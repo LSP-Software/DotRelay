@@ -6,11 +6,12 @@ revealing its human-readable content to the service that synchronizes it.
 ## Language
 
 **User**:
-A person with a DotRelay identity who may belong to Teams and authorize Devices.
+A person represented by a DotRelay identity within one Server Profile who may hold Memberships and
+authorize Devices. The same person on another Server Profile is a distinct User.
 _Avoid_: Account, developer
 
 **Device**:
-A client installation authorized by a User to access that User's DotRelay data.
+A client installation authorized by exactly one User to access that User's DotRelay data.
 _Avoid_: Session, computer
 
 **Recovery Kit**:
@@ -19,11 +20,17 @@ available.
 _Avoid_: Backup password, master password
 
 **Team**:
-The collaboration and authorization boundary containing Members and Projects.
+The collaboration and authorization boundary whose active Members share access to all of its
+Projects.
 _Avoid_: Group, organization, workspace
 
+**Membership**:
+The relationship between one User and one Team, carrying an owner, admin, or member role and an
+access lifecycle.
+_Avoid_: Seat, access grant
+
 **Member**:
-A User participating in a Team with an owner, admin, or member role.
+A User whose Membership in a Team is active.
 _Avoid_: Collaborator, teammate
 
 **Project**:
@@ -32,8 +39,8 @@ Environments.
 _Avoid_: Repository, workspace
 
 **GitHub Repository**:
-The external source repository that identifies a Project to clients but does not grant DotRelay
-access.
+The external source repository, identified by its stable GitHub identity, that identifies a Project
+to clients but does not grant DotRelay access.
 _Avoid_: Project
 
 **Environment**:
@@ -41,7 +48,8 @@ A named configuration scope within a Project, such as development, staging, or p
 _Avoid_: File, stage
 
 **Manifest**:
-The complete set of Variable definitions and Values for an Environment at a Revision.
+The complete logical set of Variable definitions, Shared Values, and User-defined Values for an
+Environment at a Revision.
 _Avoid_: Env file, payload
 
 **Variable**:
