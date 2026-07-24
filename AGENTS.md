@@ -1,3 +1,8 @@
+## Project rules
+
+1. When adding a package, use Bun to install its latest available version. Do not guess or copy a
+   version number into `package.json`.
+
 ## Agent skills
 
 ### Issue tracker
