@@ -115,12 +115,14 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay
+      DATABASE_ADMIN_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/postgres
       SHADOW_DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay_shadow
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
+      - run: bun scripts/create-shadow-database.ts
       - run: bun run db:validate
       - run: bun run db:migrate-check
 

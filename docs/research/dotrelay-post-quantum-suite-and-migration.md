@@ -119,7 +119,7 @@ reaches the expected quantum-computer horizon
 No later rewrapping can retroactively protect a v1 grant already copied by the service, a backup, or
 an observer. Deleting old grants reduces future collection but does not undo prior collection.
 Likewise, append-only history means old v1 ciphertext remains available. A migration may append
-fresh v2 encryption of historical plaintext to preserve v2-protected rollback, but it cannot make
+fresh v2 encryption of historical plaintext to preserve v2-protected history restoration, but it cannot make
 the retained v1 bytes post-quantum confidential. Product claims must say exactly:
 
 - data created at a v2 genesis is protected by v2;
@@ -231,7 +231,7 @@ and old-client behavior. Verify the corpus with two independent implementations 
 - **Design the end-to-end encryption and device lifecycle** must be extended with two encryption and
   two signing keys per User/Device, composite grants, dual signatures, a suite floor, key-continuity
   objects, recovery-envelope migration, and `SuiteTransition`.
-- **Design the encrypted manifest, revision, conflict, and rollback protocol** must be extended with
+- **Design the encrypted manifest, revision, conflict, and history-restoration protocol** must be extended with
   dual Revision signatures, v2-only lane reuse, the atomic suite-transition Revision, migration
   ceilings, and explicit v1 historical-confidentiality status. Its SHA-384 commitments and
   fail-closed version seam remain.
