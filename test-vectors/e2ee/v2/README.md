@@ -5,7 +5,7 @@ deterministic-CBOR boundary, domain-separator, hash, and fixed-length fixtures. 
 canonical and unsigned-body CBOR bytes for every closed object kind. `positive.json` records the
 object, enum, and conditional coverage, `negative.json` records malformed bytes and coarse errors,
 and `browser-bun.json` carries the same wire bytes for cross-runtime fixtures. The executable
-fixture source in `scripts/vector-fixtures.ts` independently reconstructs the registry cases and
+fixture source in `scripts/vector-fixtures.ts` independently reconstructs the registry cases, and
 the tests compare its output with this frozen corpus.
 
 The corpus is intentionally cryptographic-provider neutral. It covers the codec and wire boundary;

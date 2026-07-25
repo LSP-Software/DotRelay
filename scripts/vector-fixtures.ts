@@ -2,6 +2,7 @@ import {
   type CborValue,
   canonicalEncode,
   FIELD_REGISTRY,
+  isSignedField,
   OBJECT_REGISTRY,
   type ProtocolObject,
   protocolObjectFromFields,
@@ -14,14 +15,14 @@ const fixtureValue = (field: number): CborValue => {
   const definition = FIELD_REGISTRY[field];
   if (!definition) throw new Error(`unknown vector field ${field}`);
   if (definition.type === "uint") {
-    if (field === 35) return 1;
-    if (field === 36) return 1;
-    if (field === 37) return 1;
-    if (field === 70) return 1;
-    if (field === 78) return 1;
-    if (field === 79) return 2;
-    if (field === 71) return 0;
-    if (field === 72) return 16;
+    if (field === 35) return 1; // mutation kind
+    if (field === 36) return 1; // lane scope
+    if (field === 37) return 1; // key kind
+    if (field === 70) return 1; // grant kind
+    if (field === 78) return 1; // Membership role
+    if (field === 79) return 2; // archival/lifecycle state
+    if (field === 71) return 0; // declared plaintext length
+    if (field === 72) return 16; // declared ciphertext length
     return 1;
   }
   if (definition.type === "array") return [];
@@ -44,7 +45,7 @@ export const buildVectorObject = (
   if (!definition) throw new Error(`unknown vector kind ${kind}`);
   const fields = new Map<number, CborValue>();
   for (const field of definition.requiredFields) {
-    if (field > 2 && ![3, 4, 5, 6, 7].includes(field))
+    if (field > 2 && !isSignedField(field))
       fields.set(field, fixtureValue(field));
   }
   if (kind === 8) {

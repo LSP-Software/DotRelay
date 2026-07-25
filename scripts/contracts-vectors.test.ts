@@ -8,6 +8,7 @@ import {
   ENUM_REGISTRIES,
   encodeProtocolObject,
   FIXED_LENGTHS,
+  isSignedField,
   parseProtocolObject,
   unsignedBodyBytes,
   validateManifestCeilings,
@@ -187,19 +188,15 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
       suite: "dotrelay-e2ee-v2",
       immutable: true,
     });
-    expect(
-      browserBun.fixtures.every(
-        (fixture: {
-          browserToBun: boolean;
-          bunToBrowser: boolean;
-          hex: string;
-        }) => {
-          const bytes = bytesFromHex(fixture.hex);
-          expect(canonicalEncode(canonicalDecode(bytes))).toEqual(bytes);
-          return fixture.browserToBun && fixture.bunToBrowser;
-        },
-      ),
-    ).toBe(true);
+    for (const fixture of browserBun.fixtures as Array<{
+      browserToBun: boolean;
+      bunToBrowser: boolean;
+      hex: string;
+    }>) {
+      const bytes = bytesFromHex(fixture.hex);
+      expect(canonicalEncode(canonicalDecode(bytes))).toEqual(bytes);
+      expect(fixture.browserToBun && fixture.bunToBrowser).toBe(true);
+    }
     for (const [name, values] of Object.entries(positive.enumCoverage)) {
       const registryValues = Object.keys(
         ENUM_REGISTRIES[name as keyof typeof ENUM_REGISTRIES],
@@ -279,7 +276,7 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
       canonicalEncode(
         new Map(
           [...oversizedGrant.entries()].filter(
-            ([field]) => ![3, 4, 5, 6, 7].includes(field),
+            ([field]) => !isSignedField(field),
           ),
         ),
       ),

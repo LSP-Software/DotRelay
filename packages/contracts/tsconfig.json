@@ -1,5 +1,9 @@
 {
-  "extends": "../../tsconfig.browser.json",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "allowJs": false
+  },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"]
 }

@@ -1,17 +1,23 @@
 import { CBOR_LIMITS } from "./cbor";
 import { contractError, PROBLEM_STATUS, type ProblemCode } from "./errors";
 import { API_VERSION, SUITE_NAME, SUITE_VALUE } from "./registry";
+import { utf8Encode } from "./runtime";
 
 export type JsonObject = Readonly<Record<string, unknown>>;
 
-const isJsonValue = (value: unknown, seen = new Set<object>()): boolean => {
+const isJsonValue = (
+  value: unknown,
+  seen = new Set<object>(),
+  depth = 0,
+): boolean => {
+  if (depth > CBOR_LIMITS.maxDepth) return false;
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return true;
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) {
     if (seen.has(value)) return false;
     seen.add(value);
-    const valid = value.every((item) => isJsonValue(item, seen));
+    const valid = value.every((item) => isJsonValue(item, seen, depth + 1));
     seen.delete(value);
     return valid;
   }
@@ -21,7 +27,7 @@ const isJsonValue = (value: unknown, seen = new Set<object>()): boolean => {
   if (seen.has(value)) return false;
   seen.add(value);
   const valid = Object.values(value as Record<string, unknown>).every((item) =>
-    isJsonValue(item, seen),
+    isJsonValue(item, seen, depth + 1),
   );
   seen.delete(value);
   return valid;
@@ -44,9 +50,7 @@ export const parseJsonObject = <T extends JsonObject>(
   } catch {
     contractError("invalid_request");
   }
-  if (
-    new TextEncoder().encode(serialized).length > CBOR_LIMITS.maxAdminBodyBytes
-  )
+  if (utf8Encode(serialized).length > CBOR_LIMITS.maxAdminBodyBytes)
     contractError("payload_too_large");
   const allowed = new Set(allowedFields);
   if (Object.keys(object).some((key) => !allowed.has(key)))
@@ -205,6 +209,9 @@ export const OPENAPI_DOCUMENT = Object.freeze({
           }),
           detail: Object.freeze({ type: "string" }),
           instance: Object.freeze({ type: "string", format: "uri-reference" }),
+          retryAfterSeconds: Object.freeze({ type: "integer", minimum: 0 }),
+          headId: Object.freeze({ type: "string" }),
+          headHash: Object.freeze({ type: "string" }),
         }),
       }),
       Capabilities: Object.freeze({

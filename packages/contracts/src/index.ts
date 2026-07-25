@@ -25,6 +25,7 @@ export {
 } from "./errors";
 export {
   encodeProtocolObject,
+  isSignedField,
   parseProtocolObject,
   protocolObjectFromFields,
   signatureInput,

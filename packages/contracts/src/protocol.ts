@@ -11,9 +11,13 @@ import {
   type ProtocolObject,
   SUITE_VALUE,
 } from "./registry";
+import { utf8Encode } from "./runtime";
 
 const UINT64_MAX = (1n << 64n) - 1n;
 const SIGNED_FIELDS = new Set([3, 4, 5, 6, 7]);
+
+export const isSignedField = (field: number): boolean =>
+  SIGNED_FIELDS.has(field);
 
 const mapValue = (
   object: ProtocolObject,
@@ -133,7 +137,7 @@ const validateSignedEnvelope = (object: ProtocolObject, kind: number): void => {
     );
   }
   const unsignedBody = new Map(
-    [...object.entries()].filter(([field]) => !SIGNED_FIELDS.has(field)),
+    [...object.entries()].filter(([field]) => !isSignedField(field)),
   );
   const expected = canonicalEncode(unsignedBody);
   if (!sameBytes(expected, requireBytes(object, 3)))
@@ -322,16 +326,12 @@ export const parseProtocolObject = (bytes: Uint8Array): ProtocolObject => {
 export const unsignedBodyBytes = (object: ProtocolObject): Uint8Array => {
   validateProtocolObject(object);
   return canonicalEncode(
-    new Map(
-      [...object.entries()].filter(([field]) => !SIGNED_FIELDS.has(field)),
-    ),
+    new Map([...object.entries()].filter(([field]) => !isSignedField(field))),
   );
 };
 
 export const signatureInput = (object: ProtocolObject): Uint8Array => {
-  const prefix = new TextEncoder().encode(
-    "DotRelay\0dotrelay-e2ee-v2\0Signature\0v1\0",
-  );
+  const prefix = utf8Encode("DotRelay\0dotrelay-e2ee-v2\0Signature\0v1\0");
   const body = unsignedBodyBytes(object);
   const output = new Uint8Array(prefix.length + body.length);
   output.set(prefix);

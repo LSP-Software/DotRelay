@@ -9,6 +9,7 @@ import {
   encodeProtocolObject,
   FIELD_REGISTRY,
   OBJECT_REGISTRY,
+  OPENAPI_DOCUMENT,
   PROBLEM_STATUS,
   parseJsonObject,
   parseProtocolObject,
@@ -144,6 +145,19 @@ describe("runtime-neutral API contracts", () => {
     const cyclic: { self?: unknown } = {};
     cyclic.self = cyclic;
     expect(() => parseJsonObject(cyclic, ["self"])).toThrow("invalid_request");
+    let deeplyNested: unknown = { leaf: true };
+    for (let depth = 0; depth <= CBOR_LIMITS.maxDepth; depth++)
+      deeplyNested = [deeplyNested];
+    expect(() => parseJsonObject({ deeplyNested }, ["deeplyNested"])).toThrow(
+      "invalid_request",
+    );
+    expect(
+      OPENAPI_DOCUMENT.components.schemas.Problem.properties,
+    ).toMatchObject({
+      retryAfterSeconds: { type: "integer", minimum: 0 },
+      headId: { type: "string" },
+      headHash: { type: "string" },
+    });
     expect(createCapabilitiesDocument().suite).toEqual({
       name: SUITE_NAME,
       value: SUITE_VALUE,

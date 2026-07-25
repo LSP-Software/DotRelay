@@ -122,6 +122,16 @@
           "instance": {
             "type": "string",
             "format": "uri-reference"
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "headId": {
+            "type": "string"
+          },
+          "headHash": {
+            "type": "string"
           }
         }
       },

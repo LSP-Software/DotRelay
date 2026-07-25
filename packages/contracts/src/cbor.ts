@@ -1,4 +1,5 @@
 import { contractError } from "./errors";
+import { utf8Decode, utf8Encode } from "./runtime";
 
 export const CBOR_LIMITS = Object.freeze({
   maxDepth: 12,
@@ -97,7 +98,7 @@ const encodeValue = (value: CborValue, depth: number): Uint8Array => {
   if (typeof value === "number" || typeof value === "bigint")
     return uintBytes(asUint(value));
   if (typeof value === "string") {
-    const bytes = new TextEncoder().encode(value);
+    const bytes = utf8Encode(value);
     return concat([encodeLength(3, bytes.length), bytes]);
   }
   if (value instanceof Uint8Array)
@@ -197,7 +198,7 @@ const decodeValue = (decoder: Decoder, depth: number): CborValue => {
     decoder.offset = end;
     if (major === 2) return bytes;
     try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return utf8Decode(bytes, "utf-8", { fatal: true });
     } catch {
       contractError("invalid_crypto_object");
     }
