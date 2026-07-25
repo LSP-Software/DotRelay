@@ -6,12 +6,12 @@ export const metadata: Metadata = {
   description: "Client-encrypted collaboration context",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: ReactNode }>) {
+const RootLayout = ({ children }: Readonly<{ children: ReactNode }>) => {
   return (
     <html lang="en">
       <body>{children}</body>
     </html>
   );
-}
+};
+
+export default RootLayout;

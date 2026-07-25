@@ -1,10 +1,17 @@
 # Quality gates
 
 The fast gate runs formatting, Biome linting, strict TypeScript checks, workspace-boundary checks,
-and unit tests:
+the checked OpenAPI output comparison, and unit tests:
 
 ```sh
 bun run check
+```
+
+The contract package's focused checks can also be run directly:
+
+```sh
+bun run openapi:check
+bun test packages/contracts/src/index.test.ts scripts/contracts-vectors.test.ts
 ```
 
 The full gate adds production-shaped builds and smoke tests, PostgreSQL/Valkey integration,

@@ -14,7 +14,7 @@ afterEach(async () => {
   );
 });
 
-async function createFixture(): Promise<string> {
+const createFixture = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "dotrelay-boundaries-"));
   temporaryRoots.push(root);
   await mkdir(join(root, "apps", "web", "src"), { recursive: true });
@@ -24,11 +24,11 @@ async function createFixture(): Promise<string> {
     recursive: true,
   });
   return root;
-}
+};
 
-async function writeJson(path: string, value: unknown): Promise<void> {
+const writeJson = async (path: string, value: unknown): Promise<void> => {
   await Bun.write(path, `${JSON.stringify(value, null, 2)}\n`);
-}
+};
 
 describe("validateWorkspaceBoundaries", () => {
   test("reports dependency and import boundary violations", async () => {

@@ -1,3 +1,3 @@
-export function GET() {
+export const GET = () => {
   return Response.json({ status: "ok" });
-}
+};

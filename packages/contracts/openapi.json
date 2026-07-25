@@ -1,0 +1,269 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "DotRelay API",
+    "version": "v1"
+  },
+  "x-dotrelay": {
+    "apiVersion": "v1",
+    "protocolMediaType": "application/vnd.dotrelay.e2ee-v2+cbor",
+    "strictJson": true,
+    "suite": {
+      "name": "dotrelay-e2ee-v2",
+      "value": 2
+    },
+    "problemStatus": {
+      "invalid_request": 400,
+      "invalid_crypto_object": 400,
+      "authentication_required": 401,
+      "forbidden": 403,
+      "device_not_active": 403,
+      "resource_not_found": 404,
+      "membership_not_key_provisioned": 409,
+      "operation_conflict": 409,
+      "stale_head": 409,
+      "stale_epoch": 409,
+      "stale_generation": 409,
+      "rotation_required": 409,
+      "archived_resource": 409,
+      "state_conflict": 409,
+      "staged_object_missing": 409,
+      "invitation_expired": 410,
+      "staging_expired": 410,
+      "payload_too_large": 413,
+      "unsupported_media_type": 415,
+      "unsupported_api_version": 422,
+      "unsupported_crypto_suite": 422,
+      "rate_limited": 429,
+      "rate_limit_unavailable": 503,
+      "service_unavailable": 503
+    }
+  },
+  "paths": {
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "description": "Capabilities document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "required": ["type", "title", "status", "code", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_request",
+              "invalid_crypto_object",
+              "authentication_required",
+              "forbidden",
+              "device_not_active",
+              "resource_not_found",
+              "membership_not_key_provisioned",
+              "operation_conflict",
+              "stale_head",
+              "stale_epoch",
+              "stale_generation",
+              "rotation_required",
+              "archived_resource",
+              "state_conflict",
+              "staged_object_missing",
+              "invitation_expired",
+              "staging_expired",
+              "payload_too_large",
+              "unsupported_media_type",
+              "unsupported_api_version",
+              "unsupported_crypto_suite",
+              "rate_limited",
+              "rate_limit_unavailable",
+              "service_unavailable"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "headId": {
+            "type": "string"
+          },
+          "headHash": {
+            "type": "string"
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiVersion", "suite", "capabilities", "limits"],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "v1"
+          },
+          "suite": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "const": "dotrelay-e2ee-v2"
+              },
+              "value": {
+                "type": "integer",
+                "const": 2
+              }
+            }
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "adminBodyBytes",
+              "protocolObjectBytes",
+              "stagingObjects",
+              "stagingBytes",
+              "stagingTtlSeconds",
+              "synchronizationObjects",
+              "synchronizationBytes",
+              "variableNameBytes",
+              "descriptionBytes",
+              "valueBytes"
+            ],
+            "properties": {
+              "adminBodyBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "protocolObjectBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stagingObjects": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stagingBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stagingTtlSeconds": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "synchronizationObjects": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "synchronizationBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "variableNameBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "descriptionBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "valueBytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          }
+        }
+      },
+      "IdempotencyKey": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "ProtocolObject": {
+        "type": "string",
+        "format": "binary",
+        "contentMediaType": "application/vnd.dotrelay.e2ee-v2+cbor"
+      },
+      "StrictJsonObject": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    },
+    "parameters": {
+      "IdempotencyHeader": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/IdempotencyKey"
+        }
+      }
+    }
+  }
+}

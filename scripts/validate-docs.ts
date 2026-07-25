@@ -3,14 +3,14 @@ import { dirname, extname, join, resolve } from "node:path";
 
 const root = resolve(process.cwd(), "docs/wiki");
 const markdownFiles: string[] = [];
-async function collect(directory: string): Promise<void> {
+const collect = async (directory: string): Promise<void> => {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) await collect(path);
     else if (entry.isFile() && extname(entry.name) === ".md")
       markdownFiles.push(path);
   }
-}
+};
 
 await collect(root);
 const violations: string[] = [];

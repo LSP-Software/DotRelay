@@ -1,0 +1,17 @@
+{
+  "name": "@dotrelay/contracts",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "format": "biome format . --write",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --project tsconfig.json",
+    "test:unit": "bun test"
+  },
+  "dotrelay": {
+    "runtime": "neutral"
+  }
+}

@@ -33,10 +33,10 @@ const runtimeSensitiveIdentifiers = new Set([
   "window",
 ]);
 
-async function findWorkspaceDirectories(
+const findWorkspaceDirectories = async (
   root: string,
   group: "apps" | "packages",
-): Promise<string[]> {
+): Promise<string[]> => {
   const groupRoot = join(root, group);
   try {
     const entries = await readdir(groupRoot, { withFileTypes: true });
@@ -46,12 +46,12 @@ async function findWorkspaceDirectories(
   } catch {
     return [];
   }
-}
+};
 
-async function readManifest(
+const readManifest = async (
   directory: string,
   kind: WorkspaceKind,
-): Promise<WorkspaceManifest> {
+): Promise<WorkspaceManifest> => {
   const path = join(directory, "package.json");
   const manifest = JSON.parse(await readFile(path, "utf8")) as Record<
     string,
@@ -60,11 +60,11 @@ async function readManifest(
   const name =
     typeof manifest.name === "string" ? manifest.name : basename(directory);
   return { directory, kind, name, manifest };
-}
+};
 
-async function sourceFiles(directory: string): Promise<string[]> {
+const sourceFiles = async (directory: string): Promise<string[]> => {
   const files: string[] = [];
-  async function visit(current: string): Promise<void> {
+  const visit = async (current: string): Promise<void> => {
     for (const entry of await readdir(current, { withFileTypes: true })) {
       if (entry.isDirectory() && !ignoredDirectories.has(entry.name)) {
         await visit(join(current, entry.name));
@@ -75,12 +75,12 @@ async function sourceFiles(directory: string): Promise<string[]> {
         files.push(join(current, entry.name));
       }
     }
-  }
+  };
   await visit(directory);
   return files;
-}
+};
 
-function dependencyNames(manifest: Record<string, unknown>): Set<string> {
+const dependencyNames = (manifest: Record<string, unknown>): Set<string> => {
   const names = new Set<string>();
   for (const field of workspaceDependencyFields) {
     const dependencies = manifest[field];
@@ -89,11 +89,11 @@ function dependencyNames(manifest: Record<string, unknown>): Set<string> {
     }
   }
   return names;
-}
+};
 
-function workspaceDependencyMap(
+const workspaceDependencyMap = (
   manifest: Record<string, unknown>,
-): Map<string, string> {
+): Map<string, string> => {
   const dependencies = new Map<string, string>();
   for (const field of workspaceDependencyFields) {
     const values = manifest[field];
@@ -104,9 +104,9 @@ function workspaceDependencyMap(
     }
   }
   return dependencies;
-}
+};
 
-function parsedSource(source: string): ts.SourceFile {
+const parsedSource = (source: string): ts.SourceFile => {
   return ts.createSourceFile(
     "boundary-check.tsx",
     source,
@@ -114,9 +114,9 @@ function parsedSource(source: string): ts.SourceFile {
     true,
     ts.ScriptKind.TSX,
   );
-}
+};
 
-function importedSpecifiers(source: string): string[] {
+const importedSpecifiers = (source: string): string[] => {
   const imports: string[] = [];
   const sourceFile = parsedSource(source);
   const addModuleSpecifier = (specifier: ts.Expression | undefined): void => {
@@ -124,7 +124,7 @@ function importedSpecifiers(source: string): string[] {
       imports.push(specifier.text);
   };
 
-  function visit(node: ts.Node): void {
+  const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) {
       addModuleSpecifier(node.moduleSpecifier);
     } else if (ts.isExportDeclaration(node)) {
@@ -138,33 +138,33 @@ function importedSpecifiers(source: string): string[] {
         addModuleSpecifier(node.arguments[0]);
     }
     ts.forEachChild(node, visit);
-  }
+  };
 
   visit(sourceFile);
   return imports;
-}
+};
 
-function containsRuntimeSensitiveSyntax(source: string): boolean {
+const containsRuntimeSensitiveSyntax = (source: string): boolean => {
   const sourceFile = parsedSource(source);
   let found = false;
-  function visit(node: ts.Node): void {
+  const visit = (node: ts.Node): void => {
     if (ts.isIdentifier(node) && runtimeSensitiveIdentifiers.has(node.text)) {
       found = true;
       return;
     }
     ts.forEachChild(node, visit);
-  }
+  };
   visit(sourceFile);
   return found;
-}
+};
 
-function cycleDescriptions(graph: Map<string, Set<string>>): string[] {
+const cycleDescriptions = (graph: Map<string, Set<string>>): string[] => {
   const violations: string[] = [];
   const visiting = new Set<string>();
   const visited = new Set<string>();
   const reported = new Set<string>();
 
-  function visit(node: string, path: string[]): void {
+  const visit = (node: string, path: string[]): void => {
     if (visiting.has(node)) {
       const start = path.indexOf(node);
       const cycle = [...path.slice(start), node].join(" -> ");
@@ -181,15 +181,15 @@ function cycleDescriptions(graph: Map<string, Set<string>>): string[] {
       visit(dependency, [...path, node]);
     visiting.delete(node);
     visited.add(node);
-  }
+  };
 
   for (const node of graph.keys()) visit(node, []);
   return violations;
-}
+};
 
-export async function validateWorkspaceBoundaries(
+export const validateWorkspaceBoundaries = async (
   root: string,
-): Promise<string[]> {
+): Promise<string[]> => {
   const violations: string[] = [];
   const workspaces = [
     ...(await findWorkspaceDirectories(root, "apps")).map((directory) =>
@@ -301,7 +301,7 @@ export async function validateWorkspaceBoundaries(
 
   violations.push(...cycleDescriptions(graph));
   return [...new Set(violations)].sort();
-}
+};
 
 if (import.meta.main) {
   const violations = await validateWorkspaceBoundaries(process.cwd());
