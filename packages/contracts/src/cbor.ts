@@ -33,7 +33,7 @@ type Decoder = {
 const MAX_UINT64 = (1n << 64n) - 1n;
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
-function asUint(value: number | bigint): bigint {
+const asUint = (value: number | bigint): bigint => {
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value < 0)
       contractError("invalid_crypto_object");
@@ -41,9 +41,9 @@ function asUint(value: number | bigint): bigint {
   }
   if (value < 0n || value > MAX_UINT64) contractError("invalid_crypto_object");
   return value;
-}
+};
 
-function uintBytes(value: bigint): Uint8Array {
+const uintBytes = (value: bigint): Uint8Array => {
   if (value < 24n) return Uint8Array.of(Number(value));
   if (value <= 0xffn) return Uint8Array.of(0x18, Number(value));
   if (value <= 0xffffn)
@@ -68,9 +68,9 @@ function uintBytes(value: bigint): Uint8Array {
     Number(value >> 8n) & 0xff,
     Number(value) & 0xff,
   );
-}
+};
 
-function concat(parts: readonly Uint8Array[]): Uint8Array {
+const concat = (parts: readonly Uint8Array[]): Uint8Array => {
   const length = parts.reduce((total, part) => total + part.length, 0);
   if (length > CBOR_LIMITS.maxObjectBytes) contractError("payload_too_large");
   const output = new Uint8Array(length);
@@ -80,17 +80,17 @@ function concat(parts: readonly Uint8Array[]): Uint8Array {
     offset += part.length;
   }
   return output;
-}
+};
 
-function encodeLength(major: number, length: number): Uint8Array {
+const encodeLength = (major: number, length: number): Uint8Array => {
   if (!Number.isSafeInteger(length) || length < 0)
     contractError("invalid_crypto_object");
   return uintBytes(BigInt(length)).map((byte, index) =>
     index === 0 ? byte | (major << 5) : byte,
   );
-}
+};
 
-function encodeValue(value: CborValue, depth: number): Uint8Array {
+const encodeValue = (value: CborValue, depth: number): Uint8Array => {
   if (depth > CBOR_LIMITS.maxDepth) contractError("invalid_crypto_object");
   if (value === null) return Uint8Array.of(0xf6);
   if (typeof value === "boolean") return Uint8Array.of(value ? 0xf5 : 0xf4);
@@ -147,39 +147,39 @@ function encodeValue(value: CborValue, depth: number): Uint8Array {
     ]);
   }
   contractError("invalid_crypto_object");
-}
+};
 
-export function canonicalEncode(value: CborValue): Uint8Array {
+export const canonicalEncode = (value: CborValue): Uint8Array => {
   return encodeValue(value, 0);
-}
+};
 
-function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+const sameBytes = (left: Uint8Array, right: Uint8Array): boolean => {
   return (
     left.length === right.length &&
     left.every((byte, index) => byte === right[index])
   );
-}
+};
 
-function readByte(decoder: Decoder): number {
+const readByte = (decoder: Decoder): number => {
   const byte = decoder.bytes[decoder.offset++];
   if (byte === undefined) contractError("invalid_crypto_object");
   return byte;
-}
+};
 
-function readLength(
+const readLength = (
   decoder: Decoder,
   additional: number,
   collection = false,
-): number {
+): number => {
   const { value } = readAdditionalUInt(decoder, additional);
   const maximum = BigInt(
     collection ? CBOR_LIMITS.maxCollectionItems : CBOR_LIMITS.maxObjectBytes,
   );
   if (value > maximum) contractError("payload_too_large");
   return Number(value);
-}
+};
 
-function decodeValue(decoder: Decoder, depth: number): CborValue {
+const decodeValue = (decoder: Decoder, depth: number): CborValue => {
   if (depth > CBOR_LIMITS.maxDepth) contractError("invalid_crypto_object");
   const initial = readByte(decoder);
   const major = initial >> 5;
@@ -222,16 +222,16 @@ function decodeValue(decoder: Decoder, depth: number): CborValue {
   if (major === 7 && additional === 21) return true;
   if (major === 7 && additional === 22) return null;
   contractError("invalid_crypto_object");
-}
+};
 
-function readUnsigned(decoder: Decoder, additional: number): bigint {
+const readUnsigned = (decoder: Decoder, additional: number): bigint => {
   return readAdditionalUInt(decoder, additional).value;
-}
+};
 
-function readAdditionalUInt(
+const readAdditionalUInt = (
   decoder: Decoder,
   additional: number,
-): { readonly value: bigint } {
+): { readonly value: bigint } => {
   if (additional < 24) return { value: BigInt(additional) };
   const count =
     additional === 24
@@ -259,9 +259,9 @@ function readAdditionalUInt(
   if (value < minimum || value > MAX_UINT64)
     contractError("invalid_crypto_object");
   return { value };
-}
+};
 
-export function canonicalDecode(bytes: Uint8Array): CborValue {
+export const canonicalDecode = (bytes: Uint8Array): CborValue => {
   if (!(bytes instanceof Uint8Array)) contractError("invalid_crypto_object");
   if (bytes.length > CBOR_LIMITS.maxObjectBytes)
     contractError("payload_too_large");
@@ -271,4 +271,4 @@ export function canonicalDecode(bytes: Uint8Array): CborValue {
   if (!sameBytes(canonicalEncode(value), bytes))
     contractError("invalid_crypto_object");
   return value;
-}
+};

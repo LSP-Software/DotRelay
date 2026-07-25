@@ -1,4 +1,4 @@
-export async function run(command: string[], cwd: string): Promise<void> {
+export const run = async (command: string[], cwd: string): Promise<void> => {
   const process = Bun.spawn(command, {
     cwd,
     stdout: "inherit",
@@ -7,4 +7,4 @@ export async function run(command: string[], cwd: string): Promise<void> {
   const exitCode = await process.exited;
   if (exitCode !== 0)
     throw new Error(`${command.join(" ")} exited with ${exitCode}`);
-}
+};

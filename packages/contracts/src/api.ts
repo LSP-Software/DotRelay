@@ -4,7 +4,7 @@ import { API_VERSION, SUITE_NAME, SUITE_VALUE } from "./registry";
 
 export type JsonObject = Readonly<Record<string, unknown>>;
 
-function isJsonValue(value: unknown, seen = new Set<object>()): boolean {
+const isJsonValue = (value: unknown, seen = new Set<object>()): boolean => {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return true;
   if (typeof value === "number") return Number.isFinite(value);
@@ -25,12 +25,12 @@ function isJsonValue(value: unknown, seen = new Set<object>()): boolean {
   );
   seen.delete(value);
   return valid;
-}
+};
 
-export function parseJsonObject<T extends JsonObject>(
+export const parseJsonObject = <T extends JsonObject>(
   value: unknown,
   allowedFields: readonly string[],
-): T {
+): T => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     contractError("invalid_request");
   const prototype = Object.getPrototypeOf(value);
@@ -52,14 +52,14 @@ export function parseJsonObject<T extends JsonObject>(
   if (Object.keys(object).some((key) => !allowed.has(key)))
     contractError("invalid_request");
   return object as T;
-}
+};
 
 export type Pagination = Readonly<{
   readonly cursor?: string;
   readonly limit?: number;
 }>;
 
-export function parsePagination(value: unknown): Pagination {
+export const parsePagination = (value: unknown): Pagination => {
   const object = parseJsonObject<{ cursor?: unknown; limit?: unknown }>(value, [
     "cursor",
     "limit",
@@ -83,19 +83,19 @@ export function parsePagination(value: unknown): Pagination {
   if (typeof object.cursor === "string") pagination.cursor = object.cursor;
   if (typeof object.limit === "number") pagination.limit = object.limit;
   return pagination;
-}
+};
 
-export function validateIdempotencyKey(value: string): boolean {
+export const validateIdempotencyKey = (value: string): boolean => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
     value,
   );
-}
+};
 
-export function parseIdempotencyKey(value: unknown): string {
+export const parseIdempotencyKey = (value: unknown): string => {
   if (typeof value !== "string" || !validateIdempotencyKey(value))
     contractError("invalid_request");
   return value;
-}
+};
 
 export type CapabilitiesDocument = Readonly<{
   readonly apiVersion: typeof API_VERSION;
@@ -118,7 +118,7 @@ export type CapabilitiesDocument = Readonly<{
   }>;
 }>;
 
-export function createCapabilitiesDocument(): CapabilitiesDocument {
+export const createCapabilitiesDocument = (): CapabilitiesDocument => {
   return Object.freeze({
     apiVersion: API_VERSION,
     suite: Object.freeze({ name: SUITE_NAME, value: SUITE_VALUE }),
@@ -141,7 +141,7 @@ export function createCapabilitiesDocument(): CapabilitiesDocument {
       valueBytes: 1024 * 1024,
     }),
   });
-}
+};
 
 export type ApiProblem = Readonly<{
   readonly code: ProblemCode;

@@ -79,14 +79,14 @@ export type Problem = {
   readonly headHash?: string;
 };
 
-export function createProblem(
+export const createProblem = (
   code: ProblemCode,
   details?: {
     readonly retryAfterSeconds?: number;
     readonly headId?: string;
     readonly headHash?: string;
   },
-): Problem {
+): Problem => {
   if (typeof code !== "string" || !Object.hasOwn(PROBLEM_STATUS, code))
     contractError("invalid_request");
   const problem: Problem = {
@@ -104,4 +104,4 @@ export function createProblem(
     ...(details?.headId === undefined ? {} : { headId: details.headId }),
     ...(details?.headHash === undefined ? {} : { headHash: details.headHash }),
   };
-}
+};

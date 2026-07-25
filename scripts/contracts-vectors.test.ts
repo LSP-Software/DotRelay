@@ -14,36 +14,36 @@ import {
 } from "@dotrelay/contracts";
 import { NEGATIVE_VECTOR_CASES, VECTOR_CASES } from "./vector-fixtures";
 
-function containsText(value: CborValue): boolean {
+const containsText = (value: CborValue): boolean => {
   if (typeof value === "string") return true;
   if (Array.isArray(value)) return value.some(containsText);
   if (value instanceof Map) return [...value.values()].some(containsText);
   return false;
-}
+};
 
-function bytesFromHex(value: string): Uint8Array {
+const bytesFromHex = (value: string): Uint8Array => {
   if (!/^(?:[0-9a-f]{2})*$/.test(value)) throw new Error("invalid vector hex");
   return Uint8Array.from(
     value.match(/../g)?.map((pair) => Number.parseInt(pair, 16)) ?? [],
   );
-}
+};
 
-async function frozenVectors(): Promise<
+const frozenVectors = async (): Promise<
   Array<{ canonicalHex: string; unsignedBodyHex: string }>
-> {
+> => {
   const objects = await Bun.file("test-vectors/e2ee/v2/objects.json").json();
   const conditional = await Bun.file(
     "test-vectors/e2ee/v2/conditional.json",
   ).json();
   return [...objects.vectors, ...conditional.vectors];
-}
+};
 
-async function frozenNegativeVectors(): Promise<
+const frozenNegativeVectors = async (): Promise<
   Array<{ id: string; hex: string; error: string }>
-> {
+> => {
   const negative = await Bun.file("test-vectors/e2ee/v2/negative.json").json();
   return negative.cases;
-}
+};
 
 describe("immutable dotrelay-e2ee-v2 vectors", () => {
   test("checks deterministic-CBOR primitive and domain fixtures", async () => {

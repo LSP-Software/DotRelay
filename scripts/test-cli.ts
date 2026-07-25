@@ -8,7 +8,7 @@ const binary = join(
   "dist",
   process.platform === "win32" ? "dotrelay.exe" : "dotrelay",
 );
-async function run(args: string[]): Promise<string> {
+const run = async (args: string[]): Promise<string> => {
   const process = Bun.spawn([binary, ...args], {
     stdout: "pipe",
     stderr: "pipe",
@@ -20,7 +20,7 @@ async function run(args: string[]): Promise<string> {
   ]);
   if (exitCode !== 0) throw new Error(`CLI exited with ${exitCode}: ${stderr}`);
   return stdout.trim();
-}
+};
 
 const help = await run(["--help"]);
 if (!help.includes("dotrelay — DotRelay standalone CLI"))

@@ -10,7 +10,7 @@ import {
 const zeros = (length: number, fill = 0): Uint8Array =>
   new Uint8Array(length).fill(fill);
 
-function fixtureValue(field: number): CborValue {
+const fixtureValue = (field: number): CborValue => {
   const definition = FIELD_REGISTRY[field];
   if (!definition) throw new Error(`unknown vector field ${field}`);
   if (definition.type === "uint") {
@@ -30,16 +30,16 @@ function fixtureValue(field: number): CborValue {
     return zeros(definition.exactLength);
   if (field === 47) return zeros(16);
   return zeros(0);
-}
+};
 
-function copyObject(object: ProtocolObject): ProtocolObject {
+const copyObject = (object: ProtocolObject): ProtocolObject => {
   return new Map(object);
-}
+};
 
-export function buildVectorObject(
+export const buildVectorObject = (
   kind: number,
   overrides: ReadonlyMap<number, CborValue> = new Map(),
-): ProtocolObject {
+): ProtocolObject => {
   const definition = OBJECT_REGISTRY[kind];
   if (!definition) throw new Error(`unknown vector kind ${kind}`);
   const fields = new Map<number, CborValue>();
@@ -68,7 +68,7 @@ export function buildVectorObject(
     object = protocolObjectFromFields(kind, fields);
   }
   return copyObject(object);
-}
+};
 
 export const VECTOR_CASES = Object.freeze([
   ...Array.from({ length: 19 }, (_, index) => ({

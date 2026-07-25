@@ -15,37 +15,37 @@ import {
 const UINT64_MAX = (1n << 64n) - 1n;
 const SIGNED_FIELDS = new Set([3, 4, 5, 6, 7]);
 
-function mapValue(
+const mapValue = (
   object: ProtocolObject,
   field: number,
-): CborValue | undefined {
+): CborValue | undefined => {
   return object.get(field);
-}
+};
 
-function isBytes(value: CborValue | undefined): value is Uint8Array {
+const isBytes = (value: CborValue | undefined): value is Uint8Array => {
   return value instanceof Uint8Array;
-}
+};
 
-function bigintValue(value: CborValue | undefined): bigint | undefined {
+const bigintValue = (value: CborValue | undefined): bigint | undefined => {
   if (typeof value === "bigint" && value >= 0n && value <= UINT64_MAX)
     return value;
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
     return BigInt(value);
   return undefined;
-}
+};
 
-function isUint(value: CborValue | undefined): value is number | bigint {
+const isUint = (value: CborValue | undefined): value is number | bigint => {
   return bigintValue(value) !== undefined;
-}
+};
 
-function numberValue(value: CborValue | undefined): number | undefined {
+const numberValue = (value: CborValue | undefined): number | undefined => {
   if (!isUint(value)) return undefined;
   if (typeof value === "bigint")
     return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined;
   return value;
-}
+};
 
-function isCborStructure(value: CborValue): boolean {
+const isCborStructure = (value: CborValue): boolean => {
   if (typeof value === "string" || value === null || typeof value === "boolean")
     return false;
   if (
@@ -65,21 +65,21 @@ function isCborStructure(value: CborValue): boolean {
         isCborStructure(item),
     );
   return false;
-}
+};
 
-function requireBytes(
+const requireBytes = (
   object: ProtocolObject,
   field: number,
   exactLength?: number,
-): Uint8Array {
+): Uint8Array => {
   const value = mapValue(object, field);
   if (!isBytes(value)) contractError("invalid_crypto_object");
   if (exactLength !== undefined && value.length !== exactLength)
     contractError("invalid_crypto_object");
   return value;
-}
+};
 
-function validateValueType(field: number, value: CborValue): void {
+const validateValueType = (field: number, value: CborValue): void => {
   const definition = FIELD_REGISTRY[field];
   if (!definition || !isCborStructure(value))
     contractError("invalid_crypto_object");
@@ -103,22 +103,22 @@ function validateValueType(field: number, value: CborValue): void {
     )
       contractError("payload_too_large");
   }
-}
+};
 
-function validateEnum(value: number | undefined, maximum: number): void {
+const validateEnum = (value: number | undefined, maximum: number): void => {
   if (value === undefined || value < 1 || value > maximum)
     contractError("invalid_crypto_object");
-}
+};
 
-function validateEnumSet(
+const validateEnumSet = (
   value: number | undefined,
   allowed: readonly number[],
-): void {
+): void => {
   if (value === undefined || !allowed.includes(value))
     contractError("invalid_crypto_object");
-}
+};
 
-function validateSignedEnvelope(object: ProtocolObject, kind: number): void {
+const validateSignedEnvelope = (object: ProtocolObject, kind: number): void => {
   const definition = OBJECT_REGISTRY[kind];
   if (!definition?.serverVisible) return;
   for (const field of [3, 4, 5]) {
@@ -149,9 +149,12 @@ function validateSignedEnvelope(object: ProtocolObject, kind: number): void {
     requireBytes(object, 6, 3309);
     requireBytes(object, 7, 64);
   }
-}
+};
 
-function validateConditionalValues(object: ProtocolObject, kind: number): void {
+const validateConditionalValues = (
+  object: ProtocolObject,
+  kind: number,
+): void => {
   const fields = new Set(object.keys());
   if (kind === 16) {
     const mutation = numberValue(mapValue(object, 35));
@@ -228,11 +231,11 @@ function validateConditionalValues(object: ProtocolObject, kind: number): void {
     plaintextLength > CBOR_LIMITS.maxRecoveryPlaintextBytes
   )
     contractError("payload_too_large");
-}
+};
 
-export function validateManifestCeilings(
+export const validateManifestCeilings = (
   counts: Readonly<{ variables: number; laneCommitments: number }>,
-): void {
+): void => {
   if (
     !Number.isSafeInteger(counts.variables) ||
     counts.variables < 0 ||
@@ -245,19 +248,19 @@ export function validateManifestCeilings(
     counts.laneCommitments > CBOR_LIMITS.maxManifestLaneCommitments
   )
     contractError("payload_too_large");
-}
+};
 
-function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+const sameBytes = (left: Uint8Array, right: Uint8Array): boolean => {
   return (
     left.length === right.length &&
     left.every((byte, index) => byte === right[index])
   );
-}
+};
 
-export function protocolObjectFromFields(
+export const protocolObjectFromFields = (
   kind: number,
   fields: ReadonlyMap<number, CborValue>,
-): ProtocolObject {
+): ProtocolObject => {
   const object = new Map<number, CborValue>([
     [0, SUITE_VALUE],
     [1, kind],
@@ -269,9 +272,9 @@ export function protocolObjectFromFields(
     object.set(field, value);
   }
   return object;
-}
+};
 
-export function validateProtocolObject(object: ProtocolObject): void {
+export const validateProtocolObject = (object: ProtocolObject): void => {
   if (!(object instanceof Map)) contractError("invalid_crypto_object");
   const suite = numberValue(mapValue(object, 0));
   if (suite !== SUITE_VALUE) contractError("unsupported_crypto_suite");
@@ -299,14 +302,14 @@ export function validateProtocolObject(object: ProtocolObject): void {
   }
   validateSignedEnvelope(object, kind);
   validateConditionalValues(object, kind);
-}
+};
 
-export function encodeProtocolObject(object: ProtocolObject): Uint8Array {
+export const encodeProtocolObject = (object: ProtocolObject): Uint8Array => {
   validateProtocolObject(object);
   return canonicalEncode(object);
-}
+};
 
-export function parseProtocolObject(bytes: Uint8Array): ProtocolObject {
+export const parseProtocolObject = (bytes: Uint8Array): ProtocolObject => {
   if (!(bytes instanceof Uint8Array)) contractError("invalid_crypto_object");
   if (bytes.length > CBOR_LIMITS.maxObjectBytes)
     contractError("payload_too_large");
@@ -314,18 +317,18 @@ export function parseProtocolObject(bytes: Uint8Array): ProtocolObject {
   if (!(decoded instanceof Map)) contractError("invalid_crypto_object");
   validateProtocolObject(decoded);
   return decoded;
-}
+};
 
-export function unsignedBodyBytes(object: ProtocolObject): Uint8Array {
+export const unsignedBodyBytes = (object: ProtocolObject): Uint8Array => {
   validateProtocolObject(object);
   return canonicalEncode(
     new Map(
       [...object.entries()].filter(([field]) => !SIGNED_FIELDS.has(field)),
     ),
   );
-}
+};
 
-export function signatureInput(object: ProtocolObject): Uint8Array {
+export const signatureInput = (object: ProtocolObject): Uint8Array => {
   const prefix = new TextEncoder().encode(
     "DotRelay\0dotrelay-e2ee-v2\0Signature\0v1\0",
   );
@@ -334,4 +337,4 @@ export function signatureInput(object: ProtocolObject): Uint8Array {
   output.set(prefix);
   output.set(body, prefix.length);
   return output;
-}
+};

@@ -3,6 +3,10 @@
 1. When adding a package, use Bun to install its latest available version. Do not guess or copy a
    version number into `package.json`.
 
+2. Prefer arrow functions over anonymous `function` expressions and named declarations. Use a
+   normal function only when JavaScript or TypeScript semantics require one, such as a dynamic
+   `this`, `arguments`, a constructor, or declaration-based control-flow narrowing.
+
 ## Agent skills
 
 ### Issue tracker
