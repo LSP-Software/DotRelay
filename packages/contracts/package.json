@@ -9,7 +9,7 @@
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc --project tsconfig.json",
-    "test:unit": "bun test"
+    "test:unit": "bun test ../../scripts/contracts-unit.test.ts"
   },
   "dotrelay": {
     "runtime": "neutral"

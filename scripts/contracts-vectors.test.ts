@@ -29,6 +29,16 @@ const bytesFromHex = (value: string): Uint8Array => {
   );
 };
 
+const sha384Hex = async (bytes: Uint8Array): Promise<string> => {
+  const digest = await crypto.subtle.digest(
+    "SHA-384",
+    bytes as Uint8Array<ArrayBuffer>,
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+};
+
 const frozenVectors = async (): Promise<
   Array<{ canonicalHex: string; unsignedBodyHex: string }>
 > => {
@@ -80,16 +90,13 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
     }
     for (const vector of primitives.domainSeparators as Array<{
       utf8Hex: string;
+      sha384Hex: string;
     }>) {
+      const bytes = bytesFromHex(vector.utf8Hex);
       expect(
-        Array.from(
-          new TextEncoder().encode(
-            vector.utf8Hex === ""
-              ? ""
-              : new TextDecoder().decode(bytesFromHex(vector.utf8Hex)),
-          ),
-        ),
-      ).toEqual(Array.from(bytesFromHex(vector.utf8Hex)));
+        Array.from(new TextEncoder().encode(new TextDecoder().decode(bytes))),
+      ).toEqual(Array.from(bytes));
+      expect(await sha384Hex(bytes)).toBe(vector.sha384Hex);
     }
     expect(primitives.fixedLengths).toEqual(FIXED_LENGTHS);
   });

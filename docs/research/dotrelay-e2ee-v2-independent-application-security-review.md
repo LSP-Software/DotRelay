@@ -1,9 +1,9 @@
 # DotRelay `dotrelay-e2ee-v2` independent application-security review packet
 
-**Review date:** 2026-07-25  
-**Review scope:** frozen `dotrelay-e2ee-v2` provider gate  
-**Disposition:** **BLOCKED — evidence dossier only; no approval issued**  
-**Repository revision inspected:** `fae68a9a827f9c9c8aa569094513a0c5357a3f92` (`codex/implement-issue-30`)  
+**Review date:** 2026-07-25
+**Review scope:** frozen `dotrelay-e2ee-v2` provider gate
+**Disposition:** **BLOCKED — evidence dossier only; no approval issued**
+**Repository revision inspected:** `29e476a1920bea0c0193776522351293ab38a47d` (`codex/implement-issue-30`); the follow-up contract-only changes are separately verified below.
 
 This packet records what is evidenced, what is only required by the authoritative decisions, and
 what is absent. It does not implement cryptography, integrate a provider, or constitute protocol,
@@ -179,7 +179,7 @@ On 2026-07-25, Bun `1.3.14` ran:
 
 ```text
 bun test scripts/contracts-vectors.test.ts
-6 pass, 0 fail, 348 expect() calls
+6 pass, 0 fail, 354 expect() calls
 
 bun run check
 9 pass, 0 fail, 351 expect() calls; format, lint, typecheck, boundaries, OpenAPI, and package unit tests passed
@@ -244,7 +244,7 @@ cannot be promoted to a full matrix result.
 | Concurrency | No provider implementation or concurrent initialize/operation/destroy test. | **Missing; blocks.** |
 | Zeroization | The design requires wiping seeds, expanded keys, signing randomness, and shared secrets on success and every failure path, and inspecting copies, allocator reuse, exceptions, growth, worker transfer, and teardown ([research, lines 199–213](dotrelay-browser-bun-post-quantum-provider.md#L199-L213)). | **Missing; blocks.** |
 | Performance / memory | Upstream static allocation bounds are recorded, but no combined Wasm size, compression, initialization, peak Wasm/JS memory, p50/p95/p99 latency, low-tier device, or long-history measurements exist ([research, lines 131–152](dotrelay-browser-bun-post-quantum-provider.md#L131-L152)). | **Missing; blocks.** |
-| Stable error behavior | Current contract has `invalid_crypto_object` and `unsupported_crypto_suite` ([errors](../../packages/contracts/src/errors.ts#L1-L55)); decision #19 additionally requires `unsupported_crypto_runtime` and `crypto_provider_unavailable` before secret processing. | **Missing implementation/evidence; blocks.** |
+| Stable error behavior | The contract now declares `invalid_crypto_object`, `unsupported_crypto_suite`, `unsupported_crypto_runtime` (`422`), and `crypto_provider_unavailable` (`503`) ([errors](../../packages/contracts/src/errors.ts#L1-L60)); the provider still has no implementation or runtime result record. | **Contract present; provider evidence missing and blocks.** |
 
 The existing contract rejects server-visible private seed fields and validates fixed lengths, but no
 provider lifecycle exists to prove that the seeds remain encrypted at rest, are expanded only inside
@@ -459,9 +459,8 @@ packet cannot authorize a provider or a production claim:
     p50/p95/p99 latency, low-tier devices, or bounded long-Revision-chain verification.
 12. **No provider-backed key-storage evidence** proving encrypted-at-rest compact seeds and
     provider-only expansion for browser and CLI Devices.
-13. **Required #19 compatibility errors are not in the current contract registry.** The repository
-    has `invalid_crypto_object` and `unsupported_crypto_suite`, but no provider/runtime-unavailable
-    implementation or result record.
+13. **No provider/runtime result record exists.** The stable #19 compatibility error contracts are
+    present, but provider startup and pre-secret-processing behavior remain unimplemented under #26.
 14. **Open implementation work remains.** Provider integration issue [#26](https://github.com/LSP-Software/DotRelay/issues/26)
     and contract/vector issue [#30](https://github.com/LSP-Software/DotRelay/issues/30) remain open;
     their acceptance criteria are not evidenced by the current tree.

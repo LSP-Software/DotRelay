@@ -10,10 +10,15 @@ while it contains no Bun, browser, Node, persistence, authentication, or service
 
 Administrative HTTP uses strict JSON under `/api/v1` and stable `application/problem+json` codes.
 Capabilities, pagination, idempotency, and the checked OpenAPI output are part of that package.
-Protected grants, trust objects, lane objects, Manifest descriptors, Revisions, and transitions use
+Protected grants, trust objects, lane objects, Manifest descriptors, Revisions, and epoch lifecycle
+objects use
 `application/vnd.dotrelay.e2ee-v2+cbor`; their exact canonical bytes remain bytes at the API boundary.
 They are never JSON-reserialized, base64-wrapped, compressed, fetched through a generic object
 endpoint, or negotiated with another suite.
+
+This is a v2-only protocol: it has no v1 migration, suite negotiation, compatibility mode, suite
+floor, or suite-transition object. The epoch lifecycle object is for Project key rotation within
+v2 and is not a migration or compatibility mechanism.
 
 The closed suite value is unsigned CBOR `2`. The deterministic codec rejects noncanonical encodings,
 unknown or duplicate fields, invalid UTF-8, tags, indefinite lengths, floats, forbidden v1 values,
@@ -43,6 +48,7 @@ descriptions `16 KiB` validated UTF-8, and Values `1 MiB` validated UTF-8.
 The public problem registry is in `packages/contracts/src/errors.ts`. It preserves the stable
 status mapping: malformed requests and crypto objects `400`; authentication `401`; authorization
 `403`; missing resources `404`; state conflicts `409`; expired invitations/staging `410`; size
-`413`; media type `415`; unsupported API/suite `422`; rate limiting `429`; and service/rate-limit
-availability `503`. Protocol failures intentionally collapse to `invalid_crypto_object`, except a
-non-`2` suite, which is `unsupported_crypto_suite`.
+`413`; media type `415`; unsupported API/suite/runtime `422`; rate limiting `429`; and
+service/provider/rate-limit availability `503`. Protocol failures intentionally collapse to
+`invalid_crypto_object`, except a non-`2` suite, which is `unsupported_crypto_suite`. Runtime and
+provider errors are stable pre-secret-processing contracts; provider implementation belongs to #26.
