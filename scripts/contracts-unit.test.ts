@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   API_VERSION,
   CBOR_LIMITS,
+  type CborValue,
   canonicalDecode,
   canonicalEncode,
   createCapabilitiesDocument,
@@ -17,7 +18,7 @@ import {
   SUITE_NAME,
   SUITE_VALUE,
   validateIdempotencyKey,
-} from "./index";
+} from "@dotrelay/contracts";
 
 const zeros = (length: number): Uint8Array => new Uint8Array(length);
 const id = (value: number): Uint8Array => {
@@ -29,7 +30,7 @@ const id = (value: number): Uint8Array => {
 const userIdentity = () =>
   protocolObjectFromFields(
     1,
-    new Map([
+    new Map<number, CborValue>([
       [8, id(1)],
       [9, id(2)],
       [28, 1],
@@ -41,13 +42,13 @@ const userIdentity = () =>
 describe("deterministic CBOR boundary", () => {
   test("encodes integer-keyed maps in deterministic order and decodes a copy", () => {
     const first = canonicalEncode(
-      new Map<number, import("./index").CborValue>([
+      new Map<number, CborValue>([
         [1, "one"],
         [0, 2],
       ]),
     );
     const second = canonicalEncode(
-      new Map<number, import("./index").CborValue>([
+      new Map<number, CborValue>([
         [0, 2],
         [1, "one"],
       ]),
@@ -56,7 +57,7 @@ describe("deterministic CBOR boundary", () => {
     expect(first).toEqual(second);
     expect(Array.from(first)).toEqual([162, 0, 2, 1, 99, 111, 110, 101]);
     expect(canonicalDecode(first)).toEqual(
-      new Map([
+      new Map<number, CborValue>([
         [0, 2],
         [1, "one"],
       ]),
@@ -95,21 +96,27 @@ describe("dotrelay-e2ee-v2 registry", () => {
     const encoded = encodeProtocolObject(object);
     expect(parseProtocolObject(encoded)).toEqual(object);
 
-    const wrongSuite = new Map<number, import("./index").CborValue>(object);
+    const wrongSuite = new Map<number, CborValue>(object);
     wrongSuite.set(0, 1);
     expect(() => encodeProtocolObject(wrongSuite)).toThrow(
       "unsupported_crypto_suite",
     );
 
-    const unknown = new Map<number, import("./index").CborValue>(object);
+    const unknown = new Map<number, CborValue>(object);
     unknown.set(86, 1);
     expect(() => encodeProtocolObject(unknown)).toThrow(
       "invalid_crypto_object",
     );
 
-    const wrongIdentity = new Map<number, import("./index").CborValue>(object);
+    const wrongIdentity = new Map<number, CborValue>(object);
     wrongIdentity.set(43, zeros(31));
     expect(() => encodeProtocolObject(wrongIdentity)).toThrow(
+      "invalid_crypto_object",
+    );
+
+    const hostileFieldKey = new Map(object);
+    hostileFieldKey.set("toString" as never, 1);
+    expect(() => encodeProtocolObject(hostileFieldKey)).toThrow(
       "invalid_crypto_object",
     );
   });
@@ -126,9 +133,13 @@ describe("runtime-neutral API contracts", () => {
   test("has stable v1 problems, strict JSON objects, capabilities, and idempotency", () => {
     expect(API_VERSION).toBe("v1");
     expect(PROBLEM_STATUS.invalid_crypto_object).toBe(400);
+    expect(PROBLEM_STATUS.unsupported_crypto_runtime).toBe(422);
+    expect(PROBLEM_STATUS.crypto_provider_unavailable).toBe(503);
     expect(createProblem("unsupported_crypto_suite").code).toBe(
       "unsupported_crypto_suite",
     );
+    expect(createProblem("unsupported_crypto_runtime").status).toBe(422);
+    expect(createProblem("crypto_provider_unavailable").status).toBe(503);
     expect(() => createProblem("not-a-code" as never)).toThrow(
       "invalid_request",
     );
