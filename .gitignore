@@ -10,3 +10,4 @@ test-results/
 .env.*
 !.env.example
 generated/
+apps/web/next-env.d.ts
