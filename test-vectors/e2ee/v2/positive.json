@@ -1,0 +1,37 @@
+{
+  "suite": "dotrelay-e2ee-v2",
+  "suiteValue": 2,
+  "encoding": "deterministic-cbor",
+  "immutable": true,
+  "objectVectors": "objects.json",
+  "conditionalVectors": "conditional.json",
+  "objects": [
+    { "id": "object-1", "kind": 1 },
+    { "id": "object-2", "kind": 2 },
+    { "id": "object-3", "kind": 3, "conditional": "successor-signatures" },
+    { "id": "object-4", "kind": 4, "conditional": "enrollment-transcript" },
+    { "id": "object-5", "kind": 5, "conditional": "approval" },
+    { "id": "object-6", "kind": 6, "enum": "membership-role" },
+    { "id": "object-7", "kind": 7, "enum": "key-kind" },
+    { "id": "object-8", "kind": 8, "enum": "user-defined-value-grant" },
+    { "id": "object-9", "kind": 9, "enum": "grant-kind" },
+    { "id": "object-10", "kind": 10, "conditional": "recovery-envelope" },
+    { "id": "object-11", "kind": 11, "private": true },
+    { "id": "object-12", "kind": 12, "conditional": "epoch-transition" },
+    { "id": "object-13", "kind": 13, "enum": "lane-scope" },
+    { "id": "object-14", "kind": 14, "conditional": "authorization-routing" },
+    { "id": "object-15", "kind": 15, "conditional": "manifest-descriptor" },
+    { "id": "object-16", "kind": 16, "conditional": "rollback-fields" },
+    { "id": "object-17", "kind": 17, "conditional": "challenge-expiry" },
+    { "id": "object-18", "kind": 18, "private": true },
+    { "id": "object-19", "kind": 19, "private": true }
+  ],
+  "enumCoverage": {
+    "mutationKind": [1, 2, 3, 4, 5],
+    "laneScope": [1, 2, 3, 4],
+    "keyKind": [1, 2, 3],
+    "grantKind": [1, 2, 3, 4, 5, 6, 7],
+    "membershipRole": [1, 2, 3],
+    "lifecycle": [1, 2, 3, 4, 5, 6]
+  }
+}

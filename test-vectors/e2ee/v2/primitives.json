@@ -1,0 +1,59 @@
+{
+  "suite": "dotrelay-e2ee-v2",
+  "immutable": true,
+  "encoding": "deterministic-cbor",
+  "cbor": [
+    { "id": "uint-0", "value": 0, "canonicalHex": "00" },
+    { "id": "uint-23", "value": 23, "canonicalHex": "17" },
+    { "id": "uint-24", "value": 24, "canonicalHex": "1818" },
+    { "id": "uint-255", "value": 255, "canonicalHex": "18ff" },
+    { "id": "uint-256", "value": 256, "canonicalHex": "190100" },
+    {
+      "id": "uint-2^32",
+      "value": 4294967296,
+      "canonicalHex": "1b0000000100000000"
+    },
+    { "id": "empty-map", "value": {}, "canonicalHex": "a0" },
+    {
+      "id": "integer-keyed-map",
+      "canonicalHex": "a2000201636f6e65"
+    },
+    { "id": "byte-string", "canonicalHex": "430001ff" },
+    { "id": "utf8-text", "canonicalHex": "62c3a9" },
+    { "id": "array", "canonicalHex": "820102" }
+  ],
+  "domainSeparators": [
+    {
+      "id": "signature-input-prefix",
+      "utf8Hex": "446f7452656c617900646f7472656c61792d653265652d7632005369676e617475726500763100",
+      "sha384Hex": "b9254fdac855a83d1dec021a0d99893534b0baf4ff74bfe34d06c547f3c007caf258005d682c6af9038eadf50a0260cc"
+    },
+    {
+      "id": "composite-kem-domain",
+      "utf8Hex": "446f7452656c617900646f7472656c61792d653265652d763200436f6d706f736974654b454d004d4c2d4b454d2d3736382b583235353139007631",
+      "sha384Hex": "b6b2b7cf3d45b2a3ea2b68b5c9bd54d1bd6612ae09921b1a3c9d0b030dee48162452aa5f9b236286753b7f533d298a4c"
+    },
+    {
+      "id": "hkdf-salt-label",
+      "utf8Hex": "446f7452656c617900646f7472656c61792d653265652d763200484b44462d5348412d333834007631",
+      "sha384Hex": "8698906e4488a360dfdbeda12d6f5ec1f12bf0e51aac41f8538b972f8ceb71424844a4dacd9b2e3a7e567d231de8be9d"
+    }
+  ],
+  "fixedLengths": {
+    "mlKemPublicKey": 1184,
+    "mlKemPrivateSeed": 64,
+    "mlKemCiphertext": 1088,
+    "x25519": 32,
+    "mlDsaPublicKey": 1952,
+    "mlDsaPrivateSeed": 32,
+    "mlDsaSignature": 3309,
+    "ed25519": 32,
+    "ed25519Signature": 64,
+    "digest": 48,
+    "derivedKey": 32,
+    "nonce": 24,
+    "tag": 16,
+    "opaqueId": 16,
+    "publicIdentity": 3200
+  }
+}
