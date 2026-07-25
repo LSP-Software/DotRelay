@@ -1,11 +1,12 @@
 import postgres from "postgres";
 
 const databaseName = "dotrelay_shadow";
-const sql = postgres(
-  process.env.DATABASE_ADMIN_URL ??
-    "postgresql://dotrelay:dotrelay@127.0.0.1:5432/postgres",
-  { max: 1 },
+const adminDatabaseUrl = new URL(
+  process.env.DATABASE_URL ??
+    "postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay",
 );
+adminDatabaseUrl.pathname = "/postgres";
+const sql = postgres(adminDatabaseUrl.toString(), { max: 1 });
 
 try {
   const existing = await sql<{ datname: string }[]>`

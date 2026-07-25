@@ -1,7 +1,7 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
 import { validateWorkspaceBoundaries } from "./verify-boundaries";
 
 const temporaryRoots: string[] = [];
@@ -46,11 +46,13 @@ describe("validateWorkspaceBoundaries", () => {
     await writeJson(join(root, "packages", "shared", "package.json"), {
       name: "@dotrelay/shared",
       private: true,
+      exports: { ".": "./src/index.ts" },
     });
     await writeJson(join(root, "packages", "runtime-neutral", "package.json"), {
       name: "@dotrelay/runtime-neutral",
       private: true,
       dotrelay: { runtime: "neutral" },
+      exports: { ".": "./src/index.ts" },
     });
     await Bun.write(
       join(root, "apps", "web", "src", "index.ts"),
@@ -113,7 +115,14 @@ describe("validateWorkspaceBoundaries", () => {
     });
     await Bun.write(
       join(root, "apps", "web", "src", "index.ts"),
-      'import "@dotrelay/shared";\n',
+      [
+        'import "@dotrelay/shared";',
+        'export { shared } from "@dotrelay/shared";',
+        'const loaded = import("@dotrelay/shared");',
+        'const required = require("@dotrelay/shared");',
+        "void loaded;",
+        "void required;",
+      ].join("\n"),
     );
     await Bun.write(
       join(root, "apps", "api", "src", "index.ts"),
@@ -126,6 +135,40 @@ describe("validateWorkspaceBoundaries", () => {
     await Bun.write(
       join(root, "packages", "runtime-neutral", "src", "index.ts"),
       "export const neutral = true;\n",
+    );
+
+    expect(await validateWorkspaceBoundaries(root)).toEqual([]);
+  });
+
+  test("ignores comments and strings when checking runtime boundaries", async () => {
+    const root = await createFixture();
+
+    await writeJson(join(root, "apps", "web", "package.json"), {
+      name: "@dotrelay/web",
+      private: true,
+    });
+    await writeJson(join(root, "apps", "api", "package.json"), {
+      name: "@dotrelay/api",
+      private: true,
+    });
+    await writeJson(join(root, "packages", "shared", "package.json"), {
+      name: "@dotrelay/shared",
+      private: true,
+      exports: { ".": "./src/index.ts" },
+    });
+    await writeJson(join(root, "packages", "runtime-neutral", "package.json"), {
+      name: "@dotrelay/runtime-neutral",
+      private: true,
+      dotrelay: { runtime: "neutral" },
+      exports: { ".": "./src/index.ts" },
+    });
+    await Bun.write(
+      join(root, "packages", "runtime-neutral", "src", "index.ts"),
+      [
+        '// import "@dotrelay/undeclared";',
+        'const example = "window process node:fs require(\\"@dotrelay/undeclared\\")";',
+        "export { example };",
+      ].join("\n"),
     );
 
     expect(await validateWorkspaceBoundaries(root)).toEqual([]);

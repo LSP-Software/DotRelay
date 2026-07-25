@@ -1,6 +1,5 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": ["DATABASE_URL", "DATABASE_ADMIN_URL", "VALKEY_URL"],
   "tasks": {
     "dev": {
       "cache": false,
@@ -32,6 +31,7 @@
       "outputs": []
     },
     "test:integration": {
+      "passThroughEnv": ["DATABASE_URL", "VALKEY_URL"],
       "outputs": []
     },
     "test:e2e": {
@@ -43,9 +43,11 @@
       "cache": false
     },
     "db:validate": {
+      "passThroughEnv": ["DATABASE_URL", "SHADOW_DATABASE_URL"],
       "outputs": []
     },
     "db:migrate-check": {
+      "passThroughEnv": ["DATABASE_URL", "SHADOW_DATABASE_URL"],
       "outputs": []
     },
     "docs:validate": {

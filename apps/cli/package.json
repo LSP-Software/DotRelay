@@ -8,7 +8,7 @@
     "dev": "bun run src/index.ts",
     "build": "bun build --compile src/index.ts --outfile dist/dotrelay",
     "smoke": "bun ../../scripts/smoke-cli.ts",
-    "format": "biome format .",
+    "format": "biome format . --write",
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc --project tsconfig.json",

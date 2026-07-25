@@ -4,12 +4,11 @@
 routine bypasses are forbidden. An emergency bypass is exceptional and requires a corrective pull
 request with an explanation.
 
-Production releases are tag-only. Only an immutable SemVer tag such as `v1.2.3`, pointing to a
-fully verified commit on `main`, starts the release workflow. The workflow reruns release-critical
-checks and promotes the exact artifacts built by that run. Merging to `main` never deploys
-production.
+Production releases are tag-only. A tag matching `v*.*.*` starts the release workflow; the workflow
+checks that the tagged commit is an ancestor of `main`, reruns `bun run verify`, and publishes the
+single `apps/cli/dist/dotrelay` binary built on `ubuntu-latest` as a GitHub Release asset. Merging to
+`main` never deploys production.
 
-The CLI is compiled into self-contained native binaries and the release workflow publishes the
-supported platform artifacts plus a small npm distribution that selects the platform binary. No
-production release is permitted before the final MVP verification and security evidence ticket is
-complete.
+The current workflow does not enforce immutable tag references or strict SemVer beyond the tag glob,
+and it does not publish platform-specific artifacts or an npm distribution. Those guarantees require
+additional release-workflow and repository-policy changes before they can be promised.

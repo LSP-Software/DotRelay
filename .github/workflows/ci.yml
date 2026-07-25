@@ -9,6 +9,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   BUN_VERSION: 1.3.14
 
@@ -17,39 +20,46 @@ jobs:
     name: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run check
+      - run: bun run tracked-tree:clean
 
   build-smoke:
     name: build and smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run build
+      - run: bun run tracked-tree:clean
       - run: bun run smoke
+      - run: bun run tracked-tree:clean
 
   unit:
     name: unit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run test:unit
+      - run: bun run tracked-tree:clean
 
   integration:
     name: PostgreSQL and Valkey integration
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
         env:
           POSTGRES_USER: dotrelay
           POSTGRES_PASSWORD: dotrelay
@@ -59,7 +69,7 @@ jobs:
           --health-cmd "pg_isready -U dotrelay -d dotrelay"
           --health-interval 10s --health-timeout 5s --health-retries 5
       valkey:
-        image: valkey/valkey:8
+        image: valkey/valkey@sha256:495e4fecdc98ee48a20b207726caa5ab6451e0fac3642a9be10d9e70b3068df6
         ports: ["6379:6379"]
         options: >-
           --health-cmd "valkey-cli ping"
@@ -68,22 +78,26 @@ jobs:
       DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay
       VALKEY_URL: redis://127.0.0.1:6379
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run test:integration
+      - run: bun run tracked-tree:clean
 
   browser-e2e:
     name: browser E2E
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run test:e2e
+      - run: bun run tracked-tree:clean
 
   cli-round-trip:
     name: packaged CLI round trip
@@ -93,18 +107,20 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run test:cli
+      - run: bun run tracked-tree:clean
 
   prisma:
     name: Prisma schema and migrations
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
         env:
           POSTGRES_USER: dotrelay
           POSTGRES_PASSWORD: dotrelay
@@ -115,44 +131,51 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay
-      DATABASE_ADMIN_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/postgres
       SHADOW_DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay_shadow
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun scripts/create-shadow-database.ts
       - run: bun run db:validate
+      - run: bun run tracked-tree:clean
       - run: bun run db:migrate-check
+      - run: bun run tracked-tree:clean
 
   docs:
     name: documentation and links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run docs:validate
+      - run: bun run tracked-tree:clean
 
   security:
     name: dependency security audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run security:audit
+      - run: bun run tracked-tree:clean
 
   tracked-tree-clean:
     name: tracked tree cleanliness
     runs-on: ubuntu-latest
     needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, prisma, docs, security]
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run tracked-tree:clean

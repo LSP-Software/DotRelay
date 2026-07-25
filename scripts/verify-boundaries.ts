@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
+import ts from "typescript";
 
 type WorkspaceKind = "app" | "package";
 type WorkspaceManifest = {
@@ -15,6 +16,7 @@ const ignoredDirectories = new Set([
   ".next",
   "coverage",
   "dist",
+  "generated",
   "node_modules",
 ]);
 const workspaceDependencyFields = [
@@ -23,6 +25,13 @@ const workspaceDependencyFields = [
   "optionalDependencies",
   "peerDependencies",
 ];
+const runtimeSensitiveIdentifiers = new Set([
+  "Bun",
+  "document",
+  "navigator",
+  "process",
+  "window",
+]);
 
 async function findWorkspaceDirectories(
   root: string,
@@ -97,15 +106,56 @@ function workspaceDependencyMap(
   return dependencies;
 }
 
+function parsedSource(source: string): ts.SourceFile {
+  return ts.createSourceFile(
+    "boundary-check.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+}
+
 function importedSpecifiers(source: string): string[] {
   const imports: string[] = [];
-  const pattern =
-    /(?:import\s+(?:type\s+)?(?:[^"']+?\s+from\s+)?|import\s*\(|export\s+[^"']+?\s+from\s+|require\s*\()\s*["']([^"']+)["']/g;
-  for (const match of source.matchAll(pattern)) {
-    const specifier = match[1];
-    if (specifier) imports.push(specifier);
+  const sourceFile = parsedSource(source);
+  const addModuleSpecifier = (specifier: ts.Expression | undefined): void => {
+    if (specifier && ts.isStringLiteral(specifier))
+      imports.push(specifier.text);
+  };
+
+  function visit(node: ts.Node): void {
+    if (ts.isImportDeclaration(node)) {
+      addModuleSpecifier(node.moduleSpecifier);
+    } else if (ts.isExportDeclaration(node)) {
+      addModuleSpecifier(node.moduleSpecifier);
+    } else if (ts.isCallExpression(node)) {
+      const isDynamicImport =
+        node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const isRequireCall =
+        ts.isIdentifier(node.expression) && node.expression.text === "require";
+      if (isDynamicImport || isRequireCall)
+        addModuleSpecifier(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
   }
+
+  visit(sourceFile);
   return imports;
+}
+
+function containsRuntimeSensitiveSyntax(source: string): boolean {
+  const sourceFile = parsedSource(source);
+  let found = false;
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node) && runtimeSensitiveIdentifiers.has(node.text)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return found;
 }
 
 function cycleDescriptions(graph: Map<string, Set<string>>): string[] {
@@ -194,11 +244,13 @@ export async function validateWorkspaceBoundaries(
     ) {
       for (const file of await sourceFiles(workspace.directory)) {
         const source = await readFile(file, "utf8");
-        if (
-          /\b(window|document|navigator|Bun)\b|\b(node:|process\.)|from\s+["'](?:node:|(?:fs|path|os|crypto)(?:\/|["']))/.test(
-            source,
-          )
-        ) {
+        const specifiers = importedSpecifiers(source);
+        const importsServerRuntime = specifiers.some(
+          (specifier) =>
+            specifier.startsWith("node:") ||
+            /^(fs|path|os|crypto)(\/|$)/.test(specifier),
+        );
+        if (containsRuntimeSensitiveSyntax(source) || importsServerRuntime) {
           violations.push(
             `${relative(root, file)}: runtime-neutral package contains browser-only or server-only code`,
           );

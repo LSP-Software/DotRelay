@@ -5,7 +5,7 @@
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "smoke": "bun ../../scripts/smoke-api.ts",
-    "format": "biome format .",
+    "format": "biome format . --write",
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc --project tsconfig.json",
@@ -14,6 +14,10 @@
     "db:migrate-check": "bun ../../scripts/check-migrations.ts"
   },
   "dependencies": {
+    "@prisma/client": "^7.9.0",
     "hono": "^4.12.32"
+  },
+  "devDependencies": {
+    "prisma": "^7.9.0"
   }
 }

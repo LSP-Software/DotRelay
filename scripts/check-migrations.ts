@@ -10,18 +10,6 @@ await run(
     "x",
     "prisma",
     "migrate",
-    "deploy",
-    "--config",
-    join(root, "apps/api/prisma.config.ts"),
-  ],
-  root,
-);
-await run(
-  [
-    "bun",
-    "x",
-    "prisma",
-    "migrate",
     "diff",
     "--config",
     join(root, "apps/api/prisma.config.ts"),
@@ -29,6 +17,7 @@ await run(
     "--to-schema",
     schema,
     "--script",
+    "--exit-code",
   ],
   root,
 );
@@ -45,6 +34,7 @@ await run(
     "--to-schema",
     schema,
     "--script",
+    "--exit-code",
   ],
   root,
 );
@@ -62,6 +52,7 @@ await run(
     "--to-schema",
     schema,
     "--script",
+    "--exit-code",
   ],
   root,
 );
