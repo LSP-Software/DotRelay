@@ -27,8 +27,19 @@ The authoritative inputs are:
 | [`docs/research/dotrelay-browser-bun-post-quantum-provider.md`](dotrelay-browser-bun-post-quantum-provider.md) | Primary-source-backed provider research and explicit statement that selection is not production approval. |
 | [`test-vectors/e2ee/v2/README.md`](../../test-vectors/e2ee/v2/README.md) and [`packages/contracts`](../../packages/contracts/src/registry.ts) | Checked-in immutable deterministic-CBOR contract corpus and registry. |
 
-The issue tracker was queried read-only on the review date. No issue or comment supplies a Wasm
-artifact hash, completed build record, or completed independent review report.
+The issue tracker was queried read-only on the review date with the ordered command below:
+
+```sh
+for issue in 1 17 18 19 26 30 36; do
+  gh issue view "$issue" --repo LSP-Software/DotRelay \
+    --json number,title,state,labels,body,comments
+done
+```
+
+The ordered JSON response export was captured at `2026-07-25T20:27:25Z` and has SHA-256
+`dea259e486b89e5623e8ee3e3688bff4aa1b4716556a0ffbad00ef0b27a11d23`. This dated digest is the
+immutable issue-tracker snapshot reference for this dossier. No issue or comment in that snapshot
+supplies a Wasm artifact hash, completed build record, or completed independent review report.
 
 ## 2. Provider identity and artifact identity
 
@@ -98,8 +109,11 @@ and [decision #19's supply-chain gate](https://github.com/LSP-Software/DotRelay/
 
 The repository pins Bun `1.3.14` in [`package.json`](../../package.json#L1-L5), and CI sets the same
 version and pins its checkout/setup actions by commit in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml#L15-L29).
-The release workflow reruns the repository verification gate and builds the current CLI on
+The workflow also uses digest-pinned service images where applicable, but its build jobs run on the
+mutable `ubuntu-latest` hosted runner. The release workflow likewise builds the current CLI on
 `ubuntu-latest` ([`.github/workflows/release.yml`](../../.github/workflows/release.yml#L14-L33)).
+These are controls for the existing monorepo CI/release gate, not a pinned Emscripten/LLVM provider
+build environment and not stronger provider-build supply-chain evidence.
 
 There is no Emscripten/LLVM toolchain declaration, container digest, Wasm linker configuration,
 provider build script, two-builder job, or reproducibility comparison. The current repository
@@ -183,6 +197,12 @@ bun test scripts/contracts-vectors.test.ts
 
 bun run check
 9 pass, 0 fail, 351 expect() calls; format, lint, typecheck, boundaries, OpenAPI, and package unit tests passed
+
+bun run docs:validate
+✓ validated 5 Wiki source pages and their links
+
+git diff --check
+pass; no whitespace errors reported
 ```
 
 The vector test asserts all 19 object kinds, all 28 conditional vectors, the frozen negative corpus,
