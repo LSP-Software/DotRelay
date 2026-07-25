@@ -1,0 +1,48 @@
+{
+  "name": "dotrelay",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "smoke": "turbo run smoke",
+    "format": "biome format .",
+    "format:check": "biome ci .",
+    "format:fix": "biome format . --write",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint . --write",
+    "typecheck": "tsc --project tsconfig.json && turbo run typecheck",
+    "boundaries": "bun scripts/verify-boundaries.ts",
+    "test:unit": "bun test scripts/verify-boundaries.test.ts && turbo run test:unit",
+    "test:integration": "bun scripts/test-services.ts",
+    "test:e2e": "playwright test --config=playwright.config.ts",
+    "test:cli": "turbo run test:cli --filter=@dotrelay/cli",
+    "db:validate": "bun scripts/validate-prisma.ts",
+    "db:migrate-check": "bun scripts/check-migrations.ts",
+    "docs:validate": "bun scripts/validate-docs.ts",
+    "tracked-tree:clean": "bun scripts/check-tracked-tree.ts",
+    "security:audit": "bun audit",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run boundaries && bun run test:unit",
+    "verify": "bun run check && bun run build && bun run smoke && bun run test:integration && bun run test:e2e && bun run test:cli && bun run db:validate && bun run db:migrate-check && bun run docs:validate && bun run tracked-tree:clean"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.5",
+    "@playwright/test": "^1.62.0",
+    "@types/bun": "^1.3.14",
+    "ioredis": "^5.11.1",
+    "postgres": "^3.4.9",
+    "prisma": "^7.9.0",
+    "turbo": "^2.10.7",
+    "typescript": "5"
+  },
+  "overrides": {
+    "find-my-way": "9.7.0",
+    "postcss": "8.5.23",
+    "sharp": "0.35.3",
+    "valibot": "1.4.2"
+  }
+}

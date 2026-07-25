@@ -29,6 +29,11 @@ The relationship between one User and one Team, carrying an owner, admin, or mem
 access lifecycle.
 _Avoid_: Seat, access grant
 
+**Membership Invitation**:
+A single-use, expiring invitation addressed to a stable GitHub identity. Acceptance by the matching
+User creates a Membership that remains pending until its required key grants are provisioned.
+_Avoid_: Invite link, seat invitation
+
 **Member**:
 A User whose Membership in a Team is active.
 _Avoid_: Collaborator, teammate
@@ -44,12 +49,13 @@ to clients but does not grant DotRelay access.
 _Avoid_: Project
 
 **Environment**:
-A named configuration scope within a Project, such as development, staging, or production.
+A revisioned, named configuration scope within a Project, such as development, staging, or
+production.
 _Avoid_: File, stage
 
 **Manifest**:
-The complete logical set of Variable definitions, Shared Values, and User-defined Values for an
-Environment at a Revision.
+The complete logical encrypted content of an Environment at a Revision: its Environment definition,
+Variable definitions, Shared Values, and User-defined Values.
 _Avoid_: Env file, payload
 
 **Variable**:
@@ -78,3 +84,39 @@ _Avoid_: Revert, restore, delete
 **Server Profile**:
 A named hosted or self-hosted DotRelay service selected by a client.
 _Avoid_: Instance, endpoint
+
+**History Trust Reset**:
+An explicit acknowledgement that discards one Environment's locally trusted Revision continuity
+after a known service restore without recovering its missing history.
+_Avoid_: Rollback, profile reset, automatic resynchronization
+
+**Application Diagnostic Event**:
+A non-durable, structured record of service behavior used for operational diagnosis without
+protected content, domain identifiers, or disallowed metadata.
+_Avoid_: Log line, telemetry payload
+
+**Correlation ID**:
+A random, non-domain identifier that links diagnostic records for one request or bounded internal
+execution without identifying a User, Device, Team, Project, Environment, Variable, Revision, or
+GitHub Repository.
+_Avoid_: Operation id, domain id
+
+**Security Request Log**:
+A short-retention record of the allowlisted request metadata needed for security investigation;
+it is separate from an Application Diagnostic Event and a durable Audit Fact.
+_Avoid_: Access log, audit log
+
+**Audit Fact**:
+A durable record of a successful security or domain change containing only the approved opaque
+actors, affected entities, lifecycle change, receipt time, and immutable outcome references.
+_Avoid_: Debug log, event stream
+
+**Diagnostic Field Allowlist**:
+The small set of typed operational fields permitted in an Application Diagnostic Event; it is the
+boundary that redaction and serialization must not expand.
+_Avoid_: Log context, arbitrary metadata
+
+**Diagnostic Event Schema**:
+The versioned fixed envelope and event names used by Application Diagnostic Events, carrying only
+the Diagnostic Field Allowlist and no free-form diagnostic content.
+_Avoid_: Ad hoc log format, exception dump

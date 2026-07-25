@@ -1,0 +1,57 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "dist/**"]
+    },
+    "smoke": {
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "format": {
+      "outputs": []
+    },
+    "format:check": {
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "outputs": []
+    },
+    "test:unit": {
+      "dependsOn": ["^test:unit"],
+      "outputs": []
+    },
+    "test:integration": {
+      "passThroughEnv": ["DATABASE_URL", "VALKEY_URL"],
+      "outputs": []
+    },
+    "test:e2e": {
+      "outputs": []
+    },
+    "test:cli": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": false
+    },
+    "db:validate": {
+      "passThroughEnv": ["DATABASE_URL", "SHADOW_DATABASE_URL"],
+      "outputs": []
+    },
+    "db:migrate-check": {
+      "passThroughEnv": ["DATABASE_URL", "SHADOW_DATABASE_URL"],
+      "outputs": []
+    },
+    "docs:validate": {
+      "outputs": []
+    }
+  }
+}
