@@ -1,0 +1,31 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/wiki/**"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: publish canonical Wiki source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout Wiki repository
+        run: git clone "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git" wiki
+      - name: Mirror canonical source
+        run: |
+          rsync -a --delete --exclude .git/ docs/wiki/ wiki/
+          git -C wiki config user.name "github-actions[bot]"
+          git -C wiki config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C wiki add --all
+          if git -C wiki diff --cached --quiet; then
+            echo "Wiki is already up to date"
+          else
+            git -C wiki commit -m "docs: publish Wiki source from $GITHUB_SHA"
+            git -C wiki push origin HEAD
+          fi

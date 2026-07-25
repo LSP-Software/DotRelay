@@ -1,0 +1,19 @@
+{
+  "name": "@dotrelay/api",
+  "private": true,
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "smoke": "bun ../../scripts/smoke-api.ts",
+    "format": "biome format .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --project tsconfig.json",
+    "test:unit": "bun test",
+    "db:validate": "bun ../../scripts/validate-prisma.ts",
+    "db:migrate-check": "bun ../../scripts/check-migrations.ts"
+  },
+  "dependencies": {
+    "hono": "^4.12.32"
+  }
+}

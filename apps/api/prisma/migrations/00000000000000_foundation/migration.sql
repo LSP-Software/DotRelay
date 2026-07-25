@@ -1,0 +1,1 @@
+-- The foundation has no product tables. Later tickets add forward-only migrations.

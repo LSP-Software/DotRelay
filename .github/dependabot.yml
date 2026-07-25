@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      compatible-bun-updates:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      compatible-actions-updates:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10

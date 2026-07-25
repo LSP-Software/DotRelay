@@ -1,0 +1,55 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["DATABASE_URL", "VALKEY_URL"],
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "dist/**"]
+    },
+    "smoke": {
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "format": {
+      "outputs": []
+    },
+    "format:check": {
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "outputs": []
+    },
+    "test:unit": {
+      "dependsOn": ["^test:unit"],
+      "outputs": []
+    },
+    "test:integration": {
+      "outputs": []
+    },
+    "test:e2e": {
+      "outputs": []
+    },
+    "test:cli": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": false
+    },
+    "db:validate": {
+      "outputs": []
+    },
+    "db:migrate-check": {
+      "outputs": []
+    },
+    "docs:validate": {
+      "outputs": []
+    }
+  }
+}

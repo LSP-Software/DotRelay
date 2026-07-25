@@ -1,0 +1,18 @@
+{
+  "name": "@dotrelay/cli",
+  "private": true,
+  "bin": {
+    "dotrelay": "dist/dotrelay"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build --compile src/index.ts --outfile dist/dotrelay",
+    "smoke": "bun ../../scripts/smoke-cli.ts",
+    "format": "biome format .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --project tsconfig.json",
+    "test:unit": "bun test",
+    "test:cli": "bun ../../scripts/test-cli.ts"
+  }
+}
