@@ -20,7 +20,8 @@ version or copy one from another manifest. Commit the resulting text `bun.lock`.
 The service-backed gates use the local PostgreSQL and Valkey services from `compose.yaml`:
 
 ```sh
-docker compose up -d postgres valkey
+cp .env.example .env
+docker compose up -d --wait postgres valkey
 bun run test:integration
 bun run db:migrate-check
 docker compose down
