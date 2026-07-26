@@ -1,18 +1,22 @@
-import { canonicalDecode, canonicalEncode } from "@dotrelay/contracts";
+import {
+  canonicalDecode,
+  canonicalEncode,
+  parseProtocolObject,
+} from "@dotrelay/contracts";
+import { bytesFromHex, hexFromBytes } from "./vector-hex";
 
-const bytesFromHex = (value: string): Uint8Array => {
-  if (!/^(?:[0-9a-f]{2})*$/.test(value)) throw new Error("invalid vector hex");
-  return Uint8Array.from(
-    value.match(/../g)?.map((pair) => Number.parseInt(pair, 16)) ?? [],
-  );
-};
-
-const hexFromBytes = (value: Uint8Array): string =>
-  Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
+export type BrowserVectorEntry = Readonly<{
+  readonly hex: string;
+  readonly protocolObject?: boolean;
+}>;
 
 Object.assign(globalThis, {
-  dotRelayCanonicalHexes: (entries: Array<{ hex: string }>): string[] =>
-    entries.map(({ hex }) =>
-      hexFromBytes(canonicalEncode(canonicalDecode(bytesFromHex(hex)))),
-    ),
+  dotRelayCanonicalHexes: (entries: readonly BrowserVectorEntry[]): string[] =>
+    entries.map(({ hex, protocolObject }) => {
+      const bytes = bytesFromHex(hex);
+      const value = protocolObject
+        ? parseProtocolObject(bytes)
+        : canonicalDecode(bytes);
+      return hexFromBytes(canonicalEncode(value));
+    }),
 });

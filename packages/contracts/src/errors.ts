@@ -78,6 +78,7 @@ export type Problem = {
   readonly status: number;
   readonly code: ProblemCode;
   readonly detail: string;
+  readonly instance?: string;
   readonly retryAfterSeconds?: number;
   readonly headId?: string;
   readonly headHash?: string;

@@ -3,7 +3,7 @@
 **Review date:** 2026-07-25
 **Review scope:** frozen `dotrelay-e2ee-v2` provider gate
 **Disposition:** **BLOCKED — evidence dossier only; no approval issued**
-**Repository revision inspected:** `29e476a1920bea0c0193776522351293ab38a47d` (`codex/implement-issue-30`); the follow-up contract-only changes are separately verified below.
+**Repository revision inspected:** `69b8d3fe7940e8433a8f8fcf05381bffe8ad0e93` (`main` baseline). Contract-only changes are assessed against that baseline with `git diff main...HEAD`; the resulting branch is not an approval target.
 
 This packet records what is evidenced, what is only required by the authoritative decisions, and
 what is absent. It does not implement cryptography, integrate a provider, or constitute protocol,
@@ -22,7 +22,7 @@ The authoritative inputs are:
 | [Completed decision #18](https://github.com/LSP-Software/DotRelay/issues/18) | Source-pinned portable-C Wasm provider selection and the provider production gates. |
 | [Completed decision #19](https://github.com/LSP-Software/DotRelay/issues/19) | Conditional security claim, exclusions, evidence requirements, compatibility errors, and hard no-waiver release gate. |
 | [Open integration issue #26](https://github.com/LSP-Software/DotRelay/issues/26) | Concrete provider implementation acceptance criteria: exact artifact, source/build evidence, complete vectors/oracle/matrix, lifecycle, and performance gates. |
-| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30) | Contract and vector acceptance criteria, including provider primitive cases and independent protocol approval; the issue remains open. |
+| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30) | Provider-independent contract, deterministic-CBOR registry, and immutable-corpus acceptance criteria. Provider execution and independent approval belong to #26. |
 | [Open final gate #36](https://github.com/LSP-Software/DotRelay/issues/36) | Requires this version-bound dossier and separate independent cryptographic/application-security review before any secret-capable release. |
 | [`docs/research/dotrelay-browser-bun-post-quantum-provider.md`](dotrelay-browser-bun-post-quantum-provider.md) | Primary-source-backed provider research and explicit statement that selection is not production approval. |
 | [`test-vectors/e2ee/v2/README.md`](../../test-vectors/e2ee/v2/README.md) and [`packages/contracts`](../../packages/contracts/src/registry.ts) | Checked-in immutable deterministic-CBOR contract corpus and registry. |
@@ -169,8 +169,9 @@ integrator owns the production build ([lines 163–175](dotrelay-browser-bun-pos
 The checked-in corpus is immutable and intentionally provider-neutral. `manifest.json` commits
 each corpus file with SHA-384. `rfc-primitives.json` records RFC 5869 HKDF intermediate/output,
 RFC 7748 X25519, RFC 8032 Ed25519, and SHA-384 known-answer data, plus exact NIST ACVP source
-locations for ML-KEM and ML-DSA operations. It does not claim that a provider has executed those
-ACVP vectors.
+locations, source revisions, and SHA-256 content digests for ML-KEM and ML-DSA operations. It
+records #26 as the owner for provider execution and does not claim that a provider has executed
+those ACVP vectors.
 
 The corpus covers object kinds 1–19, mutation values 1–5, lane scopes 1–4, key kinds 1–3, grant
 kinds 1–7, membership roles 1–3, lifecycle values 1–6, canonical round trips, explicit ceilings,

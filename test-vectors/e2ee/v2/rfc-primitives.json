@@ -60,35 +60,50 @@
   "acvpReferences": [
     {
       "id": "ml-kem-keygen-fips203",
-      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/master/gen-val/json-files/ML-KEM-keyGen-FIPS203/internalProjection.json",
+      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/c924096a71e5d050742e31efa6846d1e2d6fb3bd/gen-val/json-files/ML-KEM-keyGen-FIPS203/internalProjection.json",
+      "sourceRevision": "c924096a71e5d050742e31efa6846d1e2d6fb3bd",
+      "sha256": "d7a62a2c3476957f56dd8d24f9004ea6776ccfe995ffe71a65bb9506dc9c7b1b",
+      "handoffIssue": 26,
       "algorithm": "ML-KEM",
       "revision": "FIPS203",
       "operations": ["keyGen"]
     },
     {
       "id": "ml-kem-encap-decap-fips203",
-      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/master/gen-val/json-files/ML-KEM-encapDecap-FIPS203/internalProjection.json",
+      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/c924096a71e5d050742e31efa6846d1e2d6fb3bd/gen-val/json-files/ML-KEM-encapDecap-FIPS203/internalProjection.json",
+      "sourceRevision": "c924096a71e5d050742e31efa6846d1e2d6fb3bd",
+      "sha256": "8fe8b0ade31d8f5754e909599574eb9f2d60932d95a39bc479b2b48e38f65916",
+      "handoffIssue": 26,
       "algorithm": "ML-KEM",
       "revision": "FIPS203",
       "operations": ["encapsulation", "decapsulation"]
     },
     {
       "id": "ml-dsa-keygen-fips204",
-      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/master/gen-val/json-files/ML-DSA-keyGen-FIPS204/internalProjection.json",
+      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/c924096a71e5d050742e31efa6846d1e2d6fb3bd/gen-val/json-files/ML-DSA-keyGen-FIPS204/internalProjection.json",
+      "sourceRevision": "c924096a71e5d050742e31efa6846d1e2d6fb3bd",
+      "sha256": "e67ee6540d40e11506c3c4e3b1f79fc1cefcd49820db99fc61f87cc8ba463baf",
+      "handoffIssue": 26,
       "algorithm": "ML-DSA",
       "revision": "FIPS204",
       "operations": ["keyGen"]
     },
     {
       "id": "ml-dsa-sign-fips204",
-      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/master/gen-val/json-files/ML-DSA-sigGen-FIPS204/internalProjection.json",
+      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/c924096a71e5d050742e31efa6846d1e2d6fb3bd/gen-val/json-files/ML-DSA-sigGen-FIPS204/internalProjection.json",
+      "sourceRevision": "c924096a71e5d050742e31efa6846d1e2d6fb3bd",
+      "sha256": "72dcaf5f69853ca267ccd16af9cb40949786aca0fcfbf05d1ebeba132b93af22",
+      "handoffIssue": 26,
       "algorithm": "ML-DSA",
       "revision": "FIPS204",
       "operations": ["sign"]
     },
     {
       "id": "ml-dsa-verify-fips204",
-      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/master/gen-val/json-files/ML-DSA-sigVer-FIPS204/internalProjection.json",
+      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/c924096a71e5d050742e31efa6846d1e2d6fb3bd/gen-val/json-files/ML-DSA-sigVer-FIPS204/internalProjection.json",
+      "sourceRevision": "c924096a71e5d050742e31efa6846d1e2d6fb3bd",
+      "sha256": "a41362abd3391b4858cf5d04556b6662881b0ac90eebf886c5c7271b0baf69d5",
+      "handoffIssue": 26,
       "algorithm": "ML-DSA",
       "revision": "FIPS204",
       "operations": ["verify"]

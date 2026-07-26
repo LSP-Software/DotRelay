@@ -2,22 +2,47 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalDecode, canonicalEncode } from "@dotrelay/contracts";
-import { chromium } from "@playwright/test";
+import {
+  canonicalDecode,
+  canonicalEncode,
+  parseProtocolObject,
+} from "@dotrelay/contracts";
+import { chromium, type Page } from "@playwright/test";
+import type { BrowserVectorEntry } from "./browser-vector-runner";
+import { bytesFromHex, hexFromBytes } from "./vector-hex";
 
-const fixtures: { fixtures: Array<{ hex: string }> } = await Bun.file(
+const browserFixtures: { fixtures: BrowserVectorEntry[] } = await Bun.file(
   "test-vectors/e2ee/v2/browser-bun.json",
 ).json();
 
-const bytesFromHex = (value: string): Uint8Array => {
-  if (!/^(?:[0-9a-f]{2})*$/.test(value)) throw new Error("invalid vector hex");
-  return Uint8Array.from(
-    value.match(/../g)?.map((pair) => Number.parseInt(pair, 16)) ?? [],
+const protocolFixtures = async (): Promise<BrowserVectorEntry[]> => {
+  const objects = await Bun.file("test-vectors/e2ee/v2/objects.json").json();
+  const conditional = await Bun.file(
+    "test-vectors/e2ee/v2/conditional.json",
+  ).json();
+  return [...objects.vectors, ...conditional.vectors].map(
+    (vector: { canonicalHex: string }) => ({
+      hex: vector.canonicalHex,
+      protocolObject: true,
+    }),
   );
 };
 
-const hexFromBytes = (value: Uint8Array): string =>
-  Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
+type BrowserRunner = Readonly<{
+  readonly dotRelayCanonicalHexes: (
+    entries: readonly BrowserVectorEntry[],
+  ) => string[];
+}>;
+
+const evaluateCanonicalHexes = async (
+  page: Page,
+  entries: readonly BrowserVectorEntry[],
+): Promise<string[]> =>
+  page.evaluate(
+    (vectors) =>
+      (globalThis as unknown as BrowserRunner).dotRelayCanonicalHexes(vectors),
+    entries,
+  );
 
 test("Chromium and Bun preserve the frozen protocol bytes", async () => {
   const outputDirectory = await mkdtemp(join(tmpdir(), "dotrelay-contracts-"));
@@ -35,20 +60,18 @@ test("Chromium and Bun preserve the frozen protocol bytes", async () => {
       await page.addScriptTag({
         path: join(outputDirectory, "browser-vector-runner.js"),
       });
-      const browserHex = await page.evaluate((vectors) => {
-        return (
-          globalThis as unknown as {
-            dotRelayCanonicalHexes: (
-              entries: Array<{ hex: string }>,
-            ) => string[];
-          }
-        ).dotRelayCanonicalHexes(vectors.fixtures);
-      }, fixtures);
-      const bunHex = fixtures.fixtures.map((fixture: { hex: string }) =>
-        hexFromBytes(
-          canonicalEncode(canonicalDecode(bytesFromHex(fixture.hex))),
-        ),
-      );
+      const fixtures = [
+        ...browserFixtures.fixtures,
+        ...(await protocolFixtures()),
+      ];
+      const browserHex = await evaluateCanonicalHexes(page, fixtures);
+      const bunHex = fixtures.map(({ hex, protocolObject }) => {
+        const bytes = bytesFromHex(hex);
+        const value = protocolObject
+          ? parseProtocolObject(bytes)
+          : canonicalDecode(bytes);
+        return hexFromBytes(canonicalEncode(value));
+      });
 
       // Browser output must parse and canonicalize in Bun; Bun output must do the same in Chromium.
       expect(browserHex).toEqual(
@@ -56,17 +79,12 @@ test("Chromium and Bun preserve the frozen protocol bytes", async () => {
           hexFromBytes(canonicalEncode(canonicalDecode(bytesFromHex(hex)))),
         ),
       );
-      const browserFromBunHex = await page.evaluate(
-        (entries) => {
-          return (
-            globalThis as unknown as {
-              dotRelayCanonicalHexes: (
-                values: Array<{ hex: string }>,
-              ) => string[];
-            }
-          ).dotRelayCanonicalHexes(entries);
-        },
-        bunHex.map((hex) => ({ hex })),
+      const browserFromBunHex = await evaluateCanonicalHexes(
+        page,
+        bunHex.map((hex, index) => ({
+          hex,
+          ...(fixtures[index]?.protocolObject ? { protocolObject: true } : {}),
+        })),
       );
       expect(browserFromBunHex).toEqual(bunHex);
     } finally {

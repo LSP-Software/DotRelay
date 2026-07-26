@@ -186,8 +186,15 @@ describe("runtime-neutral API contracts", () => {
       }),
     ).toThrow("invalid_request");
     expect(
-      parseProblem(createProblem("unsupported_crypto_suite")),
-    ).toMatchObject({ code: "unsupported_crypto_suite", status: 422 });
+      parseProblem({
+        ...createProblem("unsupported_crypto_suite"),
+        instance: "/api/v1/capabilities",
+      }),
+    ).toMatchObject({
+      code: "unsupported_crypto_suite",
+      instance: "/api/v1/capabilities",
+      status: 422,
+    });
     expect(() =>
       parseProblem({ ...createProblem("invalid_request"), status: 422 }),
     ).toThrow("invalid_request");
