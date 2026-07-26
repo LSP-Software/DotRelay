@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createHash,
+  createHmac,
+  createPrivateKey,
+  createPublicKey,
+  diffieHellman,
+  hkdfSync,
+  sign,
+  verify,
+} from "node:crypto";
+import {
   CBOR_LIMITS,
   type CborValue,
   ContractError,
@@ -28,6 +38,9 @@ const bytesFromHex = (value: string): Uint8Array => {
     value.match(/../g)?.map((pair) => Number.parseInt(pair, 16)) ?? [],
   );
 };
+
+const hexFromBytes = (value: Uint8Array): string =>
+  Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const sha384Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest(
@@ -182,6 +195,107 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
       "ml-dsa-sign-fips204",
       "ml-dsa-verify-fips204",
     ]);
+
+    const sourceById = new Map(
+      primitives.sources.map((source: { id: string }) => [source.id, source]),
+    );
+    const hkdf = sourceById.get("rfc-5869-a.1") as {
+      input: {
+        ikmHex: string;
+        saltHex: string;
+        infoHex: string;
+        length: number;
+      };
+      intermediates: { prkHex: string };
+      output: { okmHex: string };
+    };
+    const prk = createHmac("sha256", bytesFromHex(hkdf.input.saltHex))
+      .update(bytesFromHex(hkdf.input.ikmHex))
+      .digest();
+    expect(hexFromBytes(new Uint8Array(prk))).toBe(hkdf.intermediates.prkHex);
+    expect(
+      hexFromBytes(
+        new Uint8Array(
+          hkdfSync(
+            "sha256",
+            bytesFromHex(hkdf.input.ikmHex),
+            bytesFromHex(hkdf.input.saltHex),
+            bytesFromHex(hkdf.input.infoHex),
+            hkdf.input.length,
+          ),
+        ),
+      ),
+    ).toBe(hkdf.output.okmHex);
+
+    const x25519 = sourceById.get("rfc-7748-5.2-x25519-1") as {
+      input: { scalarHex: string; uCoordinateHex: string };
+      output: { uCoordinateHex: string };
+    };
+    const x25519Private = createPrivateKey({
+      key: Buffer.concat([
+        Buffer.from("302e020100300506032b656e04220420", "hex"),
+        Buffer.from(x25519.input.scalarHex, "hex"),
+      ]),
+      format: "der",
+      type: "pkcs8",
+    });
+    const x25519Public = createPublicKey({
+      key: Buffer.concat([
+        Buffer.from("302a300506032b656e032100", "hex"),
+        Buffer.from(x25519.input.uCoordinateHex, "hex"),
+      ]),
+      format: "der",
+      type: "spki",
+    });
+    expect(
+      hexFromBytes(
+        new Uint8Array(
+          diffieHellman({ privateKey: x25519Private, publicKey: x25519Public }),
+        ),
+      ),
+    ).toBe(x25519.output.uCoordinateHex);
+
+    const ed25519 = sourceById.get("rfc-8032-7.1-ed25519-1") as {
+      input: { seedHex: string; messageHex: string };
+      intermediates: { publicKeyHex: string };
+      output: { signatureHex: string };
+    };
+    const ed25519Private = createPrivateKey({
+      key: Buffer.concat([
+        Buffer.from("302e020100300506032b657004220420", "hex"),
+        Buffer.from(ed25519.input.seedHex, "hex"),
+      ]),
+      format: "der",
+      type: "pkcs8",
+    });
+    const ed25519Public = createPublicKey({
+      key: Buffer.concat([
+        Buffer.from("302a300506032b6570032100", "hex"),
+        Buffer.from(ed25519.intermediates.publicKeyHex, "hex"),
+      ]),
+      format: "der",
+      type: "spki",
+    });
+    const message = Buffer.from(ed25519.input.messageHex, "hex");
+    const signature = sign(null, message, ed25519Private);
+    expect(hexFromBytes(new Uint8Array(signature))).toBe(
+      ed25519.output.signatureHex,
+    );
+    expect(verify(null, message, ed25519Public, signature)).toBe(true);
+
+    const sha384 = sourceById.get("fips-180-4-sha-384-abc") as {
+      input: { messageHex: string };
+      output: { digestHex: string };
+    };
+    expect(
+      hexFromBytes(
+        new Uint8Array(
+          createHash("sha384")
+            .update(bytesFromHex(sha384.input.messageHex))
+            .digest(),
+        ),
+      ),
+    ).toBe(sha384.output.digestHex);
   });
 
   test("checks in the positive, negative, and browser/Bun corpus manifests", async () => {
