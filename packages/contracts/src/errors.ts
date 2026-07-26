@@ -20,8 +20,10 @@ export const PROBLEM_STATUS = {
   unsupported_media_type: 415,
   unsupported_api_version: 422,
   unsupported_crypto_suite: 422,
+  unsupported_crypto_runtime: 422,
   rate_limited: 429,
   rate_limit_unavailable: 503,
+  crypto_provider_unavailable: 503,
   service_unavailable: 503,
 } as const;
 
@@ -49,8 +51,10 @@ const GENERIC_TITLES: Record<ProblemCode, string> = {
   unsupported_media_type: "Unsupported media type",
   unsupported_api_version: "Unsupported API version",
   unsupported_crypto_suite: "Unsupported cryptographic suite",
+  unsupported_crypto_runtime: "Unsupported cryptographic runtime",
   rate_limited: "Rate limited",
   rate_limit_unavailable: "Rate limit unavailable",
+  crypto_provider_unavailable: "Cryptographic provider unavailable",
   service_unavailable: "Service unavailable",
 };
 
@@ -74,6 +78,7 @@ export type Problem = {
   readonly status: number;
   readonly code: ProblemCode;
   readonly detail: string;
+  readonly instance?: string;
   readonly retryAfterSeconds?: number;
   readonly headId?: string;
   readonly headHash?: string;

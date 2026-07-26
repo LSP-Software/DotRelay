@@ -14,6 +14,7 @@ import {
   validateManifestCeilings,
 } from "@dotrelay/contracts";
 import { NEGATIVE_VECTOR_CASES, VECTOR_CASES } from "./vector-fixtures";
+import { bytesFromHex } from "./vector-hex";
 
 const containsText = (value: CborValue): boolean => {
   if (typeof value === "string") return true;
@@ -22,12 +23,25 @@ const containsText = (value: CborValue): boolean => {
   return false;
 };
 
-const bytesFromHex = (value: string): Uint8Array => {
-  if (!/^(?:[0-9a-f]{2})*$/.test(value)) throw new Error("invalid vector hex");
-  return Uint8Array.from(
-    value.match(/../g)?.map((pair) => Number.parseInt(pair, 16)) ?? [],
+const sha384Hex = async (bytes: Uint8Array): Promise<string> => {
+  const digest = await crypto.subtle.digest(
+    "SHA-384",
+    bytes as Uint8Array<ArrayBuffer>,
   );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 };
+
+const canonicalVectorFiles = [
+  "browser-bun.json",
+  "conditional.json",
+  "negative.json",
+  "objects.json",
+  "positive.json",
+  "primitives.json",
+  "rfc-primitives.json",
+] as const;
 
 const frozenVectors = async (): Promise<
   Array<{ canonicalHex: string; unsignedBodyHex: string }>
@@ -47,6 +61,33 @@ const frozenNegativeVectors = async (): Promise<
 };
 
 describe("immutable dotrelay-e2ee-v2 vectors", () => {
+  test("verifies the independently committed corpus manifest", async () => {
+    const manifest = await Bun.file(
+      "test-vectors/e2ee/v2/manifest.json",
+    ).json();
+    expect(manifest).toMatchObject({
+      suite: "dotrelay-e2ee-v2",
+      suiteValue: 2,
+      immutable: true,
+      hash: "sha-384",
+    });
+    expect(manifest.files.map((entry: { path: string }) => entry.path)).toEqual(
+      canonicalVectorFiles,
+    );
+    for (const entry of manifest.files as Array<{
+      path: string;
+      sha384: string;
+    }>) {
+      expect(
+        await sha384Hex(
+          new Uint8Array(
+            await Bun.file(`test-vectors/e2ee/v2/${entry.path}`).arrayBuffer(),
+          ),
+        ),
+      ).toBe(entry.sha384);
+    }
+  });
+
   test("checks deterministic-CBOR primitive and domain fixtures", async () => {
     const primitives = await Bun.file(
       "test-vectors/e2ee/v2/primitives.json",
@@ -80,18 +121,70 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
     }
     for (const vector of primitives.domainSeparators as Array<{
       utf8Hex: string;
+      sha384Hex: string;
     }>) {
+      const bytes = bytesFromHex(vector.utf8Hex);
       expect(
-        Array.from(
-          new TextEncoder().encode(
-            vector.utf8Hex === ""
-              ? ""
-              : new TextDecoder().decode(bytesFromHex(vector.utf8Hex)),
-          ),
-        ),
-      ).toEqual(Array.from(bytesFromHex(vector.utf8Hex)));
+        Array.from(new TextEncoder().encode(new TextDecoder().decode(bytes))),
+      ).toEqual(Array.from(bytes));
+      expect(await sha384Hex(bytes)).toBe(vector.sha384Hex);
     }
     expect(primitives.fixedLengths).toEqual(FIXED_LENGTHS);
+  });
+
+  test("pins RFC primitive provenance and the #26 ACVP hand-off", async () => {
+    const primitives = await Bun.file(
+      "test-vectors/e2ee/v2/rfc-primitives.json",
+    ).json();
+    expect(primitives.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rfc-5869-a.1",
+          intermediates: {
+            prkHex:
+              "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+          },
+          output: {
+            okmHex:
+              "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+          },
+        }),
+        expect.objectContaining({
+          id: "rfc-7748-5.2-x25519-1",
+          output: {
+            uCoordinateHex:
+              "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+          },
+        }),
+        expect.objectContaining({
+          id: "rfc-8032-7.1-ed25519-1",
+          intermediates: {
+            publicKeyHex:
+              "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+          },
+        }),
+      ]),
+    );
+    expect(
+      primitives.acvpReferences.map(
+        (reference: { id: string }) => reference.id,
+      ),
+    ).toEqual([
+      "ml-kem-keygen-fips203",
+      "ml-kem-encap-decap-fips203",
+      "ml-dsa-keygen-fips204",
+      "ml-dsa-sign-fips204",
+      "ml-dsa-verify-fips204",
+    ]);
+
+    expect(
+      primitives.acvpReferences.every(
+        (reference: { sourceRevision: string; handoffIssue: number }) =>
+          reference.sourceRevision ===
+            "c924096a71e5d050742e31efa6846d1e2d6fb3bd" &&
+          reference.handoffIssue === 26,
+      ),
+    ).toBe(true);
   });
 
   test("checks in the positive, negative, and browser/Bun corpus manifests", async () => {
@@ -189,13 +282,10 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
       immutable: true,
     });
     for (const fixture of browserBun.fixtures as Array<{
-      browserToBun: boolean;
-      bunToBrowser: boolean;
       hex: string;
     }>) {
       const bytes = bytesFromHex(fixture.hex);
       expect(canonicalEncode(canonicalDecode(bytes))).toEqual(bytes);
-      expect(fixture.browserToBun && fixture.bunToBrowser).toBe(true);
     }
     for (const [name, values] of Object.entries(positive.enumCoverage)) {
       const registryValues = Object.keys(

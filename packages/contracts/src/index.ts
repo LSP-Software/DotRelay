@@ -4,9 +4,11 @@ export {
   type JsonObject,
   OPENAPI_DOCUMENT,
   type Pagination,
+  parseCapabilitiesDocument,
   parseIdempotencyKey,
   parseJsonObject,
   parsePagination,
+  parseProblem,
   validateIdempotencyKey,
 } from "./api";
 export {

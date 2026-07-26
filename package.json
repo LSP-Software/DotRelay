@@ -17,7 +17,8 @@
     "lint:fix": "biome lint . --write",
     "typecheck": "tsc --project tsconfig.json && turbo run typecheck",
     "boundaries": "bun scripts/verify-boundaries.ts",
-    "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts && turbo run test:unit",
+    "vectors:verify-sources": "bun scripts/verify-vector-sources.ts",
+    "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts && turbo run test:unit",
     "openapi:check": "bun scripts/check-openapi.ts",
     "test:integration": "bun scripts/test-services.ts",
     "test:e2e": "playwright test --config=playwright.config.ts",
@@ -27,7 +28,7 @@
     "docs:validate": "bun scripts/validate-docs.ts",
     "tracked-tree:clean": "bun scripts/check-tracked-tree.ts",
     "security:audit": "bun audit",
-    "check": "bun run format:check && bun run lint && bun run typecheck && bun run boundaries && bun run openapi:check && bun run test:unit",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run boundaries && bun run openapi:check && bun run vectors:verify-sources && bun run test:unit",
     "verify": "bun run check && bun run build && bun run smoke && bun run test:integration && bun run test:e2e && bun run test:cli && bun run db:validate && bun run db:migrate-check && bun run docs:validate && bun run tracked-tree:clean"
   },
   "devDependencies": {

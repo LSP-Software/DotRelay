@@ -1,0 +1,36 @@
+{
+  "suite": "dotrelay-e2ee-v2",
+  "suiteValue": 2,
+  "immutable": true,
+  "hash": "sha-384",
+  "files": [
+    {
+      "path": "browser-bun.json",
+      "sha384": "0d569ada76bae966b8813440b7cc88798da0bf1ab67605d209a1e332bd9abb83d7dc538639755cd759474125a301060b"
+    },
+    {
+      "path": "conditional.json",
+      "sha384": "9de6f1028176bf47b53ea27bfe209f651a8711b51689379def2d6c859b2ed44a8fb4bc0d3f771975e50f3fd5a67e171c"
+    },
+    {
+      "path": "negative.json",
+      "sha384": "ea2ddc3f47729916416b27eba0af0e074850bf1cf2600c86097d0b2c256eedf9476ddf9989192080e2920b854269f654"
+    },
+    {
+      "path": "objects.json",
+      "sha384": "9558defac8f6e006ff0b365c1a73ae7f09aac165628b6bf2b1e6143e20ba6ff6b12079fb022ee9cfccbab4bf3f1112a1"
+    },
+    {
+      "path": "positive.json",
+      "sha384": "def8012086e4d8e2079a2b1f65c3fa14647a312540ab0e4fb7372f11ef2300229f78b6bf533bed4eaf3c0a4b669e3bb8"
+    },
+    {
+      "path": "primitives.json",
+      "sha384": "befd2c899861c30d4732bf1ac5735c71a3f949b0ea8d35c6a27e713ab457f19887eac7905698fd3700be4fca41dcb3e6"
+    },
+    {
+      "path": "rfc-primitives.json",
+      "sha384": "72ee39bbd297fa5ce3e53251871da0bd40546a70323b5995b1c5f2b788a1de43d4f600a79700a3350d69715cd7f58181"
+    }
+  ]
+}

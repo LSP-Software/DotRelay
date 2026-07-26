@@ -34,8 +34,10 @@
       "unsupported_media_type": 415,
       "unsupported_api_version": 422,
       "unsupported_crypto_suite": 422,
+      "unsupported_crypto_runtime": 422,
       "rate_limited": 429,
       "rate_limit_unavailable": 503,
+      "crypto_provider_unavailable": 503,
       "service_unavailable": 503
     }
   },
@@ -111,8 +113,10 @@
               "unsupported_media_type",
               "unsupported_api_version",
               "unsupported_crypto_suite",
+              "unsupported_crypto_runtime",
               "rate_limited",
               "rate_limit_unavailable",
+              "crypto_provider_unavailable",
               "service_unavailable"
             ]
           },

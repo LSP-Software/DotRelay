@@ -1,9 +1,9 @@
 # DotRelay `dotrelay-e2ee-v2` independent application-security review packet
 
-**Review date:** 2026-07-25  
-**Review scope:** frozen `dotrelay-e2ee-v2` provider gate  
-**Disposition:** **BLOCKED — evidence dossier only; no approval issued**  
-**Repository revision inspected:** `fae68a9a827f9c9c8aa569094513a0c5357a3f92` (`codex/implement-issue-30`)  
+**Review date:** 2026-07-25
+**Review scope:** frozen `dotrelay-e2ee-v2` provider gate
+**Disposition:** **BLOCKED — evidence dossier only; no approval issued**
+**Repository revision inspected:** `69b8d3fe7940e8433a8f8fcf05381bffe8ad0e93` (`main` baseline). Contract-only changes are assessed against that baseline with `git diff main...HEAD`; the resulting branch is not an approval target.
 
 This packet records what is evidenced, what is only required by the authoritative decisions, and
 what is absent. It does not implement cryptography, integrate a provider, or constitute protocol,
@@ -22,7 +22,7 @@ The authoritative inputs are:
 | [Completed decision #18](https://github.com/LSP-Software/DotRelay/issues/18) | Source-pinned portable-C Wasm provider selection and the provider production gates. |
 | [Completed decision #19](https://github.com/LSP-Software/DotRelay/issues/19) | Conditional security claim, exclusions, evidence requirements, compatibility errors, and hard no-waiver release gate. |
 | [Open integration issue #26](https://github.com/LSP-Software/DotRelay/issues/26) | Concrete provider implementation acceptance criteria: exact artifact, source/build evidence, complete vectors/oracle/matrix, lifecycle, and performance gates. |
-| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30) | Contract and vector acceptance criteria, including provider primitive cases and independent protocol approval; the issue remains open. |
+| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30) | Provider-independent contract, deterministic-CBOR registry, and immutable-corpus acceptance criteria. Its live scope explicitly assigns provider execution and the independent approval gate to #26. |
 | [Open final gate #36](https://github.com/LSP-Software/DotRelay/issues/36) | Requires this version-bound dossier and separate independent cryptographic/application-security review before any secret-capable release. |
 | [`docs/research/dotrelay-browser-bun-post-quantum-provider.md`](dotrelay-browser-bun-post-quantum-provider.md) | Primary-source-backed provider research and explicit statement that selection is not production approval. |
 | [`test-vectors/e2ee/v2/README.md`](../../test-vectors/e2ee/v2/README.md) and [`packages/contracts`](../../packages/contracts/src/registry.ts) | Checked-in immutable deterministic-CBOR contract corpus and registry. |
@@ -166,20 +166,13 @@ integrator owns the production build ([lines 163–175](dotrelay-browser-bun-pos
 
 ### 5.1 What is present: provider-neutral v2 contract corpus
 
-The checked-in corpus is immutable and intentionally provider-neutral. Its README says it covers
-the deterministic-CBOR and wire boundary, while provider ACVP/RFC vectors belong to the later
-provider ticket ([vector README, lines 1–18](../../test-vectors/e2ee/v2/README.md#L1-L18)). The inventory
-on this checkout is:
-
-| Corpus | Count | SHA-256 |
-| --- | ---: | --- |
-| `primitives.json` CBOR fixtures | 11 | `8ffc0f6ebd65f1ed2f97138f9829f1f31bf8ed99f2d815bbbc94a3401eddf917` |
-| `primitives.json` domain separators | 3 | same file hash above |
-| `objects.json` object vectors | 19 | `df6a81a7cad785720161ecde1466984d948a8c78b15ff59817d5b17576a02c87` |
-| `conditional.json` conditional vectors | 28 | `0f6fee7080b9e6534669fda1e3f9a0ab2d5baa106aae506d05f3e139a08dde94` |
-| `negative.json` malformed cases | 21 | `f73e01700d0e186766a6815e376dfd428c21d30700b443f994a84548ae2beae1` |
-| `browser-bun.json` round-trip fixtures | 4 | `91c1097f37faa00aba68b71f553cd4eea125f523d52fac6f80e32c71f5967ab8` |
-| `positive.json` object manifest | 19 objects / 6 enum groups | `9a277840d21028268aff4f9c116c3a95cd6058c1b67c90cf6ad35ca992f9e8a9` |
+The checked-in corpus is immutable and intentionally provider-neutral. `manifest.json` commits
+each corpus file with SHA-384. `rfc-primitives.json` records RFC 5869 HKDF intermediate/output,
+RFC 7748 X25519, RFC 8032 Ed25519, and SHA-384 known-answer data, plus exact NIST ACVP source
+locations, source revisions, and SHA-256 content digests for ML-KEM and ML-DSA operations. It
+records #26 as the owner for provider execution and does not claim that a provider has executed
+those ACVP vectors. `bun run vectors:verify-sources`, included in `bun run check`, retrieves the
+immutable source URLs and verifies their recorded SHA-256 digests.
 
 The corpus covers object kinds 1–19, mutation values 1–5, lane scopes 1–4, key kinds 1–3, grant
 kinds 1–7, membership roles 1–3, lifecycle values 1–6, canonical round trips, explicit ceilings,
@@ -193,7 +186,7 @@ On 2026-07-25, Bun `1.3.14` ran:
 
 ```text
 bun test scripts/contracts-vectors.test.ts
-6 pass, 0 fail, 348 expect() calls
+6 pass, 0 fail, 354 expect() calls
 
 bun run check
 9 pass, 0 fail, 351 expect() calls; format, lint, typecheck, boundaries, OpenAPI, and package unit tests passed
@@ -205,17 +198,20 @@ git diff --check
 pass; no whitespace errors reported
 ```
 
-The vector test asserts all 19 object kinds, all 28 conditional vectors, the frozen negative corpus,
-browser/Bun byte fixture symmetry, ceilings, and coarse errors ([test, lines 49–302](../../scripts/contracts-vectors.test.ts#L49-L302)).
-This is useful evidence for the codec boundary only; it is not provider conformance or an
-application-security approval.
+The vector tests assert all 19 object kinds, all 28 conditional vectors, the frozen negative corpus,
+manifest integrity, RFC fixtures, ceilings, and coarse errors. A separate Chromium test executes the
+same browser/Bun bytes. The recorded local run used Bun `1.3.14+0d9b296af`, Playwright `1.62.0`,
+and Playwright-managed Chromium `151.0.7922.34`, invoked as
+`bun test scripts/contracts-browser.test.ts`; the test supplies no launch flags and lets Playwright
+select its pinned browser defaults. This is useful contract evidence only; it is not provider
+conformance or an application-security approval.
 
 ### 5.3 Missing provider vector and oracle results
 
-No provider-specific ACVP files, RFC 7748/X25519 results, RFC 8032/Ed25519 results, RFC 5869/HKDF
-results, SHA-3/SHA-384 results, XChaCha20-Poly1305 results, composite-KEM intermediates, signature
-inputs, or final provider-backed objects are checked in. No independent oracle harness or result
-report exists.
+No provider-executed ACVP result, SHA-3/XChaCha20-Poly1305 result, composite-KEM intermediate,
+signature input, or final provider-backed object is checked in. No independent oracle harness or
+result report exists. The static RFC cases and ACVP source references are contract evidence, not
+provider conformance.
 
 The required independent oracle is OpenSSL 3.5-or-later's default provider for ML-KEM-768 and
 ML-DSA-65, paired with independent libsodium, SHA-384/HKDF, and deterministic-CBOR implementations;
@@ -264,7 +260,7 @@ cannot be promoted to a full matrix result.
 | Concurrency | No provider implementation or concurrent initialize/operation/destroy test. | **Missing; blocks.** |
 | Zeroization | The design requires wiping seeds, expanded keys, signing randomness, and shared secrets on success and every failure path, and inspecting copies, allocator reuse, exceptions, growth, worker transfer, and teardown ([research, lines 199–213](dotrelay-browser-bun-post-quantum-provider.md#L199-L213)). | **Missing; blocks.** |
 | Performance / memory | Upstream static allocation bounds are recorded, but no combined Wasm size, compression, initialization, peak Wasm/JS memory, p50/p95/p99 latency, low-tier device, or long-history measurements exist ([research, lines 131–152](dotrelay-browser-bun-post-quantum-provider.md#L131-L152)). | **Missing; blocks.** |
-| Stable error behavior | Current contract has `invalid_crypto_object` and `unsupported_crypto_suite` ([errors](../../packages/contracts/src/errors.ts#L1-L55)); decision #19 additionally requires `unsupported_crypto_runtime` and `crypto_provider_unavailable` before secret processing. | **Missing implementation/evidence; blocks.** |
+| Stable error behavior | The contract now declares `invalid_crypto_object`, `unsupported_crypto_suite`, `unsupported_crypto_runtime` (`422`), and `crypto_provider_unavailable` (`503`) ([errors](../../packages/contracts/src/errors.ts#L1-L60)); the provider still has no implementation or runtime result record. | **Contract present; provider evidence missing and blocks.** |
 
 The existing contract rejects server-visible private seed fields and validates fixed lengths, but no
 provider lifecycle exists to prove that the seeds remain encrypted at rest, are expanded only inside
@@ -465,9 +461,8 @@ packet cannot authorize a provider or a production claim:
    export list, two-builder comparison, or rebuild logs.**
 4. **No SBOM, provenance, source/archive verification, artifact signature, or attestation.**
 5. **No independent audit of the exact Wasm output, adapter, or provider integration.**
-6. **No provider ACVP/RFC results.** The checked-in corpus is provider-neutral codec evidence only;
-   open [issue #30](https://github.com/LSP-Software/DotRelay/issues/30) still lists the primitive and
-   intermediate-value corpus as acceptance criteria.
+6. **No provider ACVP/RFC execution results.** The checked-in corpus has static RFC known answers
+   and ACVP source references, but no provider has executed or reported those cases.
 7. **No independent OpenSSL-based oracle or complete positive/negative provider result report.**
 8. **No complete runtime/OS/architecture matrix results.** Existing CI covers only a Chromium
    Ubuntu job and an OS-name CLI matrix, neither of which runs the provider.
@@ -479,9 +474,8 @@ packet cannot authorize a provider or a production claim:
     p50/p95/p99 latency, low-tier devices, or bounded long-Revision-chain verification.
 12. **No provider-backed key-storage evidence** proving encrypted-at-rest compact seeds and
     provider-only expansion for browser and CLI Devices.
-13. **Required #19 compatibility errors are not in the current contract registry.** The repository
-    has `invalid_crypto_object` and `unsupported_crypto_suite`, but no provider/runtime-unavailable
-    implementation or result record.
+13. **No provider/runtime result record exists.** The stable #19 compatibility error contracts are
+    present, but provider startup and pre-secret-processing behavior remain unimplemented under #26.
 14. **Open implementation work remains.** Provider integration issue [#26](https://github.com/LSP-Software/DotRelay/issues/26)
     and contract/vector issue [#30](https://github.com/LSP-Software/DotRelay/issues/30) remain open;
     their acceptance criteria are not evidenced by the current tree.
