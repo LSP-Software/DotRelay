@@ -12,7 +12,9 @@ import {
   OBJECT_REGISTRY,
   OPENAPI_DOCUMENT,
   PROBLEM_STATUS,
+  parseCapabilitiesDocument,
   parseJsonObject,
+  parseProblem,
   parseProtocolObject,
   protocolObjectFromFields,
   SUITE_NAME,
@@ -174,6 +176,21 @@ describe("runtime-neutral API contracts", () => {
       value: SUITE_VALUE,
     });
     expect(createCapabilitiesDocument().limits.stagingTtlSeconds).toBe(86_400);
+    expect(parseCapabilitiesDocument(createCapabilitiesDocument())).toEqual(
+      createCapabilitiesDocument(),
+    );
+    expect(() =>
+      parseCapabilitiesDocument({
+        ...createCapabilitiesDocument(),
+        extra: true,
+      }),
+    ).toThrow("invalid_request");
+    expect(
+      parseProblem(createProblem("unsupported_crypto_suite")),
+    ).toMatchObject({ code: "unsupported_crypto_suite", status: 422 });
+    expect(() =>
+      parseProblem({ ...createProblem("invalid_request"), status: 422 }),
+    ).toThrow("invalid_request");
     expect(validateIdempotencyKey("00000000-0000-4000-8000-000000000000")).toBe(
       true,
     );

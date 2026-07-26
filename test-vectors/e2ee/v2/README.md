@@ -6,10 +6,15 @@ canonical and unsigned-body CBOR bytes for every closed object kind. `positive.j
 object, enum, and conditional coverage, `negative.json` records malformed bytes and coarse errors,
 and `browser-bun.json` carries the same wire bytes for cross-runtime fixtures. The executable
 fixture source in `scripts/vector-fixtures.ts` independently reconstructs the registry cases, and
-the tests compare its output with this frozen corpus.
+the tests compare its output with this frozen corpus. `manifest.json` SHA-384-commits every corpus
+file. `rfc-primitives.json` pins RFC 5869 HKDF intermediates, RFC 7748 X25519, RFC 8032 Ed25519,
+and SHA-384 known answers, alongside exact upstream NIST ACVP source locations for ML-KEM and
+ML-DSA operations. The browser/Bun fixtures are executed by
+`scripts/contracts-browser.test.ts` in Chromium and by Bun; they are not self-attested flags.
 
-The corpus is intentionally cryptographic-provider neutral. It covers the codec and wire boundary;
-provider ACVP/RFC primitive vectors and provider integration belong to the later provider ticket.
+The corpus is intentionally cryptographic-provider neutral. It contains static provenance-bearing
+primitive cases but does not execute a cryptographic provider; provider integration, ACVP execution,
+and cross-provider oracle results belong to the later provider ticket.
 No fixture contains human-readable Environment or Variable names, descriptions, classifications, or
 Values. It describes only the v2 suite: there is no v1 migration, suite negotiation, compatibility
 mode, suite floor, or suite-transition object. No vector may be regenerated with a different suite,
