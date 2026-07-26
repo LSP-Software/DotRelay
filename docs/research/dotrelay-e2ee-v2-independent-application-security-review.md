@@ -22,7 +22,7 @@ The authoritative inputs are:
 | [Completed decision #18](https://github.com/LSP-Software/DotRelay/issues/18) | Source-pinned portable-C Wasm provider selection and the provider production gates. |
 | [Completed decision #19](https://github.com/LSP-Software/DotRelay/issues/19) | Conditional security claim, exclusions, evidence requirements, compatibility errors, and hard no-waiver release gate. |
 | [Open integration issue #26](https://github.com/LSP-Software/DotRelay/issues/26) | Concrete provider implementation acceptance criteria: exact artifact, source/build evidence, complete vectors/oracle/matrix, lifecycle, and performance gates. |
-| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30) | Provider-independent contract, deterministic-CBOR registry, and immutable-corpus acceptance criteria. Provider execution and independent approval belong to #26. |
+| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30) | Provider-independent contract, deterministic-CBOR registry, and immutable-corpus acceptance criteria. Its live scope explicitly assigns provider execution and the independent approval gate to #26. |
 | [Open final gate #36](https://github.com/LSP-Software/DotRelay/issues/36) | Requires this version-bound dossier and separate independent cryptographic/application-security review before any secret-capable release. |
 | [`docs/research/dotrelay-browser-bun-post-quantum-provider.md`](dotrelay-browser-bun-post-quantum-provider.md) | Primary-source-backed provider research and explicit statement that selection is not production approval. |
 | [`test-vectors/e2ee/v2/README.md`](../../test-vectors/e2ee/v2/README.md) and [`packages/contracts`](../../packages/contracts/src/registry.ts) | Checked-in immutable deterministic-CBOR contract corpus and registry. |
@@ -171,7 +171,8 @@ each corpus file with SHA-384. `rfc-primitives.json` records RFC 5869 HKDF inter
 RFC 7748 X25519, RFC 8032 Ed25519, and SHA-384 known-answer data, plus exact NIST ACVP source
 locations, source revisions, and SHA-256 content digests for ML-KEM and ML-DSA operations. It
 records #26 as the owner for provider execution and does not claim that a provider has executed
-those ACVP vectors.
+those ACVP vectors. `bun run vectors:verify-sources`, included in `bun run check`, retrieves the
+immutable source URLs and verifies their recorded SHA-256 digests.
 
 The corpus covers object kinds 1–19, mutation values 1–5, lane scopes 1–4, key kinds 1–3, grant
 kinds 1–7, membership roles 1–3, lifecycle values 1–6, canonical round trips, explicit ceilings,
@@ -199,8 +200,11 @@ pass; no whitespace errors reported
 
 The vector tests assert all 19 object kinds, all 28 conditional vectors, the frozen negative corpus,
 manifest integrity, RFC fixtures, ceilings, and coarse errors. A separate Chromium test executes the
-same browser/Bun bytes. This is useful contract evidence only; it is not provider conformance or an
-application-security approval.
+same browser/Bun bytes. The recorded local run used Bun `1.3.14+0d9b296af`, Playwright `1.62.0`,
+and Playwright-managed Chromium `151.0.7922.34`, invoked as
+`bun test scripts/contracts-browser.test.ts`; the test supplies no launch flags and lets Playwright
+select its pinned browser defaults. This is useful contract evidence only; it is not provider
+conformance or an application-security approval.
 
 ### 5.3 Missing provider vector and oracle results
 

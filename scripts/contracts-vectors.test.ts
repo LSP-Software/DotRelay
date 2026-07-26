@@ -179,14 +179,9 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
 
     expect(
       primitives.acvpReferences.every(
-        (reference: {
-          sourceRevision: string;
-          sha256: string;
-          handoffIssue: number;
-        }) =>
+        (reference: { sourceRevision: string; handoffIssue: number }) =>
           reference.sourceRevision ===
             "c924096a71e5d050742e31efa6846d1e2d6fb3bd" &&
-          /^[0-9a-f]{64}$/.test(reference.sha256) &&
           reference.handoffIssue === 26,
       ),
     ).toBe(true);
