@@ -17,7 +17,7 @@
     "lint:fix": "biome lint . --write",
     "typecheck": "tsc --project tsconfig.json && turbo run typecheck",
     "boundaries": "bun scripts/verify-boundaries.ts",
-    "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts && turbo run test:unit",
+    "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts && turbo run test:unit",
     "openapi:check": "bun scripts/check-openapi.ts",
     "test:integration": "bun scripts/test-services.ts",
     "test:e2e": "playwright test --config=playwright.config.ts",

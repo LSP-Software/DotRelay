@@ -1,5 +1,10 @@
 import { CBOR_LIMITS } from "./cbor";
-import { contractError, PROBLEM_STATUS, type ProblemCode } from "./errors";
+import {
+  contractError,
+  PROBLEM_STATUS,
+  type Problem,
+  type ProblemCode,
+} from "./errors";
 import { API_VERSION, SUITE_NAME, SUITE_VALUE } from "./registry";
 import { utf8Encode } from "./runtime";
 
@@ -147,10 +152,119 @@ export const createCapabilitiesDocument = (): CapabilitiesDocument => {
   });
 };
 
+const capabilityLimitFields = [
+  "adminBodyBytes",
+  "protocolObjectBytes",
+  "stagingObjects",
+  "stagingBytes",
+  "stagingTtlSeconds",
+  "synchronizationObjects",
+  "synchronizationBytes",
+  "variableNameBytes",
+  "descriptionBytes",
+  "valueBytes",
+] as const;
+
+type CapabilityLimitField = (typeof capabilityLimitFields)[number];
+
+export const parseCapabilitiesDocument = (
+  value: unknown,
+): CapabilitiesDocument => {
+  const capabilitiesDocument = parseJsonObject<{
+    apiVersion?: unknown;
+    suite?: unknown;
+    capabilities?: unknown;
+    limits?: unknown;
+  }>(value, ["apiVersion", "suite", "capabilities", "limits"]);
+  if (
+    capabilitiesDocument.apiVersion !== API_VERSION ||
+    !Array.isArray(capabilitiesDocument.capabilities)
+  )
+    contractError("invalid_request");
+  if (
+    !capabilitiesDocument.capabilities.every(
+      (capability) => typeof capability === "string",
+    )
+  )
+    contractError("invalid_request");
+  const suite = parseJsonObject<{ name?: unknown; value?: unknown }>(
+    capabilitiesDocument.suite,
+    ["name", "value"],
+  );
+  if (suite.name !== SUITE_NAME || suite.value !== SUITE_VALUE)
+    contractError("invalid_request");
+  const limits = parseJsonObject<Record<CapabilityLimitField, unknown>>(
+    capabilitiesDocument.limits,
+    capabilityLimitFields,
+  );
+  if (
+    capabilityLimitFields.some(
+      (field) =>
+        typeof limits[field] !== "number" ||
+        !Number.isInteger(limits[field]) ||
+        limits[field] < 0,
+    )
+  )
+    contractError("invalid_request");
+  return Object.freeze({
+    apiVersion: API_VERSION,
+    suite: Object.freeze({ name: SUITE_NAME, value: SUITE_VALUE }),
+    capabilities: Object.freeze([
+      ...capabilitiesDocument.capabilities,
+    ] as string[]),
+    limits: Object.freeze(
+      Object.fromEntries(
+        capabilityLimitFields.map((field) => [field, limits[field]]),
+      ) as CapabilitiesDocument["limits"],
+    ),
+  });
+};
+
 export type ApiProblem = Readonly<{
   readonly code: ProblemCode;
   readonly status: number;
 }>;
+
+export const parseProblem = (value: unknown): Problem => {
+  const problem = parseJsonObject<{
+    type?: unknown;
+    title?: unknown;
+    status?: unknown;
+    code?: unknown;
+    detail?: unknown;
+    instance?: unknown;
+    retryAfterSeconds?: unknown;
+    headId?: unknown;
+    headHash?: unknown;
+  }>(value, [
+    "type",
+    "title",
+    "status",
+    "code",
+    "detail",
+    "instance",
+    "retryAfterSeconds",
+    "headId",
+    "headHash",
+  ]);
+  if (
+    problem.type !== "https://dotrelay.dev/problems/v1" ||
+    typeof problem.title !== "string" ||
+    typeof problem.code !== "string" ||
+    !Object.hasOwn(PROBLEM_STATUS, problem.code) ||
+    problem.status !== PROBLEM_STATUS[problem.code as ProblemCode] ||
+    typeof problem.detail !== "string" ||
+    (problem.instance !== undefined && typeof problem.instance !== "string") ||
+    (problem.retryAfterSeconds !== undefined &&
+      (typeof problem.retryAfterSeconds !== "number" ||
+        !Number.isInteger(problem.retryAfterSeconds) ||
+        problem.retryAfterSeconds < 0)) ||
+    (problem.headId !== undefined && typeof problem.headId !== "string") ||
+    (problem.headHash !== undefined && typeof problem.headHash !== "string")
+  )
+    contractError("invalid_request");
+  return problem as Problem;
+};
 
 export const OPENAPI_DOCUMENT = Object.freeze({
   openapi: "3.1.0",

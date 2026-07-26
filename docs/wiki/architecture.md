@@ -25,10 +25,12 @@ unknown or duplicate fields, invalid UTF-8, tags, indefinite lengths, floats, fo
 invalid fixed lengths, and values above the frozen depth/size ceilings. Human-readable Environment
 and Variable content is not a protocol value and is never present in the vectors.
 
-The immutable corpus is under `test-vectors/e2ee/v2/`; its Bun tests cover all object kinds,
-conditional shapes, enum registries, malformed input, coarse errors, limits, and browser/Bun byte
-fixtures. Cryptographic provider integration and independent security approval remain gates for
-later secret-capable work.
+The immutable corpus is under `test-vectors/e2ee/v2/`; its SHA-384 manifest commits all artifacts,
+and its RFC known-answer cases pin primitive inputs, outputs, and HKDF intermediates. Bun and
+Chromium execute the same browser/Bun bytes. Its tests cover all object kinds, conditional shapes,
+enum registries, malformed input, coarse errors, and limits. Cryptographic provider integration,
+ACVP execution, independent oracle results, and independent security approval remain gates for
+secret-capable work.
 
 ## Contract reference
 

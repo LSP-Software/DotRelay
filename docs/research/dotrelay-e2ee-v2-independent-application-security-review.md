@@ -152,20 +152,11 @@ integrator owns the production build ([lines 163–175](dotrelay-browser-bun-pos
 
 ### 5.1 What is present: provider-neutral v2 contract corpus
 
-The checked-in corpus is immutable and intentionally provider-neutral. Its README says it covers
-the deterministic-CBOR and wire boundary, while provider ACVP/RFC vectors belong to the later
-provider ticket ([vector README, lines 1–18](../../test-vectors/e2ee/v2/README.md#L1-L18)). The inventory
-on this checkout is:
-
-| Corpus | Count | SHA-256 |
-| --- | ---: | --- |
-| `primitives.json` CBOR fixtures | 11 | `8ffc0f6ebd65f1ed2f97138f9829f1f31bf8ed99f2d815bbbc94a3401eddf917` |
-| `primitives.json` domain separators | 3 | same file hash above |
-| `objects.json` object vectors | 19 | `df6a81a7cad785720161ecde1466984d948a8c78b15ff59817d5b17576a02c87` |
-| `conditional.json` conditional vectors | 28 | `0f6fee7080b9e6534669fda1e3f9a0ab2d5baa106aae506d05f3e139a08dde94` |
-| `negative.json` malformed cases | 21 | `f73e01700d0e186766a6815e376dfd428c21d30700b443f994a84548ae2beae1` |
-| `browser-bun.json` round-trip fixtures | 4 | `91c1097f37faa00aba68b71f553cd4eea125f523d52fac6f80e32c71f5967ab8` |
-| `positive.json` object manifest | 19 objects / 6 enum groups | `9a277840d21028268aff4f9c116c3a95cd6058c1b67c90cf6ad35ca992f9e8a9` |
+The checked-in corpus is immutable and intentionally provider-neutral. `manifest.json` commits
+each corpus file with SHA-384. `rfc-primitives.json` records RFC 5869 HKDF intermediate/output,
+RFC 7748 X25519, RFC 8032 Ed25519, and SHA-384 known-answer data, plus exact NIST ACVP source
+locations for ML-KEM and ML-DSA operations. It does not claim that a provider has executed those
+ACVP vectors.
 
 The corpus covers object kinds 1–19, mutation values 1–5, lane scopes 1–4, key kinds 1–3, grant
 kinds 1–7, membership roles 1–3, lifecycle values 1–6, canonical round trips, explicit ceilings,
@@ -185,17 +176,17 @@ bun run check
 9 pass, 0 fail, 351 expect() calls; format, lint, typecheck, boundaries, OpenAPI, and package unit tests passed
 ```
 
-The vector test asserts all 19 object kinds, all 28 conditional vectors, the frozen negative corpus,
-browser/Bun byte fixture symmetry, ceilings, and coarse errors ([test, lines 49–302](../../scripts/contracts-vectors.test.ts#L49-L302)).
-This is useful evidence for the codec boundary only; it is not provider conformance or an
+The vector tests assert all 19 object kinds, all 28 conditional vectors, the frozen negative corpus,
+manifest integrity, RFC fixtures, ceilings, and coarse errors. A separate Chromium test executes the
+same browser/Bun bytes. This is useful contract evidence only; it is not provider conformance or an
 application-security approval.
 
 ### 5.3 Missing provider vector and oracle results
 
-No provider-specific ACVP files, RFC 7748/X25519 results, RFC 8032/Ed25519 results, RFC 5869/HKDF
-results, SHA-3/SHA-384 results, XChaCha20-Poly1305 results, composite-KEM intermediates, signature
-inputs, or final provider-backed objects are checked in. No independent oracle harness or result
-report exists.
+No provider-executed ACVP result, SHA-3/XChaCha20-Poly1305 result, composite-KEM intermediate,
+signature input, or final provider-backed object is checked in. No independent oracle harness or
+result report exists. The static RFC cases and ACVP source references are contract evidence, not
+provider conformance.
 
 The required independent oracle is OpenSSL 3.5-or-later's default provider for ML-KEM-768 and
 ML-DSA-65, paired with independent libsodium, SHA-384/HKDF, and deterministic-CBOR implementations;
@@ -445,9 +436,8 @@ packet cannot authorize a provider or a production claim:
    export list, two-builder comparison, or rebuild logs.**
 4. **No SBOM, provenance, source/archive verification, artifact signature, or attestation.**
 5. **No independent audit of the exact Wasm output, adapter, or provider integration.**
-6. **No provider ACVP/RFC results.** The checked-in corpus is provider-neutral codec evidence only;
-   open [issue #30](https://github.com/LSP-Software/DotRelay/issues/30) still lists the primitive and
-   intermediate-value corpus as acceptance criteria.
+6. **No provider ACVP/RFC execution results.** The checked-in corpus has static RFC known answers
+   and ACVP source references, but no provider has executed or reported those cases.
 7. **No independent OpenSSL-based oracle or complete positive/negative provider result report.**
 8. **No complete runtime/OS/architecture matrix results.** Existing CI covers only a Chromium
    Ubuntu job and an OS-name CLI matrix, neither of which runs the provider.
