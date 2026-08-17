@@ -6,3 +6,749 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+enum DeviceLifecycle {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MembershipLifecycle {
+  PENDING_KEY_GRANT
+  ACTIVE
+  REMOVED
+}
+
+enum ResourceLifecycle {
+  ACTIVE
+  ARCHIVED
+}
+
+enum OperationStatus {
+  STAGED
+  COMMITTED
+  CANCELLED
+  EXPIRED
+}
+
+enum OperationKind {
+  ADMINISTRATION
+  INVITATION
+  MEMBERSHIP_CHANGE
+  DEVICE_ENROLLMENT
+  DEVICE_REVOCATION
+  RECOVERY
+  ENVIRONMENT_GENESIS
+  REVISION_PUBLICATION
+  ROLLBACK
+  EPOCH_ROTATION
+}
+
+enum MutationKind {
+  GENESIS
+  MANIFEST_UPDATE
+  ROLLBACK
+  EPOCH_TRANSITION
+  USER_KEY_ROTATION
+}
+
+enum LaneScope {
+  ENVIRONMENT_DEFINITION
+  VARIABLE_DEFINITION
+  SHARED_VALUE
+  USER_DEFINED_VALUE
+}
+
+enum KeyKind {
+  PROJECT_EPOCH
+  USER_DEFINED_VALUE
+  USER_TRUST_BUNDLE
+}
+
+enum GrantKind {
+  CURRENT_PROJECT_EPOCH
+  HISTORICAL_PROJECT_EPOCH
+  CURRENT_USER_VALUE_GENERATION
+  HISTORICAL_USER_VALUE_GENERATION
+  DEVICE_TRUST_PROVISIONING
+  RECOVERY_PROJECT_KEY
+  RECOVERY_USER_VALUE_KEY
+}
+
+enum AuditEntityKind {
+  SERVER_PROFILE
+  USER
+  DEVICE
+  TEAM
+  MEMBERSHIP
+  INVITATION
+  PROJECT
+  ENVIRONMENT
+  OPERATION
+  PROTOCOL_OBJECT
+  REVISION
+  RECOVERY_ENVELOPE
+}
+
+enum AuditEventKind {
+  TEAM_CREATED
+  MEMBERSHIP_INVITED
+  MEMBERSHIP_ACCEPTED
+  MEMBERSHIP_ACTIVATED
+  MEMBERSHIP_ROLE_CHANGED
+  MEMBERSHIP_REMOVED
+  DEVICE_ENROLLED
+  DEVICE_REVOKED
+  RECOVERY_COMPLETED
+  PROJECT_CREATED
+  PROJECT_ARCHIVED
+  PROJECT_RESTORED
+  ENVIRONMENT_CREATED
+  ENVIRONMENT_ARCHIVED
+  ENVIRONMENT_RESTORED
+  REVISION_PUBLISHED
+  ROLLBACK_PUBLISHED
+  EPOCH_ROTATED
+}
+
+model ServerProfile {
+  id        String   @id @default(uuid()) @db.Uuid
+  origin    String   @unique @db.VarChar(2048)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  users User[]
+  teams Team[]
+
+  @@map("server_profiles")
+}
+
+model User {
+  id                 String   @id @default(uuid()) @db.Uuid
+  serverProfileId    String   @db.Uuid
+  authSubject        String   @db.VarChar(255)
+  githubSubject      String   @db.VarChar(255)
+  identityGeneration BigInt   @default(1) @db.BigInt
+  recoveryGeneration BigInt   @default(1) @db.BigInt
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  serverProfile               ServerProfile             @relation(fields: [serverProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  identityGenerations         UserIdentityGeneration[]
+  identityObjects             IdentityObject[]
+  devices                     Device[]
+  enrollments                 DeviceEnrollment[]
+  memberships                 Membership[]
+  invitationsAccepted         MembershipInvitation[]    @relation("InvitationAcceptedBy")
+  projects                    Project[]                 @relation("ProjectCreatedBy")
+  environmentsCreated         Environment[]             @relation("EnvironmentCreatedBy")
+  operations                  Operation[]               @relation("OperationActor")
+  auditEvents                 AuditEvent[]              @relation("AuditActor")
+  recoveryEnvelopes           RecoveryEnvelope[]
+  recoveryAttempts            RecoveryAttempt[]
+  recoveryChallenges          RecoveryChallengeObject[]
+  identityRollovers           IdentityRolloverObject[]
+  ownedLaneObjects            LaneObject[]              @relation("LaneOwner")
+  originalProviderLaneObjects LaneObject[]              @relation("LaneOriginalProvider")
+  ownedGrants                 GrantObject[]             @relation("GrantOwner")
+  recoveryGrantObjects        RecoveryGrantObject[]
+  revisions                   Revision[]
+
+  @@unique([serverProfileId, authSubject])
+  @@unique([serverProfileId, githubSubject])
+  @@index([serverProfileId])
+  @@map("users")
+}
+
+model UserIdentityGeneration {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  generation       BigInt    @db.BigInt
+  x25519PublicKey  Bytes     @db.ByteA
+  ed25519PublicKey Bytes     @db.ByteA
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  retiredAt        DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, generation])
+  @@map("user_identity_generations")
+}
+
+model Device {
+  id                 String          @id @db.Uuid
+  userId             String          @db.Uuid
+  lifecycle          DeviceLifecycle @default(PENDING)
+  identityGeneration BigInt          @db.BigInt
+  keyId              Bytes           @db.ByteA
+  x25519PublicKey    Bytes           @db.ByteA
+  ed25519PublicKey   Bytes           @db.ByteA
+  createdAt          DateTime        @default(now()) @db.Timestamptz(3)
+  activatedAt        DateTime?       @db.Timestamptz(3)
+  revokedAt          DateTime?       @db.Timestamptz(3)
+
+  user                 User                       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  enrollmentsInitiated DeviceEnrollment[]         @relation("EnrollmentInitiator")
+  enrollmentsApproved  DeviceEnrollment[]         @relation("EnrollmentApprover")
+  approvalObjects      EnrollmentApprovalObject[]
+  recoveryAttempts     RecoveryAttempt[]
+  recoveryChallenges   RecoveryChallengeObject[]
+  operations           Operation[]                @relation("OperationDevice")
+  auditEvents          AuditEvent[]               @relation("AuditDevice")
+  certificateObject    DeviceCertificateObject?
+  grantsSent           GrantObject[]              @relation("GrantSender")
+  grantsReceived       GrantObject[]              @relation("GrantRecipient")
+  revisions            Revision[]
+  stagedObjects        StagedObject[]
+
+  @@unique([userId, id])
+  @@unique([keyId])
+  @@index([userId, lifecycle])
+  @@map("devices")
+}
+
+model DeviceEnrollment {
+  id                String    @id @default(uuid()) @db.Uuid
+  operationId       String    @unique @db.Uuid
+  userId            String    @db.Uuid
+  initiatorDeviceId String    @db.Uuid
+  approverDeviceId  String?   @db.Uuid
+  transcriptHash    Bytes     @db.ByteA
+  challengeHash     Bytes     @db.ByteA
+  expiresAt         DateTime  @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt       DateTime? @db.Timestamptz(3)
+
+  operation        Operation                  @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user             User                       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  initiatorDevice  Device                     @relation("EnrollmentInitiator", fields: [initiatorDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  approverDevice   Device?                    @relation("EnrollmentApprover", fields: [approverDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  enrollmentObject EnrollmentObject?
+  approvalObjects  EnrollmentApprovalObject[]
+
+  @@index([userId, expiresAt])
+  @@map("device_enrollments")
+}
+
+model RecoveryEnvelope {
+  id                 String    @id @default(uuid()) @db.Uuid
+  userId             String    @db.Uuid
+  protocolObjectId   String    @unique @db.Uuid
+  identityGeneration BigInt    @db.BigInt
+  recoveryGeneration BigInt    @db.BigInt
+  ciphertextHash     Bytes     @db.ByteA
+  ciphertextLength   Int
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+  retiredAt          DateTime? @db.Timestamptz(3)
+
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  protocolObject       ProtocolObject        @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attempts             RecoveryAttempt[]
+  recoveryGrantObjects RecoveryGrantObject[]
+
+  @@index([userId, recoveryGeneration])
+  @@map("recovery_envelopes")
+}
+
+model RecoveryAttempt {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  deviceId      String?  @db.Uuid
+  envelopeId    String?  @db.Uuid
+  challengeHash Bytes    @db.ByteA
+  succeeded     Boolean
+  attemptedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  device   Device?           @relation(fields: [deviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  envelope RecoveryEnvelope? @relation(fields: [envelopeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId, attemptedAt])
+  @@map("recovery_attempts")
+}
+
+model Team {
+  id              String            @id @default(uuid()) @db.Uuid
+  serverProfileId String            @db.Uuid
+  name            String            @db.VarChar(255)
+  lifecycle       ResourceLifecycle @default(ACTIVE)
+  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+  archivedAt      DateTime?         @db.Timestamptz(3)
+
+  serverProfile ServerProfile          @relation(fields: [serverProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  memberships   Membership[]
+  invitations   MembershipInvitation[]
+  projects      Project[]
+
+  @@index([serverProfileId, lifecycle])
+  @@map("teams")
+}
+
+model MembershipInvitation {
+  id               String    @id @default(uuid()) @db.Uuid
+  teamId           String    @db.Uuid
+  providerSubject  String    @db.VarChar(255)
+  expiresAt        DateTime  @db.Timestamptz(3)
+  acceptedByUserId String?   @db.Uuid
+  acceptedAt       DateTime? @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+
+  team           Team        @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  acceptedByUser User?       @relation("InvitationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  membership     Membership?
+
+  @@index([teamId, expiresAt])
+  @@index([providerSubject, expiresAt])
+  @@map("membership_invitations")
+}
+
+model Membership {
+  id           String              @id @default(uuid()) @db.Uuid
+  teamId       String              @db.Uuid
+  userId       String              @db.Uuid
+  invitationId String?             @unique @db.Uuid
+  role         MembershipRole      @default(MEMBER)
+  lifecycle    MembershipLifecycle @default(PENDING_KEY_GRANT)
+  createdAt    DateTime            @default(now()) @db.Timestamptz(3)
+  activatedAt  DateTime?           @db.Timestamptz(3)
+  removedAt    DateTime?           @db.Timestamptz(3)
+
+  team             Team                        @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user             User                        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invitation       MembershipInvitation?       @relation(fields: [invitationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grants           GrantObject[]
+  activationObject MembershipActivationObject?
+
+  @@unique([teamId, userId])
+  @@index([teamId, lifecycle, role])
+  @@map("memberships")
+}
+
+model Project {
+  id                 String            @id @default(uuid()) @db.Uuid
+  teamId             String            @db.Uuid
+  githubRepositoryId BigInt            @db.BigInt
+  createdByUserId    String            @db.Uuid
+  lifecycle          ResourceLifecycle @default(ACTIVE)
+  currentEpoch       BigInt            @default(1) @db.BigInt
+  createdAt          DateTime          @default(now()) @db.Timestamptz(3)
+  archivedAt         DateTime?         @db.Timestamptz(3)
+
+  team                 Team                    @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy            User                    @relation("ProjectCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  environments         Environment[]
+  protocolObjects      ProtocolObject[]
+  laneObjects          LaneObject[]
+  grants               GrantObject[]
+  epochTransitions     EpochTransitionObject[]
+  recoveryGrantObjects RecoveryGrantObject[]
+  manifestDescriptors  ManifestDescriptor[]
+
+  @@index([teamId, lifecycle])
+  @@index([githubRepositoryId])
+  @@map("projects")
+}
+
+model Environment {
+  id              String            @id @db.Uuid
+  projectId       String            @db.Uuid
+  createdByUserId String            @db.Uuid
+  lifecycle       ResourceLifecycle @default(ACTIVE)
+  currentHeadId   String?           @unique @db.Uuid
+  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+  archivedAt      DateTime?         @db.Timestamptz(3)
+
+  project             Project              @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy           User                 @relation("EnvironmentCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentHead         Revision?            @relation("EnvironmentCurrentHead", fields: [currentHeadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revisions           Revision[]           @relation("EnvironmentRevisions")
+  protocolObjects     ProtocolObject[]
+  laneObjects         LaneObject[]
+  manifestDescriptors ManifestDescriptor[]
+
+  @@index([projectId, lifecycle])
+  @@map("environments")
+}
+
+model ProtocolObject {
+  id             String   @id @db.Uuid
+  suite          String   @db.VarChar(96)
+  formatVersion  Int
+  kind           Int
+  canonicalBytes Bytes    @db.ByteA
+  digest         Bytes    @db.ByteA
+  acceptedAt     DateTime @default(now()) @db.Timestamptz(3)
+  projectId      String?  @db.Uuid
+  environmentId  String?  @db.Uuid
+
+  project              Project?                    @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  environment          Environment?                @relation(fields: [environmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  identityObject       IdentityObject?
+  identityRollover     IdentityRolloverObject?
+  deviceCertificate    DeviceCertificateObject?
+  grantObject          GrantObject?
+  recoveryEnvelope     RecoveryEnvelope?
+  epochTransition      EpochTransitionObject?
+  laneObject           LaneObject?
+  laneCommitment       LaneCommitmentObject?
+  manifestDescriptor   ManifestDescriptor?
+  revision             Revision?
+  enrollmentObject     EnrollmentObject?
+  enrollmentApproval   EnrollmentApprovalObject?
+  membershipActivation MembershipActivationObject?
+  recoveryChallenge    RecoveryChallengeObject?
+  recoveryGrantObject  RecoveryGrantObject?
+
+  @@unique([digest])
+  @@index([kind, acceptedAt])
+  @@map("protocol_objects")
+}
+
+model IdentityObject {
+  protocolObjectId   String @id @db.Uuid
+  userId             String @db.Uuid
+  identityGeneration BigInt @db.BigInt
+  x25519PublicKey    Bytes  @db.ByteA
+  ed25519PublicKey   Bytes  @db.ByteA
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, identityGeneration])
+  @@map("identity_objects")
+}
+
+model IdentityRolloverObject {
+  protocolObjectId      String @id @db.Uuid
+  userId                String @db.Uuid
+  predecessorGeneration BigInt @db.BigInt
+  successorGeneration   BigInt @db.BigInt
+  predecessorHash       Bytes  @db.ByteA
+  successorHash         Bytes  @db.ByteA
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("identity_rollover_objects")
+}
+
+model DeviceCertificateObject {
+  protocolObjectId   String          @id @db.Uuid
+  deviceId           String          @unique @db.Uuid
+  userId             String          @db.Uuid
+  identityGeneration BigInt          @db.BigInt
+  lifecycle          DeviceLifecycle
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  device         Device         @relation(fields: [deviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("device_certificate_objects")
+}
+
+model EnrollmentObject {
+  protocolObjectId String @id @db.Uuid
+  enrollmentId     String @unique @db.Uuid
+
+  protocolObject ProtocolObject   @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  enrollment     DeviceEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("enrollment_objects")
+}
+
+model EnrollmentApprovalObject {
+  protocolObjectId String @id @db.Uuid
+  enrollmentId     String @db.Uuid
+  approvalDeviceId String @db.Uuid
+
+  protocolObject ProtocolObject   @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  enrollment     DeviceEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  approvalDevice Device           @relation(fields: [approvalDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([enrollmentId])
+  @@map("enrollment_approval_objects")
+}
+
+model MembershipActivationObject {
+  protocolObjectId String @id @db.Uuid
+  membershipId     String @unique @db.Uuid
+  teamId           String @db.Uuid
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  membership     Membership     @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("membership_activation_objects")
+}
+
+model GrantObject {
+  protocolObjectId  String     @id @db.Uuid
+  projectId         String     @db.Uuid
+  teamId            String     @db.Uuid
+  membershipId      String?    @db.Uuid
+  senderDeviceId    String?    @db.Uuid
+  recipientDeviceId String     @db.Uuid
+  ownerUserId       String?    @db.Uuid
+  keyKind           KeyKind
+  grantKind         GrantKind
+  laneScope         LaneScope?
+  projectEpoch      BigInt?
+  valueGeneration   BigInt?
+  plaintextLength   Int
+  ciphertextLength  Int
+  ciphertextHash    Bytes      @db.ByteA
+
+  protocolObject  ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  membership      Membership?    @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  senderDevice    Device?        @relation("GrantSender", fields: [senderDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipientDevice Device         @relation("GrantRecipient", fields: [recipientDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  ownerUser       User?          @relation("GrantOwner", fields: [ownerUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([projectId, grantKind, projectEpoch, valueGeneration])
+  @@index([recipientDeviceId, grantKind])
+  @@map("grant_objects")
+}
+
+model RecoveryGrantObject {
+  protocolObjectId   String    @id @db.Uuid
+  recoveryEnvelopeId String    @db.Uuid
+  projectId          String    @db.Uuid
+  grantKind          GrantKind
+  ownerUserId        String?   @db.Uuid
+
+  protocolObject   ProtocolObject   @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recoveryEnvelope RecoveryEnvelope @relation(fields: [recoveryEnvelopeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  ownerUser        User?            @relation(fields: [ownerUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("recovery_grant_objects")
+}
+
+model EpochTransitionObject {
+  protocolObjectId String @id @db.Uuid
+  projectId        String @db.Uuid
+  previousEpoch    BigInt @db.BigInt
+  newEpoch         BigInt @db.BigInt
+  expectedHeadId   String @db.Uuid
+  newHeadId        String @db.Uuid
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("epoch_transition_objects")
+}
+
+model LaneObject {
+  id                     String    @id @db.Uuid
+  protocolObjectId       String    @unique @db.Uuid
+  operationId            String?   @db.Uuid
+  projectId              String    @db.Uuid
+  environmentId          String    @db.Uuid
+  scope                  LaneScope
+  ownerUserId            String?   @db.Uuid
+  originalProviderUserId String?   @db.Uuid
+  projectEpoch           BigInt
+  valueGeneration        BigInt?
+  plaintextLength        Int
+  ciphertextLength       Int
+  ciphertextHash         Bytes     @db.ByteA
+  createdAt              DateTime  @default(now()) @db.Timestamptz(3)
+
+  protocolObject   ProtocolObject           @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  operation        Operation?               @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project          Project                  @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  environment      Environment              @relation(fields: [environmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  ownerUser        User?                    @relation("LaneOwner", fields: [ownerUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  originalProvider User?                    @relation("LaneOriginalProvider", fields: [originalProviderUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  commitments      RevisionLaneCommitment[]
+  commitmentObject LaneCommitmentObject?
+
+  @@index([environmentId, scope])
+  @@index([projectId, projectEpoch, valueGeneration])
+  @@map("lane_objects")
+}
+
+model LaneCommitmentObject {
+  protocolObjectId String    @id @db.Uuid
+  laneObjectId     String    @unique @db.Uuid
+  projectId        String    @db.Uuid
+  environmentId    String    @db.Uuid
+  scope            LaneScope
+  projectEpoch     BigInt
+  valueGeneration  BigInt?
+  ciphertextHash   Bytes     @db.ByteA
+  ciphertextLength Int
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  laneObject     LaneObject     @relation(fields: [laneObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("lane_commitment_objects")
+}
+
+model ManifestDescriptor {
+  protocolObjectId String @id @db.Uuid
+  revisionId       String @unique @db.Uuid
+  projectId        String @db.Uuid
+  environmentId    String @db.Uuid
+  schemaVersion    Int
+  descriptorHash   Bytes  @db.ByteA
+  laneCount        Int
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revision       Revision       @relation(fields: [revisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  environment    Environment    @relation(fields: [environmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("manifest_descriptors")
+}
+
+model Revision {
+  id               String       @id @db.Uuid
+  protocolObjectId String       @unique @db.Uuid
+  operationId      String       @unique @db.Uuid
+  environmentId    String       @db.Uuid
+  parentId         String?      @db.Uuid
+  parentHash       Bytes?       @db.ByteA
+  authorUserId     String       @db.Uuid
+  signingDeviceId  String       @db.Uuid
+  projectEpoch     BigInt       @db.BigInt
+  mutation         MutationKind
+  authoredAtMs     BigInt       @db.BigInt
+  acceptedAt       DateTime     @default(now()) @db.Timestamptz(3)
+  rollbackTargetId String?      @db.Uuid
+
+  protocolObject     ProtocolObject           @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  operation          Operation                @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  environment        Environment              @relation("EnvironmentRevisions", fields: [environmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentFor         Environment?             @relation("EnvironmentCurrentHead")
+  parent             Revision?                @relation("RevisionParent", fields: [parentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  children           Revision[]               @relation("RevisionParent")
+  authorUser         User                     @relation(fields: [authorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  signingDevice      Device                   @relation(fields: [signingDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  rollbackTarget     Revision?                @relation("RevisionRollbackTarget", fields: [rollbackTargetId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  rollbackRevisions  Revision[]               @relation("RevisionRollbackTarget")
+  commitments        RevisionLaneCommitment[]
+  manifestDescriptor ManifestDescriptor?
+
+  @@index([environmentId, acceptedAt])
+  @@index([parentId])
+  @@map("revisions")
+}
+
+model RevisionLaneCommitment {
+  revisionId             String    @db.Uuid
+  ordinal                Int
+  laneObjectId           String    @db.Uuid
+  objectHash             Bytes     @db.ByteA
+  projectEpoch           BigInt    @db.BigInt
+  valueGeneration        BigInt?   @db.BigInt
+  scope                  LaneScope
+  ownerUserId            String?   @db.Uuid
+  originalProviderUserId String?   @db.Uuid
+  ciphertextLength       Int
+
+  revision   Revision   @relation(fields: [revisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  laneObject LaneObject @relation(fields: [laneObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([revisionId, ordinal])
+  @@unique([revisionId, laneObjectId])
+  @@map("revision_lane_commitments")
+}
+
+model RecoveryChallengeObject {
+  protocolObjectId   String   @id @db.Uuid
+  userId             String   @db.Uuid
+  deviceId           String   @db.Uuid
+  recoveryGeneration BigInt   @db.BigInt
+  challengeHash      Bytes    @db.ByteA
+  expiresAt          DateTime @db.Timestamptz(3)
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  device         Device         @relation(fields: [deviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("recovery_challenge_objects")
+}
+
+model Operation {
+  id            String          @id @db.Uuid
+  actorUserId   String          @db.Uuid
+  actorDeviceId String?         @db.Uuid
+  kind          OperationKind
+  status        OperationStatus @default(STAGED)
+  commandDigest Bytes           @db.ByteA
+  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
+  committedAt   DateTime?       @db.Timestamptz(3)
+  expiresAt     DateTime?       @db.Timestamptz(3)
+
+  actorUser     User              @relation("OperationActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorDevice   Device?           @relation("OperationDevice", fields: [actorDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  enrollment    DeviceEnrollment?
+  stagedObjects StagedObject[]
+  laneObjects   LaneObject[]
+  revision      Revision?
+  auditEvents   AuditEvent[]
+
+  @@unique([actorUserId, commandDigest])
+  @@index([status, expiresAt])
+  @@map("operations")
+}
+
+model StagedObject {
+  operationId    String    @db.Uuid
+  objectId       String    @db.Uuid
+  actorDeviceId  String    @db.Uuid
+  canonicalBytes Bytes     @db.ByteA
+  digest         Bytes     @db.ByteA
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt      DateTime  @db.Timestamptz(3)
+  committedAt    DateTime? @db.Timestamptz(3)
+
+  operation   Operation @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorDevice Device    @relation(fields: [actorDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([operationId, objectId])
+  @@unique([operationId, digest])
+  @@index([expiresAt])
+  @@map("staged_objects")
+}
+
+model AuditEvent {
+  id                String          @id @default(uuid()) @db.Uuid
+  operationId       String          @db.Uuid
+  kind              AuditEventKind
+  actorUserId       String?         @db.Uuid
+  actorDeviceId     String?         @db.Uuid
+  entityKind        AuditEntityKind
+  entityId          String          @db.Uuid
+  priorLifecycle    String?         @db.VarChar(64)
+  newLifecycle      String?         @db.VarChar(64)
+  outcomeObjectId   String?         @db.Uuid
+  outcomeRevisionId String?         @db.Uuid
+  receiptAt         DateTime        @default(now()) @db.Timestamptz(3)
+
+  operation   Operation @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorUser   User?     @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorDevice Device?   @relation("AuditDevice", fields: [actorDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([entityKind, entityId, receiptAt])
+  @@index([receiptAt])
+  @@map("audit_events")
+}
+
+model SecurityRequestLog {
+  id               String   @id @default(uuid()) @db.Uuid
+  ipAddress        String   @db.Inet
+  endpointTemplate String   @db.VarChar(255)
+  httpStatus       Int
+  transferBytes    BigInt   @default(0) @db.BigInt
+  requestedAt      DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt        DateTime @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@index([requestedAt])
+  @@map("security_request_logs")
+}
