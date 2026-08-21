@@ -1,39 +1,20 @@
-import { hexFromBytes } from "./vector-hex";
-
-type AcvpReference = Readonly<{
-  readonly id: string;
-  readonly url: string;
-  readonly sourceRevision: string;
-  readonly sha256: string;
-}>;
-
-const sha256Hex = async (bytes: Uint8Array): Promise<string> =>
-  hexFromBytes(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>),
-    ),
-  );
-
-const verifyReference = async (reference: AcvpReference): Promise<void> => {
-  const response = await fetch(reference.url, { redirect: "error" });
-  if (!response.ok)
-    throw new Error(`could not retrieve ${reference.id}: ${response.status}`);
-  const source = new Uint8Array(await response.arrayBuffer());
-  const digest = await sha256Hex(source);
-  if (digest !== reference.sha256)
-    throw new Error(`digest mismatch for ${reference.id}`);
-};
+export {};
 
 const primitives = (await Bun.file(
-  "test-vectors/e2ee/v2/rfc-primitives.json",
-).json()) as { acvpReferences: AcvpReference[] };
+  "test-vectors/e2ee/v3/rfc-primitives.json",
+).json()) as {
+  sources: Array<{ algorithm: string }>;
+  acvpReferences?: unknown;
+};
 
-for (const reference of primitives.acvpReferences) {
-  if (!reference.url.includes(`/${reference.sourceRevision}/`))
-    throw new Error(`unpinned source URL for ${reference.id}`);
-  await verifyReference(reference);
-}
+if (primitives.acvpReferences !== undefined)
+  throw new Error("v3 vectors must not contain post-quantum ACVP references");
 
-console.log(
-  `✓ verified ${primitives.acvpReferences.length} pinned ACVP sources`,
+const algorithms = new Set(
+  primitives.sources.map((source) => source.algorithm),
 );
+for (const algorithm of ["X25519", "Ed25519", "SHA-384"])
+  if (!algorithms.has(algorithm))
+    throw new Error(`missing ${algorithm} fixture`);
+
+console.log("✓ verified v3 classical protocol sources");

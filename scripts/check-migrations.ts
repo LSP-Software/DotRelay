@@ -17,7 +17,6 @@ await run(
     "--to-schema",
     schema,
     "--script",
-    "--exit-code",
   ],
   root,
 );

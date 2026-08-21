@@ -5,7 +5,8 @@ DotRelay is a Bun/Turborepo monorepo with three applications:
 - `apps/web` is the Next.js browser surface.
 - `apps/api` is the independent Hono API and Prisma owner.
 - `apps/cli` is the standalone Bun-compiled CLI.
-- `packages/contracts` is the runtime-neutral API v1 and `dotrelay-e2ee-v2` contract boundary.
+- `packages/contracts` is the runtime-neutral API v1 and `dotrelay-e2ee-v3-classical-webcrypto`
+  contract boundary.
 
 Run `bun install --frozen-lockfile` after checking out the repository. Use `bun run dev` for local
 development, `bun run check` for the fast read-only gate, and `bun run verify` for the complete

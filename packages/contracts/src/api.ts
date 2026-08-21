@@ -271,7 +271,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
   info: Object.freeze({ title: "DotRelay API", version: API_VERSION }),
   "x-dotrelay": Object.freeze({
     apiVersion: API_VERSION,
-    protocolMediaType: "application/vnd.dotrelay.e2ee-v2+cbor",
+    protocolMediaType: "application/vnd.dotrelay.e2ee-v3+cbor",
     strictJson: true,
     suite: Object.freeze({ name: SUITE_NAME, value: SUITE_VALUE }),
     problemStatus: Object.freeze({ ...PROBLEM_STATUS }),
@@ -410,7 +410,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
       ProtocolObject: Object.freeze({
         type: "string",
         format: "binary",
-        contentMediaType: "application/vnd.dotrelay.e2ee-v2+cbor",
+        contentMediaType: "application/vnd.dotrelay.e2ee-v3+cbor",
       }),
       StrictJsonObject: Object.freeze({
         type: "object",

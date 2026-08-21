@@ -1,0 +1,18 @@
+{
+  "suite": "dotrelay-e2ee-v3-classical-webcrypto",
+  "immutable": true,
+  "fixtures": [
+    {
+      "id": "cbor-map-order",
+      "hex": "a2000201636f6e65"
+    },
+    {
+      "id": "cbor-empty-map",
+      "hex": "a0"
+    },
+    {
+      "id": "cbor-uint64-shortest",
+      "hex": "1b0000000100000000"
+    }
+  ]
+}

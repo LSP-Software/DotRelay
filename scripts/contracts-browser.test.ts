@@ -12,13 +12,13 @@ import type { BrowserVectorEntry } from "./browser-vector-runner";
 import { bytesFromHex, hexFromBytes } from "./vector-hex";
 
 const browserFixtures: { fixtures: BrowserVectorEntry[] } = await Bun.file(
-  "test-vectors/e2ee/v2/browser-bun.json",
+  "test-vectors/e2ee/v3/browser-bun.json",
 ).json();
 
 const protocolFixtures = async (): Promise<BrowserVectorEntry[]> => {
-  const objects = await Bun.file("test-vectors/e2ee/v2/objects.json").json();
+  const objects = await Bun.file("test-vectors/e2ee/v3/objects.json").json();
   const conditional = await Bun.file(
-    "test-vectors/e2ee/v2/conditional.json",
+    "test-vectors/e2ee/v3/conditional.json",
   ).json();
   return [...objects.vectors, ...conditional.vectors].map(
     (vector: { canonicalHex: string }) => ({

@@ -60,12 +60,7 @@ export const buildVectorObject = (
   if (definition.serverVisible) {
     const unsigned = canonicalEncode(object);
     fields.set(3, unsigned);
-    fields.set(4, zeros(3309, 0x11));
-    fields.set(5, zeros(64, 0x22));
-    if (kind === 3) {
-      fields.set(6, zeros(3309, 0x33));
-      fields.set(7, zeros(64, 0x44));
-    }
+    fields.set(4, zeros(64, 0x11));
     object = protocolObjectFromFields(kind, fields);
   }
   return copyObject(object);
@@ -148,7 +143,7 @@ const hex = (value: string): Uint8Array =>
     value.match(/../g)?.map((pair) => Number.parseInt(pair, 16)) ?? [],
   );
 
-export const NEGATIVE_VECTOR_CASES = Object.freeze([
+const NEGATIVE_VECTOR_CASES_BASE = [
   {
     id: "noncanonical-integer",
     bytes: hex("a1001802"),
@@ -264,4 +259,22 @@ export const NEGATIVE_VECTOR_CASES = Object.freeze([
     bytes: hex("a40002010102010801"),
     error: "invalid_crypto_object",
   },
-]);
+];
+
+const normalizeV3Negative = <T extends { id: string; bytes: Uint8Array }>(
+  vector: T,
+): T => {
+  if (vector.id === "unsupported-suite") return vector;
+  const bytes = new Uint8Array(vector.bytes);
+  for (let index = 0; index + 1 < bytes.length; index++) {
+    if (bytes[index] === 0 && bytes[index + 1] === 2) {
+      bytes[index + 1] = 3;
+      return { ...vector, bytes };
+    }
+  }
+  return vector;
+};
+
+export const NEGATIVE_VECTOR_CASES = Object.freeze(
+  NEGATIVE_VECTOR_CASES_BASE.map(normalizeV3Negative),
+);

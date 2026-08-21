@@ -27,6 +27,162 @@ const fail = (message: string): never => {
   throw new PersistenceValidationError(message);
 };
 
+const MAX_CBOR_DEPTH = 12;
+const MAX_CBOR_COLLECTION_ITEMS = 100_000;
+
+type CborCursor = { offset: number };
+
+const readCborByte = (bytes: Uint8Array, cursor: CborCursor): number => {
+  const value = bytes[cursor.offset++];
+  return value ?? fail("canonical protocol bytes are truncated");
+};
+
+const readCborArgument = (
+  bytes: Uint8Array,
+  cursor: CborCursor,
+  additional: number,
+): bigint => {
+  if (additional < 24) return BigInt(additional);
+  const width =
+    additional === 24
+      ? 1
+      : additional === 25
+        ? 2
+        : additional === 26
+          ? 4
+          : additional === 27
+            ? 8
+            : 0;
+  if (width === 0 || cursor.offset + width > bytes.length)
+    fail("canonical protocol bytes contain an invalid argument");
+  let value = 0n;
+  for (let index = 0; index < width; index++)
+    value = (value << 8n) | BigInt(readCborByte(bytes, cursor));
+  const minimum =
+    width === 1
+      ? 24n
+      : width === 2
+        ? 256n
+        : width === 4
+          ? 65_536n
+          : 4_294_967_296n;
+  if (value < minimum)
+    fail("canonical protocol bytes use a non-minimal argument");
+  return value;
+};
+
+const compareCborKeyBytes = (
+  bytes: Uint8Array,
+  leftStart: number,
+  leftEnd: number,
+  rightStart: number,
+  rightEnd: number,
+): number => {
+  const leftLength = leftEnd - leftStart;
+  const rightLength = rightEnd - rightStart;
+  if (leftLength !== rightLength) return leftLength - rightLength;
+  for (let index = 0; index < leftLength; index++) {
+    const leftByte =
+      bytes[leftStart + index] ??
+      fail("canonical protocol map key is truncated");
+    const rightByte =
+      bytes[rightStart + index] ??
+      fail("canonical protocol map key is truncated");
+    const difference = leftByte - rightByte;
+    if (difference !== 0) return difference;
+  }
+  return 0;
+};
+
+const readCanonicalCborValue = (
+  bytes: Uint8Array,
+  cursor: CborCursor,
+  depth: number,
+): "map" | "value" => {
+  if (depth > MAX_CBOR_DEPTH)
+    fail("canonical protocol bytes exceed CBOR depth");
+  const initial = readCborByte(bytes, cursor);
+  const major = initial >> 5;
+  const additional = initial & 0x1f;
+  if (major === 0) {
+    readCborArgument(bytes, cursor, additional);
+    return "value";
+  }
+  if (major === 1 || major === 6 || additional === 31)
+    fail("canonical protocol bytes contain an unsupported CBOR type");
+  if (major === 2 || major === 3) {
+    const length = readCborArgument(bytes, cursor, additional);
+    if (length > BigInt(PERSISTENCE_LIMITS.maxProtocolBytes))
+      fail("canonical protocol bytes exceed the persistence limit");
+    const end = cursor.offset + Number(length);
+    if (end > bytes.length) fail("canonical protocol bytes are truncated");
+    if (major === 3) {
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          bytes.slice(cursor.offset, end),
+        );
+      } catch {
+        fail("canonical protocol bytes contain invalid UTF-8");
+      }
+    }
+    cursor.offset = end;
+    return "value";
+  }
+  if (major === 4) {
+    const length = readCborArgument(bytes, cursor, additional);
+    if (length > BigInt(MAX_CBOR_COLLECTION_ITEMS))
+      fail("canonical protocol array is too large");
+    for (let index = 0; index < Number(length); index++)
+      readCanonicalCborValue(bytes, cursor, depth + 1);
+    return "value";
+  }
+  if (major === 5) {
+    const length = readCborArgument(bytes, cursor, additional);
+    if (length > BigInt(MAX_CBOR_COLLECTION_ITEMS))
+      fail("canonical protocol map is too large");
+    let previousStart = -1;
+    let previousEnd = -1;
+    for (let index = 0; index < Number(length); index++) {
+      const keyStart = cursor.offset;
+      const keyType = readCanonicalCborValue(bytes, cursor, depth + 1);
+      const keyEnd = cursor.offset;
+      const keyByte = bytes[keyStart];
+      if (keyType !== "value" || keyByte === undefined || keyByte >> 5 !== 0)
+        fail("canonical protocol map keys must be unsigned integers");
+      if (
+        previousStart >= 0 &&
+        compareCborKeyBytes(
+          bytes,
+          previousStart,
+          previousEnd,
+          keyStart,
+          keyEnd,
+        ) >= 0
+      )
+        fail("canonical protocol map keys are not in canonical order");
+      previousStart = keyStart;
+      previousEnd = keyEnd;
+      readCanonicalCborValue(bytes, cursor, depth + 1);
+    }
+    return "map";
+  }
+  if (
+    major === 7 &&
+    (additional === 20 || additional === 21 || additional === 22)
+  )
+    return "value";
+  return fail("canonical protocol bytes contain an unsupported CBOR value");
+};
+
+export const validateCanonicalCbor = (value: Uint8Array): void => {
+  const bytes = validateProtocolBytes(value, "canonical protocol bytes");
+  const cursor: CborCursor = { offset: 0 };
+  if (readCanonicalCborValue(bytes, cursor, 0) !== "map")
+    fail("canonical protocol object must be a CBOR map");
+  if (cursor.offset !== bytes.length)
+    fail("canonical protocol bytes contain trailing data");
+};
+
 export const copyBytes = (value: Uint8Array, name: string): Uint8Array => {
   if (!(value instanceof Uint8Array)) fail(`${name} must be bytes`);
   return new Uint8Array(value);
@@ -87,6 +243,7 @@ export const validateProtocolProjection = (input: {
   const bytes = copyBytes(input.canonicalBytes, "canonical protocol bytes");
   if (bytes.length === 0 || bytes.length > PERSISTENCE_LIMITS.maxProtocolBytes)
     fail("canonical protocol bytes exceed the persistence limit");
+  validateCanonicalCbor(bytes);
   validateDigest(input.digest);
 };
 
@@ -151,6 +308,7 @@ export const validateStagedObject = (input: {
   readonly createdAt: Date;
 }): void => {
   validateProtocolBytes(input.canonicalBytes, "staged canonical bytes");
+  validateCanonicalCbor(input.canonicalBytes);
   validateDigest(input.digest);
   if (input.expiresAt <= input.createdAt)
     fail("staged object must expire after creation");

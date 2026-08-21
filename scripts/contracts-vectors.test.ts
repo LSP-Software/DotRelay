@@ -46,9 +46,9 @@ const canonicalVectorFiles = [
 const frozenVectors = async (): Promise<
   Array<{ canonicalHex: string; unsignedBodyHex: string }>
 > => {
-  const objects = await Bun.file("test-vectors/e2ee/v2/objects.json").json();
+  const objects = await Bun.file("test-vectors/e2ee/v3/objects.json").json();
   const conditional = await Bun.file(
-    "test-vectors/e2ee/v2/conditional.json",
+    "test-vectors/e2ee/v3/conditional.json",
   ).json();
   return [...objects.vectors, ...conditional.vectors];
 };
@@ -56,18 +56,18 @@ const frozenVectors = async (): Promise<
 const frozenNegativeVectors = async (): Promise<
   Array<{ id: string; hex: string; error: string }>
 > => {
-  const negative = await Bun.file("test-vectors/e2ee/v2/negative.json").json();
+  const negative = await Bun.file("test-vectors/e2ee/v3/negative.json").json();
   return negative.cases;
 };
 
-describe("immutable dotrelay-e2ee-v2 vectors", () => {
+describe("immutable dotrelay-e2ee-v3 classical vectors", () => {
   test("verifies the independently committed corpus manifest", async () => {
     const manifest = await Bun.file(
-      "test-vectors/e2ee/v2/manifest.json",
+      "test-vectors/e2ee/v3/manifest.json",
     ).json();
     expect(manifest).toMatchObject({
-      suite: "dotrelay-e2ee-v2",
-      suiteValue: 2,
+      suite: "dotrelay-e2ee-v3-classical-webcrypto",
+      suiteValue: 3,
       immutable: true,
       hash: "sha-384",
     });
@@ -81,7 +81,7 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
       expect(
         await sha384Hex(
           new Uint8Array(
-            await Bun.file(`test-vectors/e2ee/v2/${entry.path}`).arrayBuffer(),
+            await Bun.file(`test-vectors/e2ee/v3/${entry.path}`).arrayBuffer(),
           ),
         ),
       ).toBe(entry.sha384);
@@ -90,7 +90,7 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
 
   test("checks deterministic-CBOR primitive and domain fixtures", async () => {
     const primitives = await Bun.file(
-      "test-vectors/e2ee/v2/primitives.json",
+      "test-vectors/e2ee/v3/primitives.json",
     ).json();
     const values: Record<string, CborValue> = {
       "uint-0": 0,
@@ -132,21 +132,21 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
     expect(primitives.fixedLengths).toEqual(FIXED_LENGTHS);
   });
 
-  test("pins RFC primitive provenance and the #26 ACVP hand-off", async () => {
+  test("pins RFC primitive provenance for the v3 classical suite", async () => {
     const primitives = await Bun.file(
-      "test-vectors/e2ee/v2/rfc-primitives.json",
+      "test-vectors/e2ee/v3/rfc-primitives.json",
     ).json();
     expect(primitives.sources).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "rfc-5869-a.1",
+          id: "rfc-5869-a.1-sha-384",
           intermediates: {
             prkHex:
-              "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+              "27ca250e192e2b112848c4a98aa760f7a0dfb1d818dc7ac62fe58118a03267abb4ff6d9e806e3af8a0b8e0adddd9ec83",
           },
           output: {
             okmHex:
-              "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+              "75e6213ae65b678b29729bf929da95da96ba6519364472a00bdf4c790246380eb23c02e4a5f081ff5dc8",
           },
         }),
         expect.objectContaining({
@@ -165,45 +165,38 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
         }),
       ]),
     );
+    expect(primitives.acvpReferences).toBeUndefined();
     expect(
-      primitives.acvpReferences.map(
-        (reference: { id: string }) => reference.id,
+      primitives.sources.map(
+        (source: { algorithm: string }) => source.algorithm,
       ),
-    ).toEqual([
-      "ml-kem-keygen-fips203",
-      "ml-kem-encap-decap-fips203",
-      "ml-dsa-keygen-fips204",
-      "ml-dsa-sign-fips204",
-      "ml-dsa-verify-fips204",
-    ]);
-
+    ).toEqual(
+      expect.arrayContaining(["X25519", "Ed25519", "HKDF-SHA-384", "SHA-384"]),
+    );
     expect(
-      primitives.acvpReferences.every(
-        (reference: { sourceRevision: string; handoffIssue: number }) =>
-          reference.sourceRevision ===
-            "c924096a71e5d050742e31efa6846d1e2d6fb3bd" &&
-          reference.handoffIssue === 26,
+      primitives.sources.map(
+        (source: { algorithm: string }) => source.algorithm,
       ),
-    ).toBe(true);
+    ).not.toContain("HKDF-SHA-256");
   });
 
   test("checks in the positive, negative, and browser/Bun corpus manifests", async () => {
     const positive = await Bun.file(
-      "test-vectors/e2ee/v2/positive.json",
+      "test-vectors/e2ee/v3/positive.json",
     ).json();
     const negative = await Bun.file(
-      "test-vectors/e2ee/v2/negative.json",
+      "test-vectors/e2ee/v3/negative.json",
     ).json();
     const browserBun = await Bun.file(
-      "test-vectors/e2ee/v2/browser-bun.json",
+      "test-vectors/e2ee/v3/browser-bun.json",
     ).json();
-    const objects = await Bun.file("test-vectors/e2ee/v2/objects.json").json();
+    const objects = await Bun.file("test-vectors/e2ee/v3/objects.json").json();
     const conditional = await Bun.file(
-      "test-vectors/e2ee/v2/conditional.json",
+      "test-vectors/e2ee/v3/conditional.json",
     ).json();
     expect(positive).toMatchObject({
-      suite: "dotrelay-e2ee-v2",
-      suiteValue: 2,
+      suite: "dotrelay-e2ee-v3-classical-webcrypto",
+      suiteValue: 3,
       immutable: true,
     });
     expect(positive.objects).toHaveLength(19);
@@ -253,7 +246,7 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
       ),
     );
     expect(negative).toMatchObject({
-      suite: "dotrelay-e2ee-v2",
+      suite: "dotrelay-e2ee-v3-classical-webcrypto",
       immutable: true,
     });
     expect(negative.cases.length).toBeGreaterThanOrEqual(14);
@@ -278,7 +271,7 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
       })).sort((left, right) => left.hex.localeCompare(right.hex)),
     );
     expect(browserBun).toMatchObject({
-      suite: "dotrelay-e2ee-v2",
+      suite: "dotrelay-e2ee-v3-classical-webcrypto",
       immutable: true,
     });
     for (const fixture of browserBun.fixtures as Array<{
@@ -330,7 +323,7 @@ describe("immutable dotrelay-e2ee-v2 vectors", () => {
     expect(() =>
       encodeProtocolObject(
         new Map<number, CborValue>([
-          [0, 2],
+          [0, 3],
           [1, 11],
           [2, 1],
           [8, "plaintext"],

@@ -1,0 +1,94 @@
+{
+  "suite": "dotrelay-e2ee-v3-classical-webcrypto",
+  "suiteValue": 3,
+  "encoding": "deterministic-cbor",
+  "immutable": true,
+  "objectVectors": "objects.json",
+  "conditionalVectors": "conditional.json",
+  "objects": [
+    {
+      "id": "object-1",
+      "kind": 1
+    },
+    {
+      "id": "object-2",
+      "kind": 2
+    },
+    {
+      "id": "object-3",
+      "kind": 3
+    },
+    {
+      "id": "object-4",
+      "kind": 4
+    },
+    {
+      "id": "object-5",
+      "kind": 5
+    },
+    {
+      "id": "object-6",
+      "kind": 6
+    },
+    {
+      "id": "object-7",
+      "kind": 7
+    },
+    {
+      "id": "object-8",
+      "kind": 8
+    },
+    {
+      "id": "object-9",
+      "kind": 9
+    },
+    {
+      "id": "object-10",
+      "kind": 10
+    },
+    {
+      "id": "object-11",
+      "kind": 11
+    },
+    {
+      "id": "object-12",
+      "kind": 12
+    },
+    {
+      "id": "object-13",
+      "kind": 13
+    },
+    {
+      "id": "object-14",
+      "kind": 14
+    },
+    {
+      "id": "object-15",
+      "kind": 15
+    },
+    {
+      "id": "object-16",
+      "kind": 16
+    },
+    {
+      "id": "object-17",
+      "kind": 17
+    },
+    {
+      "id": "object-18",
+      "kind": 18
+    },
+    {
+      "id": "object-19",
+      "kind": 19
+    }
+  ],
+  "enumCoverage": {
+    "mutationKind": [1, 2, 3, 4, 5],
+    "laneScope": [1, 2, 3, 4],
+    "keyKind": [1, 2, 3],
+    "grantKind": [1, 2, 3, 4, 5, 6, 7],
+    "membershipRole": [1, 2, 3],
+    "lifecycle": [1, 2, 3, 4, 5, 6]
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "suite": "dotrelay-e2ee-v3-classical-webcrypto",
+  "suiteValue": 3,
+  "immutable": true,
+  "sources": [
+    {
+      "id": "rfc-5869-a.1-sha-384",
+      "url": "https://www.rfc-editor.org/rfc/rfc5869#appendix-A.1",
+      "algorithm": "HKDF-SHA-384",
+      "input": {
+        "ikmHex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "saltHex": "000102030405060708090a0b0c",
+        "infoHex": "f0f1f2f3f4f5f6f7f8f9",
+        "length": 42
+      },
+      "intermediates": {
+        "prkHex": "27ca250e192e2b112848c4a98aa760f7a0dfb1d818dc7ac62fe58118a03267abb4ff6d9e806e3af8a0b8e0adddd9ec83"
+      },
+      "output": {
+        "okmHex": "75e6213ae65b678b29729bf929da95da96ba6519364472a00bdf4c790246380eb23c02e4a5f081ff5dc8"
+      }
+    },
+    {
+      "id": "rfc-7748-5.2-x25519-1",
+      "url": "https://www.rfc-editor.org/rfc/rfc7748#section-5.2",
+      "algorithm": "X25519",
+      "input": {
+        "scalarHex": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+        "uCoordinateHex": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"
+      },
+      "output": {
+        "uCoordinateHex": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552"
+      }
+    },
+    {
+      "id": "rfc-8032-7.1-ed25519-1",
+      "url": "https://www.rfc-editor.org/rfc/rfc8032#section-7.1",
+      "algorithm": "Ed25519",
+      "input": {
+        "seedHex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "messageHex": ""
+      },
+      "intermediates": {
+        "publicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+      },
+      "output": {
+        "signatureHex": "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+      }
+    },
+    {
+      "id": "fips-180-4-sha-384-abc",
+      "url": "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+      "algorithm": "SHA-384",
+      "input": {
+        "messageHex": "616263"
+      },
+      "output": {
+        "digestHex": "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7"
+      }
+    }
+  ],
+  "algorithms": ["X25519", "Ed25519", "HKDF-SHA-384", "AES-256-GCM", "SHA-384"]
+}

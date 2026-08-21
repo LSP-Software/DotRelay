@@ -1,0 +1,36 @@
+{
+  "suite": "dotrelay-e2ee-v3-classical-webcrypto",
+  "suiteValue": 3,
+  "immutable": true,
+  "hash": "sha-384",
+  "files": [
+    {
+      "path": "browser-bun.json",
+      "sha384": "1a614b1d536a7d20fe947ed949bf8639e008929cc0325a7609621b6f47dce8f0c3b2ff2b78d27572cc8846fc39bc79df"
+    },
+    {
+      "path": "conditional.json",
+      "sha384": "40c4c0ff2531ccc5208e8d6c32349539ea1de9199185e30037a8a34e3550a49881d6682054b7b9d6b665b0841b26de4d"
+    },
+    {
+      "path": "negative.json",
+      "sha384": "865a75d280e38ca38230bfbdb4cd54f3f46d963175440047281f7ebf0422910b100fdb3fcdaefd342edfbc0361b8fe6a"
+    },
+    {
+      "path": "objects.json",
+      "sha384": "dab559843956b4464b7d28bb631a3db33c182439a5b48ed6a67d1f558f8001d56510c903558f986c8d3f95b00cfe5cf3"
+    },
+    {
+      "path": "positive.json",
+      "sha384": "cbd7c53cf04ea757856a11f48af06a4c0b1376f59a10662a33abc20663e24b57f49c9bb1b584c4f6c62fd6ed63853274"
+    },
+    {
+      "path": "primitives.json",
+      "sha384": "877ecbb57388ef57e816dfe5a0697312d633089cb460094f8c3843bbf4b782d7c3ad3b68b123bda609628751e97d51d4"
+    },
+    {
+      "path": "rfc-primitives.json",
+      "sha384": "19258a58bf6280e129f16bac41c32d3dce6efc3d09f8588ca29dbd05ce0792ba2da812c95f7fd2b368a3bb74f9243e3c"
+    }
+  ]
+}

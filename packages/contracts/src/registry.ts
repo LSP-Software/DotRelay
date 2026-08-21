@@ -1,7 +1,7 @@
 import type { CborValue } from "./cbor";
 
-export const SUITE_NAME = "dotrelay-e2ee-v2" as const;
-export const SUITE_VALUE = 2 as const;
+export const SUITE_NAME = "dotrelay-e2ee-v3-classical-webcrypto" as const;
+export const SUITE_VALUE = 3 as const;
 export const API_VERSION = "v1" as const;
 
 export type FieldType = "uint" | "bytes" | "array" | "map" | "any";
@@ -26,10 +26,7 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     3: field("exact unsigned-body bytes", "bytes", {
       maxLength: 64 * 1024 * 1024,
     }),
-    4: field("primary ML-DSA signature", "bytes", { exactLength: 3309 }),
-    5: field("primary Ed25519 signature", "bytes", { exactLength: 64 }),
-    6: field("successor ML-DSA signature", "bytes", { exactLength: 3309 }),
-    7: field("successor Ed25519 signature", "bytes", { exactLength: 64 }),
+    4: field("Ed25519 signature", "bytes", { exactLength: 64 }),
     8: field("Server Profile id", "bytes", { exactLength: 16 }),
     9: field("User id", "bytes", { exactLength: 16 }),
     10: field("Device id", "bytes", { exactLength: 16 }),
@@ -60,15 +57,12 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     35: field("mutation kind", "uint"),
     36: field("lane scope", "uint"),
     37: field("key kind", "uint"),
-    38: field("ML-KEM public key", "bytes", { exactLength: 1184 }),
     39: field("X25519 public key", "bytes", { exactLength: 32 }),
-    40: field("ML-DSA public key", "bytes", { exactLength: 1952 }),
     41: field("Ed25519 public key", "bytes", { exactLength: 32 }),
     42: field("predecessor hash", "bytes", { exactLength: 48 }),
-    43: field("four-key public identity", "bytes", { exactLength: 3200 }),
-    44: field("ML-KEM ciphertext", "bytes", { exactLength: 1088 }),
-    45: field("X25519 ciphertext", "bytes", { exactLength: 32 }),
-    46: field("XChaCha20 nonce", "bytes", { exactLength: 24 }),
+    44: field("HKDF salt", "bytes", { exactLength: 32 }),
+    45: field("ephemeral X25519 public key", "bytes", { exactLength: 32 }),
+    46: field("AES-GCM IV", "bytes", { exactLength: 12 }),
     47: field("ciphertext", "bytes", { maxLength: 64 * 1024 * 1024 }),
     48: field("ciphertext hash", "bytes", { exactLength: 48 }),
     49: field("reserved and forbidden", "any"),
@@ -98,16 +92,14 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     71: field("declared plaintext length", "uint"),
     72: field("declared ciphertext length", "uint"),
     73: field("service accepted-at milliseconds", "uint"),
-    74: field("predecessor identity", "bytes", { exactLength: 3200 }),
-    75: field("successor identity", "bytes", { exactLength: 3200 }),
+    74: field("predecessor public identity", "bytes", { exactLength: 64 }),
+    75: field("successor public identity", "bytes", { exactLength: 64 }),
     76: field("enrollment transcript hash", "bytes", { exactLength: 48 }),
     77: field("approval Device id", "bytes", { exactLength: 16 }),
     78: field("Membership role", "uint"),
     79: field("archival/lifecycle state", "uint"),
-    80: field("ML-KEM private seed", "bytes", { exactLength: 64 }),
-    81: field("X25519 private input", "bytes", { exactLength: 32 }),
-    82: field("ML-DSA private seed", "bytes", { exactLength: 32 }),
-    83: field("Ed25519 private seed", "bytes", { exactLength: 32 }),
+    80: field("X25519 PKCS#8 private key", "bytes", { maxLength: 256 }),
+    81: field("Ed25519 PKCS#8 private key", "bytes", { maxLength: 256 }),
     84: field("HKDF purpose code", "uint"),
     85: field("HKDF context hash", "bytes", { exactLength: 48 }),
   });
@@ -180,24 +172,24 @@ const range = (start: number, end: number): number[] =>
 const kindDefinitions: Record<number, ObjectDefinition> = {
   1: objectDefinition(
     "User identity",
-    [0, 1, 2, 8, 9, 28, 32, 43],
-    [0, 1, 2, 8, 9, 28, 32, 43],
+    [0, 1, 2, 8, 9, 28, 32, 39, 41],
+    [0, 1, 2, 8, 9, 28, 32, 39, 41],
     false,
   ),
   2: objectDefinition(
     "Device certificate",
-    [0, 1, 2, 8, 9, 10, 17, 28, 32, 43],
-    signed([0, 1, 2, 8, 9, 10, 17, 28, 32, 43, 79]),
+    [0, 1, 2, 8, 9, 10, 17, 28, 32, 39, 41],
+    signed([0, 1, 2, 8, 9, 10, 17, 28, 32, 39, 41, 79]),
   ),
   3: objectDefinition(
     "User identity rollover",
     [0, 1, 2, 8, 9, 17, 32, 42, 74, 75],
-    signed([0, 1, 2, 8, 9, 17, 32, 42, 74, 75, 6, 7]),
+    signed([0, 1, 2, 8, 9, 17, 32, 42, 74, 75]),
   ),
   4: objectDefinition(
     "Device enrollment transcript",
-    [0, 1, 2, 8, 9, 10, 17, 32, 33, 43, 57],
-    signed([0, 1, 2, 8, 9, 10, 17, 32, 33, 43, 57]),
+    [0, 1, 2, 8, 9, 10, 17, 32, 33, 39, 41, 57],
+    signed([0, 1, 2, 8, 9, 10, 17, 32, 33, 39, 41, 57]),
   ),
   5: objectDefinition(
     "Device enrollment approval",
@@ -212,44 +204,44 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
   7: objectDefinition(
     "Project key grant",
     [
-      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 38, 39, 44, 45, 46, 47, 48, 70,
-      71, 72,
+      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 39, 44, 45, 46, 47, 48, 70, 71,
+      72,
     ],
     signed([
-      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 38, 39, 44, 45, 46, 47, 48, 70,
-      71, 72,
+      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 39, 44, 45, 46, 47, 48, 70, 71,
+      72,
     ]),
   ),
   8: objectDefinition(
     "User-defined Value key grant",
     [
-      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 38, 39, 44, 45, 46, 47, 48, 70,
-      71, 72, 9, 26, 31,
+      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 39, 44, 45, 46, 47, 48, 70, 71,
+      72, 9, 26, 31,
     ],
     signed([
-      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 38, 39, 44, 45, 46, 47, 48, 70,
-      71, 72, 9, 26, 31,
+      0, 1, 2, 8, 11, 13, 17, 24, 25, 30, 37, 39, 44, 45, 46, 47, 48, 70, 71,
+      72, 9, 26, 31,
     ]),
   ),
   9: objectDefinition(
     "Recovery grant",
-    [0, 1, 2, 8, 9, 13, 17, 24, 37, 38, 39, 44, 45, 46, 47, 48, 59, 70, 71, 72],
+    [0, 1, 2, 8, 9, 13, 17, 24, 37, 39, 41, 44, 45, 46, 47, 48, 59, 70, 71, 72],
     signed([
-      0, 1, 2, 8, 9, 13, 17, 24, 28, 29, 30, 31, 37, 38, 39, 40, 41, 42, 43, 44,
-      45, 46, 47, 48, 59, 70, 71, 72,
+      0, 1, 2, 8, 9, 13, 17, 24, 28, 29, 30, 31, 37, 39, 41, 42, 44, 45, 46, 47,
+      48, 59, 70, 71, 72,
     ]),
   ),
   10: objectDefinition(
     "Recovery envelope",
-    [0, 1, 2, 8, 9, 17, 28, 29, 32, 38, 39, 40, 41, 46, 47, 48, 59, 71, 72],
+    [0, 1, 2, 8, 9, 17, 28, 29, 32, 39, 41, 44, 45, 46, 47, 48, 59, 71, 72],
     signed([
-      0, 1, 2, 8, 9, 17, 28, 29, 32, 38, 39, 40, 41, 46, 47, 48, 59, 71, 72,
+      0, 1, 2, 8, 9, 17, 28, 29, 32, 39, 41, 44, 45, 46, 47, 48, 59, 71, 72,
     ]),
   ),
   11: objectDefinition(
     "Recovery plaintext bundle",
-    [0, 1, 2, 8, 9, 28, 29, 80, 81, 82, 83],
-    [0, 1, 2, 8, 9, 28, 29, 80, 81, 82, 83],
+    [0, 1, 2, 8, 9, 28, 29, 80, 81],
+    [0, 1, 2, 8, 9, 28, 29, 80, 81],
     false,
   ),
   12: objectDefinition(
@@ -293,14 +285,14 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
   ),
   18: objectDefinition(
     "Device private bundle",
-    [0, 1, 2, 8, 9, 10, 28, 80, 81, 82, 83],
-    [0, 1, 2, 8, 9, 10, 28, 80, 81, 82, 83],
+    [0, 1, 2, 8, 9, 10, 28, 80, 81],
+    [0, 1, 2, 8, 9, 10, 28, 80, 81],
     false,
   ),
   19: objectDefinition(
     "User trust private bundle",
-    [0, 1, 2, 8, 9, 28, 29, 80, 81, 82, 83],
-    [0, 1, 2, 8, 9, 28, 29, 80, 81, 82, 83],
+    [0, 1, 2, 8, 9, 28, 29, 80, 81],
+    [0, 1, 2, 8, 9, 28, 29, 80, 81],
     false,
   ),
 };
@@ -364,21 +356,16 @@ export const OBJECT_REGISTRY: Readonly<Record<number, ObjectDefinition>> =
   Object.freeze(kindDefinitions);
 
 export const FIXED_LENGTHS = Object.freeze({
-  mlKemPublicKey: 1184,
-  mlKemPrivateSeed: 64,
-  mlKemCiphertext: 1088,
   x25519: 32,
-  mlDsaPublicKey: 1952,
-  mlDsaPrivateSeed: 32,
-  mlDsaSignature: 3309,
   ed25519: 32,
   ed25519Signature: 64,
   digest: 48,
   derivedKey: 32,
-  nonce: 24,
+  hkdfSalt: 32,
+  iv: 12,
   tag: 16,
   opaqueId: 16,
-  publicIdentity: 3200,
+  pkcs8PrivateKeyMax: 256,
 });
 
 export type ProtocolObject = ReadonlyMap<number, CborValue>;

@@ -25,6 +25,39 @@ export class OperationConflictError extends Error {
   }
 }
 
+const requireActiveDevice = async (
+  database: PersistenceClient,
+  actorUserId: string,
+  actorDeviceId: string | undefined,
+) => {
+  if (!actorDeviceId) throw new Error("an active actor device is required");
+  const device = await database.device.findFirst({
+    where: { id: actorDeviceId, userId: actorUserId, lifecycle: "ACTIVE" },
+  });
+  if (!device) throw new Error("actor device is not active");
+  return device;
+};
+
+const requireTeamRole = async (
+  database: PersistenceClient,
+  actorUserId: string,
+  actorDeviceId: string | undefined,
+  teamId: string,
+  roles: ReadonlyArray<"OWNER" | "ADMIN" | "MEMBER"> = ["OWNER", "ADMIN"],
+) => {
+  await requireActiveDevice(database, actorUserId, actorDeviceId);
+  const membership = await database.membership.findFirst({
+    where: {
+      teamId,
+      userId: actorUserId,
+      lifecycle: "ACTIVE",
+      role: { in: [...roles] },
+    },
+  });
+  if (!membership) throw new Error("actor is not authorized for the Team");
+  return membership;
+};
+
 export class StagedObjectConflictError extends Error {
   constructor() {
     super("staged object was uploaded with different bytes");
@@ -148,6 +181,49 @@ export class StagedObjectRepository {
       where: { expiresAt: { lte: now }, committedAt: null },
     });
   }
+
+  async promote(
+    database: PersistenceClient,
+    input: Readonly<{
+      readonly operationId: string;
+      readonly actorDeviceId: string;
+      readonly now: Date;
+      readonly objects: ReadonlyArray<{
+        readonly objectId: string;
+        readonly canonicalBytes: Uint8Array;
+        readonly digest: Uint8Array;
+      }>;
+    }>,
+  ) {
+    for (const object of input.objects) {
+      const staged = await database.stagedObject.findUnique({
+        where: {
+          operationId_objectId: {
+            operationId: input.operationId,
+            objectId: object.objectId,
+          },
+        },
+      });
+      if (
+        !staged ||
+        staged.actorDeviceId !== input.actorDeviceId ||
+        staged.committedAt !== null ||
+        staged.expiresAt <= input.now ||
+        !sameBytes(staged.canonicalBytes, object.canonicalBytes) ||
+        !sameBytes(staged.digest, object.digest)
+      )
+        throw new Error("protocol object was not staged by the actor");
+      await database.stagedObject.update({
+        where: {
+          operationId_objectId: {
+            operationId: input.operationId,
+            objectId: object.objectId,
+          },
+        },
+        data: { committedAt: input.now },
+      });
+    }
+  }
 }
 
 export type OperationInput = Readonly<{
@@ -186,8 +262,11 @@ export class OperationRepository {
       if (
         byId.actorUserId !== input.actorUserId ||
         byId.actorDeviceId !== (input.actorDeviceId ?? null) ||
+        byId.kind !== input.kind ||
         !sameBytes(byId.commandDigest, digest)
       )
+        throw new OperationConflictError();
+      if (byId.status === "CANCELLED" || byId.status === "EXPIRED")
         throw new OperationConflictError();
       return { operation: byId, idempotent: byId.status === "COMMITTED" };
     }
@@ -196,6 +275,8 @@ export class OperationRepository {
     });
     if (byDigest) {
       if (byDigest.id !== input.id) throw new OperationConflictError();
+      if (byDigest.status === "CANCELLED" || byDigest.status === "EXPIRED")
+        throw new OperationConflictError();
       return {
         operation: byDigest,
         idempotent: byDigest.status === "COMMITTED",
@@ -342,6 +423,7 @@ export type TeamCreationInput = Readonly<{
   readonly serverProfileId: string;
   readonly ownerUserId: string;
   readonly name: string;
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
   readonly now?: Date;
 }>;
 
@@ -355,6 +437,18 @@ export class AdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       const now = input.now ?? new Date();
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
+      if (input.operation.actorUserId !== input.ownerUserId)
+        throw new Error("Team owner must be the operation actor");
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       const team = await transaction.team.create({
         data: {
           id: input.teamId ?? crypto.randomUUID(),
@@ -374,7 +468,20 @@ export class AdministrationRepository {
           activatedAt: now,
         },
       });
-      return { team, membership };
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "TEAM_CREATED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "TEAM",
+        entityId: team.id,
+        newLifecycle: "ACTIVE",
+      });
+      return { operation: operation.operation, team, membership };
     });
   }
 
@@ -388,6 +495,16 @@ export class AdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
+      const lockedProject = await transaction.project.findUnique({
+        where: { id: input.projectId },
+      });
+      if (!lockedProject) throw new Error("Project not found");
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        lockedProject.teamId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -428,6 +545,16 @@ export class AdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
+      const lockedProject = await transaction.project.findUnique({
+        where: { id: input.projectId },
+      });
+      if (!lockedProject) throw new Error("Project not found");
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        lockedProject.teamId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -468,6 +595,17 @@ export class AdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
+      const lockedEnvironment = await transaction.environment.findUnique({
+        where: { id: input.environmentId },
+        include: { project: true },
+      });
+      if (!lockedEnvironment) throw new Error("Environment not found");
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        lockedEnvironment.project.teamId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -511,6 +649,17 @@ export class AdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
+      const lockedEnvironment = await transaction.environment.findUnique({
+        where: { id: input.environmentId },
+        include: { project: true },
+      });
+      if (!lockedEnvironment) throw new Error("Environment not found");
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        lockedEnvironment.project.teamId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -559,6 +708,12 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -603,6 +758,11 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "membership_invitations" WHERE "id" = ${input.invitationId} FOR UPDATE`;
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       const invitation = await transaction.membershipInvitation.findUnique({
         where: { id: input.invitationId },
       });
@@ -617,11 +777,14 @@ export class MembershipAdministrationRepository {
         throw new Error("Membership invitation is expired or already used");
       if (user.githubSubject !== invitation.providerSubject)
         throw new Error("Membership invitation is addressed to another User");
-      const operation = await this.operations.begin(
-        transaction,
-        input.operation,
-      );
-      if (operation.idempotent) return operation;
+      const team = await transaction.team.findUnique({
+        where: { id: invitation.teamId },
+        select: { serverProfileId: true },
+      });
+      if (!team || team.serverProfileId !== user.serverProfileId)
+        throw new Error(
+          "Membership invitation belongs to another Server Profile",
+        );
       const now = input.now ?? new Date();
       const membership = await transaction.membership.create({
         data: {
@@ -667,6 +830,12 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+      );
       const membership = await transaction.membership.findUnique({
         where: { id: input.membershipId },
       });
@@ -713,6 +882,12 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+      );
       const membership = await transaction.membership.findUnique({
         where: { id: input.membershipId },
       });
@@ -745,6 +920,60 @@ export class MembershipAdministrationRepository {
         newLifecycle: "REMOVED",
       });
       return { operation: operation.operation, membership: removed };
+    });
+  }
+}
+
+export type ProjectCreationInput = Readonly<{
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly teamId: string;
+  readonly projectId?: string;
+  readonly githubRepositoryId: bigint;
+  readonly now?: Date;
+}>;
+
+export class ProjectRepository {
+  private readonly operations = new OperationRepository();
+  private readonly audit = new AuditFactRepository();
+
+  async create(database: TransactionDatabase, input: ProjectCreationInput) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+      );
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      const project = await transaction.project.create({
+        data: {
+          id: input.projectId ?? crypto.randomUUID(),
+          teamId: input.teamId,
+          githubRepositoryId: input.githubRepositoryId,
+          createdByUserId: input.operation.actorUserId,
+          createdAt: now,
+        },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "PROJECT_CREATED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "PROJECT",
+        entityId: project.id,
+        newLifecycle: "ACTIVE",
+      });
+      return { operation: operation.operation, project };
     });
   }
 }
@@ -830,6 +1059,7 @@ export type RevisionPublicationInput = Readonly<{
 
 export class PublicationRepository {
   private readonly protocolObjects = new ProtocolObjectRepository();
+  private readonly stagedObjects = new StagedObjectRepository();
 
   async publishRevision(
     database: TransactionDatabase,
@@ -931,7 +1161,23 @@ export class PublicationRepository {
       throw new Error(
         "Revision protocol object id does not match its projection",
       );
+    if (
+      input.revisionObject.projectId !== environment.projectId ||
+      input.revisionObject.environmentId !== input.environmentId ||
+      input.descriptor.protocolObject.projectId !== environment.projectId ||
+      input.descriptor.protocolObject.environmentId !== input.environmentId
+    )
+      throw new Error(
+        "publication protocol objects are outside the Environment",
+      );
     validateProtocolProjection(input.descriptor.protocolObject);
+    if (
+      !sameBytes(
+        input.descriptor.descriptorHash,
+        input.descriptor.protocolObject.digest,
+      )
+    )
+      throw new Error("Manifest descriptor hash does not match its object");
     if (
       input.descriptor.laneCount !== input.lanes.length ||
       input.commitments.length !== input.lanes.length
@@ -941,6 +1187,14 @@ export class PublicationRepository {
     const ordinals = new Set<number>();
     for (const lane of input.lanes) {
       validateLaneProjection(lane.lane);
+      if (
+        lane.lane.projectId !== environment.projectId ||
+        lane.lane.environmentId !== input.environmentId ||
+        lane.lane.projectEpoch !== input.revision.projectEpoch ||
+        lane.protocolObject.projectId !== environment.projectId ||
+        lane.protocolObject.environmentId !== input.environmentId
+      )
+        throw new Error("lane projection is outside the publication context");
       if (lane.protocolObject.id !== lane.lane.protocolObjectId)
         throw new Error(
           "lane protocol object id does not match its projection",
@@ -954,9 +1208,40 @@ export class PublicationRepository {
       if (ordinals.has(commitment.ordinal))
         throw new Error("Manifest commitment ordinals must be unique");
       ordinals.add(commitment.ordinal);
+      const lane = input.lanes.find(
+        ({ lane: candidate }) => candidate.id === commitment.laneObjectId,
+      );
+      if (!lane)
+        throw new Error("Manifest commitment references an unknown lane");
+      if (
+        commitment.projectEpoch !== lane.lane.projectEpoch ||
+        commitment.valueGeneration !== lane.lane.valueGeneration ||
+        commitment.scope !== lane.lane.scope ||
+        commitment.ownerUserId !== lane.lane.ownerUserId ||
+        commitment.originalProviderUserId !==
+          lane.lane.originalProviderUserId ||
+        commitment.ciphertextLength !== lane.lane.ciphertextLength ||
+        !sameBytes(commitment.objectHash, lane.protocolObject.digest)
+      )
+        throw new Error(
+          "Manifest commitment does not match its lane projection",
+        );
     }
     if ([...ordinals].some((ordinal, index) => ordinal !== index))
       throw new Error("Manifest commitment ordinals must be contiguous");
+    if (input.revision.mutation === "ROLLBACK") {
+      if (!input.revision.rollbackTargetId)
+        throw new Error("rollback must identify its target revision");
+      const rollbackTarget = await transaction.revision.findUnique({
+        where: { id: input.revision.rollbackTargetId },
+        select: { environmentId: true },
+      });
+      if (
+        !rollbackTarget ||
+        rollbackTarget.environmentId !== input.environmentId
+      )
+        throw new Error("rollback target is outside the Environment");
+    }
 
     const operation = existingOperation
       ? existingOperation
@@ -976,6 +1261,30 @@ export class PublicationRepository {
               : {}),
           },
         });
+
+    const stagedNow = new Date();
+    await this.stagedObjects.promote(transaction, {
+      operationId: operation.id,
+      actorDeviceId: input.operation.actorDeviceId,
+      now: stagedNow,
+      objects: [
+        {
+          objectId: input.revisionObject.id,
+          canonicalBytes: input.revisionObject.canonicalBytes,
+          digest: input.revisionObject.digest,
+        },
+        {
+          objectId: input.descriptor.protocolObject.id,
+          canonicalBytes: input.descriptor.protocolObject.canonicalBytes,
+          digest: input.descriptor.protocolObject.digest,
+        },
+        ...input.lanes.map(({ protocolObject }) => ({
+          objectId: protocolObject.id,
+          canonicalBytes: protocolObject.canonicalBytes,
+          digest: protocolObject.digest,
+        })),
+      ],
+    });
 
     const revisionObject = await this.protocolObjects.create(
       transaction,
@@ -1156,6 +1465,7 @@ export type MembershipActivationInput = Readonly<{
 export class MembershipRepository {
   private readonly operations = new OperationRepository();
   private readonly audit = new AuditFactRepository();
+  private readonly stagedObjects = new StagedObjectRepository();
 
   async activate(
     database: TransactionDatabase,
@@ -1163,6 +1473,17 @@ export class MembershipRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+      );
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       const membership = await transaction.membership.findUnique({
         where: { id: input.membershipId },
       });
@@ -1176,16 +1497,23 @@ export class MembershipRepository {
       if (grantCount !== input.requiredGrantCount)
         throw new Error("required Membership grant set is incomplete");
 
-      const operation = await this.operations.begin(
-        transaction,
-        input.operation,
-      );
-      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.activationObject.id,
+            canonicalBytes: input.activationObject.canonicalBytes,
+            digest: input.activationObject.digest,
+          },
+        ],
+      });
       const protocolObject = await new ProtocolObjectRepository().create(
         transaction,
         input.activationObject,
       );
-      const now = input.now ?? new Date();
       const activated = await transaction.membership.update({
         where: { id: input.membershipId },
         data: { lifecycle: "ACTIVE", activatedAt: now },
@@ -1238,6 +1566,7 @@ export class DeviceRepository {
   private readonly operations = new OperationRepository();
   private readonly protocolObjects = new ProtocolObjectRepository();
   private readonly audit = new AuditFactRepository();
+  private readonly stagedObjects = new StagedObjectRepository();
 
   async completeEnrollment(
     database: TransactionDatabase,
@@ -1245,6 +1574,16 @@ export class DeviceRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "device_enrollments" WHERE "id" = ${input.enrollmentId} FOR UPDATE`;
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       const enrollment = await transaction.deviceEnrollment.findUnique({
         where: { id: input.enrollmentId },
       });
@@ -1252,17 +1591,36 @@ export class DeviceRepository {
         throw new Error("Device enrollment is not pending");
       if (enrollment.expiresAt <= (input.now ?? new Date()))
         throw new Error("Device enrollment expired");
+      const user = await transaction.user.findUnique({
+        where: { id: enrollment.userId },
+        select: { identityGeneration: true },
+      });
+      if (!user || user.identityGeneration !== input.device.identityGeneration)
+        throw new Error("device identity generation is stale");
       validatePublicKeys(input.device);
       await validateSha384Digest(
         input.device.x25519PublicKey,
         input.device.keyId,
         "Device key id",
       );
-      const operation = await this.operations.begin(
-        transaction,
-        input.operation,
-      );
-      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.enrollmentObject.id,
+            canonicalBytes: input.enrollmentObject.canonicalBytes,
+            digest: input.enrollmentObject.digest,
+          },
+          {
+            objectId: input.certificateObject.id,
+            canonicalBytes: input.certificateObject.canonicalBytes,
+            digest: input.certificateObject.digest,
+          },
+        ],
+      });
       const enrollmentObject = await this.protocolObjects.create(
         transaction,
         input.enrollmentObject,
@@ -1271,7 +1629,6 @@ export class DeviceRepository {
         transaction,
         input.certificateObject,
       );
-      const now = input.now ?? new Date();
       const device = await transaction.device.create({
         data: {
           id: input.device.id,
@@ -1339,6 +1696,11 @@ export class DeviceRepository {
         where: { id: input.deviceId },
       });
       if (!device) throw new Error("Device not found");
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -1387,6 +1749,7 @@ export class RecoveryRepository {
   private readonly operations = new OperationRepository();
   private readonly protocolObjects = new ProtocolObjectRepository();
   private readonly audit = new AuditFactRepository();
+  private readonly stagedObjects = new StagedObjectRepository();
 
   async recordAttempt(
     database: TransactionDatabase,
@@ -1419,16 +1782,41 @@ export class RecoveryRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
+      const user = await transaction.user.findUnique({
+        where: { id: input.operation.actorUserId },
+      });
+      if (!user) throw new Error("User not found");
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      if (input.envelope.identityGeneration !== user.identityGeneration)
+        throw new Error("recovery envelope identity generation is stale");
+      if (input.envelope.recoveryGeneration !== user.recoveryGeneration + 1n)
+        throw new Error("recovery generation must advance by one");
+      const now = input.now ?? new Date();
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.envelope.protocolObject.id,
+            canonicalBytes: input.envelope.protocolObject.canonicalBytes,
+            digest: input.envelope.protocolObject.digest,
+          },
+        ],
+      });
       const protocolObject = await this.protocolObjects.create(
         transaction,
         input.envelope.protocolObject,
       );
-      const now = input.now ?? new Date();
       await transaction.recoveryEnvelope.updateMany({
         where: { userId: input.operation.actorUserId, retiredAt: null },
         data: { retiredAt: now },
@@ -1495,6 +1883,7 @@ export class ProjectEpochRepository {
   private readonly protocolObjects = new ProtocolObjectRepository();
   private readonly audit = new AuditFactRepository();
   private readonly publication = new PublicationRepository();
+  private readonly stagedObjects = new StagedObjectRepository();
 
   async rotate(database: TransactionDatabase, input: EpochRotationInput) {
     return inShortTransaction(database, async (transaction) => {
@@ -1503,6 +1892,17 @@ export class ProjectEpochRepository {
         where: { id: input.projectId },
       });
       if (!project) throw new Error("Project not found");
+      await requireTeamRole(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        project.teamId,
+      );
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       if (project.currentEpoch !== input.expectedEpoch)
         throw new StaleEpochError(project.currentEpoch);
       if (input.newEpoch !== input.expectedEpoch + 1n)
@@ -1526,15 +1926,14 @@ export class ProjectEpochRepository {
         )
       )
         throw new StaleHeadError(null);
-      const operation = await this.operations.begin(
-        transaction,
-        input.operation,
-      );
-      if (operation.idempotent) return operation;
       const now = input.now ?? new Date();
       for (const transition of transitions) {
         if (
           transition.protocolObject.kind !== 12 ||
+          transition.publication.operation.actorUserId !==
+            input.operation.actorUserId ||
+          transition.publication.operation.actorDeviceId !==
+            input.operation.actorDeviceId ||
           transition.publication.environmentId !== transition.environmentId ||
           transition.publication.expectedHeadId !== transition.expectedHeadId ||
           transition.publication.revision.mutation !== "EPOCH_TRANSITION" ||
@@ -1542,6 +1941,18 @@ export class ProjectEpochRepository {
           transition.publication.revision.projectEpoch !== input.newEpoch
         )
           throw new Error("Project epoch transition publication is incomplete");
+        await this.stagedObjects.promote(transaction, {
+          operationId: operation.operation.id,
+          actorDeviceId: input.operation.actorDeviceId,
+          now,
+          objects: [
+            {
+              objectId: transition.protocolObject.id,
+              canonicalBytes: transition.protocolObject.canonicalBytes,
+              digest: transition.protocolObject.digest,
+            },
+          ],
+        });
         await this.publication.publishRevisionInTransaction(
           transaction,
           transition.publication,

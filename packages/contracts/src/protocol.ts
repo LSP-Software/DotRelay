@@ -14,7 +14,7 @@ import {
 import { utf8Encode } from "./runtime";
 
 const UINT64_MAX = (1n << 64n) - 1n;
-const SIGNED_FIELDS = new Set([3, 4, 5, 6, 7]);
+const SIGNED_FIELDS = new Set([3, 4]);
 
 export const isSignedField = (field: number): boolean =>
   SIGNED_FIELDS.has(field);
@@ -125,7 +125,7 @@ const validateEnumSet = (
 const validateSignedEnvelope = (object: ProtocolObject, kind: number): void => {
   const definition = OBJECT_REGISTRY[kind];
   if (!definition?.serverVisible) return;
-  for (const field of [3, 4, 5]) {
+  for (const field of [3, 4]) {
     const fieldDefinition = FIELD_REGISTRY[field];
     if (!fieldDefinition) contractError("invalid_crypto_object");
     requireBytes(
@@ -142,17 +142,6 @@ const validateSignedEnvelope = (object: ProtocolObject, kind: number): void => {
   const expected = canonicalEncode(unsignedBody);
   if (!sameBytes(expected, requireBytes(object, 3)))
     contractError("invalid_crypto_object");
-  const hasSuccessorMlDsa = object.has(6);
-  const hasSuccessorEd25519 = object.has(7);
-  if (
-    hasSuccessorMlDsa !== hasSuccessorEd25519 ||
-    (kind !== 3 && (hasSuccessorMlDsa || hasSuccessorEd25519))
-  )
-    contractError("invalid_crypto_object");
-  if (kind === 3) {
-    requireBytes(object, 6, 3309);
-    requireBytes(object, 7, 64);
-  }
 };
 
 const validateConditionalValues = (
@@ -298,7 +287,7 @@ export const validateProtocolObject = (object: ProtocolObject): void => {
     )
       contractError("invalid_crypto_object");
     validateValueType(field, value);
-    if (field >= 80 && field <= 83 && definition.serverVisible)
+    if (field >= 80 && field <= 81 && definition.serverVisible)
       contractError("invalid_crypto_object");
   }
   for (const field of definition.requiredFields) {
@@ -331,7 +320,9 @@ export const unsignedBodyBytes = (object: ProtocolObject): Uint8Array => {
 };
 
 export const signatureInput = (object: ProtocolObject): Uint8Array => {
-  const prefix = utf8Encode("DotRelay\0dotrelay-e2ee-v2\0Signature\0v1\0");
+  const prefix = utf8Encode(
+    "DotRelay\0dotrelay-e2ee-v3-classical-webcrypto\0Signature\0v1\0",
+  );
   const body = unsignedBodyBytes(object);
   const output = new Uint8Array(prefix.length + body.length);
   output.set(prefix);

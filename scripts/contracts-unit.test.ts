@@ -37,7 +37,8 @@ const userIdentity = () =>
       [9, id(2)],
       [28, 1],
       [32, 1],
-      [43, zeros(3200)],
+      [39, zeros(32)],
+      [41, zeros(32)],
     ]),
   );
 
@@ -82,10 +83,10 @@ describe("deterministic CBOR boundary", () => {
   });
 });
 
-describe("dotrelay-e2ee-v2 registry", () => {
+describe("dotrelay-e2ee-v3 classical registry", () => {
   test("is closed and exposes the frozen field and object registries", () => {
-    expect(SUITE_NAME).toBe("dotrelay-e2ee-v2");
-    expect(SUITE_VALUE).toBe(2);
+    expect(SUITE_NAME).toBe("dotrelay-e2ee-v3-classical-webcrypto");
+    expect(SUITE_VALUE).toBe(3);
     expect("v1" in OBJECT_REGISTRY).toBe(false);
     expect(FIELD_REGISTRY[49]?.name).toBe("reserved and forbidden");
     expect(OBJECT_REGISTRY[16]?.name).toBe("Revision");
@@ -111,7 +112,7 @@ describe("dotrelay-e2ee-v2 registry", () => {
     );
 
     const wrongIdentity = new Map<number, CborValue>(object);
-    wrongIdentity.set(43, zeros(31));
+    wrongIdentity.set(39, zeros(31));
     expect(() => encodeProtocolObject(wrongIdentity)).toThrow(
       "invalid_crypto_object",
     );

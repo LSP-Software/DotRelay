@@ -18,6 +18,7 @@
     "typecheck": "tsc --project tsconfig.json && turbo run typecheck",
     "boundaries": "bun scripts/verify-boundaries.ts",
     "vectors:verify-sources": "bun scripts/verify-vector-sources.ts",
+    "vectors:generate": "bun scripts/generate-v3-vectors.ts",
     "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts && turbo run test:unit",
     "openapi:check": "bun scripts/check-openapi.ts",
     "test:integration": "bun scripts/test-services.ts",

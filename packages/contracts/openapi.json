@@ -6,11 +6,11 @@
   },
   "x-dotrelay": {
     "apiVersion": "v1",
-    "protocolMediaType": "application/vnd.dotrelay.e2ee-v2+cbor",
+    "protocolMediaType": "application/vnd.dotrelay.e2ee-v3+cbor",
     "strictJson": true,
     "suite": {
-      "name": "dotrelay-e2ee-v2",
-      "value": 2
+      "name": "dotrelay-e2ee-v3-classical-webcrypto",
+      "value": 3
     },
     "problemStatus": {
       "invalid_request": 400,
@@ -155,11 +155,11 @@
             "properties": {
               "name": {
                 "type": "string",
-                "const": "dotrelay-e2ee-v2"
+                "const": "dotrelay-e2ee-v3-classical-webcrypto"
               },
               "value": {
                 "type": "integer",
-                "const": 2
+                "const": 3
               }
             }
           },
@@ -252,7 +252,7 @@
       "ProtocolObject": {
         "type": "string",
         "format": "binary",
-        "contentMediaType": "application/vnd.dotrelay.e2ee-v2+cbor"
+        "contentMediaType": "application/vnd.dotrelay.e2ee-v3+cbor"
       },
       "StrictJsonObject": {
         "type": "object",

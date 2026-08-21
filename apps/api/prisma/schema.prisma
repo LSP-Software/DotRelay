@@ -283,6 +283,7 @@ model Team {
   memberships   Membership[]
   invitations   MembershipInvitation[]
   projects      Project[]
+  activationObjects MembershipActivationObject[]
 
   @@index([serverProfileId, lifecycle])
   @@map("teams")
@@ -479,6 +480,7 @@ model MembershipActivationObject {
 
   protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   membership     Membership     @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  team           Team           @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@map("membership_activation_objects")
 }

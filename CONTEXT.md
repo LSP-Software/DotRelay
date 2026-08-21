@@ -120,3 +120,8 @@ _Avoid_: Log context, arbitrary metadata
 The versioned fixed envelope and event names used by Application Diagnostic Events, carrying only
 the Diagnostic Field Allowlist and no free-form diagnostic content.
 _Avoid_: Ad hoc log format, exception dump
+
+**Cryptographic Suite**:
+The single closed set of algorithms, encodings, and protocol rules that protects DotRelay protocol
+objects and encrypted Values for one release line.
+_Avoid_: Provider, algorithm option, compatibility mode

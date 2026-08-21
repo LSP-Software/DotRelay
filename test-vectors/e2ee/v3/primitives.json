@@ -1,0 +1,83 @@
+{
+  "suite": "dotrelay-e2ee-v3-classical-webcrypto",
+  "immutable": true,
+  "encoding": "deterministic-cbor",
+  "cbor": [
+    {
+      "id": "uint-0",
+      "value": 0,
+      "canonicalHex": "00"
+    },
+    {
+      "id": "uint-23",
+      "value": 23,
+      "canonicalHex": "17"
+    },
+    {
+      "id": "uint-24",
+      "value": 24,
+      "canonicalHex": "1818"
+    },
+    {
+      "id": "uint-255",
+      "value": 255,
+      "canonicalHex": "18ff"
+    },
+    {
+      "id": "uint-256",
+      "value": 256,
+      "canonicalHex": "190100"
+    },
+    {
+      "id": "uint-2^32",
+      "value": 4294967296,
+      "canonicalHex": "1b0000000100000000"
+    },
+    {
+      "id": "empty-map",
+      "value": {},
+      "canonicalHex": "a0"
+    },
+    {
+      "id": "integer-keyed-map",
+      "canonicalHex": "a2000201636f6e65"
+    },
+    {
+      "id": "byte-string",
+      "canonicalHex": "430001ff"
+    },
+    {
+      "id": "utf8-text",
+      "canonicalHex": "62c3a9"
+    },
+    {
+      "id": "array",
+      "canonicalHex": "820102"
+    }
+  ],
+  "domainSeparators": [
+    {
+      "id": "signature-input-prefix",
+      "utf8Hex": "446f7452656c617900646f7472656c61792d653265652d76332d636c6173736963616c2d77656263727970746f005369676e617475726500763100",
+      "sha384Hex": "184820283520030f286bd3ed12bd59b2c78f136402c526932810961d0318e4567e8a22e404bc8ea73c39c329196da3ff"
+    },
+    {
+      "id": "hkdf-info-label",
+      "utf8Hex": "446f7452656c617900646f7472656c61792d653265652d76332d636c6173736963616c2d77656263727970746f004145532d3235362d47434d007631",
+      "sha384Hex": "347ca8142dada7c308738f947dd846689f0dd49f8b7a40b0c7f58d3d739e1b68fb6bec69f4d1210cccef42ef7d3814db"
+    }
+  ],
+  "fixedLengths": {
+    "x25519": 32,
+    "ed25519": 32,
+    "ed25519Signature": 64,
+    "digest": 48,
+    "derivedKey": 32,
+    "hkdfSalt": 32,
+    "iv": 12,
+    "tag": 16,
+    "opaqueId": 16,
+    "pkcs8PrivateKeyMax": 256
+  },
+  "suiteValue": 3
+}

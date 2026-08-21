@@ -877,6 +877,10 @@ ALTER TABLE "recovery_envelopes"
   ADD CONSTRAINT "recovery_envelopes_ciphertext_length_check"
   CHECK ("ciphertextLength" > 16 AND "ciphertextLength" <= 67108864);
 
+ALTER TABLE "recovery_attempts"
+  ADD CONSTRAINT "recovery_attempts_challenge_hash_length_check"
+  CHECK (octet_length("challengeHash") = 48);
+
 ALTER TABLE "teams"
   ADD CONSTRAINT "teams_lifecycle_timestamps_check"
   CHECK (
@@ -1065,6 +1069,29 @@ CREATE UNIQUE INDEX "projects_active_team_repository_key"
 ALTER TABLE "grant_objects"
   ADD CONSTRAINT "grant_objects_teamId_fkey"
   FOREIGN KEY ("teamId") REFERENCES "teams"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+ALTER TABLE "membership_activation_objects"
+  ADD CONSTRAINT "membership_activation_objects_teamId_fkey"
+  FOREIGN KEY ("teamId") REFERENCES "teams"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+CREATE OR REPLACE FUNCTION dotrelay_enforce_project_epoch_forward_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW."currentEpoch" <> OLD."currentEpoch"
+     AND NEW."currentEpoch" <> OLD."currentEpoch" + 1 THEN
+    RAISE EXCEPTION 'Project epoch must advance by one'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER projects_epoch_forward_only
+AFTER UPDATE OF "currentEpoch" ON "projects"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION dotrelay_enforce_project_epoch_forward_only();
 
 CREATE OR REPLACE FUNCTION dotrelay_reject_immutable_row()
 RETURNS trigger
