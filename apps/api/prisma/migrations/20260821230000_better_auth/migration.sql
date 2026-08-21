@@ -6,7 +6,7 @@ CREATE TABLE "auth_users" (
   "emailVerified" BOOLEAN NOT NULL DEFAULT false,
   "image" VARCHAR(2048),
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMPTZ(3) NOT NULL,
   CONSTRAINT "auth_users_pkey" PRIMARY KEY ("id")
 );
 
@@ -15,7 +15,7 @@ CREATE TABLE "auth_sessions" (
   "expiresAt" TIMESTAMPTZ(3) NOT NULL,
   "token" VARCHAR(512) NOT NULL,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMPTZ(3) NOT NULL,
   "ipAddress" VARCHAR(255),
   "userAgent" VARCHAR(1024),
   "userId" TEXT NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE "auth_accounts" (
   "scope" VARCHAR(2048),
   "password" TEXT,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMPTZ(3) NOT NULL,
   "issuer" VARCHAR(2048) NOT NULL DEFAULT '',
   CONSTRAINT "auth_accounts_pkey" PRIMARY KEY ("id")
 );
@@ -46,7 +46,7 @@ CREATE TABLE "auth_verifications" (
   "value" TEXT NOT NULL,
   "expiresAt" TIMESTAMPTZ(3) NOT NULL,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMPTZ(3) NOT NULL,
   CONSTRAINT "auth_verifications_pkey" PRIMARY KEY ("id")
 );
 
