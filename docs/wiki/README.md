@@ -5,5 +5,5 @@ these Markdown pages and their internal links; the post-merge publication workfl
 tree to the Wiki. Wiki-only edits are not authoritative.
 
 Read the [development commands](development.md), [quality gates](quality-gates.md),
-[PostgreSQL persistence](persistence.md), and [release policy](release-policy.md) before changing
-the repository foundation.
+[PostgreSQL persistence](persistence.md), [the v3 WebCrypto core](crypto.md), and [release
+policy](release-policy.md) before changing the repository foundation.

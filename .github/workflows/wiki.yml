@@ -21,7 +21,16 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { persist-credentials: false }
       - name: Checkout Wiki repository
-        run: git clone "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git" wiki
+        env:
+          WIKI_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          set -euo pipefail
+          if ! git ls-remote "$WIKI_URL" >/dev/null 2>wiki-error.txt; then
+            echo "::error::The GitHub Wiki repository ${GITHUB_REPOSITORY}.wiki.git is unavailable. Enable the repository Wiki or create the Wiki repository before publishing canonical docs/wiki source."
+            cat wiki-error.txt
+            exit 1
+          fi
+          git clone "$WIKI_URL" wiki
       - name: Mirror canonical source
         run: |
           rsync -a --delete --exclude .git/ docs/wiki/ wiki/

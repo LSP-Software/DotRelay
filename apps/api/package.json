@@ -8,15 +8,15 @@
     "format": "biome format . --write",
     "format:check": "biome format .",
     "lint": "biome lint .",
-    "typecheck": "tsc --project tsconfig.json",
+    "typecheck": "bun x prisma generate --config prisma.config.ts && tsc --project tsconfig.json",
     "test:unit": "bun test",
     "db:validate": "bun ../../scripts/validate-prisma.ts",
     "db:migrate-check": "bun ../../scripts/check-migrations.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
-    "@prisma/client": "^7.9.0",
-    "hono": "^4.12.32",
+    "@prisma/client": "^7.9.1",
+    "hono": "4.12.34",
     "pg": "^8.23.0"
   },
   "devDependencies": {

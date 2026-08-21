@@ -9,6 +9,7 @@ import {
 } from "@dotrelay/contracts";
 import { chromium, type Page } from "@playwright/test";
 import type { BrowserVectorEntry } from "./browser-vector-runner";
+import { runCryptoRoundTrip } from "./crypto-browser-runner";
 import { bytesFromHex, hexFromBytes } from "./vector-hex";
 
 const browserFixtures: { fixtures: BrowserVectorEntry[] } = await Bun.file(
@@ -32,6 +33,16 @@ type BrowserRunner = Readonly<{
   readonly dotRelayCanonicalHexes: (
     entries: readonly BrowserVectorEntry[],
   ) => string[];
+}>;
+
+type CryptoBrowserRunner = Readonly<{
+  readonly dotRelayCryptoRoundTrip: () => Promise<{
+    readonly encryptionRoundTrip: boolean;
+    readonly signingRoundTrip: boolean;
+    readonly signatureLength: number;
+    readonly ciphertextLength: number;
+    readonly freshRandomness: boolean;
+  }>;
 }>;
 
 const evaluateCanonicalHexes = async (
@@ -87,6 +98,45 @@ test("Chromium and Bun preserve the frozen protocol bytes", async () => {
         })),
       );
       expect(browserFromBunHex).toEqual(bunHex);
+    } finally {
+      await browser.close();
+    }
+  } finally {
+    await rm(outputDirectory, { force: true, recursive: true });
+  }
+});
+
+test("Chromium and Bun execute the same native WebCrypto v3 operations", async () => {
+  const outputDirectory = await mkdtemp(join(tmpdir(), "dotrelay-crypto-"));
+  try {
+    const build = await Bun.build({
+      entrypoints: ["scripts/crypto-browser-runner.ts"],
+      format: "iife",
+      outdir: outputDirectory,
+      target: "browser",
+    });
+    expect(build.success).toBe(true);
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto("https://example.com");
+      await page.addScriptTag({
+        path: join(outputDirectory, "crypto-browser-runner.js"),
+      });
+      const browserResult = await page.evaluate(() =>
+        (
+          globalThis as unknown as CryptoBrowserRunner
+        ).dotRelayCryptoRoundTrip(),
+      );
+      const bunResult = await runCryptoRoundTrip();
+      expect(browserResult).toEqual(bunResult);
+      expect(bunResult).toMatchObject({
+        encryptionRoundTrip: true,
+        signingRoundTrip: true,
+        signatureLength: 64,
+        freshRandomness: true,
+      });
+      expect(browserResult.ciphertextLength).toBeGreaterThan(0);
     } finally {
       await browser.close();
     }
