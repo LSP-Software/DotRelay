@@ -21,8 +21,8 @@ indistinguishable to callers.
 | Runtime | Operating system | Evidence and support boundary |
 | --- | --- | --- |
 | Chromium installed by Playwright | Ubuntu Linux in CI | Browser/Bun parity tests; this is the only browser entry currently evidenced. |
-| Bun `1.3.14` | Ubuntu Linux in CI | Unit, import/export, encryption, and signature coverage. |
-| Bun `1.3.14` | macOS and Windows CI matrix | CLI runtime targets; run the crypto suite on each OS before claiming secret-capable parity there. |
+| Bun `1.4.0` | Ubuntu Linux in CI | Unit, import/export, encryption, and signature coverage. |
+| Bun `1.4.0` | macOS and Windows CI matrix | CLI runtime targets; run the crypto suite on each OS before claiming secret-capable parity there. |
 
 Other browsers, browser versions, operating systems, and Bun versions require fresh compatibility
 evidence before being added to the supported matrix.
