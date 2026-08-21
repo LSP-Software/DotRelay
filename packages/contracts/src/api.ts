@@ -106,7 +106,28 @@ export const parseIdempotencyKey = (value: unknown): string => {
   return value;
 };
 
+const isServerProfileId = (value: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+
+const isCanonicalOrigin = (value: string) => {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === value &&
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+};
+
 export type CapabilitiesDocument = Readonly<{
+  readonly serverProfileId: string;
+  readonly origin: string;
   readonly apiVersion: typeof API_VERSION;
   readonly suite: Readonly<{
     readonly name: typeof SUITE_NAME;
@@ -127,8 +148,16 @@ export type CapabilitiesDocument = Readonly<{
   }>;
 }>;
 
-export const createCapabilitiesDocument = (): CapabilitiesDocument => {
+export const createCapabilitiesDocument = (
+  options: Readonly<{
+    readonly serverProfileId?: string;
+    readonly origin?: string;
+  }> = {},
+): CapabilitiesDocument => {
   return Object.freeze({
+    serverProfileId:
+      options.serverProfileId ?? "00000000-0000-4000-8000-000000000000",
+    origin: options.origin ?? "https://dotrelay.invalid",
     apiVersion: API_VERSION,
     suite: Object.freeze({ name: SUITE_NAME, value: SUITE_VALUE }),
     capabilities: Object.freeze([
@@ -171,12 +200,25 @@ export const parseCapabilitiesDocument = (
   value: unknown,
 ): CapabilitiesDocument => {
   const capabilitiesDocument = parseJsonObject<{
+    serverProfileId?: unknown;
+    origin?: unknown;
     apiVersion?: unknown;
     suite?: unknown;
     capabilities?: unknown;
     limits?: unknown;
-  }>(value, ["apiVersion", "suite", "capabilities", "limits"]);
+  }>(value, [
+    "serverProfileId",
+    "origin",
+    "apiVersion",
+    "suite",
+    "capabilities",
+    "limits",
+  ]);
   if (
+    typeof capabilitiesDocument.serverProfileId !== "string" ||
+    !isServerProfileId(capabilitiesDocument.serverProfileId) ||
+    typeof capabilitiesDocument.origin !== "string" ||
+    !isCanonicalOrigin(capabilitiesDocument.origin) ||
     capabilitiesDocument.apiVersion !== API_VERSION ||
     !Array.isArray(capabilitiesDocument.capabilities)
   )
@@ -207,6 +249,8 @@ export const parseCapabilitiesDocument = (
   )
     contractError("invalid_request");
   return Object.freeze({
+    serverProfileId: capabilitiesDocument.serverProfileId,
+    origin: capabilitiesDocument.origin,
     apiVersion: API_VERSION,
     suite: Object.freeze({ name: SUITE_NAME, value: SUITE_VALUE }),
     capabilities: Object.freeze([
@@ -332,12 +376,16 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         type: "object",
         additionalProperties: false,
         required: Object.freeze([
+          "serverProfileId",
+          "origin",
           "apiVersion",
           "suite",
           "capabilities",
           "limits",
         ]),
         properties: Object.freeze({
+          serverProfileId: Object.freeze({ type: "string", format: "uuid" }),
+          origin: Object.freeze({ type: "string", format: "uri" }),
           apiVersion: Object.freeze({ type: "string", const: API_VERSION }),
           suite: Object.freeze({
             type: "object",

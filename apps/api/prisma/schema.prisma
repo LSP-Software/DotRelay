@@ -128,6 +128,87 @@ model ServerProfile {
   @@map("server_profiles")
 }
 
+model AuthUser {
+  id            String        @id
+  name          String        @db.VarChar(255)
+  email         String        @unique @db.VarChar(320)
+  emailVerified Boolean       @default(false)
+  image         String?       @db.VarChar(2048)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(3)
+
+  sessions AuthSession[]
+  accounts AuthAccount[]
+
+  @@map("auth_users")
+}
+
+model AuthSession {
+  id        String   @id
+  expiresAt DateTime @db.Timestamptz(3)
+  token     String   @unique @db.VarChar(512)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  ipAddress String?  @db.VarChar(255)
+  userAgent String?  @db.VarChar(1024)
+  userId    String
+
+  user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model AuthAccount {
+  id                    String    @id
+  accountId             String    @db.VarChar(255)
+  providerId            String    @db.VarChar(255)
+  userId                String
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(3)
+  scope                 String?   @db.VarChar(2048)
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+  issuer                String    @default("") @db.VarChar(2048)
+
+  user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([issuer, accountId])
+  @@index([userId])
+  @@map("auth_accounts")
+}
+
+model AuthVerification {
+  id         String   @id
+  identifier String   @db.VarChar(512)
+  value      String   @db.Text
+  expiresAt  DateTime @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([identifier])
+  @@map("auth_verifications")
+}
+
+model AuthDeviceCode {
+  id              String    @id
+  deviceCode      String    @unique @db.VarChar(255)
+  userCode        String    @unique @db.VarChar(64)
+  userId          String?
+  expiresAt       DateTime  @db.Timestamptz(3)
+  status          String    @db.VarChar(32)
+  lastPolledAt    DateTime? @db.Timestamptz(3)
+  pollingInterval Int?
+  clientId        String?   @db.VarChar(255)
+  scope           String?   @db.VarChar(2048)
+
+  @@map("auth_device_codes")
+}
+
 model User {
   id                 String   @id @default(uuid()) @db.Uuid
   serverProfileId    String   @db.Uuid
