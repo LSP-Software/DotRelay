@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
-import ts from "typescript";
+import ts from "typescript6";
 
 type WorkspaceKind = "app" | "package";
 type WorkspaceManifest = {
