@@ -107,7 +107,7 @@ and [decision #19's supply-chain gate](https://github.com/LSP-Software/DotRelay/
 
 ### 3.2 Repository evidence
 
-The repository pins Bun `1.3.14` in [`package.json`](../../package.json#L1-L5), and CI sets the same
+The repository now pins Bun `1.4.0` in [`package.json`](../../package.json#L1-L5), and CI sets the same
 version and pins its checkout/setup actions by commit in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml#L15-L29).
 The workflow also uses digest-pinned service images where applicable, but its build jobs run on the
 mutable `ubuntu-latest` hosted runner. The release workflow likewise builds the current CLI on
@@ -236,7 +236,7 @@ repeated initialize/destroy cycles ([provider research, lines 99–129](dotrelay
 
 ### Evidence actually present
 
-- The monorepo declares Bun `1.3.14`; the local verification host was Darwin arm64.
+- The monorepo now declares Bun `1.4.0`; the historical local verification host was Darwin arm64.
 - CI has a browser E2E job that installs Chromium on `ubuntu-latest` only
   ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml#L89-L100)).
 - CI has a packaged CLI matrix across Ubuntu, macOS, and Windows, but does not declare an explicit

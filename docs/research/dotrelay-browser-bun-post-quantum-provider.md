@@ -104,9 +104,10 @@ WICG incubator specification rather than the established Web Cryptography Recomm
 ([Chrome 151 beta](https://developer.chrome.com/blog/chrome-151-beta),
 [Mozilla enhancement](https://bugzilla.mozilla.org/show_bug.cgi?id=1943614),
 [modern-algorithms incubator](https://wicg.github.io/webcrypto-modern-algos/)).
-Bun 1.3.14 is the current stable release and supports Linux x64/arm64, macOS x64/Apple Silicon, and
-Windows x64/arm64, but it does not expose ML-KEM-768 or ML-DSA-65 through WebCrypto
-([Bun release and platform list](https://github.com/oven-sh/bun/releases/tag/bun-v1.3.14)).
+Bun 1.4.0 is the repository's current runtime pin. Bun supports Linux x64/arm64, macOS x64/Apple
+Silicon, and Windows x64/arm64, but the dated probe below used Bun 1.3.14 and found no
+ML-KEM-768 or ML-DSA-65 support through WebCrypto
+([Bun releases](https://github.com/oven-sh/bun/releases)).
 A local Bun 1.3.14 probe on 2026-07-25 confirmed that
 `crypto.subtle.generateKey({ name: "ML-KEM-768" }, ...)` and the equivalent ML-DSA-65 call each
 throw `NotSupportedError`, while X25519, Ed25519, SHA-384, and SHA3-384 succeed. This is reproducible

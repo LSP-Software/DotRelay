@@ -178,7 +178,7 @@ cross-runtime implementation path is not yet production-ready:
   ([Chrome 151 beta](https://developer.chrome.com/blog/chrome-151-beta)).
 - Mozilla's ML-KEM WebCrypto work remains an open enhancement
   ([Mozilla bug 1943614](https://bugzilla.mozilla.org/show_bug.cgi?id=1943614)).
-- Bun 1.3.14 is the current release
+- Bun 1.4.0 is the repository's current runtime pin
   ([Bun releases](https://github.com/oven-sh/bun/releases)). A reproducible local probe on that
   release returned `NotSupportedError` for WebCrypto `generateKey` with `ML-KEM-768` and
   `ML-DSA-65`, while X25519 and Ed25519 succeeded.
