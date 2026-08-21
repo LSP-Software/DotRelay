@@ -35,15 +35,16 @@
     "verify": "bun run check && bun run build && bun run smoke && bun run test:integration && bun run test:e2e && bun run test:cli && bun run db:validate && bun run db:migrate-check && bun run docs:validate && bun run tracked-tree:clean"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.9",
     "@dotrelay/contracts": "workspace:*",
-    "@biomejs/biome": "^2.5.5",
-    "@playwright/test": "^1.62.0",
+    "@playwright/test": "^1.62.1",
     "@types/bun": "^1.4.0",
     "ioredis": "^5.11.1",
     "postgres": "^3.4.9",
     "prisma": "^7.9.1",
-    "turbo": "^2.10.7",
-    "typescript": "5"
+    "turbo": "^2.10.11",
+    "typescript": "7",
+    "typescript6": "npm:@typescript/typescript6@^6.0.2"
   },
   "overrides": {
     "deepmerge-ts": "8.0.2",
