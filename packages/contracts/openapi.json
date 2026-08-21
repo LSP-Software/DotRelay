@@ -142,8 +142,23 @@
       "Capabilities": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["apiVersion", "suite", "capabilities", "limits"],
+        "required": [
+          "serverProfileId",
+          "origin",
+          "apiVersion",
+          "suite",
+          "capabilities",
+          "limits"
+        ],
         "properties": {
+          "serverProfileId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "origin": {
+            "type": "string",
+            "format": "uri"
+          },
           "apiVersion": {
             "type": "string",
             "const": "v1"
