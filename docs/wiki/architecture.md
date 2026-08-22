@@ -1,8 +1,9 @@
 # Architecture and wire boundaries
 
 Code stays in its owning application until a second real consumer exists. Shared packages are
-private, use `workspace:*`, and expose only intentional public exports. Database, cache,
-authentication, and web UI code remain application-local until actual reuse appears.
+private, use `workspace:*`, and expose only intentional public exports. The database package owns
+the Prisma schema, migrations, generated client, persistence validation, repositories, and their
+shared types. Authentication and web UI code remain application-local.
 
 The hosted and self-hosted products use the same backend build and protocol. The runtime-neutral
 `@dotrelay/contracts` package is the only shared contract boundary: apps consume its public exports,

@@ -9,7 +9,7 @@ await run(
     "prisma",
     "validate",
     "--config",
-    join(root, "apps/api/prisma.config.ts"),
+    join(root, "packages/database/prisma.config.ts"),
   ],
   root,
 );

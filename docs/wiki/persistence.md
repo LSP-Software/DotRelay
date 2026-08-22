@@ -1,6 +1,6 @@
 # PostgreSQL persistence
 
-`apps/api/prisma/schema.prisma` and the committed SQL migrations define the DotRelay persistence
+`packages/database/prisma/schema.prisma` and the committed SQL migrations define the DotRelay persistence
 boundary. PostgreSQL is the source of truth for identity lifecycle, authorization, epochs,
 Environment heads, idempotency, immutable protocol history, and audit facts. Better Auth records
 remain library-owned and are linked to a DotRelay `User` only through the server-local auth
@@ -64,7 +64,7 @@ Start the repository services with `docker compose up -d postgres valkey`, then 
 migrations through Prisma and run the integration gates:
 
 ```sh
-bun x prisma migrate deploy --config apps/api/prisma.config.ts
+bun x prisma migrate deploy --config packages/database/prisma.config.ts
 bun run db:migrate-check
 bun run test:integration
 ```

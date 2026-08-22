@@ -1,7 +1,7 @@
 import { prismaAdapter } from "@better-auth/prisma-adapter";
+import type { PrismaClient } from "@dotrelay/database";
 import { betterAuth, type DBAdapterInstance } from "better-auth";
 import { bearer, deviceAuthorization } from "better-auth/plugins";
-import type { PrismaClient } from "./generated/prisma/client";
 import type { ServerProfileConfig } from "./profile";
 
 export const AUTH_CLIENT_ID = "dotrelay-cli";

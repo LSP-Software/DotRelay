@@ -24,7 +24,7 @@
     "test:integration": "bun scripts/test-services.ts",
     "test:e2e": "playwright test --config=playwright.config.ts",
     "test:cli": "turbo run test:cli --filter=@dotrelay/cli",
-    "prisma:generate": "bun x prisma generate --config apps/api/prisma.config.ts",
+    "prisma:generate": "bun x prisma generate --config packages/database/prisma.config.ts",
     "db:validate": "bun scripts/validate-prisma.ts",
     "db:migrate-check": "bun scripts/check-migrations.ts",
     "docs:validate": "bun scripts/validate-docs.ts",

@@ -2,9 +2,9 @@ import { join } from "node:path";
 import postgres from "postgres";
 
 const root = process.cwd();
-const schema = join(root, "apps/api/prisma/schema.prisma");
-const migrations = join(root, "apps/api/prisma/migrations");
-const config = join(root, "apps/api/prisma.config.ts");
+const schema = join(root, "packages/database/prisma/schema.prisma");
+const migrations = join(root, "packages/database/prisma/migrations");
+const config = join(root, "packages/database/prisma.config.ts");
 const databaseUrl =
   process.env.DATABASE_URL ??
   "postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay";

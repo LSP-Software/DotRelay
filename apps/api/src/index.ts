@@ -3,14 +3,13 @@ import {
   type ProblemCode,
   parseCapabilitiesDocument,
 } from "@dotrelay/contracts";
+import { createDatabaseClient, type PrismaClient } from "@dotrelay/database";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createAuth, type DotRelayAuth } from "./auth";
-import type { PrismaClient } from "./generated/prisma/client";
 import { resolveDotRelayUser } from "./identity";
-import { createDatabaseClient } from "./persistence/client";
 import {
   createCapabilitiesDocument,
   ensureServerProfile,

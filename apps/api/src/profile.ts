@@ -4,7 +4,7 @@ import {
   SUITE_NAME,
   SUITE_VALUE,
 } from "@dotrelay/contracts";
-import type { PrismaClient } from "./generated/prisma/client";
+import type { PrismaClient } from "@dotrelay/database";
 
 export type ServerProfileConfig = Readonly<{
   readonly id: string;

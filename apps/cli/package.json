@@ -14,5 +14,8 @@
     "typecheck": "tsc --project tsconfig.json",
     "test:unit": "bun test",
     "test:cli": "bun ../../scripts/test-cli.ts"
+  },
+  "dependencies": {
+    "@dotrelay/database": "workspace:*"
   }
 }

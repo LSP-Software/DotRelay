@@ -1,4 +1,4 @@
-import type { PrismaClient } from "./generated/prisma/client";
+import type { PrismaClient } from "@dotrelay/database";
 import type { ServerProfileConfig } from "./profile";
 
 export const resolveDotRelayUser = async (
