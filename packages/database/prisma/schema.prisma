@@ -156,6 +156,7 @@ model AuthSession {
 
   user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([expiresAt])
   @@index([userId])
   @@map("auth_sessions")
 }
@@ -191,6 +192,7 @@ model AuthVerification {
   createdAt  DateTime @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
+  @@index([expiresAt])
   @@index([identifier])
   @@map("auth_verifications")
 }
@@ -209,6 +211,7 @@ model AuthDeviceCode {
 
   user AuthUser? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([expiresAt])
   @@index([userId])
   @@map("auth_device_codes")
 }

@@ -182,6 +182,8 @@ const preparePublication = async (input: {
 };
 
 const createAuthorizedDeviceFixture = async () => {
+  const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
+  const keyId = new Uint8Array(await sha384Digest(x25519PublicKey));
   const serverProfile = await database.serverProfile.create({
     data: {
       id: crypto.randomUUID(),
@@ -201,9 +203,9 @@ const createAuthorizedDeviceFixture = async () => {
       userId: user.id,
       lifecycle: "ACTIVE",
       identityGeneration: 1n,
-      keyId: new Uint8Array(48),
-      x25519PublicKey: new Uint8Array(32),
-      ed25519PublicKey: new Uint8Array(32),
+      keyId,
+      x25519PublicKey,
+      ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
       activatedAt: new Date(),
     },
   });
