@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  ensureServerProfile,
   hasMixedCredentials,
   isAllowedOrigin,
   isSecureRequest,
@@ -100,32 +99,5 @@ describe("Server Profile configuration", () => {
         }),
       ),
     ).toBe(true);
-  });
-
-  test("fails closed on a persisted origin change unless explicitly rebound", async () => {
-    const updates: unknown[] = [];
-    const database = {
-      serverProfile: {
-        findUnique: async () => ({ origin: "https://old.example" }),
-        update: async (input: unknown) => updates.push(input),
-        create: async () => undefined,
-      },
-    } as never;
-    const environment = {
-      SERVER_PROFILE_ORIGIN: "https://new.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
-    };
-    const profile = loadServerProfileConfig(environment);
-    await expect(ensureServerProfile(database, profile)).rejects.toThrow(
-      "SERVER_PROFILE_REBIND=true",
-    );
-    await ensureServerProfile(
-      database,
-      loadServerProfileConfig({
-        ...environment,
-        SERVER_PROFILE_REBIND: "true",
-      }),
-    );
-    expect(updates).toHaveLength(1);
   });
 });

@@ -3,16 +3,19 @@ import {
   type ProblemCode,
   parseCapabilitiesDocument,
 } from "@dotrelay/contracts";
-import { createDatabaseClient, type PrismaClient } from "@dotrelay/database";
+import {
+  createDatabaseClient,
+  ensureServerProfile,
+  type PrismaClient,
+  resolveDotRelayUser,
+} from "@dotrelay/database";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createAuth, type DotRelayAuth } from "./auth";
-import { resolveDotRelayUser } from "./identity";
 import {
   createCapabilitiesDocument,
-  ensureServerProfile,
   etagFor,
   hasMixedCredentials,
   isAllowedOrigin,
@@ -168,7 +171,10 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
       headers: context.req.raw.headers,
     });
     if (!session) return jsonProblem(context, "authentication_required");
-    const user = await resolveDotRelayUser(database, profile, session.user.id);
+    const user = await resolveDotRelayUser(database, {
+      serverProfileId: profile.id,
+      authSubject: session.user.id,
+    });
     if (!user) return jsonProblem(context, "service_unavailable");
     return context.json(
       { authenticated: true, user: { id: user.id, name: session.user.name } },
@@ -190,6 +196,10 @@ export const app = createApi({ database, profile, auth });
 export { createApi, loadServerProfileConfig };
 
 if (import.meta.main) {
-  await ensureServerProfile(database, profile);
+  await ensureServerProfile(database, {
+    id: profile.id,
+    origin: profile.origin,
+    allowRebind: profile.allowRebind,
+  });
   Bun.serve({ fetch: app.fetch, port: Number(process.env.PORT ?? 3001) });
 }

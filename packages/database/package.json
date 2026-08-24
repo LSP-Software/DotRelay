@@ -9,7 +9,7 @@
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "bun x prisma generate --config prisma.config.ts && tsc --project tsconfig.json",
-    "test:unit": "bun test src/persistence",
+    "test:unit": "bun test src",
     "db:validate": "bun ../../scripts/validate-prisma.ts",
     "db:migrate-check": "bun ../../scripts/check-migrations.ts"
   },

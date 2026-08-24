@@ -46,6 +46,8 @@ export type {
   UserIdentityGeneration,
 } from "./generated/prisma/browser";
 export type { PrismaClient } from "./generated/prisma/client";
+export type { ResolveDotRelayUserInput } from "./identity";
+export { resolveDotRelayUser } from "./identity";
 export { createDatabaseClient } from "./persistence/client";
 export type {
   AuditFactInput,
@@ -105,3 +107,5 @@ export {
   validateSha384Digest,
   validateStagedObject,
 } from "./persistence/validation";
+export type { EnsureServerProfileInput } from "./server-profile";
+export { ensureServerProfile } from "./server-profile";

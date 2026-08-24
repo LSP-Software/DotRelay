@@ -4,7 +4,6 @@ import {
   SUITE_NAME,
   SUITE_VALUE,
 } from "@dotrelay/contracts";
-import type { PrismaClient } from "@dotrelay/database";
 
 export type ServerProfileConfig = Readonly<{
   readonly id: string;
@@ -249,29 +248,3 @@ export const isSecureRequest = (
 
 export const hasMixedCredentials = (request: Request) =>
   request.headers.has("authorization") && request.headers.has("cookie");
-
-export const ensureServerProfile = async (
-  database: PrismaClient,
-  profile: ServerProfileConfig,
-) => {
-  const existing = await database.serverProfile.findUnique({
-    where: { id: profile.id },
-  });
-  if (existing) {
-    if (existing.origin !== profile.origin && !profile.allowRebind) {
-      throw new Error(
-        "SERVER_PROFILE_ORIGIN differs from the persisted profile; set SERVER_PROFILE_REBIND=true for an explicit rebind",
-      );
-    }
-    if (existing.origin !== profile.origin && profile.allowRebind) {
-      await database.serverProfile.update({
-        where: { id: profile.id },
-        data: { origin: profile.origin },
-      });
-    }
-    return;
-  }
-  await database.serverProfile.create({
-    data: { id: profile.id, origin: profile.origin },
-  });
-};
