@@ -370,7 +370,12 @@ integrationDescribe("PostgreSQL persistence integration", () => {
           data: { role: "MEMBER" },
         }),
       ),
-    ).rejects.toThrow("a Team must retain one active owner");
+    ).rejects.toThrow();
+    expect(
+      await database.membership.findFirst({
+        where: { teamId, userId: user.id },
+      }),
+    ).toMatchObject({ role: "OWNER", lifecycle: "ACTIVE" });
 
     const rolledBackEndpoint = `/rollback/${crypto.randomUUID()}`;
     await expect(
