@@ -1,5 +1,9 @@
 import type { Prisma, PrismaClient } from "../generated/prisma/client";
-import { inShortTransaction, type TransactionDatabase } from "./transaction";
+import {
+  inShortTransaction,
+  inShortTransactionUnlessActive,
+  type TransactionDatabase,
+} from "./transaction";
 import {
   copyBytes,
   validateDigest,
@@ -15,14 +19,6 @@ type DatabaseBytes = Uint8Array<ArrayBuffer>;
 
 const databaseBytes = (value: Uint8Array): DatabaseBytes =>
   new Uint8Array(value) as DatabaseBytes;
-
-const inPersistenceTransaction = async <T>(
-  database: PersistenceClient,
-  callback: (transaction: PersistenceClient) => Promise<T>,
-): Promise<T> => {
-  if ("$transaction" in database) return inShortTransaction(database, callback);
-  return callback(database);
-};
 
 export class OperationConflictError extends Error {
   constructor() {
@@ -154,7 +150,7 @@ export class StagedObjectRepository {
       canonicalBytes,
       input.digest,
     );
-    return inPersistenceTransaction(database, async (transaction) => {
+    return inShortTransactionUnlessActive(database, async (transaction) => {
       await transaction.stagedObject.createMany({
         data: [
           {
@@ -267,7 +263,7 @@ export class OperationRepository {
         "operation digest",
       ),
     );
-    return inPersistenceTransaction(database, async (transaction) => {
+    return inShortTransactionUnlessActive(database, async (transaction) => {
       await transaction.operation.createMany({
         data: [
           {
