@@ -517,7 +517,18 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     }
 
     expect(await operations.expireStaging(database, now)).toBe(1);
-    expect(await database.stagedObject.count()).toBe(1);
+    expect(
+      await database.stagedObject.count({
+        where: {
+          operationId: { in: [expiredOperation.id, currentOperation.id] },
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await database.stagedObject.findFirst({
+        where: { operationId: expiredOperation.id },
+      }),
+    ).toBeNull();
     expect(
       await database.operation.findUnique({
         where: { id: expiredOperation.id },
@@ -572,13 +583,15 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     });
 
     await expect(
-      database.protocolObject.update({
-        where: { id: protocolObject.id },
-        data: { canonicalBytes: new Uint8Array([0xa1, 0x00, 0x01]) },
-      }),
+      Promise.resolve(
+        database.protocolObject.update({
+          where: { id: protocolObject.id },
+          data: { canonicalBytes: new Uint8Array([0xa1, 0x00, 0x01]) },
+        }),
+      ),
     ).rejects.toThrow("immutable DotRelay row");
     await expect(
-      database.auditEvent.delete({ where: { id: audit.id } }),
+      Promise.resolve(database.auditEvent.delete({ where: { id: audit.id } })),
     ).rejects.toThrow("immutable DotRelay row");
   });
 });

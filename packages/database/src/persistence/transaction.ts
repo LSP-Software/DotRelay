@@ -11,5 +11,5 @@ export const inShortTransaction = async <T>(
   database: TransactionDatabase,
   callback: (transaction: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> => {
-  return database.$transaction(callback, DEFAULT_TRANSACTION_OPTIONS);
+  return database.$transaction(callback, { ...DEFAULT_TRANSACTION_OPTIONS });
 };
