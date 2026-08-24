@@ -1,4 +1,21 @@
+export type { DatabaseClient } from "./client";
 export { createDatabaseClient } from "./client";
+export type {
+  AuditFactInput,
+  DeviceEnrollmentCompletionInput,
+  EnvironmentGenesisInput,
+  EpochRotationInput,
+  LaneProjectionInput,
+  MembershipActivationInput,
+  OperationInput,
+  PersistenceClient,
+  ProjectCreationInput,
+  ProtocolObjectInput,
+  RecoveryEnvelopeReplacementInput,
+  RevisionPublicationInput,
+  StageObjectInput,
+  TeamCreationInput,
+} from "./repositories";
 export {
   AdministrationRepository,
   AuditFactRepository,
@@ -19,7 +36,8 @@ export {
   StaleEpochError,
   StaleHeadError,
 } from "./repositories";
-export { inShortTransaction } from "./transaction";
+export type { TransactionDatabase } from "./transaction";
+export { DEFAULT_TRANSACTION_OPTIONS, inShortTransaction } from "./transaction";
 export {
   copyBytes,
   DOTRELAY_PROTOCOL_FORMAT_VERSION,

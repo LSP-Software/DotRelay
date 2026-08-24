@@ -11,6 +11,7 @@ export const resolveDotRelayUser = async (
 ) => {
   const account = await database.authAccount.findFirst({
     where: { userId: input.authSubject, providerId: "github" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: { accountId: true },
   });
   if (!account) return null;

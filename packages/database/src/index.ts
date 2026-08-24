@@ -50,65 +50,6 @@ export type {
 export type { PrismaClient } from "./generated/prisma/client";
 export type { ResolveDotRelayUserInput } from "./identity";
 export { resolveDotRelayUser } from "./identity";
-export type { DatabaseClient } from "./persistence/client";
-export { createDatabaseClient } from "./persistence/client";
-export type {
-  AuditFactInput,
-  DeviceEnrollmentCompletionInput,
-  EnvironmentGenesisInput,
-  EpochRotationInput,
-  LaneProjectionInput,
-  MembershipActivationInput,
-  OperationInput,
-  PersistenceClient,
-  ProjectCreationInput,
-  ProtocolObjectInput,
-  RecoveryEnvelopeReplacementInput,
-  RevisionPublicationInput,
-  StageObjectInput,
-  TeamCreationInput,
-} from "./persistence/repositories";
-export {
-  AdministrationRepository,
-  AuditFactRepository,
-  DeviceRepository,
-  EnvironmentRepository,
-  MembershipAdministrationRepository,
-  MembershipRepository,
-  OperationConflictError,
-  OperationRepository,
-  ProjectEpochRepository,
-  ProjectRepository,
-  ProtocolObjectRepository,
-  PublicationRepository,
-  RecoveryRepository,
-  SecurityRequestLogRepository,
-  StagedObjectConflictError,
-  StagedObjectRepository,
-  StaleEpochError,
-  StaleHeadError,
-} from "./persistence/repositories";
-export type { TransactionDatabase } from "./persistence/transaction";
-export {
-  DEFAULT_TRANSACTION_OPTIONS,
-  inShortTransaction,
-} from "./persistence/transaction";
-export {
-  copyBytes,
-  DOTRELAY_PROTOCOL_FORMAT_VERSION,
-  DOTRELAY_V3_SUITE,
-  PERSISTENCE_LIMITS,
-  PersistenceValidationError,
-  sha384Digest,
-  validateCanonicalCbor,
-  validateDigest,
-  validateLaneProjection,
-  validateOpaqueId,
-  validateProtocolBytes,
-  validateProtocolProjection,
-  validatePublicKeys,
-  validateSha384Digest,
-  validateStagedObject,
-} from "./persistence/validation";
+export * from "./persistence";
 export type { EnsureServerProfileInput } from "./server-profile";
 export { ensureServerProfile } from "./server-profile";
