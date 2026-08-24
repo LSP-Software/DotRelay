@@ -364,10 +364,12 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       }),
     ).toBe(4);
     await expect(
-      database.membership.updateMany({
-        where: { teamId, userId: user.id },
-        data: { role: "MEMBER" },
-      }),
+      Promise.resolve(
+        database.membership.updateMany({
+          where: { teamId, userId: user.id },
+          data: { role: "MEMBER" },
+        }),
+      ),
     ).rejects.toThrow("a Team must retain one active owner");
 
     const rolledBackEndpoint = `/rollback/${crypto.randomUUID()}`;
