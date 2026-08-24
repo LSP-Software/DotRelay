@@ -111,7 +111,7 @@ const isServerProfileId = (value: string) =>
     value,
   );
 
-const isCanonicalOrigin = (value: string) => {
+export const isCanonicalOrigin = (value: string) => {
   try {
     const url = new URL(value);
     return (
@@ -219,10 +219,11 @@ export const parseCapabilitiesDocument = (
     !isServerProfileId(capabilitiesDocument.serverProfileId) ||
     typeof capabilitiesDocument.origin !== "string" ||
     !isCanonicalOrigin(capabilitiesDocument.origin) ||
-    capabilitiesDocument.apiVersion !== API_VERSION ||
     !Array.isArray(capabilitiesDocument.capabilities)
   )
     contractError("invalid_request");
+  if (capabilitiesDocument.apiVersion !== API_VERSION)
+    contractError("unsupported_api_version");
   if (
     !capabilitiesDocument.capabilities.every(
       (capability) => typeof capability === "string",
@@ -234,7 +235,7 @@ export const parseCapabilitiesDocument = (
     ["name", "value"],
   );
   if (suite.name !== SUITE_NAME || suite.value !== SUITE_VALUE)
-    contractError("invalid_request");
+    contractError("unsupported_crypto_suite");
   const limits = parseJsonObject<Record<CapabilityLimitField, unknown>>(
     capabilitiesDocument.limits,
     capabilityLimitFields,

@@ -3,6 +3,24 @@ import { createInMemoryAuth } from "./auth";
 import { app, createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
+const deviceTokenRequest = (
+  testApp: ReturnType<typeof createApi>,
+  profile: ReturnType<typeof loadServerProfileConfig>,
+  deviceCode: string,
+) =>
+  testApp.request(`${profile.origin}/api/auth/device/token`, {
+    method: "POST",
+    headers: {
+      Origin: profile.origin,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: "dotrelay-cli",
+      device_code: deviceCode,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    }),
+  });
+
 describe("API foundation", () => {
   test("exposes a health endpoint", async () => {
     const response = await app.request("http://localhost/health");
@@ -119,6 +137,208 @@ describe("API foundation", () => {
     expect(await tokenResponse.json()).toMatchObject({
       error: "authorization_pending",
     });
+  });
+
+  test("enforces device polling intervals, expiry, and endpoint rate limits", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    const codeResponse = await testApp.request(
+      `${profile.origin}/api/auth/device/code`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.origin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ client_id: "dotrelay-cli" }),
+      },
+    );
+    const code = (await codeResponse.json()) as {
+      device_code: string;
+      expires_in: number;
+      interval: number;
+    };
+    expect(code).toMatchObject({ expires_in: 1800, interval: 5 });
+
+    const pending = await deviceTokenRequest(
+      testApp,
+      profile,
+      code.device_code,
+    );
+    expect(await pending.json()).toMatchObject({
+      error: "authorization_pending",
+    });
+    const tooFast = await deviceTokenRequest(
+      testApp,
+      profile,
+      code.device_code,
+    );
+    expect(await tooFast.json()).toMatchObject({ error: "slow_down" });
+
+    const context = await auth.$context;
+    const record = await context.adapter.findOne<{
+      id: string;
+    }>({
+      model: "deviceCode",
+      where: [{ field: "deviceCode", value: code.device_code }],
+    });
+    expect(record).not.toBeNull();
+    await context.adapter.update({
+      model: "deviceCode",
+      where: [{ field: "id", value: record?.id ?? "" }],
+      update: { expiresAt: new Date(0), lastPolledAt: null },
+    });
+    const expired = await deviceTokenRequest(
+      testApp,
+      profile,
+      code.device_code,
+    );
+    expect(await expired.json()).toMatchObject({ error: "expired_token" });
+
+    const limitedAuth = createInMemoryAuth(profile);
+    const limitedApp = createApi({
+      database: {} as never,
+      profile,
+      auth: limitedAuth,
+    });
+    const responses = [];
+    for (let request = 0; request < 11; request += 1) {
+      responses.push(
+        await limitedApp.request(`${profile.origin}/api/auth/device/code`, {
+          method: "POST",
+          headers: {
+            Origin: profile.origin,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ client_id: "dotrelay-cli" }),
+        }),
+      );
+    }
+    const firstLimited = responses.findIndex(
+      (response) => response.status === 429,
+    );
+    expect(firstLimited).toBeGreaterThan(0);
+    expect(
+      responses
+        .slice(firstLimited)
+        .every((response) => response.status === 429),
+    ).toBe(true);
+    expect(responses[firstLimited]?.headers.get("x-retry-after")).toBe("60");
+    expect(
+      responses[firstLimited]?.headers.get("access-control-expose-headers"),
+    ).toContain("X-Retry-After");
+  });
+
+  test("uses the exact GitHub callback and secure browser state cookies", async () => {
+    const profile = loadServerProfileConfig({
+      NODE_ENV: "production",
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+      SERVER_PROFILE_ORIGIN: "https://relay.example",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+      GITHUB_CLIENT_ID: "github-client",
+      GITHUB_CLIENT_SECRET: "github-secret",
+    });
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    const response = await testApp.request(
+      `${profile.origin}/api/auth/sign-in/social`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.origin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: "github",
+          callbackURL: "/device?user_code=ABCDEFGH",
+        }),
+      },
+    );
+    const authorization = new URL(response.headers.get("location") ?? "");
+
+    expect(response.status).toBe(200);
+    expect(authorization.origin).toBe("https://github.com");
+    expect(authorization.searchParams.get("redirect_uri")).toBe(
+      `${profile.origin}/api/auth/callback/github`,
+    );
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
+    expect(response.headers.get("set-cookie")).toContain("Secure");
+
+    const rejectedCallback = await testApp.request(
+      `${profile.origin}/api/auth/callback/github?code=fake&state=fake`,
+    );
+    expect(rejectedCallback.status).toBe(302);
+    expect(rejectedCallback.headers.get("location")).toBe(
+      `${profile.origin}/api/auth/error?error=state_mismatch`,
+    );
+    expect(await rejectedCallback.text()).not.toContain("state.mjs");
+  });
+
+  test("applies logout, remote revocation, and expiry on the next bearer request", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    const context = await auth.$context;
+    const user = await context.internalAdapter.createUser(
+      {
+        email: "auth-test@example.com",
+        emailVerified: true,
+        name: "Auth Test",
+      },
+      {
+        method: "oauth",
+        oauth: { providerId: "github" },
+      },
+    );
+    const createSession = async () => {
+      const session = await context.internalAdapter.createSession(
+        user.id,
+        false,
+      );
+      if (!session) throw new Error("test session was not created");
+      return session;
+    };
+    const sessionHeaders = (token: string) =>
+      new Headers({ Authorization: `Bearer ${token}` });
+
+    const loggedOut = await createSession();
+    expect(
+      await auth.api.getSession({ headers: sessionHeaders(loggedOut.token) }),
+    ).not.toBeNull();
+    const logoutResponse = await testApp.request(
+      `${profile.origin}/api/auth/sign-out`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${loggedOut.token}` },
+      },
+    );
+    expect(logoutResponse.status).toBe(200);
+    expect(
+      await auth.api.getSession({ headers: sessionHeaders(loggedOut.token) }),
+    ).toBeNull();
+
+    const administrator = await createSession();
+    const remotelyRevoked = await createSession();
+    await auth.api.revokeSession({
+      headers: sessionHeaders(administrator.token),
+      body: { token: remotelyRevoked.token },
+    });
+    expect(
+      await auth.api.getSession({
+        headers: sessionHeaders(remotelyRevoked.token),
+      }),
+    ).toBeNull();
+
+    const expired = await createSession();
+    await context.internalAdapter.updateSession(expired.token, {
+      expiresAt: new Date(0),
+    });
+    expect(
+      await auth.api.getSession({ headers: sessionHeaders(expired.token) }),
+    ).toBeNull();
+    expect(auth.options.session?.cookieCache).toEqual({ enabled: false });
   });
 
   test("serves the device verification page without reflecting markup", async () => {

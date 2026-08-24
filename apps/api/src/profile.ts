@@ -1,9 +1,13 @@
+import { isIP } from "node:net";
 import {
   type CapabilitiesDocument,
   CBOR_LIMITS,
   SUITE_NAME,
   SUITE_VALUE,
 } from "@dotrelay/contracts";
+
+declare const trustedProxyBrand: unique symbol;
+type TrustedProxy = string & { readonly [trustedProxyBrand]: true };
 
 export type ServerProfileConfig = Readonly<{
   readonly id: string;
@@ -20,6 +24,7 @@ export type ServerProfileConfig = Readonly<{
   readonly githubClientSecret?: string;
   readonly isProduction: boolean;
   readonly trustProxy: boolean;
+  readonly trustedProxies: readonly TrustedProxy[];
   readonly allowRebind: boolean;
 }>;
 
@@ -85,6 +90,23 @@ const validateProfileId = (value: string) => {
   return value.toLowerCase();
 };
 
+const parseTrustedProxy = (value: string): TrustedProxy => {
+  const [address, prefix, ...remainder] = value.split("/");
+  const version = isIP(address ?? "");
+  if (version === 0 || remainder.length > 0)
+    throw new Error(
+      "SERVER_PROFILE_TRUSTED_PROXIES contains an invalid IP or CIDR",
+    );
+  if (prefix !== undefined) {
+    const maximum = version === 4 ? 32 : 128;
+    if (!/^\d{1,3}$/.test(prefix) || Number(prefix) > maximum)
+      throw new Error(
+        "SERVER_PROFILE_TRUSTED_PROXIES contains an invalid IP or CIDR",
+      );
+  }
+  return value as TrustedProxy;
+};
+
 const bounded = (
   name: string,
   value: string | undefined,
@@ -121,7 +143,31 @@ export const loadServerProfileConfig = (
   }
   if (authSecret.length < 32)
     throw new Error("BETTER_AUTH_SECRET must contain at least 32 characters");
+  const githubClientId = environment.GITHUB_CLIENT_ID;
+  const githubClientSecret = environment.GITHUB_CLIENT_SECRET;
+  if (Boolean(githubClientId) !== Boolean(githubClientSecret)) {
+    throw new Error(
+      "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be configured together",
+    );
+  }
+  if (isProduction && (!githubClientId || !githubClientSecret)) {
+    throw new Error(
+      "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be configured in production",
+    );
+  }
   const trustProxy = environment.SERVER_PROFILE_TRUST_PROXY === "true";
+  const trustedProxies = Object.freeze(
+    (environment.SERVER_PROFILE_TRUSTED_PROXIES ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+      .map(parseTrustedProxy),
+  );
+  if (isProduction && trustProxy && trustedProxies.length === 0) {
+    throw new Error(
+      "SERVER_PROFILE_TRUSTED_PROXIES must list the trusted proxy addresses or CIDR ranges",
+    );
+  }
   const allowRebind = environment.SERVER_PROFILE_REBIND === "true";
   return Object.freeze({
     id: validateProfileId(environment.SERVER_PROFILE_ID ?? defaultProfileId),
@@ -192,14 +238,11 @@ export const loadServerProfileConfig = (
       ),
     }),
     authSecret,
-    ...(environment.GITHUB_CLIENT_ID
-      ? { githubClientId: environment.GITHUB_CLIENT_ID }
-      : {}),
-    ...(environment.GITHUB_CLIENT_SECRET
-      ? { githubClientSecret: environment.GITHUB_CLIENT_SECRET }
-      : {}),
+    ...(githubClientId ? { githubClientId } : {}),
+    ...(githubClientSecret ? { githubClientSecret } : {}),
     isProduction,
     trustProxy,
+    trustedProxies,
     allowRebind,
   });
 };
