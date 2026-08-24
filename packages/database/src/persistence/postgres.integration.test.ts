@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import type {
+  DatabaseClient,
   OperationInput,
   ProtocolObjectInput,
   RevisionPublicationInput,
@@ -31,16 +32,14 @@ const testDatabaseUrl = sourceDatabaseUrl
   : undefined;
 if (testDatabaseUrl) {
   testDatabaseUrl.pathname = `/${testDatabaseName}`;
-  testDatabaseUrl.search = "";
 }
 const adminDatabaseUrl = sourceDatabaseUrl
   ? new URL(sourceDatabaseUrl)
   : undefined;
 if (adminDatabaseUrl) {
   adminDatabaseUrl.pathname = "/postgres";
-  adminDatabaseUrl.search = "";
 }
-const database = createDatabaseClient(testDatabaseUrl?.toString());
+let database: DatabaseClient;
 const textEncoder = new TextEncoder();
 let protocolSequence = 1;
 const databasePackage = fileURLToPath(new URL("../..", import.meta.url));
@@ -241,6 +240,8 @@ const createProjectFixture = async (label: string) => {
 integrationDescribe("PostgreSQL persistence integration", () => {
   beforeAll(async () => {
     if (!adminDatabaseUrl) throw new Error("DATABASE_URL is required");
+    if (!testDatabaseUrl) throw new Error("DATABASE_URL is required");
+    database = createDatabaseClient(testDatabaseUrl.toString());
     const admin = new Client({ connectionString: adminDatabaseUrl.toString() });
     await admin.connect();
     try {
@@ -364,13 +365,13 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       }),
     ).toBe(4);
     await expect(
-      Promise.resolve(
-        database.membership.updateMany({
+      database.$transaction(async (transaction) =>
+        transaction.membership.updateMany({
           where: { teamId, userId: user.id },
           data: { role: "MEMBER" },
         }),
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow("a Team must retain one active owner");
     expect(
       await database.membership.findFirst({
         where: { teamId, userId: user.id },
@@ -542,13 +543,14 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       }),
     ).toMatchObject({ status: "EXPIRED" });
 
+    const endpointTemplate = `/expiration/${crypto.randomUUID()}`;
     for (const expiresAt of [
       new Date(now.getTime() - 60_000),
       new Date(now.getTime() + 60_000),
     ]) {
       await securityLogs.append(database, {
         ipAddress: "192.0.2.1",
-        endpointTemplate: "/api/v1/environments/:id",
+        endpointTemplate,
         httpStatus: 200,
         transferBytes: 128n,
         requestedAt: new Date(expiresAt.getTime() - 60_000),
@@ -556,7 +558,9 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       });
     }
     expect((await securityLogs.expire(database, now)).count).toBe(1);
-    expect(await database.securityRequestLog.count()).toBe(1);
+    expect(
+      await database.securityRequestLog.count({ where: { endpointTemplate } }),
+    ).toBe(1);
   });
 
   test("keeps accepted protocol objects and Audit Facts append-only", async () => {

@@ -61,7 +61,6 @@ const migrationDeploy = [
 const mainDatabase = new URL(databaseUrl);
 const adminDatabase = new URL(mainDatabase);
 adminDatabase.pathname = "/postgres";
-adminDatabase.search = "";
 const quoteIdentifier = (value: string): string =>
   `"${value.replaceAll('"', '""')}"`;
 const temporaryDatabase = (purpose: string) => {
@@ -70,7 +69,6 @@ const temporaryDatabase = (purpose: string) => {
     .replaceAll("-", "")}`;
   const url = new URL(mainDatabase);
   url.pathname = `/${name}`;
-  url.search = "";
   return { name, url } as const;
 };
 const databases = [
@@ -211,12 +209,15 @@ try {
     "✓ Prisma fresh, upgrade, applied-migration, and schema-drift checks passed",
   );
 } finally {
-  await fresh.end({ timeout: 5 });
-  await applied.end({ timeout: 5 });
-  await upgrade.end({ timeout: 5 });
-  for (const database of databases)
-    await admin.unsafe(
-      `DROP DATABASE IF EXISTS ${quoteIdentifier(database.name)}`,
-    );
+  await Promise.allSettled([
+    fresh.end({ timeout: 5 }),
+    applied.end({ timeout: 5 }),
+    upgrade.end({ timeout: 5 }),
+  ]);
+  await Promise.allSettled(
+    databases.map((database) =>
+      admin.unsafe(`DROP DATABASE IF EXISTS ${quoteIdentifier(database.name)}`),
+    ),
+  );
   await admin.end({ timeout: 5 });
 }
