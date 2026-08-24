@@ -21,7 +21,7 @@
     "vectors:generate": "bun scripts/generate-v3-vectors.ts",
     "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts && turbo run test:unit",
     "openapi:check": "bun scripts/check-openapi.ts",
-    "test:integration": "bun scripts/test-services.ts",
+    "test:integration": "bun scripts/test-services.ts && turbo run test:integration",
     "test:e2e": "playwright test --config=playwright.config.ts",
     "test:cli": "turbo run test:cli --filter=@dotrelay/cli",
     "prisma:generate": "bun x prisma generate --config packages/database/prisma.config.ts",

@@ -10,6 +10,7 @@
     "lint": "biome lint .",
     "typecheck": "bun x prisma generate --config prisma.config.ts && tsc --project tsconfig.json",
     "test:unit": "bun test src",
+    "test:integration": "bun test src/persistence/postgres.integration.test.ts",
     "db:validate": "bun ../../scripts/validate-prisma.ts",
     "db:migrate-check": "bun ../../scripts/check-migrations.ts"
   },
