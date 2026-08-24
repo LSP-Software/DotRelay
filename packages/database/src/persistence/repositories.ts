@@ -16,6 +16,14 @@ type DatabaseBytes = Uint8Array<ArrayBuffer>;
 const databaseBytes = (value: Uint8Array): DatabaseBytes =>
   new Uint8Array(value) as DatabaseBytes;
 
+const inPersistenceTransaction = async <T>(
+  database: PersistenceClient,
+  callback: (transaction: PersistenceClient) => Promise<T>,
+): Promise<T> => {
+  if ("$transaction" in database) return inShortTransaction(database, callback);
+  return callback(database);
+};
+
 export class OperationConflictError extends Error {
   constructor() {
     super(
@@ -146,33 +154,37 @@ export class StagedObjectRepository {
       canonicalBytes,
       input.digest,
     );
-    const existing = await database.stagedObject.findUnique({
-      where: {
-        operationId_objectId: {
-          operationId: input.operationId,
-          objectId: input.objectId,
+    return inPersistenceTransaction(database, async (transaction) => {
+      await transaction.stagedObject.createMany({
+        data: [
+          {
+            operationId: input.operationId,
+            objectId: input.objectId,
+            actorDeviceId: input.actorDeviceId,
+            canonicalBytes: databaseBytes(canonicalBytes),
+            digest: databaseBytes(requestedDigest),
+            createdAt: input.createdAt,
+            expiresAt: input.expiresAt,
+          },
+        ],
+        skipDuplicates: true,
+      });
+      const staged = await transaction.stagedObject.findUnique({
+        where: {
+          operationId_objectId: {
+            operationId: input.operationId,
+            objectId: input.objectId,
+          },
         },
-      },
-    });
-    if (existing) {
+      });
       if (
-        existing.actorDeviceId !== input.actorDeviceId ||
-        !sameBytes(existing.digest, requestedDigest) ||
-        !sameBytes(existing.canonicalBytes, canonicalBytes)
+        !staged ||
+        staged.actorDeviceId !== input.actorDeviceId ||
+        !sameBytes(staged.digest, requestedDigest) ||
+        !sameBytes(staged.canonicalBytes, canonicalBytes)
       )
         throw new StagedObjectConflictError();
-      return existing;
-    }
-    return database.stagedObject.create({
-      data: {
-        operationId: input.operationId,
-        objectId: input.objectId,
-        actorDeviceId: input.actorDeviceId,
-        canonicalBytes: databaseBytes(canonicalBytes),
-        digest: databaseBytes(requestedDigest),
-        createdAt: input.createdAt,
-        expiresAt: input.expiresAt,
-      },
+      return staged;
     });
   }
 
@@ -255,44 +267,40 @@ export class OperationRepository {
         "operation digest",
       ),
     );
-    const byId = await database.operation.findUnique({
-      where: { id: input.id },
-    });
-    if (byId) {
+    return inPersistenceTransaction(database, async (transaction) => {
+      await transaction.operation.createMany({
+        data: [
+          {
+            id: input.id,
+            actorUserId: input.actorUserId,
+            ...(input.actorDeviceId
+              ? { actorDeviceId: input.actorDeviceId }
+              : {}),
+            kind: input.kind,
+            commandDigest: digest,
+            ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+          },
+        ],
+        skipDuplicates: true,
+      });
+      const operation = await transaction.operation.findUnique({
+        where: { id: input.id },
+      });
       if (
-        byId.actorUserId !== input.actorUserId ||
-        byId.actorDeviceId !== (input.actorDeviceId ?? null) ||
-        byId.kind !== input.kind ||
-        !sameBytes(byId.commandDigest, digest)
+        !operation ||
+        operation.actorUserId !== input.actorUserId ||
+        operation.actorDeviceId !== (input.actorDeviceId ?? null) ||
+        operation.kind !== input.kind ||
+        !sameBytes(operation.commandDigest, digest) ||
+        operation.status === "CANCELLED" ||
+        operation.status === "EXPIRED"
       )
         throw new OperationConflictError();
-      if (byId.status === "CANCELLED" || byId.status === "EXPIRED")
-        throw new OperationConflictError();
-      return { operation: byId, idempotent: byId.status === "COMMITTED" };
-    }
-    const byDigest = await database.operation.findFirst({
-      where: { actorUserId: input.actorUserId, commandDigest: digest },
-    });
-    if (byDigest) {
-      if (byDigest.id !== input.id) throw new OperationConflictError();
-      if (byDigest.status === "CANCELLED" || byDigest.status === "EXPIRED")
-        throw new OperationConflictError();
       return {
-        operation: byDigest,
-        idempotent: byDigest.status === "COMMITTED",
+        operation,
+        idempotent: operation.status === "COMMITTED",
       };
-    }
-    const operation = await database.operation.create({
-      data: {
-        id: input.id,
-        actorUserId: input.actorUserId,
-        ...(input.actorDeviceId ? { actorDeviceId: input.actorDeviceId } : {}),
-        kind: input.kind,
-        commandDigest: digest,
-        ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
-      },
     });
-    return { operation, idempotent: false };
   }
 
   async expireStaging(database: TransactionDatabase, now: Date) {

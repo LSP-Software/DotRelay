@@ -9,7 +9,10 @@ describe("short persistence transactions", () => {
         callback: (transaction: { marker: string }) => Promise<string>,
         receivedOptions: unknown,
       ) => {
-        options = receivedOptions;
+        options = { ...(receivedOptions as Record<string, unknown>) };
+        Object.defineProperty(receivedOptions, "newTxId", {
+          value: "nested-transaction",
+        });
         return callback({ marker: "transaction" });
       },
     };

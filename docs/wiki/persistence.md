@@ -69,5 +69,12 @@ bun run db:migrate-check
 bun run test:integration
 ```
 
+`test:integration` creates a disposable database, deploys the committed migrations, runs the
+PostgreSQL repository suite, and drops the database. The suite exercises concurrent idempotency,
+atomic administration and publication, Revision Rollback, lifecycle restore, staging and Security
+Request Log expiry, last-owner enforcement, and append-only protocol and Audit Fact rows.
+`db:migrate-check` separately verifies fresh deployment, an upgrade with representative base-state
+rows, migration-history parity, and deliberate schema-drift detection.
+
 Stop local services with `docker compose down`. Production and self-hosted deployments use the
 same forward-only migration history and never use `db push`.
