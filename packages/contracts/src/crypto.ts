@@ -1,4 +1,5 @@
 import { type CborValue, canonicalDecode, canonicalEncode } from "./cbor";
+import { contractError } from "./errors";
 import { signatureInput } from "./protocol";
 import {
   FIELD_REGISTRY,
@@ -37,6 +38,80 @@ export const CRYPTO_SUITE = Object.freeze({
 export type ClassicalEncryptionKeyPair = CryptoKeyPair;
 export type ClassicalSigningKeyPair = CryptoKeyPair;
 export type CiphertextEnvelope = ReadonlyMap<number, CborValue>;
+
+export const assertCryptoRuntime = async (
+  runtime: Crypto | undefined = globalThis.crypto,
+): Promise<void> => {
+  try {
+    if (!runtime?.subtle || typeof runtime.getRandomValues !== "function")
+      contractError("unsupported_crypto_runtime");
+    const probe = new Uint8Array(32);
+    runtime.getRandomValues(probe);
+    const [hkdfKey, encryptionKeys, signingKeys] = await Promise.all([
+      runtime.subtle.importKey("raw", asBufferSource(probe), "HKDF", false, [
+        "deriveKey",
+      ]),
+      runtime.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]),
+      runtime.subtle.generateKey({ name: "Ed25519" }, false, [
+        "sign",
+        "verify",
+      ]),
+    ]);
+    const encryptionKeyPair = encryptionKeys as unknown as CryptoKeyPair;
+    const signingKeyPair = signingKeys as unknown as CryptoKeyPair;
+    const [aesKey, signature] = await Promise.all([
+      runtime.subtle.deriveKey(
+        {
+          name: "HKDF",
+          hash: "SHA-384",
+          salt: asBufferSource(new Uint8Array(32)),
+          info: asBufferSource(new Uint8Array()),
+        },
+        hkdfKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"],
+      ),
+      runtime.subtle.sign(
+        "Ed25519",
+        signingKeyPair.privateKey,
+        asBufferSource(probe),
+      ),
+      runtime.subtle.digest("SHA-384", asBufferSource(probe)),
+      runtime.subtle.deriveBits(
+        {
+          name: "X25519",
+          public: encryptionKeyPair.publicKey,
+        },
+        encryptionKeyPair.privateKey,
+        256,
+      ),
+    ]);
+    const iv = new Uint8Array(12);
+    const ciphertext = await runtime.subtle.encrypt(
+      { name: "AES-GCM", iv: asBufferSource(iv) },
+      aesKey,
+      asBufferSource(probe),
+    );
+    const [plaintext, verified] = await Promise.all([
+      runtime.subtle.decrypt(
+        { name: "AES-GCM", iv: asBufferSource(iv) },
+        aesKey,
+        ciphertext,
+      ),
+      runtime.subtle.verify(
+        "Ed25519",
+        signingKeyPair.publicKey,
+        signature,
+        asBufferSource(probe),
+      ),
+    ]);
+    if (!verified || plaintext.byteLength !== probe.byteLength)
+      contractError("unsupported_crypto_runtime");
+  } catch {
+    contractError("unsupported_crypto_runtime");
+  }
+};
 
 export class InvalidCiphertextError extends Error {
   constructor() {

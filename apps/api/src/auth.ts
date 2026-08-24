@@ -16,7 +16,16 @@ const createAuthWithAdapter = (
     secret: profile.authSecret,
     trustedOrigins: [profile.origin, profile.webOrigin],
     ...(database ? { database } : {}),
-    user: { modelName: "authUser" },
+    ...(database
+      ? {
+          user: { modelName: "authUser" },
+          account: {
+            modelName: "authAccount",
+            encryptOAuthTokens: true,
+          },
+          verification: { modelName: "authVerification" },
+        }
+      : {}),
     session: {
       modelName: "authSession",
       expiresIn: 60 * 60 * 24 * 30,
@@ -24,8 +33,17 @@ const createAuthWithAdapter = (
       disableSessionRefresh: false,
       cookieCache: { enabled: false },
     },
-    account: { modelName: "authAccount" },
-    verification: { modelName: "authVerification" },
+    advanced: {
+      useSecureCookies: profile.isProduction,
+      ipAddress: profile.trustProxy
+        ? {
+            ipAddressHeaders: ["x-forwarded-for"],
+            trustedProxies: [...profile.trustedProxies],
+          }
+        : {
+            ipAddressHeaders: [],
+          },
+    },
     socialProviders:
       profile.githubClientId && profile.githubClientSecret
         ? {
@@ -41,7 +59,9 @@ const createAuthWithAdapter = (
       deviceAuthorization({
         verificationUri: `${profile.origin}/device`,
         validateClient: (clientId) => clientId === AUTH_CLIENT_ID,
-        schema: { deviceCode: { modelName: "authDeviceCode" } },
+        ...(database
+          ? { schema: { deviceCode: { modelName: "authDeviceCode" } } }
+          : {}),
       }),
     ],
     rateLimit: {

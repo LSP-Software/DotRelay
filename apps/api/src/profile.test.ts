@@ -7,6 +7,11 @@ import {
   normalizeOrigin,
 } from "./profile";
 
+const githubOAuthEnvironment = {
+  GITHUB_CLIENT_ID: "github-client",
+  GITHUB_CLIENT_SECRET: "github-secret",
+};
+
 describe("Server Profile configuration", () => {
   test("normalizes an exact origin and rejects path-bearing origins", () => {
     expect(normalizeOrigin("https://relay.example/")).toBe(
@@ -34,8 +39,34 @@ describe("Server Profile configuration", () => {
     ).toThrow("BETTER_AUTH_SECRET");
   });
 
+  test("requires a complete GitHub OAuth configuration in production", () => {
+    const production = {
+      NODE_ENV: "production",
+      SERVER_PROFILE_ORIGIN: "https://relay.example",
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    };
+    expect(() => loadServerProfileConfig(production)).toThrow(
+      "GITHUB_CLIENT_ID",
+    );
+    expect(() =>
+      loadServerProfileConfig({
+        ...production,
+        GITHUB_CLIENT_ID: "github-client",
+      }),
+    ).toThrow("configured together");
+    expect(
+      loadServerProfileConfig({
+        ...production,
+        GITHUB_CLIENT_ID: "github-client",
+        GITHUB_CLIENT_SECRET: "github-secret",
+      }).githubClientId,
+    ).toBe("github-client");
+  });
+
   test("accepts lower operational quotas but never raises protocol ceilings", () => {
     const profile = loadServerProfileConfig({
+      ...githubOAuthEnvironment,
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
       BETTER_AUTH_SECRET: "x".repeat(32),
@@ -46,6 +77,7 @@ describe("Server Profile configuration", () => {
     expect(profile.limits.adminBodyBytes).toBe(1024);
     expect(() =>
       loadServerProfileConfig({
+        ...githubOAuthEnvironment,
         NODE_ENV: "production",
         SERVER_PROFILE_ORIGIN: "https://relay.example",
         BETTER_AUTH_SECRET: "x".repeat(32),
@@ -84,6 +116,7 @@ describe("Server Profile configuration", () => {
       headers: { "x-forwarded-proto": "https" },
     });
     const base = {
+      ...githubOAuthEnvironment,
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
       BETTER_AUTH_SECRET: "x".repeat(32),
@@ -96,8 +129,40 @@ describe("Server Profile configuration", () => {
         loadServerProfileConfig({
           ...base,
           SERVER_PROFILE_TRUST_PROXY: "true",
+          SERVER_PROFILE_TRUSTED_PROXIES: "192.0.2.10",
         }),
       ),
     ).toBe(true);
+  });
+
+  test("requires explicit proxy addresses for production forwarded headers", () => {
+    expect(() =>
+      loadServerProfileConfig({
+        ...githubOAuthEnvironment,
+        NODE_ENV: "production",
+        SERVER_PROFILE_ORIGIN: "https://relay.example",
+        BETTER_AUTH_SECRET: "x".repeat(32),
+        SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+        SERVER_PROFILE_TRUST_PROXY: "true",
+      }),
+    ).toThrow("SERVER_PROFILE_TRUSTED_PROXIES");
+
+    expect(
+      loadServerProfileConfig({
+        ...githubOAuthEnvironment,
+        NODE_ENV: "production",
+        SERVER_PROFILE_ORIGIN: "https://relay.example",
+        BETTER_AUTH_SECRET: "x".repeat(32),
+        SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+        SERVER_PROFILE_TRUST_PROXY: "true",
+        SERVER_PROFILE_TRUSTED_PROXIES: "192.0.2.10, 2001:db8::/32",
+      }).trustedProxies.join(","),
+    ).toBe("192.0.2.10,2001:db8::/32");
+
+    expect(() =>
+      loadServerProfileConfig({
+        SERVER_PROFILE_TRUSTED_PROXIES: "192.0.2.10/999",
+      }),
+    ).toThrow("invalid IP or CIDR");
   });
 });

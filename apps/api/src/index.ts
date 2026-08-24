@@ -120,7 +120,7 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
       credentials: true,
       allowHeaders: ["Content-Type", "Authorization"],
       allowMethods: ["GET", "POST", "OPTIONS"],
-      exposeHeaders: ["Retry-After", "Set-Auth-Token"],
+      exposeHeaders: ["X-Retry-After", "Set-Auth-Token"],
       maxAge: 600,
     }),
   );

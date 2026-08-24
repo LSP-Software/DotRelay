@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalEncode } from "./cbor";
 import {
+  assertCryptoRuntime,
   CRYPTO_SUITE,
   decodeCiphertextEnvelope,
   encodeCiphertextEnvelope,
@@ -28,6 +29,12 @@ import { protocolObjectFromFields } from "./protocol";
 const encoder = new TextEncoder();
 
 describe("v3 native WebCrypto core", () => {
+  test("checks every required runtime algorithm without application secret input", async () => {
+    await expect(assertCryptoRuntime()).resolves.toBeUndefined();
+    await expect(assertCryptoRuntime({} as Crypto)).rejects.toMatchObject({
+      code: "unsupported_crypto_runtime",
+    });
+  });
   test("generates, exports, imports, and round-trips X25519 keys", async () => {
     const original = await generateEncryptionKeyPair();
     const publicKeyBytes = await exportEncryptionPublicKey(original.publicKey);

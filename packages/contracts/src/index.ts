@@ -18,6 +18,7 @@ export {
   canonicalEncode,
 } from "./cbor";
 export {
+  assertCryptoRuntime,
   type CiphertextEnvelope,
   type ClassicalEncryptionKeyPair,
   type ClassicalSigningKeyPair,
@@ -73,3 +74,9 @@ export {
   SUITE_NAME,
   SUITE_VALUE,
 } from "./registry";
+export {
+  establishServerProfileTrust,
+  type ServerProfilePin,
+  ServerProfileTrustError,
+  type ServerProfileTrustErrorCode,
+} from "./server-profile";
