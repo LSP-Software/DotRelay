@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   DOTRELAY_PROTOCOL_FORMAT_VERSION,
   DOTRELAY_V3_SUITE,
-  PersistenceValidationError,
   validateCanonicalCbor,
   validateLaneProjection,
   validateProtocolProjection,
@@ -42,13 +41,13 @@ describe("persistence validation boundary", () => {
   test("rejects a superseded suite before persistence", () => {
     expect(() =>
       validateProtocolProjection({
-        suite: "dotrelay-e2ee-v3-classical-webcrypto",
-        formatVersion: 3,
+        suite: "dotrelay-e2ee-v2-classical-webcrypto",
+        formatVersion: DOTRELAY_PROTOCOL_FORMAT_VERSION,
         kind: 13,
-        canonicalBytes: bytes(4),
+        canonicalBytes: Uint8Array.of(0xa0),
         digest: bytes(48),
       }),
-    ).toThrow(PersistenceValidationError);
+    ).toThrow("protocol object suite is not supported");
   });
 
   test("rejects non-canonical and non-map protocol bytes", () => {
@@ -81,5 +80,51 @@ describe("persistence validation boundary", () => {
         ciphertextHash: bytes(48),
       }),
     ).not.toThrow();
+
+    expect(() =>
+      validateLaneProjection({
+        scope: "ENVIRONMENT_DEFINITION",
+        ownerUserId: "owner",
+        projectEpoch: 1n,
+        plaintextLength: 12,
+        ciphertextLength: 28,
+        ciphertextHash: bytes(48),
+      }),
+    ).toThrow("definition lanes cannot carry a User owner or provider");
+
+    expect(() =>
+      validateLaneProjection({
+        scope: "VARIABLE_DEFINITION",
+        originalProviderUserId: "provider",
+        projectEpoch: 1n,
+        plaintextLength: 12,
+        ciphertextLength: 28,
+        ciphertextHash: bytes(48),
+      }),
+    ).toThrow("definition lanes cannot carry a User owner or provider");
+
+    expect(() =>
+      validateLaneProjection({
+        scope: "SHARED_VALUE",
+        originalProviderUserId: "provider",
+        ownerUserId: "owner",
+        projectEpoch: 1n,
+        plaintextLength: 12,
+        ciphertextLength: 28,
+        ciphertextHash: bytes(48),
+      }),
+    ).toThrow("Shared Value lanes require only an original provider");
+
+    expect(() =>
+      validateLaneProjection({
+        scope: "USER_DEFINED_VALUE",
+        ownerUserId: "owner",
+        originalProviderUserId: "provider",
+        projectEpoch: 1n,
+        plaintextLength: 12,
+        ciphertextLength: 28,
+        ciphertextHash: bytes(48),
+      }),
+    ).toThrow("User-defined Value lanes require only an owner User");
   });
 });

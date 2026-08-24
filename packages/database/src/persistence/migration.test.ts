@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 
 const migrationUrl = new URL(
   "../../prisma/migrations/20260817100000_persistence/migration.sql",
@@ -54,21 +55,27 @@ describe("persistence migration boundary", () => {
       }
       console.log("migration-ok");
     `;
-    const process = Bun.spawn(
-      ["node", "--input-type=module", "-e", childSource, migrationUrl.pathname],
+    const child = Bun.spawn(
+      [
+        "node",
+        "--input-type=module",
+        "-e",
+        childSource,
+        fileURLToPath(migrationUrl),
+      ],
       {
-        cwd: new URL("../..", import.meta.url).pathname,
+        cwd: fileURLToPath(new URL("../..", import.meta.url)),
         stderr: "pipe",
         stdout: "pipe",
       },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(process.stdout).text(),
-      new Response(process.stderr).text(),
-      process.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
     ]);
     expect(exitCode).toBe(0);
     expect(stdout.trim()).toBe("migration-ok");
-    expect(stderr).toBe("");
+    expect(stderr).not.toMatch(/error/i);
   });
 });

@@ -1,26 +1,30 @@
 import type { PrismaClient } from "./generated/prisma/client";
-import type { ServerProfileConfig } from "./profile";
+
+export type ResolveDotRelayUserInput = Readonly<{
+  readonly serverProfileId: string;
+  readonly authSubject: string;
+}>;
 
 export const resolveDotRelayUser = async (
   database: PrismaClient,
-  profile: ServerProfileConfig,
-  authSubject: string,
+  input: ResolveDotRelayUserInput,
 ) => {
   const account = await database.authAccount.findFirst({
-    where: { userId: authSubject, providerId: "github" },
+    where: { userId: input.authSubject, providerId: "github" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: { accountId: true },
   });
   if (!account) return null;
   return database.user.upsert({
     where: {
       serverProfileId_authSubject: {
-        serverProfileId: profile.id,
-        authSubject,
+        serverProfileId: input.serverProfileId,
+        authSubject: input.authSubject,
       },
     },
     create: {
-      serverProfileId: profile.id,
-      authSubject,
+      serverProfileId: input.serverProfileId,
+      authSubject: input.authSubject,
       githubSubject: account.accountId,
     },
     update: { githubSubject: account.accountId },

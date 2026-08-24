@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { inShortTransaction } from "./transaction";
+import { inShortTransaction, type TransactionDatabase } from "./transaction";
 
 describe("short persistence transactions", () => {
   test("always applies bounded wait and timeout settings", async () => {
@@ -15,7 +15,7 @@ describe("short persistence transactions", () => {
     };
 
     const result = await inShortTransaction(
-      database as never,
+      database as unknown as TransactionDatabase,
       async () => "transaction",
     );
 

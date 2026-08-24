@@ -1,0 +1,55 @@
+export type { BetterAuthDatabaseAdapter } from "./better-auth";
+export { createBetterAuthDatabaseAdapter } from "./better-auth";
+export type {
+  AuditEntityKind,
+  AuditEventKind,
+  AuthAccount,
+  AuthDeviceCode,
+  AuthSession,
+  AuthUser,
+  Device,
+  DeviceEnrollment,
+  DeviceLifecycle,
+  Environment,
+  EpochTransitionObject,
+  GrantKind,
+  GrantObject,
+  IdentityObject,
+  IdentityRolloverObject,
+  KeyKind,
+  LaneCommitmentObject,
+  LaneObject,
+  LaneScope,
+  ManifestDescriptor,
+  Membership,
+  MembershipActivationObject,
+  MembershipInvitation,
+  MembershipLifecycle,
+  MembershipRole,
+  MutationKind,
+  Operation,
+  OperationKind,
+  OperationStatus,
+  Prisma,
+  Project,
+  ProtocolObject,
+  RecoveryAttempt,
+  RecoveryChallengeObject,
+  RecoveryEnvelope,
+  RecoveryGrantObject,
+  ResourceLifecycle,
+  Revision,
+  RevisionLaneCommitment,
+  SecurityRequestLog,
+  ServerProfile,
+  StagedObject,
+  Team,
+  User,
+  UserIdentityGeneration,
+} from "./generated/prisma/browser";
+export type { PrismaClient } from "./generated/prisma/client";
+export type { ResolveDotRelayUserInput } from "./identity";
+export { resolveDotRelayUser } from "./identity";
+export * from "./persistence";
+export type { EnsureServerProfileInput } from "./server-profile";
+export { ensureServerProfile } from "./server-profile";

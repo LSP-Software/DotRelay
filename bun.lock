@@ -20,18 +20,10 @@
     "apps/api": {
       "name": "@dotrelay/api",
       "dependencies": {
-        "@better-auth/prisma-adapter": "^1.7.1",
         "@dotrelay/contracts": "workspace:*",
-        "@prisma/adapter-pg": "^7.9.1",
-        "@prisma/client": "^7.9.1",
+        "@dotrelay/database": "workspace:*",
         "better-auth": "^1.7.1",
         "hono": "4.13.3",
-        "pg": "^8.23.0",
-      },
-      "devDependencies": {
-        "@electric-sql/pglite": "^0.5.5",
-        "@types/pg": "^8.23.1",
-        "prisma": "^7.9.0",
       },
     },
     "apps/cli": {
@@ -39,10 +31,14 @@
       "bin": {
         "dotrelay": "dist/dotrelay",
       },
+      "dependencies": {
+        "@dotrelay/database": "workspace:*",
+      },
     },
     "apps/web": {
       "name": "@dotrelay/web",
       "dependencies": {
+        "@dotrelay/database": "workspace:*",
         "next": "^16.3.1",
         "react": "^19.2.8",
         "react-dom": "^19.2.8",
@@ -56,6 +52,20 @@
     },
     "packages/contracts": {
       "name": "@dotrelay/contracts",
+    },
+    "packages/database": {
+      "name": "@dotrelay/database",
+      "dependencies": {
+        "@better-auth/prisma-adapter": "^1.7.1",
+        "@prisma/adapter-pg": "^7.9.1",
+        "@prisma/client": "^7.9.1",
+      },
+      "devDependencies": {
+        "@electric-sql/pglite": "^0.5.5",
+        "@types/pg": "^8.23.1",
+        "pg": "^8.23.0",
+        "prisma": "^7.9.1",
+      },
     },
   },
   "overrides": {
@@ -108,6 +118,8 @@
     "@dotrelay/cli": ["@dotrelay/cli@workspace:apps/cli"],
 
     "@dotrelay/contracts": ["@dotrelay/contracts@workspace:packages/contracts"],
+
+    "@dotrelay/database": ["@dotrelay/database@workspace:packages/database"],
 
     "@dotrelay/web": ["@dotrelay/web@workspace:apps/web"],
 

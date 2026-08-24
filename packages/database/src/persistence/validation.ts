@@ -27,8 +27,25 @@ const fail = (message: string): never => {
   throw new PersistenceValidationError(message);
 };
 
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+
 const MAX_CBOR_DEPTH = 12;
 const MAX_CBOR_COLLECTION_ITEMS = 100_000;
+
+export const copyBytes = (value: Uint8Array, name: string): Uint8Array => {
+  if (!(value instanceof Uint8Array)) fail(`${name} must be bytes`);
+  return new Uint8Array(value);
+};
+
+export const validateProtocolBytes = (
+  value: Uint8Array,
+  name = "protocol bytes",
+): Uint8Array => {
+  const bytes = copyBytes(value, name);
+  if (bytes.length === 0 || bytes.length > PERSISTENCE_LIMITS.maxProtocolBytes)
+    fail(`${name} exceed the persistence limit`);
+  return bytes;
+};
 
 type CborCursor = { offset: number };
 
@@ -118,9 +135,7 @@ const readCanonicalCborValue = (
     if (end > bytes.length) fail("canonical protocol bytes are truncated");
     if (major === 3) {
       try {
-        new TextDecoder("utf-8", { fatal: true }).decode(
-          bytes.slice(cursor.offset, end),
-        );
+        UTF8_DECODER.decode(bytes.subarray(cursor.offset, end));
       } catch {
         fail("canonical protocol bytes contain invalid UTF-8");
       }
@@ -174,8 +189,7 @@ const readCanonicalCborValue = (
   return fail("canonical protocol bytes contain an unsupported CBOR value");
 };
 
-export const validateCanonicalCbor = (value: Uint8Array): void => {
-  const bytes = validateProtocolBytes(value, "canonical protocol bytes");
+const parseCanonicalCbor = (bytes: Uint8Array): void => {
   const cursor: CborCursor = { offset: 0 };
   if (readCanonicalCborValue(bytes, cursor, 0) !== "map")
     fail("canonical protocol object must be a CBOR map");
@@ -183,10 +197,8 @@ export const validateCanonicalCbor = (value: Uint8Array): void => {
     fail("canonical protocol bytes contain trailing data");
 };
 
-export const copyBytes = (value: Uint8Array, name: string): Uint8Array => {
-  if (!(value instanceof Uint8Array)) fail(`${name} must be bytes`);
-  return new Uint8Array(value);
-};
+export const validateCanonicalCbor = (value: Uint8Array): void =>
+  parseCanonicalCbor(validateProtocolBytes(value, "canonical protocol bytes"));
 
 const requireLength = (
   value: Uint8Array,
@@ -240,10 +252,11 @@ export const validateProtocolProjection = (input: {
     fail("protocol object format version is not supported");
   if (!Number.isInteger(input.kind) || input.kind < 1 || input.kind > 19)
     fail("protocol object kind is not supported");
-  const bytes = copyBytes(input.canonicalBytes, "canonical protocol bytes");
-  if (bytes.length === 0 || bytes.length > PERSISTENCE_LIMITS.maxProtocolBytes)
-    fail("canonical protocol bytes exceed the persistence limit");
-  validateCanonicalCbor(bytes);
+  const bytes = validateProtocolBytes(
+    input.canonicalBytes,
+    "canonical protocol bytes",
+  );
+  parseCanonicalCbor(bytes);
   validateDigest(input.digest);
 };
 
@@ -281,7 +294,7 @@ export const validateLaneProjection = (input: {
     fail("plaintext length must be non-negative");
   if (
     !Number.isInteger(input.ciphertextLength) ||
-    input.ciphertextLength <= 16 ||
+    input.ciphertextLength < 16 ||
     input.ciphertextLength > PERSISTENCE_LIMITS.maxProtocolBytes
   )
     fail("ciphertext length is outside the persistence limit");
@@ -307,19 +320,12 @@ export const validateStagedObject = (input: {
   readonly expiresAt: Date;
   readonly createdAt: Date;
 }): void => {
-  validateProtocolBytes(input.canonicalBytes, "staged canonical bytes");
-  validateCanonicalCbor(input.canonicalBytes);
+  const bytes = validateProtocolBytes(
+    input.canonicalBytes,
+    "staged canonical bytes",
+  );
+  parseCanonicalCbor(bytes);
   validateDigest(input.digest);
   if (input.expiresAt <= input.createdAt)
     fail("staged object must expire after creation");
-};
-
-export const validateProtocolBytes = (
-  value: Uint8Array,
-  name = "protocol bytes",
-): Uint8Array => {
-  const bytes = copyBytes(value, name);
-  if (bytes.length === 0 || bytes.length > PERSISTENCE_LIMITS.maxProtocolBytes)
-    fail(`${name} exceed the persistence limit`);
-  return bytes;
 };

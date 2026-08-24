@@ -8,23 +8,13 @@
     "format": "biome format . --write",
     "format:check": "biome format .",
     "lint": "biome lint .",
-    "typecheck": "bun x prisma generate --config prisma.config.ts && tsc --project tsconfig.json",
-    "test:unit": "bun test",
-    "db:validate": "bun ../../scripts/validate-prisma.ts",
-    "db:migrate-check": "bun ../../scripts/check-migrations.ts"
+    "typecheck": "tsc --project tsconfig.json",
+    "test:unit": "bun test"
   },
   "dependencies": {
-    "@better-auth/prisma-adapter": "^1.7.1",
     "@dotrelay/contracts": "workspace:*",
-    "@prisma/adapter-pg": "^7.9.1",
-    "@prisma/client": "^7.9.1",
+    "@dotrelay/database": "workspace:*",
     "better-auth": "^1.7.1",
-    "hono": "4.13.3",
-    "pg": "^8.23.0"
-  },
-  "devDependencies": {
-    "@electric-sql/pglite": "^0.5.5",
-    "@types/pg": "^8.23.1",
-    "prisma": "^7.9.0"
+    "hono": "4.13.3"
   }
 }

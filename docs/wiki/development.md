@@ -3,7 +3,8 @@
 DotRelay is a Bun/Turborepo monorepo with three applications:
 
 - `apps/web` is the Next.js browser surface.
-- `apps/api` is the independent Hono API and Prisma owner.
+- `apps/api` is the independent Hono API; `packages/database` owns Prisma and PostgreSQL
+  persistence.
 - `apps/cli` is the standalone Bun-compiled CLI.
 - `packages/contracts` is the runtime-neutral API v1 and `dotrelay-e2ee-v3-classical-webcrypto`
   contract boundary.

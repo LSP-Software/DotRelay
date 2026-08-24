@@ -3,17 +3,20 @@ import {
   type ProblemCode,
   parseCapabilitiesDocument,
 } from "@dotrelay/contracts";
+import {
+  createBetterAuthDatabaseAdapter,
+  createDatabaseClient,
+  type DatabaseClient,
+  ensureServerProfile,
+  resolveDotRelayUser,
+} from "@dotrelay/database";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createAuth, type DotRelayAuth } from "./auth";
-import type { PrismaClient } from "./generated/prisma/client";
-import { resolveDotRelayUser } from "./identity";
-import { createDatabaseClient } from "./persistence/client";
 import {
   createCapabilitiesDocument,
-  ensureServerProfile,
   etagFor,
   hasMixedCredentials,
   isAllowedOrigin,
@@ -23,7 +26,7 @@ import {
 } from "./profile";
 
 type ApiDependencies = Readonly<{
-  readonly database: PrismaClient;
+  readonly database: DatabaseClient;
   readonly profile: ServerProfileConfig;
   readonly auth: DotRelayAuth;
 }>;
@@ -169,7 +172,10 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
       headers: context.req.raw.headers,
     });
     if (!session) return jsonProblem(context, "authentication_required");
-    const user = await resolveDotRelayUser(database, profile, session.user.id);
+    const user = await resolveDotRelayUser(database, {
+      serverProfileId: profile.id,
+      authSubject: session.user.id,
+    });
     if (!user) return jsonProblem(context, "service_unavailable");
     return context.json(
       { authenticated: true, user: { id: user.id, name: session.user.name } },
@@ -186,11 +192,18 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
 
 const profile = loadServerProfileConfig();
 const database = createDatabaseClient();
-export const auth = createAuth(database, profile);
+export const auth = createAuth(
+  createBetterAuthDatabaseAdapter(database),
+  profile,
+);
 export const app = createApi({ database, profile, auth });
 export { createApi, loadServerProfileConfig };
 
 if (import.meta.main) {
-  await ensureServerProfile(database, profile);
+  await ensureServerProfile(database, {
+    id: profile.id,
+    origin: profile.origin,
+    allowRebind: profile.allowRebind,
+  });
   Bun.serve({ fetch: app.fetch, port: Number(process.env.PORT ?? 3001) });
 }
