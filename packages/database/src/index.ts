@@ -1,3 +1,5 @@
+export type { BetterAuthDatabaseAdapter } from "./better-auth";
+export { createBetterAuthDatabaseAdapter } from "./better-auth";
 export type {
   AuditEntityKind,
   AuditEventKind,
@@ -48,6 +50,7 @@ export type {
 export type { PrismaClient } from "./generated/prisma/client";
 export type { ResolveDotRelayUserInput } from "./identity";
 export { resolveDotRelayUser } from "./identity";
+export type { DatabaseClient } from "./persistence/client";
 export { createDatabaseClient } from "./persistence/client";
 export type {
   AuditFactInput,

@@ -4,9 +4,10 @@ import {
   parseCapabilitiesDocument,
 } from "@dotrelay/contracts";
 import {
+  createBetterAuthDatabaseAdapter,
   createDatabaseClient,
+  type DatabaseClient,
   ensureServerProfile,
-  type PrismaClient,
   resolveDotRelayUser,
 } from "@dotrelay/database";
 import type { Context } from "hono";
@@ -25,7 +26,7 @@ import {
 } from "./profile";
 
 type ApiDependencies = Readonly<{
-  readonly database: PrismaClient;
+  readonly database: DatabaseClient;
   readonly profile: ServerProfileConfig;
   readonly auth: DotRelayAuth;
 }>;
@@ -191,7 +192,10 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
 
 const profile = loadServerProfileConfig();
 const database = createDatabaseClient();
-export const auth = createAuth(database, profile);
+export const auth = createAuth(
+  createBetterAuthDatabaseAdapter(database),
+  profile,
+);
 export const app = createApi({ database, profile, auth });
 export { createApi, loadServerProfileConfig };
 

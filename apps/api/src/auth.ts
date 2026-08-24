@@ -1,5 +1,4 @@
-import { prismaAdapter } from "@better-auth/prisma-adapter";
-import type { PrismaClient } from "@dotrelay/database";
+import type { BetterAuthDatabaseAdapter } from "@dotrelay/database";
 import { betterAuth, type DBAdapterInstance } from "better-auth";
 import { bearer, deviceAuthorization } from "better-auth/plugins";
 import type { ServerProfileConfig } from "./profile";
@@ -53,16 +52,9 @@ const createAuthWithAdapter = (
   });
 
 export const createAuth = (
-  database: PrismaClient,
+  database: BetterAuthDatabaseAdapter,
   profile: ServerProfileConfig,
-) =>
-  createAuthWithAdapter(
-    prismaAdapter(database, {
-      provider: "postgresql",
-      transaction: true,
-    }),
-    profile,
-  );
+) => createAuthWithAdapter(database, profile);
 
 export const createInMemoryAuth = (profile: ServerProfileConfig) =>
   createAuthWithAdapter(undefined, profile);

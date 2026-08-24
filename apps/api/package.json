@@ -12,7 +12,6 @@
     "test:unit": "bun test"
   },
   "dependencies": {
-    "@better-auth/prisma-adapter": "^1.7.1",
     "@dotrelay/contracts": "workspace:*",
     "@dotrelay/database": "workspace:*",
     "better-auth": "^1.7.1",

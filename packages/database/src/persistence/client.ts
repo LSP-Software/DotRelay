@@ -8,3 +8,5 @@ export const createDatabaseClient = (
   const adapter = new PrismaPg({ connectionString });
   return new PrismaClient({ adapter });
 };
+
+export type DatabaseClient = ReturnType<typeof createDatabaseClient>;
