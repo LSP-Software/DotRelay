@@ -39,6 +39,11 @@ export type ClassicalEncryptionKeyPair = CryptoKeyPair;
 export type ClassicalSigningKeyPair = CryptoKeyPair;
 export type CiphertextEnvelope = ReadonlyMap<number, CborValue>;
 
+type X25519DeriveParams = Readonly<{
+  readonly name: "X25519";
+  readonly public: CryptoKey;
+}>;
+
 export const assertCryptoRuntime = async (
   runtime: Crypto | undefined = globalThis.crypto,
 ): Promise<void> => {
@@ -79,10 +84,7 @@ export const assertCryptoRuntime = async (
       ),
       runtime.subtle.digest("SHA-384", asBufferSource(probe)),
       runtime.subtle.deriveBits(
-        {
-          name: "X25519",
-          public: encryptionKeyPair.publicKey,
-        },
+        x25519DeriveParams(encryptionKeyPair.publicKey),
         encryptionKeyPair.privateKey,
         256,
       ),
@@ -139,6 +141,11 @@ const requireKey = (
   if (key.algorithm.name !== algorithm || key.type !== type)
     throw new TypeError(`Expected ${type} ${algorithm} key`);
 };
+
+const x25519DeriveParams = (publicKey: CryptoKey): X25519DeriveParams => ({
+  name: "X25519",
+  public: publicKey,
+});
 
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean => {
   if (left.length !== right.length) return false;
@@ -353,7 +360,7 @@ export const seal = async (
     );
     sharedSecret = bytes(
       await crypto.subtle.deriveBits(
-        { name: "X25519", public: recipientPublicKey },
+        x25519DeriveParams(recipientPublicKey),
         ephemeral.privateKey,
         256,
       ),
@@ -411,7 +418,7 @@ export const open = async (
     try {
       sharedSecret = bytes(
         await crypto.subtle.deriveBits(
-          { name: "X25519", public: ephemeralPublicKey },
+          x25519DeriveParams(ephemeralPublicKey),
           recipientPrivateKey,
           256,
         ),

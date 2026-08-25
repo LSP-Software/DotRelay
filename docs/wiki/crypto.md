@@ -7,10 +7,12 @@ It is classical cryptography only and has no post-quantum resistance, fallback p
 negotiation, migration, downgrade, or reduced-security path.
 
 Ciphertexts are canonical CBOR maps using the existing v3 field registry. They carry the suite,
-fresh 32-byte HKDF salt, ephemeral X25519 SPKI public key, fresh IV, ciphertext, SHA-384
-ciphertext digest, and byte lengths. Associated data is supplied by the caller and is authenticated
-by AES-GCM; it is not treated as plaintext metadata. Protocol objects and signatures continue to
-use `encodeProtocolObject` and `signatureInput` from `@dotrelay/contracts`.
+fresh 32-byte HKDF salt, a raw 32-byte ephemeral X25519 public key, fresh IV, ciphertext, SHA-384
+ciphertext digest, and byte lengths. Long-term public keys use standard SPKI and private keys use
+standard PKCS#8; the compact raw ephemeral key is bounded by the fixed v3 field length. Associated
+data is supplied by the caller and is authenticated by AES-GCM; it is not treated as plaintext
+metadata. Protocol objects and signatures continue to use `encodeProtocolObject` and
+`signatureInput` from `@dotrelay/contracts`.
 
 Decryption returns only plaintext or one generic `InvalidCiphertextError`. Malformed envelopes,
 unsupported suites, wrong keys, wrong associated data, and authentication failures are

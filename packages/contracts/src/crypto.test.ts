@@ -50,6 +50,9 @@ describe("v3 native WebCrypto core", () => {
 
     expect(publicKeyBytes.length).toBeGreaterThan(32);
     expect(privateKeyBytes.length).toBeGreaterThan(32);
+    const decoded = decodeCiphertextEnvelope(envelope);
+    expect(decoded.get(45)).toBeInstanceOf(Uint8Array);
+    expect((decoded.get(45) as Uint8Array).length).toBe(32);
     expect(await open(envelope, privateKey)).toEqual(
       encoder.encode("portable key material"),
     );
@@ -135,6 +138,9 @@ describe("v3 native WebCrypto core", () => {
       ),
     );
     expect(CRYPTO_SUITE.name).toBe("dotrelay-e2ee-v3-classical-webcrypto");
+    expect(CRYPTO_SUITE.mediaType).toBe(
+      "application/vnd.dotrelay.e2ee-v3+cbor",
+    );
   });
 
   test("uses the canonical protocol signature input", async () => {
