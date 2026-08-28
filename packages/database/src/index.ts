@@ -1,3 +1,11 @@
+export type {
+  DisclosableLane,
+  MembershipAccess,
+  PolicyDecision,
+  PolicyDenial,
+  TeamAction,
+} from "./administration";
+export { decideLaneDisclosure, decideTeamAction } from "./administration";
 export type { BetterAuthDatabaseAdapter } from "./better-auth";
 export { createBetterAuthDatabaseAdapter } from "./better-auth";
 export type {

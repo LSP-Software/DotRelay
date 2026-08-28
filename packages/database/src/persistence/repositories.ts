@@ -1,4 +1,13 @@
-import type { Prisma, PrismaClient } from "../generated/prisma/client";
+import {
+  decideLaneDisclosure,
+  decideTeamAction,
+  type TeamAction,
+} from "../administration";
+import type {
+  MembershipRole,
+  Prisma,
+  PrismaClient,
+} from "../generated/prisma/client";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import {
   copyBytes,
@@ -46,25 +55,35 @@ const requireActiveDevice = async (
   return device;
 };
 
-const requireTeamRole = async (
+const requireTeamAction = async (
   database: PersistenceClient,
   actorUserId: string,
   actorDeviceId: string | undefined,
   teamId: string,
-  roles: ReadonlyArray<"OWNER" | "ADMIN" | "MEMBER"> = ["OWNER", "ADMIN"],
+  action: TeamAction,
 ) => {
   await requireActiveDevice(database, actorUserId, actorDeviceId);
   const membership = await database.membership.findFirst({
     where: {
       teamId,
       userId: actorUserId,
-      lifecycle: "ACTIVE",
-      role: { in: [...roles] },
     },
+    select: { lifecycle: true, role: true },
   });
-  if (!membership) throw new Error("actor is not authorized for the Team");
+  const decision = decideTeamAction(membership, action);
+  if (!decision.allowed)
+    throw new Error(`actor is not authorized for the Team: ${decision.reason}`);
   return membership;
 };
+
+const managedRoleActions: Readonly<Record<MembershipRole, TeamAction>> = {
+  OWNER: "MANAGE_OWNER",
+  ADMIN: "MANAGE_ADMIN",
+  MEMBER: "MANAGE_MEMBER",
+};
+
+const managedRoleAction = (role: MembershipRole): TeamAction =>
+  managedRoleActions[role];
 
 export class StagedObjectConflictError extends Error {
   constructor() {
@@ -452,6 +471,12 @@ export class AdministrationRepository {
       );
       if (input.operation.actorUserId !== input.ownerUserId)
         throw new Error("Team owner must be the operation actor");
+      const owner = await transaction.user.findUnique({
+        where: { id: input.ownerUserId },
+        select: { serverProfileId: true },
+      });
+      if (!owner || owner.serverProfileId !== input.serverProfileId)
+        throw new Error("Team owner belongs to another Server Profile");
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -507,11 +532,14 @@ export class AdministrationRepository {
         where: { id: input.projectId },
       });
       if (!lockedProject) throw new Error("Project not found");
-      await requireTeamRole(
+      if (lockedProject.lifecycle !== "ACTIVE")
+        throw new Error("Project is not active");
+      await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         lockedProject.teamId,
+        "ADMINISTER_PROJECT",
       );
       const operation = await this.operations.begin(
         transaction,
@@ -557,11 +585,14 @@ export class AdministrationRepository {
         where: { id: input.projectId },
       });
       if (!lockedProject) throw new Error("Project not found");
-      await requireTeamRole(
+      if (lockedProject.lifecycle !== "ARCHIVED")
+        throw new Error("Project is not archived");
+      await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         lockedProject.teamId,
+        "ADMINISTER_PROJECT",
       );
       const operation = await this.operations.begin(
         transaction,
@@ -608,11 +639,14 @@ export class AdministrationRepository {
         include: { project: true },
       });
       if (!lockedEnvironment) throw new Error("Environment not found");
-      await requireTeamRole(
+      if (lockedEnvironment.lifecycle !== "ACTIVE")
+        throw new Error("Environment is not active");
+      await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         lockedEnvironment.project.teamId,
+        "ADMINISTER_ENVIRONMENT",
       );
       const operation = await this.operations.begin(
         transaction,
@@ -662,11 +696,16 @@ export class AdministrationRepository {
         include: { project: true },
       });
       if (!lockedEnvironment) throw new Error("Environment not found");
-      await requireTeamRole(
+      if (lockedEnvironment.lifecycle !== "ARCHIVED")
+        throw new Error("Environment is not archived");
+      if (lockedEnvironment.project.lifecycle !== "ACTIVE")
+        throw new Error("Project is archived");
+      await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         lockedEnvironment.project.teamId,
+        "ADMINISTER_ENVIRONMENT",
       );
       const operation = await this.operations.begin(
         transaction,
@@ -710,33 +749,40 @@ export class MembershipAdministrationRepository {
       readonly teamId: string;
       readonly invitationId?: string;
       readonly providerSubject: string;
-      readonly expiresAt: Date;
       readonly now?: Date;
     }>,
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
-      await requireTeamRole(
+      await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         input.teamId,
+        "INVITE_MEMBER",
       );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      const team = await transaction.team.findUnique({
+        where: { id: input.teamId },
+        select: { lifecycle: true },
+      });
+      if (team?.lifecycle !== "ACTIVE") throw new Error("Team is not active");
+      if (input.providerSubject.length === 0)
+        throw new Error("GitHub provider subject is required");
+      const now = input.now ?? new Date();
       const invitation = await transaction.membershipInvitation.create({
         data: {
           id: input.invitationId ?? crypto.randomUUID(),
           teamId: input.teamId,
           providerSubject: input.providerSubject,
-          expiresAt: input.expiresAt,
-          createdAt: input.now ?? new Date(),
+          expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000),
+          createdAt: now,
         },
       });
-      const now = input.now ?? new Date();
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
@@ -771,6 +817,8 @@ export class MembershipAdministrationRepository {
         input.operation,
       );
       if (operation.idempotent) return operation;
+      if (input.operation.actorUserId !== input.userId)
+        throw new Error("Membership invitation must be accepted by its User");
       const invitation = await transaction.membershipInvitation.findUnique({
         where: { id: input.invitationId },
       });
@@ -838,17 +886,26 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
-      await requireTeamRole(
-        transaction,
-        input.operation.actorUserId,
-        input.operation.actorDeviceId,
-        input.teamId,
-      );
       const membership = await transaction.membership.findUnique({
         where: { id: input.membershipId },
       });
       if (!membership || membership.teamId !== input.teamId)
         throw new Error("Membership not found");
+      if (membership.lifecycle === "REMOVED")
+        throw new Error("Membership is removed");
+      const managedRole =
+        membership.role === "OWNER" || input.role === "OWNER"
+          ? "OWNER"
+          : membership.role === "ADMIN" || input.role === "ADMIN"
+            ? "ADMIN"
+            : "MEMBER";
+      await requireTeamAction(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+        managedRoleAction(managedRole),
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -890,17 +947,20 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
-      await requireTeamRole(
-        transaction,
-        input.operation.actorUserId,
-        input.operation.actorDeviceId,
-        input.teamId,
-      );
       const membership = await transaction.membership.findUnique({
         where: { id: input.membershipId },
       });
       if (!membership || membership.teamId !== input.teamId)
         throw new Error("Membership not found");
+      if (membership.lifecycle === "REMOVED")
+        throw new Error("Membership is already removed");
+      await requireTeamAction(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+        managedRoleAction(membership.role),
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -947,12 +1007,20 @@ export class ProjectRepository {
   async create(database: TransactionDatabase, input: ProjectCreationInput) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
-      await requireTeamRole(
+      await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         input.teamId,
+        "ADMINISTER_PROJECT",
       );
+      const team = await transaction.team.findUnique({
+        where: { id: input.teamId },
+        select: { lifecycle: true },
+      });
+      if (team?.lifecycle !== "ACTIVE") throw new Error("Team is archived");
+      if (input.githubRepositoryId <= 0n)
+        throw new Error("GitHub Repository id must be positive");
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -982,6 +1050,111 @@ export class ProjectRepository {
         newLifecycle: "ACTIVE",
       });
       return { operation: operation.operation, project };
+    });
+  }
+}
+
+export type EnvironmentMetadata = Readonly<{
+  readonly id: string;
+  readonly projectId: string;
+  readonly lifecycle: "ACTIVE" | "ARCHIVED";
+  readonly currentHeadId: string | null;
+}>;
+
+type EnvironmentAccessInput = Readonly<{
+  readonly actorUserId: string;
+  readonly actorDeviceId: string;
+  readonly environmentId: string;
+}>;
+
+/**
+ * Read-side authorization keeps protected rows outside the result set. In
+ * particular, owner/admin roles do not broaden User-defined Value ownership.
+ */
+export class AdministrationDisclosureRepository {
+  private async requireEnvironmentAccess(
+    database: PersistenceClient,
+    input: EnvironmentAccessInput,
+  ) {
+    await requireActiveDevice(database, input.actorUserId, input.actorDeviceId);
+    const environment = await database.environment.findFirst({
+      where: {
+        id: input.environmentId,
+        project: {
+          team: {
+            memberships: {
+              some: { userId: input.actorUserId, lifecycle: "ACTIVE" },
+            },
+          },
+        },
+      },
+      include: { project: { select: { teamId: true, lifecycle: true } } },
+    });
+    if (!environment) throw new Error("Environment not found");
+    const membership = await database.membership.findUnique({
+      where: {
+        teamId_userId: {
+          teamId: environment.project.teamId,
+          userId: input.actorUserId,
+        },
+      },
+      select: { lifecycle: true, role: true },
+    });
+    const decision = decideTeamAction(membership, "VIEW");
+    if (!decision.allowed)
+      throw new Error(`Environment is not disclosed: ${decision.reason}`);
+    return { environment, membership };
+  }
+
+  async getEnvironmentMetadata(
+    database: PersistenceClient,
+    input: EnvironmentAccessInput,
+  ): Promise<EnvironmentMetadata> {
+    const { environment } = await this.requireEnvironmentAccess(
+      database,
+      input,
+    );
+    return {
+      id: environment.id,
+      projectId: environment.projectId,
+      lifecycle: environment.lifecycle,
+      currentHeadId: environment.currentHeadId,
+    };
+  }
+
+  async listEnvironmentLanes(
+    database: PersistenceClient,
+    input: EnvironmentAccessInput,
+  ) {
+    const { environment, membership } = await this.requireEnvironmentAccess(
+      database,
+      input,
+    );
+    const resourceLifecycle =
+      environment.lifecycle === "ACTIVE" &&
+      environment.project.lifecycle === "ACTIVE"
+        ? "ACTIVE"
+        : "ARCHIVED";
+    const resourceDecision = decideLaneDisclosure(
+      membership,
+      resourceLifecycle,
+      { scope: "SHARED_VALUE" },
+      input.actorUserId,
+    );
+    if (!resourceDecision.allowed)
+      throw new Error(
+        `Environment lanes are not disclosed: ${resourceDecision.reason}`,
+      );
+    return database.laneObject.findMany({
+      where: {
+        environmentId: input.environmentId,
+        OR: [
+          { scope: { not: "USER_DEFINED_VALUE" } },
+          { scope: "USER_DEFINED_VALUE", ownerUserId: input.actorUserId },
+        ],
+      },
+      include: { protocolObject: true },
+      orderBy: { id: "asc" },
     });
   }
 }
@@ -1445,7 +1618,26 @@ export class EnvironmentRepository {
       throw new Error("genesis must start with an empty Environment head");
     if (input.publication.revision.mutation !== "GENESIS")
       throw new Error("genesis must use the GENESIS mutation");
+    if (
+      input.createdByUserId !== input.publication.operation.actorUserId ||
+      input.environmentId !== input.publication.environmentId ||
+      input.projectId !== input.publication.revisionObject.projectId
+    )
+      throw new Error("Environment genesis context does not match its actor");
     return inShortTransaction(database, async (transaction) => {
+      const project = await transaction.project.findUnique({
+        where: { id: input.projectId },
+        select: { lifecycle: true, teamId: true },
+      });
+      if (project?.lifecycle !== "ACTIVE")
+        throw new Error("Project is not active");
+      await requireTeamAction(
+        transaction,
+        input.publication.operation.actorUserId,
+        input.publication.operation.actorDeviceId,
+        project.teamId,
+        "ADMINISTER_ENVIRONMENT",
+      );
       await transaction.environment.create({
         data: {
           id: input.environmentId,
@@ -1481,12 +1673,6 @@ export class MembershipRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
-      await requireTeamRole(
-        transaction,
-        input.operation.actorUserId,
-        input.operation.actorDeviceId,
-        input.teamId,
-      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -1497,6 +1683,13 @@ export class MembershipRepository {
       });
       if (!membership || membership.teamId !== input.teamId)
         throw new Error("Membership not found");
+      await requireTeamAction(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+        managedRoleAction(membership.role),
+      );
       if (membership.lifecycle !== "PENDING_KEY_GRANT")
         throw new Error("Membership is not pending key grants");
       const grantCount = await transaction.grantObject.count({
@@ -1900,11 +2093,12 @@ export class ProjectEpochRepository {
         where: { id: input.projectId },
       });
       if (!project) throw new Error("Project not found");
-      await requireTeamRole(
+      await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         project.teamId,
+        "ADMINISTER_PROJECT",
       );
       const operation = await this.operations.begin(
         transaction,

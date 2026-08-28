@@ -10,3 +10,7 @@ Run `bun install --frozen-lockfile`, then `bun run check` for the fast read-only
 `bun run verify` for the full pull-request-equivalent suite. Repository commands, dependency and
 boundary rules, CI checks, release policy, and the canonical Wiki source are documented in
 [`docs/wiki/`](docs/wiki/README.md).
+
+The persisted [administration policy](docs/administration.md) defines Team roles, Membership
+lifecycle and invitations, Project/GitHub Repository identity, Environment lifecycle, and safe
+disclosure boundaries.

@@ -8,9 +8,11 @@ import type {
   RevisionPublicationInput,
 } from "..";
 import {
+  AdministrationDisclosureRepository,
   AdministrationRepository,
   createDatabaseClient,
   EnvironmentRepository,
+  MembershipAdministrationRepository,
   OperationConflictError,
   OperationRepository,
   ProjectRepository,
@@ -211,6 +213,30 @@ const createAuthorizedDeviceFixture = async () => {
   return { device, serverProfile, user };
 };
 
+const createUserAndDevice = async (serverProfileId: string) => {
+  const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
+  const user = await database.user.create({
+    data: {
+      serverProfileId,
+      authSubject: `auth:${crypto.randomUUID()}`,
+      githubSubject: `github:${crypto.randomUUID()}`,
+    },
+  });
+  const device = await database.device.create({
+    data: {
+      id: crypto.randomUUID(),
+      userId: user.id,
+      lifecycle: "ACTIVE",
+      identityGeneration: 1n,
+      keyId: new Uint8Array(await sha384Digest(x25519PublicKey)),
+      x25519PublicKey,
+      ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      activatedAt: new Date(),
+    },
+  });
+  return { device, user };
+};
+
 const createProjectFixture = async (label: string) => {
   const { device, serverProfile, user } = await createAuthorizedDeviceFixture();
   const teamId = crypto.randomUUID();
@@ -400,6 +426,434 @@ integrationDescribe("PostgreSQL persistence integration", () => {
         where: { endpointTemplate: rolledBackEndpoint },
       }),
     ).toBe(0);
+  });
+
+  test("enforces role policy and seven-day single-use GitHub identity invitations", async () => {
+    const {
+      device,
+      serverProfile,
+      user: owner,
+    } = await createAuthorizedDeviceFixture();
+    const teamId = crypto.randomUUID();
+    const administration = new AdministrationRepository();
+    const memberships = new MembershipAdministrationRepository();
+    await administration.createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: owner.id,
+      name: "administration-policy",
+      operation: {
+        ...(await createOperationInput(owner.id, "policy-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const admin = await createUserAndDevice(serverProfile.id);
+    const member = await createUserAndDevice(serverProfile.id);
+    const invited = await createUserAndDevice(serverProfile.id);
+    const mismatch = await createUserAndDevice(serverProfile.id);
+    const activatedAt = new Date();
+    const [adminMembership, memberMembership] = await Promise.all([
+      database.membership.create({
+        data: {
+          teamId,
+          userId: admin.user.id,
+          role: "ADMIN",
+          lifecycle: "ACTIVE",
+          activatedAt,
+        },
+      }),
+      database.membership.create({
+        data: {
+          teamId,
+          userId: member.user.id,
+          role: "MEMBER",
+          lifecycle: "ACTIVE",
+          activatedAt,
+        },
+      }),
+    ]);
+
+    const invitedAt = new Date("2026-08-28T12:00:00.000Z");
+    const invitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invited.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(admin.user.id, "admin-invitation")),
+        actorDeviceId: admin.device.id,
+      },
+    });
+    if (!("invitation" in invitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    expect(invitation.invitation.expiresAt.toISOString()).toBe(
+      "2026-09-04T12:00:00.000Z",
+    );
+    await expect(
+      memberships.invite(database, {
+        teamId,
+        providerSubject: crypto.randomUUID(),
+        operation: {
+          ...(await createOperationInput(member.user.id, "member-invitation")),
+          actorDeviceId: member.device.id,
+        },
+      }),
+    ).rejects.toThrow("insufficient_role");
+    await expect(
+      memberships.accept(database, {
+        invitationId: invitation.invitation.id,
+        userId: mismatch.user.id,
+        operation: await createOperationInput(
+          mismatch.user.id,
+          "mismatched-acceptance",
+          "INVITATION",
+        ),
+      }),
+    ).rejects.toThrow("addressed to another User");
+    const accepted = await memberships.accept(database, {
+      invitationId: invitation.invitation.id,
+      userId: invited.user.id,
+      operation: {
+        ...(await createOperationInput(
+          invited.user.id,
+          "accepted-invitation",
+          "INVITATION",
+        )),
+        actorDeviceId: invited.device.id,
+      },
+    });
+    if (!("membership" in accepted))
+      throw new Error("invitation acceptance was unexpectedly idempotent");
+    expect(accepted.membership).toMatchObject({
+      lifecycle: "PENDING_KEY_GRANT",
+      role: "MEMBER",
+    });
+    await expect(
+      memberships.accept(database, {
+        invitationId: invitation.invitation.id,
+        userId: invited.user.id,
+        operation: await createOperationInput(
+          invited.user.id,
+          "replayed-invitation",
+          "INVITATION",
+        ),
+      }),
+    ).rejects.toThrow("expired or already used");
+
+    const expiring = await memberships.invite(database, {
+      teamId,
+      providerSubject: mismatch.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "expiring-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in expiring))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    await expect(
+      memberships.accept(database, {
+        invitationId: expiring.invitation.id,
+        userId: mismatch.user.id,
+        now: expiring.invitation.expiresAt,
+        operation: await createOperationInput(
+          mismatch.user.id,
+          "expired-invitation",
+          "INVITATION",
+        ),
+      }),
+    ).rejects.toThrow("expired or already used");
+
+    await expect(
+      memberships.changeRole(database, {
+        teamId,
+        membershipId: memberMembership.id,
+        role: "ADMIN",
+        operation: {
+          ...(await createOperationInput(admin.user.id, "admin-promotion")),
+          actorDeviceId: admin.device.id,
+        },
+      }),
+    ).rejects.toThrow("insufficient_role");
+    await memberships.changeRole(database, {
+      teamId,
+      membershipId: memberMembership.id,
+      role: "ADMIN",
+      operation: {
+        ...(await createOperationInput(owner.id, "owner-promotion")),
+        actorDeviceId: device.id,
+      },
+    });
+    await expect(
+      memberships.remove(database, {
+        teamId,
+        membershipId: (
+          await database.membership.findUniqueOrThrow({
+            where: { teamId_userId: { teamId, userId: owner.id } },
+          })
+        ).id,
+        operation: {
+          ...(await createOperationInput(owner.id, "remove-last-owner")),
+          actorDeviceId: device.id,
+        },
+      }),
+    ).rejects.toThrow("a Team must retain one active owner");
+    expect(adminMembership.role).toBe("ADMIN");
+  });
+
+  test("preserves Project identity and safely discloses Environment metadata and lanes", async () => {
+    const {
+      device,
+      projectId,
+      teamId,
+      user: owner,
+    } = await createProjectFixture("administration-disclosure");
+    const team = await database.team.findUniqueOrThrow({
+      where: { id: teamId },
+    });
+    const admin = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: admin.user.id,
+        role: "ADMIN",
+        lifecycle: "ACTIVE",
+        activatedAt: new Date(),
+      },
+    });
+    const member = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: member.user.id,
+        role: "MEMBER",
+        lifecycle: "ACTIVE",
+        activatedAt: new Date(),
+      },
+    });
+    const project = await database.project.findUniqueOrThrow({
+      where: { id: projectId },
+    });
+    const projects = new ProjectRepository();
+    const administration = new AdministrationRepository();
+    await expect(
+      projects.create(database, {
+        teamId,
+        githubRepositoryId: 0n,
+        operation: {
+          ...(await createOperationInput(owner.id, "invalid-project-id")),
+          actorDeviceId: device.id,
+        },
+      }),
+    ).rejects.toThrow("must be positive");
+    await expect(
+      projects.create(database, {
+        teamId,
+        githubRepositoryId: project.githubRepositoryId,
+        operation: {
+          ...(await createOperationInput(owner.id, "duplicate-project")),
+          actorDeviceId: device.id,
+        },
+      }),
+    ).rejects.toThrow();
+    await administration.archiveProject(database, {
+      projectId,
+      operation: {
+        ...(await createOperationInput(owner.id, "archive-original-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    const replacement = await projects.create(database, {
+      teamId,
+      githubRepositoryId: project.githubRepositoryId,
+      operation: {
+        ...(await createOperationInput(owner.id, "replacement-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("project" in replacement))
+      throw new Error("Project creation was unexpectedly idempotent");
+    await expect(
+      administration.restoreProject(database, {
+        projectId,
+        operation: {
+          ...(await createOperationInput(owner.id, "conflicting-restore")),
+          actorDeviceId: device.id,
+        },
+      }),
+    ).rejects.toThrow();
+    await administration.archiveProject(database, {
+      projectId: replacement.project.id,
+      operation: {
+        ...(await createOperationInput(owner.id, "archive-replacement")),
+        actorDeviceId: device.id,
+      },
+    });
+    await administration.restoreProject(database, {
+      projectId,
+      operation: {
+        ...(await createOperationInput(owner.id, "restore-original")),
+        actorDeviceId: device.id,
+      },
+    });
+    await expect(
+      Promise.resolve(
+        database.project.update({
+          where: { id: projectId },
+          data: { githubRepositoryId: project.githubRepositoryId + 1n },
+        }),
+      ),
+    ).rejects.toThrow("identities are immutable");
+    await expect(
+      Promise.resolve(
+        database.project.update({
+          where: { id: projectId },
+          data: { teamId: crypto.randomUUID() },
+        }),
+      ),
+    ).rejects.toThrow("identities are immutable");
+
+    const environmentId = crypto.randomUUID();
+    const memberEnvironmentId = crypto.randomUUID();
+    const memberGenesis = await preparePublication({
+      actorUserId: member.user.id,
+      actorDeviceId: member.device.id,
+      projectId,
+      environmentId: memberEnvironmentId,
+      expectedHeadId: null,
+      mutation: "GENESIS",
+      label: "member-environment-genesis",
+    });
+    await expect(
+      new EnvironmentRepository().createWithGenesis(database, {
+        environmentId: memberEnvironmentId,
+        projectId,
+        createdByUserId: member.user.id,
+        publication: memberGenesis,
+      }),
+    ).rejects.toThrow("insufficient_role");
+    expect(
+      await database.environment.findUnique({
+        where: { id: memberEnvironmentId },
+      }),
+    ).toBeNull();
+    await database.environment.create({
+      data: {
+        id: environmentId,
+        projectId,
+        createdByUserId: owner.id,
+      },
+    });
+    const createLane = async (
+      scope: "SHARED_VALUE" | "USER_DEFINED_VALUE",
+      ownerUserId?: string,
+    ) => {
+      if (scope === "USER_DEFINED_VALUE" && !ownerUserId)
+        throw new Error("User-defined Value test lane needs an owner");
+      const protocolObject = await new ProtocolObjectRepository().create(
+        database,
+        await createProtocolObjectInput(11, projectId, environmentId),
+      );
+      return database.laneObject.create({
+        data: {
+          id: crypto.randomUUID(),
+          protocolObjectId: protocolObject.id,
+          projectId,
+          environmentId,
+          scope,
+          ...(scope === "USER_DEFINED_VALUE"
+            ? { ownerUserId: ownerUserId as string, valueGeneration: 1n }
+            : { originalProviderUserId: owner.id }),
+          projectEpoch: 1n,
+          plaintextLength: 1,
+          ciphertextLength: 17,
+          ciphertextHash: crypto.getRandomValues(new Uint8Array(48)),
+        },
+      });
+    };
+    const shared = await createLane("SHARED_VALUE");
+    const ownersValue = await createLane("USER_DEFINED_VALUE", owner.id);
+    const adminsValue = await createLane("USER_DEFINED_VALUE", admin.user.id);
+    const disclosure = new AdministrationDisclosureRepository();
+    const visible = await disclosure.listEnvironmentLanes(database, {
+      actorUserId: admin.user.id,
+      actorDeviceId: admin.device.id,
+      environmentId,
+    });
+    expect(visible.map(({ id }) => id).sort()).toEqual(
+      [shared.id, adminsValue.id].sort(),
+    );
+    expect(visible.some(({ id }) => id === ownersValue.id)).toBe(false);
+    const metadata = await disclosure.getEnvironmentMetadata(database, {
+      actorUserId: admin.user.id,
+      actorDeviceId: admin.device.id,
+      environmentId,
+    });
+    expect(metadata).toEqual({
+      id: environmentId,
+      projectId,
+      lifecycle: "ACTIVE",
+      currentHeadId: null,
+    });
+    expect(Object.hasOwn(metadata, "name")).toBe(false);
+    const admittedButPending = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: admittedButPending.user.id,
+        lifecycle: "PENDING_KEY_GRANT",
+      },
+    });
+    await expect(
+      disclosure.getEnvironmentMetadata(database, {
+        actorUserId: admittedButPending.user.id,
+        actorDeviceId: admittedButPending.device.id,
+        environmentId,
+      }),
+    ).rejects.toThrow("Environment not found");
+    const removed = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: removed.user.id,
+        lifecycle: "REMOVED",
+        removedAt: new Date(),
+      },
+    });
+    await expect(
+      disclosure.getEnvironmentMetadata(database, {
+        actorUserId: removed.user.id,
+        actorDeviceId: removed.device.id,
+        environmentId,
+      }),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      disclosure.getEnvironmentMetadata(database, {
+        actorUserId: admittedButPending.user.id,
+        actorDeviceId: admittedButPending.device.id,
+        environmentId: crypto.randomUUID(),
+      }),
+    ).rejects.toThrow("Environment not found");
+    await administration.archiveEnvironment(database, {
+      environmentId,
+      operation: {
+        ...(await createOperationInput(admin.user.id, "archive-environment")),
+        actorDeviceId: admin.device.id,
+      },
+    });
+    await expect(
+      disclosure.listEnvironmentLanes(database, {
+        actorUserId: admin.user.id,
+        actorDeviceId: admin.device.id,
+        environmentId,
+      }),
+    ).rejects.toThrow("resource_not_active");
+    await administration.restoreEnvironment(database, {
+      environmentId,
+      operation: {
+        ...(await createOperationInput(admin.user.id, "restore-environment")),
+        actorDeviceId: admin.device.id,
+      },
+    });
   });
 
   test("serializes competing publications and records Rollback as a new Revision", async () => {

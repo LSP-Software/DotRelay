@@ -4,6 +4,7 @@ export type {
   AuditFactInput,
   DeviceEnrollmentCompletionInput,
   EnvironmentGenesisInput,
+  EnvironmentMetadata,
   EpochRotationInput,
   LaneProjectionInput,
   MembershipActivationInput,
@@ -17,6 +18,7 @@ export type {
   TeamCreationInput,
 } from "./repositories";
 export {
+  AdministrationDisclosureRepository,
   AdministrationRepository,
   AuditFactRepository,
   DeviceRepository,
