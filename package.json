@@ -19,7 +19,7 @@
     "boundaries": "bun scripts/verify-boundaries.ts",
     "vectors:verify-sources": "bun scripts/verify-vector-sources.ts",
     "vectors:generate": "bun scripts/generate-v3-vectors.ts",
-    "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts && turbo run test:unit",
+    "test:unit": "bun test scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts scripts/client-browser.test.ts && turbo run test:unit",
     "openapi:check": "bun scripts/check-openapi.ts",
     "test:integration": "bun scripts/test-services.ts && turbo run test:integration",
     "test:e2e": "playwright test --config=playwright.config.ts",
@@ -36,6 +36,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.9",
+    "@dotrelay/client": "workspace:*",
     "@dotrelay/contracts": "workspace:*",
     "@playwright/test": "^1.62.1",
     "@types/bun": "^1.4.0",
