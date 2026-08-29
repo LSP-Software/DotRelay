@@ -21,7 +21,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -71,25 +71,17 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import {
+  e2eWorkspaceBoundary,
+  fetchWorkspaceBoundary,
+  type WorkspaceBoundary,
+  type WorkspaceProfileId,
+  workspaceProfileCatalog,
+} from "@/lib/workspace-boundary";
 
 type MembershipRole = "OWNER" | "ADMIN" | "MEMBER";
 type ResourceLifecycle = "ACTIVE" | "ARCHIVED";
-type ProfileId = "hosted" | "self-hosted";
-
-const profiles: Readonly<
-  Record<ProfileId, { name: string; origin: string; pinned: boolean }>
-> = {
-  hosted: {
-    name: "Hosted / London",
-    origin: "https://relay.dotrelay.dev",
-    pinned: true,
-  },
-  "self-hosted": {
-    name: "Self-hosted / eu-1",
-    origin: "https://relay.acme.internal",
-    pinned: false,
-  },
-};
+type ProfileId = WorkspaceProfileId;
 
 const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
   OWNER: "Owners can administer Members, roles, Projects, and Environments.",
@@ -223,6 +215,9 @@ const StatusItem = ({
 export const WorkspaceShell = () => {
   const [role, setRole] = useState<MembershipRole>("OWNER");
   const [profileId, setProfileId] = useState<ProfileId>("hosted");
+  const [boundary, setBoundary] = useState<WorkspaceBoundary>(() =>
+    e2eWorkspaceBoundary("hosted"),
+  );
   const [environmentLifecycle, setEnvironmentLifecycle] =
     useState<ResourceLifecycle>("ACTIVE");
   const [projectLifecycle, setProjectLifecycle] =
@@ -231,8 +226,36 @@ export const WorkspaceShell = () => {
   const [githubSubject, setGithubSubject] = useState("");
   const [invitations, setInvitations] = useState<string[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const profile = profiles[profileId];
+  const profile = boundary.profile;
   const canAdminister = role === "OWNER" || role === "ADMIN";
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchWorkspaceBoundary(profileId)
+      .then((nextBoundary) => {
+        if (!cancelled) setBoundary(nextBoundary);
+      })
+      .catch(() => {
+        if (!cancelled) setBoundary(e2eWorkspaceBoundary(profileId));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId]);
+
+  const resetWorkspaceContext = () => {
+    setInvitations([]);
+    setEnvironmentLifecycle("ACTIVE");
+    setProjectLifecycle("ACTIVE");
+    setInvitationOpen(false);
+    setGithubSubject("");
+  };
+
+  const handleProfileChange = (nextProfileId: ProfileId) => {
+    resetWorkspaceContext();
+    setProfileId(nextProfileId);
+    setBoundary(e2eWorkspaceBoundary(nextProfileId));
+  };
 
   const createInvitation = () => {
     const subject = githubSubject.trim();
@@ -270,12 +293,18 @@ export const WorkspaceShell = () => {
         <div className="mt-auto border-t p-4">
           <div className="flex items-center gap-3">
             <Avatar size="sm">
-              <AvatarFallback>AS</AvatarFallback>
+              <AvatarFallback>
+                {(boundary.session.displayName ?? "DR")
+                  .slice(0, 2)
+                  .toUpperCase()}
+              </AvatarFallback>
             </Avatar>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">Ari Stone</p>
+              <p className="truncate text-sm font-medium">
+                {boundary.session.displayName ?? "Signed out"}
+              </p>
               <p className="truncate text-xs text-muted-foreground">
-                Authenticated
+                {boundary.session.active ? "Signed in" : "Sign in required"}
               </p>
             </div>
           </div>
@@ -334,12 +363,17 @@ export const WorkspaceShell = () => {
                 className="h-9 max-w-44 rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 id="server-profile"
                 onChange={(event) =>
-                  setProfileId(event.target.value as ProfileId)
+                  handleProfileChange(event.target.value as ProfileId)
                 }
                 value={profileId}
               >
-                <option value="hosted">Hosted / London</option>
-                <option value="self-hosted">Self-hosted / eu-1</option>
+                {(Object.keys(workspaceProfileCatalog) as ProfileId[]).map(
+                  (id) => (
+                    <option key={id} value={id}>
+                      {workspaceProfileCatalog[id].name}
+                    </option>
+                  ),
+                )}
               </select>
               <Tooltip>
                 <TooltipTrigger
@@ -416,32 +450,49 @@ export const WorkspaceShell = () => {
                 tone={profile.pinned ? "ok" : "warn"}
               />
               <StatusItem
-                detail="cookie · expires in 6h 42m"
+                detail={
+                  boundary.session.active
+                    ? "cookie · server-local User"
+                    : "sign in to continue"
+                }
                 icon={CircleUserRound}
-                label="Session active"
-                tone="ok"
+                label={
+                  boundary.session.active ? "Session active" : "No session"
+                }
+                tone={boundary.session.active ? "ok" : "warn"}
               />
               <StatusItem
-                detail="protected operations blocked"
+                detail={
+                  boundary.device.active
+                    ? "authorized for protected operations"
+                    : "protected operations blocked"
+                }
                 icon={MonitorSmartphone}
-                label="No active Device"
-                tone="warn"
+                label={
+                  boundary.device.active
+                    ? "Active Device"
+                    : (boundary.device.label ?? "No active Device")
+                }
+                tone={boundary.device.active ? "ok" : "warn"}
               />
             </div>
 
-            <Alert className="mt-5 border-amber-300/25 bg-amber-300/5 py-4">
-              <LockKeyhole aria-hidden="true" className="text-amber-300" />
-              <AlertTitle>Protected content is unavailable</AlertTitle>
-              <AlertDescription className="max-w-4xl">
-                This browser has no active Device and its required v3
-                cryptographic provider is unavailable. Manifest lanes and Values
-                were not requested. Non-secret Team administration remains
-                available.
-                <code className="ml-2 rounded bg-background/70 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
-                  crypto_provider_unavailable
-                </code>
-              </AlertDescription>
-            </Alert>
+            {!boundary.crypto.available ? (
+              <Alert className="mt-5 border-amber-300/25 bg-amber-300/5 py-4">
+                <LockKeyhole aria-hidden="true" className="text-amber-300" />
+                <AlertTitle>Protected content is unavailable</AlertTitle>
+                <AlertDescription className="max-w-4xl">
+                  This browser has no active Device and its required v3
+                  cryptographic provider is unavailable. Manifest lanes and
+                  Values were not requested. Non-secret Team administration
+                  remains available.
+                  <code className="ml-2 rounded bg-background/70 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+                    {boundary.crypto.problemCode ??
+                      "crypto_provider_unavailable"}
+                  </code>
+                </AlertDescription>
+              </Alert>
+            ) : null}
           </section>
 
           <section
@@ -710,7 +761,7 @@ export const WorkspaceShell = () => {
                       </Badge>
                       <CardTitle>production</CardTitle>
                       <CardDescription>
-                        Current head rev_0184 · client-verified name
+                        Current head rev_0184 · opaque continuity reference
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="flex items-center justify-between gap-4">

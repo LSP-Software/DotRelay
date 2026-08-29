@@ -10,10 +10,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import {
+  resolveApiOrigin,
+  resolveOAuthCallbackUrl,
+} from "@/lib/workspace-boundary";
 
 const SignInPage = () => {
-  const apiOrigin =
-    process.env.NEXT_PUBLIC_DOTRELAY_API_ORIGIN ?? "http://localhost:3001";
+  const apiOrigin = resolveApiOrigin() ?? "http://localhost:3001";
+  const callbackUrl = resolveOAuthCallbackUrl();
 
   return (
     <main className="landing-grid grid min-h-screen place-items-center px-5 py-12">
@@ -49,7 +53,7 @@ const SignInPage = () => {
             </div>
             <form action={`${apiOrigin}/api/auth/sign-in/social`} method="post">
               <input name="provider" type="hidden" value="github" />
-              <input name="callbackURL" type="hidden" value="/workspace" />
+              <input name="callbackURL" type="hidden" value={callbackUrl} />
               <Button className="w-full" size="lg" type="submit">
                 <GitBranch aria-hidden="true" /> Continue with GitHub
               </Button>
@@ -61,12 +65,6 @@ const SignInPage = () => {
                 GitHub identifies you; it does not grant DotRelay access.
               </AlertDescription>
             </Alert>
-            <Link
-              className="block text-center text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
-              href="/workspace"
-            >
-              Explore the non-secret demo workspace
-            </Link>
           </CardContent>
         </Card>
       </div>
