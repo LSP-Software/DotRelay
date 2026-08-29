@@ -1,0 +1,77 @@
+export type WorkspaceProfileId = "hosted" | "self-hosted";
+
+export type WorkspaceBoundary = Readonly<{
+  readonly session: Readonly<{
+    readonly active: boolean;
+    readonly displayName?: string;
+  }>;
+  readonly profile: Readonly<{
+    readonly id: WorkspaceProfileId;
+    readonly name: string;
+    readonly origin: string;
+    readonly pinned: boolean;
+  }>;
+  readonly device: Readonly<{
+    readonly active: boolean;
+    readonly label?: string;
+  }>;
+  readonly crypto: Readonly<{
+    readonly available: boolean;
+    readonly problemCode?:
+      | "crypto_provider_unavailable"
+      | "unsupported_crypto_runtime";
+  }>;
+}>;
+
+const profileCatalog: Readonly<
+  Record<
+    WorkspaceProfileId,
+    Readonly<{ name: string; origin: string; pinned: boolean }>
+  >
+> = {
+  hosted: {
+    name: "Hosted / London",
+    origin: "https://relay.dotrelay.dev",
+    pinned: true,
+  },
+  "self-hosted": {
+    name: "Self-hosted / eu-1",
+    origin: "https://relay.acme.internal",
+    pinned: false,
+  },
+};
+
+export const workspaceProfileCatalog = profileCatalog;
+
+export const e2eWorkspaceBoundary = (
+  profileId: WorkspaceProfileId,
+): WorkspaceBoundary => {
+  const profile = profileCatalog[profileId];
+  return {
+    session: { active: true, displayName: "Ari Stone" },
+    profile: { id: profileId, ...profile },
+    device: { active: false, label: "No active Device" },
+    crypto: { available: false, problemCode: "crypto_provider_unavailable" },
+  };
+};
+
+export const fetchWorkspaceBoundary = async (
+  profileId: WorkspaceProfileId,
+): Promise<WorkspaceBoundary> => {
+  const response = await fetch(
+    `/api/workspace/boundary?profile=${encodeURIComponent(profileId)}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) throw new Error("workspace boundary request failed");
+  return response.json() as Promise<WorkspaceBoundary>;
+};
+
+export const resolveWebOrigin = (): string =>
+  process.env.NEXT_PUBLIC_WEB_ORIGIN ?? "http://127.0.0.1:3000";
+
+export const resolveApiOrigin = (): string | undefined =>
+  process.env.NEXT_PUBLIC_DOTRELAY_API_ORIGIN ??
+  process.env.DOTRELAY_API_ORIGIN;
+
+export const resolveOAuthCallbackUrl = (): string =>
+  `${resolveWebOrigin()}/workspace`;

@@ -13,4 +13,6 @@ boundary rules, CI checks, release policy, and the canonical Wiki source are doc
 
 The persisted [administration policy](docs/administration.md) defines Team roles, Membership
 lifecycle and invitations, Project/GitHub Repository identity, Environment lifecycle, and safe
-disclosure boundaries.
+disclosure boundaries. The [web application guide](docs/web-application.md) records the dark-only
+visual system, workspace hierarchy, trust/session/Device states, role disclosures, and non-secret
+fallback limits.
