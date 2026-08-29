@@ -1,0 +1,19 @@
+{
+  "name": "@dotrelay/client",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser": "./src/storage/browser.ts",
+    "./cli": "./src/storage/cli.ts"
+  },
+  "scripts": {
+    "format": "biome format . --write",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --project tsconfig.json",
+    "test:unit": "bun test src"
+  },
+  "dependencies": {
+    "@dotrelay/contracts": "workspace:*"
+  }
+}

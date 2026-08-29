@@ -16,6 +16,7 @@
     "test:cli": "bun ../../scripts/test-cli.ts"
   },
   "dependencies": {
+    "@dotrelay/client": "workspace:*",
     "@dotrelay/database": "workspace:*"
   }
 }

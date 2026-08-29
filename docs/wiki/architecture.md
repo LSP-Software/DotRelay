@@ -6,8 +6,9 @@ the Prisma schema, migrations, generated client, persistence validation, reposit
 shared types. Authentication and web UI code remain application-local.
 
 The hosted and self-hosted products use the same backend build and protocol. The runtime-neutral
-`@dotrelay/contracts` package is the only shared contract boundary: apps consume its public exports,
-while it contains no Bun, browser, Node, persistence, authentication, or service code.
+`@dotrelay/contracts` package is the shared wire boundary, and `@dotrelay/client` is the shared
+runtime for web and CLI secret-capable workflows. Apps consume public exports from those packages;
+neither package contains service persistence or authentication handlers.
 
 Administrative HTTP uses strict JSON under `/api/v1` and stable `application/problem+json` codes.
 Capabilities, pagination, idempotency, and the checked OpenAPI output are part of that package.
