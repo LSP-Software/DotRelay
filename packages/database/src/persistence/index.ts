@@ -2,10 +2,14 @@ export type { DatabaseClient } from "./client";
 export { createDatabaseClient } from "./client";
 export type {
   AuditFactInput,
+  DeviceBootstrapInput,
+  DeviceEnrollmentApprovalInput,
+  DeviceEnrollmentBeginInput,
   DeviceEnrollmentCompletionInput,
   EnvironmentGenesisInput,
   EnvironmentMetadata,
   EpochRotationInput,
+  GrantCreationInput,
   LaneProjectionInput,
   MembershipActivationInput,
   OperationInput,
@@ -23,6 +27,7 @@ export {
   AuditFactRepository,
   DeviceRepository,
   EnvironmentRepository,
+  GrantRepository,
   MembershipAdministrationRepository,
   MembershipRepository,
   OperationConflictError,
