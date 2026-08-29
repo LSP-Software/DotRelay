@@ -11,6 +11,7 @@ import type {
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import {
   copyBytes,
+  PERSISTENCE_LIMITS,
   validateDigest,
   validateLaneProjection,
   validateProtocolProjection,
@@ -1748,6 +1749,37 @@ export class MembershipRepository {
   }
 }
 
+export type DeviceEnrollmentBeginInput = Readonly<{
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly enrollmentId: string;
+  readonly userId: string;
+  readonly initiatorDeviceId: string;
+  readonly transcriptHash: Uint8Array;
+  readonly challengeHash: Uint8Array;
+  readonly expiresAt: Date;
+  readonly now?: Date;
+}>;
+
+export type DeviceEnrollmentApprovalInput = Readonly<{
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly enrollmentId: string;
+  readonly approvalObject: ProtocolObjectInput;
+  readonly now?: Date;
+}>;
+
+export type DeviceBootstrapInput = Readonly<{
+  readonly operation: OperationInput;
+  readonly device: Readonly<{
+    readonly id: string;
+    readonly identityGeneration: bigint;
+    readonly keyId: Uint8Array;
+    readonly x25519PublicKey: Uint8Array;
+    readonly ed25519PublicKey: Uint8Array;
+  }>;
+  readonly certificateObject: ProtocolObjectInput;
+  readonly now?: Date;
+}>;
+
 export type DeviceEnrollmentCompletionInput = Readonly<{
   readonly operation: OperationInput & { readonly actorDeviceId: string };
   readonly enrollmentId: string;
@@ -1768,6 +1800,193 @@ export class DeviceRepository {
   private readonly protocolObjects = new ProtocolObjectRepository();
   private readonly audit = new AuditFactRepository();
   private readonly stagedObjects = new StagedObjectRepository();
+
+  async beginEnrollment(
+    database: TransactionDatabase,
+    input: DeviceEnrollmentBeginInput,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
+      if (input.initiatorDeviceId !== input.operation.actorDeviceId)
+        throw new Error("enrollment initiator must match the actor device");
+      const operation = await this.operations.begin(transaction, {
+        ...input.operation,
+        kind: "DEVICE_ENROLLMENT",
+      });
+      if (operation.idempotent) return operation;
+      const activeDeviceCount = await transaction.device.count({
+        where: { userId: input.userId, lifecycle: "ACTIVE" },
+      });
+      if (activeDeviceCount === 0)
+        throw new Error(
+          "initial trust bootstrap must use the bootstrap enrollment path",
+        );
+      const now = input.now ?? new Date();
+      if (input.expiresAt <= now) throw new Error("Device enrollment expired");
+      const enrollment = await transaction.deviceEnrollment.create({
+        data: {
+          id: input.enrollmentId,
+          operationId: operation.operation.id,
+          userId: input.userId,
+          initiatorDeviceId: input.initiatorDeviceId,
+          transcriptHash: databaseBytes(
+            validateDigest(input.transcriptHash, "enrollment transcript hash"),
+          ),
+          challengeHash: databaseBytes(
+            validateDigest(input.challengeHash, "enrollment challenge hash"),
+          ),
+          expiresAt: input.expiresAt,
+          createdAt: now,
+        },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      return { operation: operation.operation, enrollment };
+    });
+  }
+
+  async approveEnrollment(
+    database: TransactionDatabase,
+    input: DeviceEnrollmentApprovalInput,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "device_enrollments" WHERE "id" = ${input.enrollmentId} FOR UPDATE`;
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
+      const enrollment = await transaction.deviceEnrollment.findUnique({
+        where: { id: input.enrollmentId },
+      });
+      if (!enrollment || enrollment.completedAt)
+        throw new Error("Device enrollment is not pending");
+      if (enrollment.expiresAt <= (input.now ?? new Date()))
+        throw new Error("Device enrollment expired");
+      if (enrollment.initiatorDeviceId === input.operation.actorDeviceId)
+        throw new Error("enrollment approver must differ from the initiator");
+      const operation = await this.operations.begin(transaction, {
+        ...input.operation,
+        kind: "DEVICE_ENROLLMENT",
+      });
+      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.approvalObject.id,
+            canonicalBytes: input.approvalObject.canonicalBytes,
+            digest: input.approvalObject.digest,
+          },
+        ],
+      });
+      const approvalObject = await this.protocolObjects.create(
+        transaction,
+        input.approvalObject,
+      );
+      await transaction.enrollmentApprovalObject.create({
+        data: {
+          protocolObjectId: approvalObject.id,
+          enrollmentId: enrollment.id,
+          approvalDeviceId: input.operation.actorDeviceId,
+        },
+      });
+      await transaction.deviceEnrollment.update({
+        where: { id: enrollment.id },
+        data: { approverDeviceId: input.operation.actorDeviceId },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      return { operation: operation.operation, enrollment };
+    });
+  }
+
+  async completeBootstrap(
+    database: TransactionDatabase,
+    input: DeviceBootstrapInput,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
+      const activeDeviceCount = await transaction.device.count({
+        where: {
+          userId: input.operation.actorUserId,
+          lifecycle: "ACTIVE",
+        },
+      });
+      if (activeDeviceCount > 0)
+        throw new Error("bootstrap enrollment requires no active devices");
+      const operation = await this.operations.begin(transaction, {
+        ...input.operation,
+        kind: "DEVICE_ENROLLMENT",
+      });
+      if (operation.idempotent) return operation;
+      const user = await transaction.user.findUnique({
+        where: { id: input.operation.actorUserId },
+        select: { identityGeneration: true },
+      });
+      if (!user || user.identityGeneration !== input.device.identityGeneration)
+        throw new Error("device identity generation is stale");
+      validatePublicKeys(input.device);
+      await validateSha384Digest(
+        input.device.x25519PublicKey,
+        input.device.keyId,
+        "Device key id",
+      );
+      const now = input.now ?? new Date();
+      const certificateObject = await this.protocolObjects.create(
+        transaction,
+        input.certificateObject,
+      );
+      const device = await transaction.device.create({
+        data: {
+          id: input.device.id,
+          userId: input.operation.actorUserId,
+          identityGeneration: input.device.identityGeneration,
+          keyId: databaseBytes(
+            validateDigest(input.device.keyId, "Device key id"),
+          ),
+          x25519PublicKey: databaseBytes(input.device.x25519PublicKey),
+          ed25519PublicKey: databaseBytes(input.device.ed25519PublicKey),
+          lifecycle: "ACTIVE",
+          activatedAt: now,
+        },
+      });
+      await transaction.deviceCertificateObject.create({
+        data: {
+          protocolObjectId: certificateObject.id,
+          deviceId: device.id,
+          userId: input.operation.actorUserId,
+          identityGeneration: input.device.identityGeneration,
+          lifecycle: "ACTIVE",
+        },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "DEVICE_ENROLLED",
+        actorUserId: input.operation.actorUserId,
+        entityKind: "DEVICE",
+        entityId: device.id,
+        newLifecycle: "ACTIVE",
+        outcomeObjectId: certificateObject.id,
+      });
+      return { operation: operation.operation, device };
+    });
+  }
 
   async completeEnrollment(
     database: TransactionDatabase,
@@ -1792,6 +2011,8 @@ export class DeviceRepository {
         throw new Error("Device enrollment is not pending");
       if (enrollment.expiresAt <= (input.now ?? new Date()))
         throw new Error("Device enrollment expired");
+      if (!enrollment.approverDeviceId)
+        throw new Error("Device enrollment is not approved");
       const user = await transaction.user.findUnique({
         where: { id: enrollment.userId },
         select: { identityGeneration: true },
@@ -2198,6 +2419,158 @@ export class ProjectEpochRepository {
         newLifecycle: `epoch:${input.newEpoch.toString()}`,
       });
       return { operation: operation.operation, projectEpoch: input.newEpoch };
+    });
+  }
+}
+
+export type GrantCreationInput = Readonly<{
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly grant: Readonly<{
+    readonly protocolObject: ProtocolObjectInput;
+    readonly projectId: string;
+    readonly teamId: string;
+    readonly membershipId?: string;
+    readonly senderDeviceId?: string;
+    readonly recipientDeviceId: string;
+    readonly ownerUserId?: string;
+    readonly keyKind:
+      | "PROJECT_EPOCH"
+      | "USER_DEFINED_VALUE"
+      | "USER_TRUST_BUNDLE";
+    readonly grantKind:
+      | "CURRENT_PROJECT_EPOCH"
+      | "HISTORICAL_PROJECT_EPOCH"
+      | "CURRENT_USER_VALUE_GENERATION"
+      | "HISTORICAL_USER_VALUE_GENERATION"
+      | "DEVICE_TRUST_PROVISIONING"
+      | "RECOVERY_PROJECT_KEY"
+      | "RECOVERY_USER_VALUE_KEY";
+    readonly laneScope?:
+      | "ENVIRONMENT_DEFINITION"
+      | "VARIABLE_DEFINITION"
+      | "SHARED_VALUE"
+      | "USER_DEFINED_VALUE";
+    readonly projectEpoch?: bigint;
+    readonly valueGeneration?: bigint;
+    readonly plaintextLength: number;
+    readonly ciphertextLength: number;
+    readonly ciphertextHash: Uint8Array;
+    readonly recipientDeviceIds: ReadonlyArray<string>;
+  }>;
+  readonly now?: Date;
+}>;
+
+export class GrantRepository {
+  private readonly operations = new OperationRepository();
+  private readonly protocolObjects = new ProtocolObjectRepository();
+  private readonly stagedObjects = new StagedObjectRepository();
+
+  async create(database: TransactionDatabase, input: GrantCreationInput) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.grant.projectId} FOR UPDATE`;
+      const project = await transaction.project.findUnique({
+        where: { id: input.grant.projectId },
+      });
+      if (!project || project.teamId !== input.grant.teamId)
+        throw new Error("Project not found");
+      await requireTeamAction(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.grant.teamId,
+        "ADMINISTER_PROJECT",
+      );
+      const recipientDeviceIds = [...input.grant.recipientDeviceIds].sort();
+      if (
+        recipientDeviceIds.length === 0 ||
+        !recipientDeviceIds.includes(input.grant.recipientDeviceId) ||
+        recipientDeviceIds.some(
+          (deviceId, index) =>
+            index > 0 && deviceId === recipientDeviceIds[index - 1],
+        )
+      )
+        throw new Error("grant recipient set is invalid");
+      for (const recipientDeviceId of recipientDeviceIds) {
+        const recipient = await transaction.device.findFirst({
+          where: { id: recipientDeviceId, lifecycle: "ACTIVE" },
+        });
+        if (!recipient) throw new Error("grant recipient device is not active");
+      }
+      if (input.grant.membershipId) {
+        const membership = await transaction.membership.findUnique({
+          where: { id: input.grant.membershipId },
+        });
+        if (
+          !membership ||
+          membership.teamId !== input.grant.teamId ||
+          membership.lifecycle !== "PENDING_KEY_GRANT"
+        )
+          throw new Error("grant membership is not pending key grants");
+      }
+      if (
+        input.grant.plaintextLength > PERSISTENCE_LIMITS.maxGrantPlaintextBytes
+      )
+        throw new Error("grant plaintext exceeds persistence limit");
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.grant.protocolObject.id,
+            canonicalBytes: input.grant.protocolObject.canonicalBytes,
+            digest: input.grant.protocolObject.digest,
+          },
+        ],
+      });
+      const protocolObject = await this.protocolObjects.create(
+        transaction,
+        input.grant.protocolObject,
+      );
+      const grant = await transaction.grantObject.create({
+        data: {
+          protocolObjectId: protocolObject.id,
+          projectId: input.grant.projectId,
+          teamId: input.grant.teamId,
+          ...(input.grant.membershipId
+            ? { membershipId: input.grant.membershipId }
+            : {}),
+          ...(input.grant.senderDeviceId
+            ? { senderDeviceId: input.grant.senderDeviceId }
+            : {}),
+          recipientDeviceId: input.grant.recipientDeviceId,
+          ...(input.grant.ownerUserId
+            ? { ownerUserId: input.grant.ownerUserId }
+            : {}),
+          keyKind: input.grant.keyKind,
+          grantKind: input.grant.grantKind,
+          ...(input.grant.laneScope
+            ? { laneScope: input.grant.laneScope }
+            : {}),
+          ...(input.grant.projectEpoch !== undefined
+            ? { projectEpoch: input.grant.projectEpoch }
+            : {}),
+          ...(input.grant.valueGeneration !== undefined
+            ? { valueGeneration: input.grant.valueGeneration }
+            : {}),
+          plaintextLength: input.grant.plaintextLength,
+          ciphertextLength: input.grant.ciphertextLength,
+          ciphertextHash: databaseBytes(
+            validateDigest(input.grant.ciphertextHash, "grant ciphertext hash"),
+          ),
+        },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      return { operation: operation.operation, grant };
     });
   }
 }
