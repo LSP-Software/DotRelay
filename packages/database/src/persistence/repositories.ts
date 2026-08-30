@@ -34,6 +34,20 @@ const inPersistenceTransaction = async <T>(
   return callback(database);
 };
 
+export class OperationNotFoundError extends Error {
+  constructor() {
+    super("Operation not found");
+    this.name = "OperationNotFoundError";
+  }
+}
+
+export class OperationNotCancellableError extends Error {
+  constructor() {
+    super("Operation is not cancellable");
+    this.name = "OperationNotCancellableError";
+  }
+}
+
 export class OperationConflictError extends Error {
   constructor() {
     super(
@@ -339,6 +353,41 @@ export class OperationRepository {
         data: { status: "EXPIRED" },
       });
       return result.count;
+    });
+  }
+
+  async cancel(
+    database: PersistenceClient,
+    input: Readonly<{
+      readonly operationId: string;
+      readonly actorUserId: string;
+      readonly actorDeviceId: string;
+    }>,
+  ) {
+    return inPersistenceTransaction(database, async (transaction) => {
+      await requireActiveDevice(
+        transaction,
+        input.actorUserId,
+        input.actorDeviceId,
+      );
+      const operation = await transaction.operation.findUnique({
+        where: { id: input.operationId },
+      });
+      if (
+        !operation ||
+        operation.actorUserId !== input.actorUserId ||
+        operation.actorDeviceId !== input.actorDeviceId
+      )
+        throw new OperationNotFoundError();
+      if (operation.status !== "STAGED")
+        throw new OperationNotCancellableError();
+      await transaction.stagedObject.deleteMany({
+        where: { operationId: operation.id, committedAt: null },
+      });
+      return transaction.operation.update({
+        where: { id: operation.id },
+        data: { status: "CANCELLED" },
+      });
     });
   }
 }

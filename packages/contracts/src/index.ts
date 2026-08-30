@@ -63,6 +63,28 @@ export {
   validateProtocolObject,
 } from "./protocol";
 export {
+  type BeginOperationRequest,
+  bytesToUuid,
+  DEVICE_ID_HEADER,
+  decodeSyncPage,
+  type EpochRotationRequest,
+  encodeSyncPage,
+  type FinalizePublicationRequest,
+  formatSyncCursor,
+  PROTOCOL_MEDIA_TYPE,
+  parseBeginOperationRequest,
+  parseEpochRotationRequest,
+  parseFinalizePublicationRequest,
+  parseSha384Hex,
+  parseSyncCursorValue,
+  parseSyncRequest,
+  parseUuid,
+  type SyncPageWire,
+  type SyncRevisionWire,
+  sha384ToHex,
+  uuidToBytes,
+} from "./protocol-api";
+export {
   API_VERSION,
   ENUM_REGISTRIES,
   FIELD_REGISTRY,

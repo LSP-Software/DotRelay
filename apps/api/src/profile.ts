@@ -261,6 +261,9 @@ export const createCapabilitiesDocument = (profile: ServerProfileConfig) =>
       "better-auth",
       "device-authorization",
       "bearer-sessions",
+      "operation-staging",
+      "revision-publication",
+      "environment-synchronization",
     ]),
     limits: profile.limits,
   });

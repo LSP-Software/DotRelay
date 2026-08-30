@@ -24,6 +24,7 @@ import {
   loadServerProfileConfig,
   type ServerProfileConfig,
 } from "./profile";
+import { registerProtocolRoutes } from "./protocol";
 
 type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
@@ -185,6 +186,8 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
       },
     );
   });
+
+  registerProtocolRoutes(app, { database, profile, auth });
 
   void database;
   return app;

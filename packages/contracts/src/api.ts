@@ -5,6 +5,7 @@ import {
   type Problem,
   type ProblemCode,
 } from "./errors";
+import { PROTOCOL_OPENAPI_PATHS } from "./protocol-openapi";
 import { API_VERSION, SUITE_NAME, SUITE_VALUE } from "./registry";
 import { utf8Encode } from "./runtime";
 
@@ -165,6 +166,9 @@ export const createCapabilitiesDocument = (
       "canonical-cbor-protocol",
       "pagination",
       "idempotency",
+      "operation-staging",
+      "revision-publication",
+      "environment-synchronization",
     ]),
     limits: Object.freeze({
       adminBodyBytes: CBOR_LIMITS.maxAdminBodyBytes,
@@ -347,6 +351,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         }),
       }),
     }),
+    ...PROTOCOL_OPENAPI_PATHS,
   }),
   components: Object.freeze({
     schemas: Object.freeze({
