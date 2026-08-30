@@ -223,7 +223,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/operations/{operationId}/staging/{objectId}": {
@@ -377,7 +382,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/operations/{operationId}": {
@@ -505,7 +515,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/operations/{operationId}/finalize": {
@@ -650,7 +665,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/operations/{operationId}/epoch-transitions": {
@@ -795,7 +815,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/environments/{environmentId}/sync": {
@@ -940,7 +965,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     }
   },
@@ -1156,6 +1186,19 @@
         "schema": {
           "$ref": "#/components/schemas/IdempotencyKey"
         }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Better Auth session token. Protocol routes also require the active device header."
+      },
+      "deviceId": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-DotRelay-Device-Id",
+        "description": "Active enrolled device id for protocol authorization."
       }
     }
   }

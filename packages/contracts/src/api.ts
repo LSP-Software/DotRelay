@@ -5,6 +5,7 @@ import {
   type Problem,
   type ProblemCode,
 } from "./errors";
+import { DEVICE_ID_HEADER } from "./protocol-api";
 import { PROTOCOL_OPENAPI_PATHS } from "./protocol-openapi";
 import { API_VERSION, SUITE_NAME, SUITE_VALUE } from "./registry";
 import { utf8Encode } from "./runtime";
@@ -477,6 +478,20 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         in: "header",
         required: true,
         schema: Object.freeze({ $ref: "#/components/schemas/IdempotencyKey" }),
+      }),
+    }),
+    securitySchemes: Object.freeze({
+      bearerAuth: Object.freeze({
+        type: "http",
+        scheme: "bearer",
+        description:
+          "Better Auth session token. Protocol routes also require the active device header.",
+      }),
+      deviceId: Object.freeze({
+        type: "apiKey",
+        in: "header",
+        name: DEVICE_ID_HEADER,
+        description: "Active enrolled device id for protocol authorization.",
       }),
     }),
   }),

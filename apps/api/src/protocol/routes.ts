@@ -25,7 +25,8 @@ import {
   StagedObjectRepository,
   SyncRepository,
 } from "@dotrelay/database";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DotRelayAuth } from "../auth";
 import type { ServerProfileConfig } from "../profile";
@@ -41,6 +42,8 @@ import {
   buildProtocolObjectFromStage,
   buildPublicationInput,
   collectStagedObjectIds,
+  hasAllStagedObjects,
+  uniqueStagedObjectIds,
   verifyRevisionSignature,
 } from "./staging";
 
@@ -66,6 +69,27 @@ const respondProblem = (
   };
 };
 
+const respondContractError = (error: unknown) => {
+  if (error instanceof ContractError) return respondProblem(error.code);
+  return respondProblem("invalid_request");
+};
+
+const readPathUuid = (context: Context, name: string) =>
+  parseUuid(context.req.param(name), name);
+
+const clampStagingExpiry = (
+  expiresHeader: string | undefined,
+  stagingTtlSeconds: number,
+): Date => {
+  const now = Date.now();
+  const ceiling = now + stagingTtlSeconds * 1000;
+  if (!expiresHeader || Number.isNaN(Date.parse(expiresHeader)))
+    return new Date(ceiling);
+  const requested = Date.parse(expiresHeader);
+  if (requested <= now) return new Date(Math.min(now + 1, ceiling));
+  return new Date(Math.min(requested, ceiling));
+};
+
 const readProtocolBody = async (
   request: Request,
   maximumBytes: number,
@@ -86,7 +110,15 @@ const readProtocolBody = async (
       },
     );
   const body = new Uint8Array(await request.arrayBuffer());
-  if (body.length === 0 || body.length > maximumBytes)
+  if (body.length === 0)
+    return new Response(JSON.stringify(createProblem("invalid_request")), {
+      status: 400,
+      headers: {
+        "Content-Type": "application/problem+json",
+        "Cache-Control": "no-store",
+      },
+    });
+  if (body.length > maximumBytes)
     return new Response(JSON.stringify(createProblem("payload_too_large")), {
       status: 413,
       headers: {
@@ -142,15 +174,32 @@ export const registerProtocolRoutes = (
   );
   app.use("/api/v1/projects/*", createProtocolRateLimit(profile.isProduction));
 
+  const adminJsonLimit = bodyLimit({
+    maxSize: profile.limits.adminBodyBytes,
+    onError: (context) => {
+      const problem = createProblem("payload_too_large");
+      return context.json(problem, problem.status as ContentfulStatusCode, {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/problem+json",
+      });
+    },
+  });
+
   void DEVICE_ID_HEADER;
 
   app.post("/api/v1/operations/:operationId/begin", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
-    const operationId = parseUuid(
-      context.req.param("operationId"),
-      "operationId",
-    );
+    let operationId: string;
+    try {
+      operationId = readPathUuid(context, "operationId");
+    } catch (error) {
+      const problem = respondContractError(error);
+      return context.json(problem.body, problem.status, {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/problem+json",
+      });
+    }
     const idempotencyKey = context.req.header("Idempotency-Key");
     if (!idempotencyKey || idempotencyKey !== operationId) {
       const problem = respondProblem("invalid_request");
@@ -196,11 +245,10 @@ export const registerProtocolRoutes = (
       });
     }
     const commandDigest = await digestRequestBody(commandBody);
-    const expiresHeader = context.req.header("X-DotRelay-Expires-At");
-    const expiresAt =
-      expiresHeader && !Number.isNaN(Date.parse(expiresHeader))
-        ? new Date(expiresHeader)
-        : new Date(Date.now() + profile.limits.stagingTtlSeconds * 1000);
+    const expiresAt = clampStagingExpiry(
+      context.req.header("X-DotRelay-Expires-At") ?? undefined,
+      profile.limits.stagingTtlSeconds,
+    );
     const createdAt = new Date();
     try {
       await staging.put(database, {
@@ -251,11 +299,18 @@ export const registerProtocolRoutes = (
         auth,
       );
       if (actor instanceof Response) return actor;
-      const operationId = parseUuid(
-        context.req.param("operationId"),
-        "operationId",
-      );
-      const objectId = parseUuid(context.req.param("objectId"), "objectId");
+      let operationId: string;
+      let objectId: string;
+      try {
+        operationId = readPathUuid(context, "operationId");
+        objectId = readPathUuid(context, "objectId");
+      } catch (error) {
+        const problem = respondContractError(error);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
       if (objectId === COMMAND_STAGE_OBJECT_ID) {
         const problem = respondProblem("invalid_request");
         return context.json(problem.body, problem.status, {
@@ -311,10 +366,16 @@ export const registerProtocolRoutes = (
   app.delete("/api/v1/operations/:operationId", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
-    const operationId = parseUuid(
-      context.req.param("operationId"),
-      "operationId",
-    );
+    let operationId: string;
+    try {
+      operationId = readPathUuid(context, "operationId");
+    } catch (error) {
+      const problem = respondContractError(error);
+      return context.json(problem.body, problem.status, {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/problem+json",
+      });
+    }
     try {
       await operations.cancel(database, {
         operationId,
@@ -332,220 +393,9 @@ export const registerProtocolRoutes = (
     }
   });
 
-  app.post("/api/v1/operations/:operationId/finalize", async (context) => {
-    const actor = await requireProtocolActor(context, database, profile, auth);
-    if (actor instanceof Response) return actor;
-    const operationId = parseUuid(
-      context.req.param("operationId"),
-      "operationId",
-    );
-    let finalizeRequest: ReturnType<typeof parseFinalizePublicationRequest>;
-    try {
-      finalizeRequest = parseFinalizePublicationRequest(
-        await context.req.json(),
-      );
-    } catch (error) {
-      const code =
-        error instanceof ContractError ? error.code : "invalid_request";
-      const problem = respondProblem(code);
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const operation = await database.operation.findUnique({
-      where: { id: operationId },
-    });
-    if (
-      !operation ||
-      operation.actorUserId !== actor.userId ||
-      operation.actorDeviceId !== actor.deviceId
-    ) {
-      const problem = respondProblem("resource_not_found");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const environment = await database.environment.findUnique({
-      where: { id: finalizeRequest.environmentId },
-      include: { project: true },
-    });
-    if (!environment) {
-      const problem = respondProblem("resource_not_found");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const stagedIds = collectStagedObjectIds(finalizeRequest);
-    const stagedRows = await database.stagedObject.findMany({
-      where: {
-        operationId,
-        objectId: { in: [...stagedIds] },
-        actorDeviceId: actor.deviceId,
-        committedAt: null,
-      },
-    });
-    if (stagedRows.length !== stagedIds.length) {
-      const problem = respondProblem("staged_object_missing");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const stagedById = new Map(stagedRows.map((row) => [row.objectId, row]));
-    const commandStaged = stagedById.get(COMMAND_STAGE_OBJECT_ID);
-    if (!commandStaged) {
-      const problem = respondProblem("staged_object_missing");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const revisionObject = buildProtocolObjectFromStage(
-      stagedById,
-      finalizeRequest.revision.protocolObjectId,
-      environment.projectId,
-      environment.id,
-    );
-    const signingDevice = await database.device.findUnique({
-      where: { id: actor.deviceId },
-      select: { ed25519PublicKey: true },
-    });
-    if (!signingDevice) {
-      const problem = respondProblem("device_not_active");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    if (
-      !(await verifyRevisionSignature(
-        revisionObject,
-        signingDevice.ed25519PublicKey,
-      ))
-    ) {
-      const problem = respondProblem("invalid_crypto_object");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    try {
-      const result = await publications.publishRevision(
-        database,
-        buildPublicationInput({
-          operationId,
-          actorUserId: actor.userId,
-          actorDeviceId: actor.deviceId,
-          commandStaged,
-          operationExpiresAt: operation.expiresAt,
-          finalizeRequest,
-          projectId: environment.projectId,
-          environmentId: environment.id,
-          stagedById,
-        }),
-      );
-      return context.json(
-        { revisionId: result.revision.id, idempotent: result.idempotent },
-        200,
-        { "Cache-Control": "no-store" },
-      );
-    } catch (error) {
-      const mapped = await handlePersistenceFailure(database, error);
-      const problem = respondProblem(mapped.code, mapped);
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-  });
-
-  app.post("/api/v1/environments/:environmentId/sync", async (context) => {
-    const actor = await requireProtocolActor(context, database, profile, auth);
-    if (actor instanceof Response) return actor;
-    const environmentId = parseUuid(
-      context.req.param("environmentId"),
-      "environmentId",
-    );
-    let syncRequest: ReturnType<typeof parseSyncRequest>;
-    try {
-      syncRequest = parseSyncRequest(await context.req.json());
-    } catch (error) {
-      const code =
-        error instanceof ContractError ? error.code : "invalid_request";
-      const problem = respondProblem(code);
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const limit = syncRequest.pagination.limit ?? CBOR_LIMITS.maxSyncObjects;
-    const cursor =
-      syncRequest.pagination.cursor === undefined
-        ? undefined
-        : parseSyncCursorValue(syncRequest.pagination.cursor);
-    try {
-      const page = await synchronization.synchronize(database, {
-        actorUserId: actor.userId,
-        actorDeviceId: actor.deviceId,
-        environmentId,
-        trustedRevisionId: syncRequest.trustedRevisionId,
-        trustedRevisionHash: syncRequest.trustedRevisionHash,
-        ...(cursor
-          ? {
-              cursorRevisionId: cursor.revisionId,
-              cursorRevisionHash: cursor.revisionHash,
-            }
-          : {}),
-        limit,
-      });
-      const wirePage = encodeSyncPage({
-        environmentId: page.environmentId,
-        trustedRevisionId: page.trustedRevisionId,
-        trustedRevisionHash: page.trustedRevisionHash,
-        currentHeadId: page.currentHeadId,
-        currentHeadHash: page.currentHeadHash,
-        projectEpoch: page.projectEpoch,
-        revisions: page.revisions.map((revision) => ({
-          id: revision.id,
-          digest: revision.digest,
-          parentId: revision.parentId,
-          parentHash: revision.parentHash,
-          mutation: mutationToWire(revision.mutation),
-          projectEpoch: revision.projectEpoch,
-          authoredAtMs: revision.authoredAtMs,
-          rollbackTargetId: revision.rollbackTargetId,
-          objects: revision.objects,
-        })),
-        nextCursor:
-          page.nextCursor === null
-            ? null
-            : formatSyncCursor(
-                page.nextCursor.revisionId,
-                page.nextCursor.revisionHash,
-              ),
-      });
-      return new Response(wirePage, {
-        status: 200,
-        headers: {
-          "Cache-Control": "no-store",
-          "Content-Type": PROTOCOL_MEDIA_TYPE,
-        },
-      });
-    } catch (error) {
-      const mapped = await handlePersistenceFailure(database, error);
-      const problem = respondProblem(mapped.code, mapped);
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-  });
-
   app.post(
-    "/api/v1/operations/:operationId/epoch-transitions",
+    "/api/v1/operations/:operationId/finalize",
+    adminJsonLimit,
     async (context) => {
       const actor = await requireProtocolActor(
         context,
@@ -554,10 +404,292 @@ export const registerProtocolRoutes = (
         auth,
       );
       if (actor instanceof Response) return actor;
-      const operationId = parseUuid(
-        context.req.param("operationId"),
-        "operationId",
+      let operationId: string;
+      try {
+        operationId = readPathUuid(context, "operationId");
+      } catch (error) {
+        const problem = respondContractError(error);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      let finalizeRequest: ReturnType<typeof parseFinalizePublicationRequest>;
+      try {
+        finalizeRequest = parseFinalizePublicationRequest(
+          await context.req.json(),
+        );
+      } catch (error) {
+        const code =
+          error instanceof ContractError ? error.code : "invalid_request";
+        const problem = respondProblem(code);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const operation = await database.operation.findUnique({
+        where: { id: operationId },
+      });
+      if (
+        !operation ||
+        operation.actorUserId !== actor.userId ||
+        operation.actorDeviceId !== actor.deviceId
+      ) {
+        const problem = respondProblem("resource_not_found");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const environment = await database.environment.findUnique({
+        where: { id: finalizeRequest.environmentId },
+        include: { project: true },
+      });
+      if (!environment) {
+        const problem = respondProblem("resource_not_found");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const stagedIds = uniqueStagedObjectIds(
+        collectStagedObjectIds(finalizeRequest),
       );
+      const stagedRows = await database.stagedObject.findMany({
+        where: {
+          operationId,
+          objectId: { in: [...stagedIds] },
+          actorDeviceId: actor.deviceId,
+          committedAt: null,
+        },
+      });
+      if (!hasAllStagedObjects(stagedIds, stagedRows)) {
+        const problem = respondProblem("staged_object_missing");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const stagedById = new Map(stagedRows.map((row) => [row.objectId, row]));
+      const commandStaged = stagedById.get(COMMAND_STAGE_OBJECT_ID);
+      if (!commandStaged) {
+        const problem = respondProblem("staged_object_missing");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      let revisionObject: ReturnType<typeof buildProtocolObjectFromStage>;
+      try {
+        revisionObject = buildProtocolObjectFromStage(
+          stagedById,
+          finalizeRequest.revision.protocolObjectId,
+          environment.projectId,
+          environment.id,
+        );
+      } catch (error) {
+        const problem = respondContractError(error);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const signingDevice = await database.device.findUnique({
+        where: { id: actor.deviceId },
+        select: { ed25519PublicKey: true },
+      });
+      if (!signingDevice) {
+        const problem = respondProblem("device_not_active");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      if (
+        !(await verifyRevisionSignature(
+          revisionObject,
+          signingDevice.ed25519PublicKey,
+        ))
+      ) {
+        const problem = respondProblem("invalid_crypto_object");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      try {
+        const result = await publications.publishRevision(
+          database,
+          buildPublicationInput({
+            operationId,
+            actorUserId: actor.userId,
+            actorDeviceId: actor.deviceId,
+            commandStaged,
+            operationExpiresAt: operation.expiresAt,
+            finalizeRequest,
+            projectId: environment.projectId,
+            environmentId: environment.id,
+            stagedById,
+          }),
+        );
+        return context.json(
+          { revisionId: result.revision.id, idempotent: result.idempotent },
+          200,
+          { "Cache-Control": "no-store" },
+        );
+      } catch (error) {
+        if (error instanceof ContractError) {
+          const problem = respondProblem(error.code);
+          return context.json(problem.body, problem.status, {
+            "Cache-Control": "no-store",
+            "Content-Type": "application/problem+json",
+          });
+        }
+        const mapped = await handlePersistenceFailure(database, error);
+        const problem = respondProblem(mapped.code, mapped);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/environments/:environmentId/sync",
+    adminJsonLimit,
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      let environmentId: string;
+      try {
+        environmentId = readPathUuid(context, "environmentId");
+      } catch (error) {
+        const problem = respondContractError(error);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      let syncRequest: ReturnType<typeof parseSyncRequest>;
+      try {
+        syncRequest = parseSyncRequest(await context.req.json());
+      } catch (error) {
+        const code =
+          error instanceof ContractError ? error.code : "invalid_request";
+        const problem = respondProblem(code);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const limit = syncRequest.pagination.limit ?? CBOR_LIMITS.maxSyncObjects;
+      let cursor: ReturnType<typeof parseSyncCursorValue> | undefined;
+      try {
+        cursor =
+          syncRequest.pagination.cursor === undefined
+            ? undefined
+            : parseSyncCursorValue(syncRequest.pagination.cursor);
+      } catch (error) {
+        const problem = respondContractError(error);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      try {
+        const page = await synchronization.synchronize(database, {
+          actorUserId: actor.userId,
+          actorDeviceId: actor.deviceId,
+          environmentId,
+          trustedRevisionId: syncRequest.trustedRevisionId,
+          trustedRevisionHash: syncRequest.trustedRevisionHash,
+          ...(cursor
+            ? {
+                cursorRevisionId: cursor.revisionId,
+                cursorRevisionHash: cursor.revisionHash,
+              }
+            : {}),
+          limit,
+        });
+        const wirePage = encodeSyncPage({
+          environmentId: page.environmentId,
+          trustedRevisionId: page.trustedRevisionId,
+          trustedRevisionHash: page.trustedRevisionHash,
+          currentHeadId: page.currentHeadId,
+          currentHeadHash: page.currentHeadHash,
+          projectEpoch: page.projectEpoch,
+          revisions: page.revisions.map((revision) => ({
+            id: revision.id,
+            digest: revision.digest,
+            parentId: revision.parentId,
+            parentHash: revision.parentHash,
+            mutation: mutationToWire(revision.mutation),
+            projectEpoch: revision.projectEpoch,
+            authoredAtMs: revision.authoredAtMs,
+            rollbackTargetId: revision.rollbackTargetId,
+            objects: revision.objects,
+          })),
+          nextCursor:
+            page.nextCursor === null
+              ? null
+              : formatSyncCursor(
+                  page.nextCursor.revisionId,
+                  page.nextCursor.revisionHash,
+                ),
+        });
+        return new Response(wirePage, {
+          status: 200,
+          headers: {
+            "Cache-Control": "no-store",
+            "Content-Type": PROTOCOL_MEDIA_TYPE,
+          },
+        });
+      } catch (error) {
+        if (error instanceof ContractError) {
+          const problem = respondProblem(error.code);
+          return context.json(problem.body, problem.status, {
+            "Cache-Control": "no-store",
+            "Content-Type": "application/problem+json",
+          });
+        }
+        const mapped = await handlePersistenceFailure(database, error);
+        const problem = respondProblem(mapped.code, mapped);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/operations/:operationId/epoch-transitions",
+    adminJsonLimit,
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      let operationId: string;
+      try {
+        operationId = readPathUuid(context, "operationId");
+      } catch (error) {
+        const problem = respondContractError(error);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
       let rotationRequest: ReturnType<typeof parseEpochRotationRequest>;
       try {
         rotationRequest = parseEpochRotationRequest(await context.req.json());
@@ -585,7 +717,7 @@ export const registerProtocolRoutes = (
           "Content-Type": "application/problem+json",
         });
       }
-      const stagedIds = [
+      const stagedIds = uniqueStagedObjectIds([
         COMMAND_STAGE_OBJECT_ID,
         ...rotationRequest.transitions.flatMap((transition) => [
           transition.protocolObjectId,
@@ -593,16 +725,16 @@ export const registerProtocolRoutes = (
             (objectId) => objectId !== COMMAND_STAGE_OBJECT_ID,
           ),
         ]),
-      ];
+      ]);
       const stagedRows = await database.stagedObject.findMany({
         where: {
           operationId,
-          objectId: { in: stagedIds },
+          objectId: { in: [...stagedIds] },
           actorDeviceId: actor.deviceId,
           committedAt: null,
         },
       });
-      if (stagedRows.length !== stagedIds.length) {
+      if (!hasAllStagedObjects(stagedIds, stagedRows)) {
         const problem = respondProblem("staged_object_missing");
         return context.json(problem.body, problem.status, {
           "Cache-Control": "no-store",
@@ -698,6 +830,13 @@ export const registerProtocolRoutes = (
           { "Cache-Control": "no-store" },
         );
       } catch (error) {
+        if (error instanceof ContractError) {
+          const problem = respondProblem(error.code);
+          return context.json(problem.body, problem.status, {
+            "Cache-Control": "no-store",
+            "Content-Type": "application/problem+json",
+          });
+        }
         const mapped = await handlePersistenceFailure(database, error);
         const problem = respondProblem(mapped.code, mapped);
         return context.json(problem.body, problem.status, {

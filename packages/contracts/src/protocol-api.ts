@@ -17,6 +17,9 @@ const uuidPattern =
 
 const sha384HexPattern = /^[0-9a-f]{96}$/i;
 
+const isoInstantPattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+
 export const parseUuid = (value: unknown, _field: string): string => {
   if (typeof value !== "string" || !uuidPattern.test(value))
     contractError("invalid_request");
@@ -90,6 +93,7 @@ export const parseBeginOperationRequest = (
   if (body.expiresAt !== undefined) {
     if (
       typeof body.expiresAt !== "string" ||
+      !isoInstantPattern.test(body.expiresAt) ||
       Number.isNaN(Date.parse(body.expiresAt))
     )
       contractError("invalid_request");
@@ -742,6 +746,8 @@ export const parseEpochRotationRequest = (
     !Array.isArray(body.transitions)
   )
     contractError("invalid_request");
+  if (body.newEpoch <= body.expectedEpoch) contractError("invalid_request");
+  const seenEnvironmentIds = new Set<string>();
   return Object.freeze({
     projectId: parseUuid(body.projectId, "projectId"),
     expectedEpoch: body.expectedEpoch,
@@ -765,11 +771,15 @@ export const parseEpochRotationRequest = (
           transition.environmentId,
           "transition.environmentId",
         );
-        const publication = parseFinalizePublicationRequest({
-          ...(transition.publication as Record<string, unknown>),
-          environmentId,
-        });
+        if (seenEnvironmentIds.has(environmentId))
+          contractError("invalid_request");
+        seenEnvironmentIds.add(environmentId);
+        const publication = parseFinalizePublicationRequest(
+          transition.publication,
+        );
         if (publication.environmentId !== environmentId)
+          contractError("invalid_request");
+        if (publication.revision.projectEpoch !== body.newEpoch)
           contractError("invalid_request");
         return Object.freeze({
           environmentId,

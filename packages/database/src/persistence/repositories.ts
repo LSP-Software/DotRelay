@@ -379,15 +379,30 @@ export class OperationRepository {
         operation.actorDeviceId !== input.actorDeviceId
       )
         throw new OperationNotFoundError();
+      if (operation.status === "CANCELLED")
+        return Object.freeze({ operation, idempotent: true });
       if (operation.status !== "STAGED")
         throw new OperationNotCancellableError();
       await transaction.stagedObject.deleteMany({
         where: { operationId: operation.id, committedAt: null },
       });
-      return transaction.operation.update({
-        where: { id: operation.id },
+      const result = await transaction.operation.updateMany({
+        where: { id: operation.id, status: "STAGED" },
         data: { status: "CANCELLED" },
       });
+      if (result.count !== 1) {
+        const current = await transaction.operation.findUnique({
+          where: { id: operation.id },
+        });
+        if (current?.status === "CANCELLED")
+          return Object.freeze({ operation: current, idempotent: true });
+        throw new OperationNotCancellableError();
+      }
+      const cancelled = await transaction.operation.findUnique({
+        where: { id: operation.id },
+      });
+      if (!cancelled) throw new OperationNotFoundError();
+      return Object.freeze({ operation: cancelled, idempotent: false });
     });
   }
 }

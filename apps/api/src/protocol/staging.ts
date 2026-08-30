@@ -1,4 +1,5 @@
 import {
+  ContractError,
   type FinalizePublicationRequest,
   importSigningPublicKey,
   parseProtocolObject,
@@ -24,6 +25,18 @@ export const collectStagedObjectIds = (
   ...request.lanes.map((lane) => lane.protocolObjectId),
 ];
 
+export const uniqueStagedObjectIds = (
+  ids: readonly string[],
+): readonly string[] => [...new Set(ids)];
+
+export const hasAllStagedObjects = (
+  requestedIds: readonly string[],
+  stagedRows: ReadonlyArray<{ readonly objectId: string }>,
+): boolean => {
+  const stagedIds = new Set(stagedRows.map((row) => row.objectId));
+  return requestedIds.every((objectId) => stagedIds.has(objectId));
+};
+
 export const buildProtocolObjectFromStage = (
   stagedById: ReadonlyMap<string, StagedRow>,
   objectId: string,
@@ -31,7 +44,7 @@ export const buildProtocolObjectFromStage = (
   environmentId: string,
 ) => {
   const staged = stagedById.get(objectId);
-  if (!staged) throw new Error("protocol object was not staged by the actor");
+  if (!staged) throw new ContractError("staged_object_missing");
   const parsed = parseProtocolObject(new Uint8Array(staged.canonicalBytes));
   validateProtocolObject(parsed);
   return {

@@ -4,8 +4,9 @@ Authenticated protocol endpoints live under `/api/v1` and combine strict JSON
 administration with exact `application/vnd.dotrelay.e2ee-v3+cbor` protected
 transport. Authenticated responses use `Cache-Control: no-store`.
 
-Protocol routes are rate limited through disposable Valkey counters in
-production. Development skips enforcement when Valkey is unavailable.
+Protocol routes are rate limited through disposable Valkey counters when
+`VALKEY_URL` or `REDIS_URL` is configured. Production requires a configured
+Valkey endpoint; non-production skips enforcement when neither URL is set.
 
 ## Operation lifecycle
 

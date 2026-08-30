@@ -80,6 +80,7 @@ export {
   parseSyncRequest,
   parseUuid,
   type SyncPageWire,
+  type SyncRequest,
   type SyncRevisionWire,
   sha384ToHex,
   uuidToBytes,
