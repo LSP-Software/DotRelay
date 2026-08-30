@@ -1,10 +1,9 @@
-import {
-  type ProblemCode,
-  sha384,
-} from "@dotrelay/contracts";
+import { type ProblemCode, sha384 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
   OperationConflictError,
+  OperationNotCancellableError,
+  OperationNotFoundError,
   StagedObjectConflictError,
   StaleEpochError,
   StaleHeadError,
@@ -13,7 +12,11 @@ import {
 
 export const mapPersistenceError = (
   error: unknown,
-): { readonly code: ProblemCode; readonly headId?: string; readonly headHash?: string } | null => {
+): {
+  readonly code: ProblemCode;
+  readonly headId?: string;
+  readonly headHash?: string;
+} | null => {
   if (error instanceof StaleHeadError)
     return {
       code: "stale_head",
@@ -25,6 +28,10 @@ export const mapPersistenceError = (
   if (error instanceof StagedObjectConflictError)
     return { code: "state_conflict" };
   if (error instanceof SyncIntegrityError) return { code: "state_conflict" };
+  if (error instanceof OperationNotFoundError)
+    return { code: "resource_not_found" };
+  if (error instanceof OperationNotCancellableError)
+    return { code: "state_conflict" };
   if (!(error instanceof Error)) return null;
   const message = error.message;
   if (message.includes("not active")) return { code: "device_not_active" };
@@ -34,7 +41,6 @@ export const mapPersistenceError = (
   if (message.includes("archived")) return { code: "archived_resource" };
   if (message.includes("not staged")) return { code: "staged_object_missing" };
   if (message.includes("expired")) return { code: "staging_expired" };
-  if (message.includes("not cancellable")) return { code: "state_conflict" };
   return null;
 };
 
@@ -55,5 +61,6 @@ export const enrichStaleHead = async (
   return { headId, headHash };
 };
 
-export const digestRequestBody = async (body: Uint8Array): Promise<Uint8Array> =>
-  sha384(body);
+export const digestRequestBody = async (
+  body: Uint8Array,
+): Promise<Uint8Array> => sha384(body);

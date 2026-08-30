@@ -16,7 +16,9 @@ export const requireProtocolActor = async (
   profile: ServerProfileConfig,
   auth: DotRelayAuth,
 ): Promise<ProtocolActor | Response> => {
-  const session = await auth.api.getSession({ headers: context.req.raw.headers });
+  const session = await auth.api.getSession({
+    headers: context.req.raw.headers,
+  });
   if (!session)
     return context.json(createProblem("authentication_required"), 401, {
       "Cache-Control": "no-store",

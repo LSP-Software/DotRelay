@@ -63,6 +63,28 @@ export {
   validateProtocolObject,
 } from "./protocol";
 export {
+  type BeginOperationRequest,
+  bytesToUuid,
+  DEVICE_ID_HEADER,
+  decodeSyncPage,
+  type EpochRotationRequest,
+  encodeSyncPage,
+  type FinalizePublicationRequest,
+  formatSyncCursor,
+  PROTOCOL_MEDIA_TYPE,
+  parseBeginOperationRequest,
+  parseEpochRotationRequest,
+  parseFinalizePublicationRequest,
+  parseSha384Hex,
+  parseSyncCursorValue,
+  parseSyncRequest,
+  parseUuid,
+  type SyncPageWire,
+  type SyncRevisionWire,
+  sha384ToHex,
+  uuidToBytes,
+} from "./protocol-api";
+export {
   API_VERSION,
   ENUM_REGISTRIES,
   FIELD_REGISTRY,
@@ -74,22 +96,6 @@ export {
   SUITE_NAME,
   SUITE_VALUE,
 } from "./registry";
-export {
-  type BeginOperationRequest,
-  DEVICE_ID_HEADER,
-  encodeSyncPage,
-  formatSyncCursor,
-  parseBeginOperationRequest,
-  parseFinalizePublicationRequest,
-  parseSha384Hex,
-  parseSyncCursorValue,
-  parseSyncRequest,
-  parseUuid,
-  PROTOCOL_MEDIA_TYPE,
-  sha384ToHex,
-  type SyncPageWire,
-  type SyncRevisionWire,
-} from "./protocol-api";
 export {
   establishServerProfileTrust,
   type ServerProfilePin,

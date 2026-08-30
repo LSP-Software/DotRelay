@@ -31,6 +31,8 @@ export {
   MembershipAdministrationRepository,
   MembershipRepository,
   OperationConflictError,
+  OperationNotCancellableError,
+  OperationNotFoundError,
   OperationRepository,
   ProjectEpochRepository,
   ProjectRepository,

@@ -34,6 +34,20 @@ const inPersistenceTransaction = async <T>(
   return callback(database);
 };
 
+export class OperationNotFoundError extends Error {
+  constructor() {
+    super("Operation not found");
+    this.name = "OperationNotFoundError";
+  }
+}
+
+export class OperationNotCancellableError extends Error {
+  constructor() {
+    super("Operation is not cancellable");
+    this.name = "OperationNotCancellableError";
+  }
+}
+
 export class OperationConflictError extends Error {
   constructor() {
     super(
@@ -364,9 +378,9 @@ export class OperationRepository {
         operation.actorUserId !== input.actorUserId ||
         operation.actorDeviceId !== input.actorDeviceId
       )
-        throw new Error("Operation not found");
+        throw new OperationNotFoundError();
       if (operation.status !== "STAGED")
-        throw new Error("Operation is not cancellable");
+        throw new OperationNotCancellableError();
       await transaction.stagedObject.deleteMany({
         where: { operationId: operation.id, committedAt: null },
       });

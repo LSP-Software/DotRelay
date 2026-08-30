@@ -1,1 +1,1 @@
-export { registerProtocolRoutes, COMMAND_STAGE_OBJECT_ID } from "./routes";
+export { COMMAND_STAGE_OBJECT_ID, registerProtocolRoutes } from "./routes";

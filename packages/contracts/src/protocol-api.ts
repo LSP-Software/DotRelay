@@ -1,7 +1,11 @@
-import { CBOR_LIMITS, canonicalEncode, type CborValue } from "./cbor";
+import { type Pagination, parseJsonObject, parsePagination } from "./api";
+import {
+  CBOR_LIMITS,
+  type CborValue,
+  canonicalDecode,
+  canonicalEncode,
+} from "./cbor";
 import { contractError } from "./errors";
-import { parseJsonObject, parsePagination, type Pagination } from "./api";
-import { utf8Encode } from "./runtime";
 
 export const PROTOCOL_MEDIA_TYPE =
   "application/vnd.dotrelay.e2ee-v3+cbor" as const;
@@ -13,13 +17,13 @@ const uuidPattern =
 
 const sha384HexPattern = /^[0-9a-f]{96}$/i;
 
-export const parseUuid = (value: unknown, field: string): string => {
+export const parseUuid = (value: unknown, _field: string): string => {
   if (typeof value !== "string" || !uuidPattern.test(value))
     contractError("invalid_request");
   return value.toLowerCase();
 };
 
-export const parseSha384Hex = (value: unknown, field: string): Uint8Array => {
+export const parseSha384Hex = (value: unknown, _field: string): Uint8Array => {
   if (typeof value !== "string" || !sha384HexPattern.test(value))
     contractError("invalid_request");
   const bytes = new Uint8Array(48);
@@ -32,12 +36,27 @@ export const parseSha384Hex = (value: unknown, field: string): Uint8Array => {
 export const sha384ToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+export const uuidToBytes = (value: string): Uint8Array => {
+  parseUuid(value, "id");
+  const hex = value.replaceAll("-", "");
+  const bytes = new Uint8Array(16);
+  for (let index = 0; index < 16; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+};
+
+export const bytesToUuid = (value: Uint8Array): string => {
+  if (value.length !== 16) contractError("invalid_request");
+  const hex = [...value]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+};
+
 export type BeginOperationRequest = Readonly<{
   readonly operationId: string;
-  readonly kind:
-    | "REVISION_PUBLICATION"
-    | "ROLLBACK"
-    | "EPOCH_ROTATION";
+  readonly kind: "REVISION_PUBLICATION" | "ROLLBACK" | "EPOCH_ROTATION";
   readonly commandDigest: Uint8Array;
   readonly expiresAt?: string;
 }>;
@@ -69,7 +88,10 @@ export const parseBeginOperationRequest = (
     commandDigest: parseSha384Hex(body.commandDigest, "commandDigest"),
   };
   if (body.expiresAt !== undefined) {
-    if (typeof body.expiresAt !== "string" || Number.isNaN(Date.parse(body.expiresAt)))
+    if (
+      typeof body.expiresAt !== "string" ||
+      Number.isNaN(Date.parse(body.expiresAt))
+    )
       contractError("invalid_request");
     request.expiresAt = body.expiresAt;
   }
@@ -366,7 +388,10 @@ export const parseFinalizePublicationRequest = (
           projectEpoch: lane.projectEpoch,
           plaintextLength: lane.plaintextLength,
           ciphertextLength: lane.ciphertextLength,
-          ciphertextHash: parseSha384Hex(lane.ciphertextHash, "lane.ciphertextHash"),
+          ciphertextHash: parseSha384Hex(
+            lane.ciphertextHash,
+            "lane.ciphertextHash",
+          ),
         };
         if (lane.ownerUserId !== undefined)
           parsed.ownerUserId = parseUuid(lane.ownerUserId, "lane.ownerUserId");
@@ -434,8 +459,14 @@ export const parseFinalizePublicationRequest = (
           originalProviderUserId?: string;
         } = {
           ordinal: commitment.ordinal,
-          laneObjectId: parseUuid(commitment.laneObjectId, "commitment.laneObjectId"),
-          objectHash: parseSha384Hex(commitment.objectHash, "commitment.objectHash"),
+          laneObjectId: parseUuid(
+            commitment.laneObjectId,
+            "commitment.laneObjectId",
+          ),
+          objectHash: parseSha384Hex(
+            commitment.objectHash,
+            "commitment.objectHash",
+          ),
           projectEpoch: commitment.projectEpoch,
           scope: parseLaneScope(commitment.scope),
           ciphertextLength: commitment.ciphertextLength,
@@ -518,7 +549,7 @@ const SYNC_FIELD = Object.freeze({
 
 const encodeRevision = (revision: SyncRevisionWire): CborValue => {
   const fields = new Map<number, CborValue>([
-    [SYNC_FIELD.revisionId, utf8Encode(revision.id)],
+    [SYNC_FIELD.revisionId, uuidToBytes(revision.id)],
     [SYNC_FIELD.revisionDigest, revision.digest],
     [SYNC_FIELD.mutation, Number(revision.mutation)],
     [SYNC_FIELD.projectEpoch, revision.projectEpoch],
@@ -528,7 +559,7 @@ const encodeRevision = (revision: SyncRevisionWire): CborValue => {
       revision.objects.map(
         (object) =>
           new Map<number, CborValue>([
-            [SYNC_FIELD.objectId, utf8Encode(object.objectId)],
+            [SYNC_FIELD.objectId, uuidToBytes(object.objectId)],
             [SYNC_FIELD.canonicalBytes, object.canonicalBytes],
             [SYNC_FIELD.objectDigest, object.digest],
           ]),
@@ -536,11 +567,14 @@ const encodeRevision = (revision: SyncRevisionWire): CborValue => {
     ],
   ]);
   if (revision.parentId !== null)
-    fields.set(SYNC_FIELD.parentId, utf8Encode(revision.parentId));
+    fields.set(SYNC_FIELD.parentId, uuidToBytes(revision.parentId));
   if (revision.parentHash !== null)
     fields.set(SYNC_FIELD.parentHash, revision.parentHash);
   if (revision.rollbackTargetId !== null)
-    fields.set(SYNC_FIELD.rollbackTargetId, utf8Encode(revision.rollbackTargetId));
+    fields.set(
+      SYNC_FIELD.rollbackTargetId,
+      uuidToBytes(revision.rollbackTargetId),
+    );
   return fields;
 };
 
@@ -559,8 +593,8 @@ export const encodeSyncPage = (page: SyncPageWire): Uint8Array => {
   )
     contractError("payload_too_large");
   const envelope = new Map<number, CborValue>([
-    [SYNC_FIELD.environmentId, utf8Encode(page.environmentId)],
-    [SYNC_FIELD.trustedRevisionId, utf8Encode(page.trustedRevisionId)],
+    [SYNC_FIELD.environmentId, uuidToBytes(page.environmentId)],
+    [SYNC_FIELD.trustedRevisionId, uuidToBytes(page.trustedRevisionId)],
     [SYNC_FIELD.trustedRevisionHash, page.trustedRevisionHash],
     [SYNC_FIELD.projectEpoch, page.projectEpoch],
     [
@@ -569,7 +603,7 @@ export const encodeSyncPage = (page: SyncPageWire): Uint8Array => {
     ],
   ]);
   if (page.currentHeadId !== null)
-    envelope.set(SYNC_FIELD.currentHeadId, utf8Encode(page.currentHeadId));
+    envelope.set(SYNC_FIELD.currentHeadId, uuidToBytes(page.currentHeadId));
   if (page.currentHeadHash !== null)
     envelope.set(SYNC_FIELD.currentHeadHash, page.currentHeadHash);
   if (page.nextCursor !== null)
@@ -577,9 +611,188 @@ export const encodeSyncPage = (page: SyncPageWire): Uint8Array => {
   return canonicalEncode(envelope);
 };
 
+const readUuidField = (value: CborValue | undefined): string => {
+  if (!(value instanceof Uint8Array) || value.length !== 16)
+    contractError("invalid_request");
+  return bytesToUuid(value);
+};
+
+const readBytesField = (
+  value: CborValue | undefined,
+  exactLength?: number,
+): Uint8Array => {
+  if (!(value instanceof Uint8Array)) contractError("invalid_request");
+  if (exactLength !== undefined && value.length !== exactLength)
+    contractError("invalid_request");
+  return value;
+};
+
+const readUintField = (value: CborValue | undefined): bigint => {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+    return BigInt(value);
+  contractError("invalid_request");
+};
+
+export const decodeSyncPage = (encoded: Uint8Array): SyncPageWire => {
+  const decoded = canonicalDecode(encoded);
+  if (!(decoded instanceof Map)) contractError("invalid_request");
+  const revisionsValue = decoded.get(SYNC_FIELD.revisions);
+  if (!Array.isArray(revisionsValue)) contractError("invalid_request");
+  const revisions = revisionsValue.map((revisionValue) => {
+    if (!(revisionValue instanceof Map)) contractError("invalid_request");
+    const objectsValue = revisionValue.get(SYNC_FIELD.objects);
+    if (!Array.isArray(objectsValue)) contractError("invalid_request");
+    const parentIdValue = revisionValue.get(SYNC_FIELD.parentId);
+    const parentHashValue = revisionValue.get(SYNC_FIELD.parentHash);
+    const rollbackTargetValue = revisionValue.get(SYNC_FIELD.rollbackTargetId);
+    return Object.freeze({
+      id: readUuidField(revisionValue.get(SYNC_FIELD.revisionId)),
+      digest: readBytesField(revisionValue.get(SYNC_FIELD.revisionDigest), 48),
+      parentId:
+        parentIdValue === undefined ? null : readUuidField(parentIdValue),
+      parentHash:
+        parentHashValue === undefined
+          ? null
+          : readBytesField(parentHashValue, 48),
+      mutation: Number(readUintField(revisionValue.get(SYNC_FIELD.mutation))),
+      projectEpoch: readUintField(revisionValue.get(SYNC_FIELD.projectEpoch)),
+      authoredAtMs: readUintField(revisionValue.get(SYNC_FIELD.authoredAtMs)),
+      rollbackTargetId:
+        rollbackTargetValue === undefined
+          ? null
+          : readUuidField(rollbackTargetValue),
+      objects: Object.freeze(
+        objectsValue.map((objectValue) => {
+          if (!(objectValue instanceof Map)) contractError("invalid_request");
+          return Object.freeze({
+            objectId: readUuidField(objectValue.get(SYNC_FIELD.objectId)),
+            canonicalBytes: readBytesField(
+              objectValue.get(SYNC_FIELD.canonicalBytes),
+            ),
+            digest: readBytesField(
+              objectValue.get(SYNC_FIELD.objectDigest),
+              48,
+            ),
+          });
+        }),
+      ),
+    });
+  });
+  const currentHeadIdValue = decoded.get(SYNC_FIELD.currentHeadId);
+  const currentHeadHashValue = decoded.get(SYNC_FIELD.currentHeadHash);
+  const nextCursorValue = decoded.get(SYNC_FIELD.nextCursor);
+  return Object.freeze({
+    environmentId: readUuidField(decoded.get(SYNC_FIELD.environmentId)),
+    trustedRevisionId: readUuidField(decoded.get(SYNC_FIELD.trustedRevisionId)),
+    trustedRevisionHash: readBytesField(
+      decoded.get(SYNC_FIELD.trustedRevisionHash),
+      48,
+    ),
+    currentHeadId:
+      currentHeadIdValue === undefined
+        ? null
+        : readUuidField(currentHeadIdValue),
+    currentHeadHash:
+      currentHeadHashValue === undefined
+        ? null
+        : readBytesField(currentHeadHashValue, 48),
+    projectEpoch: readUintField(decoded.get(SYNC_FIELD.projectEpoch)),
+    revisions: Object.freeze(revisions),
+    nextCursor:
+      typeof nextCursorValue === "string"
+        ? nextCursorValue
+        : nextCursorValue === undefined
+          ? null
+          : contractError("invalid_request"),
+  });
+};
+
+export type EpochRotationRequest = Readonly<{
+  readonly projectId: string;
+  readonly expectedEpoch: number;
+  readonly newEpoch: number;
+  readonly transitions: ReadonlyArray<
+    Readonly<{
+      readonly environmentId: string;
+      readonly expectedHeadId: string;
+      readonly newHeadId: string;
+      readonly protocolObjectId: string;
+      readonly publication: FinalizePublicationRequest;
+    }>
+  >;
+}>;
+
+export const parseEpochRotationRequest = (
+  value: unknown,
+): EpochRotationRequest => {
+  const body = parseJsonObject<{
+    projectId?: unknown;
+    expectedEpoch?: unknown;
+    newEpoch?: unknown;
+    transitions?: unknown;
+  }>(value, ["projectId", "expectedEpoch", "newEpoch", "transitions"]);
+  if (
+    typeof body.expectedEpoch !== "number" ||
+    !Number.isInteger(body.expectedEpoch) ||
+    body.expectedEpoch < 0 ||
+    typeof body.newEpoch !== "number" ||
+    !Number.isInteger(body.newEpoch) ||
+    body.newEpoch < 0 ||
+    !Array.isArray(body.transitions)
+  )
+    contractError("invalid_request");
+  return Object.freeze({
+    projectId: parseUuid(body.projectId, "projectId"),
+    expectedEpoch: body.expectedEpoch,
+    newEpoch: body.newEpoch,
+    transitions: Object.freeze(
+      body.transitions.map((transitionValue) => {
+        const transition = parseJsonObject<{
+          environmentId?: unknown;
+          expectedHeadId?: unknown;
+          newHeadId?: unknown;
+          protocolObjectId?: unknown;
+          publication?: unknown;
+        }>(transitionValue, [
+          "environmentId",
+          "expectedHeadId",
+          "newHeadId",
+          "protocolObjectId",
+          "publication",
+        ]);
+        const environmentId = parseUuid(
+          transition.environmentId,
+          "transition.environmentId",
+        );
+        const publication = parseFinalizePublicationRequest({
+          ...(transition.publication as Record<string, unknown>),
+          environmentId,
+        });
+        if (publication.environmentId !== environmentId)
+          contractError("invalid_request");
+        return Object.freeze({
+          environmentId,
+          expectedHeadId: parseUuid(
+            transition.expectedHeadId,
+            "transition.expectedHeadId",
+          ),
+          newHeadId: parseUuid(transition.newHeadId, "transition.newHeadId"),
+          protocolObjectId: parseUuid(
+            transition.protocolObjectId,
+            "transition.protocolObjectId",
+          ),
+          publication,
+        });
+      }),
+    ),
+  });
+};
+
 export const parseSyncCursor = (value: string | undefined): string | null => {
   if (value === undefined) return null;
-  if (value.length === 0 || value.length > 1024) contractError("invalid_request");
+  if (value.length === 0 || value.length > 1024)
+    contractError("invalid_request");
   return value;
 };
 

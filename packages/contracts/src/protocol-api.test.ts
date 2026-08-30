@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  decodeSyncPage,
   encodeSyncPage,
   formatSyncCursor,
+  parseEpochRotationRequest,
   parseFinalizePublicationRequest,
   parseSha384Hex,
   parseSyncCursorValue,
   parseSyncRequest,
   parseUuid,
   sha384ToHex,
-} from "@dotrelay/contracts";
+} from "./protocol-api";
 
 describe("protocol API contracts", () => {
   test("parses sync requests and cursor values", () => {
@@ -69,5 +71,69 @@ describe("protocol API contracts", () => {
     });
     expect(parsed.revision.mutation).toBe("GENESIS");
     expect(parsed.descriptor.laneCount).toBe(0);
+  });
+
+  test("round-trips synchronization pages through CBOR", () => {
+    const digest = new Uint8Array(48).fill(0x03);
+    const encoded = encodeSyncPage({
+      environmentId: "00000000-0000-4000-8000-000000000020",
+      trustedRevisionId: "00000000-0000-4000-8000-000000000021",
+      trustedRevisionHash: digest,
+      currentHeadId: "00000000-0000-4000-8000-000000000022",
+      currentHeadHash: digest,
+      projectEpoch: 2n,
+      revisions: [],
+      nextCursor: formatSyncCursor(
+        "00000000-0000-4000-8000-000000000023",
+        digest,
+      ),
+    });
+    const decoded = decodeSyncPage(encoded);
+    expect(decoded.environmentId).toBe("00000000-0000-4000-8000-000000000020");
+    expect(decoded.projectEpoch).toBe(2n);
+    expect(decoded.nextCursor).toBe(
+      formatSyncCursor("00000000-0000-4000-8000-000000000023", digest),
+    );
+  });
+
+  test("parses epoch rotation requests with embedded publications", () => {
+    const digest = sha384ToHex(new Uint8Array(48).fill(0x04));
+    const environmentId = "00000000-0000-4000-8000-000000000030";
+    const parsed = parseEpochRotationRequest({
+      projectId: "00000000-0000-4000-8000-000000000031",
+      expectedEpoch: 1,
+      newEpoch: 2,
+      transitions: [
+        {
+          environmentId,
+          expectedHeadId: "00000000-0000-4000-8000-000000000032",
+          newHeadId: "00000000-0000-4000-8000-000000000033",
+          protocolObjectId: "00000000-0000-4000-8000-000000000034",
+          publication: {
+            environmentId,
+            expectedHeadId: "00000000-0000-4000-8000-000000000032",
+            revision: {
+              id: "00000000-0000-4000-8000-000000000035",
+              protocolObjectId: "00000000-0000-4000-8000-000000000034",
+              projectEpoch: 2,
+              mutation: "EPOCH_TRANSITION",
+              authoredAtMs: 1,
+            },
+            descriptor: {
+              protocolObjectId: "00000000-0000-4000-8000-000000000036",
+              schemaVersion: 1,
+              descriptorHash: digest,
+              laneCount: 0,
+            },
+            lanes: [],
+            commitments: [],
+          },
+        },
+      ],
+    });
+    expect(parsed.newEpoch).toBe(2);
+    expect(parsed.transitions[0]?.publication.revision.mutation).toBe(
+      "EPOCH_TRANSITION",
+    );
   });
 });

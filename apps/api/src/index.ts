@@ -15,7 +15,6 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createAuth, type DotRelayAuth } from "./auth";
-import { registerProtocolRoutes } from "./protocol";
 import {
   createCapabilitiesDocument,
   etagFor,
@@ -25,6 +24,7 @@ import {
   loadServerProfileConfig,
   type ServerProfileConfig,
 } from "./profile";
+import { registerProtocolRoutes } from "./protocol";
 
 type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;

@@ -5,6 +5,7 @@ import {
   type Problem,
   type ProblemCode,
 } from "./errors";
+import { PROTOCOL_OPENAPI_PATHS } from "./protocol-openapi";
 import { API_VERSION, SUITE_NAME, SUITE_VALUE } from "./registry";
 import { utf8Encode } from "./runtime";
 
@@ -350,6 +351,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         }),
       }),
     }),
+    ...PROTOCOL_OPENAPI_PATHS,
   }),
   components: Object.freeze({
     schemas: Object.freeze({

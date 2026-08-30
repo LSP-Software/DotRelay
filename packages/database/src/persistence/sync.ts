@@ -1,10 +1,10 @@
 import { decideLaneDisclosure } from "../administration";
 import type { MutationKind } from "../generated/prisma/client";
-import { copyBytes } from "./validation";
 import {
   AdministrationDisclosureRepository,
   type PersistenceClient,
 } from "./repositories";
+import { copyBytes } from "./validation";
 
 export class SyncIntegrityError extends Error {
   constructor(message: string) {
@@ -50,9 +50,10 @@ export type SyncPage = Readonly<{
   readonly currentHeadHash: Uint8Array | null;
   readonly projectEpoch: bigint;
   readonly revisions: readonly SyncRevision[];
-  readonly nextCursor:
-    | Readonly<{ revisionId: string; revisionHash: Uint8Array }>
-    | null;
+  readonly nextCursor: Readonly<{
+    revisionId: string;
+    revisionHash: Uint8Array;
+  }> | null;
 }>;
 
 const mutationWireValues: Readonly<Record<MutationKind, number>> = {
@@ -118,9 +119,15 @@ export class SyncRepository {
       trusted.environmentId !== input.environmentId ||
       !sameBytes(trusted.protocolObject.digest, input.trustedRevisionHash)
     )
-      throw new SyncIntegrityError("trusted revision is unknown or incompatible");
-    if (!(await this.isAncestor(database, trusted.id, environment.currentHeadId)))
-      throw new SyncIntegrityError("trusted revision is not an ancestor of the head");
+      throw new SyncIntegrityError(
+        "trusted revision is unknown or incompatible",
+      );
+    if (
+      !(await this.isAncestor(database, trusted.id, environment.currentHeadId))
+    )
+      throw new SyncIntegrityError(
+        "trusted revision is not an ancestor of the head",
+      );
     let afterRevision = trusted;
     if (input.cursorRevisionId !== undefined) {
       if (input.cursorRevisionHash === undefined)
@@ -134,9 +141,13 @@ export class SyncRepository {
         cursor.environmentId !== input.environmentId ||
         !sameBytes(cursor.protocolObject.digest, input.cursorRevisionHash)
       )
-        throw new SyncIntegrityError("cursor revision is unknown or incompatible");
+        throw new SyncIntegrityError(
+          "cursor revision is unknown or incompatible",
+        );
       if (!(await this.isAncestor(database, trusted.id, cursor.id)))
-        throw new SyncIntegrityError("cursor revision is not after the trusted revision");
+        throw new SyncIntegrityError(
+          "cursor revision is not after the trusted revision",
+        );
       afterRevision = cursor;
     }
     const revisions = await database.revision.findMany({

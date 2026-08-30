@@ -4,6 +4,9 @@ Authenticated protocol endpoints live under `/api/v1` and combine strict JSON
 administration with exact `application/vnd.dotrelay.e2ee-v3+cbor` protected
 transport. Authenticated responses use `Cache-Control: no-store`.
 
+Protocol routes are rate limited through disposable Valkey counters in
+production. Development skips enforcement when Valkey is unavailable.
+
 ## Operation lifecycle
 
 1. **Begin** — `POST /api/v1/operations/:operationId/begin` with a CBOR command
@@ -14,12 +17,17 @@ transport. Authenticated responses use `Cache-Control: no-store`.
 3. **Finalize** — `POST /api/v1/operations/:operationId/finalize` submits the
    strict JSON publication descriptor and performs compare-and-swap head
    advancement through `PublicationRepository`.
-4. **Cancel** — `DELETE /api/v1/operations/:operationId` cancels an uncommitted
+4. **Epoch transition** — `POST /api/v1/operations/:operationId/epoch-transitions`
+   finalizes an `EPOCH_ROTATION` operation across every active Environment in a
+   Project through `ProjectEpochRepository.rotate`.
+5. **Cancel** — `DELETE /api/v1/operations/:operationId` cancels an uncommitted
    staged operation.
 
 Publication and Rollback share the finalize route. The service verifies the
 Revision signature with the actor Device's Ed25519 public key before committing.
 `stale_head` problems include `headId` and `headHash` for client reconciliation.
+`stale_epoch` problems surface when an epoch transition no longer matches the
+Project's current epoch.
 
 ## Synchronization
 
