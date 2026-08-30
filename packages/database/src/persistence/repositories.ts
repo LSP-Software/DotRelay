@@ -341,6 +341,41 @@ export class OperationRepository {
       return result.count;
     });
   }
+
+  async cancel(
+    database: PersistenceClient,
+    input: Readonly<{
+      readonly operationId: string;
+      readonly actorUserId: string;
+      readonly actorDeviceId: string;
+    }>,
+  ) {
+    return inPersistenceTransaction(database, async (transaction) => {
+      await requireActiveDevice(
+        transaction,
+        input.actorUserId,
+        input.actorDeviceId,
+      );
+      const operation = await transaction.operation.findUnique({
+        where: { id: input.operationId },
+      });
+      if (
+        !operation ||
+        operation.actorUserId !== input.actorUserId ||
+        operation.actorDeviceId !== input.actorDeviceId
+      )
+        throw new Error("Operation not found");
+      if (operation.status !== "STAGED")
+        throw new Error("Operation is not cancellable");
+      await transaction.stagedObject.deleteMany({
+        where: { operationId: operation.id, committedAt: null },
+      });
+      return transaction.operation.update({
+        where: { id: operation.id },
+        data: { status: "CANCELLED" },
+      });
+    });
+  }
 }
 
 export type AuditFactInput = Readonly<{

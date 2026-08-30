@@ -75,6 +75,22 @@ export {
   SUITE_VALUE,
 } from "./registry";
 export {
+  type BeginOperationRequest,
+  DEVICE_ID_HEADER,
+  encodeSyncPage,
+  formatSyncCursor,
+  parseBeginOperationRequest,
+  parseFinalizePublicationRequest,
+  parseSha384Hex,
+  parseSyncCursorValue,
+  parseSyncRequest,
+  parseUuid,
+  PROTOCOL_MEDIA_TYPE,
+  sha384ToHex,
+  type SyncPageWire,
+  type SyncRevisionWire,
+} from "./protocol-api";
+export {
   establishServerProfileTrust,
   type ServerProfilePin,
   ServerProfileTrustError,

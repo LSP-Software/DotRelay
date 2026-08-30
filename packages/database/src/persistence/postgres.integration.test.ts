@@ -21,6 +21,7 @@ import {
   SecurityRequestLogRepository,
   StagedObjectRepository,
   StaleHeadError,
+  SyncRepository,
   sha384Digest,
 } from "..";
 
@@ -939,6 +940,52 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       mutation: "ROLLBACK",
     });
     expect(await database.revision.count({ where: { environmentId } })).toBe(3);
+  });
+
+  test("returns authorization-scoped synchronization pages after a trusted revision", async () => {
+    const { device, projectId, user } = await createProjectFixture("sync-page");
+    const environments = new EnvironmentRepository();
+    const publications = new PublicationRepository();
+    const synchronization = new SyncRepository();
+    const environmentId = crypto.randomUUID();
+    const genesis = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: null,
+      mutation: "GENESIS",
+      label: "sync-genesis",
+    });
+    await environments.createWithGenesis(database, {
+      environmentId,
+      projectId,
+      createdByUserId: user.id,
+      publication: genesis,
+    });
+    const update = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: genesis.revision.id,
+      parentHash: genesis.revisionObject.digest,
+      mutation: "MANIFEST_UPDATE",
+      label: "sync-update",
+    });
+    await publications.publishRevision(database, update);
+    const page = await synchronization.synchronize(database, {
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      environmentId,
+      trustedRevisionId: genesis.revision.id,
+      trustedRevisionHash: genesis.revisionObject.digest,
+      limit: 16,
+    });
+    expect(page.revisions).toHaveLength(1);
+    expect(page.revisions[0]?.id).toBe(update.revision.id);
+    expect(page.currentHeadId).toBe(update.revision.id);
+    expect(page.nextCursor).toBeNull();
   });
 
   test("expires only disposable staging and Security Request Log rows", async () => {

@@ -43,6 +43,8 @@ export {
   StaleEpochError,
   StaleHeadError,
 } from "./repositories";
+export type { SyncInput, SyncObject, SyncPage, SyncRevision } from "./sync";
+export { mutationToWire, SyncIntegrityError, SyncRepository } from "./sync";
 export type { TransactionDatabase } from "./transaction";
 export { DEFAULT_TRANSACTION_OPTIONS, inShortTransaction } from "./transaction";
 export {

@@ -74,7 +74,13 @@
     "schemas": {
       "Problem": {
         "type": "object",
-        "required": ["type", "title", "status", "code", "detail"],
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
         "additionalProperties": false,
         "properties": {
           "type": {
@@ -166,7 +172,10 @@
           "suite": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "value"],
+            "required": [
+              "name",
+              "value"
+            ],
             "properties": {
               "name": {
                 "type": "string",

@@ -15,6 +15,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createAuth, type DotRelayAuth } from "./auth";
+import { registerProtocolRoutes } from "./protocol";
 import {
   createCapabilitiesDocument,
   etagFor,
@@ -185,6 +186,8 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
       },
     );
   });
+
+  registerProtocolRoutes(app, { database, profile, auth });
 
   void database;
   return app;

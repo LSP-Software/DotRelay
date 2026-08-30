@@ -165,6 +165,9 @@ export const createCapabilitiesDocument = (
       "canonical-cbor-protocol",
       "pagination",
       "idempotency",
+      "operation-staging",
+      "revision-publication",
+      "environment-synchronization",
     ]),
     limits: Object.freeze({
       adminBodyBytes: CBOR_LIMITS.maxAdminBodyBytes,
