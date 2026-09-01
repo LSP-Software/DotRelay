@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { stageCliPackage } from "./stage-cli-package";
 
 const binary = join(
   import.meta.dir,
@@ -29,3 +30,32 @@ const version = await run(["--version"]);
 if (version !== "0.0.0-foundation")
   throw new Error(`unexpected CLI version: ${version}`);
 console.log("✓ packaged CLI round trip passed");
+
+await stageCliPackage();
+const selector = join(
+  import.meta.dir,
+  "..",
+  "packages",
+  "dotrelay",
+  "bin",
+  "dotrelay.mjs",
+);
+const selectorProcess = Bun.spawn([process.execPath, selector, "--version"], {
+  env: Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key !== "DOTRELAY_BINARY"),
+  ),
+  stdout: "pipe",
+  stderr: "pipe",
+});
+const [selectorOutput, selectorError, selectorExitCode] = await Promise.all([
+  new Response(selectorProcess.stdout).text(),
+  new Response(selectorProcess.stderr).text(),
+  selectorProcess.exited,
+]);
+if (selectorExitCode !== 0)
+  throw new Error(
+    `npm selector exited with ${selectorExitCode}: ${selectorError}`,
+  );
+if (selectorOutput.trim() !== version)
+  throw new Error(`unexpected npm selector version: ${selectorOutput.trim()}`);
+console.log("✓ npm selector forwarded the command contract");

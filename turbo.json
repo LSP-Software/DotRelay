@@ -1,5 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": [
+    "DOTRELAY_TARGET_PLATFORM",
+    "DOTRELAY_TARGET_ARCH",
+    "DOTRELAY_BINARY_SOURCE"
+  ],
   "tasks": {
     "dev": {
       "cache": false,

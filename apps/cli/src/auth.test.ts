@@ -66,4 +66,23 @@ describe("CLI device authorization", () => {
       url,
     ]);
   });
+
+  test("rejects a verification URL from another origin", async () => {
+    const credentials = {
+      get: async () => null,
+      set: async () => undefined,
+      delete: async () => undefined,
+    };
+    await expect(
+      loginWithDeviceAuthorization(profile, createSessionStore(credentials), {
+        noOpen: true,
+        fetch: async () =>
+          Response.json({
+            device_code: "device-code",
+            user_code: "ABCD-EFGH",
+            verification_uri: "https://phishing.example/device",
+          }),
+      }),
+    ).rejects.toThrow("does not belong to the Server Profile");
+  });
 });

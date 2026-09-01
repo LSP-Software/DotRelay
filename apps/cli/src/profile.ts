@@ -29,10 +29,35 @@ export type ProfileCatalogStore = Readonly<{
   readonly write: (catalog: ProfileCatalog) => Promise<void>;
 }>;
 
+export type ProfileTrustCandidate = Readonly<{
+  readonly name: string;
+  readonly origin: string;
+  readonly pin: ServerProfilePin;
+}>;
+
 const emptyCatalog = (): ProfileCatalog =>
   Object.freeze({ version: 1, profiles: Object.freeze([]) });
 
 const profileName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const serverProfileId =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isCanonicalStoredOrigin = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    return (
+      url.origin === value &&
+      (url.protocol === "https:" || (url.protocol === "http:" && loopback)) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+};
 
 const validateCatalog = (value: unknown): ProfileCatalog => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -70,7 +95,11 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
       typeof record.origin !== "string" ||
       !pin ||
       typeof pin.origin !== "string" ||
-      typeof pin.serverProfileId !== "string"
+      typeof pin.serverProfileId !== "string" ||
+      record.origin !== pin.origin ||
+      !isCanonicalStoredOrigin(record.origin) ||
+      !isCanonicalStoredOrigin(pin.origin) ||
+      !serverProfileId.test(pin.serverProfileId)
     )
       throw new CliError(
         "local-io",
@@ -188,6 +217,7 @@ export const addServerProfile = async (
   options: Readonly<{
     readonly fetch?: FetchFunction;
     readonly runtime?: Crypto;
+    readonly confirm?: (candidate: ProfileTrustCandidate) => Promise<boolean>;
   }> = {},
 ): Promise<CliServerProfile> => {
   if (!profileName.test(name))
@@ -251,6 +281,10 @@ export const addServerProfile = async (
     );
   }
   const profile = Object.freeze({ name, origin, pin: trusted.pin });
+  if (options.confirm && !(await options.confirm(profile)))
+    throw new CliInvocationError(
+      "Server Profile trust confirmation was declined; nothing was saved",
+    );
   const profiles = Object.freeze([
     ...catalog.profiles.filter((candidate) => candidate.name !== name),
     profile,
@@ -271,8 +305,7 @@ export const useServerProfile = async (
 ): Promise<CliServerProfile> => {
   const catalog = await store.read();
   const profile = catalog.profiles.find((candidate) => candidate.name === name);
-  if (!profile)
-    throw new CliInvocationError(`Server Profile not found: ${name}`);
+  if (!profile) throw new CliInvocationError("Server Profile not found");
   await store.write(
     Object.freeze({ version: 1, profiles: catalog.profiles, selected: name }),
   );

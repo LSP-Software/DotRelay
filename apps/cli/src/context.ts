@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CliError, CliInvocationError } from "./errors";
 import { atomicWriteProtectedFile } from "./output";
+import type { FetchFunction } from "./profile";
 
 export type GitRemote = Readonly<{
   readonly name: string;
@@ -12,15 +13,32 @@ export type GitHubRepository = Readonly<{
   readonly owner: string;
   readonly name: string;
   readonly remoteNames: readonly string[];
+  readonly githubRepositoryId?: string;
 }>;
 
 export type WorktreeContext = Readonly<{
   readonly serverProfileId: string;
   readonly projectId: string;
-  readonly environmentId: string;
+  readonly environmentId?: string;
+}>;
+
+export type EnvironmentSelection = Readonly<{
+  readonly source: "override" | "worktree";
+  readonly value: string;
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+
+export const resolveEnvironmentSelection = (
+  override: string | undefined,
+  context: WorktreeContext | null,
+): EnvironmentSelection | null => {
+  if (override !== undefined)
+    return Object.freeze({ source: "override", value: override });
+  if (context?.environmentId !== undefined)
+    return Object.freeze({ source: "worktree", value: context.environmentId });
+  return null;
+};
 
 const parseGitHubRemote = (
   remote: GitRemote,
@@ -88,12 +106,87 @@ export const detectGitHubRepository = (
   });
 };
 
+const readRepositoryId = async (response: Response): Promise<string> => {
+  if (!response.ok)
+    throw new CliError(
+      "transient",
+      "GitHub could not resolve the repository identity",
+      {},
+      "repository_resolution_failed",
+    );
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new CliError(
+      "transient",
+      "GitHub returned an invalid repository identity",
+      {},
+      "repository_resolution_failed",
+    );
+  }
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    typeof (body as Record<string, unknown>).id !== "number" ||
+    !Number.isSafeInteger((body as Record<string, unknown>).id) ||
+    Number((body as Record<string, unknown>).id) < 1
+  )
+    throw new CliError(
+      "transient",
+      "GitHub returned an invalid repository identity",
+      {},
+      "repository_resolution_failed",
+    );
+  return String((body as Record<string, unknown>).id);
+};
+
+export const resolveGitHubRepository = async (
+  repository: GitHubRepository,
+  options: Readonly<{ readonly fetch?: FetchFunction }> = {},
+): Promise<GitHubRepository> => {
+  if (repository.githubRepositoryId) return repository;
+  const fetcher = options.fetch ?? fetch;
+  let response: Response;
+  try {
+    response = await fetcher(
+      `https://api.github.com/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`,
+      {
+        method: "GET",
+        redirect: "error",
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "dotrelay-cli",
+        },
+      },
+    );
+  } catch {
+    throw new CliError(
+      "transient",
+      "could not resolve the GitHub repository identity",
+      {},
+      "repository_resolution_failed",
+    );
+  }
+  return Object.freeze({
+    ...repository,
+    githubRepositoryId: await readRepositoryId(response),
+  });
+};
+
 const validateContext = (value: unknown): WorktreeContext => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new CliInvocationError("worktree context is invalid");
   const object = value as Record<string, unknown>;
   const keys = Object.keys(object).sort();
-  if (keys.join(",") !== "environmentId,projectId,serverProfileId")
+  if (
+    !keys.every((key) =>
+      ["environmentId", "projectId", "serverProfileId"].includes(key),
+    ) ||
+    !keys.includes("projectId") ||
+    !keys.includes("serverProfileId")
+  )
     throw new CliInvocationError(
       "worktree context must contain only opaque ids",
     );
@@ -110,7 +203,9 @@ const validateContext = (value: unknown): WorktreeContext => {
   return Object.freeze({
     serverProfileId: object.serverProfileId as string,
     projectId: object.projectId as string,
-    environmentId: object.environmentId as string,
+    ...(object.environmentId === undefined
+      ? {}
+      : { environmentId: object.environmentId as string }),
   });
 };
 

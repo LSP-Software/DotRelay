@@ -54,7 +54,104 @@ const requireSupportedPlatform = (): "security" | "secret-tool" => {
   );
 };
 
+const base64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+};
+
+const windowsTarget = (service: string, account: string): string =>
+  `DotRelay/${base64(new TextEncoder().encode(`${service}\0${account}`))}`;
+
+const WINDOWS_CREDENTIAL_TYPE = [
+  "Add-Type @'",
+  "using System;",
+  "using System.Runtime.InteropServices;",
+  "public static class DotRelayCredential {",
+  "[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct CREDENTIAL {",
+  "public uint Flags; public uint Type; public string TargetName; public string Comment; public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten; public uint CredentialBlobSize; public IntPtr CredentialBlob; public uint Persist; public uint AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName; }",
+  '[DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredRead(string target, uint type, uint flags, out IntPtr credential);',
+  '[DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredWrite(ref CREDENTIAL credential, uint flags);',
+  '[DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredDelete(string target, uint type, uint flags);',
+  '[DllImport("advapi32.dll")] public static extern void CredFree(IntPtr credential);',
+  "public static byte[] Read(string target) { IntPtr pointer; if (!CredRead(target, 1, 0, out pointer)) return null; var value = (CREDENTIAL)Marshal.PtrToStructure(pointer, typeof(CREDENTIAL)); var bytes = new byte[value.CredentialBlobSize]; Marshal.Copy(value.CredentialBlob, bytes, 0, (int)value.CredentialBlobSize); CredFree(pointer); return bytes; }",
+  "public static bool Write(string target, byte[] bytes) { var pointer = Marshal.AllocHGlobal(bytes.Length); try { Marshal.Copy(bytes, 0, pointer, bytes.Length); var value = new CREDENTIAL { Type=1, TargetName=target, CredentialBlob=pointer, CredentialBlobSize=(uint)bytes.Length, Persist=2, UserName=target }; return CredWrite(ref value, 0); } finally { Marshal.FreeHGlobal(pointer); } }",
+  "}",
+  "'@",
+].join("\n");
+
+const windowsScript = (
+  operation: "read" | "write" | "delete",
+  target: string,
+): string =>
+  [
+    WINDOWS_CREDENTIAL_TYPE,
+    `$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${btoa(target)}'))`,
+    `$operation = '${operation}'`,
+    "$inputText = [Console]::In.ReadToEnd()",
+    "if ($operation -eq 'read') { $secret = [DotRelayCredential]::Read($target); if ($null -eq $secret) { exit 1 }; [Console]::OpenStandardOutput().Write($secret, 0, $secret.Length); exit 0 }",
+    "if ($operation -eq 'write') { $secret = [Convert]::FromBase64String($inputText); if (![DotRelayCredential]::Write($target, $secret)) { exit 1 }; exit 0 }",
+    "if (![DotRelayCredential]::CredDelete($target, 1, 0)) { exit 1 }; exit 0",
+  ].join("\n");
+
+const createWindowsCredentialStore = (): NativeCredentialStore =>
+  Object.freeze({
+    get: async (service, account) => {
+      const target = windowsTarget(service, account);
+      const result = await command("powershell.exe", [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        windowsScript("read", target),
+      ]);
+      return result.status === 0 ? result.stdout : null;
+    },
+    set: async (service, account, secret) => {
+      const target = windowsTarget(service, account);
+      const result = await command(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          windowsScript("write", target),
+        ],
+        new TextEncoder().encode(base64(secret)),
+      );
+      if (result.status !== 0)
+        throw new CliError(
+          "local-io",
+          "could not save a credential in the operating-system store",
+          {},
+          "credential_store_write_failed",
+        );
+    },
+    delete: async (service, account) => {
+      const target = windowsTarget(service, account);
+      const result = await command("powershell.exe", [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        windowsScript("delete", target),
+      ]);
+      if (result.status !== 0 && result.status !== 1168)
+        throw new CliError(
+          "local-io",
+          "could not remove a credential from the operating-system store",
+          {},
+          "credential_store_delete_failed",
+        );
+    },
+  });
+
 export const createNativeCredentialStore = (): NativeCredentialStore => {
+  if (process.platform === "win32") return createWindowsCredentialStore();
   const executable = requireSupportedPlatform();
   if (executable === "security") {
     return Object.freeze({

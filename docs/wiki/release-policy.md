@@ -5,10 +5,11 @@ routine bypasses are forbidden. An emergency bypass is exceptional and requires 
 request with an explanation.
 
 Production releases are tag-only. A tag matching `v*.*.*` starts the release workflow; the workflow
-checks that the tagged commit is an ancestor of `main`, reruns `bun run verify`, and publishes the
-single `apps/cli/dist/dotrelay` binary built on `ubuntu-latest` as a GitHub Release asset. Merging to
-`main` never deploys production.
+checks that the tagged commit is an ancestor of `main`, reruns `bun run verify`, and builds native
+CLI binaries on Linux, macOS, and Windows. It publishes all three binaries as GitHub Release assets
+and publishes the intentional `dotrelay` npm selector containing the matching platform binaries.
+Merging to `main` never deploys production.
 
-The current workflow does not enforce immutable tag references or strict SemVer beyond the tag glob,
-and it does not publish platform-specific artifacts or an npm distribution. Those guarantees require
-additional release-workflow and repository-policy changes before they can be promised.
+The workflow does not enforce immutable tag references or strict SemVer beyond the tag glob.
+Platform-specific npm binaries are staged with `bun run package:cli`; the release workflow verifies
+the selector and publishes the package only after the cross-platform build matrix completes.

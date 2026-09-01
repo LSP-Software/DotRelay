@@ -352,4 +352,55 @@ describe("API foundation", () => {
     expect(page).toContain("&lt;script&gt;");
     expect(page).not.toContain("<strong><script>");
   });
+
+  test("exposes only opaque Environment metadata to an active Device", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({
+          user: { id: "auth-user", name: "Ari" },
+        }),
+      },
+    } as never;
+    const database = {
+      authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
+      user: { upsert: async () => ({ id: "user-id" }) },
+      device: { findFirst: async () => ({ id: "device-id" }) },
+      project: { findUnique: async () => ({ teamId: "team-id" }) },
+      membership: { findFirst: async () => ({ id: "membership-id" }) },
+      environment: {
+        findMany: async () => [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "00000000-0000-4000-8000-000000000002",
+            lifecycle: "ACTIVE",
+            currentHeadId: null,
+          },
+        ],
+      },
+    } as never;
+    const testApp = createApi({ database, profile, auth });
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/projects/00000000-0000-4000-8000-000000000002/environments`,
+      {
+        headers: {
+          Origin: profile.origin,
+          Authorization: "Bearer session-token",
+          "X-DotRelay-Device-Id": "device-id",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      environments: [
+        {
+          id: "00000000-0000-4000-8000-000000000003",
+          projectId: "00000000-0000-4000-8000-000000000002",
+          lifecycle: "active",
+          currentHeadId: null,
+        },
+      ],
+    });
+  });
 });
