@@ -178,10 +178,13 @@ describe("CLI foundation", () => {
           readGitRemotes: async () => [
             { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
           ],
+          githubFetch: async () => Response.json({ id: 1311418611 }),
           admin: {
             post: async () => ({
               id: "00000000-0000-4000-8000-000000000002",
-              name: "DotRelay",
+              teamId: "00000000-0000-4000-8000-000000000001",
+              githubRepositoryId: "1311418611",
+              lifecycle: "active",
             }),
             get: async () => ({}) as never,
           },
@@ -190,7 +193,7 @@ describe("CLI foundation", () => {
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
-        project: "DotRelay",
+        projectId: "00000000-0000-4000-8000-000000000002",
       });
       expect(await Bun.file(contextPath).text()).toBe(
         '{"serverProfileId":"00000000-0000-4000-8000-000000000042","projectId":"00000000-0000-4000-8000-000000000002"}\n',
@@ -238,7 +241,7 @@ describe("CLI foundation", () => {
           "env",
           "use",
           "--environment",
-          "staging",
+          "00000000-0000-4000-8000-000000000003",
           "--profile",
           "relay",
           "--json",
@@ -249,7 +252,12 @@ describe("CLI foundation", () => {
           admin: {
             get: async () => ({
               environments: [
-                { id: "00000000-0000-4000-8000-000000000003", name: "staging" },
+                {
+                  id: "00000000-0000-4000-8000-000000000003",
+                  projectId: "00000000-0000-4000-8000-000000000002",
+                  lifecycle: "active",
+                  currentHeadId: null,
+                },
               ],
             }),
             post: async () => ({}) as never,
@@ -259,7 +267,7 @@ describe("CLI foundation", () => {
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
-        environment: "staging",
+        environmentId: "00000000-0000-4000-8000-000000000003",
       });
       expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
         serverProfileId: "00000000-0000-4000-8000-000000000042",

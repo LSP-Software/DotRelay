@@ -22,11 +22,18 @@ are rejected.
 
 ## Repository and worktree context
 
-`context` normalizes GitHub SSH and HTTPS remotes to a stable owner/repository identity. Missing or
-different repository remotes fail closed and require an explicit choice. Repository detection only
-finds a Project; it never grants Membership or secret access. Environment selection is worktree
-local. `.git/dotrelay/config` may contain only the Server Profile, Project, and Environment opaque
-ids, never names or Values.
+`context` normalizes GitHub SSH and HTTPS remotes, then resolves GitHub's stable numeric Repository
+id. Missing or different repository remotes fail closed and require an explicit choice. Repository
+detection only finds a Project; it never grants Membership or secret access. The identity lookup
+uses GitHub's public repository metadata endpoint and never receives a GitHub token from the CLI.
+Environment selection is by opaque id and is worktree local. `.git/dotrelay/config` may contain
+only the Server Profile, Project, and Environment opaque ids, never names or Values.
+
+`project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
+Server Profile. It requires an authenticated session and an active enrolled Device; a session from
+`login` alone is intentionally insufficient. `env use <environment-id>` reads only opaque
+Environment metadata and never exposes a server-side Environment name, because the server does not
+store readable names.
 
 ## Output and automation
 

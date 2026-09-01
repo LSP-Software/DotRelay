@@ -1,10 +1,14 @@
 import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-const binaryName = process.platform === "win32" ? "dotrelay.exe" : "dotrelay";
-const platformDirectory = `${process.platform}-${process.arch}`;
+const targetPlatform = process.env.DOTRELAY_TARGET_PLATFORM ?? process.platform;
+const targetArch = process.env.DOTRELAY_TARGET_ARCH ?? process.arch;
+const binaryName = targetPlatform === "win32" ? "dotrelay.exe" : "dotrelay";
+const platformDirectory = `${targetPlatform}-${targetArch}`;
 const root = join(import.meta.dir, "..");
-const source = join(root, "apps", "cli", "dist", binaryName);
+const source =
+  process.env.DOTRELAY_BINARY_SOURCE ??
+  join(root, "apps", "cli", "dist", binaryName);
 const destination = join(
   root,
   "packages",

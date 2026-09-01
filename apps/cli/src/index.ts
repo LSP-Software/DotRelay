@@ -20,6 +20,7 @@ import {
   type GitRemote,
   readWorktreeContext,
   resolveEnvironmentSelection,
+  resolveGitHubRepository,
   worktreeConfigPath,
   writeWorktreeContext,
 } from "./context";
@@ -62,7 +63,7 @@ export const renderHelp = (): string => {
     "Context and protected workflows:",
     "  context                             Detect the GitHub Repository",
     "  project link --team <team>          Link a Project explicitly",
-    "  env use <name>                      Select an Environment",
+    "  env use <environment-id>            Select an Environment by opaque id",
     "  init <environment> --from <file>    Create a reviewed genesis Revision",
     "  push --from <file>                  Publish a reviewed Revision",
     "  pull --output <file>                Safely export locally decrypted Values",
@@ -86,6 +87,8 @@ export type CliRuntime = Readonly<{
   readonly profilePath?: string;
   readonly credentials?: NativeCredentialStore;
   readonly fetch?: FetchFunction;
+  readonly githubFetch?: FetchFunction;
+  readonly deviceId?: string;
   readonly open?: (url: string) => Promise<void>;
   readonly readGitRemotes?: () => Promise<readonly GitRemote[]>;
   readonly worktreeConfig?: string;
@@ -283,6 +286,9 @@ const execute = async (
     const repository = detectGitHubRepository(
       await (runtime.readGitRemotes ?? readGitRemotes)(),
     );
+    const resolvedRepository = await resolveGitHubRepository(repository, {
+      ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
+    });
     const context = await readWorktreeContext(
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
     );
@@ -293,8 +299,9 @@ const execute = async (
     return {
       value: {
         profile: profile.name,
-        repository: `${repository.host}/${repository.owner}/${repository.name}`,
-        remoteNames: repository.remoteNames,
+        repository: `${resolvedRepository.host}/${resolvedRepository.owner}/${resolvedRepository.name}`,
+        remoteNames: resolvedRepository.remoteNames,
+        githubRepositoryId: resolvedRepository.githubRepositoryId,
         ...(context ? { projectId: context.projectId } : {}),
         ...(context?.environmentId
           ? { environmentId: context.environmentId }
@@ -315,15 +322,33 @@ const execute = async (
     const team = parsed.team;
     if (!team)
       throw new CliInvocationError("project link requires --team <team-id>");
-    const repository = detectGitHubRepository(
-      await (runtime.readGitRemotes ?? readGitRemotes)(),
+    const repository = await resolveGitHubRepository(
+      detectGitHubRepository(
+        await (runtime.readGitRemotes ?? readGitRemotes)(),
+      ),
+      { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
     );
     const credentials = runtime.credentials ?? createNativeCredentialStore();
     const admin =
-      runtime.admin ?? createStrictJsonClient(profile.pin, credentials);
+      runtime.admin ??
+      createStrictJsonClient(profile.pin, credentials, {
+        ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
+      });
     const project = await linkProject(admin, {
       teamId: team,
-      repository,
+      repository: {
+        ...repository,
+        githubRepositoryId:
+          repository.githubRepositoryId ??
+          (() => {
+            throw new CliError(
+              "transient",
+              "GitHub repository identity was not resolved",
+              {},
+              "repository_resolution_failed",
+            );
+          })(),
+      },
     });
     await writeWorktreeContext(
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
@@ -335,7 +360,6 @@ const execute = async (
     return {
       value: {
         profile: profile.name,
-        project: project.name,
         projectId: project.id,
         repository: `${repository.host}/${repository.owner}/${repository.name}`,
       },
@@ -354,12 +378,19 @@ const execute = async (
       throw new CliInvocationError(
         "worktree Project belongs to a different Server Profile",
       );
-    const name = parsed.environment ?? parsed.positionals[0];
-    if (!name) throw new Error("env use requires an Environment name");
+    const environmentId = parsed.environment ?? parsed.positionals[0];
+    if (!environmentId) throw new Error("env use requires an Environment id");
     const credentials = runtime.credentials ?? createNativeCredentialStore();
     const admin =
-      runtime.admin ?? createStrictJsonClient(profile.pin, credentials);
-    const environment = await selectEnvironment(admin, context.projectId, name);
+      runtime.admin ??
+      createStrictJsonClient(profile.pin, credentials, {
+        ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
+      });
+    const environment = await selectEnvironment(
+      admin,
+      context.projectId,
+      environmentId,
+    );
     await writeWorktreeContext(contextPath, {
       ...context,
       environmentId: environment.id,
@@ -367,7 +398,6 @@ const execute = async (
     return {
       value: {
         profile: profile.name,
-        environment: environment.name,
         environmentId: environment.id,
         selected: true,
       },

@@ -158,7 +158,7 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.positionals.length > 0
   )
     throw new CliInvocationError(
-      "env use accepts an Environment name either as an argument or with --environment",
+      "env use accepts an Environment id either as an argument or with --environment",
     );
   if (
     parsed.acceptProfile &&

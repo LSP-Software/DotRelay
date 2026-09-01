@@ -38,7 +38,12 @@ describe("strict administration client", () => {
     const client = {
       post: async (path: string, body: Record<string, unknown>) => {
         calls.push({ path, body });
-        return { id: "00000000-0000-4000-8000-000000000002", name: "DotRelay" };
+        return {
+          id: "00000000-0000-4000-8000-000000000002",
+          teamId: "00000000-0000-4000-8000-000000000001",
+          githubRepositoryId: "1311418611",
+          lifecycle: "active",
+        };
       },
     };
 
@@ -49,11 +54,14 @@ describe("strict administration client", () => {
           host: "github.com",
           owner: "LSP-Software",
           name: "DotRelay",
+          githubRepositoryId: "1311418611",
         },
       }),
     ).resolves.toEqual({
       id: "00000000-0000-4000-8000-000000000002",
-      name: "DotRelay",
+      teamId: "00000000-0000-4000-8000-000000000001",
+      githubRepositoryId: "1311418611",
+      lifecycle: "active",
     });
     expect(calls).toEqual([
       {
@@ -63,25 +71,37 @@ describe("strict administration client", () => {
           repositoryHost: "github.com",
           repositoryOwner: "LSP-Software",
           repositoryName: "DotRelay",
+          githubRepositoryId: "1311418611",
         },
       },
     ]);
     expect(JSON.stringify(calls)).not.toContain("value");
   });
 
-  test("selects one Environment by exact name and rejects ambiguity", async () => {
+  test("selects one Environment by opaque id and rejects ambiguity", async () => {
     const client = {
       get: async () => ({
         environments: [
-          { id: "00000000-0000-4000-8000-000000000003", name: "development" },
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "project-id",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
         ],
       }),
     };
     await expect(
-      selectEnvironment(client, "project-id", "development"),
+      selectEnvironment(
+        client,
+        "project-id",
+        "00000000-0000-4000-8000-000000000003",
+      ),
     ).resolves.toEqual({
       id: "00000000-0000-4000-8000-000000000003",
-      name: "development",
+      projectId: "project-id",
+      lifecycle: "active",
+      currentHeadId: null,
     });
   });
 

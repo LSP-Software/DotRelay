@@ -1,7 +1,7 @@
 {
   "name": "dotrelay",
   "private": false,
-  "version": "0.0.0-foundation",
+  "version": "0.0.0",
   "description": "The npm selector for the DotRelay standalone CLI",
   "publishConfig": {
     "access": "public"

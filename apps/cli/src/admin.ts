@@ -18,6 +18,7 @@ export type StrictJsonClient = Readonly<{
     path: string,
     body: Record<string, unknown>,
     fields: readonly string[],
+    options?: Readonly<{ readonly idempotencyKey?: string }>,
   ) => Promise<Record<string, unknown>>;
 }>;
 
@@ -27,17 +28,22 @@ export type ProjectLinkInput = Readonly<{
     readonly host: "github.com";
     readonly owner: string;
     readonly name: string;
+    readonly githubRepositoryId: string;
   }>;
 }>;
 
 export type ProjectSummary = Readonly<{
   readonly id: string;
-  readonly name: string;
+  readonly teamId: string;
+  readonly githubRepositoryId: string;
+  readonly lifecycle: "active" | "archived";
 }>;
 
 export type EnvironmentSummary = Readonly<{
   readonly id: string;
-  readonly name: string;
+  readonly projectId: string;
+  readonly lifecycle: "active" | "archived";
+  readonly currentHeadId: string | null;
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
@@ -48,8 +54,26 @@ const requireOpaqueId = (value: unknown, label: string): string => {
   return value;
 };
 
-const requireName = (value: unknown, label: string): string => {
-  if (typeof value !== "string" || value.length === 0)
+const requireGitHubRepositoryId = (value: unknown): string => {
+  if (
+    typeof value !== "string" ||
+    !/^[1-9][0-9]{0,18}$/.test(value) ||
+    BigInt(value) > 9_223_372_036_854_775_807n
+  )
+    throw new CliError(
+      "transient",
+      "the server returned an invalid GitHub Repository id",
+      {},
+      "response_invalid",
+    );
+  return value;
+};
+
+const requireLifecycle = (
+  value: unknown,
+  label: string,
+): "active" | "archived" => {
+  if (value !== "active" && value !== "archived")
     throw new CliError(
       "transient",
       `the server returned an invalid ${label}`,
@@ -131,19 +155,23 @@ export const linkProject = async (
       repositoryHost: input.repository.host,
       repositoryOwner: input.repository.owner,
       repositoryName: input.repository.name,
+      githubRepositoryId: input.repository.githubRepositoryId,
     },
-    ["id", "name"],
+    ["id", "teamId", "githubRepositoryId", "lifecycle"],
+    { idempotencyKey: crypto.randomUUID() },
   );
   return Object.freeze({
     id: requireOpaqueId(response.id, "Project id"),
-    name: requireName(response.name, "Project name"),
+    teamId: requireOpaqueId(response.teamId, "Team id"),
+    githubRepositoryId: requireGitHubRepositoryId(response.githubRepositoryId),
+    lifecycle: requireLifecycle(response.lifecycle, "Project lifecycle"),
   });
 };
 
 export const selectEnvironment = async (
   client: Pick<StrictJsonClient, "get">,
   projectId: string,
-  name: string,
+  environmentId: string,
 ): Promise<EnvironmentSummary> => {
   const response = await client.get(
     `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
@@ -171,10 +199,21 @@ export const selectEnvironment = async (
     const environment = candidate as Record<string, unknown>;
     return {
       id: requireOpaqueId(environment.id, "Environment id"),
-      name: requireName(environment.name, "Environment name"),
+      projectId: requireOpaqueId(environment.projectId, "Project id"),
+      lifecycle: requireLifecycle(
+        environment.lifecycle,
+        "Environment lifecycle",
+      ),
+      currentHeadId:
+        environment.currentHeadId === null
+          ? null
+          : requireOpaqueId(environment.currentHeadId, "Environment head id"),
     };
   });
-  const selected = environments.filter((candidate) => candidate.name === name);
+  const selected = environments.filter(
+    (candidate) =>
+      candidate.id === environmentId && candidate.projectId === projectId,
+  );
   if (selected.length === 0)
     throw new CliError(
       "invocation",
@@ -185,7 +224,7 @@ export const selectEnvironment = async (
   if (selected.length !== 1)
     throw new CliError(
       "invocation",
-      "the requested Environment name is ambiguous",
+      "the requested Environment id is ambiguous",
       {},
       "environment_ambiguous",
     );
@@ -199,7 +238,12 @@ export const selectEnvironment = async (
     );
   return Object.freeze({
     id: requireOpaqueId(environment.id, "Environment id"),
-    name: requireName(environment.name, "Environment name"),
+    projectId: requireOpaqueId(environment.projectId, "Project id"),
+    lifecycle: requireLifecycle(environment.lifecycle, "Environment lifecycle"),
+    currentHeadId:
+      environment.currentHeadId === null
+        ? null
+        : requireOpaqueId(environment.currentHeadId, "Environment head id"),
   });
 };
 
@@ -262,7 +306,10 @@ const readResponse = async (response: Response): Promise<unknown> => {
 export const createStrictJsonClient = (
   profile: ServerProfilePin,
   credentials: NativeCredentialStore,
-  options: Readonly<{ readonly fetch?: FetchFunction }> = {},
+  options: Readonly<{
+    readonly fetch?: FetchFunction;
+    readonly deviceId?: string;
+  }> = {},
 ): StrictJsonClient => {
   const fetcher = options.fetch ?? fetch;
   const sessions = createSessionStore(credentials);
@@ -270,6 +317,7 @@ export const createStrictJsonClient = (
     path: string,
     init: RequestInit,
     fields: readonly string[],
+    extraHeaders: Record<string, string> = {},
   ): Promise<Record<string, unknown>> => {
     const token = await sessions.get(profile);
     if (!token)
@@ -287,8 +335,12 @@ export const createStrictJsonClient = (
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${token}`,
+          ...(options.deviceId
+            ? { "X-DotRelay-Device-Id": options.deviceId }
+            : {}),
           ...(init.body ? { "Content-Type": "application/json" } : {}),
           ...init.headers,
+          ...extraHeaders,
         },
       });
     } catch {
@@ -332,7 +384,7 @@ export const createStrictJsonClient = (
   };
   return Object.freeze({
     get: (path, fields) => request(path, { method: "GET" }, fields),
-    post: (path, body, fields) =>
+    post: (path, body, fields, postOptions) =>
       request(
         path,
         {
@@ -340,6 +392,9 @@ export const createStrictJsonClient = (
           body: JSON.stringify(parseJsonObject(body, Object.keys(body))),
         },
         fields,
+        postOptions?.idempotencyKey
+          ? { "Idempotency-Key": postOptions.idempotencyKey }
+          : {},
       ),
   });
 };
