@@ -48,6 +48,22 @@ is limited to sign-in/out, profile selection and trust explanation, non-secret T
 resource lifecycle metadata, invitation administration, Device authorization, Recovery Kit entry,
 and stable problem guidance.
 
+## Environment editor workflow
+
+Once all protected gates pass, the Environment editor displays the verified head, current Project
+epoch, Variables, descriptions, and the ownership of each Value lane. Values use password inputs and
+remain masked until the active Device explicitly reveals one. A new Variable requires a valid name
+and explicit Shared Value or User-defined Value classification; its definition and initial Value
+lane enter the local draft together. Empty Values and absent optional Values remain distinct.
+
+Review & publish shows the expected parent Revision, signing Device, changed-lane count, and a
+zero-plaintext service boundary before the client encrypts changed lanes, signs the v3 mutation,
+stages objects, and finalizes publication. A stale head becomes a local three-way conflict with
+Keep local, Use remote, and Merge choices. Rollback is lane-scoped and always publishes a new
+Revision, so the current head remains in immutable history. Archived resources, stale epochs,
+missing grants, inactive Devices, unsupported crypto, and untrusted profiles keep this workflow
+locked and disclose only actionable gate state.
+
 ## Role and lifecycle disclosure
 
 The UI derives controls from the persisted Membership role. Owners can manage roles and all

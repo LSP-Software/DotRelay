@@ -130,3 +130,58 @@ test("unsupported cryptography blocks protected content but leaves non-secret fl
     0,
   );
 });
+
+test("protected Environment editor keeps Values masked and publishes a local draft", async ({
+  page,
+}) => {
+  await page.goto("/workspace?preview=protected");
+
+  await expect(
+    page.getByRole("heading", { name: "Environment editor" }),
+  ).toBeVisible();
+  await expect(page.getByText("Verified head", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Add Variable" }).click();
+  await page.getByLabel("Variable name").fill("DATABASE_URL");
+  await page.getByLabel("Description (optional)").fill("Database connection.");
+  await page.getByText("User-defined Value", { exact: true }).last().click();
+  await page.getByLabel("Initial Value").fill("local-only-value");
+  await page.getByRole("button", { name: "Add Variable" }).last().click();
+
+  const value = page.getByLabel("DATABASE_URL Value");
+  await expect(value).toHaveAttribute("type", "password");
+  await expect(
+    page.getByText("User-defined Value", { exact: true }).last(),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Reveal DATABASE_URL" }).click();
+  await expect(value).toHaveAttribute("type", "text");
+  await expect(value).toHaveValue("local-only-value");
+
+  await page.getByRole("button", { name: "Review & publish" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Service plaintext");
+  await expect(page.getByRole("dialog")).toContainText("0 bytes");
+  await expect(page.getByRole("dialog")).toContainText("fresh lane encryption");
+  await page.getByRole("button", { name: "Encrypt, stage & publish" }).click();
+  await expect(page.getByText(/Published as rev_0185/)).toBeVisible();
+});
+
+test("protected Environment editor offers local conflict choices and lane rollback", async ({
+  page,
+}) => {
+  await page.goto("/workspace?preview=protected");
+
+  await page.getByLabel("API_ORIGIN Value").fill("https://changed.invalid");
+  await page.getByRole("button", { name: "Sync & verify" }).click();
+  await expect(page.getByText("Stale head: resolve locally")).toBeVisible();
+  await page.getByRole("button", { name: "Keep local" }).click();
+  await expect(page.getByText("Stale head: resolve locally")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Rollback lanes" }).first().click();
+  await expect(page.getByRole("dialog")).toContainText("append-only Revision");
+  await page
+    .getByRole("button", { name: "Stage append-only rollback" })
+    .click();
+  await expect(page.getByText(/Rollback staged from rev_0183/)).toBeVisible();
+  await expect(page.getByText(/current head is never rewound/i)).toBeVisible();
+});
