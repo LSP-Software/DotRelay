@@ -15,7 +15,7 @@ export type EnvironmentVariable = Readonly<{
   readonly ownership: VariableOwnership;
   readonly value: string | null;
   readonly required: boolean;
-  readonly changed: boolean;
+  readonly hasDraftChange: boolean;
 }>;
 
 export type VariableDraft = Readonly<{
@@ -35,6 +35,8 @@ export type RollbackPlan = Readonly<{
 export type PublicationPreparation = Readonly<{
   readonly encryptedLaneCount: number;
   readonly encryptedBytes: number;
+  readonly laneCiphertextHashes: readonly Uint8Array[];
+  readonly mutationSignature: Uint8Array;
   readonly signatureBytes: number;
   readonly servicePlaintextBytes: 0;
 }>;
@@ -73,14 +75,14 @@ export const createEnvironmentVariable = (
     ownership,
     value: draft.value === "" && !draft.required ? null : draft.value,
     required: draft.required,
-    changed: true,
+    hasDraftChange: true,
   });
 };
 
 export const prepareEncryptedPublication = async (
   variables: readonly EnvironmentVariable[],
 ): Promise<PublicationPreparation> => {
-  const changed = variables.filter((variable) => variable.changed);
+  const changed = variables.filter((variable) => variable.hasDraftChange);
   if (changed.length === 0) throw new Error("publication has no changed lanes");
   const recipient = await generateEncryptionKeyPair();
   const signing = await generateSigningKeyPair();
@@ -104,6 +106,9 @@ export const prepareEncryptedPublication = async (
     }
     const mutationDigest = await sha384(digestInput);
     const signature = await sign(mutationDigest, signing.privateKey);
+    const laneCiphertextHashes = await Promise.all(
+      ciphertexts.map((ciphertext) => sha384(ciphertext)),
+    );
     digestInput.fill(0);
     return Object.freeze({
       encryptedLaneCount: changed.length,
@@ -111,6 +116,10 @@ export const prepareEncryptedPublication = async (
         (total, ciphertext) => total + ciphertext.length,
         0,
       ),
+      laneCiphertextHashes: Object.freeze(
+        laneCiphertextHashes.map((hash) => new Uint8Array(hash)),
+      ),
+      mutationSignature: new Uint8Array(signature),
       signatureBytes: signature.length,
       servicePlaintextBytes: 0,
     });
@@ -122,11 +131,12 @@ export const prepareEncryptedPublication = async (
 export const updateVariableValue = (
   variable: EnvironmentVariable,
   value: string | null,
-): EnvironmentVariable => Object.freeze({ ...variable, value, changed: true });
+): EnvironmentVariable =>
+  Object.freeze({ ...variable, value, hasDraftChange: true });
 
 export const changedLaneCount = (
   variables: readonly EnvironmentVariable[],
-): number => variables.filter((variable) => variable.changed).length;
+): number => variables.filter((variable) => variable.hasDraftChange).length;
 
 export const createRollbackPlan = (
   targetRevision: string,
@@ -154,7 +164,7 @@ export const applyRollbackToVariables = (
         ? Object.freeze({
             ...variable,
             value: historicalValues.get(variable.id) ?? null,
-            changed: true,
+            hasDraftChange: true,
           })
         : variable,
     ),

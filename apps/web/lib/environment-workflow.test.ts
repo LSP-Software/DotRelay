@@ -36,7 +36,7 @@ test("creating a Variable establishes its definition and initial Value lane toge
     name: "API_ORIGIN",
     ownership: "SHARED_VALUE",
     value: "",
-    changed: true,
+    hasDraftChange: true,
   });
 });
 
@@ -65,7 +65,7 @@ test("empty and absent User-defined Values remain distinct", () => {
 test("changed lane count supports a publication review", () => {
   const unchanged = {
     ...createEnvironmentVariable(sharedDraft, "lane-1"),
-    changed: false,
+    hasDraftChange: false,
   };
   const changed = createEnvironmentVariable(
     { ...sharedDraft, name: "SIGNING_KEY" },
@@ -88,6 +88,8 @@ test("publication preparation encrypts changed lanes and signs the mutation dige
     servicePlaintextBytes: 0,
     signatureBytes: 64,
   });
+  expect(preparation.laneCiphertextHashes).toHaveLength(1);
+  expect(preparation.mutationSignature).toHaveLength(64);
   expect(preparation.encryptedBytes).toBeGreaterThan(0);
 });
 
@@ -118,7 +120,7 @@ test("rollback applies only selected historical lanes while retaining the curren
 
   expect(rolledBack[0]?.value).toBe("historical-a");
   expect(rolledBack[1]?.value).toBe("current-b");
-  expect(rolledBack[0]?.changed).toBe(true);
+  expect(rolledBack[0]?.hasDraftChange).toBe(true);
 });
 
 test("protected workflows report every unmet security gate", () => {

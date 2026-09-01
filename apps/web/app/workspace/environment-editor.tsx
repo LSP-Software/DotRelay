@@ -62,7 +62,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
     ownership: "SHARED_VALUE",
     value: "",
     required: true,
-    changed: false,
+    hasDraftChange: false,
   },
   {
     id: "00000000-0000-4000-8000-000000000002",
@@ -71,7 +71,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
     ownership: "USER_DEFINED_VALUE",
     value: "",
     required: true,
-    changed: false,
+    hasDraftChange: false,
   },
   {
     id: "00000000-0000-4000-8000-000000000003",
@@ -80,7 +80,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
     ownership: "SHARED_VALUE",
     value: null,
     required: false,
-    changed: false,
+    hasDraftChange: false,
   },
 ];
 
@@ -311,7 +311,7 @@ export const EnvironmentEditor = ({
       const nextRevision = revisionNumber(headRevision) + 1;
       setHeadRevision(`rev_${String(nextRevision).padStart(4, "0")}`);
       setVariables((current) =>
-        current.map((variable) => ({ ...variable, changed: false })),
+        current.map((variable) => ({ ...variable, hasDraftChange: false })),
       );
       setConflictingLaneIds(new Set());
       setReviewOpen(false);
@@ -354,7 +354,7 @@ export const EnvironmentEditor = ({
                 value:
                   initialVariables.find((candidate) => candidate.id === id)
                     ?.value ?? null,
-                changed: false,
+                hasDraftChange: false,
               }
             : variable,
         ),
@@ -363,7 +363,7 @@ export const EnvironmentEditor = ({
     if (choice === "local" || choice === "merge") {
       setVariables((current) =>
         current.map((variable) =>
-          variable.id === id ? { ...variable, changed: true } : variable,
+          variable.id === id ? { ...variable, hasDraftChange: true } : variable,
         ),
       );
     }
@@ -429,7 +429,7 @@ export const EnvironmentEditor = ({
               setConflictingLaneIds(
                 new Set(
                   variables
-                    .filter((variable) => variable.changed)
+                    .filter((variable) => variable.hasDraftChange)
                     .map((variable) => variable.id),
                 ),
               );
@@ -579,7 +579,7 @@ export const EnvironmentEditor = ({
                       <Badge variant="outline">
                         {ownershipLabel(variable.ownership)}
                       </Badge>
-                      {variable.changed ? (
+                      {variable.hasDraftChange ? (
                         <Badge
                           className="border-amber-300/25 text-amber-200"
                           variant="outline"
@@ -722,7 +722,7 @@ export const EnvironmentEditor = ({
           </div>
           <div className="grid gap-2">
             {variables
-              .filter((variable) => variable.changed)
+              .filter((variable) => variable.hasDraftChange)
               .map((variable) => (
                 <div
                   className="flex items-center justify-between rounded-lg border p-3"
