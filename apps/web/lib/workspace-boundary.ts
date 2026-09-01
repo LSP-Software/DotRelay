@@ -15,6 +15,9 @@ export type WorkspaceBoundary = Readonly<{
     readonly active: boolean;
     readonly label?: string;
   }>;
+  readonly grantsReady: boolean;
+  readonly epochCurrent: boolean;
+  readonly rotationRequired: boolean;
   readonly crypto: Readonly<{
     readonly available: boolean;
     readonly problemCode?:
@@ -51,6 +54,9 @@ export const e2eWorkspaceBoundary = (
     session: { active: true, displayName: "Ari Stone" },
     profile: { id: profileId, ...profile },
     device: { active: false, label: "No active Device" },
+    grantsReady: false,
+    epochCurrent: true,
+    rotationRequired: false,
     crypto: { available: false, problemCode: "crypto_provider_unavailable" },
   };
 };

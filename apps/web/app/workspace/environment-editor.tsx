@@ -36,6 +36,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  applyRollbackToVariables,
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
@@ -55,7 +56,7 @@ type AddVariableState = VariableDraft;
 
 const initialVariables: readonly EnvironmentVariable[] = [
   {
-    id: "lane-api-origin",
+    id: "00000000-0000-4000-8000-000000000001",
     name: "API_ORIGIN",
     description: "Shared service origin used by the Team.",
     ownership: "SHARED_VALUE",
@@ -64,7 +65,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
     changed: false,
   },
   {
-    id: "lane-signing-key",
+    id: "00000000-0000-4000-8000-000000000002",
     name: "SIGNING_KEY",
     description: "User-defined signing material for this Device.",
     ownership: "USER_DEFINED_VALUE",
@@ -73,7 +74,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
     changed: false,
   },
   {
-    id: "lane-feature-gate",
+    id: "00000000-0000-4000-8000-000000000003",
     name: "FEATURE_GATE",
     description: "Optional Team feature flag.",
     ownership: "SHARED_VALUE",
@@ -94,8 +95,7 @@ const emptyVariableDraft: AddVariableState = {
 const ownershipLabel = (ownership: EnvironmentVariable["ownership"]): string =>
   ownership === "SHARED_VALUE" ? "Shared Value" : "User-defined Value";
 
-const nextVariableId = (variables: readonly EnvironmentVariable[]): string =>
-  `lane-${variables.length + 1}-${Date.now()}`;
+const nextVariableId = (): string => globalThis.crypto.randomUUID();
 
 const revisionNumber = (revision: string): number =>
   Number.parseInt(revision.replace("rev_", ""), 10);
@@ -218,16 +218,6 @@ const AddVariableDialog = ({
             type="password"
             value={draft.value}
           />
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              checked={draft.required}
-              onChange={(event) =>
-                onDraftChange({ ...draft, required: event.target.checked })
-              }
-              type="checkbox"
-            />
-            This Variable requires a Value
-          </label>
         </div>
       </div>
       {error ? (
@@ -271,6 +261,11 @@ export const EnvironmentEditor = ({
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const changedCount = changedLaneCount(variables);
+  const historicalValues = new Map<string, string | null>([
+    ["00000000-0000-4000-8000-000000000001", ""],
+    ["00000000-0000-4000-8000-000000000002", null],
+    ["00000000-0000-4000-8000-000000000003", null],
+  ]);
 
   const updateValue = (id: string, value: string) => {
     setPublishMessage(null);
@@ -296,10 +291,7 @@ export const EnvironmentEditor = ({
       setAddError(error);
       return;
     }
-    const variable = createEnvironmentVariable(
-      addDraft,
-      nextVariableId(variables),
-    );
+    const variable = createEnvironmentVariable(addDraft, nextVariableId());
     setVariables((current) => [...current, variable]);
     setAddDraft(emptyVariableDraft);
     setAddError(null);
@@ -338,13 +330,11 @@ export const EnvironmentEditor = ({
   const applyRollback = () => {
     if (!rollbackTarget || rollbackLanes.size === 0) return;
     createRollbackPlan(rollbackTarget, [...rollbackLanes]);
-    setVariables((current) =>
-      current.map((variable) =>
-        rollbackLanes.has(variable.id)
-          ? { ...variable, changed: true }
-          : variable,
-      ),
-    );
+    setVariables((current) => [
+      ...applyRollbackToVariables(current, historicalValues, [
+        ...rollbackLanes,
+      ]),
+    ]);
     setRollbackTarget(null);
     setPublishMessage(
       `Rollback staged from ${rollbackTarget}. This will append a new Revision; ${headRevision} remains in history.`,
@@ -359,7 +349,13 @@ export const EnvironmentEditor = ({
       setVariables((current) =>
         current.map((variable) =>
           variable.id === id
-            ? { ...variable, value: null, changed: false }
+            ? {
+                ...variable,
+                value:
+                  initialVariables.find((candidate) => candidate.id === id)
+                    ?.value ?? null,
+                changed: false,
+              }
             : variable,
         ),
       );

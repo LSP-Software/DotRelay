@@ -142,6 +142,25 @@ export const createRollbackPlan = (
   });
 };
 
+export const applyRollbackToVariables = (
+  variables: readonly EnvironmentVariable[],
+  historicalValues: ReadonlyMap<string, string | null>,
+  selectedVariableIds: readonly string[],
+): readonly EnvironmentVariable[] => {
+  const selected = new Set(selectedVariableIds);
+  return Object.freeze(
+    variables.map((variable) =>
+      selected.has(variable.id)
+        ? Object.freeze({
+            ...variable,
+            value: historicalValues.get(variable.id) ?? null,
+            changed: true,
+          })
+        : variable,
+    ),
+  );
+};
+
 export type ProtectedWorkflowState = Readonly<{
   readonly profileTrusted: boolean;
   readonly cryptoAvailable: boolean;

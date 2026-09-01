@@ -70,6 +70,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { protectedWorkflowBlockers } from "@/lib/environment-workflow";
 import { cn } from "@/lib/utils";
 import {
   e2eWorkspaceBoundary,
@@ -234,29 +235,25 @@ export const WorkspaceShell = () => {
         ...boundary,
         profile: { ...boundary.profile, pinned: true },
         device: { active: true, label: "Active Device" },
+        grantsReady: true,
+        epochCurrent: true,
+        rotationRequired: false,
         crypto: { available: true },
       }
     : boundary;
   const profile = displayBoundary.profile;
   const canAdminister = role === "OWNER" || role === "ADMIN";
 
-  const protectedBlockers = [
-    ...(displayBoundary.profile.pinned
-      ? []
-      : ["Server Profile trust is required."]),
-    ...(displayBoundary.crypto.available
-      ? []
-      : ["The closed v3 cryptographic suite is unavailable."]),
-    ...(displayBoundary.device.active
-      ? []
-      : [
-          "An active Device is required.",
-          "Required key grants are still pending.",
-        ]),
-    ...(projectLifecycle === "ACTIVE" && environmentLifecycle === "ACTIVE"
-      ? []
-      : ["Archived Projects and Environments are read-only."]),
-  ];
+  const protectedBlockers = protectedWorkflowBlockers({
+    profileTrusted: displayBoundary.profile.pinned,
+    cryptoAvailable: displayBoundary.crypto.available,
+    deviceActive: displayBoundary.device.active,
+    grantsReady: displayBoundary.grantsReady,
+    resourceActive:
+      projectLifecycle === "ACTIVE" && environmentLifecycle === "ACTIVE",
+    epochCurrent: displayBoundary.epochCurrent,
+    rotationRequired: displayBoundary.rotationRequired,
+  });
 
   const protectedWorkflowAvailable = protectedBlockers.length === 0;
 

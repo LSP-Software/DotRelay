@@ -45,6 +45,9 @@ const fetchLiveBoundary = async (
     },
     profile: { id: profileId, ...profile },
     device: { active: false, label: "No active Device" },
+    grantsReady: false,
+    epochCurrent: true,
+    rotationRequired: false,
     crypto: cryptoAvailable
       ? { available: true }
       : {

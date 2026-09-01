@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  applyRollbackToVariables,
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
@@ -96,6 +97,28 @@ test("rollback plans select lanes and never rewind the Environment head", () => 
     selectedVariableIds: ["lane-1"],
     appendOnly: true,
   });
+});
+
+test("rollback applies only selected historical lanes while retaining the current head", () => {
+  const variables = [
+    createEnvironmentVariable({ ...sharedDraft, value: "current-a" }, "lane-1"),
+    createEnvironmentVariable(
+      { ...sharedDraft, name: "SECOND", value: "current-b" },
+      "lane-2",
+    ),
+  ];
+  const rolledBack = applyRollbackToVariables(
+    variables,
+    new Map([
+      ["lane-1", "historical-a"],
+      ["lane-2", "historical-b"],
+    ]),
+    ["lane-1"],
+  );
+
+  expect(rolledBack[0]?.value).toBe("historical-a");
+  expect(rolledBack[1]?.value).toBe("current-b");
+  expect(rolledBack[0]?.changed).toBe(true);
 });
 
 test("protected workflows report every unmet security gate", () => {
