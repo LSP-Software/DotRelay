@@ -204,6 +204,7 @@ export const loginWithDeviceAuthorization = async (
     );
   let intervalSeconds = authorization.intervalSeconds;
   for (let poll = 0; poll < maxPolls; poll += 1) {
+    await sleep(intervalSeconds * 1000);
     let response: Response;
     try {
       response = await fetcher(`${profile.origin}/api/auth/device/token`, {
@@ -239,12 +240,10 @@ export const loginWithDeviceAuthorization = async (
     }
     const error = typeof body.error === "string" ? body.error : "";
     if (error === "authorization_pending") {
-      await sleep(intervalSeconds * 1000);
       continue;
     }
     if (error === "slow_down") {
       intervalSeconds += 5;
-      await sleep(intervalSeconds * 1000);
       continue;
     }
     if (error === "expired_token")
@@ -276,15 +275,20 @@ export const loginWithDeviceAuthorization = async (
   );
 };
 
+export const verificationPageCommand = (
+  platform: NodeJS.Platform,
+  url: string,
+): readonly string[] =>
+  platform === "darwin"
+    ? ["open", url]
+    : platform === "win32"
+      ? ["explorer.exe", url]
+      : ["xdg-open", url];
+
 export const openVerificationPage = async (url: string): Promise<void> => {
-  const command =
-    process.platform === "darwin"
-      ? ["open", url]
-      : process.platform === "win32"
-        ? ["cmd", "/c", "start", "", url]
-        : ["xdg-open", url];
+  const command = verificationPageCommand(process.platform, url);
   try {
-    Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
+    Bun.spawn([...command], { stdout: "ignore", stderr: "ignore" });
   } catch {
     throw new CliError(
       "local-io",

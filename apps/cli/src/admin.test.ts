@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ServerProfilePin } from "@dotrelay/contracts";
+import { CBOR_LIMITS, type ServerProfilePin } from "@dotrelay/contracts";
 import { createStrictJsonClient } from "./admin";
 
 const profile: ServerProfilePin = {
@@ -25,5 +25,20 @@ describe("strict administration client", () => {
       "invalid administration response",
     );
     expect(authorization).toBe("Bearer session-token");
+  });
+
+  test("rejects oversized responses before parsing them", async () => {
+    const credentials = {
+      get: async () => new TextEncoder().encode("session-token"),
+      set: async () => undefined,
+      delete: async () => undefined,
+    };
+    const client = createStrictJsonClient(profile, credentials, {
+      fetch: async () =>
+        new Response("x".repeat(CBOR_LIMITS.maxAdminBodyBytes + 1)),
+    });
+    await expect(client.get("/api/v1/teams", ["id"])).rejects.toThrow(
+      "response was too large",
+    );
   });
 });

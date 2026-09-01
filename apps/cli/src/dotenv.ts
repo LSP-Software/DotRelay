@@ -81,7 +81,9 @@ export const classifyDotenv = (
 ): readonly ClassifiedDotenvEntry[] => {
   return Object.freeze(
     entries.map((entry) => {
-      const classification = classifications[entry.name];
+      const classification = Object.hasOwn(classifications, entry.name)
+        ? classifications[entry.name]
+        : undefined;
       if (!classification)
         throw new CliInvocationError(
           `classification is required for ${entry.name}`,

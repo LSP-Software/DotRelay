@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ServerProfilePin } from "@dotrelay/contracts";
-import { createSessionStore, loginWithDeviceAuthorization } from "./auth";
+import {
+  createSessionStore,
+  loginWithDeviceAuthorization,
+  verificationPageCommand,
+} from "./auth";
 
 const profile: ServerProfilePin = {
   origin: "https://relay.example",
@@ -49,9 +53,17 @@ describe("CLI device authorization", () => {
       },
     });
     expect(result.userCode).toBe("KITE-MOSS");
-    expect(waits).toEqual([7000]);
+    expect(waits).toEqual([7000, 7000]);
     expect(await sessions.get(profile)).toBe("bearer-secret");
     expect(calls[0]).toContain("/device/code");
     expect(calls[1]).toContain("/device/token");
+  });
+
+  test("passes a Windows verification URL without shell interpretation", () => {
+    const url = 'https://relay.example/device?value="quoted"&next=1';
+    expect(verificationPageCommand("win32", url)).toEqual([
+      "explorer.exe",
+      url,
+    ]);
   });
 });

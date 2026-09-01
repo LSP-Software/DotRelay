@@ -70,6 +70,7 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
         return result.status === 0 ? result.stdout : null;
       },
       set: async (service, account, secret) => {
+        // A final -w makes security read the password from stdin, not argv.
         const result = await command(
           executable,
           ["add-generic-password", "-U", "-s", service, "-a", account, "-w"],

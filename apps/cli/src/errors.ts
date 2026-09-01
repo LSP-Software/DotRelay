@@ -41,6 +41,19 @@ const safeDiagnosticKeys = new Set([
   "repository",
 ]);
 
+const sanitizeDiagnosticDetail = (detail: string): string =>
+  Array.from(detail)
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return (
+        codePoint === 9 ||
+        codePoint === 10 ||
+        codePoint === 13 ||
+        !(codePoint < 32 || (codePoint >= 127 && codePoint <= 159))
+      );
+    })
+    .join("");
+
 export class CliError extends Error {
   readonly category: CliErrorCategory;
   readonly code: string;
@@ -91,7 +104,7 @@ export const diagnosticForError = (error: unknown): CliDiagnostic => {
       ok: false,
       category: error.category,
       code: error.code,
-      detail: error.message,
+      detail: sanitizeDiagnosticDetail(error.message),
       ...safeDetails,
       exitCode: error.exitCode,
     };

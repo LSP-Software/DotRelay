@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseDotenv, summarizeClassification } from "./dotenv";
+import { classifyDotenv, parseDotenv, summarizeClassification } from "./dotenv";
 
 describe("local dotenv parsing", () => {
   test("preserves empty values and parses quoted values", () => {
@@ -18,6 +18,9 @@ describe("local dotenv parsing", () => {
   test("rejects malformed and duplicate variables", () => {
     expect(() => parseDotenv("BAD-NAME=value")).toThrow();
     expect(() => parseDotenv("VALUE=one\nVALUE=two")).toThrow("duplicate");
+    expect(() =>
+      classifyDotenv([{ name: "constructor", value: "" }], {}),
+    ).toThrow("classification is required");
   });
 
   test("summarizes classifications without exposing values", () => {

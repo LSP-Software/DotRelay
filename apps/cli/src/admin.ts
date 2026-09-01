@@ -1,4 +1,5 @@
 import {
+  CBOR_LIMITS,
   parseJsonObject,
   parseProblem,
   type ServerProfilePin,
@@ -21,8 +22,51 @@ export type StrictJsonClient = Readonly<{
 }>;
 
 const readResponse = async (response: Response): Promise<unknown> => {
+  const body = response.body;
+  if (!body)
+    throw new CliError(
+      "transient",
+      "the server returned invalid JSON",
+      {},
+      "response_invalid",
+    );
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
   try {
-    return await response.json();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > CBOR_LIMITS.maxAdminBodyBytes) {
+        await reader.cancel();
+        throw new CliError(
+          "transient",
+          "the server response was too large",
+          {},
+          "response_too_large",
+        );
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "transient",
+      "the server returned invalid JSON",
+      {},
+      "response_invalid",
+    );
+  }
+  reader.releaseLock();
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     throw new CliError(
       "transient",

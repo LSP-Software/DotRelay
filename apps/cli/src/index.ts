@@ -61,6 +61,7 @@ export type CliRuntime = Readonly<{
   readonly credentials?: NativeCredentialStore;
   readonly fetch?: FetchFunction;
   readonly open?: (url: string) => Promise<void>;
+  readonly readGitRemotes?: () => Promise<readonly GitRemote[]>;
   readonly stdoutIsTerminal?: boolean;
 }>;
 
@@ -80,7 +81,7 @@ const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
       new Response(child.stdout).text(),
       child.exited,
     ]);
-    if (exitCode !== 0) throw new Error("git config failed");
+    if (exitCode !== 0 && exitCode !== 1) throw new Error("git config failed");
     return Object.freeze(
       stdout
         .trim()
@@ -168,11 +169,18 @@ const execute = async (
     const selected = catalog.selected
       ? catalog.profiles.find((profile) => profile.name === catalog.selected)
       : undefined;
+    const authenticated = selected
+      ? Boolean(
+          await createSessionStore(
+            runtime.credentials ?? createNativeCredentialStore(),
+          ).get(selected.pin),
+        )
+      : false;
     return {
       value: {
         profile: selected?.name ?? null,
         origin: selected?.origin ?? null,
-        authenticated: false,
+        authenticated,
         device: "not loaded",
       },
     };
@@ -207,7 +215,9 @@ const execute = async (
   }
   if (parsed.command === "context") {
     const profile = await resolveServerProfile(store, parsed.profile);
-    const repository = detectGitHubRepository(await readGitRemotes());
+    const repository = detectGitHubRepository(
+      await (runtime.readGitRemotes ?? readGitRemotes)(),
+    );
     return {
       value: {
         profile: profile.name,

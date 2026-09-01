@@ -1,7 +1,7 @@
 # Standalone CLI
 
-The `dotrelay` binary and the `npx dotrelay` npm selector expose the same command contract. The npm
-package selects a platform-specific native Bun binary; it is not a second JavaScript client.
+The `dotrelay` binary exposes the command contract. The repository also contains a private npm
+selector implementation for future distribution; it is not currently published.
 
 ## Profiles and authentication
 
