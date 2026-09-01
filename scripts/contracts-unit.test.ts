@@ -168,6 +168,7 @@ describe("runtime-neutral API contracts", () => {
     expect(
       OPENAPI_DOCUMENT.components.schemas.Problem.properties,
     ).toMatchObject({
+      correlationId: { type: "string", format: "uuid" },
       retryAfterSeconds: { type: "integer", minimum: 0 },
       headId: { type: "string" },
       headHash: { type: "string" },
@@ -188,11 +189,14 @@ describe("runtime-neutral API contracts", () => {
     ).toThrow("invalid_request");
     expect(
       parseProblem({
-        ...createProblem("unsupported_crypto_suite"),
+        ...createProblem("unsupported_crypto_suite", {
+          correlationId: "00000000-0000-4000-8000-000000000000",
+        }),
         instance: "/api/v1/capabilities",
       }),
     ).toMatchObject({
       code: "unsupported_crypto_suite",
+      correlationId: "00000000-0000-4000-8000-000000000000",
       instance: "/api/v1/capabilities",
       status: 422,
     });

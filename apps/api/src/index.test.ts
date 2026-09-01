@@ -27,6 +27,9 @@ describe("API foundation", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
+    expect(response.headers.get("x-correlation-id")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   test("publishes a profile-bound capabilities document with an ETag", async () => {
@@ -112,6 +115,9 @@ describe("API foundation", () => {
     );
     expect(response.headers.get("access-control-allow-credentials")).toBe(
       "true",
+    );
+    expect(response.headers.get("access-control-expose-headers")).toContain(
+      "X-Correlation-ID",
     );
     expect(device).toMatchObject({
       verification_uri: `${profile.origin}/device`,

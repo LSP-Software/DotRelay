@@ -282,6 +282,7 @@ export const parseProblem = (value: unknown): Problem => {
     status?: unknown;
     code?: unknown;
     detail?: unknown;
+    correlationId?: unknown;
     instance?: unknown;
     retryAfterSeconds?: unknown;
     headId?: unknown;
@@ -292,6 +293,7 @@ export const parseProblem = (value: unknown): Problem => {
     "status",
     "code",
     "detail",
+    "correlationId",
     "instance",
     "retryAfterSeconds",
     "headId",
@@ -304,6 +306,11 @@ export const parseProblem = (value: unknown): Problem => {
     !Object.hasOwn(PROBLEM_STATUS, problem.code) ||
     problem.status !== PROBLEM_STATUS[problem.code as ProblemCode] ||
     typeof problem.detail !== "string" ||
+    (problem.correlationId !== undefined &&
+      (typeof problem.correlationId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+          problem.correlationId,
+        ))) ||
     (problem.instance !== undefined && typeof problem.instance !== "string") ||
     (problem.retryAfterSeconds !== undefined &&
       (typeof problem.retryAfterSeconds !== "number" ||
@@ -373,6 +380,10 @@ export const OPENAPI_DOCUMENT = Object.freeze({
             enum: Object.freeze(Object.keys(PROBLEM_STATUS)),
           }),
           detail: Object.freeze({ type: "string" }),
+          correlationId: Object.freeze({
+            type: "string",
+            format: "uuid",
+          }),
           instance: Object.freeze({ type: "string", format: "uri-reference" }),
           retryAfterSeconds: Object.freeze({ type: "integer", minimum: 0 }),
           headId: Object.freeze({ type: "string" }),

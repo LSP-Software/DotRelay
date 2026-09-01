@@ -39,6 +39,8 @@ export {
   ProtocolObjectRepository,
   PublicationRepository,
   RecoveryRepository,
+  SECURITY_REQUEST_ENDPOINT_TEMPLATES,
+  SECURITY_REQUEST_LOG_RETENTION_MS,
   SecurityRequestLogRepository,
   StagedObjectConflictError,
   StagedObjectRepository,

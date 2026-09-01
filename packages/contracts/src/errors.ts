@@ -78,6 +78,7 @@ export type Problem = {
   readonly status: number;
   readonly code: ProblemCode;
   readonly detail: string;
+  readonly correlationId?: string;
   readonly instance?: string;
   readonly retryAfterSeconds?: number;
   readonly headId?: string;
@@ -87,6 +88,7 @@ export type Problem = {
 export const createProblem = (
   code: ProblemCode,
   details?: {
+    readonly correlationId?: string;
     readonly retryAfterSeconds?: number;
     readonly headId?: string;
     readonly headHash?: string;
@@ -103,6 +105,9 @@ export const createProblem = (
   };
   return {
     ...problem,
+    ...(details?.correlationId === undefined
+      ? {}
+      : { correlationId: details.correlationId }),
     ...(details?.retryAfterSeconds === undefined
       ? {}
       : { retryAfterSeconds: details.retryAfterSeconds }),

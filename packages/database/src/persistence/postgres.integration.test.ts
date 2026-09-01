@@ -1044,7 +1044,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       }),
     ).toMatchObject({ status: "EXPIRED" });
 
-    const endpointTemplate = `/expiration/${crypto.randomUUID()}`;
+    const endpointTemplate = "/health";
     for (const expiresAt of [
       new Date(now.getTime() - 60_000),
       new Date(now.getTime() + 60_000),

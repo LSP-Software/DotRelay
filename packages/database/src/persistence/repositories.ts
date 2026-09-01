@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import {
   decideLaneDisclosure,
   decideTeamAction,
@@ -487,8 +488,36 @@ export class SecurityRequestLogRepository {
       readonly expiresAt: Date;
     }>,
   ) {
+    if (
+      !SECURITY_REQUEST_ENDPOINT_TEMPLATES.includes(
+        input.endpointTemplate as (typeof SECURITY_REQUEST_ENDPOINT_TEMPLATES)[number],
+      )
+    )
+      throw new Error(
+        "Security Request Log endpoint template is not allowlisted",
+      );
+    if (isIP(input.ipAddress) === 0)
+      throw new Error("Security Request Log IP address is invalid");
+    if (
+      !Number.isInteger(input.httpStatus) ||
+      input.httpStatus < 100 ||
+      input.httpStatus > 599
+    )
+      throw new Error("Security Request Log status is invalid");
+    if (input.transferBytes < 0n)
+      throw new Error("Security Request Log transfer size is invalid");
+    if (
+      Number.isNaN(input.requestedAt.getTime()) ||
+      Number.isNaN(input.expiresAt.getTime())
+    )
+      throw new Error("Security Request Log timestamp is invalid");
     if (input.expiresAt <= input.requestedAt)
       throw new Error("Security Request Log must expire after receipt");
+    if (
+      input.expiresAt.getTime() - input.requestedAt.getTime() >
+      SECURITY_REQUEST_LOG_RETENTION_MS
+    )
+      throw new Error("Security Request Log retention exceeds 30 days");
     return database.securityRequestLog.create({
       data: {
         ipAddress: input.ipAddress,
@@ -509,6 +538,22 @@ export class SecurityRequestLogRepository {
     );
   }
 }
+
+export const SECURITY_REQUEST_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const SECURITY_REQUEST_ENDPOINT_TEMPLATES = Object.freeze([
+  "/health",
+  "/api/v1/capabilities",
+  "/api/v1/session",
+  "/device",
+  "/api/auth/*",
+  "/api/v1/operations/:operationId/begin",
+  "/api/v1/operations/:operationId/staging/:objectId",
+  "/api/v1/operations/:operationId/finalize",
+  "/api/v1/operations/:operationId",
+  "/api/v1/environments/:environmentId/sync",
+  "/api/v1/operations/:operationId/epoch-transitions",
+] as const);
 
 export type TeamCreationInput = Readonly<{
   readonly teamId?: string;

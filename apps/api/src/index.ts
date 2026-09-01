@@ -31,6 +31,12 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
 import {
+  API_CORRELATION_HEADER,
+  type ApiObservability,
+  createApiObservability,
+  createServerCorrelationId,
+} from "./observability";
+import {
   createCapabilitiesDocument,
   etagFor,
   hasMixedCredentials,
@@ -42,10 +48,12 @@ import {
 import { registerProtocolRoutes } from "./protocol";
 import { requireProtocolActor } from "./protocol/context";
 
-type ApiDependencies = Readonly<{
+export type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
   readonly profile: ServerProfileConfig;
   readonly auth: DotRelayAuth;
+  readonly observability?: ApiObservability;
+  readonly resolveClientIp?: (request: Request) => string | null;
 }>;
 
 const jsonProblem = (context: Context, code: ProblemCode) => {
@@ -227,14 +235,43 @@ const parseUuidBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
-const createApi = ({ database, profile, auth }: ApiDependencies) => {
+const createApi = ({
+  database,
+  profile,
+  auth,
+  observability: suppliedObservability,
+  resolveClientIp,
+}: ApiDependencies) => {
   const app = new Hono();
+  const observability =
+    suppliedObservability ??
+    createApiObservability(
+      database,
+      resolveClientIp === undefined ? {} : { resolveClientIp },
+    );
   const capabilities = createCapabilitiesDocument(profile);
   let capabilitiesEtagPromise: Promise<string> | undefined;
   const getCapabilitiesEtag = () => {
     capabilitiesEtagPromise ??= etagFor(capabilities);
     return capabilitiesEtagPromise;
   };
+
+  app.use("*", async (context, next) => {
+    const correlationId = createServerCorrelationId();
+    const startedAt = performance.now();
+    context.header(API_CORRELATION_HEADER, correlationId);
+    try {
+      await next();
+    } finally {
+      observability.recordRequest({
+        request: context.req.raw,
+        path: context.req.path,
+        status: context.res.status,
+        correlationId,
+        durationMs: performance.now() - startedAt,
+      });
+    }
+  });
 
   app.use("*", async (context, next) => {
     if (!isSecureRequest(context.req.raw, profile))
@@ -269,7 +306,7 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
       credentials: true,
       allowHeaders: ["Content-Type", "Authorization"],
       allowMethods: ["GET", "POST", "OPTIONS"],
-      exposeHeaders: ["X-Retry-After", "Set-Auth-Token"],
+      exposeHeaders: ["X-Correlation-ID", "X-Retry-After", "Set-Auth-Token"],
       maxAge: 600,
     }),
   );
@@ -679,7 +716,6 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
 
   registerProtocolRoutes(app, { database, profile, auth });
 
-  void database;
   return app;
 };
 
@@ -698,5 +734,30 @@ if (import.meta.main) {
     origin: profile.origin,
     allowRebind: profile.allowRebind,
   });
-  Bun.serve({ fetch: app.fetch, port: Number(process.env.PORT ?? 3001) });
+  type RequestIpServer = {
+    readonly requestIP: (
+      request: Request,
+    ) => { readonly address: string } | null;
+  };
+  let server: RequestIpServer | undefined;
+  const runtimeObservability = createApiObservability(database, {
+    resolveClientIp: (request) => server?.requestIP(request)?.address ?? null,
+  });
+  const runtimeApp = createApi({
+    database,
+    profile,
+    auth,
+    observability: runtimeObservability,
+  });
+  server = Bun.serve({
+    fetch: runtimeApp.fetch,
+    port: Number(process.env.PORT ?? 3001),
+  });
+  const cleanupTimer = setInterval(
+    () => {
+      void runtimeObservability.expireSecurityRequestLogs();
+    },
+    60 * 60 * 1000,
+  );
+  cleanupTimer.unref?.();
 }
