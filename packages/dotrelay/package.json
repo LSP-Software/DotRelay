@@ -1,0 +1,19 @@
+{
+  "name": "dotrelay",
+  "private": true,
+  "version": "0.0.0-foundation",
+  "description": "The npm selector for the DotRelay standalone CLI",
+  "bin": {
+    "dotrelay": "bin/dotrelay.mjs"
+  },
+  "exports": {
+    ".": "./bin/dotrelay.mjs"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@dotrelay/client": "workspace:*",
+    "@dotrelay/contracts": "workspace:*",
     "@dotrelay/database": "workspace:*"
   }
 }
