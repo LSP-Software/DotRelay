@@ -135,6 +135,28 @@ const parseAuthorization = (value: unknown): DeviceAuthorization => {
   });
 };
 
+const requireProfileUrl = (value: string, profile: ServerProfilePin): URL => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CliError(
+      "authentication",
+      "the server returned an invalid verification URL",
+      {},
+      "auth_response_invalid",
+    );
+  }
+  if (url.origin !== profile.origin || url.username || url.password)
+    throw new CliError(
+      "authentication",
+      "the verification URL does not belong to the Server Profile",
+      {},
+      "auth_response_invalid",
+    );
+  return url;
+};
+
 const parseResponseBody = async (response: Response): Promise<unknown> => {
   try {
     return await response.json();
@@ -188,9 +210,19 @@ export const loginWithDeviceAuthorization = async (
 ): Promise<DeviceLoginResult> => {
   const fetcher = options.fetch ?? fetch;
   const authorization = await requestDeviceCode(profile.origin, fetcher);
-  const verificationUrl =
-    authorization.verificationUriComplete ??
-    `${authorization.verificationUri}?user_code=${encodeURIComponent(authorization.userCode)}`;
+  const verificationUri = requireProfileUrl(
+    authorization.verificationUri,
+    profile,
+  );
+  const verificationUrl = authorization.verificationUriComplete
+    ? requireProfileUrl(
+        authorization.verificationUriComplete,
+        profile,
+      ).toString()
+    : (() => {
+        verificationUri.searchParams.set("user_code", authorization.userCode);
+        return verificationUri.toString();
+      })();
   if (!options.noOpen && options.open) await options.open(verificationUrl);
   const sleep =
     options.sleep ??
@@ -235,7 +267,7 @@ export const loginWithDeviceAuthorization = async (
       return Object.freeze({
         profile,
         userCode: authorization.userCode,
-        verificationUri: authorization.verificationUri,
+        verificationUri: verificationUri.toString(),
       });
     }
     const error = typeof body.error === "string" ? body.error : "";

@@ -23,6 +23,19 @@ describe("CLI argument contract", () => {
     });
   });
 
+  test("requires an exact Server Profile id for profile trust confirmation", () => {
+    expect(
+      parseArguments([
+        "profile",
+        "add",
+        "work",
+        "https://relay.example",
+        "--accept-profile",
+        "00000000-0000-4000-8000-000000000042",
+      ]).acceptProfile,
+    ).toBe("00000000-0000-4000-8000-000000000042");
+  });
+
   test("rejects insecure and credential-bearing flags", () => {
     expect(() => parseArguments(["status", "--insecure"])).toThrow(
       CliInvocationError,

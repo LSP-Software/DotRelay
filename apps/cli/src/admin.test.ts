@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { CBOR_LIMITS, type ServerProfilePin } from "@dotrelay/contracts";
-import { createStrictJsonClient } from "./admin";
+import {
+  createStrictJsonClient,
+  linkProject,
+  selectEnvironment,
+} from "./admin";
 
 const profile: ServerProfilePin = {
   origin: "https://relay.example",
@@ -25,6 +29,60 @@ describe("strict administration client", () => {
       "invalid administration response",
     );
     expect(authorization).toBe("Bearer session-token");
+  });
+
+  test("links a detected GitHub Repository without sending protected content", async () => {
+    const calls: Array<
+      Readonly<{ path: string; body: Record<string, unknown> }>
+    > = [];
+    const client = {
+      post: async (path: string, body: Record<string, unknown>) => {
+        calls.push({ path, body });
+        return { id: "00000000-0000-4000-8000-000000000002", name: "DotRelay" };
+      },
+    };
+
+    await expect(
+      linkProject(client, {
+        teamId: "00000000-0000-4000-8000-000000000001",
+        repository: {
+          host: "github.com",
+          owner: "LSP-Software",
+          name: "DotRelay",
+        },
+      }),
+    ).resolves.toEqual({
+      id: "00000000-0000-4000-8000-000000000002",
+      name: "DotRelay",
+    });
+    expect(calls).toEqual([
+      {
+        path: "/api/v1/projects",
+        body: {
+          teamId: "00000000-0000-4000-8000-000000000001",
+          repositoryHost: "github.com",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+        },
+      },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain("value");
+  });
+
+  test("selects one Environment by exact name and rejects ambiguity", async () => {
+    const client = {
+      get: async () => ({
+        environments: [
+          { id: "00000000-0000-4000-8000-000000000003", name: "development" },
+        ],
+      }),
+    };
+    await expect(
+      selectEnvironment(client, "project-id", "development"),
+    ).resolves.toEqual({
+      id: "00000000-0000-4000-8000-000000000003",
+      name: "development",
+    });
   });
 
   test("rejects oversized responses before parsing them", async () => {

@@ -1,15 +1,39 @@
-import { type ParsedArguments, parseArguments } from "./args";
+import { isAbsolute, resolve } from "node:path";
+import {
+  createStrictJsonClient,
+  linkProject,
+  type StrictJsonClient,
+  selectEnvironment,
+} from "./admin";
+import {
+  type ParsedArguments,
+  parseArguments,
+  rejectForbiddenFlags,
+} from "./args";
 import {
   createSessionStore,
   loginWithDeviceAuthorization,
   openVerificationPage,
 } from "./auth";
-import { detectGitHubRepository, type GitRemote } from "./context";
+import {
+  detectGitHubRepository,
+  type GitRemote,
+  readWorktreeContext,
+  resolveEnvironmentSelection,
+  worktreeConfigPath,
+  writeWorktreeContext,
+} from "./context";
 import {
   createNativeCredentialStore,
   type NativeCredentialStore,
 } from "./credentials";
-import { CliError, diagnosticForError, EXIT_CODES } from "./errors";
+import {
+  CliError,
+  CliInvocationError,
+  diagnosticForError,
+  EXIT_CODES,
+  sanitizeCliText,
+} from "./errors";
 import {
   addServerProfile,
   createFileProfileCatalog,
@@ -46,12 +70,14 @@ export const renderHelp = (): string => {
     "  status                              Show non-secret local state",
     "",
     "Global options: --profile, --environment, --json, --no-input",
+    "Profile trust: profile add requires --accept-profile <server-profile-id>",
     "Output: --stdout requires --reveal when stdout is a terminal; Values are never diagnostic data.",
     "Security: --insecure and credential-bearing flags are not supported.",
   ].join("\n");
 };
 
 export const main = (args: string[]): string => {
+  rejectForbiddenFlags(args);
   if (args.includes("--version")) return version;
   return renderHelp();
 };
@@ -62,6 +88,8 @@ export type CliRuntime = Readonly<{
   readonly fetch?: FetchFunction;
   readonly open?: (url: string) => Promise<void>;
   readonly readGitRemotes?: () => Promise<readonly GitRemote[]>;
+  readonly worktreeConfig?: string;
+  readonly admin?: StrictJsonClient;
   readonly stdoutIsTerminal?: boolean;
 }>;
 
@@ -96,7 +124,33 @@ const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
         }),
     );
   } catch {
-    throw new Error("could not read Git remotes");
+    throw new CliError(
+      "local-io",
+      "could not read Git remotes",
+      {},
+      "repository_detection_failed",
+    );
+  }
+};
+
+const defaultWorktreeConfigPath = async (): Promise<string> => {
+  try {
+    const child = Bun.spawn(["git", "rev-parse", "--git-dir"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [directory, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      child.exited,
+    ]);
+    if (exitCode !== 0) throw new Error("git directory unavailable");
+    const gitDirectory = directory.trim();
+    if (!gitDirectory) throw new Error("git directory unavailable");
+    return worktreeConfigPath(
+      isAbsolute(gitDirectory) ? gitDirectory : resolve(gitDirectory),
+    );
+  } catch {
+    throw new CliInvocationError("could not locate the Git worktree context");
   }
 };
 
@@ -109,7 +163,15 @@ const renderSuccess = (
   parsed.json
     ? json({ ok: true, ...value })
     : `${Object.entries(value)
-        .map(([key, entry]) => `${key}: ${String(entry)}`)
+        .map(([key, entry]) => {
+          const rendered =
+            typeof entry === "string"
+              ? entry
+              : entry !== null && typeof entry === "object"
+                ? JSON.stringify(entry)
+                : String(entry);
+          return `${sanitizeCliText(key)}: ${sanitizeCliText(rendered ?? "")}`;
+        })
         .join("\n")}\n`;
 
 const execute = async (
@@ -129,12 +191,11 @@ const execute = async (
     const [name, origin] = parsed.positionals;
     if (!name || !origin)
       throw new Error("profile add requires a name and origin");
-    const profile = await addServerProfile(
-      store,
-      name,
-      origin,
-      runtime.fetch ? { fetch: runtime.fetch } : {},
-    );
+    const profile = await addServerProfile(store, name, origin, {
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      confirm: async (candidate) =>
+        parsed.acceptProfile === candidate.pin.serverProfileId,
+    });
     return {
       value: {
         profile: profile.name,
@@ -166,9 +227,13 @@ const execute = async (
   }
   if (parsed.command === "status") {
     const catalog = await store.read();
-    const selected = catalog.selected
-      ? catalog.profiles.find((profile) => profile.name === catalog.selected)
-      : undefined;
+    const selected = parsed.profile
+      ? catalog.profiles.find((profile) => profile.name === parsed.profile)
+      : catalog.selected
+        ? catalog.profiles.find((profile) => profile.name === catalog.selected)
+        : undefined;
+    if (parsed.profile && !selected)
+      await resolveServerProfile(store, parsed.profile);
     const authenticated = selected
       ? Boolean(
           await createSessionStore(
@@ -192,7 +257,7 @@ const execute = async (
       profile.pin,
       createSessionStore(credentials),
       {
-        noOpen: parsed.noOpen,
+        noOpen: parsed.noOpen || parsed.noInput,
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
         open: runtime.open ?? openVerificationPage,
       },
@@ -218,11 +283,93 @@ const execute = async (
     const repository = detectGitHubRepository(
       await (runtime.readGitRemotes ?? readGitRemotes)(),
     );
+    const context = await readWorktreeContext(
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
+    );
+    if (context && context.serverProfileId !== profile.pin.serverProfileId)
+      throw new CliInvocationError(
+        "worktree context belongs to a different Server Profile",
+      );
     return {
       value: {
         profile: profile.name,
         repository: `${repository.host}/${repository.owner}/${repository.name}`,
         remoteNames: repository.remoteNames,
+        ...(context ? { projectId: context.projectId } : {}),
+        ...(context?.environmentId
+          ? { environmentId: context.environmentId }
+          : {}),
+        ...(resolveEnvironmentSelection(parsed.environment, context)
+          ? {
+              environment: resolveEnvironmentSelection(
+                parsed.environment,
+                context,
+              )?.value,
+            }
+          : {}),
+      },
+    };
+  }
+  if (parsed.command === "project" && parsed.subcommand === "link") {
+    const profile = await resolveServerProfile(store, parsed.profile);
+    const team = parsed.team;
+    if (!team)
+      throw new CliInvocationError("project link requires --team <team-id>");
+    const repository = detectGitHubRepository(
+      await (runtime.readGitRemotes ?? readGitRemotes)(),
+    );
+    const credentials = runtime.credentials ?? createNativeCredentialStore();
+    const admin =
+      runtime.admin ?? createStrictJsonClient(profile.pin, credentials);
+    const project = await linkProject(admin, {
+      teamId: team,
+      repository,
+    });
+    await writeWorktreeContext(
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        projectId: project.id,
+      },
+    );
+    return {
+      value: {
+        profile: profile.name,
+        project: project.name,
+        projectId: project.id,
+        repository: `${repository.host}/${repository.owner}/${repository.name}`,
+      },
+    };
+  }
+  if (parsed.command === "env" && parsed.subcommand === "use") {
+    const profile = await resolveServerProfile(store, parsed.profile);
+    const contextPath =
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+    const context = await readWorktreeContext(contextPath);
+    if (!context)
+      throw new CliInvocationError(
+        "No Project selected; use project link before selecting an Environment",
+      );
+    if (context.serverProfileId !== profile.pin.serverProfileId)
+      throw new CliInvocationError(
+        "worktree Project belongs to a different Server Profile",
+      );
+    const name = parsed.environment ?? parsed.positionals[0];
+    if (!name) throw new Error("env use requires an Environment name");
+    const credentials = runtime.credentials ?? createNativeCredentialStore();
+    const admin =
+      runtime.admin ?? createStrictJsonClient(profile.pin, credentials);
+    const environment = await selectEnvironment(admin, context.projectId, name);
+    await writeWorktreeContext(contextPath, {
+      ...context,
+      environmentId: environment.id,
+    });
+    return {
+      value: {
+        profile: profile.name,
+        environment: environment.name,
+        environmentId: environment.id,
+        selected: true,
       },
     };
   }
@@ -239,6 +386,7 @@ export const run = async (
   runtime: CliRuntime = {},
 ): Promise<CliRunResult> => {
   try {
+    rejectForbiddenFlags(args);
     if (args.includes("--help") || args.length === 0)
       return {
         exitCode: EXIT_CODES.success,

@@ -50,4 +50,26 @@ describe("CLI Server Profile catalog", () => {
       }),
     ).rejects.toThrow();
   });
+
+  test("does not persist a newly trusted profile when confirmation is declined", async () => {
+    const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
+    const store = createFileProfileCatalog(path);
+    try {
+      const capabilities = createCapabilitiesDocument({
+        origin: "https://relay.example",
+        serverProfileId: "00000000-0000-4000-8000-000000000042",
+      });
+      await expect(
+        addServerProfile(store, "work", capabilities.origin, {
+          fetch: async () => Response.json(capabilities),
+          confirm: async () => false,
+        }),
+      ).rejects.toThrow("confirmation");
+      expect((await store.read()).profiles).toEqual([]);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(path)
+        .catch(() => undefined);
+    }
+  });
 });

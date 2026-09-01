@@ -17,10 +17,26 @@ export type GitHubRepository = Readonly<{
 export type WorktreeContext = Readonly<{
   readonly serverProfileId: string;
   readonly projectId: string;
-  readonly environmentId: string;
+  readonly environmentId?: string;
+}>;
+
+export type EnvironmentSelection = Readonly<{
+  readonly source: "override" | "worktree";
+  readonly value: string;
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+
+export const resolveEnvironmentSelection = (
+  override: string | undefined,
+  context: WorktreeContext | null,
+): EnvironmentSelection | null => {
+  if (override !== undefined)
+    return Object.freeze({ source: "override", value: override });
+  if (context?.environmentId !== undefined)
+    return Object.freeze({ source: "worktree", value: context.environmentId });
+  return null;
+};
 
 const parseGitHubRemote = (
   remote: GitRemote,
@@ -93,7 +109,13 @@ const validateContext = (value: unknown): WorktreeContext => {
     throw new CliInvocationError("worktree context is invalid");
   const object = value as Record<string, unknown>;
   const keys = Object.keys(object).sort();
-  if (keys.join(",") !== "environmentId,projectId,serverProfileId")
+  if (
+    !keys.every((key) =>
+      ["environmentId", "projectId", "serverProfileId"].includes(key),
+    ) ||
+    !keys.includes("projectId") ||
+    !keys.includes("serverProfileId")
+  )
     throw new CliInvocationError(
       "worktree context must contain only opaque ids",
     );
@@ -110,7 +132,9 @@ const validateContext = (value: unknown): WorktreeContext => {
   return Object.freeze({
     serverProfileId: object.serverProfileId as string,
     projectId: object.projectId as string,
-    environmentId: object.environmentId as string,
+    ...(object.environmentId === undefined
+      ? {}
+      : { environmentId: object.environmentId as string }),
   });
 };
 

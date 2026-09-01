@@ -25,6 +25,7 @@ export type ParsedArguments = Readonly<{
   readonly subcommand?: string;
   readonly positionals: readonly string[];
   readonly profile?: string;
+  readonly acceptProfile?: string;
   readonly environment?: string;
   readonly output?: string;
   readonly from?: string;
@@ -43,6 +44,7 @@ type MutableArguments = {
   subcommand?: string;
   positionals: string[];
   profile?: string;
+  acceptProfile?: string;
   environment?: string;
   output?: string;
   from?: string;
@@ -58,6 +60,7 @@ type MutableArguments = {
 
 const valueFlags = new Set([
   "--profile",
+  "--accept-profile",
   "--environment",
   "--output",
   "--from",
@@ -74,9 +77,20 @@ const forbiddenFlags = new Set([
   "--credentials",
 ]);
 
+export const rejectForbiddenFlags = (args: readonly string[]): void => {
+  for (const token of args) {
+    const flag = token.includes("=")
+      ? token.slice(0, token.indexOf("="))
+      : token;
+    if (forbiddenFlags.has(flag))
+      throw new CliInvocationError(`${flag} is not supported`);
+  }
+};
+
 const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   if (value.length === 0) throw new CliInvocationError(`${flag} needs a value`);
   if (flag === "--profile") parsed.profile = value;
+  else if (flag === "--accept-profile") parsed.acceptProfile = value;
   else if (flag === "--environment") parsed.environment = value;
   else if (flag === "--output") parsed.output = value;
   else if (flag === "--from") parsed.from = value;
@@ -113,7 +127,7 @@ const validateCommand = (parsed: MutableArguments) => {
       parsed.subcommand === "add" ? 2 : parsed.subcommand === "use" ? 1 : 0,
     device: 0,
     project: 0,
-    env: 1,
+    env: parsed.subcommand === "use" && parsed.environment ? 0 : 1,
     init: 1,
     rollback: 1,
   };
@@ -135,6 +149,24 @@ const validateCommand = (parsed: MutableArguments) => {
     throw new CliInvocationError("--output is only valid with pull");
   if (parsed.from && !["init", "push"].includes(command))
     throw new CliInvocationError("--from is only valid with init or push");
+  if (parsed.team && !(command === "project" && parsed.subcommand === "link"))
+    throw new CliInvocationError("--team is only valid with project link");
+  if (
+    command === "env" &&
+    parsed.subcommand === "use" &&
+    parsed.environment &&
+    parsed.positionals.length > 0
+  )
+    throw new CliInvocationError(
+      "env use accepts an Environment name either as an argument or with --environment",
+    );
+  if (
+    parsed.acceptProfile &&
+    !(command === "profile" && parsed.subcommand === "add")
+  )
+    throw new CliInvocationError(
+      "--accept-profile is only valid with profile add",
+    );
 };
 
 export const parseArguments = (

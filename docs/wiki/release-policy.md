@@ -9,6 +9,6 @@ checks that the tagged commit is an ancestor of `main`, reruns `bun run verify`,
 single `apps/cli/dist/dotrelay` binary built on `ubuntu-latest` as a GitHub Release asset. Merging to
 `main` never deploys production.
 
-The current workflow does not enforce immutable tag references or strict SemVer beyond the tag glob,
-and it does not publish platform-specific artifacts or an npm distribution. Those guarantees require
-additional release-workflow and repository-policy changes before they can be promised.
+The current workflow does not enforce immutable tag references or strict SemVer beyond the tag glob.
+Platform-specific npm packages are staged with `bun run package:cli`; the release workflow still
+publishes the standalone binary as its release asset.

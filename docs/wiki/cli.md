@@ -1,7 +1,7 @@
 # Standalone CLI
 
-The `dotrelay` binary exposes the command contract. The repository also contains a private npm
-selector implementation for future distribution; it is not currently published.
+The `dotrelay` binary exposes the command contract. The `dotrelay` npm package selects the native
+binary staged for the current platform and forwards the same arguments to it.
 
 ## Profiles and authentication
 

@@ -41,7 +41,7 @@ const safeDiagnosticKeys = new Set([
   "repository",
 ]);
 
-const sanitizeDiagnosticDetail = (detail: string): string =>
+export const sanitizeCliText = (detail: string): string =>
   Array.from(detail)
     .filter((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -104,7 +104,7 @@ export const diagnosticForError = (error: unknown): CliDiagnostic => {
       ok: false,
       category: error.category,
       code: error.code,
-      detail: sanitizeDiagnosticDetail(error.message),
+      detail: sanitizeCliText(error.message),
       ...safeDetails,
       exitCode: error.exitCode,
     };

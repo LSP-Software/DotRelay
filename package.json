@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
+    "package:cli": "bun scripts/stage-cli-package.ts",
     "smoke": "turbo run smoke",
     "format": "biome format .",
     "format:check": "biome ci .",

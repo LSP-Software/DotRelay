@@ -208,7 +208,14 @@ export const validateWorkspaceBoundaries = async (
   for (const workspace of manifests) {
     const { name, manifest, kind } = workspace;
     graph.set(name, new Set());
-    if (manifest.private !== true)
+    const publishConfig = manifest.publishConfig;
+    const isIntentionalPublicPackage =
+      kind === "package" &&
+      manifest.private === false &&
+      publishConfig !== null &&
+      typeof publishConfig === "object" &&
+      (publishConfig as Record<string, unknown>).access === "public";
+    if (manifest.private !== true && !isIntentionalPublicPackage)
       violations.push(`${name}: workspace must be private`);
     if (
       kind === "package" &&

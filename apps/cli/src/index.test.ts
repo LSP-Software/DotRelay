@@ -51,6 +51,64 @@ describe("CLI foundation", () => {
     }
   });
 
+  test("honors a status profile override", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(
+        profilePath,
+        JSON.stringify({
+          version: 1,
+          selected: "relay",
+          profiles: [
+            {
+              name: "relay",
+              origin: "https://relay.example",
+              pin: {
+                origin: "https://relay.example",
+                serverProfileId: "00000000-0000-4000-8000-000000000042",
+              },
+            },
+            {
+              name: "other",
+              origin: "https://other.example",
+              pin: {
+                origin: "https://other.example",
+                serverProfileId: "00000000-0000-4000-8000-000000000043",
+              },
+            },
+          ],
+        }),
+      );
+      const result = await run(["status", "--profile", "other", "--json"], {
+        profilePath,
+        credentials: {
+          get: async (_service, account) =>
+            account.includes("000000000043")
+              ? new TextEncoder().encode("session-token")
+              : null,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        profile: "other",
+        origin: "https://other.example",
+        authenticated: true,
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("rejects forbidden flags even when help is requested", async () => {
+    const result = await run(["--insecure", "--help"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--insecure is not supported");
+  });
+
   test("maps an empty Git remote result to repository_missing", async () => {
     const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
     try {
@@ -81,6 +139,139 @@ describe("CLI foundation", () => {
     } finally {
       await (await import("node:fs/promises"))
         .unlink(profilePath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("links a Project and writes only opaque worktree context", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-context-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(
+        profilePath,
+        JSON.stringify({
+          version: 1,
+          selected: "relay",
+          profiles: [
+            {
+              name: "relay",
+              origin: "https://relay.example",
+              pin: {
+                origin: "https://relay.example",
+                serverProfileId: "00000000-0000-4000-8000-000000000042",
+              },
+            },
+          ],
+        }),
+      );
+      const result = await run(
+        [
+          "project",
+          "link",
+          "--team",
+          "00000000-0000-4000-8000-000000000001",
+          "--json",
+        ],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          readGitRemotes: async () => [
+            { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
+          ],
+          admin: {
+            post: async () => ({
+              id: "00000000-0000-4000-8000-000000000002",
+              name: "DotRelay",
+            }),
+            get: async () => ({}) as never,
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        project: "DotRelay",
+      });
+      expect(await Bun.file(contextPath).text()).toBe(
+        '{"serverProfileId":"00000000-0000-4000-8000-000000000042","projectId":"00000000-0000-4000-8000-000000000002"}\n',
+      );
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("selects an Environment with command-level precedence and preserves context", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-context-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(
+        profilePath,
+        JSON.stringify({
+          version: 1,
+          selected: "relay",
+          profiles: [
+            {
+              name: "relay",
+              origin: "https://relay.example",
+              pin: {
+                origin: "https://relay.example",
+                serverProfileId: "00000000-0000-4000-8000-000000000042",
+              },
+            },
+          ],
+        }),
+      );
+      await Bun.write(
+        contextPath,
+        JSON.stringify({
+          serverProfileId: "00000000-0000-4000-8000-000000000042",
+          projectId: "00000000-0000-4000-8000-000000000002",
+        }),
+      );
+      const result = await run(
+        [
+          "env",
+          "use",
+          "--environment",
+          "staging",
+          "--profile",
+          "relay",
+          "--json",
+        ],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          admin: {
+            get: async () => ({
+              environments: [
+                { id: "00000000-0000-4000-8000-000000000003", name: "staging" },
+              ],
+            }),
+            post: async () => ({}) as never,
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        environment: "staging",
+      });
+      expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
+        serverProfileId: "00000000-0000-4000-8000-000000000042",
+        projectId: "00000000-0000-4000-8000-000000000002",
+        environmentId: "00000000-0000-4000-8000-000000000003",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
         .catch(() => undefined);
     }
   });
