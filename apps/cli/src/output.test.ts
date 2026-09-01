@@ -33,6 +33,12 @@ describe("CLI output safety", () => {
     );
     expect(JSON.stringify(secret)).not.toContain("secret");
     expect(JSON.stringify(secret)).not.toContain("bearer");
+    const terminalControl = diagnosticForError(
+      new CliError("local-io", "ordinary\u001b[31m text\b"),
+    );
+    expect(terminalControl.detail).toContain("ordinary");
+    expect(terminalControl.detail).not.toContain("\u001b");
+    expect(terminalControl.detail).not.toContain("\b");
   });
 
   test("atomically writes a protected output file", async () => {
