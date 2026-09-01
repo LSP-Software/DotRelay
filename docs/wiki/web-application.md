@@ -50,3 +50,22 @@ authorization, and Recovery Kit entry.
 
 There is no reduced-security mode, alternate cryptographic suite, provider fallback, or server-side
 plaintext rendering.
+
+## Environment editor
+
+The protected editor is available only after Server Profile trust, v3 runtime verification, an
+active Device, required grants, active resource state, and a current Project epoch all pass. It
+shows verified-head metadata and Variable definitions while keeping Values masked by default.
+Reveal is an explicit per-Value action on the active Device and is never an output path for
+diagnostics or logs.
+
+New Variables require explicit ownership classification. Shared Values are Team-readable; a
+User-defined Value is readable only by that User's authorized Devices. Definitions and their
+required initial Value lanes are added atomically to the local draft, preserving exact UTF-8 and
+empty-versus-absent semantics.
+
+Review & publish displays the expected parent, signing Device, changed lanes, and the client-only
+encryption boundary before staging and finalizing a signed v3 mutation. Stale heads require local
+three-way resolution. Rollback chooses lanes and appends a new Revision rather than rewinding the
+head. Unsupported crypto, inactive Devices, pending grants, archived resources, stale epochs, and
+required rotation fail closed without requesting protected content.

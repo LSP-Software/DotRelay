@@ -70,6 +70,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { protectedWorkflowBlockers } from "@/lib/environment-workflow";
 import { cn } from "@/lib/utils";
 import {
   e2eWorkspaceBoundary,
@@ -78,6 +79,7 @@ import {
   type WorkspaceProfileId,
   workspaceProfileCatalog,
 } from "@/lib/workspace-boundary";
+import { EnvironmentEditor } from "./environment-editor";
 
 type MembershipRole = "OWNER" | "ADMIN" | "MEMBER";
 type ResourceLifecycle = "ACTIVE" | "ARCHIVED";
@@ -92,6 +94,7 @@ const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
 
 const navigation = [
   { label: "Overview", href: "#overview", icon: LayoutDashboard },
+  { label: "Environment editor", href: "#environment", icon: LockKeyhole },
   { label: "Revision history", href: "#revisions", icon: History },
   { label: "Administration", href: "#administration", icon: Users },
   { label: "Devices", href: "#devices", icon: MonitorSmartphone },
@@ -226,8 +229,33 @@ export const WorkspaceShell = () => {
   const [githubSubject, setGithubSubject] = useState("");
   const [invitations, setInvitations] = useState<string[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const profile = boundary.profile;
+  const [protectedPreview, setProtectedPreview] = useState(false);
+  const displayBoundary = protectedPreview
+    ? {
+        ...boundary,
+        profile: { ...boundary.profile, pinned: true },
+        device: { active: true, label: "Active Device" },
+        grantsReady: true,
+        epochCurrent: true,
+        rotationRequired: false,
+        crypto: { available: true },
+      }
+    : boundary;
+  const profile = displayBoundary.profile;
   const canAdminister = role === "OWNER" || role === "ADMIN";
+
+  const protectedBlockers = protectedWorkflowBlockers({
+    profileTrusted: displayBoundary.profile.pinned,
+    cryptoAvailable: displayBoundary.crypto.available,
+    deviceActive: displayBoundary.device.active,
+    grantsReady: displayBoundary.grantsReady,
+    resourceActive:
+      projectLifecycle === "ACTIVE" && environmentLifecycle === "ACTIVE",
+    epochCurrent: displayBoundary.epochCurrent,
+    rotationRequired: displayBoundary.rotationRequired,
+  });
+
+  const protectedWorkflowAvailable = protectedBlockers.length === 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -242,6 +270,14 @@ export const WorkspaceShell = () => {
       cancelled = true;
     };
   }, [profileId]);
+
+  useEffect(() => {
+    setProtectedPreview(
+      process.env.NODE_ENV !== "production" &&
+        new URLSearchParams(window.location.search).get("preview") ===
+          "protected",
+    );
+  }, []);
 
   const resetWorkspaceContext = () => {
     setInvitations([]);
@@ -294,17 +330,19 @@ export const WorkspaceShell = () => {
           <div className="flex items-center gap-3">
             <Avatar size="sm">
               <AvatarFallback>
-                {(boundary.session.displayName ?? "DR")
+                {(displayBoundary.session.displayName ?? "DR")
                   .slice(0, 2)
                   .toUpperCase()}
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">
-                {boundary.session.displayName ?? "Signed out"}
+                {displayBoundary.session.displayName ?? "Signed out"}
               </p>
               <p className="truncate text-xs text-muted-foreground">
-                {boundary.session.active ? "Signed in" : "Sign in required"}
+                {displayBoundary.session.active
+                  ? "Signed in"
+                  : "Sign in required"}
               </p>
             </div>
           </div>
@@ -451,33 +489,35 @@ export const WorkspaceShell = () => {
               />
               <StatusItem
                 detail={
-                  boundary.session.active
+                  displayBoundary.session.active
                     ? "cookie · server-local User"
                     : "sign in to continue"
                 }
                 icon={CircleUserRound}
                 label={
-                  boundary.session.active ? "Session active" : "No session"
+                  displayBoundary.session.active
+                    ? "Session active"
+                    : "No session"
                 }
-                tone={boundary.session.active ? "ok" : "warn"}
+                tone={displayBoundary.session.active ? "ok" : "warn"}
               />
               <StatusItem
                 detail={
-                  boundary.device.active
+                  displayBoundary.device.active
                     ? "authorized for protected operations"
                     : "protected operations blocked"
                 }
                 icon={MonitorSmartphone}
                 label={
-                  boundary.device.active
+                  displayBoundary.device.active
                     ? "Active Device"
-                    : (boundary.device.label ?? "No active Device")
+                    : (displayBoundary.device.label ?? "No active Device")
                 }
-                tone={boundary.device.active ? "ok" : "warn"}
+                tone={displayBoundary.device.active ? "ok" : "warn"}
               />
             </div>
 
-            {!boundary.crypto.available ? (
+            {!displayBoundary.crypto.available ? (
               <Alert className="mt-5 border-amber-300/25 bg-amber-300/5 py-4">
                 <LockKeyhole aria-hidden="true" className="text-amber-300" />
                 <AlertTitle>Protected content is unavailable</AlertTitle>
@@ -487,13 +527,18 @@ export const WorkspaceShell = () => {
                   Values were not requested. Non-secret Team administration
                   remains available.
                   <code className="ml-2 rounded bg-background/70 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
-                    {boundary.crypto.problemCode ??
+                    {displayBoundary.crypto.problemCode ??
                       "crypto_provider_unavailable"}
                   </code>
                 </AlertDescription>
               </Alert>
             ) : null}
           </section>
+
+          <EnvironmentEditor
+            available={protectedWorkflowAvailable}
+            blockers={protectedBlockers}
+          />
 
           <section
             className="mt-8 grid scroll-mt-24 gap-4 xl:grid-cols-[1fr_0.62fr]"
