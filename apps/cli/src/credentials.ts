@@ -52,13 +52,13 @@ const standardBase64 = (bytes: Uint8Array): string => {
   return btoa(binary);
 };
 
-const macCredentialPrefix = "dotrelay-v1:";
+const textCredentialPrefix = "dotrelay-v1:";
 
-const decodeMacCredential = (value: Uint8Array): Uint8Array => {
+const decodeTextCredential = (value: Uint8Array): Uint8Array => {
   const text = new TextDecoder().decode(value).trimEnd();
-  if (!text.startsWith(macCredentialPrefix)) return value;
+  if (!text.startsWith(textCredentialPrefix)) return value;
   try {
-    const binary = atob(text.slice(macCredentialPrefix.length));
+    const binary = atob(text.slice(textCredentialPrefix.length));
     return Uint8Array.from(binary, (character) => character.charCodeAt(0));
   } catch {
     throw new CliError(
@@ -155,7 +155,7 @@ const WINDOWS_CREDENTIAL_TYPE = [
   "using System.Runtime.InteropServices;",
   "public static class DotRelayCredential {",
   "[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct CREDENTIAL {",
-  "public uint Flags; public uint Type; public string TargetName; public string Comment; public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten; public uint CredentialBlobSize; public IntPtr CredentialBlob; public uint Persist; public uint AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName; }",
+  "public uint Flags; public uint Type; [MarshalAs(UnmanagedType.LPWStr)] public string TargetName; [MarshalAs(UnmanagedType.LPWStr)] public string Comment; public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten; public uint CredentialBlobSize; public IntPtr CredentialBlob; public uint Persist; public uint AttributeCount; public IntPtr Attributes; [MarshalAs(UnmanagedType.LPWStr)] public string TargetAlias; [MarshalAs(UnmanagedType.LPWStr)] public string UserName; }",
   '[DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredRead(string target, uint type, uint flags, out IntPtr credential);',
   '[DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredWrite(ref CREDENTIAL credential, uint flags);',
   '[DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredDelete(string target, uint type, uint flags);',
@@ -247,7 +247,7 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
           account,
           "-w",
         ]);
-        return result.status === 0 ? decodeMacCredential(result.stdout) : null;
+        return result.status === 0 ? decodeTextCredential(result.stdout) : null;
       },
       set: async (service, account, secret) => {
         // macOS security has no password-stdin mode. Its final -w prompts on
@@ -267,7 +267,7 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
             "-w",
           ],
           new TextEncoder().encode(
-            `${macCredentialPrefix}${standardBase64(secret)}`,
+            `${textCredentialPrefix}${standardBase64(secret)}`,
           ),
         );
         if (result !== 0)
@@ -305,7 +305,7 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
         "account",
         account,
       ]);
-      return result.status === 0 ? result.stdout : null;
+      return result.status === 0 ? decodeTextCredential(result.stdout) : null;
     },
     set: async (service, account, secret) => {
       const result = await command(
@@ -319,7 +319,9 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
           "account",
           account,
         ],
-        secret,
+        new TextEncoder().encode(
+          `${textCredentialPrefix}${standardBase64(secret)}`,
+        ),
       );
       if (result.status !== 0)
         throw new CliError(
