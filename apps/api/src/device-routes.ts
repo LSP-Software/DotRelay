@@ -2,6 +2,7 @@ import {
   ContractError,
   createProblem,
   DEVICE_ID_HEADER,
+  type ProtocolObject,
   parseJsonObject,
   parseProtocolObject,
   parseSha384Hex,
@@ -9,12 +10,14 @@ import {
   sha384ToHex,
   uuidToBytes,
   validateProtocolObject,
+  verifyProtocolObject,
 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
   DeviceRepository,
   OperationRepository,
   RecoveryRepository,
+  resolveDotRelayUser,
   StagedObjectRepository,
   sha384Digest,
 } from "@dotrelay/database";
@@ -53,7 +56,7 @@ const mapError = (error: unknown) => {
   if (error.message.includes("must differ")) return "forbidden" as const;
   if (error.message.includes("requires no active"))
     return "state_conflict" as const;
-  return "state_conflict" as const;
+  return "service_unavailable" as const;
 };
 
 const decodeBase64 = (value: unknown): Uint8Array => {
@@ -118,11 +121,19 @@ const readBody = async (context: Context) => {
       "enrollmentObject",
       "certificateObjectId",
       "certificateObject",
+      "enrolledDeviceId",
       "envelopeId",
+      "envelope",
       "recoveryGeneration",
       "ciphertextHash",
       "ciphertextLength",
       "succeeded",
+      "challenge",
+      "proof",
+      "certificateId",
+      "certificate",
+      "replacementSigningPublicKey",
+      "replacementEncryptionPublicKey",
     ]);
   } catch {
     throw new ContractError("invalid_request");
@@ -206,6 +217,52 @@ const operation = async (
     commandBytes,
     commandDigest: await sha384Digest(commandBytes),
   } as const;
+};
+
+const requireSessionUser = async (
+  context: Context,
+  database: DatabaseClient,
+  profile: ServerProfileConfig,
+  auth: DotRelayAuth,
+): Promise<string | Response> => {
+  const session = await auth.api.getSession({
+    headers: context.req.raw.headers,
+  });
+  if (!session) return problem(context, "authentication_required");
+  const user = await resolveDotRelayUser(database, {
+    serverProfileId: profile.id,
+    authSubject: session.user.id,
+  });
+  if (!user) return problem(context, "service_unavailable");
+  return user.id;
+};
+
+const verifyWithStoredDevice = async (
+  database: DatabaseClient,
+  userId: string,
+  object: ProtocolObject,
+  deviceId?: string,
+): Promise<boolean> => {
+  const signature = requiredBytes(object, 4, 64);
+  const devices = await database.device.findMany({
+    where: { userId, ...(deviceId ? { id: deviceId } : {}) },
+    select: { ed25519PublicKey: true },
+  });
+  for (const device of devices) {
+    try {
+      const publicKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(device.ed25519PublicKey).buffer,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      if (await verifyProtocolObject(object, signature, publicKey)) return true;
+    } catch {
+      // A malformed stored key must not make another valid historical key unusable.
+    }
+  }
+  return false;
 };
 
 const stage = async (
@@ -340,7 +397,11 @@ export const registerDeviceRoutes = (
         );
         const enrollment = await database.deviceEnrollment.findUnique({
           where: { id: enrollmentId },
-          select: { userId: true, transcriptHash: true },
+          select: {
+            userId: true,
+            transcriptHash: true,
+            initiatorDeviceId: true,
+          },
         });
         if (!enrollment || enrollment.userId !== actor.userId)
           return problem(context, "resource_not_found");
@@ -367,6 +428,26 @@ export const registerDeviceRoutes = (
             requiredBytes(approval.object, 76, 48),
             new Uint8Array(enrollment.transcriptHash),
           )
+        )
+          throw new ContractError("invalid_crypto_object");
+        const enrolledDeviceId = parseUuid(
+          body.enrolledDeviceId,
+          "enrolledDeviceId",
+        );
+        if (
+          !equalBytes(
+            requiredBytes(approval.object, 10, 16),
+            uuidToBytes(enrolledDeviceId),
+          )
+        )
+          throw new ContractError("invalid_crypto_object");
+        if (
+          !(await verifyWithStoredDevice(
+            database,
+            actor.userId,
+            approval.object,
+            actor.deviceId,
+          ))
         )
           throw new ContractError("invalid_crypto_object");
         const command = approval.canonicalBytes;
@@ -411,7 +492,12 @@ export const registerDeviceRoutes = (
         );
         const enrollment = await database.deviceEnrollment.findFirst({
           where: { id: enrollmentId, userId: actor.userId },
-          select: { initiatorDeviceId: true },
+          select: {
+            initiatorDeviceId: true,
+            transcriptHash: true,
+            challengeHash: true,
+            expiresAt: true,
+          },
         });
         if (!enrollment) return problem(context, "resource_not_found");
         if (enrollment.initiatorDeviceId !== actor.deviceId)
@@ -432,6 +518,58 @@ export const registerDeviceRoutes = (
           !equalBytes(
             requiredBytes(enrollmentObject.object, 17, 16),
             uuidToBytes(enrollmentId),
+          )
+        )
+          throw new ContractError("invalid_crypto_object");
+        if (
+          !equalBytes(
+            enrollmentObject.digest,
+            new Uint8Array(enrollment.transcriptHash),
+          ) ||
+          !(await verifyWithStoredDevice(
+            database,
+            actor.userId,
+            enrollmentObject.object,
+            enrollment.initiatorDeviceId,
+          ))
+        )
+          throw new ContractError("invalid_crypto_object");
+        if (
+          requiredUint(enrollmentObject.object, 33) !==
+          BigInt(enrollment.expiresAt.getTime())
+        )
+          throw new ContractError("invalid_crypto_object");
+        const transcriptChallenge = requiredBytes(
+          enrollmentObject.object,
+          57,
+          32,
+        );
+        if (
+          !equalBytes(
+            await sha384Digest(transcriptChallenge),
+            new Uint8Array(enrollment.challengeHash),
+          )
+        )
+          throw new ContractError("invalid_crypto_object");
+        const persistedApproval =
+          await database.enrollmentApprovalObject.findFirst({
+            where: { enrollmentId },
+            select: { protocolObject: { select: { canonicalBytes: true } } },
+          });
+        if (!persistedApproval) throw new ContractError("state_conflict");
+        const approvalObject = parseProtocolObject(
+          new Uint8Array(persistedApproval.protocolObject.canonicalBytes),
+        );
+        validateProtocolObject(approvalObject);
+        if (
+          approvalObject.get(1) !== 5 ||
+          !equalBytes(
+            requiredBytes(approvalObject, 17, 16),
+            uuidToBytes(enrollmentId),
+          ) ||
+          !equalBytes(
+            requiredBytes(approvalObject, 10, 16),
+            requiredBytes(enrollmentObject.object, 10, 16),
           )
         )
           throw new ContractError("invalid_crypto_object");
@@ -466,6 +604,26 @@ export const registerDeviceRoutes = (
             requiredBytes(certificateObject.object, 10, 16),
             uuidToBytes(deviceId),
           )
+        )
+          throw new ContractError("invalid_crypto_object");
+        const certificateSignature = requiredBytes(
+          certificateObject.object,
+          4,
+          64,
+        );
+        const certificatePublicKey = await crypto.subtle.importKey(
+          "raw",
+          new Uint8Array(ed25519PublicKey).slice().buffer,
+          { name: "Ed25519" },
+          false,
+          ["verify"],
+        );
+        if (
+          !(await verifyProtocolObject(
+            certificateObject.object,
+            certificateSignature,
+            certificatePublicKey,
+          ))
         )
           throw new ContractError("invalid_crypto_object");
         if (
@@ -544,6 +702,15 @@ export const registerDeviceRoutes = (
       );
       validateActorBinding(object.object, profile.id, actor.userId);
       if (
+        !(await verifyWithStoredDevice(
+          database,
+          actor.userId,
+          object.object,
+          actor.deviceId,
+        ))
+      )
+        throw new ContractError("invalid_crypto_object");
+      if (
         !equalBytes(
           requiredBytes(object.object, 59, 16),
           uuidToBytes(envelopeId),
@@ -592,6 +759,171 @@ export const registerDeviceRoutes = (
     }
   });
 
+  app.post("/api/v1/recovery/restore", async (context) => {
+    const user = await requireSessionUser(context, database, profile, auth);
+    if (user instanceof Response) return user;
+    try {
+      const body = await readBody(context);
+      requireIdempotencyKey(context, body.operationId);
+      const current = await database.recoveryEnvelope.findFirst({
+        where: { userId: user, retiredAt: null },
+        orderBy: { recoveryGeneration: "desc" },
+        include: { protocolObject: true },
+      });
+      if (!current) return problem(context, "resource_not_found");
+      const envelope = await parseProtocolPayload(
+        body,
+        "envelopeId",
+        "envelope",
+        10,
+      );
+      if (
+        envelope.id !== current.id ||
+        !equalBytes(
+          envelope.digest,
+          new Uint8Array(current.protocolObject.digest),
+        )
+      )
+        throw new ContractError("state_conflict");
+      if (!(await verifyWithStoredDevice(database, user, envelope.object)))
+        throw new ContractError("invalid_crypto_object");
+
+      const challenge = decodeBase64(body.challenge);
+      if (challenge.length !== 32) throw new ContractError("invalid_request");
+      const proofBytes = decodeBase64(body.proof);
+      const proof = parseProtocolObject(proofBytes);
+      validateProtocolObject(proof);
+      if (proof.get(1) !== 17) throw new ContractError("invalid_crypto_object");
+      const replacementSigningPublicKey = decodeBase64(
+        body.replacementSigningPublicKey,
+      );
+      if (replacementSigningPublicKey.length !== 32)
+        throw new ContractError("invalid_request");
+      const proofKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(replacementSigningPublicKey).buffer,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      const proofSignature = requiredBytes(proof, 4, 64);
+      if (!(await verifyProtocolObject(proof, proofSignature, proofKey)))
+        throw new ContractError("invalid_crypto_object");
+      if (
+        !equalBytes(requiredBytes(proof, 8, 16), uuidToBytes(profile.id)) ||
+        !equalBytes(requiredBytes(proof, 9, 16), uuidToBytes(user)) ||
+        !equalBytes(requiredBytes(proof, 17, 16), uuidToBytes(envelope.id))
+      ) {
+        throw new ContractError("invalid_crypto_object");
+      }
+      const deviceId = parseUuid(body.deviceId, "deviceId");
+      const identityGeneration = body.identityGeneration;
+      if (
+        typeof identityGeneration !== "string" ||
+        !/^[1-9][0-9]*$/.test(identityGeneration)
+      )
+        throw new ContractError("invalid_request");
+      if (
+        !equalBytes(requiredBytes(proof, 10, 16), uuidToBytes(deviceId)) ||
+        requiredUint(proof, 28) !== BigInt(identityGeneration) ||
+        requiredUint(proof, 29) !== current.recoveryGeneration
+      )
+        throw new ContractError("invalid_crypto_object");
+      const expiresAt = requiredUint(proof, 33);
+      if (expiresAt <= BigInt(Date.now()))
+        throw new ContractError("stale_generation");
+      const challengeHash = await sha384Digest(challenge);
+      if (!equalBytes(requiredBytes(proof, 58, 48), challengeHash))
+        throw new ContractError("invalid_crypto_object");
+
+      const x25519PublicKey = decodeBase64(body.x25519PublicKey);
+      const ed25519PublicKey = decodeBase64(body.ed25519PublicKey);
+      const keyId = decodeBase64(body.keyId);
+      if (
+        x25519PublicKey.length !== 32 ||
+        ed25519PublicKey.length !== 32 ||
+        keyId.length !== 48 ||
+        !equalBytes(ed25519PublicKey, replacementSigningPublicKey)
+      )
+        throw new ContractError("invalid_request");
+      const expectedKeyId = await sha384Digest(x25519PublicKey);
+      if (!equalBytes(keyId, expectedKeyId))
+        throw new ContractError("invalid_crypto_object");
+      const certificate = await parseProtocolPayload(
+        body,
+        "certificateId",
+        "certificate",
+        2,
+      );
+      validateActorBinding(certificate.object, profile.id, user);
+      if (
+        !equalBytes(
+          requiredBytes(certificate.object, 10, 16),
+          uuidToBytes(deviceId),
+        ) ||
+        requiredUint(certificate.object, 28) !== BigInt(identityGeneration) ||
+        !equalBytes(
+          requiredBytes(certificate.object, 39, 32),
+          x25519PublicKey,
+        ) ||
+        !equalBytes(requiredBytes(certificate.object, 41, 32), ed25519PublicKey)
+      )
+        throw new ContractError("invalid_crypto_object");
+      const certificateSignature = requiredBytes(certificate.object, 4, 64);
+      if (
+        !(await verifyProtocolObject(
+          certificate.object,
+          certificateSignature,
+          proofKey,
+        ))
+      )
+        throw new ContractError("invalid_crypto_object");
+      const op = {
+        id: body.operationId as string,
+        actorUserId: user,
+        kind: "RECOVERY" as const,
+        commandBytes: commandBytes(
+          envelope.canonicalBytes,
+          proofBytes,
+          certificate.canonicalBytes,
+        ),
+        commandDigest: await sha384Digest(
+          commandBytes(
+            envelope.canonicalBytes,
+            proofBytes,
+            certificate.canonicalBytes,
+          ),
+        ),
+      };
+      const result = await new DeviceRepository().completeBootstrap(database, {
+        operation: op,
+        device: {
+          id: deviceId,
+          identityGeneration: BigInt(identityGeneration),
+          keyId,
+          x25519PublicKey,
+          ed25519PublicKey,
+        },
+        certificateObject: certificate,
+        recoveryAttempt: {
+          envelopeId: current.id,
+          challengeHash,
+        },
+      });
+      return context.json(
+        {
+          deviceId: "device" in result ? result.device.id : deviceId,
+          active: true,
+          idempotent: "idempotent" in result && result.idempotent,
+        },
+        201,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      return problem(context, mapError(error));
+    }
+  });
+
   app.post("/api/v1/recovery/attempts", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
@@ -601,6 +933,7 @@ export const registerDeviceRoutes = (
       const succeeded = body.succeeded;
       if (typeof succeeded !== "boolean")
         throw new ContractError("invalid_request");
+      if (succeeded) throw new ContractError("forbidden");
       const envelopeId =
         body.envelopeId === undefined
           ? undefined

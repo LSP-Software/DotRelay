@@ -8,10 +8,17 @@ const platformDirectories = await readdir(distDirectory, {
   withFileTypes: true,
 });
 const binaries = platformDirectories.filter((entry) => entry.isDirectory());
-if (binaries.length < 3)
-  throw new Error(
-    "the npm selector package must contain Linux, macOS, and Windows binaries",
-  );
+const platforms = new Set(
+  binaries.map((entry) => entry.name.slice(0, entry.name.indexOf("-"))),
+);
+const missingPlatforms = ["linux", "darwin", "win32"].filter(
+  (platform) => !platforms.has(platform),
+);
+if (missingPlatforms.length > 0) {
+  const message = `the npm selector package is missing ${missingPlatforms.join(", ")} native artifact(s)`;
+  if (process.env.CI === "true") throw new Error(message);
+  console.warn(`⚠ ${message}; local artifact-only run`);
+}
 for (const directory of binaries) {
   const binary = join(
     distDirectory,
@@ -36,4 +43,4 @@ const [stdout, stderr, exitCode] = await Promise.all([
 ]);
 if (exitCode !== 0 || stdout.trim().length === 0)
   throw new Error(`npm selector package smoke test failed: ${stderr}`);
-console.log("✓ npm selector package contains all platform binaries and runs");
+console.log("✓ npm selector package artifacts and selector run passed");

@@ -44,7 +44,15 @@ import {
   resolveServerProfile,
   useServerProfile,
 } from "./profile";
-import { enrollDevice, runProtectedWorkflow } from "./workflow";
+import {
+  approveDeviceEnrollment,
+  beginDeviceEnrollment,
+  completeDeviceEnrollment,
+  createRecoveryBackup,
+  enrollDevice,
+  restoreRecoveryKit,
+  runProtectedWorkflow,
+} from "./workflow";
 
 export const version = "0.0.0-foundation";
 
@@ -60,7 +68,12 @@ export const renderHelp = (): string => {
     "  profile list                        List saved Server Profiles",
     "  login [--profile <name>]            Authenticate in a browser",
     "  logout [--profile <name>]           Remove the local session",
-    "  device enroll|recover               Manage an authorized Device",
+    "  device enroll                         Bootstrap or begin Device enrollment",
+    "  device begin --output <file>         Begin dual-control enrollment",
+    "  device approve --from <file>         Approve an enrollment handoff",
+    "  device complete --from <file>        Complete an approved enrollment",
+    "  device backup --output <file>         Create and store a Recovery Kit",
+    "  device recover --from <file>         Restore a Device from a Recovery Kit",
     "",
     "Context and protected workflows:",
     "  context                             Detect the GitHub Repository",
@@ -413,6 +426,73 @@ const execute = async (
       },
     };
   }
+  const deviceTrustCommands = new Set([
+    "enroll",
+    "begin",
+    "approve",
+    "complete",
+    "backup",
+    "recover",
+  ]);
+  if (
+    parsed.command === "device" &&
+    deviceTrustCommands.has(parsed.subcommand ?? "")
+  ) {
+    if (parsed.noInput && !parsed.profile)
+      throw new CliInvocationError(
+        "--no-input requires explicit --profile for Device trust commands",
+      );
+    const profile = await resolveServerProfile(store, parsed.profile);
+    const credentials = runtime.credentials ?? createNativeCredentialStore();
+    const stateDirectory =
+      runtime.stateDirectory ??
+      dirname(runtime.profilePath ?? profileCatalogPath());
+    const workflowOptions = {
+      profile,
+      credentials,
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.deviceStorage
+        ? { deviceStorage: runtime.deviceStorage }
+        : {}),
+      ...(runtime.admin ? { admin: runtime.admin } : {}),
+      ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
+      stateDirectory,
+      contextPath: runtime.worktreeConfig ?? "",
+      ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+      ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+      noInput: parsed.noInput,
+      stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
+    };
+    if (parsed.subcommand === "enroll")
+      return {
+        value: await enrollDevice(workflowOptions, parsed.output),
+      };
+    if (parsed.subcommand === "begin")
+      return {
+        value: await beginDeviceEnrollment(workflowOptions, parsed.output),
+      };
+    if (parsed.subcommand === "approve")
+      return {
+        value: await approveDeviceEnrollment(
+          workflowOptions,
+          parsed.from ?? "",
+        ),
+      };
+    if (parsed.subcommand === "complete")
+      return {
+        value: await completeDeviceEnrollment(
+          workflowOptions,
+          parsed.from ?? "",
+        ),
+      };
+    if (parsed.subcommand === "backup")
+      return {
+        value: await createRecoveryBackup(workflowOptions, parsed.output ?? ""),
+      };
+    return {
+      value: await restoreRecoveryKit(workflowOptions, parsed.from ?? ""),
+    };
+  }
   const protectedCommands = new Set([
     "init",
     "push",
@@ -453,36 +533,6 @@ const execute = async (
       parsed,
     );
     return { value: workflowResult };
-  }
-  if (parsed.command === "device" && parsed.subcommand === "enroll") {
-    const profile = await resolveServerProfile(store, parsed.profile);
-    const enrolled = await enrollDevice({
-      profile,
-      credentials: runtime.credentials ?? createNativeCredentialStore(),
-      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
-      ...(runtime.deviceStorage
-        ? { deviceStorage: runtime.deviceStorage }
-        : {}),
-      ...(runtime.admin ? { admin: runtime.admin } : {}),
-      stateDirectory:
-        runtime.stateDirectory ??
-        dirname(runtime.profilePath ?? profileCatalogPath()),
-      contextPath:
-        runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
-      ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
-      ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
-      noInput: parsed.noInput,
-      stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
-    });
-    return { value: enrolled };
-  }
-  if (parsed.command === "device" && parsed.subcommand === "recover") {
-    throw new CliError(
-      "authentication",
-      "Recovery Kit recovery requires a Recovery endpoint on the Server Profile",
-      {},
-      "recovery_unavailable",
-    );
   }
   throw new CliError(
     "invocation",

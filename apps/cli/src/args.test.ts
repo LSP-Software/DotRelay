@@ -73,4 +73,44 @@ describe("CLI argument contract", () => {
       parseArguments(["rollback", "11111111-1111-4111-8111-111111111111"]),
     ).toThrow("--variable");
   });
+
+  test("accepts the Device trust handoff commands", () => {
+    expect(
+      parseArguments(["device", "begin", "--output", "request.json"]),
+    ).toMatchObject({
+      command: "device",
+      subcommand: "begin",
+      output: "request.json",
+    });
+    expect(
+      parseArguments(["device", "approve", "--from", "request.json"]),
+    ).toMatchObject({
+      command: "device",
+      subcommand: "approve",
+      from: "request.json",
+    });
+    expect(
+      parseArguments(["device", "complete", "--from", "request.json"]),
+    ).toMatchObject({ command: "device", subcommand: "complete" });
+    expect(
+      parseArguments(["device", "backup", "--output", "recovery.kit"]),
+    ).toMatchObject({
+      command: "device",
+      subcommand: "backup",
+      output: "recovery.kit",
+    });
+    expect(
+      parseArguments(["device", "recover", "--from", "recovery.kit"]),
+    ).toMatchObject({
+      command: "device",
+      subcommand: "recover",
+      from: "recovery.kit",
+    });
+  });
+
+  test("requires explicit handoff files in the trust commands", () => {
+    expect(() => parseArguments(["device", "approve"])).toThrow("--from");
+    expect(() => parseArguments(["device", "backup"])).toThrow("--output");
+    expect(() => parseArguments(["device", "recover"])).toThrow("--from");
+  });
 });

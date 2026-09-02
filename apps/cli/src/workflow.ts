@@ -1,26 +1,51 @@
-import { readFile } from "node:fs/promises";
+import { createPrivateKey, createPublicKey } from "node:crypto";
+import { readFile, unlink } from "node:fs/promises";
 import {
   assertPublicationAccepted,
   type CliDeviceStorage,
   createCliDeviceStorage,
   createDeviceBootstrap,
+  createDeviceCertificate,
+  createDeviceEnrollmentApproval,
+  createDeviceEnrollmentRequest,
+  createDevicePrivateBundle,
   createProjectEpochGrantBootstrap,
   createProtocolTransport,
   createPublicationArtifacts,
+  createRecoveryChallengeProof,
+  createRecoveryKit,
   createVerifiedEnvironmentSession,
   type DecodedVariable,
+  type DeviceEnrollmentRequest,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
   exportEncryptionPublicKey,
   exportSigningPublicKey,
   loadDeviceKeyMaterial,
+  openRecoveryKit,
   type ProtocolTransport,
   type PublicationContext,
+  parseDeviceEnrollmentTranscript,
   reviewPublication,
   type SyncPageWire,
+  verifySignedProtocolObject,
 } from "@dotrelay/client";
-import { sha384, sha384ToHex, uuidToBytes } from "@dotrelay/contracts";
-import { createStrictJsonClient, type StrictJsonClient } from "./admin";
+import {
+  encodeProtocolObject,
+  exportEncryptionPrivateKey,
+  exportSigningPrivateKey,
+  importEncryptionPublicKey,
+  importSigningPublicKey,
+  parseProtocolObject,
+  sha384,
+  sha384ToHex,
+  uuidToBytes,
+} from "@dotrelay/contracts";
+import {
+  categoryForProblem,
+  createStrictJsonClient,
+  type StrictJsonClient,
+} from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
@@ -427,7 +452,7 @@ const postBootstrap = async (
     const code =
       typeof body?.code === "string" ? body.code : "device_enrollment_failed";
     throw new CliError(
-      code === "authentication_required" ? "authentication" : "conflict",
+      categoryForProblem(code),
       "Device enrollment was rejected",
       {},
       code,
@@ -435,9 +460,310 @@ const postBootstrap = async (
   }
 };
 
+type AuthorizedDevice = Readonly<{
+  readonly admin: StrictJsonClient;
+  readonly boundary: Boundary;
+  readonly userId: string;
+  readonly deviceId: string;
+  readonly bundle: DevicePrivateBundle;
+  readonly keys: DeviceKeyMaterial;
+}>;
+
+type EnrollmentArtifact = Readonly<{
+  readonly version: 1;
+  readonly kind: "dotrelay-device-enrollment-request";
+  readonly serverProfileId: string;
+  readonly userId: string;
+  readonly initiatorDeviceId: string;
+  readonly enrollmentId: string;
+  readonly deviceId: string;
+  readonly identityGeneration: number;
+  readonly operationId: string;
+  readonly enrollmentObjectId: string;
+  readonly expiresAt: string;
+  readonly transcript: string;
+  readonly transcriptHash: string;
+  readonly initiatorSigningPublicKey: string;
+  readonly certificate: string;
+  readonly certificateObjectId: string;
+}>;
+
+type RecoveryArtifact = Readonly<{
+  readonly version: 1;
+  readonly kind: "dotrelay-recovery-kit";
+  readonly serverProfileId: string;
+  readonly userId: string;
+  readonly envelopeId: string;
+  readonly identityGeneration: number;
+  readonly recoveryGeneration: number;
+  readonly activeDeviceSigningPublicKey: string;
+  readonly kit: string;
+}>;
+
+const base64 = (bytes: Uint8Array): string =>
+  Buffer.from(bytes).toString("base64");
+
+const fromBase64 = (value: unknown, label: string): Uint8Array => {
+  if (typeof value !== "string" || value.length === 0)
+    throw new CliError(
+      "crypto",
+      `the ${label} is missing`,
+      {},
+      "artifact_invalid",
+    );
+  try {
+    const bytes = new Uint8Array(Buffer.from(value, "base64"));
+    if (bytes.length === 0) throw new Error("empty");
+    return bytes;
+  } catch {
+    throw new CliError(
+      "crypto",
+      `the ${label} is invalid`,
+      {},
+      "artifact_invalid",
+    );
+  }
+};
+
+const artifactObject = async (
+  path: string,
+): Promise<Record<string, unknown>> => {
+  try {
+    const source = await readFile(path);
+    if (source.byteLength > 8 * 1024 * 1024)
+      throw new CliError(
+        "local-io",
+        "the Device handoff file is too large",
+        {},
+        "artifact_too_large",
+      );
+    const value: unknown = JSON.parse(new TextDecoder().decode(source));
+    if (!isRecord(value)) throw new Error("not an object");
+    return value;
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "local-io",
+      "could not read the Device handoff file",
+      {},
+      "artifact_read_failed",
+    );
+  }
+};
+
+const requiredArtifactString = (
+  value: Record<string, unknown>,
+  field: string,
+): string => requiredString(value[field], `handoff ${field}`);
+
+const readEnrollmentArtifact = async (
+  path: string,
+): Promise<EnrollmentArtifact> => {
+  const value = await artifactObject(path);
+  if (
+    value.version !== 1 ||
+    value.kind !== "dotrelay-device-enrollment-request"
+  )
+    throw new CliError(
+      "crypto",
+      "the enrollment handoff file has an unsupported format",
+      {},
+      "artifact_invalid",
+    );
+  const identityGeneration = value.identityGeneration;
+  if (
+    typeof identityGeneration !== "number" ||
+    !Number.isSafeInteger(identityGeneration) ||
+    identityGeneration < 0
+  )
+    throw new CliError(
+      "crypto",
+      "the enrollment handoff has an invalid identity generation",
+      {},
+      "artifact_invalid",
+    );
+  return Object.freeze({
+    version: 1,
+    kind: "dotrelay-device-enrollment-request",
+    serverProfileId: requiredArtifactString(value, "serverProfileId"),
+    userId: requiredArtifactString(value, "userId"),
+    initiatorDeviceId: requiredArtifactString(value, "initiatorDeviceId"),
+    enrollmentId: requiredArtifactString(value, "enrollmentId"),
+    deviceId: requiredArtifactString(value, "deviceId"),
+    identityGeneration,
+    operationId: requiredArtifactString(value, "operationId"),
+    enrollmentObjectId: requiredArtifactString(value, "enrollmentObjectId"),
+    expiresAt: requiredArtifactString(value, "expiresAt"),
+    transcript: requiredArtifactString(value, "transcript"),
+    transcriptHash: requiredArtifactString(value, "transcriptHash"),
+    initiatorSigningPublicKey: requiredArtifactString(
+      value,
+      "initiatorSigningPublicKey",
+    ),
+    certificate: requiredArtifactString(value, "certificate"),
+    certificateObjectId: requiredArtifactString(value, "certificateObjectId"),
+  });
+};
+
+const readRecoveryArtifact = async (
+  path: string,
+): Promise<RecoveryArtifact> => {
+  const value = await artifactObject(path);
+  if (value.version !== 1 || value.kind !== "dotrelay-recovery-kit")
+    throw new CliError(
+      "crypto",
+      "the Recovery Kit has an unsupported format",
+      {},
+      "recovery_kit_invalid",
+    );
+  const identityGeneration = value.identityGeneration;
+  const recoveryGeneration = value.recoveryGeneration;
+  if (
+    typeof identityGeneration !== "number" ||
+    !Number.isSafeInteger(identityGeneration) ||
+    identityGeneration < 0 ||
+    typeof recoveryGeneration !== "number" ||
+    !Number.isSafeInteger(recoveryGeneration) ||
+    recoveryGeneration < 1
+  )
+    throw new CliError(
+      "crypto",
+      "the Recovery Kit generations are invalid",
+      {},
+      "recovery_kit_invalid",
+    );
+  return Object.freeze({
+    version: 1,
+    kind: "dotrelay-recovery-kit",
+    serverProfileId: requiredArtifactString(value, "serverProfileId"),
+    userId: requiredArtifactString(value, "userId"),
+    envelopeId: requiredArtifactString(value, "envelopeId"),
+    identityGeneration,
+    recoveryGeneration,
+    activeDeviceSigningPublicKey: requiredArtifactString(
+      value,
+      "activeDeviceSigningPublicKey",
+    ),
+    kit: requiredArtifactString(value, "kit"),
+  });
+};
+
+const rawPublicKey = async (key: CryptoKey): Promise<Uint8Array> =>
+  new Uint8Array(await crypto.subtle.exportKey("raw", key));
+
+const createDeviceAdmin = (
+  options: WorkflowOptions,
+  deviceId?: string,
+): StrictJsonClient =>
+  options.admin ??
+  createStrictJsonClient(options.profile.pin, options.credentials, {
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(deviceId ? { deviceId } : {}),
+  });
+
+const loadAuthorizedDevice = async (
+  options: WorkflowOptions,
+): Promise<AuthorizedDevice> => {
+  const knownDeviceId =
+    options.deviceId ??
+    (await readDeviceId(
+      deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    ));
+  const firstAdmin = createDeviceAdmin(options, knownDeviceId ?? undefined);
+  const session = await firstAdmin.get("/api/v1/session", [
+    "authenticated",
+    "user",
+  ]);
+  if (!isRecord(session.user))
+    throw new CliError(
+      "authentication",
+      "the Server Profile returned no User identity",
+      {},
+      "session_invalid",
+    );
+  const userId = requiredString(session.user.id, "User id");
+  const boundary = parseBoundary(
+    await firstAdmin.get("/api/v1/workspace/boundary", [
+      "environment",
+      "session",
+      "profile",
+      "device",
+      "grantsReady",
+      "epochCurrent",
+      "rotationRequired",
+      "crypto",
+      "projectEpoch",
+    ]),
+  );
+  if (!boundary.device.active)
+    throw new CliError(
+      "authentication",
+      "an active Device is required",
+      {},
+      "device_not_active",
+    );
+  const deviceId = options.deviceId ?? boundary.device.id ?? knownDeviceId;
+  if (!deviceId)
+    throw new CliError(
+      "authentication",
+      "the active Device is not available locally",
+      {},
+      "device_bundle_missing",
+    );
+  if (boundary.device.id && boundary.device.id !== deviceId)
+    throw new CliError(
+      "authentication",
+      "the requested Device is not active",
+      {},
+      "device_not_active",
+    );
+  const storage = resolveDeviceStorage(options);
+  let bundle: DevicePrivateBundle;
+  try {
+    bundle = await storage.load({
+      pin: options.profile.pin,
+      deviceId: uuidToBytes(deviceId),
+    });
+  } catch {
+    throw new CliError(
+      "authentication",
+      "the active Device bundle is not available locally",
+      {},
+      "device_bundle_missing",
+    );
+  }
+  let keys: DeviceKeyMaterial;
+  try {
+    keys = await loadDeviceKeyMaterial(bundle);
+  } catch {
+    throw new CliError(
+      "crypto",
+      "the active Device bundle is invalid",
+      {},
+      "device_bundle_invalid",
+    );
+  }
+  return Object.freeze({
+    admin: createDeviceAdmin(options, deviceId),
+    boundary,
+    userId,
+    deviceId,
+    bundle,
+    keys,
+  });
+};
+
 export const enrollDevice = async (
   options: WorkflowOptions,
-): Promise<Readonly<{ deviceId: string; active: boolean }>> => {
+  output?: string,
+): Promise<
+  Readonly<{
+    deviceId: string;
+    active: boolean;
+    enrollmentId?: string;
+    request?: string;
+  }>
+> => {
   const sessions = createSessionStore(options.credentials);
   const token = await sessions.get(options.profile.pin);
   if (!token)
@@ -474,13 +800,7 @@ export const enrollDevice = async (
       "projectEpoch",
     ]),
   );
-  if (boundary.device.active)
-    throw new CliError(
-      "conflict",
-      "an active Device already exists; dual-control enrollment is required",
-      {},
-      "device_enrollment_requires_approval",
-    );
+  if (boundary.device.active) return beginDeviceEnrollment(options, output);
   const bootstrap = await createDeviceBootstrap({
     pin: options.profile.pin,
     userId,
@@ -503,6 +823,750 @@ export const enrollDevice = async (
     bootstrap.deviceId,
   );
   return { deviceId: bootstrap.deviceId, active: true };
+};
+
+const enrollmentStatePath = (directory: string, enrollmentId: string): string =>
+  `${directory}/enrollment-${enrollmentId}.json`;
+
+const enrollmentArtifactFromRequest = (
+  request: DeviceEnrollmentRequest,
+  operationId: string,
+  enrollmentObjectId: string,
+  certificateObjectId: string,
+): EnrollmentArtifact => ({
+  version: 1,
+  kind: "dotrelay-device-enrollment-request",
+  serverProfileId: request.ids.serverProfileId,
+  userId: request.ids.userId,
+  initiatorDeviceId: request.ids.initiatorDeviceId,
+  enrollmentId: request.ids.enrollmentId,
+  deviceId: request.ids.deviceId,
+  identityGeneration: request.bundle.userIdentityGeneration,
+  operationId,
+  enrollmentObjectId,
+  expiresAt: new Date(request.expiresAtMs).toISOString(),
+  transcript: base64(request.transcriptBytes),
+  transcriptHash: sha384ToHex(request.transcriptHash),
+  initiatorSigningPublicKey: base64(request.initiatorSigningPublicKey),
+  certificate: base64(request.certificateBytes),
+  certificateObjectId,
+});
+
+const writeEnrollmentArtifact = async (
+  options: WorkflowOptions,
+  artifact: EnrollmentArtifact,
+  output?: string,
+): Promise<string> => {
+  const statePathForEnrollment = enrollmentStatePath(
+    options.stateDirectory,
+    artifact.enrollmentId,
+  );
+  const contents = `${JSON.stringify(artifact)}\n`;
+  await atomicWriteProtectedFile(statePathForEnrollment, contents);
+  if (output && output !== statePathForEnrollment)
+    await atomicWriteProtectedFile(output, contents);
+  return output ?? statePathForEnrollment;
+};
+
+const requestForApproval = async (
+  artifact: EnrollmentArtifact,
+): Promise<
+  Readonly<{ artifact: EnrollmentArtifact; request: DeviceEnrollmentRequest }>
+> => {
+  const transcriptBytes = fromBase64(
+    artifact.transcript,
+    "enrollment transcript",
+  );
+  const initiatorSigningPublicKey = fromBase64(
+    artifact.initiatorSigningPublicKey,
+    "initiator signing public key",
+  );
+  const transcript = await parseDeviceEnrollmentTranscript(
+    transcriptBytes,
+    initiatorSigningPublicKey,
+  );
+  if (
+    transcript.serverProfileId !== artifact.serverProfileId.toLowerCase() ||
+    transcript.userId !== artifact.userId.toLowerCase() ||
+    transcript.enrollmentId !== artifact.enrollmentId.toLowerCase() ||
+    transcript.deviceId !== artifact.deviceId.toLowerCase()
+  )
+    throw new CliError(
+      "crypto",
+      "the enrollment handoff is bound to a different identity",
+      {},
+      "enrollment_binding_mismatch",
+    );
+  const transcriptHash = await sha384(transcriptBytes);
+  if (sha384ToHex(transcriptHash) !== artifact.transcriptHash.toLowerCase())
+    throw new CliError(
+      "crypto",
+      "the enrollment handoff transcript hash is invalid",
+      {},
+      "enrollment_binding_mismatch",
+    );
+  return {
+    artifact,
+    request: {
+      ids: {
+        serverProfileId: transcript.serverProfileId,
+        userId: transcript.userId,
+        enrollmentId: transcript.enrollmentId,
+        deviceId: transcript.deviceId,
+        initiatorDeviceId: artifact.initiatorDeviceId,
+      },
+      challenge: transcript.challenge,
+      expiresAtMs: transcript.expiresAtMs,
+      transcriptBytes,
+      transcriptHash,
+      bundle: undefined as never,
+      keyMaterial: undefined as never,
+      initiatorSigningPublicKey,
+      certificateBytes: fromBase64(artifact.certificate, "Device certificate"),
+    } as DeviceEnrollmentRequest,
+  };
+};
+
+export const beginDeviceEnrollment = async (
+  options: WorkflowOptions,
+  output?: string,
+): Promise<
+  Readonly<{
+    enrollmentId: string;
+    deviceId: string;
+    active: boolean;
+    request: string;
+  }>
+> => {
+  const authorized = await loadAuthorizedDevice(options);
+  if (!authorized.keys.signingPublicKey)
+    throw new CliError(
+      "crypto",
+      "the active Device has no signing public key",
+      {},
+      "device_bundle_invalid",
+    );
+  const expiresAtMs = Date.now() + 10 * 60 * 1000;
+  const request = await createDeviceEnrollmentRequest({
+    serverProfileId: options.profile.pin.serverProfileId,
+    origin: options.profile.origin,
+    userId: authorized.userId,
+    identityGeneration: authorized.bundle.userIdentityGeneration,
+    initiatorDeviceId: authorized.deviceId,
+    initiatorSigningPrivateKey: authorized.keys.signingPrivateKey,
+    initiatorSigningPublicKey: await exportSigningPublicKey(
+      authorized.keys.signingPublicKey,
+    ),
+    expiresAtMs,
+  });
+  const operationId = crypto.randomUUID();
+  const certificateObjectId = crypto.randomUUID();
+  const enrollmentObjectId = crypto.randomUUID();
+  const artifact = enrollmentArtifactFromRequest(
+    request,
+    operationId,
+    enrollmentObjectId,
+    certificateObjectId,
+  );
+  const completeArtifact = Object.freeze({
+    ...artifact,
+  });
+  const storage = resolveDeviceStorage(options);
+  await storage.save(request.bundle);
+  const response = await authorized.admin.post(
+    "/api/v1/devices/enrollments",
+    {
+      operationId,
+      enrollmentId: request.ids.enrollmentId,
+      userId: authorized.userId,
+      transcriptHash: sha384ToHex(request.transcriptHash),
+      challengeHash: sha384ToHex(await sha384(request.challenge)),
+      expiresAt: artifact.expiresAt,
+    },
+    ["enrollmentId", "expiresAt", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  if (
+    response.enrollmentId !== undefined &&
+    requiredString(response.enrollmentId, "enrollment id") !==
+      request.ids.enrollmentId
+  )
+    throw new CliError(
+      "crypto",
+      "the Server Profile returned the wrong enrollment id",
+      {},
+      "response_invalid",
+    );
+  const requestPath = await writeEnrollmentArtifact(
+    options,
+    completeArtifact,
+    output,
+  );
+  return {
+    enrollmentId: request.ids.enrollmentId,
+    deviceId: request.ids.deviceId,
+    active: false,
+    request: requestPath,
+  };
+};
+
+export const approveDeviceEnrollment = async (
+  options: WorkflowOptions,
+  path: string,
+): Promise<
+  Readonly<{ enrollmentId: string; deviceId: string; approved: boolean }>
+> => {
+  const artifact = await readEnrollmentArtifact(path);
+  if (
+    artifact.serverProfileId.toLowerCase() !==
+    options.profile.pin.serverProfileId
+  )
+    throw new CliError(
+      "authentication",
+      "the enrollment handoff belongs to another Server Profile",
+      {},
+      "profile_mismatch",
+    );
+  const authorized = await loadAuthorizedDevice(options);
+  if (artifact.userId.toLowerCase() !== authorized.userId.toLowerCase())
+    throw new CliError(
+      "authentication",
+      "the enrollment handoff belongs to another User",
+      {},
+      "user_mismatch",
+    );
+  const parsed = await requestForApproval(artifact).catch((error) => {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "crypto",
+      "the enrollment handoff could not be verified",
+      {},
+      "enrollment_binding_mismatch",
+    );
+  });
+  const approval = await createDeviceEnrollmentApproval({
+    request: parsed.request,
+    approverDeviceId: authorized.deviceId,
+    approverSigningPrivateKey: authorized.keys.signingPrivateKey,
+  });
+  const operationId = crypto.randomUUID();
+  await authorized.admin.post(
+    `/api/v1/devices/enrollments/${encodeURIComponent(artifact.enrollmentId)}/approve`,
+    {
+      operationId,
+      enrolledDeviceId: artifact.deviceId,
+      objectId: crypto.randomUUID(),
+      object: base64(approval.canonicalBytes),
+    },
+    ["approved", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  return {
+    enrollmentId: artifact.enrollmentId,
+    deviceId: artifact.deviceId,
+    approved: true,
+  };
+};
+
+export const completeDeviceEnrollment = async (
+  options: WorkflowOptions,
+  path: string,
+): Promise<
+  Readonly<{ enrollmentId: string; deviceId: string; active: boolean }>
+> => {
+  const artifact = await readEnrollmentArtifact(path);
+  if (
+    artifact.serverProfileId.toLowerCase() !==
+    options.profile.pin.serverProfileId
+  )
+    throw new CliError(
+      "authentication",
+      "the enrollment handoff belongs to another Server Profile",
+      {},
+      "profile_mismatch",
+    );
+  const authorized = await loadAuthorizedDevice(options);
+  if (
+    artifact.userId.toLowerCase() !== authorized.userId.toLowerCase() ||
+    artifact.initiatorDeviceId.toLowerCase() !==
+      authorized.deviceId.toLowerCase()
+  )
+    throw new CliError(
+      "authentication",
+      "this Device cannot complete the enrollment handoff",
+      {},
+      "device_mismatch",
+    );
+  const transcript = await parseDeviceEnrollmentTranscript(
+    fromBase64(artifact.transcript, "enrollment transcript"),
+    fromBase64(
+      artifact.initiatorSigningPublicKey,
+      "initiator signing public key",
+    ),
+  );
+  if (
+    transcript.enrollmentId !== artifact.enrollmentId.toLowerCase() ||
+    transcript.deviceId !== artifact.deviceId.toLowerCase()
+  )
+    throw new CliError(
+      "crypto",
+      "the enrollment handoff is invalid",
+      {},
+      "enrollment_binding_mismatch",
+    );
+  const certificateBytes = fromBase64(
+    artifact.certificate,
+    "Device certificate",
+  );
+  const certificate = parseProtocolObject(certificateBytes);
+  if (
+    certificate.get(1) !== 2 ||
+    certificate.get(28) !== artifact.identityGeneration
+  )
+    throw new CliError(
+      "crypto",
+      "the enrollment certificate is invalid",
+      {},
+      "enrollment_certificate_invalid",
+    );
+  const storage = resolveDeviceStorage(options);
+  const bundle = await storage.load({
+    pin: options.profile.pin,
+    deviceId: uuidToBytes(artifact.deviceId),
+  });
+  const keys = await loadDeviceKeyMaterial(bundle);
+  if (!keys.encryptionPublicKey || !keys.signingPublicKey)
+    throw new CliError(
+      "crypto",
+      "the pending Device bundle has no public key material",
+      {},
+      "device_bundle_invalid",
+    );
+  const x25519PublicKey = await rawPublicKey(keys.encryptionPublicKey);
+  const ed25519PublicKey = await rawPublicKey(keys.signingPublicKey);
+  const profileBytes = uuidToBytes(options.profile.pin.serverProfileId);
+  const userBytes = uuidToBytes(authorized.userId);
+  const deviceBytes = uuidToBytes(artifact.deviceId);
+  const certificateProfile = certificate.get(8);
+  const certificateUser = certificate.get(9);
+  const certificateDevice = certificate.get(10);
+  const certificateEncryptionKey = certificate.get(39);
+  const certificateSigningKey = certificate.get(41);
+  if (
+    !(certificateProfile instanceof Uint8Array) ||
+    !(certificateUser instanceof Uint8Array) ||
+    !(certificateDevice instanceof Uint8Array) ||
+    !(certificateEncryptionKey instanceof Uint8Array) ||
+    !(certificateSigningKey instanceof Uint8Array) ||
+    bytesToHex(certificateProfile) !== bytesToHex(profileBytes) ||
+    bytesToHex(certificateUser) !== bytesToHex(userBytes) ||
+    bytesToHex(certificateDevice) !== bytesToHex(deviceBytes) ||
+    bytesToHex(certificateEncryptionKey) !== bytesToHex(x25519PublicKey) ||
+    bytesToHex(certificateSigningKey) !== bytesToHex(ed25519PublicKey)
+  )
+    throw new CliError(
+      "crypto",
+      "the enrollment certificate does not match the pending Device",
+      {},
+      "enrollment_certificate_invalid",
+    );
+  try {
+    await verifySignedProtocolObject(
+      certificateBytes,
+      await exportSigningPublicKey(keys.signingPublicKey),
+    );
+  } catch {
+    throw new CliError(
+      "crypto",
+      "the enrollment certificate signature is invalid",
+      {},
+      "enrollment_certificate_invalid",
+    );
+  }
+  const operationId = crypto.randomUUID();
+  await authorized.admin.post(
+    `/api/v1/devices/enrollments/${encodeURIComponent(artifact.enrollmentId)}/complete`,
+    {
+      operationId,
+      enrollmentObjectId: artifact.enrollmentObjectId,
+      enrollmentObject: base64(
+        fromBase64(artifact.transcript, "enrollment transcript"),
+      ),
+      certificateObjectId: artifact.certificateObjectId,
+      certificateObject: base64(certificateBytes),
+      deviceId: artifact.deviceId,
+      identityGeneration: String(artifact.identityGeneration),
+      x25519PublicKey: base64(x25519PublicKey),
+      ed25519PublicKey: base64(ed25519PublicKey),
+      keyId: base64(await sha384(x25519PublicKey)),
+    },
+    ["deviceId", "active", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  await writeDeviceId(
+    deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    options.profile.pin,
+    artifact.deviceId,
+  );
+  await unlink(
+    enrollmentStatePath(options.stateDirectory, artifact.enrollmentId),
+  ).catch(() => undefined);
+  return {
+    enrollmentId: artifact.enrollmentId,
+    deviceId: artifact.deviceId,
+    active: true,
+  };
+};
+
+const protocolBytes = (
+  object: ReadonlyMap<number, unknown>,
+  field: number,
+  label: string,
+  length?: number,
+): Uint8Array => {
+  const value = object.get(field);
+  if (
+    !(value instanceof Uint8Array) ||
+    (length !== undefined && value.length !== length)
+  )
+    throw new CliError(
+      "crypto",
+      `the ${label} is invalid`,
+      {},
+      "recovery_kit_invalid",
+    );
+  return value;
+};
+
+const protocolNumber = (
+  object: ReadonlyMap<number, unknown>,
+  field: number,
+  label: string,
+): number => {
+  const value = object.get(field);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new CliError(
+      "crypto",
+      `the ${label} is invalid`,
+      {},
+      "recovery_kit_invalid",
+    );
+  return value;
+};
+
+const nextRecoveryGeneration = async (
+  admin: StrictJsonClient,
+): Promise<number> => {
+  let current: Record<string, unknown>;
+  try {
+    current = await admin.get("/api/v1/recovery/envelopes/current", [
+      "envelopeId",
+      "identityGeneration",
+      "recoveryGeneration",
+      "ciphertextHash",
+      "ciphertextLength",
+      "object",
+    ]);
+  } catch (error) {
+    if (error instanceof CliError && error.code === "resource_not_found")
+      return 2;
+    throw error;
+  }
+  const generation = current.recoveryGeneration;
+  const parsed =
+    typeof generation === "string" && /^[1-9][0-9]*$/.test(generation)
+      ? BigInt(generation)
+      : null;
+  if (parsed === null || parsed >= BigInt(Number.MAX_SAFE_INTEGER))
+    throw new CliError(
+      "conflict",
+      "the Recovery Kit generation cannot advance safely",
+      {},
+      "recovery_generation_invalid",
+    );
+  return Number(parsed + 1n);
+};
+
+export const createRecoveryBackup = async (
+  options: WorkflowOptions,
+  output: string,
+): Promise<
+  Readonly<{ output: string; envelopeId: string; recoveryGeneration: number }>
+> => {
+  const authorized = await loadAuthorizedDevice(options);
+  const recoveryGeneration = await nextRecoveryGeneration(authorized.admin);
+  const kit = await createRecoveryKit({
+    serverProfileId: options.profile.pin.serverProfileId,
+    userId: authorized.userId,
+    identityGeneration: authorized.bundle.userIdentityGeneration,
+    recoveryGeneration,
+    activeDeviceSigningPrivateKey: authorized.keys.signingPrivateKey,
+  });
+  const envelope = parseProtocolObject(kit.envelopeBytes);
+  const envelopeId = kit.envelopeId;
+  const artifact: RecoveryArtifact = {
+    version: 1,
+    kind: "dotrelay-recovery-kit",
+    serverProfileId: options.profile.pin.serverProfileId,
+    userId: authorized.userId,
+    envelopeId,
+    identityGeneration: kit.identityGeneration,
+    recoveryGeneration: kit.recoveryGeneration,
+    activeDeviceSigningPublicKey: base64(
+      await exportSigningPublicKey(
+        authorized.keys.signingPublicKey ??
+          (() => {
+            throw new CliError(
+              "crypto",
+              "the active Device has no signing public key",
+              {},
+              "device_bundle_invalid",
+            );
+          })(),
+      ),
+    ),
+    kit: base64(kit.bytes),
+  };
+  const priorArtifactPath = `${output}.previous`;
+  try {
+    const priorArtifact = await readFile(output);
+    await atomicWriteProtectedFile(
+      priorArtifactPath,
+      new TextDecoder().decode(priorArtifact),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await atomicWriteProtectedFile(output, `${JSON.stringify(artifact)}\n`);
+  const operationId = crypto.randomUUID();
+  await authorized.admin.post(
+    "/api/v1/recovery/envelopes",
+    {
+      operationId,
+      objectId: envelopeId,
+      object: base64(kit.envelopeBytes),
+      envelopeId,
+      identityGeneration: String(kit.identityGeneration),
+      recoveryGeneration: String(kit.recoveryGeneration),
+      ciphertextHash: sha384ToHex(
+        protocolBytes(envelope, 48, "Recovery Kit ciphertext hash", 48),
+      ),
+      ciphertextLength: protocolNumber(
+        envelope,
+        72,
+        "Recovery Kit ciphertext length",
+      ),
+    },
+    ["envelopeId", "recoveryGeneration", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  return { output, envelopeId, recoveryGeneration };
+};
+
+const publicSpkiFromPrivate = async (
+  privateKey: CryptoKey,
+  exportPrivate: (key: CryptoKey) => Promise<Uint8Array>,
+): Promise<Uint8Array> => {
+  try {
+    const privateKeyObject = createPrivateKey({
+      key: Buffer.from(await exportPrivate(privateKey)),
+      format: "der",
+      type: "pkcs8",
+    });
+    const publicKey = createPublicKey(privateKeyObject).export({
+      format: "der",
+      type: "spki",
+    });
+    return new Uint8Array(publicKey as Buffer);
+  } catch {
+    throw new CliError(
+      "crypto",
+      "the Recovery Kit replacement keys are invalid",
+      {},
+      "recovery_kit_invalid",
+    );
+  }
+};
+
+const loadRecoveryIdentity = async (
+  options: WorkflowOptions,
+): Promise<
+  Readonly<{ admin: StrictJsonClient; boundary: Boundary; userId: string }>
+> => {
+  const admin = createDeviceAdmin(options);
+  const session = await admin.get("/api/v1/session", ["authenticated", "user"]);
+  if (!isRecord(session.user))
+    throw new CliError(
+      "authentication",
+      "the Server Profile returned no User identity",
+      {},
+      "session_invalid",
+    );
+  const userId = requiredString(session.user.id, "User id");
+  const boundary = parseBoundary(
+    await admin.get("/api/v1/workspace/boundary", [
+      "environment",
+      "session",
+      "profile",
+      "device",
+      "grantsReady",
+      "epochCurrent",
+      "rotationRequired",
+      "crypto",
+      "projectEpoch",
+    ]),
+  );
+  if (boundary.device.active)
+    throw new CliError(
+      "conflict",
+      "Recovery Kit restore requires no active Device",
+      {},
+      "recovery_requires_no_active_device",
+    );
+  return { admin, boundary, userId };
+};
+
+export const restoreRecoveryKit = async (
+  options: WorkflowOptions,
+  path: string,
+): Promise<
+  Readonly<{ deviceId: string; active: boolean; recoveryGeneration: number }>
+> => {
+  const artifact = await readRecoveryArtifact(path);
+  if (
+    artifact.serverProfileId.toLowerCase() !==
+    options.profile.pin.serverProfileId
+  )
+    throw new CliError(
+      "authentication",
+      "the Recovery Kit belongs to another Server Profile",
+      {},
+      "profile_mismatch",
+    );
+  const identity = await loadRecoveryIdentity(options);
+  if (artifact.userId.toLowerCase() !== identity.userId.toLowerCase())
+    throw new CliError(
+      "authentication",
+      "the Recovery Kit belongs to another User",
+      {},
+      "user_mismatch",
+    );
+  let opened: Awaited<ReturnType<typeof openRecoveryKit>>;
+  try {
+    opened = await openRecoveryKit(fromBase64(artifact.kit, "Recovery Kit"), {
+      serverProfileId: options.profile.pin.serverProfileId,
+      userId: identity.userId,
+      activeDeviceSigningPublicKey: fromBase64(
+        artifact.activeDeviceSigningPublicKey,
+        "Recovery Kit signing public key",
+      ),
+    });
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "crypto",
+      "the Recovery Kit could not be verified",
+      {},
+      "recovery_kit_invalid",
+    );
+  }
+  if (
+    opened.envelopeId !== artifact.envelopeId.toLowerCase() ||
+    opened.identityGeneration !== artifact.identityGeneration ||
+    opened.recoveryGeneration !== artifact.recoveryGeneration
+  )
+    throw new CliError(
+      "crypto",
+      "the Recovery Kit metadata does not match its envelope",
+      {},
+      "recovery_kit_invalid",
+    );
+  const encryptionSpki = await publicSpkiFromPrivate(
+    opened.replacementEncryptionPrivateKey,
+    exportEncryptionPrivateKey,
+  );
+  const signingSpki = await publicSpkiFromPrivate(
+    opened.replacementSigningPrivateKey,
+    exportSigningPrivateKey,
+  );
+  const encryptionPublicKey = await importEncryptionPublicKey(encryptionSpki);
+  const signingPublicKey = await importSigningPublicKey(signingSpki);
+  const bundle = await createDevicePrivateBundle({
+    pin: options.profile.pin,
+    userId: uuidToBytes(identity.userId),
+    deviceId: uuidToBytes(opened.replacementDeviceId),
+    userIdentityGeneration: opened.identityGeneration,
+    keyMaterial: {
+      encryptionPrivateKey: opened.replacementEncryptionPrivateKey,
+      signingPrivateKey: opened.replacementSigningPrivateKey,
+      encryptionPublicKey,
+      signingPublicKey,
+    },
+    encryptionPublicKey: encryptionSpki,
+    signingPublicKey: signingSpki,
+  });
+  const rawEncryptionPublicKey = await rawPublicKey(encryptionPublicKey);
+  const rawSigningPublicKey = await rawPublicKey(signingPublicKey);
+  const storage = resolveDeviceStorage(options);
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const challengeExpiresAtMs = Date.now() + 10 * 60 * 1000;
+  const proof = await createRecoveryChallengeProof({
+    serverProfileId: options.profile.pin.serverProfileId,
+    userId: identity.userId,
+    replacementDeviceId: opened.replacementDeviceId,
+    correlationId: opened.envelopeId,
+    identityGeneration: opened.identityGeneration,
+    recoveryGeneration: opened.recoveryGeneration,
+    challenge,
+    expiresAtMs: challengeExpiresAtMs,
+    signingPrivateKey: opened.replacementSigningPrivateKey,
+  });
+  const certificate = await createDeviceCertificate({
+    serverProfileId: options.profile.pin.serverProfileId,
+    userId: identity.userId,
+    deviceId: opened.replacementDeviceId,
+    identityGeneration: opened.identityGeneration,
+    encryptionPublicKey: rawEncryptionPublicKey,
+    signingPublicKey: rawSigningPublicKey,
+    signingPrivateKey: opened.replacementSigningPrivateKey,
+  });
+  const operationId = crypto.randomUUID();
+  await storage.save(bundle);
+  await writeDeviceId(
+    deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    options.profile.pin,
+    opened.replacementDeviceId,
+  );
+  await identity.admin.post(
+    "/api/v1/recovery/restore",
+    {
+      operationId,
+      objectId: opened.envelopeId,
+      envelope: base64(encodeProtocolObject(opened.envelope)),
+      object: base64(encodeProtocolObject(opened.envelope)),
+      envelopeId: opened.envelopeId,
+      identityGeneration: String(opened.identityGeneration),
+      recoveryGeneration: String(opened.recoveryGeneration),
+      deviceId: opened.replacementDeviceId,
+      challenge: base64(challenge),
+      expiresAt: new Date(challengeExpiresAtMs).toISOString(),
+      proof: base64(proof.canonicalBytes),
+      replacementEncryptionPublicKey: base64(rawEncryptionPublicKey),
+      replacementSigningPublicKey: base64(rawSigningPublicKey),
+      x25519PublicKey: base64(rawEncryptionPublicKey),
+      ed25519PublicKey: base64(rawSigningPublicKey),
+      keyId: base64(await sha384(rawEncryptionPublicKey)),
+      certificateId: crypto.randomUUID(),
+      certificate: base64(certificate),
+    },
+    ["deviceId", "active", "recoveryGeneration", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  return {
+    deviceId: opened.replacementDeviceId,
+    active: true,
+    recoveryGeneration: opened.recoveryGeneration,
+  };
 };
 
 const loadWorkflowSession = async (

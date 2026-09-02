@@ -138,7 +138,7 @@ const validateCommand = (parsed: MutableArguments) => {
   if (!command) throw new CliInvocationError("a command is required");
   const expectedSubcommands: Partial<Record<CommandName, readonly string[]>> = {
     profile: ["add", "use", "list"],
-    device: ["enroll", "recover"],
+    device: ["enroll", "begin", "approve", "complete", "backup", "recover"],
     project: ["link"],
     env: ["use"],
   };
@@ -174,10 +174,28 @@ const validateCommand = (parsed: MutableArguments) => {
     throw new CliInvocationError("--stdout is only valid with pull");
   if (parsed.reveal && command !== "pull")
     throw new CliInvocationError("--reveal is only valid with pull");
-  if (parsed.output && command !== "pull")
-    throw new CliInvocationError("--output is only valid with pull");
-  if (parsed.from && !["init", "push"].includes(command))
-    throw new CliInvocationError("--from is only valid with init or push");
+  if (
+    parsed.output &&
+    command !== "pull" &&
+    !(
+      command === "device" &&
+      ["enroll", "begin", "backup"].includes(parsed.subcommand ?? "")
+    )
+  )
+    throw new CliInvocationError(
+      "--output is only valid with pull or Device handoff commands",
+    );
+  if (
+    parsed.from &&
+    !["init", "push"].includes(command) &&
+    !(
+      command === "device" &&
+      ["approve", "complete", "recover"].includes(parsed.subcommand ?? "")
+    )
+  )
+    throw new CliInvocationError(
+      "--from is only valid with init, push, or a Device handoff command",
+    );
   if (parsed.team && !(command === "project" && parsed.subcommand === "link"))
     throw new CliInvocationError("--team is only valid with project link");
   if (
@@ -206,6 +224,16 @@ const validateCommand = (parsed: MutableArguments) => {
     throw new CliInvocationError("--variable is only valid with rollback");
   if (command === "rollback" && parsed.variableIds.length === 0)
     throw new CliInvocationError("rollback requires at least one --variable");
+  if (
+    command === "device" &&
+    ["approve", "complete", "recover"].includes(parsed.subcommand ?? "") &&
+    !parsed.from
+  )
+    throw new CliInvocationError(
+      `device ${parsed.subcommand} requires --from <file>`,
+    );
+  if (command === "device" && parsed.subcommand === "backup" && !parsed.output)
+    throw new CliInvocationError("device backup requires --output <file>");
 };
 
 export const parseArguments = (

@@ -65,10 +65,21 @@ environment-variable credential bundles and auto-approved ephemeral Devices are 
 
 The first `device enroll` uses the server's initial trust bootstrap and stores the encrypted Device
 bundle in the native credential store, with a protected local record for its profile and Device id.
-When an active Device already exists, enrollment is refused until the Server Profile exposes the
-three-step dual-control enrollment flow. `device recover` likewise refuses to process Recovery Kit
-material unless the Server Profile exposes its Recovery endpoint; it never accepts Recovery Kit
-bytes through an ad hoc or insecure local path.
+When an active Device already exists, `device enroll` begins the dual-control flow instead. The
+explicit form is `device begin --output <request>`. Move that signed request artifact to a second
+authorized installation and run `device approve --from <request>`. Return the request artifact to
+the initiator and run `device complete --from <request>`. The request contains public protocol
+objects only; the pending private bundle stays in encrypted local Device storage.
+
+Create a Recovery Kit with `device backup --output <path>`. The protected file contains the kit and
+the public key needed to verify its signed envelope. It is never printed in normal or JSON output.
+When replacing an existing path, the prior protected artifact is retained at `<path>.previous` so a
+failed publication cannot remove the last usable Recovery Kit.
+`device recover --from <path>` verifies the profile, User, envelope signature, decryption, fresh
+challenge proof, replacement keys, and certificate before sending the recovery request. Recovery
+requires no active Device on the Server Profile and uses `/api/v1/recovery/restore`; it never falls
+back to initial bootstrap. `--no-input` requires an explicit profile and all required handoff paths,
+and never answers a confirmation prompt on the user's behalf.
 
 The stable exit categories are invocation/configuration (2), incomplete export (3), unresolved
 conflict (4), cryptographic/integrity/compatibility (5), authentication/device/authorization (6),

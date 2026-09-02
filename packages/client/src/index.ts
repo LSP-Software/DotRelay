@@ -13,9 +13,30 @@ export {
   parseDevicePrivateBundle,
 } from "./device/bundle";
 export {
+  createDeviceCertificate,
+  createDeviceEnrollmentApproval,
+  createDeviceEnrollmentRequest,
+  type DeviceEnrollmentApproval,
+  type DeviceEnrollmentRequest,
+  type DeviceEnrollmentTranscript,
+  parseDeviceEnrollmentTranscript,
+  verifyDeviceEnrollmentApproval,
+} from "./device/enrollment";
+export {
   createProjectEpochGrantBootstrap,
   type ProjectEpochGrantBootstrap,
 } from "./device/grant-bootstrap";
+export {
+  createRecoveredDeviceCertificate,
+  createRecoveryChallengeProof,
+  createRecoveryKit,
+  type OpenedRecoveryKit,
+  openRecoveryKit,
+  type RecoveredDeviceCertificate,
+  type RecoveryChallengeProof,
+  type RecoveryKit,
+  verifyRecoveryChallengeProof,
+} from "./device/recovery";
 export {
   assertRevealBoundary,
   createDiagnosticEvent,

@@ -83,7 +83,7 @@ const requireLifecycle = (
   return value;
 };
 
-const categoryForProblem = (
+export const categoryForProblem = (
   code: string,
 ): "invocation" | "conflict" | "crypto" | "authentication" | "transient" => {
   if (
