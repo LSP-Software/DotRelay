@@ -55,14 +55,20 @@ epoch, Variables, descriptions, and the ownership of each Value lane. Values use
 remain masked until the active Device explicitly reveals one. A new Variable requires a valid name
 and explicit Shared Value or User-defined Value classification; its definition and initial Value
 lane enter the local draft together. Empty Values and absent optional Values remain distinct.
+Live Variable names are unique within the Manifest. Deletion creates a tombstone in the draft so
+the definition is not silently reused or removed from immutable history.
 
 Review & publish shows the expected parent Revision, signing Device, changed-lane count, and a
-zero-plaintext service boundary before the client encrypts changed lanes, signs the v3 mutation,
-stages objects, and finalizes publication. A stale head becomes a local three-way conflict with
-Keep local, Use remote, and Merge choices. Rollback is lane-scoped and always publishes a new
-Revision, so the current head remains in immutable history. Archived resources, stale epochs,
-missing grants, inactive Devices, unsupported crypto, and untrusted profiles keep this workflow
-locked and disclose only actionable gate state.
+zero-plaintext service boundary. A live protocol session then encrypts each changed definition
+and Value lane, signs the v3 mutation with the active Device key, begins an idempotent operation,
+stages immutable objects, and finalizes with compare-and-swap head checks. The client verifies
+sync object digests, manifest hashes, and revision links before accepting remote state. A stale
+head becomes a local three-way conflict with Keep local, Use remote, and Merge choices. Rollback
+is lane-scoped and always publishes a new Revision, so the current head remains in immutable
+history. The development protected preview uses the same cryptographic artifact builder but is
+explicitly local and never reports a service publication. Archived resources, stale epochs,
+missing grants, inactive Devices, unsupported crypto, and untrusted profiles keep the live
+workflow locked and disclose only actionable gate state.
 
 ## Role and lifecycle disclosure
 

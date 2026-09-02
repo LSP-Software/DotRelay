@@ -63,9 +63,15 @@ New Variables require explicit ownership classification. Shared Values are Team-
 User-defined Value is readable only by that User's authorized Devices. Definitions and their
 required initial Value lanes are added atomically to the local draft, preserving exact UTF-8 and
 empty-versus-absent semantics.
+Live Variable names remain unique within the Manifest. Deletion stages a tombstone, preserving the
+definition's history until publication.
 
 Review & publish displays the expected parent, signing Device, changed lanes, and the client-only
-encryption boundary before staging and finalizing a signed v3 mutation. Stale heads require local
-three-way resolution. Rollback chooses lanes and appends a new Revision rather than rewinding the
-head. Unsupported crypto, inactive Devices, pending grants, archived resources, stale epochs, and
+encryption boundary. With a live protocol session, the active Device builds encrypted definition
+and Value lanes, signs the v3 mutation, begins an idempotent operation, stages immutable objects,
+and finalizes with compare-and-swap head checks. Sync verifies object digests, manifest hashes,
+and revision links before remote state is accepted. Stale heads require local three-way
+resolution. Rollback chooses lanes and appends a new Revision rather than rewinding the head.
+The protected development preview is explicitly local and never claims service publication.
+Unsupported crypto, inactive Devices, pending grants, archived resources, stale epochs, and
 required rotation fail closed without requesting protected content.

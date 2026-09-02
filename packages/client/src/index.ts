@@ -1,4 +1,9 @@
+export type { SyncPageWire } from "@dotrelay/contracts";
 export * from "./contracts";
+export {
+  createDeviceBootstrap,
+  type DeviceBootstrap,
+} from "./device/bootstrap";
 export {
   createDevicePrivateBundle,
   type DeviceKeyMaterial,
@@ -7,6 +12,10 @@ export {
   loadDeviceKeyMaterial,
   parseDevicePrivateBundle,
 } from "./device/bundle";
+export {
+  createProjectEpochGrantBootstrap,
+  type ProjectEpochGrantBootstrap,
+} from "./device/grant-bootstrap";
 export {
   assertRevealBoundary,
   createDiagnosticEvent,
@@ -20,6 +29,7 @@ export {
 export {
   type BrowserDeviceStorage,
   createBrowserDeviceStorage,
+  createIndexedDbDeviceRecordStore,
   createMemoryDeviceRecordStore,
   resetMemoryDeviceRecordStore,
 } from "./storage/browser";
@@ -56,10 +66,21 @@ export {
 } from "./sync/manifest";
 export {
   assertPublicationAccepted,
+  changedVariableIdsFromSyncPage,
+  createPublicationArtifacts,
+  type DecodedVariable,
+  decodeSyncVariables,
   isRollbackRevision,
+  openLane,
+  type PublicationArtifacts,
+  type PublicationContext,
   type PublicationReview,
+  type PublicationVariable,
   reviewPublication,
+  type StagedPublicationObject,
+  validatePublicationVariables,
   validateRollbackRevision,
+  verifySyncPage,
 } from "./sync/publication";
 export {
   detectEquivocation,
@@ -68,6 +89,22 @@ export {
   type ReconciliationOutcome,
   reconcileHead,
 } from "./sync/reconcile";
+export {
+  createVerifiedEnvironmentSession,
+  type VerifiedEnvironmentSession,
+} from "./sync/session";
+export {
+  type BeginInput,
+  type BeginResult,
+  type CancelInput,
+  createProtocolTransport,
+  type FinalizeInput,
+  type FinalizeResult,
+  type ProtocolTransport,
+  ProtocolTransportError,
+  type StageInput,
+  type SyncInput,
+} from "./sync/transport";
 export {
   acknowledgeHistoryTrustReset,
   createTrustedHeadStore,

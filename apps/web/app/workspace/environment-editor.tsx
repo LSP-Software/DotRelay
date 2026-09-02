@@ -1,6 +1,16 @@
 "use client";
 
 import {
+  changedVariableIdsFromSyncPage,
+  createPublicationArtifacts,
+  type ProtocolTransport,
+  ProtocolTransportError,
+  type PublicationContext,
+  type SyncPageWire,
+  sha384,
+  verifySyncPage,
+} from "@dotrelay/client";
+import {
   Check,
   CircleAlert,
   Eye,
@@ -12,7 +22,7 @@ import {
   RotateCcw,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +50,7 @@ import {
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
+  deleteEnvironmentVariable,
   type EnvironmentVariable,
   prepareEncryptedPublication,
   updateVariableValue,
@@ -50,6 +61,19 @@ import {
 type EnvironmentEditorProps = Readonly<{
   readonly available: boolean;
   readonly blockers: readonly string[];
+  readonly remoteHeadRevision: string;
+  readonly protocolSession?: Readonly<{
+    readonly context: PublicationContext;
+    readonly transport: ProtocolTransport;
+    readonly decodeVariables?: (
+      page: SyncPageWire,
+      previousVariables: readonly EnvironmentVariable[],
+    ) => Promise<readonly EnvironmentVariable[]>;
+    readonly resolveRollbackValues?: (input: {
+      readonly targetRevision: string;
+      readonly selectedVariableIds: readonly string[];
+    }) => Promise<ReadonlyMap<string, string | null>>;
+  }>;
 }>;
 
 type AddVariableState = VariableDraft;
@@ -89,6 +113,7 @@ const emptyVariableDraft: AddVariableState = {
   description: "",
   ownership: "",
   value: "",
+  valuePresent: true,
   required: true,
 };
 
@@ -101,6 +126,7 @@ const revisionNumber = (revision: string): number =>
   Number.parseInt(revision.replace("rev_", ""), 10);
 
 const valueStateLabel = (variable: EnvironmentVariable): string => {
+  if (variable.tombstone) return "Tombstone";
   if (variable.value === null) return "Absent";
   if (variable.value === "") return "Empty Value";
   return "Set · hidden";
@@ -219,6 +245,35 @@ const AddVariableDialog = ({
             value={draft.value}
           />
         </div>
+        {!draft.required ? (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              checked={draft.valuePresent === false}
+              onChange={(event) =>
+                onDraftChange({
+                  ...draft,
+                  valuePresent: !event.target.checked,
+                })
+              }
+              type="checkbox"
+            />
+            Create without a Value (absent, not an empty Value)
+          </label>
+        ) : null}
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            checked={draft.required}
+            onChange={(event) =>
+              onDraftChange({
+                ...draft,
+                required: event.target.checked,
+                ...(event.target.checked ? { valuePresent: true } : {}),
+              })
+            }
+            type="checkbox"
+          />
+          This Variable requires a Value
+        </label>
       </div>
       {error ? (
         <p className="text-sm text-destructive" role="alert">
@@ -238,11 +293,19 @@ const AddVariableDialog = ({
 export const EnvironmentEditor = ({
   available,
   blockers,
+  remoteHeadRevision,
+  protocolSession,
 }: EnvironmentEditorProps) => {
-  const [variables, setVariables] = useState<EnvironmentVariable[]>(() => [
-    ...initialVariables,
-  ]);
-  const [headRevision, setHeadRevision] = useState("rev_0184");
+  const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
+    protocolSession ? [] : [...initialVariables],
+  );
+  const [remoteVariables, setRemoteVariables] = useState<
+    readonly EnvironmentVariable[]
+  >(() => (protocolSession ? [] : initialVariables));
+  const [headRevision, setHeadRevision] = useState(
+    protocolSession?.context.expectedHeadId ?? "rev_0184",
+  );
+  const [verifiedHistory, setVerifiedHistory] = useState<readonly string[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [addDraft, setAddDraft] =
     useState<AddVariableState>(emptyVariableDraft);
@@ -260,10 +323,57 @@ export const EnvironmentEditor = ({
   >(() => new Set());
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [staleHeadRevision, setStaleHeadRevision] = useState<string | null>(
+    null,
+  );
+  const [retryReady, setRetryReady] = useState(false);
+  const [protocolHead, setProtocolHead] = useState<Readonly<{
+    readonly id: string;
+    readonly hash: Uint8Array;
+  }> | null>(() =>
+    protocolSession?.context.expectedHeadId &&
+    protocolSession.context.expectedHeadHash
+      ? {
+          id: protocolSession.context.expectedHeadId,
+          hash: protocolSession.context.expectedHeadHash,
+        }
+      : null,
+  );
+  const [rollbackMutationTarget, setRollbackMutationTarget] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (!protocolSession) return;
+    setVariables((current) =>
+      current.some((variable) => variable.hasDraftChange) ? current : [],
+    );
+    setRemoteVariables([]);
+    setHeadRevision(
+      protocolSession.context.expectedHeadId ?? "empty-environment",
+    );
+    setVerifiedHistory([]);
+    setProtocolHead(
+      protocolSession.context.expectedHeadId &&
+        protocolSession.context.expectedHeadHash
+        ? {
+            id: protocolSession.context.expectedHeadId,
+            hash: protocolSession.context.expectedHeadHash,
+          }
+        : null,
+    );
+  }, [protocolSession]);
+  const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
+    ReadonlyMap<string, EnvironmentVariable>
+  >(() => new Map());
   const changedCount = changedLaneCount(variables);
+  const canPublish =
+    changedCount > 0 &&
+    conflictingLaneIds.size === 0 &&
+    staleHeadRevision === null &&
+    !publishing;
   const historicalValues = new Map<string, string | null>([
     ["00000000-0000-4000-8000-000000000001", ""],
-    ["00000000-0000-4000-8000-000000000002", null],
+    ["00000000-0000-4000-8000-000000000002", ""],
     ["00000000-0000-4000-8000-000000000003", null],
   ]);
 
@@ -276,6 +386,44 @@ export const EnvironmentEditor = ({
     );
   };
 
+  const deleteVariable = (id: string) => {
+    setPublishMessage(null);
+    const variable = variables.find((candidate) => candidate.id === id);
+    if (variable && !variable.tombstone)
+      setDeletedVariableSnapshots((snapshots) => {
+        const next = new Map(snapshots);
+        next.set(id, variable);
+        return next;
+      });
+    setVariables((current) =>
+      current.map((candidate) =>
+        candidate.id === id ? deleteEnvironmentVariable(candidate) : candidate,
+      ),
+    );
+    setRevealed((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const undoDelete = (id: string) => {
+    const snapshot = deletedVariableSnapshots.get(id);
+    if (!snapshot) return;
+    setVariables((current) =>
+      current.map((variable) =>
+        variable.id === id
+          ? { ...snapshot, hasDraftChange: true, tombstone: false }
+          : variable,
+      ),
+    );
+    setDeletedVariableSnapshots((snapshots) => {
+      const next = new Map(snapshots);
+      next.delete(id);
+      return next;
+    });
+  };
+
   const toggleReveal = (id: string) => {
     setRevealed((current) => {
       const next = new Set(current);
@@ -286,7 +434,7 @@ export const EnvironmentEditor = ({
   };
 
   const createVariable = () => {
-    const error = validateVariableDraft(addDraft);
+    const error = validateVariableDraft(addDraft, variables);
     if (error) {
       setAddError(error);
       return;
@@ -307,35 +455,207 @@ export const EnvironmentEditor = ({
     if (changedCount === 0) return;
     setPublishing(true);
     try {
+      if (protocolSession) {
+        const context = protocolSession.context;
+        const expectedHeadId = protocolHead?.id ?? context.expectedHeadId;
+        const expectedHeadHash = protocolHead?.hash ?? context.expectedHeadHash;
+        const artifacts = await createPublicationArtifacts(variables, {
+          ...context,
+          expectedHeadId,
+          expectedHeadHash,
+          ...(rollbackMutationTarget
+            ? {
+                mutation: "ROLLBACK" as const,
+                rollbackTargetId: rollbackMutationTarget,
+                rollbackSelectedVariableIds: [...rollbackLanes],
+              }
+            : {}),
+        });
+        const operationId = globalThis.crypto.randomUUID();
+        await protocolSession.transport.begin({
+          operationId,
+          deviceId: context.actorDeviceId,
+          kind:
+            rollbackMutationTarget || context.mutation === "ROLLBACK"
+              ? "ROLLBACK"
+              : "REVISION_PUBLICATION",
+          commandBytes: artifacts.commandBytes,
+          commandDigest: await sha384(artifacts.commandBytes),
+        });
+        try {
+          for (const staged of artifacts.stagedObjects)
+            await protocolSession.transport.stage({
+              operationId,
+              deviceId: context.actorDeviceId,
+              objectId: staged.objectId,
+              bytes: staged.bytes,
+            });
+          await protocolSession.transport.finalize({
+            operationId,
+            deviceId: context.actorDeviceId,
+            request: artifacts.request,
+          });
+        } catch (error) {
+          await protocolSession.transport
+            .cancel({
+              operationId,
+              deviceId: context.actorDeviceId,
+            })
+            .catch(() => undefined);
+          throw error;
+        }
+        const revisionObject = artifacts.stagedObjects.find(
+          (staged) =>
+            staged.objectId === artifacts.request.revision.protocolObjectId,
+        );
+        if (revisionObject) {
+          const nextHeadHash = await sha384(revisionObject.bytes);
+          setProtocolHead({
+            id: artifacts.request.revision.id,
+            hash: nextHeadHash,
+          });
+          setHeadRevision(artifacts.request.revision.id);
+        }
+        setVariables((current) =>
+          current.map((variable) => ({ ...variable, hasDraftChange: false })),
+        );
+        setDeletedVariableSnapshots(new Map());
+        setRemoteVariables(
+          variables.map((variable) => ({
+            ...variable,
+            hasDraftChange: false,
+          })),
+        );
+        setRollbackMutationTarget(null);
+        setConflictingLaneIds(new Set());
+        setStaleHeadRevision(null);
+        setRetryReady(false);
+        setReviewOpen(false);
+        setPublishMessage(
+          `Published as ${artifacts.request.revision.id}. ${artifacts.encryptedLaneCount} encrypted lane${artifacts.encryptedLaneCount === 1 ? "" : "s"} (${artifacts.encryptedBytes} bytes); ${artifacts.tombstoneLaneCount} tombstone${artifacts.tombstoneLaneCount === 1 ? "" : "s"}; service plaintext 0 bytes.`,
+        );
+        return;
+      }
       const preparation = await prepareEncryptedPublication(variables);
       const nextRevision = revisionNumber(headRevision) + 1;
       setHeadRevision(`rev_${String(nextRevision).padStart(4, "0")}`);
       setVariables((current) =>
         current.map((variable) => ({ ...variable, hasDraftChange: false })),
       );
+      setDeletedVariableSnapshots(new Map());
       setConflictingLaneIds(new Set());
+      setStaleHeadRevision(null);
+      setRetryReady(false);
       setReviewOpen(false);
       setPublishMessage(
-        `Published as rev_${String(nextRevision).padStart(4, "0")}. ${preparation.encryptedLaneCount} changed lane${preparation.encryptedLaneCount === 1 ? " was" : "s were"} encrypted (${preparation.encryptedBytes} bytes), signed (${preparation.signatureBytes} bytes), staged, and finalized.`,
+        `Local cryptographic preview completed as rev_${String(nextRevision).padStart(4, "0")}. ${preparation.encryptedLaneCount} changed lane${preparation.encryptedLaneCount === 1 ? " was" : "s were"} encrypted (${preparation.encryptedBytes} bytes), and ${preparation.tombstoneLaneCount} tombstone${preparation.tombstoneLaneCount === 1 ? " was" : "s were"} signed (${preparation.signatureBytes} bytes). No service publication occurred because this workspace has no live protocol session.`,
       );
-    } catch {
+    } catch (error) {
+      if (
+        protocolSession &&
+        error instanceof ProtocolTransportError &&
+        error.problem.code === "stale_head"
+      ) {
+        try {
+          const context = protocolSession.context;
+          const page = await protocolSession.transport.syncAll({
+            environmentId: context.environmentId,
+            deviceId: context.actorDeviceId,
+            request: {
+              trustedRevisionId:
+                protocolHead?.id ?? context.expectedHeadId ?? "",
+              trustedRevisionHash:
+                protocolHead?.hash ??
+                context.expectedHeadHash ??
+                new Uint8Array(48),
+              pagination: {},
+            },
+          });
+          if (!context.revisionSigningPublicKey)
+            throw new Error("revision signing trust key is unavailable");
+          await verifySyncPage(page, context.revisionSigningPublicKey, {
+            actorUserId: context.actorUserId,
+          });
+          setVerifiedHistory(page.revisions.map((revision) => revision.id));
+          const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
+          const decodedVariables = protocolSession.decodeVariables
+            ? await protocolSession.decodeVariables(page, remoteVariables)
+            : undefined;
+          if (decodedVariables) setRemoteVariables(decodedVariables);
+          if (!page.currentHeadId || !page.currentHeadHash)
+            throw new Error(
+              "the stale response did not provide a verified head",
+            );
+          const localChangedVariableIds = variables
+            .filter((variable) => variable.hasDraftChange)
+            .map((variable) => variable.id);
+          const conflictingVariableIds =
+            page.nextCursor !== null
+              ? localChangedVariableIds
+              : localChangedVariableIds.filter((id) =>
+                  remoteChangedVariableIds.has(id),
+                );
+          setProtocolHead({
+            id: page.currentHeadId,
+            hash: page.currentHeadHash,
+          });
+          setHeadRevision(page.currentHeadId);
+          setConflictingLaneIds(new Set(conflictingVariableIds));
+          setStaleHeadRevision(
+            conflictingVariableIds.length > 0 ? page.currentHeadId : null,
+          );
+          setRetryReady(false);
+          setReviewOpen(false);
+          setPublishMessage(
+            conflictingVariableIds.length > 0
+              ? "Publication was not committed because the verified head changed on overlapping lanes. Resolve them, then retry."
+              : "Publication was not committed, but the verified head changed on other lanes; the local draft remains publishable.",
+          );
+        } catch (reconciliationError) {
+          setPublishMessage(
+            `Publication stopped after a stale head response: ${reconciliationError instanceof Error ? reconciliationError.message : "the new verified head could not be synchronized"}.`,
+          );
+        }
+        return;
+      }
       setPublishMessage(
-        "Publication stopped: the verified v3 cryptographic runtime could not encrypt and sign the draft.",
+        `Publication stopped: ${error instanceof Error ? error.message : "the verified v3 cryptographic runtime could not encrypt and sign the draft"}.`,
       );
     } finally {
       setPublishing(false);
     }
   };
 
-  const applyRollback = () => {
+  const applyRollback = async () => {
     if (!rollbackTarget || rollbackLanes.size === 0) return;
-    createRollbackPlan(rollbackTarget, [...rollbackLanes]);
-    setVariables((current) => [
-      ...applyRollbackToVariables(current, historicalValues, [
-        ...rollbackLanes,
-      ]),
-    ]);
+    try {
+      createRollbackPlan(rollbackTarget, [...rollbackLanes]);
+      const rollbackValues = protocolSession
+        ? protocolSession.resolveRollbackValues
+          ? await protocolSession.resolveRollbackValues({
+              targetRevision: rollbackTarget,
+              selectedVariableIds: [...rollbackLanes],
+            })
+          : null
+        : historicalValues;
+      if (!rollbackValues)
+        throw new Error(
+          "verified historical Values are unavailable for this live session",
+        );
+      const nextVariables = applyRollbackToVariables(
+        variables,
+        rollbackValues,
+        [...rollbackLanes],
+      );
+      setVariables([...nextVariables]);
+    } catch (error) {
+      setPublishMessage(
+        `Rollback stopped: ${error instanceof Error ? error.message : "verified historical state is unavailable"}.`,
+      );
+      return;
+    }
     setRollbackTarget(null);
+    setRollbackMutationTarget(rollbackTarget);
     setPublishMessage(
       `Rollback staged from ${rollbackTarget}. This will append a new Revision; ${headRevision} remains in history.`,
     );
@@ -349,29 +669,66 @@ export const EnvironmentEditor = ({
       setVariables((current) =>
         current.map((variable) =>
           variable.id === id
-            ? {
-                ...variable,
-                value:
-                  initialVariables.find((candidate) => candidate.id === id)
-                    ?.value ?? null,
-                hasDraftChange: false,
-              }
+            ? (() => {
+                const remote = remoteVariables.find(
+                  (candidate) => candidate.id === id,
+                );
+                return remote
+                  ? { ...remote, id, hasDraftChange: false }
+                  : {
+                      ...variable,
+                      value: null,
+                      tombstone: true,
+                      hasDraftChange: false,
+                    };
+              })()
             : variable,
         ),
       );
     }
-    if (choice === "local" || choice === "merge") {
+    if (choice === "local") {
       setVariables((current) =>
         current.map((variable) =>
           variable.id === id ? { ...variable, hasDraftChange: true } : variable,
         ),
       );
     }
+    if (choice === "merge") {
+      setVariables((current) =>
+        current.map((variable) => {
+          if (variable.id !== id) return variable;
+          const remote = remoteVariables.find(
+            (candidate) => candidate.id === id,
+          );
+          return remote
+            ? {
+                ...remote,
+                value: variable.value,
+                hasDraftChange: true,
+                ...(variable.tombstone === undefined
+                  ? {}
+                  : { tombstone: variable.tombstone }),
+              }
+            : { ...variable, hasDraftChange: true };
+        }),
+      );
+    }
     setConflictingLaneIds((current) => {
       const next = new Set(current);
       next.delete(id);
+      if (next.size === 0 && staleHeadRevision) setRetryReady(true);
       return next;
     });
+  };
+
+  const retryAgainstVerifiedHead = () => {
+    if (!staleHeadRevision) return;
+    setHeadRevision(staleHeadRevision);
+    setStaleHeadRevision(null);
+    setRetryReady(false);
+    setPublishMessage(
+      `${protocolSession ? "Retrying" : "Local preview retry"} against verified head ${staleHeadRevision}. The local choices remain in the draft.`,
+    );
   };
 
   if (!available) {
@@ -425,7 +782,109 @@ export const EnvironmentEditor = ({
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
-            onClick={() => {
+            onClick={async () => {
+              if (protocolSession) {
+                try {
+                  const context = protocolSession.context;
+                  if (
+                    (context.expectedHeadId && !context.expectedHeadHash) ||
+                    !context.trustedRevisionId ||
+                    !context.trustedRevisionHash
+                  )
+                    throw new Error(
+                      "a verified head is required before synchronization",
+                    );
+                  const useGenesisTrust = remoteVariables.length === 0;
+                  const trustedRevisionId = context.trustedRevisionId;
+                  const trustedRevisionHash = context.trustedRevisionHash;
+                  const syncTrustedRevisionId = useGenesisTrust
+                    ? trustedRevisionId
+                    : (protocolHead?.id ?? context.expectedHeadId);
+                  const syncTrustedRevisionHash = useGenesisTrust
+                    ? trustedRevisionHash
+                    : (protocolHead?.hash ?? context.expectedHeadHash);
+                  if (!syncTrustedRevisionId || !syncTrustedRevisionHash)
+                    throw new Error(
+                      "a verified synchronization anchor is unavailable",
+                    );
+                  const page = await protocolSession.transport.syncAll({
+                    environmentId: context.environmentId,
+                    deviceId: context.actorDeviceId,
+                    request: {
+                      trustedRevisionId: syncTrustedRevisionId,
+                      trustedRevisionHash: syncTrustedRevisionHash,
+                      pagination: {},
+                    },
+                  });
+                  if (!context.revisionSigningPublicKey)
+                    throw new Error(
+                      "revision signing trust key is unavailable",
+                    );
+                  await verifySyncPage(page, context.revisionSigningPublicKey, {
+                    actorUserId: context.actorUserId,
+                  });
+                  setVerifiedHistory(
+                    page.revisions.map((revision) => revision.id),
+                  );
+                  const remoteChangedVariableIds =
+                    changedVariableIdsFromSyncPage(page);
+                  const decodedVariables = protocolSession.decodeVariables
+                    ? await protocolSession.decodeVariables(
+                        page,
+                        remoteVariables,
+                      )
+                    : undefined;
+                  if (decodedVariables) {
+                    setRemoteVariables(decodedVariables);
+                    if (changedCount === 0) setVariables([...decodedVariables]);
+                  }
+                  if (page.currentHeadId && page.currentHeadHash) {
+                    const localHeadId =
+                      protocolHead?.id ?? context.expectedHeadId;
+                    const headChanged =
+                      localHeadId !== null &&
+                      localHeadId !== page.currentHeadId;
+                    setProtocolHead({
+                      id: page.currentHeadId,
+                      hash: page.currentHeadHash,
+                    });
+                    setHeadRevision(page.currentHeadId);
+                    if (headChanged && changedCount > 0) {
+                      const localChangedVariableIds = variables
+                        .filter((variable) => variable.hasDraftChange)
+                        .map((variable) => variable.id);
+                      const conflictingVariableIds =
+                        page.nextCursor !== null
+                          ? localChangedVariableIds
+                          : localChangedVariableIds.filter((id) =>
+                              remoteChangedVariableIds.has(id),
+                            );
+                      setConflictingLaneIds(new Set(conflictingVariableIds));
+                      setStaleHeadRevision(
+                        conflictingVariableIds.length > 0
+                          ? page.currentHeadId
+                          : null,
+                      );
+                      setRetryReady(false);
+                      setPublishMessage(
+                        conflictingVariableIds.length > 0
+                          ? "The verified server head changed on overlapping lanes. Choose a three-way resolution before retrying."
+                          : "The verified server head changed on other lanes; the local draft remains publishable against the verified head.",
+                      );
+                      return;
+                    }
+                  }
+                  setPublishMessage(
+                    "Verified synchronization completed; no plaintext was requested.",
+                  );
+                  return;
+                } catch (error) {
+                  setPublishMessage(
+                    `Synchronization stopped: ${error instanceof Error ? error.message : "the verified history could not be read"}.`,
+                  );
+                  return;
+                }
+              }
               setConflictingLaneIds(
                 new Set(
                   variables
@@ -435,18 +894,22 @@ export const EnvironmentEditor = ({
               );
               setPublishMessage(
                 changedCount > 0
-                  ? "The server head changed while this draft was open. Choose a local three-way resolution."
+                  ? "Local preview: the server head changed while this draft was open. Choose a local three-way resolution."
                   : "Head verified against the local trust store.",
               );
+              if (changedCount > 0 && remoteHeadRevision !== headRevision) {
+                setStaleHeadRevision(remoteHeadRevision);
+                setRetryReady(false);
+              } else {
+                setStaleHeadRevision(null);
+                setRetryReady(false);
+              }
             }}
             variant="outline"
           >
             <RefreshCcw aria-hidden="true" /> Sync &amp; verify
           </Button>
-          <Button
-            disabled={changedCount === 0}
-            onClick={() => setReviewOpen(true)}
-          >
+          <Button disabled={!canPublish} onClick={() => setReviewOpen(true)}>
             <ShieldCheck aria-hidden="true" /> Review &amp; publish
           </Button>
         </div>
@@ -476,7 +939,8 @@ export const EnvironmentEditor = ({
             <LockKeyhole className="size-4 text-primary" /> Current epoch
           </div>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
-            epoch 7 · active Device · grants ready
+            epoch {protocolSession?.context.projectEpoch ?? "preview"} · active
+            Device · grants ready
           </p>
         </div>
       </div>
@@ -523,6 +987,7 @@ export const EnvironmentEditor = ({
                       Keep local
                     </Button>
                     <Button
+                      disabled={remoteVariables.length === 0}
                       onClick={() => resolveConflict(variable.id, "remote")}
                       size="sm"
                       variant="outline"
@@ -530,6 +995,7 @@ export const EnvironmentEditor = ({
                       Use remote
                     </Button>
                     <Button
+                      disabled={remoteVariables.length === 0}
                       onClick={() => resolveConflict(variable.id, "merge")}
                       size="sm"
                     >
@@ -540,6 +1006,22 @@ export const EnvironmentEditor = ({
               ))}
           </CardContent>
         </Card>
+      ) : null}
+
+      {retryReady && staleHeadRevision ? (
+        <Alert className="mb-4 border-primary/25 bg-primary/5">
+          <ShieldCheck className="text-primary" />
+          <AlertTitle>Conflict choices are ready to retry</AlertTitle>
+          <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              Verify the new parent {staleHeadRevision} before preparing the
+              signed mutation.
+            </span>
+            <Button onClick={retryAgainstVerifiedHead} size="sm">
+              Retry against verified head
+            </Button>
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       <Card>
@@ -568,6 +1050,7 @@ export const EnvironmentEditor = ({
             return (
               <div
                 className="rounded-lg border bg-background/35 p-4"
+                data-testid={`environment-variable-${variable.name}`}
                 key={variable.id}
               >
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -596,41 +1079,86 @@ export const EnvironmentEditor = ({
                     {valueStateLabel(variable)}
                   </span>
                 </div>
-                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <Label className="sr-only" htmlFor={`value-${variable.id}`}>
-                    {variable.name} Value
-                  </Label>
-                  <Input
-                    autoComplete="off"
-                    id={`value-${variable.id}`}
-                    onChange={(event) =>
-                      updateValue(variable.id, event.target.value)
-                    }
-                    placeholder={
-                      variable.value === null ? "Absent" : "Empty Value"
-                    }
-                    readOnly={variable.value === null}
-                    type={isRevealed ? "text" : "password"}
-                    value={variable.value ?? ""}
-                  />
-                  <Button
-                    aria-label={`${isRevealed ? "Hide" : "Reveal"} ${variable.name}`}
-                    onClick={() => toggleReveal(variable.id)}
-                    size="icon"
-                    variant="outline"
-                  >
-                    {isRevealed ? (
-                      <EyeOff aria-hidden="true" />
-                    ) : (
-                      <Eye aria-hidden="true" />
-                    )}
-                  </Button>
-                </div>
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  {isRevealed
-                    ? "Revealed only in this active Device view. It is not copied to diagnostics or logs."
-                    : "Hidden by default · reveal is explicit and local to this Device."}
-                </p>
+                {variable.tombstone ? (
+                  <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                    <span>This Variable is marked for deletion.</span>
+                    {variable.hasDraftChange &&
+                    deletedVariableSnapshots.has(variable.id) ? (
+                      <Button
+                        onClick={() => undoDelete(variable.id)}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Undo delete
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <Label
+                        className="sr-only"
+                        htmlFor={`value-${variable.id}`}
+                      >
+                        {variable.name} Value
+                      </Label>
+                      <Input
+                        autoComplete="off"
+                        id={`value-${variable.id}`}
+                        onChange={(event) =>
+                          updateValue(variable.id, event.target.value)
+                        }
+                        placeholder={
+                          variable.value === null ? "Absent" : "Empty Value"
+                        }
+                        type={isRevealed ? "text" : "password"}
+                        value={variable.value ?? ""}
+                      />
+                      <Button
+                        aria-label={`${isRevealed ? "Hide" : "Reveal"} ${variable.name}`}
+                        onClick={() => toggleReveal(variable.id)}
+                        size="icon"
+                        variant="outline"
+                      >
+                        {isRevealed ? (
+                          <EyeOff aria-hidden="true" />
+                        ) : (
+                          <Eye aria-hidden="true" />
+                        )}
+                      </Button>
+                      <Button
+                        aria-label={`Delete ${variable.name}`}
+                        onClick={() => deleteVariable(variable.id)}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Delete
+                      </Button>
+                      {!variable.required && variable.value !== null ? (
+                        <Button
+                          onClick={() =>
+                            setVariables((current) =>
+                              current.map((candidate) =>
+                                candidate.id === variable.id
+                                  ? updateVariableValue(candidate, null)
+                                  : candidate,
+                              ),
+                            )
+                          }
+                          size="sm"
+                          variant="ghost"
+                        >
+                          Set absent
+                        </Button>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      {isRevealed
+                        ? "Revealed only in this active Device view. It is not copied to diagnostics or logs."
+                        : "Hidden by default · reveal is explicit and local to this Device."}
+                    </p>
+                  </>
+                )}
               </div>
             );
           })}
@@ -652,7 +1180,10 @@ export const EnvironmentEditor = ({
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2">
-          {[headRevision, "rev_0183", "rev_0182"].map((revision) => (
+          {(protocolSession
+            ? verifiedHistory
+            : [headRevision, "rev_0183", "rev_0182"]
+          ).map((revision) => (
             <div
               className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
               key={revision}
@@ -731,8 +1262,9 @@ export const EnvironmentEditor = ({
                   <div>
                     <p className="font-mono text-sm">{variable.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {ownershipLabel(variable.ownership)} · fresh lane
-                      encryption
+                      {variable.tombstone
+                        ? "append-only tombstone"
+                        : `${ownershipLabel(variable.ownership)} · fresh lane encryption`}
                     </p>
                   </div>
                   <span className="font-mono text-xs text-muted-foreground">
@@ -754,7 +1286,7 @@ export const EnvironmentEditor = ({
             <DialogClose render={<Button variant="outline" />}>
               Cancel
             </DialogClose>
-            <Button disabled={changedCount === 0} onClick={publish}>
+            <Button disabled={!canPublish} onClick={publish}>
               {publishing ? "Encrypting…" : "Encrypt, stage & publish"}
             </Button>
           </DialogFooter>

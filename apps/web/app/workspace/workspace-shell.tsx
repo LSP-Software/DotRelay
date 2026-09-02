@@ -1,6 +1,14 @@
 "use client";
 
 import {
+  createBrowserDeviceStorage,
+  createDeviceBootstrap,
+  createProjectEpochGrantBootstrap,
+  createProtocolTransport,
+  loadDeviceKeyMaterial,
+  uuidToBytes,
+} from "@dotrelay/client";
+import {
   Archive,
   Braces,
   ChevronRight,
@@ -70,11 +78,16 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  createEnvironmentProtocolSession,
+  type EnvironmentProtocolSession,
+} from "@/lib/environment-protocol-session";
 import { protectedWorkflowBlockers } from "@/lib/environment-workflow";
 import { cn } from "@/lib/utils";
 import {
   e2eWorkspaceBoundary,
   fetchWorkspaceBoundary,
+  resolveApiOrigin,
   type WorkspaceBoundary,
   type WorkspaceProfileId,
   workspaceProfileCatalog,
@@ -84,6 +97,23 @@ import { EnvironmentEditor } from "./environment-editor";
 type MembershipRole = "OWNER" | "ADMIN" | "MEMBER";
 type ResourceLifecycle = "ACTIVE" | "ARCHIVED";
 type ProfileId = WorkspaceProfileId;
+
+const bytesToHex = (value: Uint8Array): string =>
+  [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const hexToBytes = (value: string): Uint8Array => {
+  if (!/^[0-9a-f]{96}$/i.test(value)) throw new Error("invalid digest");
+  const bytes = new Uint8Array(48);
+  for (let index = 0; index < bytes.length; index += 1)
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  return bytes;
+};
+
+const toBase64 = (value: Uint8Array): string => {
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
 
 const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
   OWNER: "Owners can administer Members, roles, Projects, and Environments.",
@@ -215,7 +245,11 @@ const StatusItem = ({
   </div>
 );
 
-export const WorkspaceShell = () => {
+export const WorkspaceShell = ({
+  protocolSession,
+}: Readonly<{
+  readonly protocolSession?: EnvironmentProtocolSession;
+}>) => {
   const [role, setRole] = useState<MembershipRole>("OWNER");
   const [profileId, setProfileId] = useState<ProfileId>("hosted");
   const [boundary, setBoundary] = useState<WorkspaceBoundary>(() =>
@@ -229,6 +263,12 @@ export const WorkspaceShell = () => {
   const [githubSubject, setGithubSubject] = useState("");
   const [invitations, setInvitations] = useState<string[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [liveProtocolSession, setLiveProtocolSession] =
+    useState<EnvironmentProtocolSession | null>(null);
+  const [deviceSetupMessage, setDeviceSetupMessage] = useState<string | null>(
+    null,
+  );
+  const [deviceSetupInProgress, setDeviceSetupInProgress] = useState(false);
   const [protectedPreview, setProtectedPreview] = useState(false);
   const displayBoundary = protectedPreview
     ? {
@@ -243,6 +283,21 @@ export const WorkspaceShell = () => {
     : boundary;
   const profile = displayBoundary.profile;
   const canAdminister = role === "OWNER" || role === "ADMIN";
+  const historyRows =
+    displayBoundary.device.active && !protectedPreview
+      ? [
+          [
+            displayBoundary.environment.headRevision,
+            "Current",
+            "local Device",
+            "Current head",
+          ],
+        ]
+      : [
+          ["rev_0184", "14 min ago", "ari…9c2", "Current head"],
+          ["rev_0183", "Yesterday", "mina…31a", "Verified"],
+          ["rev_0182", "28 Aug", "ari…9c2", "Verified"],
+        ];
 
   const protectedBlockers = protectedWorkflowBlockers({
     profileTrusted: displayBoundary.profile.pinned,
@@ -254,14 +309,25 @@ export const WorkspaceShell = () => {
     epochCurrent: displayBoundary.epochCurrent,
     rotationRequired: displayBoundary.rotationRequired,
   });
+  const localDeviceBlockers =
+    displayBoundary.device.active &&
+    !protectedPreview &&
+    !protocolSession &&
+    !liveProtocolSession
+      ? ["This browser has no locally unlocked Device key bundle."]
+      : [];
 
-  const protectedWorkflowAvailable = protectedBlockers.length === 0;
+  const protectedWorkflowAvailable =
+    protectedBlockers.length === 0 && localDeviceBlockers.length === 0;
 
   useEffect(() => {
     let cancelled = false;
     fetchWorkspaceBoundary(profileId)
       .then((nextBoundary) => {
-        if (!cancelled) setBoundary(nextBoundary);
+        if (!cancelled) {
+          setBoundary(nextBoundary);
+          setLiveProtocolSession(null);
+        }
       })
       .catch(() => {
         if (!cancelled) setBoundary(e2eWorkspaceBoundary(profileId));
@@ -270,6 +336,175 @@ export const WorkspaceShell = () => {
       cancelled = true;
     };
   }, [profileId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSession = async () => {
+      const environment = boundary.environment;
+      const device = boundary.device;
+      const profile = boundary.profile;
+      if (
+        !boundary.session.userId ||
+        !profile.serverProfileId ||
+        !device.active ||
+        !device.id ||
+        !device.encryptionPublicKey ||
+        !device.signingPublicKey ||
+        !environment.id ||
+        !environment.projectId ||
+        !environment.teamId
+      ) {
+        if (!cancelled) setLiveProtocolSession(null);
+        return;
+      }
+      try {
+        const pin = {
+          serverProfileId: profile.serverProfileId,
+          origin: profile.origin,
+        };
+        const storage = createBrowserDeviceStorage(pin);
+        const bundle = await storage.load({
+          pin,
+          deviceId: uuidToBytes(device.id),
+        });
+        const keyMaterial = await loadDeviceKeyMaterial(bundle);
+        if (!keyMaterial.encryptionPublicKey)
+          throw new Error("stored Device public key is missing");
+        const expectedHeadId =
+          boundary.environment.headRevision === "empty-environment"
+            ? null
+            : boundary.environment.headRevision;
+        const context = {
+          serverProfileId: profile.serverProfileId,
+          teamId: environment.teamId,
+          projectId: environment.projectId,
+          environmentId: environment.id,
+          actorUserId: boundary.session.userId,
+          actorDeviceId: device.id,
+          projectEpoch: Number(environment.projectEpoch ?? 1),
+          expectedHeadId,
+          expectedHeadHash: environment.headHash
+            ? hexToBytes(environment.headHash)
+            : null,
+          trustedRevisionId: environment.id,
+          trustedRevisionHash: new Uint8Array(48),
+          valueRecipientPublicKey: keyMaterial.encryptionPublicKey,
+          userDefinedValueRecipientPublicKey: keyMaterial.encryptionPublicKey,
+          signingPrivateKey: keyMaterial.signingPrivateKey,
+          revisionSigningPublicKey: hexToBytes(device.signingPublicKey),
+          ...(expectedHeadId ? {} : { mutation: "GENESIS" as const }),
+        };
+        const transport = createProtocolTransport({ origin: profile.origin });
+        const session = createEnvironmentProtocolSession({
+          context,
+          transport,
+          sharedValuePrivateKey: keyMaterial.encryptionPrivateKey,
+          userDefinedValuePrivateKey: keyMaterial.encryptionPrivateKey,
+        });
+        if (!cancelled) setLiveProtocolSession(session);
+      } catch {
+        if (!cancelled) setLiveProtocolSession(null);
+      }
+    };
+    void loadSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [boundary]);
+
+  const provisionBrowserDevice = async () => {
+    const apiOrigin = resolveApiOrigin() ?? boundary.profile.origin;
+    if (!boundary.session.userId || !boundary.profile.serverProfileId) {
+      setDeviceSetupMessage(
+        "Sign in to this Server Profile before enrolling a Device.",
+      );
+      return;
+    }
+    setDeviceSetupInProgress(true);
+    setDeviceSetupMessage(null);
+    try {
+      const pin = {
+        serverProfileId: boundary.profile.serverProfileId,
+        origin: boundary.profile.origin,
+      };
+      const bootstrap = await createDeviceBootstrap({
+        pin,
+        userId: boundary.session.userId,
+      });
+      const response = await fetch(`${apiOrigin}/api/v1/devices/bootstrap`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationId: globalThis.crypto.randomUUID(),
+          deviceId: bootstrap.deviceId,
+          identityGeneration: bootstrap.identityGeneration,
+          keyId: bytesToHex(bootstrap.keyId),
+          x25519PublicKey: bytesToHex(bootstrap.x25519PublicKey),
+          ed25519PublicKey: bytesToHex(bootstrap.ed25519PublicKey),
+          certificateId: bootstrap.certificate.id,
+          certificate: toBase64(bootstrap.certificate.canonicalBytes),
+        }),
+      });
+      if (!response.ok)
+        throw new Error("the Server Profile rejected this Device");
+      await createBrowserDeviceStorage(pin).save(bootstrap.bundle);
+      const environment = boundary.environment;
+      if (
+        environment.projectId &&
+        environment.teamId &&
+        environment.projectEpoch &&
+        bootstrap.keyMaterial.encryptionPublicKey
+      ) {
+        const grant = await createProjectEpochGrantBootstrap({
+          serverProfileId: boundary.profile.serverProfileId,
+          teamId: environment.teamId,
+          projectId: environment.projectId,
+          projectEpoch: Number(environment.projectEpoch),
+          senderDeviceId: bootstrap.deviceId,
+          recipientDeviceId: bootstrap.deviceId,
+          recipientX25519PublicKey: bootstrap.x25519PublicKey,
+          recipientEncryptionPublicKey:
+            bootstrap.keyMaterial.encryptionPublicKey,
+          signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+        });
+        const grantResponse = await fetch(
+          `${apiOrigin}/api/v1/grants/bootstrap`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              "X-DotRelay-Device-Id": bootstrap.deviceId,
+            },
+            body: JSON.stringify({
+              operationId: globalThis.crypto.randomUUID(),
+              objectId: grant.objectId,
+              projectId: environment.projectId,
+              teamId: environment.teamId,
+              digest: toBase64(grant.digest),
+              grant: toBase64(grant.canonicalBytes),
+            }),
+          },
+        );
+        if (!grantResponse.ok)
+          throw new Error("the Project epoch key grant was rejected");
+      }
+      const nextBoundary = await fetchWorkspaceBoundary(profileId);
+      setBoundary(nextBoundary);
+      setDeviceSetupMessage(
+        "This browser Device is active and its private keys are stored locally.",
+      );
+    } catch (error) {
+      setDeviceSetupMessage(
+        error instanceof Error
+          ? error.message
+          : "Device enrollment could not be completed.",
+      );
+    } finally {
+      setDeviceSetupInProgress(false);
+    }
+  };
 
   useEffect(() => {
     setProtectedPreview(
@@ -533,11 +768,44 @@ export const WorkspaceShell = () => {
                 </AlertDescription>
               </Alert>
             ) : null}
+            {displayBoundary.crypto.available &&
+            displayBoundary.session.active &&
+            !displayBoundary.device.active &&
+            !protectedPreview &&
+            displayBoundary.profile.serverProfileId ? (
+              <Alert className="mt-5 border-primary/25 bg-primary/5 py-4">
+                <MonitorSmartphone className="text-primary" />
+                <AlertTitle>Enroll this browser as a Device</AlertTitle>
+                <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <span>
+                    A new Device key pair will be generated here. Private keys
+                    are wrapped before local storage and never sent to the
+                    Server Profile.
+                  </span>
+                  <Button
+                    disabled={deviceSetupInProgress}
+                    onClick={provisionBrowserDevice}
+                    size="sm"
+                  >
+                    {deviceSetupInProgress ? "Enrolling…" : "Enroll browser"}
+                  </Button>
+                </AlertDescription>
+                {deviceSetupMessage ? (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {deviceSetupMessage}
+                  </p>
+                ) : null}
+              </Alert>
+            ) : null}
           </section>
 
           <EnvironmentEditor
             available={protectedWorkflowAvailable}
-            blockers={protectedBlockers}
+            blockers={[...protectedBlockers, ...localDeviceBlockers]}
+            {...((liveProtocolSession ?? protocolSession)
+              ? { protocolSession: liveProtocolSession ?? protocolSession }
+              : {})}
+            remoteHeadRevision={displayBoundary.environment.headRevision}
           />
 
           <section
@@ -566,11 +834,7 @@ export const WorkspaceShell = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {[
-                      ["rev_0184", "14 min ago", "ari…9c2", "Current head"],
-                      ["rev_0183", "Yesterday", "mina…31a", "Verified"],
-                      ["rev_0182", "28 Aug", "ari…9c2", "Verified"],
-                    ].map(([revision, recorded, actor, state]) => (
+                    {historyRows.map(([revision, recorded, actor, state]) => (
                       <TableRow key={revision}>
                         <TableCell className="font-mono text-xs">
                           {revision}

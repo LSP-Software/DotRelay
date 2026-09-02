@@ -110,19 +110,26 @@ export class SyncRepository {
       select: { role: true, lifecycle: true },
     });
     if (!membership) throw new Error("Membership is not active");
-    const trusted = await database.revision.findUnique({
-      where: { id: input.trustedRevisionId },
-      include: { protocolObject: true },
-    });
+    const isEnvironmentGenesis =
+      input.trustedRevisionId === input.environmentId &&
+      sameBytes(input.trustedRevisionHash, new Uint8Array(48));
+    const trusted = isEnvironmentGenesis
+      ? null
+      : await database.revision.findUnique({
+          where: { id: input.trustedRevisionId },
+          include: { protocolObject: true },
+        });
     if (
-      !trusted ||
-      trusted.environmentId !== input.environmentId ||
-      !sameBytes(trusted.protocolObject.digest, input.trustedRevisionHash)
+      (!isEnvironmentGenesis && !trusted) ||
+      (trusted &&
+        (trusted.environmentId !== input.environmentId ||
+          !sameBytes(trusted.protocolObject.digest, input.trustedRevisionHash)))
     )
       throw new SyncIntegrityError(
         "trusted revision is unknown or incompatible",
       );
     if (
+      trusted &&
       !(await this.isAncestor(database, trusted.id, environment.currentHeadId))
     )
       throw new SyncIntegrityError(
@@ -144,7 +151,7 @@ export class SyncRepository {
         throw new SyncIntegrityError(
           "cursor revision is unknown or incompatible",
         );
-      if (!(await this.isAncestor(database, trusted.id, cursor.id)))
+      if (trusted && !(await this.isAncestor(database, trusted.id, cursor.id)))
         throw new SyncIntegrityError(
           "cursor revision is not after the trusted revision",
         );
@@ -153,13 +160,17 @@ export class SyncRepository {
     const revisions = await database.revision.findMany({
       where: {
         environmentId: input.environmentId,
-        OR: [
-          { acceptedAt: { gt: afterRevision.acceptedAt } },
-          {
-            acceptedAt: afterRevision.acceptedAt,
-            id: { gt: afterRevision.id },
-          },
-        ],
+        ...(afterRevision
+          ? {
+              OR: [
+                { acceptedAt: { gt: afterRevision.acceptedAt } },
+                {
+                  acceptedAt: afterRevision.acceptedAt,
+                  id: { gt: afterRevision.id },
+                },
+              ],
+            }
+          : {}),
       },
       include: {
         protocolObject: true,

@@ -10,12 +10,14 @@ export type EncryptedDeviceRecord = Readonly<{
   readonly scope: DeviceStorageScope;
   readonly iv: Uint8Array;
   readonly ciphertext: Uint8Array;
+  readonly wrappingKey?: CryptoKey;
 }>;
 
 export type DeviceRecordStore = Readonly<{
   read(scope: DeviceStorageScope): Promise<EncryptedDeviceRecord | null>;
   write(record: EncryptedDeviceRecord): Promise<void>;
   remove(scope: DeviceStorageScope): Promise<void>;
+  wipe?(pin: ServerProfilePin): Promise<void>;
 }>;
 
 export type CredentialStore = Readonly<{

@@ -1,8 +1,17 @@
 export type WorkspaceProfileId = "hosted" | "self-hosted";
 
 export type WorkspaceBoundary = Readonly<{
+  readonly environment: Readonly<{
+    readonly headRevision: string;
+    readonly id?: string;
+    readonly projectId?: string;
+    readonly teamId?: string;
+    readonly headHash?: string | null;
+    readonly projectEpoch?: string;
+  }>;
   readonly session: Readonly<{
     readonly active: boolean;
+    readonly userId?: string;
     readonly displayName?: string;
   }>;
   readonly profile: Readonly<{
@@ -10,10 +19,14 @@ export type WorkspaceBoundary = Readonly<{
     readonly name: string;
     readonly origin: string;
     readonly pinned: boolean;
+    readonly serverProfileId?: string;
   }>;
   readonly device: Readonly<{
     readonly active: boolean;
     readonly label?: string;
+    readonly id?: string;
+    readonly encryptionPublicKey?: string;
+    readonly signingPublicKey?: string;
   }>;
   readonly grantsReady: boolean;
   readonly epochCurrent: boolean;
@@ -51,6 +64,7 @@ export const e2eWorkspaceBoundary = (
 ): WorkspaceBoundary => {
   const profile = profileCatalog[profileId];
   return {
+    environment: { headRevision: "rev_0185" },
     session: { active: true, displayName: "Ari Stone" },
     profile: { id: profileId, ...profile },
     device: { active: false, label: "No active Device" },
