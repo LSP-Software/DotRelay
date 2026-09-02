@@ -144,11 +144,18 @@ const handlePersistenceFailure = async (
 
 const parseOperationKind = (
   value: string | undefined,
-): "REVISION_PUBLICATION" | "ROLLBACK" | "EPOCH_ROTATION" => {
+):
+  | "REVISION_PUBLICATION"
+  | "ROLLBACK"
+  | "EPOCH_ROTATION"
+  | "DEVICE_ENROLLMENT"
+  | "RECOVERY" => {
   if (
     value !== "REVISION_PUBLICATION" &&
     value !== "ROLLBACK" &&
-    value !== "EPOCH_ROTATION"
+    value !== "EPOCH_ROTATION" &&
+    value !== "DEVICE_ENROLLMENT" &&
+    value !== "RECOVERY"
   )
     throw new ContractError("invalid_request");
   return value;
@@ -209,7 +216,7 @@ export const registerProtocolRoutes = (
       });
     }
     parseIdempotencyKey(operationId);
-    let kind: "REVISION_PUBLICATION" | "ROLLBACK" | "EPOCH_ROTATION";
+    let kind: ReturnType<typeof parseOperationKind>;
     try {
       kind = parseOperationKind(
         context.req.header("X-DotRelay-Operation-Kind") ?? undefined,
