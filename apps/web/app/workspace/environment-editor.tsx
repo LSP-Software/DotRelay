@@ -1050,6 +1050,7 @@ export const EnvironmentEditor = ({
             return (
               <div
                 className="rounded-lg border bg-background/35 p-4"
+                data-testid={`environment-variable-${variable.name}`}
                 key={variable.id}
               >
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

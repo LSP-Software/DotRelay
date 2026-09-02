@@ -213,10 +213,7 @@ test("Environment drafts enforce unique names and preserve tombstones", async ({
     .check();
   await page.getByRole("button", { name: "Add Variable" }).last().click();
   await expect(page.getByText("OPTIONAL_FLAG", { exact: true })).toBeVisible();
-  const optionalRow = page
-    .locator("div")
-    .filter({ hasText: "OPTIONAL_FLAG" })
-    .last();
+  const optionalRow = page.getByTestId("environment-variable-OPTIONAL_FLAG");
   await expect(optionalRow).toContainText("Absent");
   await page.getByLabel("OPTIONAL_FLAG Value").fill("enabled");
   await page.getByRole("button", { name: "Set absent" }).click();
