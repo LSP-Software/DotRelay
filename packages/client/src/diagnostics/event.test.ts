@@ -67,6 +67,13 @@ describe("value-blind diagnostics", () => {
     ).toBe(
       `{"schemaVersion":1,"eventName":"client.storage.load","correlationId":"${first}"}`,
     );
+    expect(Object.keys(serialized).sort()).toMatchInlineSnapshot(`
+      [
+        "correlationId",
+        "eventName",
+        "schemaVersion",
+      ]
+    `);
   });
 
   test("bounds safe fields and rejects malformed values", () => {
@@ -96,10 +103,23 @@ describe("value-blind diagnostics", () => {
   });
 
   test("redacts forbidden fields without allowing them into an event", () => {
-    const hostilePayloads = Array.from({ length: 32 }, (_, index) => ({
+    const forbiddenFields = [
+      "plaintext",
+      "ciphertext",
+      "privateKey",
+      "recoveryKit",
+      "bearerCredential",
+      "authorization",
+      "ipAddress",
+      "userId",
+      "environmentId",
+      "stack",
+    ];
+    const hostilePayloads = Array.from({ length: 128 }, (_, index) => ({
       eventName: "client.storage.load",
-      [`secret${index}`]: "plaintext",
-      context: { ciphertext: "ciphertext" },
+      [forbiddenFields[index % forbiddenFields.length] as string]:
+        "forbidden-value",
+      context: { nested: { ciphertext: "ciphertext" } },
     }));
     for (const payload of hostilePayloads)
       expect(redactDiagnosticEvent(payload)).toEqual({
@@ -107,6 +127,34 @@ describe("value-blind diagnostics", () => {
       });
     expect(redactDiagnosticEvent({ secret: "plaintext" })).toBeNull();
     expect(DIAGNOSTIC_RETENTION_MS).toBe(14 * 24 * 60 * 60 * 1000);
+  });
+
+  test("fuzzes nested and forbidden diagnostic payloads fail-closed", () => {
+    const fields = [
+      "plaintext",
+      "ciphertext",
+      "privateKey",
+      "recoveryKit",
+      "bearerCredential",
+      "authorization",
+      "ipAddress",
+      "userId",
+      "environmentId",
+      "stack",
+    ];
+    const randomBytes = crypto.getRandomValues(new Uint8Array(256));
+    for (let index = 0; index < randomBytes.length; index += 1) {
+      const field = fields[(randomBytes[index] ?? 0) % fields.length] as string;
+      const payload = {
+        eventName: "client.sync",
+        [field]: {
+          nested: ["plaintext", { ciphertext: "ciphertext" }],
+        },
+      };
+      expect(redactDiagnosticEvent(payload)).toEqual({
+        eventName: "client.sync",
+      });
+    }
   });
 
   test("keeps metrics, private traces, and explicit crash reports value-blind", () => {

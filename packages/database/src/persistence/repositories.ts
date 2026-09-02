@@ -342,7 +342,7 @@ export class OperationRepository {
     return inShortTransaction(database, async (transaction) => {
       const expired = await transaction.operation.findMany({
         where: { status: "STAGED", expiresAt: { lte: now } },
-        select: { id: true },
+        select: { id: true, actorUserId: true, actorDeviceId: true },
       });
       if (expired.length === 0) return 0;
       const ids = expired.map(({ id }) => id);
@@ -353,6 +353,20 @@ export class OperationRepository {
         where: { id: { in: ids }, status: "STAGED" },
         data: { status: "EXPIRED" },
       });
+      for (const operation of expired) {
+        await transaction.auditEvent.create({
+          data: {
+            operationId: operation.id,
+            kind: "OPERATION_EXPIRED",
+            actorUserId: operation.actorUserId,
+            ...(operation.actorDeviceId
+              ? { actorDeviceId: operation.actorDeviceId }
+              : {}),
+            entityKind: "OPERATION",
+            entityId: operation.id,
+          },
+        });
+      }
       return result.count;
     });
   }
@@ -403,6 +417,16 @@ export class OperationRepository {
         where: { id: operation.id },
       });
       if (!cancelled) throw new OperationNotFoundError();
+      await transaction.auditEvent.create({
+        data: {
+          operationId: cancelled.id,
+          kind: "OPERATION_CANCELLED",
+          actorUserId: input.actorUserId,
+          actorDeviceId: input.actorDeviceId,
+          entityKind: "OPERATION",
+          entityId: cancelled.id,
+        },
+      });
       return Object.freeze({ operation: cancelled, idempotent: false });
     });
   }
@@ -428,7 +452,12 @@ export type AuditFactInput = Readonly<{
     | "ENVIRONMENT_RESTORED"
     | "REVISION_PUBLISHED"
     | "ROLLBACK_PUBLISHED"
-    | "EPOCH_ROTATED";
+    | "EPOCH_ROTATED"
+    | "GRANT_CREATED"
+    | "DEVICE_ENROLLMENT_STARTED"
+    | "DEVICE_ENROLLMENT_APPROVED"
+    | "OPERATION_CANCELLED"
+    | "OPERATION_EXPIRED";
   readonly actorUserId?: string;
   readonly actorDeviceId?: string;
   readonly entityKind:
@@ -481,18 +510,14 @@ export class SecurityRequestLogRepository {
     database: PersistenceClient,
     input: Readonly<{
       readonly ipAddress: string;
-      readonly endpointTemplate: string;
+      readonly endpointTemplate: SecurityRequestEndpointTemplate;
       readonly httpStatus: number;
       readonly transferBytes: bigint;
       readonly requestedAt: Date;
       readonly expiresAt: Date;
     }>,
   ) {
-    if (
-      !SECURITY_REQUEST_ENDPOINT_TEMPLATES.includes(
-        input.endpointTemplate as (typeof SECURITY_REQUEST_ENDPOINT_TEMPLATES)[number],
-      )
-    )
+    if (!SECURITY_REQUEST_ENDPOINT_TEMPLATES.includes(input.endpointTemplate))
       throw new Error(
         "Security Request Log endpoint template is not allowlisted",
       );
@@ -554,6 +579,9 @@ export const SECURITY_REQUEST_ENDPOINT_TEMPLATES = Object.freeze([
   "/api/v1/environments/:environmentId/sync",
   "/api/v1/operations/:operationId/epoch-transitions",
 ] as const);
+
+export type SecurityRequestEndpointTemplate =
+  (typeof SECURITY_REQUEST_ENDPOINT_TEMPLATES)[number];
 
 export type TeamCreationInput = Readonly<{
   readonly teamId?: string;
@@ -1956,6 +1984,14 @@ export class DeviceRepository {
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
       });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "DEVICE_ENROLLMENT_STARTED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "OPERATION",
+        entityId: operation.operation.id,
+      });
       return { operation: operation.operation, enrollment };
     });
   }
@@ -2016,6 +2052,15 @@ export class DeviceRepository {
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "DEVICE_ENROLLMENT_APPROVED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "OPERATION",
+        entityId: operation.operation.id,
+        outcomeObjectId: approvalObject.id,
       });
       return { operation: operation.operation, enrollment };
     });
@@ -2678,6 +2723,17 @@ export class GrantRepository {
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          operationId: operation.operation.id,
+          kind: "GRANT_CREATED",
+          actorUserId: input.operation.actorUserId,
+          actorDeviceId: input.operation.actorDeviceId,
+          entityKind: "PROTOCOL_OBJECT",
+          entityId: protocolObject.id,
+          outcomeObjectId: protocolObject.id,
+        },
       });
       return { operation: operation.operation, grant };
     });

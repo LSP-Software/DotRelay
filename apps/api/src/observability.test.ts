@@ -9,14 +9,23 @@ import {
 describe("API observability boundary", () => {
   test("sanitizes direct sink input before retaining it", () => {
     const diagnostics = createInMemoryDiagnosticSink(() => 0);
-    diagnostics.emit({
+    const event = {
       schemaVersion: 1,
       eventName: "api.request.completed",
       correlationId: createServerCorrelationId(),
+      retryAfterSeconds: 5,
+    } as const;
+    diagnostics.emit(event);
+    expect(diagnostics.records()).toEqual([
+      expect.objectContaining({ retryAfterSeconds: 5 }),
+    ]);
+
+    diagnostics.emit({
+      ...event,
       // @ts-expect-error adversarial fields are rejected at runtime
       secret: "plaintext",
     });
-    expect(diagnostics.records()).toEqual([]);
+    expect(diagnostics.records()).toHaveLength(1);
   });
 
   test("creates opaque Correlation IDs and maps paths to templates", () => {
@@ -111,5 +120,44 @@ describe("API observability boundary", () => {
         durationMs: 0,
       }),
     ).not.toThrow();
+  });
+
+  test("keeps hosted and self-hosted request policy identical", async () => {
+    const makeDatabase = () => {
+      const rows: unknown[] = [];
+      return {
+        rows,
+        database: {
+          securityRequestLog: {
+            create: async (input: unknown) => {
+              rows.push(input);
+              return input;
+            },
+          },
+        } as never,
+      };
+    };
+    const hosted = makeDatabase();
+    const selfHosted = makeDatabase();
+    const request = new Request("https://relay.example/api/v1/session", {
+      headers: { "Content-Length": "8" },
+    });
+    const input = {
+      request,
+      path: "/api/v1/session",
+      status: 401,
+      correlationId: createServerCorrelationId(),
+      durationMs: 2,
+    } as const;
+    const createPolicy = (database: never) =>
+      createApiObservability(database, {
+        sampleRate: 0,
+        now: () => new Date("2026-01-01T00:00:00.000Z"),
+        resolveClientIp: () => "192.0.2.10",
+      });
+    createPolicy(hosted.database).recordRequest(input);
+    createPolicy(selfHosted.database).recordRequest(input);
+    await Promise.resolve();
+    expect(hosted.rows).toEqual(selfHosted.rows);
   });
 });

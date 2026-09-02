@@ -218,10 +218,17 @@ export const createInMemoryDiagnosticSink = (options?: {
     throw new DiagnosticBoundaryError("diagnostic sample rate is invalid");
   const now = options?.now ?? Date.now;
   const random = options?.random ?? Math.random;
-  const entries: Array<{ readonly expiresAt: number; readonly value: string }> =
-    [];
+  type DiagnosticEntry = {
+    readonly expiresAt: number;
+    readonly value: string;
+    timer?: ReturnType<typeof setTimeout>;
+  };
+  const entries: DiagnosticEntry[] = [];
   const purge = (at = now()) => {
     const retained = entries.filter((entry) => entry.expiresAt > at);
+    for (const entry of entries) {
+      if (entry.expiresAt <= at && entry.timer) clearTimeout(entry.timer);
+    }
     const removed = entries.length - retained.length;
     entries.splice(0, entries.length, ...retained);
     return removed;
@@ -233,10 +240,13 @@ export const createInMemoryDiagnosticSink = (options?: {
       try {
         const value = serializeDiagnosticEvent(event);
         if (entries.length >= MAX_DIAGNOSTIC_ENTRIES) entries.shift();
-        entries.push({
+        const entry: DiagnosticEntry = {
           expiresAt: now() + DIAGNOSTIC_RETENTION_MS,
           value,
-        });
+        };
+        entry.timer = setTimeout(() => purge(), DIAGNOSTIC_RETENTION_MS);
+        (entry.timer as unknown as { readonly unref?: () => void }).unref?.();
+        entries.push(entry);
       } catch {
         // Diagnostic loss is intentionally non-blocking.
       }
@@ -358,6 +368,17 @@ export const createLocalDiagnosticStore = (
 ): LocalDiagnosticStore => {
   const traces: PrivateDiagnosticTrace[] = [];
   const crashReports: ExplicitCrashReport[] = [];
+  const expirationTimers = new Map<
+    PrivateDiagnosticTrace | ExplicitCrashReport,
+    ReturnType<typeof setTimeout>
+  >();
+  const scheduleExpiration = (
+    value: PrivateDiagnosticTrace | ExplicitCrashReport,
+  ) => {
+    const timer = setTimeout(() => purge(), OPTIONAL_TRACE_RETENTION_MS);
+    (timer as unknown as { readonly unref?: () => void }).unref?.();
+    expirationTimers.set(value, timer);
+  };
   const purge = (at = now()) => {
     const traceCount = traces.length;
     const crashCount = crashReports.length;
@@ -371,6 +392,15 @@ export const createLocalDiagnosticStore = (
       crashReports.length,
       ...crashReports.filter((report) => report.expiresAt > at),
     );
+    for (const [value, timer] of expirationTimers) {
+      if (
+        !traces.includes(value as PrivateDiagnosticTrace) &&
+        !crashReports.includes(value as ExplicitCrashReport)
+      ) {
+        clearTimeout(timer);
+        expirationTimers.delete(value);
+      }
+    }
     return traceCount - traces.length + crashCount - crashReports.length;
   };
   const sanitizeTrace = (value: unknown, at: number) => {
@@ -452,6 +482,7 @@ export const createLocalDiagnosticStore = (
       if (!sanitized) return;
       if (traces.length >= MAX_DIAGNOSTIC_ENTRIES) traces.shift();
       traces.push(sanitized);
+      scheduleExpiration(sanitized);
     },
     addCrashReport: (report: ExplicitCrashReport) => {
       const at = now();
@@ -460,6 +491,7 @@ export const createLocalDiagnosticStore = (
       if (!sanitized) return;
       if (crashReports.length >= MAX_DIAGNOSTIC_ENTRIES) crashReports.shift();
       crashReports.push(sanitized);
+      scheduleExpiration(sanitized);
     },
     traces: (at?: number) => {
       purge(at);

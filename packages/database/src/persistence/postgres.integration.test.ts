@@ -277,6 +277,9 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       await admin.end();
     }
     await runMigrations();
+    await database.$executeRawUnsafe(
+      "GRANT dotrelay_security_response TO CURRENT_USER",
+    );
   });
 
   afterAll(async () => {
@@ -363,6 +366,29 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     ).toBe(1);
   });
 
+  test("records operation cancellation as an unsampled Audit Fact", async () => {
+    const { device, user } = await createAuthorizedDeviceFixture();
+    const operation = {
+      ...(await createOperationInput(user.id, "cancelled-operation")),
+      actorDeviceId: device.id,
+    };
+    const operations = new OperationRepository();
+    await operations.begin(database, operation);
+
+    const cancelled = await operations.cancel(database, {
+      operationId: operation.id,
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+    });
+
+    expect(cancelled.operation.status).toBe("CANCELLED");
+    expect(
+      await database.auditEvent.count({
+        where: { operationId: operation.id, kind: "OPERATION_CANCELLED" },
+      }),
+    ).toBe(1);
+  });
+
   test("keeps Team administration atomic, auditable, and restore-safe", async () => {
     const { device, projectId, teamId, user } = await createProjectFixture(
       "persistence-integration",
@@ -405,26 +431,32 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       }),
     ).toMatchObject({ role: "OWNER", lifecycle: "ACTIVE" });
 
-    const rolledBackEndpoint = `/rollback/${crypto.randomUUID()}`;
+    const rolledBackEndpoint = "/health";
+    const rollbackRequestedAt = new Date();
     await expect(
       database.$transaction(async (transaction) => {
-        const requestedAt = new Date();
         await transaction.securityRequestLog.create({
           data: {
             ipAddress: "192.0.2.1",
             endpointTemplate: rolledBackEndpoint,
             httpStatus: 200,
             transferBytes: 0n,
-            requestedAt,
-            expiresAt: new Date(requestedAt.getTime() + 60_000),
+            requestedAt: rollbackRequestedAt,
+            expiresAt: new Date(rollbackRequestedAt.getTime() + 60_000),
           },
         });
         throw new Error("force rollback");
       }),
     ).rejects.toThrow("force rollback");
     expect(
-      await database.securityRequestLog.count({
-        where: { endpointTemplate: rolledBackEndpoint },
+      await database.$transaction(async (transaction) => {
+        await transaction.$executeRaw`SELECT set_config('dotrelay.security_request_log_access', 'security-response', true)`;
+        return transaction.securityRequestLog.count({
+          where: {
+            endpointTemplate: rolledBackEndpoint,
+            requestedAt: rollbackRequestedAt,
+          },
+        });
       }),
     ).toBe(0);
   });
@@ -1027,6 +1059,11 @@ integrationDescribe("PostgreSQL persistence integration", () => {
 
     expect(await operations.expireStaging(database, now)).toBe(1);
     expect(
+      await database.auditEvent.count({
+        where: { operationId: expiredOperation.id, kind: "OPERATION_EXPIRED" },
+      }),
+    ).toBe(1);
+    expect(
       await database.stagedObject.count({
         where: {
           operationId: { in: [expiredOperation.id, currentOperation.id] },
@@ -1060,8 +1097,44 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     }
     expect((await securityLogs.expire(database, now)).count).toBe(1);
     expect(
-      await database.securityRequestLog.count({ where: { endpointTemplate } }),
+      await database.$transaction(async (transaction) => {
+        await transaction.$executeRaw`SELECT set_config('dotrelay.security_request_log_access', 'security-response', true)`;
+        return transaction.securityRequestLog.count({
+          where: { endpointTemplate },
+        });
+      }),
     ).toBe(1);
+  });
+
+  test("denies Security Request Log reads to an ordinary role", async () => {
+    const ordinaryRole = "dotrelay_security_request_test_ordinary";
+    const requestedAt = new Date();
+    await new SecurityRequestLogRepository().append(database, {
+      ipAddress: "192.0.2.55",
+      endpointTemplate: "/health",
+      httpStatus: 401,
+      transferBytes: 0n,
+      requestedAt,
+      expiresAt: new Date(requestedAt.getTime() + 60_000),
+    });
+    await database.$executeRawUnsafe(
+      `CREATE ROLE ${ordinaryRole} NOLOGIN; GRANT SELECT ON TABLE "security_request_logs" TO ${ordinaryRole}; GRANT ${ordinaryRole} TO CURRENT_USER;`,
+    );
+    try {
+      const visibleRows = await database.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          `SET LOCAL ROLE ${ordinaryRole}; SET LOCAL dotrelay.security_request_log_access = 'security-response';`,
+        );
+        return transaction.securityRequestLog.count({
+          where: { requestedAt },
+        });
+      });
+      expect(visibleRows).toBe(0);
+    } finally {
+      await database.$executeRawUnsafe(
+        `REVOKE ${ordinaryRole} FROM CURRENT_USER; DROP ROLE ${ordinaryRole};`,
+      );
+    }
   });
 
   test("keeps accepted protocol objects and Audit Facts append-only", async () => {

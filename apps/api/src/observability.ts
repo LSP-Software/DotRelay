@@ -3,6 +3,7 @@ import type { DatabaseClient } from "@dotrelay/database";
 import {
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
   SECURITY_REQUEST_LOG_RETENTION_MS,
+  type SecurityRequestEndpointTemplate,
   SecurityRequestLogRepository,
 } from "@dotrelay/database";
 
@@ -18,6 +19,7 @@ export type ServerDiagnosticEvent = Readonly<{
   readonly durationMs?: number;
   readonly outcome?: "success" | "failure";
   readonly problemCode?: string;
+  readonly retryAfterSeconds?: number;
 }>;
 
 export type ServerDiagnosticSink = Readonly<{
@@ -71,12 +73,17 @@ export const createServerCorrelationId = createCorrelationId;
 export const createInMemoryDiagnosticSink = (
   now: () => number = Date.now,
 ): MemoryDiagnosticSink => {
-  const entries: Array<{
+  type DiagnosticEntry = {
     readonly event: ServerDiagnosticEvent;
     readonly expiresAt: number;
-  }> = [];
+    timer?: ReturnType<typeof setTimeout>;
+  };
+  const entries: DiagnosticEntry[] = [];
   const purge = (at = now()) => {
     const retained = entries.filter((entry) => entry.expiresAt > at);
+    for (const entry of entries) {
+      if (entry.expiresAt <= at && entry.timer) clearTimeout(entry.timer);
+    }
     const removed = entries.length - retained.length;
     entries.splice(0, entries.length, ...retained);
     return removed;
@@ -87,10 +94,14 @@ export const createInMemoryDiagnosticSink = (
       if (!sanitized) return;
       purge();
       if (entries.length >= MAX_DIAGNOSTIC_ENTRIES) entries.shift();
-      entries.push({
+      const entry: DiagnosticEntry = {
         event: sanitized,
         expiresAt: now() + DIAGNOSTIC_RETENTION_MS,
-      });
+      };
+      entry.timer = setTimeout(() => purge(), DIAGNOSTIC_RETENTION_MS);
+      if (typeof entry.timer === "object" && "unref" in entry.timer)
+        entry.timer.unref();
+      entries.push(entry);
     },
     records: (at?: number) => {
       purge(at);
@@ -118,7 +129,9 @@ const ENDPOINT_PATTERNS = SECURITY_REQUEST_ENDPOINT_TEMPLATES.map((template) =>
   Object.freeze({ template, pattern: endpointPattern(template) }),
 );
 
-export const endpointTemplateFor = (path: string): string | null =>
+export const endpointTemplateFor = (
+  path: string,
+): SecurityRequestEndpointTemplate | null =>
   ENDPOINT_PATTERNS.find(({ pattern }) => pattern.test(path))?.template ?? null;
 
 const emitSafely = (
@@ -146,6 +159,7 @@ const sanitizeServerDiagnosticEvent = (
     "durationMs",
     "outcome",
     "problemCode",
+    "retryAfterSeconds",
   ]);
   if (Object.keys(object).some((key) => !allowed.has(key))) return null;
   if (
@@ -179,6 +193,14 @@ const sanitizeServerDiagnosticEvent = (
       forbiddenProblemCodes.has(object.problemCode))
   )
     return null;
+  if (
+    object.retryAfterSeconds !== undefined &&
+    (typeof object.retryAfterSeconds !== "number" ||
+      !Number.isInteger(object.retryAfterSeconds) ||
+      object.retryAfterSeconds < 0 ||
+      object.retryAfterSeconds > 86_400)
+  )
+    return null;
   return Object.freeze({
     schemaVersion: 1,
     eventName: object.eventName,
@@ -190,6 +212,9 @@ const sanitizeServerDiagnosticEvent = (
     ...(object.problemCode === undefined
       ? {}
       : { problemCode: object.problemCode }),
+    ...(object.retryAfterSeconds === undefined
+      ? {}
+      : { retryAfterSeconds: object.retryAfterSeconds }),
   }) as ServerDiagnosticEvent;
 };
 

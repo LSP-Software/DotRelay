@@ -18,7 +18,7 @@ describe("Security Request Log boundary", () => {
     } as never;
     const repository = new SecurityRequestLogRepository();
     const requestedAt = new Date("2026-01-01T00:00:00.000Z");
-    const endpointTemplate = SECURITY_REQUEST_ENDPOINT_TEMPLATES[0] as string;
+    const endpointTemplate = SECURITY_REQUEST_ENDPOINT_TEMPLATES[0];
 
     await repository.append(database, {
       ipAddress: "192.0.2.10",
@@ -37,7 +37,7 @@ describe("Security Request Log boundary", () => {
     } as never;
     const repository = new SecurityRequestLogRepository();
     const requestedAt = new Date("2026-01-01T00:00:00.000Z");
-    const endpointTemplate = SECURITY_REQUEST_ENDPOINT_TEMPLATES[0] as string;
+    const endpointTemplate = SECURITY_REQUEST_ENDPOINT_TEMPLATES[0];
     const base = {
       ipAddress: "192.0.2.10",
       endpointTemplate,
@@ -48,7 +48,10 @@ describe("Security Request Log boundary", () => {
     } as const;
 
     await expect(
-      repository.append(database, { ...base, endpointTemplate: "/users/123" }),
+      repository.append(database, {
+        ...base,
+        endpointTemplate: "/users/123" as never,
+      }),
     ).rejects.toThrow("endpoint template");
     await expect(
       repository.append(database, { ...base, httpStatus: 99 }),

@@ -32,6 +32,63 @@ describe("API foundation", () => {
     );
   });
 
+  test("keeps domain responses successful when the observability sink throws", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    let domainCommitCount = 0;
+    const testApp = createApi({
+      database: {} as never,
+      profile,
+      auth,
+      observability: {
+        diagnostics: { emit: () => undefined },
+        expireSecurityRequestLogs: async () => 0,
+        recordRequest: () => {
+          throw new Error("observability sink unavailable");
+        },
+      },
+    });
+    testApp.post("/test-domain-commit", (context) =>
+      context.json({ committed: ++domainCommitCount }, 201),
+    );
+
+    const response = await testApp.request(`${profile.origin}/health`);
+    const domainResponse = await testApp.request(
+      `${profile.origin}/test-domain-commit`,
+      { method: "POST" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok" });
+    expect(domainResponse.status).toBe(201);
+    expect(await domainResponse.json()).toEqual({ committed: 1 });
+    expect(domainCommitCount).toBe(1);
+  });
+
+  test("returns a generic problem for uncaught route failures", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    testApp.get("/test-unhandled-error", () => {
+      throw new Error("secret request body and stack");
+    });
+
+    const response = await testApp.request(
+      `${profile.origin}/test-unhandled-error`,
+    );
+    const problem = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(503);
+    expect(problem).toMatchObject({
+      code: "service_unavailable",
+      detail: "Service unavailable",
+    });
+    expect(problem.correlationId).toBe(
+      response.headers.get("x-correlation-id"),
+    );
+    expect(JSON.stringify(problem)).not.toContain("secret request body");
+  });
+
   test("publishes a profile-bound capabilities document with an ETag", async () => {
     const response = await app.request("http://localhost/api/v1/capabilities");
     const capabilities = await response.json();
@@ -143,6 +200,31 @@ describe("API foundation", () => {
     expect(await tokenResponse.json()).toMatchObject({
       error: "authorization_pending",
     });
+  });
+
+  test("exposes Correlation IDs on protocol CORS responses", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/devices/bootstrap`,
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: profile.origin,
+          "Access-Control-Request-Method": "POST",
+        },
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-expose-headers")).toContain(
+      "X-Correlation-ID",
+    );
+    expect(response.headers.get("x-correlation-id")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   test("enforces device polling intervals, expiry, and endpoint rate limits", async () => {
@@ -345,6 +427,12 @@ describe("API foundation", () => {
       await auth.api.getSession({ headers: sessionHeaders(expired.token) }),
     ).toBeNull();
     expect(auth.options.session?.cookieCache).toEqual({ enabled: false });
+  });
+
+  test("disables Better Auth logging at the privacy boundary", () => {
+    const auth = createInMemoryAuth(loadServerProfileConfig());
+
+    expect(auth.options.logger).toEqual({ disabled: true });
   });
 
   test("serves the device verification page without reflecting markup", async () => {

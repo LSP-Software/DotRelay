@@ -267,6 +267,14 @@ integrationDescribe("trust workflow integration", () => {
       challengeHash: new Uint8Array(48),
       expiresAt,
     });
+    expect(
+      await database.auditEvent.count({
+        where: {
+          operationId: beginOperation.id,
+          kind: "DEVICE_ENROLLMENT_STARTED",
+        },
+      }),
+    ).toBe(1);
     const approvalObject = await createProtocolObjectInput(5);
     const approveOperation = {
       ...(await createOperationInput(
@@ -287,6 +295,14 @@ integrationDescribe("trust workflow integration", () => {
       enrollmentId,
       approvalObject,
     });
+    expect(
+      await database.auditEvent.count({
+        where: {
+          operationId: approveOperation.id,
+          kind: "DEVICE_ENROLLMENT_APPROVED",
+        },
+      }),
+    ).toBe(1);
     const newDeviceId = crypto.randomUUID();
     const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
     const enrollmentObject = await createProtocolObjectInput(4);
@@ -410,6 +426,74 @@ integrationDescribe("trust workflow integration", () => {
         recipientDeviceIds: [inviteeDevice.id],
       },
     });
+    expect(
+      await database.auditEvent.count({
+        where: { operationId: grantOperation.id, kind: "GRANT_CREATED" },
+      }),
+    ).toBe(1);
+
+    const rejectedGrantObject = await createProtocolObjectInput(8);
+    const rejectedGrantOperation = {
+      ...(await createOperationInput(owner.id, "trust-grant-audit-failure")),
+      actorDeviceId: ownerDevice.id,
+    };
+    await stageObject({
+      operation: rejectedGrantOperation,
+      objectId: rejectedGrantObject.id,
+      canonicalBytes: rejectedGrantObject.canonicalBytes,
+      digest: rejectedGrantObject.digest,
+    });
+    await database.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION dotrelay_fail_grant_audit()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW."kind" = 'GRANT_CREATED' THEN
+          RAISE EXCEPTION 'audit sink unavailable';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER dotrelay_fail_grant_audit_trigger
+      BEFORE INSERT ON "audit_events"
+      FOR EACH ROW EXECUTE FUNCTION dotrelay_fail_grant_audit();
+    `);
+    try {
+      await expect(
+        grants.create(database, {
+          operation: rejectedGrantOperation,
+          grant: {
+            protocolObject: rejectedGrantObject,
+            projectId,
+            teamId,
+            membershipId,
+            senderDeviceId: ownerDevice.id,
+            recipientDeviceId: inviteeDevice.id,
+            ownerUserId: invitee.id,
+            keyKind: "PROJECT_EPOCH",
+            grantKind: "CURRENT_PROJECT_EPOCH",
+            projectEpoch: 1n,
+            plaintextLength: 32,
+            ciphertextLength: 48,
+            ciphertextHash: new Uint8Array(48),
+            recipientDeviceIds: [inviteeDevice.id],
+          },
+        }),
+      ).rejects.toThrow("audit sink unavailable");
+      expect(
+        await database.operation.findUnique({
+          where: { id: rejectedGrantOperation.id },
+        }),
+      ).toBeNull();
+      expect(
+        await database.protocolObject.findUnique({
+          where: { id: rejectedGrantObject.id },
+        }),
+      ).toBeNull();
+    } finally {
+      await database.$executeRawUnsafe(
+        'DROP TRIGGER IF EXISTS dotrelay_fail_grant_audit_trigger ON "audit_events"; DROP FUNCTION IF EXISTS dotrelay_fail_grant_audit();',
+      );
+    }
     const activationObject = await createProtocolObjectInput(6);
     const activateOperation = {
       ...(await createOperationInput(owner.id, "trust-activate")),

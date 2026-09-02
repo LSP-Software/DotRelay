@@ -59,5 +59,9 @@ use the same 30-day maximum and allowlist.
 Diagnostic access is limited to the operations role. Security Request Logs are limited to the
 security-response role and are not available to ordinary support users. Break-glass access requires
 an incident reference, an approving security owner, least-privilege temporary access, and a review
-of the access record after the incident. The release checklist must record security-review approval
-of this privacy boundary and verify hosted/self-hosted policy parity before production release.
+of the access record after the incident. The database additionally applies forced row-level security:
+Security Request Log reads require the explicit `dotrelay.security_request_log_access` transaction
+setting with value `security-response` and membership in the dedicated PostgreSQL
+`dotrelay_security_response` role; the application has no ordinary support read path. The release
+checklist must record security-review approval of this privacy boundary and verify hosted/self-hosted
+policy parity before production release.

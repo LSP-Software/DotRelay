@@ -611,15 +611,15 @@ export const EnvironmentEditor = ({
               ? "Publication was not committed because the verified head changed on overlapping lanes. Resolve them, then retry."
               : "Publication was not committed, but the verified head changed on other lanes; the local draft remains publishable.",
           );
-        } catch (reconciliationError) {
+        } catch {
           setPublishMessage(
-            `Publication stopped after a stale head response: ${reconciliationError instanceof Error ? reconciliationError.message : "the new verified head could not be synchronized"}.`,
+            "Publication stopped after a stale head response. The verified head could not be synchronized.",
           );
         }
         return;
       }
       setPublishMessage(
-        `Publication stopped: ${error instanceof Error ? error.message : "the verified v3 cryptographic runtime could not encrypt and sign the draft"}.`,
+        "Publication stopped because the verified server rejected the draft.",
       );
     } finally {
       setPublishing(false);
@@ -648,9 +648,9 @@ export const EnvironmentEditor = ({
         [...rollbackLanes],
       );
       setVariables([...nextVariables]);
-    } catch (error) {
+    } catch {
       setPublishMessage(
-        `Rollback stopped: ${error instanceof Error ? error.message : "verified historical state is unavailable"}.`,
+        "Rollback stopped because verified historical state is unavailable.",
       );
       return;
     }
@@ -878,9 +878,9 @@ export const EnvironmentEditor = ({
                     "Verified synchronization completed; no plaintext was requested.",
                   );
                   return;
-                } catch (error) {
+                } catch {
                   setPublishMessage(
-                    `Synchronization stopped: ${error instanceof Error ? error.message : "the verified history could not be read"}.`,
+                    "Synchronization stopped because verified history could not be read.",
                   );
                   return;
                 }

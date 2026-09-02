@@ -57,7 +57,12 @@ export type ApiDependencies = Readonly<{
 }>;
 
 const jsonProblem = (context: Context, code: ProblemCode) => {
-  const problem = createProblem(code);
+  const correlationId = context.get("correlationId" as never) as
+    | string
+    | undefined;
+  const problem = createProblem(code, {
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
   return context.json(problem, problem.status as ContentfulStatusCode, {
     "Content-Type": "application/problem+json",
   });
@@ -221,6 +226,7 @@ const protocolCors = (profile: ServerProfileConfig) =>
     credentials: true,
     allowHeaders: ["Content-Type", "Authorization", DEVICE_ID_HEADER],
     allowMethods: ["POST", "OPTIONS"],
+    exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
     maxAge: 600,
   });
 
@@ -259,19 +265,26 @@ const createApi = ({
   app.use("*", async (context, next) => {
     const correlationId = createServerCorrelationId();
     const startedAt = performance.now();
+    context.set("correlationId" as never, correlationId);
     context.header(API_CORRELATION_HEADER, correlationId);
     try {
       await next();
     } finally {
-      observability.recordRequest({
-        request: context.req.raw,
-        path: context.req.path,
-        status: context.res.status,
-        correlationId,
-        durationMs: performance.now() - startedAt,
-      });
+      try {
+        observability.recordRequest({
+          request: context.req.raw,
+          path: context.req.path,
+          status: context.res.status,
+          correlationId,
+          durationMs: performance.now() - startedAt,
+        });
+      } catch {
+        // Observability loss must never affect the response or domain behavior.
+      }
     }
   });
+
+  app.onError((_error, context) => jsonProblem(context, "service_unavailable"));
 
   app.use("*", async (context, next) => {
     if (!isSecureRequest(context.req.raw, profile))
@@ -721,11 +734,23 @@ const createApi = ({
 
 const profile = loadServerProfileConfig();
 const database = createDatabaseClient();
+type RequestIpServer = {
+  readonly requestIP: (request: Request) => { readonly address: string } | null;
+};
+let server: RequestIpServer | undefined;
+const runtimeObservability = createApiObservability(database, {
+  resolveClientIp: (request) => server?.requestIP(request)?.address ?? null,
+});
 export const auth = createAuth(
   createBetterAuthDatabaseAdapter(database),
   profile,
 );
-export const app = createApi({ database, profile, auth });
+export const app = createApi({
+  database,
+  profile,
+  auth,
+  observability: runtimeObservability,
+});
 export { createApi, loadServerProfileConfig };
 
 if (import.meta.main) {
@@ -734,23 +759,8 @@ if (import.meta.main) {
     origin: profile.origin,
     allowRebind: profile.allowRebind,
   });
-  type RequestIpServer = {
-    readonly requestIP: (
-      request: Request,
-    ) => { readonly address: string } | null;
-  };
-  let server: RequestIpServer | undefined;
-  const runtimeObservability = createApiObservability(database, {
-    resolveClientIp: (request) => server?.requestIP(request)?.address ?? null,
-  });
-  const runtimeApp = createApi({
-    database,
-    profile,
-    auth,
-    observability: runtimeObservability,
-  });
   server = Bun.serve({
-    fetch: runtimeApp.fetch,
+    fetch: app.fetch,
     port: Number(process.env.PORT ?? 3001),
   });
   const cleanupTimer = setInterval(
