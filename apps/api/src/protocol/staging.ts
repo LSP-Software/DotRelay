@@ -1,4 +1,5 @@
 import {
+  bytesToUuid,
   ContractError,
   type FinalizePublicationRequest,
   importSigningPublicKey,
@@ -93,6 +94,30 @@ export const buildPublicationInput = (input: {
     );
   const revisionObject = build(input.finalizeRequest.revision.protocolObjectId);
   validateProtocolProjection(revisionObject);
+  const parsedRevision = parseProtocolObject(revisionObject.canonicalBytes);
+  if (
+    parsedRevision.get(1) !== 16 ||
+    !(parsedRevision.get(16) instanceof Uint8Array) ||
+    bytesToUuid(parsedRevision.get(16) as Uint8Array) !==
+      input.finalizeRequest.revision.id ||
+    parsedRevision.get(35) !==
+      (
+        {
+          GENESIS: 1,
+          MANIFEST_UPDATE: 2,
+          ROLLBACK: 3,
+          EPOCH_TRANSITION: 4,
+          USER_KEY_ROTATION: 5,
+        } as const
+      )[input.finalizeRequest.revision.mutation] ||
+    BigInt(parsedRevision.get(30) as number | bigint) !==
+      BigInt(input.finalizeRequest.revision.projectEpoch) ||
+    BigInt(parsedRevision.get(34) as number | bigint) !==
+      BigInt(input.finalizeRequest.revision.authoredAtMs)
+  )
+    throw new ContractError("invalid_crypto_object");
+  if (input.finalizeRequest.revision.mutation === "ROLLBACK")
+    validateRollbackLaneScope(parsedRevision, input, build);
   const operationKind =
     input.finalizeRequest.revision.mutation === "ROLLBACK"
       ? "ROLLBACK"
@@ -131,27 +156,35 @@ export const buildPublicationInput = (input: {
       descriptorHash: input.finalizeRequest.descriptor.descriptorHash,
       laneCount: input.finalizeRequest.descriptor.laneCount,
     },
-    lanes: input.finalizeRequest.lanes.map((lane) => ({
-      lane: {
-        id: lane.id,
-        protocolObjectId: lane.protocolObjectId,
-        projectId: input.projectId,
-        environmentId: input.environmentId,
-        scope: lane.scope,
-        ...(lane.ownerUserId ? { ownerUserId: lane.ownerUserId } : {}),
-        ...(lane.originalProviderUserId
-          ? { originalProviderUserId: lane.originalProviderUserId }
-          : {}),
-        projectEpoch: BigInt(lane.projectEpoch),
-        ...(lane.valueGeneration !== undefined
-          ? { valueGeneration: BigInt(lane.valueGeneration) }
-          : {}),
-        plaintextLength: lane.plaintextLength,
-        ciphertextLength: lane.ciphertextLength,
-        ciphertextHash: lane.ciphertextHash,
-      },
-      protocolObject: build(lane.protocolObjectId),
-    })),
+    lanes: input.finalizeRequest.lanes.map((lane) => {
+      const protocolObject = build(lane.protocolObjectId);
+      validateLaneOwnership(
+        lane,
+        parseProtocolObject(protocolObject.canonicalBytes),
+        input.actorUserId,
+      );
+      return {
+        lane: {
+          id: lane.id,
+          protocolObjectId: lane.protocolObjectId,
+          projectId: input.projectId,
+          environmentId: input.environmentId,
+          scope: lane.scope,
+          ...(lane.ownerUserId ? { ownerUserId: lane.ownerUserId } : {}),
+          ...(lane.originalProviderUserId
+            ? { originalProviderUserId: lane.originalProviderUserId }
+            : {}),
+          projectEpoch: BigInt(lane.projectEpoch),
+          ...(lane.valueGeneration !== undefined
+            ? { valueGeneration: BigInt(lane.valueGeneration) }
+            : {}),
+          plaintextLength: lane.plaintextLength,
+          ciphertextLength: lane.ciphertextLength,
+          ciphertextHash: lane.ciphertextHash,
+        },
+        protocolObject,
+      };
+    }),
     commitments: input.finalizeRequest.commitments.map((commitment) => ({
       ordinal: commitment.ordinal,
       laneObjectId: commitment.laneObjectId,
@@ -178,4 +211,76 @@ export const buildPublicationInput = (input: {
       entityId: input.environmentId,
     },
   };
+};
+
+const validateRollbackLaneScope = (
+  revision: ReturnType<typeof parseProtocolObject>,
+  input: {
+    readonly finalizeRequest: FinalizePublicationRequest;
+  },
+  build: (objectId: string) => ReturnType<typeof buildProtocolObjectFromStage>,
+): void => {
+  const selected = revision.get(68);
+  if (!Array.isArray(selected) || selected.length === 0)
+    throw new ContractError("invalid_crypto_object");
+  const selectedIds = new Set<string>();
+  for (const value of selected) {
+    if (!(value instanceof Uint8Array) || value.length !== 16)
+      throw new ContractError("invalid_crypto_object");
+    const id = bytesToUuid(value);
+    if (selectedIds.has(id)) throw new ContractError("invalid_crypto_object");
+    selectedIds.add(id);
+  }
+  const laneVariableIds = new Set<string>();
+  for (const lane of input.finalizeRequest.lanes) {
+    const object = parseProtocolObject(
+      build(lane.protocolObjectId).canonicalBytes,
+    );
+    const variableId = object.get(15);
+    const scope = object.get(36);
+    if (!(variableId instanceof Uint8Array) || variableId.length !== 16)
+      throw new ContractError("invalid_crypto_object");
+    if (scope === 1) throw new ContractError("invalid_crypto_object");
+    laneVariableIds.add(bytesToUuid(variableId));
+  }
+  if (
+    laneVariableIds.size !== selectedIds.size ||
+    [...laneVariableIds].some((id) => !selectedIds.has(id))
+  )
+    throw new ContractError("invalid_crypto_object");
+};
+
+const validateLaneOwnership = (
+  lane: FinalizePublicationRequest["lanes"][number],
+  object: ReturnType<typeof parseProtocolObject>,
+  actorUserId: string,
+): void => {
+  if (object.get(1) !== 13) throw new ContractError("invalid_crypto_object");
+  const readOptionalUuid = (field: number): string | undefined => {
+    const value = object.get(field);
+    if (value === undefined) return undefined;
+    if (!(value instanceof Uint8Array) || value.length !== 16)
+      throw new ContractError("invalid_crypto_object");
+    return bytesToUuid(value);
+  };
+  const ownerUserId = readOptionalUuid(26);
+  const originalProviderUserId = readOptionalUuid(27);
+  if (
+    lane.scope === "VARIABLE_DEFINITION" ||
+    lane.scope === "ENVIRONMENT_DEFINITION"
+  ) {
+    if (ownerUserId || originalProviderUserId)
+      throw new ContractError("invalid_crypto_object");
+    return;
+  }
+  if (lane.scope === "USER_DEFINED_VALUE") {
+    if (ownerUserId !== actorUserId || originalProviderUserId !== undefined)
+      throw new ContractError("invalid_crypto_object");
+    return;
+  }
+  if (
+    lane.scope === "SHARED_VALUE" &&
+    (originalProviderUserId !== actorUserId || ownerUserId !== undefined)
+  )
+    throw new ContractError("invalid_crypto_object");
 };

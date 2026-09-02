@@ -19,11 +19,15 @@ export type DevicePrivateBundle = Readonly<{
   readonly userId: Uint8Array;
   readonly deviceId: Uint8Array;
   readonly userIdentityGeneration: number;
+  readonly encryptionPublicKey?: Uint8Array;
+  readonly signingPublicKey?: Uint8Array;
 }>;
 
 export type DeviceKeyMaterial = Readonly<{
   readonly encryptionPrivateKey: CryptoKey;
   readonly signingPrivateKey: CryptoKey;
+  readonly encryptionPublicKey?: CryptoKey;
+  readonly signingPublicKey?: CryptoKey;
 }>;
 
 const requireLength = (
@@ -41,6 +45,9 @@ export const createDevicePrivateBundle = async (
     readonly userId: Uint8Array;
     readonly deviceId: Uint8Array;
     readonly userIdentityGeneration: number;
+    readonly keyMaterial?: DeviceKeyMaterial;
+    readonly encryptionPublicKey?: Uint8Array;
+    readonly signingPublicKey?: Uint8Array;
   }>,
 ): Promise<DevicePrivateBundle> => {
   requireLength(input.userId, 16, "user id");
@@ -50,8 +57,12 @@ export const createDevicePrivateBundle = async (
     input.userIdentityGeneration < 0
   )
     throw new TypeError("user identity generation must be a safe integer");
-  const encryption = await generateEncryptionKeyPair();
-  const signing = await generateSigningKeyPair();
+  const encryption = input.keyMaterial
+    ? { privateKey: input.keyMaterial.encryptionPrivateKey }
+    : await generateEncryptionKeyPair();
+  const signing = input.keyMaterial
+    ? { privateKey: input.keyMaterial.signingPrivateKey }
+    : await generateSigningKeyPair();
   const fields = new Map<number, CborValue>();
   fields.set(8, uuidToBytes(input.pin.serverProfileId));
   fields.set(9, input.userId);
@@ -59,6 +70,8 @@ export const createDevicePrivateBundle = async (
   fields.set(28, input.userIdentityGeneration);
   fields.set(80, await exportEncryptionPrivateKey(encryption.privateKey));
   fields.set(81, await exportSigningPrivateKey(signing.privateKey));
+  if (input.encryptionPublicKey) fields.set(82, input.encryptionPublicKey);
+  if (input.signingPublicKey) fields.set(83, input.signingPublicKey);
   const object = protocolObjectFromFields(18, fields);
   return Object.freeze({
     object,
@@ -66,6 +79,12 @@ export const createDevicePrivateBundle = async (
     userId: input.userId,
     deviceId: input.deviceId,
     userIdentityGeneration: input.userIdentityGeneration,
+    ...(input.encryptionPublicKey
+      ? { encryptionPublicKey: new Uint8Array(input.encryptionPublicKey) }
+      : {}),
+    ...(input.signingPublicKey
+      ? { signingPublicKey: new Uint8Array(input.signingPublicKey) }
+      : {}),
   });
 };
 
@@ -94,12 +113,20 @@ export const parseDevicePrivateBundle = (
     expectedPin.origin.length === 0
   )
     throw new Error("device bundle server profile mismatch");
+  const encryptionPublicKey = object.get(82);
+  const signingPublicKey = object.get(83);
   return Object.freeze({
     object,
     pin: expectedPin,
     userId,
     deviceId,
     userIdentityGeneration,
+    ...(encryptionPublicKey instanceof Uint8Array
+      ? { encryptionPublicKey: new Uint8Array(encryptionPublicKey) }
+      : {}),
+    ...(signingPublicKey instanceof Uint8Array
+      ? { signingPublicKey: new Uint8Array(signingPublicKey) }
+      : {}),
   });
 };
 
@@ -108,11 +135,31 @@ export const loadDeviceKeyMaterial = async (
 ): Promise<DeviceKeyMaterial> => {
   const encryptionBytes = requireField(bundle.object, 80);
   const signingBytes = requireField(bundle.object, 81);
+  const encryptionPublicKey = bundle.encryptionPublicKey
+    ? await importPublicKey(bundle.encryptionPublicKey, "X25519")
+    : undefined;
+  const signingPublicKey = bundle.signingPublicKey
+    ? await importPublicKey(bundle.signingPublicKey, "Ed25519")
+    : undefined;
   return Object.freeze({
     encryptionPrivateKey: await importEncryptionPrivateKey(encryptionBytes),
     signingPrivateKey: await importSigningPrivateKey(signingBytes),
+    ...(encryptionPublicKey ? { encryptionPublicKey } : {}),
+    ...(signingPublicKey ? { signingPublicKey } : {}),
   });
 };
+
+const importPublicKey = async (
+  bytes: Uint8Array,
+  algorithm: "X25519" | "Ed25519",
+): Promise<CryptoKey> =>
+  crypto.subtle.importKey(
+    "spki",
+    new Uint8Array(bytes).buffer,
+    { name: algorithm },
+    true,
+    [],
+  );
 
 const requireField = (
   object: ProtocolObject,

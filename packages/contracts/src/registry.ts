@@ -100,6 +100,12 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     79: field("archival/lifecycle state", "uint"),
     80: field("X25519 PKCS#8 private key", "bytes", { maxLength: 256 }),
     81: field("Ed25519 PKCS#8 private key", "bytes", { maxLength: 256 }),
+    82: field("X25519 public key for local recovery", "bytes", {
+      maxLength: 256,
+    }),
+    83: field("Ed25519 public key for local recovery", "bytes", {
+      maxLength: 256,
+    }),
     84: field("HKDF purpose code", "uint"),
     85: field("HKDF context hash", "bytes", { exactLength: 48 }),
   });
@@ -286,13 +292,13 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
   18: objectDefinition(
     "Device private bundle",
     [0, 1, 2, 8, 9, 10, 28, 80, 81],
-    [0, 1, 2, 8, 9, 10, 28, 80, 81],
+    [0, 1, 2, 8, 9, 10, 28, 80, 81, 82, 83],
     false,
   ),
   19: objectDefinition(
     "User trust private bundle",
     [0, 1, 2, 8, 9, 28, 29, 80, 81],
-    [0, 1, 2, 8, 9, 28, 29, 80, 81],
+    [0, 1, 2, 8, 9, 28, 29, 80, 81, 82, 83],
     false,
   ),
 };

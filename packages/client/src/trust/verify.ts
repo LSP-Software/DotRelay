@@ -1,5 +1,4 @@
 import {
-  importSigningPublicKey,
   type ProtocolObject,
   parseProtocolObject,
   sha384,
@@ -34,7 +33,13 @@ export const verifySignedProtocolObject = async (
 ): Promise<ProtocolObject> => {
   const object = parseProtocolObject(bytes);
   const signature = requireField(object, 4, 64);
-  const publicKey = await importSigningPublicKey(publicKeyBytes);
+  const publicKey = await crypto.subtle.importKey(
+    publicKeyBytes.length === 32 ? "raw" : "spki",
+    new Uint8Array(publicKeyBytes).buffer,
+    { name: "Ed25519" },
+    false,
+    ["verify"],
+  );
   const verified = await verifyProtocolObject(object, signature, publicKey);
   if (!verified)
     throw new ProtocolVerificationError("signature verification failed");

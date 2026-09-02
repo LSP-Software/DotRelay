@@ -131,7 +131,7 @@ test("unsupported cryptography blocks protected content but leaves non-secret fl
   );
 });
 
-test("protected Environment editor keeps Values masked and publishes a local draft", async ({
+test("protected Environment editor keeps Values masked and previews a local draft", async ({
   page,
 }) => {
   await page.goto("/workspace?preview=protected");
@@ -163,7 +163,9 @@ test("protected Environment editor keeps Values masked and publishes a local dra
   await expect(page.getByRole("dialog")).toContainText("0 bytes");
   await expect(page.getByRole("dialog")).toContainText("fresh lane encryption");
   await page.getByRole("button", { name: "Encrypt, stage & publish" }).click();
-  await expect(page.getByText(/Published as rev_0185/)).toBeVisible();
+  await expect(
+    page.getByText(/Local cryptographic preview completed as rev_0185/),
+  ).toBeVisible();
 });
 
 test("protected Environment editor offers local conflict choices and lane rollback", async ({
@@ -176,6 +178,12 @@ test("protected Environment editor offers local conflict choices and lane rollba
   await expect(page.getByText("Stale head: resolve locally")).toBeVisible();
   await page.getByRole("button", { name: "Keep local" }).click();
   await expect(page.getByText("Stale head: resolve locally")).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Retry against verified head" })
+    .click();
+  await expect(
+    page.getByText(/Local preview retry against verified head rev_0185/),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Rollback lanes" }).first().click();
   await expect(page.getByRole("dialog")).toContainText("append-only Revision");
@@ -184,4 +192,42 @@ test("protected Environment editor offers local conflict choices and lane rollba
     .click();
   await expect(page.getByText(/Rollback staged from rev_0183/)).toBeVisible();
   await expect(page.getByText(/current head is never rewound/i)).toBeVisible();
+});
+
+test("Environment drafts enforce unique names and preserve tombstones", async ({
+  page,
+}) => {
+  await page.goto("/workspace?preview=protected");
+
+  await page.getByRole("button", { name: "Add Variable" }).click();
+  await page.getByLabel("Variable name").fill("API_ORIGIN");
+  await page.getByText("Shared Value", { exact: true }).last().click();
+  await page.getByRole("button", { name: "Add Variable" }).last().click();
+  await expect(page.getByRole("alert")).toContainText("already exists");
+
+  await page.getByLabel("Variable name").fill("OPTIONAL_FLAG");
+  await page.getByText("Shared Value", { exact: true }).last().click();
+  await page.getByLabel("This Variable requires a Value").uncheck();
+  await page
+    .getByLabel("Create without a Value (absent, not an empty Value)")
+    .check();
+  await page.getByRole("button", { name: "Add Variable" }).last().click();
+  await expect(page.getByText("OPTIONAL_FLAG", { exact: true })).toBeVisible();
+  const optionalRow = page
+    .locator("div")
+    .filter({ hasText: "OPTIONAL_FLAG" })
+    .last();
+  await expect(optionalRow).toContainText("Absent");
+  await page.getByLabel("OPTIONAL_FLAG Value").fill("enabled");
+  await page.getByRole("button", { name: "Set absent" }).click();
+  await expect(optionalRow).toContainText("Absent");
+
+  await page.getByRole("button", { name: "Delete FEATURE_GATE" }).click();
+  await expect(
+    page.getByText("This Variable is marked for deletion."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Undo delete" }).click();
+  await expect(
+    page.getByRole("button", { name: "Delete FEATURE_GATE" }),
+  ).toBeVisible();
 });

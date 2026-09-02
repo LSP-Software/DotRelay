@@ -4,6 +4,7 @@ import {
   seal,
   sha384,
   sign,
+  validatePublicationVariables,
 } from "@dotrelay/client";
 
 export type VariableOwnership = "SHARED_VALUE" | "USER_DEFINED_VALUE";
@@ -16,6 +17,7 @@ export type EnvironmentVariable = Readonly<{
   readonly value: string | null;
   readonly required: boolean;
   readonly hasDraftChange: boolean;
+  readonly tombstone?: boolean;
 }>;
 
 export type VariableDraft = Readonly<{
@@ -23,6 +25,7 @@ export type VariableDraft = Readonly<{
   readonly description: string;
   readonly ownership: VariableOwnership | "";
   readonly value: string;
+  readonly valuePresent?: boolean;
   readonly required: boolean;
 }>;
 
@@ -39,16 +42,25 @@ export type PublicationPreparation = Readonly<{
   readonly mutationSignature: Uint8Array;
   readonly signatureBytes: number;
   readonly servicePlaintextBytes: 0;
+  readonly tombstoneLaneCount: number;
+  readonly tombstoneVariableIds: readonly string[];
 }>;
 
 const VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const VARIABLE_NAME_MAX_BYTES = 256;
 const DESCRIPTION_MAX_BYTES = 16 * 1024;
+const VALUE_MAX_BYTES = 1024 * 1024;
 
 const utf8ByteLength = (value: string): number =>
   new TextEncoder().encode(value).length;
 
-export const validateVariableDraft = (draft: VariableDraft): string | null => {
+export const validateVariableDraft = (
+  draft: VariableDraft,
+  existingVariables: readonly Pick<
+    EnvironmentVariable,
+    "name" | "tombstone"
+  >[] = [],
+): string | null => {
   if (!draft.name.trim()) return "Variable name is required.";
   if (!VARIABLE_NAME_PATTERN.test(draft.name))
     return "Use letters, numbers, and underscores; the first character must be a letter or underscore.";
@@ -57,6 +69,19 @@ export const validateVariableDraft = (draft: VariableDraft): string | null => {
   if (!draft.ownership) return "Choose Shared Value or User-defined Value.";
   if (utf8ByteLength(draft.description) > DESCRIPTION_MAX_BYTES)
     return "Description exceeds the 16 KiB limit.";
+  if (
+    draft.valuePresent !== false &&
+    utf8ByteLength(draft.value) > VALUE_MAX_BYTES
+  )
+    return "Value exceeds the 1 MiB limit.";
+  if (draft.required && draft.valuePresent === false)
+    return "Required Variables must have a Value.";
+  if (
+    existingVariables.some(
+      (variable) => !variable.tombstone && variable.name === draft.name,
+    )
+  )
+    return `Variable name "${draft.name}" already exists.`;
   return null;
 };
 
@@ -73,22 +98,54 @@ export const createEnvironmentVariable = (
     name: draft.name,
     description: draft.description,
     ownership,
-    value: draft.value === "" && !draft.required ? null : draft.value,
+    value: draft.valuePresent === false ? null : draft.value,
     required: draft.required,
     hasDraftChange: true,
+    tombstone: false,
   });
 };
+
+export const validateEnvironmentVariables = (
+  variables: readonly EnvironmentVariable[],
+): string | null => validatePublicationVariables(variables);
+
+export const deleteEnvironmentVariable = (
+  variable: EnvironmentVariable,
+): EnvironmentVariable =>
+  Object.freeze({
+    ...variable,
+    value: null,
+    hasDraftChange: true,
+    tombstone: true,
+  });
 
 export const prepareEncryptedPublication = async (
   variables: readonly EnvironmentVariable[],
 ): Promise<PublicationPreparation> => {
+  const validationError = validateEnvironmentVariables(variables);
+  if (validationError) throw new Error(validationError);
   const changed = variables.filter((variable) => variable.hasDraftChange);
   if (changed.length === 0) throw new Error("publication has no changed lanes");
   const recipient = await generateEncryptionKeyPair();
   const signing = await generateSigningKeyPair();
+  const changedValues = changed.filter(
+    (variable) => !variable.tombstone && variable.value !== null,
+  );
+  const tombstoneVariableIds = changed
+    .filter((variable) => variable.tombstone)
+    .map((variable) => variable.id);
   const ciphertexts: Uint8Array[] = [];
+  const metadata = new TextEncoder().encode(
+    JSON.stringify(
+      changed.map((variable) => ({
+        id: variable.id,
+        tombstone: variable.tombstone === true,
+        valuePresent: variable.value !== null,
+      })),
+    ),
+  );
   try {
-    for (const variable of changed) {
+    for (const variable of changedValues) {
       const plaintext = new TextEncoder().encode(variable.value ?? "");
       try {
         ciphertexts.push(await seal(plaintext, recipient.publicKey));
@@ -97,21 +154,24 @@ export const prepareEncryptedPublication = async (
       }
     }
     const digestInput = new Uint8Array(
-      ciphertexts.reduce((total, ciphertext) => total + ciphertext.length, 0),
+      ciphertexts.reduce((total, ciphertext) => total + ciphertext.length, 0) +
+        metadata.length,
     );
     let offset = 0;
     for (const ciphertext of ciphertexts) {
       digestInput.set(ciphertext, offset);
       offset += ciphertext.length;
     }
+    digestInput.set(metadata, offset);
     const mutationDigest = await sha384(digestInput);
     const signature = await sign(mutationDigest, signing.privateKey);
     const laneCiphertextHashes = await Promise.all(
       ciphertexts.map((ciphertext) => sha384(ciphertext)),
     );
     digestInput.fill(0);
+    metadata.fill(0);
     return Object.freeze({
-      encryptedLaneCount: changed.length,
+      encryptedLaneCount: changedValues.length,
       encryptedBytes: ciphertexts.reduce(
         (total, ciphertext) => total + ciphertext.length,
         0,
@@ -122,8 +182,11 @@ export const prepareEncryptedPublication = async (
       mutationSignature: new Uint8Array(signature),
       signatureBytes: signature.length,
       servicePlaintextBytes: 0,
+      tombstoneLaneCount: tombstoneVariableIds.length,
+      tombstoneVariableIds: Object.freeze([...tombstoneVariableIds]),
     });
   } finally {
+    metadata.fill(0);
     for (const ciphertext of ciphertexts) ciphertext.fill(0);
   }
 };
@@ -131,8 +194,15 @@ export const prepareEncryptedPublication = async (
 export const updateVariableValue = (
   variable: EnvironmentVariable,
   value: string | null,
-): EnvironmentVariable =>
-  Object.freeze({ ...variable, value, hasDraftChange: true });
+): EnvironmentVariable => {
+  if (variable.tombstone)
+    throw new Error("cannot update the Value of a tombstone");
+  if (variable.required && value === null)
+    throw new Error("required Variable cannot have an absent Value");
+  if (value !== null && utf8ByteLength(value) > VALUE_MAX_BYTES)
+    throw new Error("Value exceeds the 1 MiB limit");
+  return Object.freeze({ ...variable, value, hasDraftChange: true });
+};
 
 export const changedLaneCount = (
   variables: readonly EnvironmentVariable[],
@@ -157,7 +227,20 @@ export const applyRollbackToVariables = (
   historicalValues: ReadonlyMap<string, string | null>,
   selectedVariableIds: readonly string[],
 ): readonly EnvironmentVariable[] => {
+  if (selectedVariableIds.length === 0)
+    throw new Error("select at least one lane to roll back");
   const selected = new Set(selectedVariableIds);
+  if (selected.size !== selectedVariableIds.length)
+    throw new Error("rollback lanes must be unique");
+  for (const variableId of selected) {
+    if (!variables.some((variable) => variable.id === variableId))
+      throw new Error("rollback lane is not part of the Environment");
+    if (!historicalValues.has(variableId))
+      throw new Error("verified historical Value is missing for rollback lane");
+    const variable = variables.find((candidate) => candidate.id === variableId);
+    if (variable?.required && historicalValues.get(variableId) === null)
+      throw new Error("required Variable cannot roll back to an absent Value");
+  }
   return Object.freeze(
     variables.map((variable) =>
       selected.has(variable.id)
@@ -165,6 +248,7 @@ export const applyRollbackToVariables = (
             ...variable,
             value: historicalValues.get(variable.id) ?? null,
             hasDraftChange: true,
+            tombstone: false,
           })
         : variable,
     ),
