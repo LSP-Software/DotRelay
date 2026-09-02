@@ -409,6 +409,13 @@ export const registerDeviceRoutes = (
           context.req.param("enrollmentId"),
           "enrollmentId",
         );
+        const enrollment = await database.deviceEnrollment.findFirst({
+          where: { id: enrollmentId, userId: actor.userId },
+          select: { initiatorDeviceId: true },
+        });
+        if (!enrollment) return problem(context, "resource_not_found");
+        if (enrollment.initiatorDeviceId !== actor.deviceId)
+          return problem(context, "forbidden");
         const enrollmentObject = await parseProtocolPayload(
           body,
           "enrollmentObjectId",
