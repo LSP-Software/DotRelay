@@ -19,7 +19,6 @@ import {
   type DeviceEnrollmentRequest,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
-  exportEncryptionPublicKey,
   exportSigningPublicKey,
   loadDeviceKeyMaterial,
   openRecoveryKit,
@@ -335,9 +334,7 @@ const bootstrapProjectGrant = async (
       {},
       "device_bundle_invalid",
     );
-  const recipientKey = await exportEncryptionPublicKey(
-    keys.encryptionPublicKey,
-  );
+  const recipientKey = await rawPublicKey(keys.encryptionPublicKey);
   const grant = await createProjectEpochGrantBootstrap({
     serverProfileId: options.profile.pin.serverProfileId,
     teamId: boundary.environment.teamId,

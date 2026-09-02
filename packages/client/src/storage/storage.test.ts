@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createDevicePrivateBundle } from "../device/bundle";
 import {
   createBrowserDeviceStorage,
+  createMemoryDeviceRecordStore,
   resetMemoryDeviceRecordStore,
 } from "./browser";
 import {
@@ -9,7 +10,7 @@ import {
   createMemoryCredentialStore,
   resetMemoryCredentialStore,
 } from "./cli";
-import { zeroize } from "./types";
+import { credentialAccount, legacyCredentialAccount, zeroize } from "./types";
 import { unwrapBytes, wrapBytes, wrappingAssociatedData } from "./wrapping";
 
 const pin = Object.freeze({
@@ -104,12 +105,58 @@ describe("cli device storage", () => {
     await storage.save(bundle);
     const secret = await credentialStore.get(
       "dotrelay-device-wrap",
-      `${pin.origin}\0${pin.serverProfileId}\0${[...deviceId].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+      credentialAccount({ pin, deviceId }),
     );
     expect(secret?.length).toBe(32);
+    expect(credentialAccount({ pin, deviceId })).not.toContain("\0");
     const loaded = await storage.load({ pin, deviceId });
     expect(loaded.userIdentityGeneration).toBe(4);
     await storage.remove({ pin, deviceId });
     await expect(storage.load({ pin, deviceId })).rejects.toThrow();
+  });
+
+  test("migrates a legacy wrapping secret before loading a bundle", async () => {
+    resetMemoryDeviceRecordStore();
+    resetMemoryCredentialStore();
+    const credentialStore = createMemoryCredentialStore();
+    const recordStore = createMemoryDeviceRecordStore();
+    const storage = createCliDeviceStorage(pin, credentialStore, {
+      recordStore,
+    });
+    const deviceId = crypto.getRandomValues(new Uint8Array(16));
+    const bundle = await createDevicePrivateBundle({
+      pin,
+      userId: crypto.getRandomValues(new Uint8Array(16)),
+      deviceId,
+      userIdentityGeneration: 1,
+    });
+    await storage.save(bundle);
+    const current = await credentialStore.get(
+      "dotrelay-device-wrap",
+      credentialAccount({ pin, deviceId }),
+    );
+    if (!current) throw new Error("current wrapping secret is missing");
+    await credentialStore.delete(
+      "dotrelay-device-wrap",
+      credentialAccount({ pin, deviceId }),
+    );
+    await credentialStore.set(
+      "dotrelay-device-wrap",
+      legacyCredentialAccount({ pin, deviceId }),
+      current,
+    );
+    await storage.load({ pin, deviceId });
+    expect(
+      await credentialStore.get(
+        "dotrelay-device-wrap",
+        credentialAccount({ pin, deviceId }),
+      ),
+    ).toEqual(current);
+    expect(
+      await credentialStore.get(
+        "dotrelay-device-wrap",
+        legacyCredentialAccount({ pin, deviceId }),
+      ),
+    ).toBeNull();
   });
 });

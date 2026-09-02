@@ -38,7 +38,7 @@ export const reviewPublication = (
     throw new TypeError("revision mutation kind is missing");
   const counts = validateRevisionManifest(revision);
   return Object.freeze({
-    accepted: mutationKind === 1 || mutationKind === 2,
+    accepted: mutationKind === 1 || mutationKind === 2 || mutationKind === 3,
     mutationKind,
     manifestVariables: counts.variables,
     manifestLaneCommitments: counts.laneCommitments,

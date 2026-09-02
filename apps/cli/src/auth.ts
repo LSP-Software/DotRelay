@@ -32,15 +32,42 @@ export type LoginOptions = Readonly<{
 }>;
 
 const sessionAccount = (profile: ServerProfilePin): string =>
+  `v1:${encodeURIComponent(`${profile.origin}\0${profile.serverProfileId}`)}`;
+
+const legacySessionAccount = (profile: ServerProfilePin): string =>
   `${profile.origin}\0${profile.serverProfileId}`;
+
+const readToken = async (
+  credentials: NativeCredentialStore,
+  profile: ServerProfilePin,
+): Promise<Uint8Array | null> => {
+  const current = await credentials.get(
+    SESSION_SERVICE,
+    sessionAccount(profile),
+  );
+  if (current) return current;
+  try {
+    const legacy = await credentials.get(
+      SESSION_SERVICE,
+      legacySessionAccount(profile),
+    );
+    if (legacy) {
+      await credentials.set(SESSION_SERVICE, sessionAccount(profile), legacy);
+      await credentials
+        .delete(SESSION_SERVICE, legacySessionAccount(profile))
+        .catch(() => undefined);
+      return legacy;
+    }
+  } catch {
+    // Legacy POSIX accounts cannot be represented as process arguments.
+  }
+  return null;
+};
 
 export const createSessionStore = (credentials: NativeCredentialStore) =>
   Object.freeze({
     get: async (profile: ServerProfilePin): Promise<string | null> => {
-      const token = await credentials.get(
-        SESSION_SERVICE,
-        sessionAccount(profile),
-      );
+      const token = await readToken(credentials, profile);
       return token ? new TextDecoder().decode(token).trimEnd() : null;
     },
     save: async (profile: ServerProfilePin, token: string): Promise<void> => {
@@ -59,6 +86,15 @@ export const createSessionStore = (credentials: NativeCredentialStore) =>
     },
     remove: async (profile: ServerProfilePin): Promise<void> => {
       await credentials.delete(SESSION_SERVICE, sessionAccount(profile));
+      try {
+        await credentials.delete(
+          SESSION_SERVICE,
+          legacySessionAccount(profile),
+        );
+      } catch {
+        // Legacy accounts can be unaddressable on POSIX stores because their
+        // original format contained a NUL separator.
+      }
     },
   });
 

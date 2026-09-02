@@ -12,6 +12,7 @@ import {
   createPublicationArtifacts,
   openLane,
   type PublicationVariable,
+  reviewPublication,
   verifySyncPage,
 } from "./publication";
 
@@ -96,6 +97,27 @@ describe("publication artifacts", () => {
     expect(artifacts.tombstoneLaneCount).toBe(1);
     expect(artifacts.request.revision.mutation).toBe("MANIFEST_UPDATE");
     validateProtocolObject(parseProtocolObject(artifacts.commandBytes));
+  });
+
+  test("accepts a signed lane-scoped Rollback for publication", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts(
+      [variable({ value: "previous" })],
+      {
+        ...ids,
+        projectEpoch: 1,
+        expectedHeadId: ids.environmentId,
+        expectedHeadHash: new Uint8Array(48),
+        valueRecipientPublicKey: encryption.publicKey,
+        signingPrivateKey: signing.privateKey,
+        mutation: "ROLLBACK",
+        rollbackTargetId: ids.environmentId,
+        rollbackSelectedVariableIds: [variable().id],
+      },
+    );
+    expect(reviewPublication(artifacts.commandBytes).accepted).toBe(true);
+    expect(artifacts.request.revision.mutation).toBe("ROLLBACK");
   });
 
   test("requires a separate recipient key for User-defined Values", async () => {
