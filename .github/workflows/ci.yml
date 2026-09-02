@@ -124,6 +124,7 @@ jobs:
           dbus-run-session -- bash -c 'set -euo pipefail;
           printf "%s\n" dotrelay | gnome-keyring-daemon --login;
           eval "$(gnome-keyring-daemon --start --components=secrets)";
+          printf "%s\n" dotrelay | gnome-keyring-daemon --unlock;
           export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK;
           bun run test:cli:live'
       - if: runner.os == 'macOS'

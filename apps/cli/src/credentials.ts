@@ -43,6 +43,89 @@ const command = async (
   }
 };
 
+const shellQuote = (value: string): string =>
+  `'${value.replaceAll("'", "'\\''")}'`;
+
+const standardBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const macCredentialPrefix = "dotrelay-v1:";
+
+const decodeMacCredential = (value: Uint8Array): Uint8Array => {
+  const text = new TextDecoder().decode(value).trimEnd();
+  if (!text.startsWith(macCredentialPrefix)) return value;
+  try {
+    const binary = atob(text.slice(macCredentialPrefix.length));
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    throw new CliError(
+      "local-io",
+      "the operating-system credential store returned an invalid credential",
+      {},
+      "credential_store_invalid",
+    );
+  }
+};
+
+const interactiveCredentialCommand = async (
+  args: readonly string[],
+  secret: Uint8Array,
+): Promise<number> => {
+  if (process.platform !== "darwin")
+    throw new CliError(
+      "local-io",
+      "interactive credential-store access is unavailable",
+      {},
+      "credential_store_unavailable",
+    );
+  const commandLine = ["security", ...args].map(shellQuote).join(" ");
+  const expectScript = [
+    "set timeout 15",
+    "set secret [string trim [read stdin]]",
+    `spawn sh -c {${commandLine}}`,
+    "expect {",
+    '  *password*new*item:* { send -- "$secret\\r"; exp_continue }',
+    '  *retype*password*new*item:* { send -- "$secret\\r"; exp_continue }',
+    "  eof {}",
+    "  timeout { exit 124 }",
+    "}",
+    "set result [wait]",
+    "exit [lindex $result 3]",
+  ].join("\n");
+  try {
+    const child = Bun.spawn(["expect", "-c", expectScript], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (!child.stdin)
+      throw new CliError(
+        "local-io",
+        "the operating-system credential store is unavailable",
+        {},
+        "credential_store_unavailable",
+      );
+    child.stdin.write(secret);
+    child.stdin.end();
+    await Promise.all([
+      new Response(child.stdout).bytes(),
+      new Response(child.stderr).bytes(),
+    ]);
+    return await child.exited;
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "local-io",
+      "the operating-system credential store is unavailable",
+      {},
+      "credential_store_unavailable",
+    );
+  }
+};
+
 const requireSupportedPlatform = (): "security" | "secret-tool" => {
   if (process.platform === "darwin") return "security";
   if (process.platform === "linux") return "secret-tool";
@@ -164,16 +247,30 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
           account,
           "-w",
         ]);
-        return result.status === 0 ? result.stdout : null;
+        return result.status === 0 ? decodeMacCredential(result.stdout) : null;
       },
       set: async (service, account, secret) => {
-        // A final -w makes security read the password from stdin, not argv.
-        const result = await command(
-          executable,
-          ["add-generic-password", "-U", "-s", service, "-a", account, "-w"],
-          secret,
+        // macOS security has no password-stdin mode. Its final -w prompts on
+        // a controlling TTY, so answer that prompt without putting the secret
+        // in process arguments or shell history. Encode the bytes first so
+        // the line-oriented prompt cannot truncate binary credentials.
+        const result = await interactiveCredentialCommand(
+          [
+            "add-generic-password",
+            "-U",
+            "-s",
+            service,
+            "-a",
+            account,
+            "-T",
+            "/usr/bin/security",
+            "-w",
+          ],
+          new TextEncoder().encode(
+            `${macCredentialPrefix}${standardBase64(secret)}`,
+          ),
         );
-        if (result.status !== 0)
+        if (result !== 0)
           throw new CliError(
             "local-io",
             "could not save a credential in the operating-system store",
