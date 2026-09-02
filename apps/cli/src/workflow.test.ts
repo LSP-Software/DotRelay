@@ -1,0 +1,166 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  createCliDeviceStorage,
+  createDeviceBootstrap,
+  createMemoryCredentialStore,
+  createMemoryDeviceRecordStore,
+} from "@dotrelay/client";
+import { encodeSyncPage } from "@dotrelay/contracts";
+import type { StrictJsonClient } from "./admin";
+import { createSessionStore } from "./auth";
+import type { NativeCredentialStore } from "./credentials";
+import { run } from "./index";
+import type { FetchFunction } from "./profile";
+
+const profile = {
+  name: "relay",
+  origin: "https://relay.example",
+  pin: {
+    origin: "https://relay.example",
+    serverProfileId: "11111111-1111-4111-8111-111111111111",
+  },
+} as const;
+const ids = {
+  user: "22222222-2222-4222-8222-222222222222",
+  device: "33333333-3333-4333-8333-333333333333",
+  team: "44444444-4444-4444-8444-444444444444",
+  project: "55555555-5555-4555-8555-555555555555",
+  environment: "66666666-6666-4666-8666-666666666666",
+} as const;
+
+const boundary = {
+  session: { active: true, userId: ids.user },
+  environment: {
+    headRevision: "empty-environment",
+    id: ids.environment,
+    projectId: ids.project,
+    teamId: ids.team,
+    headHash: null,
+    projectEpoch: "1",
+  },
+  device: { active: true, id: ids.device },
+  grantsReady: true,
+  epochCurrent: true,
+  rotationRequired: false,
+  profile: { name: "relay", origin: profile.origin, pinned: true },
+  crypto: { available: true },
+} as const;
+
+const setup = async (): Promise<{
+  credentials: NativeCredentialStore;
+  deviceStorage: ReturnType<typeof createCliDeviceStorage>;
+  admin: StrictJsonClient;
+  fetch: FetchFunction;
+  profilePath: string;
+}> => {
+  const profilePath = `${import.meta.dir}/.tmp-workflow-profile-${crypto.randomUUID()}`;
+  await Bun.write(
+    profilePath,
+    JSON.stringify({ version: 1, profiles: [profile] }),
+  );
+  const credentials = createMemoryCredentialStore();
+  await createSessionStore(credentials).save(profile.pin, "session-token");
+  const deviceStorage = createCliDeviceStorage(profile.pin, credentials, {
+    recordStore: createMemoryDeviceRecordStore(),
+  });
+  const bootstrap = await createDeviceBootstrap({
+    pin: profile.pin,
+    userId: ids.user,
+    deviceId: ids.device,
+  });
+  await deviceStorage.save(bootstrap.bundle);
+  const admin: StrictJsonClient = {
+    get: async (path) => {
+      if (path === "/api/v1/session")
+        return { authenticated: true, user: { id: ids.user } };
+      return boundary;
+    },
+    post: async () => ({}),
+  };
+  const emptyPage = encodeSyncPage({
+    environmentId: ids.environment,
+    trustedRevisionId: ids.environment,
+    trustedRevisionHash: new Uint8Array(48),
+    currentHeadId: null,
+    currentHeadHash: null,
+    projectEpoch: 1n,
+    revisions: [],
+    nextCursor: null,
+  });
+  const fetcher: FetchFunction = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const request = new Request(input as never, init);
+    if (request.url.endsWith("/sync")) return new Response(emptyPage);
+    if (request.url.endsWith("/begin"))
+      return Response.json({
+        operationId: crypto.randomUUID(),
+        status: "STAGED",
+        idempotent: false,
+        expiresAt: "2026-09-02T00:00:00Z",
+      });
+    return Response.json({});
+  };
+  return { credentials, deviceStorage, admin, fetch: fetcher, profilePath };
+};
+
+afterEach(async () => {
+  for (const file of [".tmp-workflow-input", ".tmp-workflow-output"])
+    await (await import("node:fs/promises"))
+      .unlink(`${import.meta.dir}/${file}`)
+      .catch(() => undefined);
+  for (const file of await (await import("node:fs/promises")).readdir(
+    import.meta.dir,
+  ))
+    if (file.startsWith(".tmp-workflow-profile-"))
+      await (await import("node:fs/promises"))
+        .unlink(`${import.meta.dir}/${file}`)
+        .catch(() => undefined);
+});
+
+describe("protected CLI workflows", () => {
+  test("pulls an empty Environment to stdout without requiring reveal", async () => {
+    const runtime = await setup();
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("\n");
+    expect(result.stderr).toBe("");
+  });
+
+  test("stages and finalizes an encrypted genesis publication", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const result = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"ok":true');
+    expect(result.stdout).not.toContain("postgres://secret");
+  });
+});

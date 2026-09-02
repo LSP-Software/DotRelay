@@ -32,6 +32,8 @@ export type ParsedArguments = Readonly<{
   readonly team?: string;
   readonly name?: string;
   readonly limit?: number;
+  readonly classifications: Readonly<Record<string, "shared" | "user-defined">>;
+  readonly variableIds: readonly string[];
   readonly noOpen: boolean;
   readonly noInput: boolean;
   readonly json: boolean;
@@ -51,6 +53,8 @@ type MutableArguments = {
   team?: string;
   name?: string;
   limit?: number;
+  classifications: Record<string, "shared" | "user-defined">;
+  variableIds: string[];
   noOpen: boolean;
   noInput: boolean;
   json: boolean;
@@ -67,6 +71,8 @@ const valueFlags = new Set([
   "--team",
   "--name",
   "--limit",
+  "--classify",
+  "--variable",
 ]);
 
 const forbiddenFlags = new Set([
@@ -101,6 +107,29 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)
       throw new CliInvocationError("--limit must be an integer from 1 to 256");
     parsed.limit = limit;
+  } else if (flag === "--classify") {
+    const separator = value.indexOf("=");
+    const name = separator < 1 ? "" : value.slice(0, separator);
+    const classification = separator < 1 ? "" : value.slice(separator + 1);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      throw new CliInvocationError(
+        "--classify requires NAME=shared or NAME=user-defined",
+      );
+    if (classification !== "shared" && classification !== "user-defined")
+      throw new CliInvocationError(
+        "--classify requires NAME=shared or NAME=user-defined",
+      );
+    parsed.classifications[name] = classification;
+  } else if (flag === "--variable") {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value,
+      )
+    )
+      throw new CliInvocationError(
+        "--variable requires a Revision Variable id",
+      );
+    parsed.variableIds.push(value.toLowerCase());
   }
 };
 
@@ -167,6 +196,16 @@ const validateCommand = (parsed: MutableArguments) => {
     throw new CliInvocationError(
       "--accept-profile is only valid with profile add",
     );
+  if (
+    Object.keys(parsed.classifications).length > 0 &&
+    command !== "init" &&
+    command !== "push"
+  )
+    throw new CliInvocationError("--classify is only valid with init or push");
+  if (parsed.variableIds.length > 0 && command !== "rollback")
+    throw new CliInvocationError("--variable is only valid with rollback");
+  if (command === "rollback" && parsed.variableIds.length === 0)
+    throw new CliInvocationError("rollback requires at least one --variable");
 };
 
 export const parseArguments = (
@@ -180,6 +219,8 @@ export const parseArguments = (
     json: false,
     stdout: false,
     reveal: false,
+    classifications: {},
+    variableIds: [],
   };
   let index = 0;
   while (index < args.length) {
@@ -233,5 +274,7 @@ export const parseArguments = (
     ...parsed,
     command: parsed.command,
     positionals: Object.freeze(parsed.positionals),
+    classifications: Object.freeze({ ...parsed.classifications }),
+    variableIds: Object.freeze([...parsed.variableIds]),
   }) as ParsedArguments;
 };

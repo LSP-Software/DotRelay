@@ -55,4 +55,22 @@ describe("CLI argument contract", () => {
       }).reveal,
     ).toBe(true);
   });
+
+  test("requires explicit lane ownership and supports lane-scoped Rollback", () => {
+    expect(
+      parseArguments(["push", "--from", ".env", "--classify", "API_URL=shared"])
+        .classifications,
+    ).toEqual({ API_URL: "shared" });
+    expect(
+      parseArguments([
+        "rollback",
+        "11111111-1111-4111-8111-111111111111",
+        "--variable",
+        "22222222-2222-4222-8222-222222222222",
+      ]).variableIds,
+    ).toEqual(["22222222-2222-4222-8222-222222222222"]);
+    expect(() =>
+      parseArguments(["rollback", "11111111-1111-4111-8111-111111111111"]),
+    ).toThrow("--variable");
+  });
 });

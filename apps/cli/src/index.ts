@@ -1,4 +1,5 @@
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
+import type { CliDeviceStorage } from "@dotrelay/client";
 import {
   createStrictJsonClient,
   linkProject,
@@ -43,6 +44,7 @@ import {
   resolveServerProfile,
   useServerProfile,
 } from "./profile";
+import { enrollDevice, runProtectedWorkflow } from "./workflow";
 
 export const version = "0.0.0-foundation";
 
@@ -71,6 +73,8 @@ export const renderHelp = (): string => {
     "  status                              Show non-secret local state",
     "",
     "Global options: --profile, --environment, --json, --no-input",
+    "Publication options: --classify NAME=shared|user-defined",
+    "Rollback options: --variable <id> (repeat for lane-scoped Rollback)",
     "Profile trust: profile add requires --accept-profile <server-profile-id>",
     "Output: --stdout requires --reveal when stdout is a terminal; Values are never diagnostic data.",
     "Security: --insecure and credential-bearing flags are not supported.",
@@ -94,6 +98,10 @@ export type CliRuntime = Readonly<{
   readonly worktreeConfig?: string;
   readonly admin?: StrictJsonClient;
   readonly stdoutIsTerminal?: boolean;
+  readonly prompt?: (question: string) => Promise<string>;
+  readonly confirm?: (question: string) => Promise<boolean>;
+  readonly deviceStorage?: CliDeviceStorage;
+  readonly stateDirectory?: string;
 }>;
 
 export type CliRunResult = Readonly<{
@@ -180,7 +188,9 @@ const renderSuccess = (
 const execute = async (
   args: readonly string[],
   runtime: CliRuntime,
-): Promise<Readonly<{ value: Record<string, unknown> }>> => {
+): Promise<
+  Readonly<{ value: Record<string, unknown> | { stdout: string } }>
+> => {
   const parsed = parseArguments(
     args,
     runtime.stdoutIsTerminal === undefined
@@ -403,6 +413,77 @@ const execute = async (
       },
     };
   }
+  const protectedCommands = new Set([
+    "init",
+    "push",
+    "pull",
+    "history",
+    "rollback",
+  ]);
+  if (protectedCommands.has(parsed.command)) {
+    const hasExplicitEnvironment =
+      parsed.environment !== undefined ||
+      (parsed.command === "init" && parsed.positionals.length === 1);
+    if (parsed.noInput && (!parsed.profile || !hasExplicitEnvironment))
+      throw new CliInvocationError(
+        "--no-input requires explicit --profile and --environment context",
+      );
+    const profile = await resolveServerProfile(store, parsed.profile);
+    const contextPath =
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+    const workflowResult = await runProtectedWorkflow(
+      {
+        profile,
+        credentials: runtime.credentials ?? createNativeCredentialStore(),
+        ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+        ...(runtime.deviceStorage
+          ? { deviceStorage: runtime.deviceStorage }
+          : {}),
+        ...(runtime.admin ? { admin: runtime.admin } : {}),
+        ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
+        stateDirectory:
+          runtime.stateDirectory ??
+          dirname(runtime.profilePath ?? profileCatalogPath()),
+        contextPath,
+        ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+        ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+        noInput: parsed.noInput,
+        stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
+      },
+      parsed,
+    );
+    return { value: workflowResult };
+  }
+  if (parsed.command === "device" && parsed.subcommand === "enroll") {
+    const profile = await resolveServerProfile(store, parsed.profile);
+    const enrolled = await enrollDevice({
+      profile,
+      credentials: runtime.credentials ?? createNativeCredentialStore(),
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.deviceStorage
+        ? { deviceStorage: runtime.deviceStorage }
+        : {}),
+      ...(runtime.admin ? { admin: runtime.admin } : {}),
+      stateDirectory:
+        runtime.stateDirectory ??
+        dirname(runtime.profilePath ?? profileCatalogPath()),
+      contextPath:
+        runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
+      ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+      ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+      noInput: parsed.noInput,
+      stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
+    });
+    return { value: enrolled };
+  }
+  if (parsed.command === "device" && parsed.subcommand === "recover") {
+    throw new CliError(
+      "authentication",
+      "Recovery Kit recovery requires a Recovery endpoint on the Server Profile",
+      {},
+      "recovery_unavailable",
+    );
+  }
   throw new CliError(
     "invocation",
     `command ${parsed.command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""} is not available in this foundation build`,
@@ -438,7 +519,10 @@ export const run = async (
     );
     return {
       exitCode: EXIT_CODES.success,
-      stdout: renderSuccess(parsed, result.value),
+      stdout:
+        "stdout" in result.value
+          ? String(result.value.stdout)
+          : renderSuccess(parsed, result.value),
       stderr: "",
     };
   } catch (error) {

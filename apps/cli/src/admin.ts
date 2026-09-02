@@ -309,6 +309,7 @@ export const createStrictJsonClient = (
   options: Readonly<{
     readonly fetch?: FetchFunction;
     readonly deviceId?: string;
+    readonly authorization?: string;
   }> = {},
 ): StrictJsonClient => {
   const fetcher = options.fetch ?? fetch;
@@ -334,7 +335,7 @@ export const createStrictJsonClient = (
         redirect: "error",
         headers: {
           Accept: "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: options.authorization ?? `Bearer ${token}`,
           ...(options.deviceId
             ? { "X-DotRelay-Device-Id": options.deviceId }
             : {}),

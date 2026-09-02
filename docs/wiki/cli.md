@@ -35,6 +35,24 @@ Server Profile. It requires an authenticated session and an active enrolled Devi
 Environment metadata and never exposes a server-side Environment name, because the server does not
 store readable names.
 
+## Encrypted workflows
+
+`init <environment> --from <dotenv>` creates the signed genesis Revision. `push --from <dotenv>`
+appends a signed Manifest Revision. Every input Variable must be explicitly classified with
+`--classify NAME=shared` or `--classify NAME=user-defined`; interactive classification is available
+when those flags are omitted. Existing Variable ids are retained, omitted Variables become signed
+tombstones, and empty Values remain Values rather than being dropped.
+
+The CLI reviews the publication summary before beginning staging. It then uploads the signed
+command and encrypted protocol objects, finalizes the operation with the expected head and epoch,
+and cancels a failed operation when the Server Profile permits cancellation.
+
+`pull --output <path>` and `pull --stdout` first verify the complete v3 history from genesis. A
+missing Value fails the export before any output is written. Terminal stdout requires explicit
+`--reveal` and confirmation; ordinary diagnostics never contain Values. `history` reports only
+revision metadata. `rollback <revision> --variable <id>` creates a new signed Rollback Revision
+for the selected lanes, preserving all other current Values.
+
 ## Output and automation
 
 Protected Values are never included in status, ordinary progress, JSON responses, or diagnostics.
@@ -44,6 +62,13 @@ unless `--reveal` is also supplied. `--no-input` never prompts or guesses; missi
 conflicts fail without writing an output file. Automation is limited to a previously authenticated,
 enrolled persistent Device with explicit profile and environment context. Portable plaintext or
 environment-variable credential bundles and auto-approved ephemeral Devices are not supported.
+
+The first `device enroll` uses the server's initial trust bootstrap and stores the encrypted Device
+bundle in the native credential store, with a protected local record for its profile and Device id.
+When an active Device already exists, enrollment is refused until the Server Profile exposes the
+three-step dual-control enrollment flow. `device recover` likewise refuses to process Recovery Kit
+material unless the Server Profile exposes its Recovery endpoint; it never accepts Recovery Kit
+bytes through an ad hoc or insecure local path.
 
 The stable exit categories are invocation/configuration (2), incomplete export (3), unresolved
 conflict (4), cryptographic/integrity/compatibility (5), authentication/device/authorization (6),
