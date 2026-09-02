@@ -70,6 +70,20 @@ const decodeTextCredential = (value: Uint8Array): Uint8Array => {
   }
 };
 
+const decodeStandardBase64 = (value: Uint8Array): Uint8Array => {
+  try {
+    const binary = atob(new TextDecoder().decode(value).trim());
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    throw new CliError(
+      "local-io",
+      "the operating-system credential store returned an invalid credential",
+      {},
+      "credential_store_invalid",
+    );
+  }
+};
+
 const interactiveCredentialCommand = async (
   args: readonly string[],
   secret: Uint8Array,
@@ -175,7 +189,7 @@ const windowsScript = (
     `$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${btoa(target)}'))`,
     `$operation = '${operation}'`,
     "$inputText = [Console]::In.ReadToEnd()",
-    "if ($operation -eq 'read') { $secret = [DotRelayCredential]::Read($target); if ($null -eq $secret) { exit 1 }; [Console]::OpenStandardOutput().Write($secret, 0, $secret.Length); exit 0 }",
+    "if ($operation -eq 'read') { $secret = [DotRelayCredential]::Read($target); if ($null -eq $secret) { exit 1 }; $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
     "if ($operation -eq 'write') { $secret = [Convert]::FromBase64String($inputText); if (![DotRelayCredential]::Write($target, $secret)) { exit 1 }; exit 0 }",
     "if (![DotRelayCredential]::CredDelete($target, 1, 0)) { exit 1 }; exit 0",
   ].join("\n");
@@ -191,7 +205,7 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
         "-Command",
         windowsScript("read", target),
       ]);
-      return result.status === 0 ? result.stdout : null;
+      return result.status === 0 ? decodeStandardBase64(result.stdout) : null;
     },
     set: async (service, account, secret) => {
       const target = windowsTarget(service, account);
