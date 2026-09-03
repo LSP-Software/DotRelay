@@ -227,8 +227,8 @@ const windowsDpapiScript = (
     "$path = Join-Path $root ($key + '.bin')",
     `$operation = '${operation}'`,
     "$inputText = [Console]::In.ReadToEnd()",
-    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $secure = ConvertTo-SecureString ([IO.File]::ReadAllText($path)); $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure); try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer); $encoded = [Text.Encoding]::ASCII.GetBytes($plain); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) } }",
-    "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secure = ConvertTo-SecureString $inputText -AsPlainText -Force; $protected = ConvertFrom-SecureString $secure; [IO.File]::WriteAllText($path, $protected, [Text.Encoding]::UTF8); exit 0 }",
+    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $secure = ConvertTo-SecureString -String ([IO.File]::ReadAllText($path)); $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure); try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer); $encoded = [Text.Encoding]::ASCII.GetBytes($plain); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) } }",
+    "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secure = ConvertTo-SecureString -String $inputText -AsPlainText -Force; $protected = ConvertFrom-SecureString -SecureString $secure; [IO.File]::WriteAllText($path, $protected, [Text.Encoding]::UTF8); exit 0 }",
     "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
   ].join("\n");
 
@@ -274,20 +274,23 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
         windowsDpapiScript("write", target),
         input,
       );
+      let dpapiVerificationDetail = "read failed";
       if (dpapiResult.status === 0) {
         const verification = await runWindowsCommand(
           windowsDpapiScript("read", target),
         );
-        if (
-          verification.status === 0 &&
-          sameBytes(decodeStandardBase64(verification.stdout), secret)
-        )
-          return;
+        if (verification.status === 0) {
+          const stored = decodeStandardBase64(verification.stdout);
+          if (sameBytes(stored, secret)) return;
+          dpapiVerificationDetail = `returned ${stored.length} bytes for ${secret.length}-byte secret`;
+        }
+      } else if (commandStderr(dpapiResult.stderr)) {
+        dpapiVerificationDetail = commandStderr(dpapiResult.stderr);
       }
       if (nativeVerified) return;
       throw new CliError(
         "local-io",
-        `could not save a credential in the operating-system store${dpapiResult.status === 0 ? ": DPAPI read-back verification failed" : commandStderr(dpapiResult.stderr) ? `: ${commandStderr(dpapiResult.stderr)}` : ""}`,
+        `could not save a credential in the operating-system store: DPAPI ${dpapiVerificationDetail}`,
         {},
         "credential_store_write_failed",
       );
