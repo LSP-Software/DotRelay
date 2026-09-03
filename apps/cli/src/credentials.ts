@@ -27,7 +27,7 @@ const command = async (
       stderr: "pipe",
     });
     if (input && child.stdin) {
-      child.stdin.write(input);
+      await child.stdin.write(input);
       child.stdin.end();
     }
     const [stdout, stderr, status] = await Promise.all([
@@ -132,7 +132,7 @@ const interactiveCredentialCommand = async (
         {},
         "credential_store_unavailable",
       );
-    child.stdin.write(secret);
+    await child.stdin.write(secret);
     child.stdin.end();
     await Promise.all([
       new Response(child.stdout).bytes(),
