@@ -308,7 +308,7 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
     },
     set: async (service, account, secret) => {
       const target = await windowsTarget(service, account);
-      const input = new TextEncoder().encode(base64(secret));
+      const input = new TextEncoder().encode(standardBase64(secret));
       const nativeResult = await runWindowsCommand(
         windowsScript("write", target),
         input,
