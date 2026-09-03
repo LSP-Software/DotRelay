@@ -1,4 +1,4 @@
-import { PROBLEM_STATUS } from "@dotrelay/contracts";
+import { PROBLEM_STATUS, type ProblemCode } from "@dotrelay/contracts";
 
 export const DIAGNOSTIC_FIELD_ALLOWLIST = Object.freeze([
   "eventName",
@@ -26,6 +26,7 @@ export const DIAGNOSTIC_EVENT_NAMES = Object.freeze([
   "client.sync.failed",
   "client.crash.reported",
 ] as const);
+export type DiagnosticEventName = (typeof DIAGNOSTIC_EVENT_NAMES)[number];
 const DIAGNOSTIC_OUTCOMES = new Set([
   "success",
   "failure",
@@ -33,13 +34,26 @@ const DIAGNOSTIC_OUTCOMES = new Set([
   "denied",
   "cancelled",
 ]);
+export type DiagnosticOutcome =
+  | "success"
+  | "failure"
+  | "rejected"
+  | "denied"
+  | "cancelled";
+export type DiagnosticProblemCode = Exclude<
+  ProblemCode,
+  | "invalid_crypto_object"
+  | "unsupported_crypto_suite"
+  | "unsupported_crypto_runtime"
+  | "crypto_provider_unavailable"
+>;
 
 export type DiagnosticEvent = Readonly<{
-  readonly eventName: string;
+  readonly eventName: DiagnosticEventName;
   readonly correlationId?: CorrelationId;
   readonly durationMs?: number;
-  readonly outcome?: string;
-  readonly problemCode?: string;
+  readonly outcome?: DiagnosticOutcome;
+  readonly problemCode?: DiagnosticProblemCode;
   readonly retryAfterSeconds?: number;
 }>;
 
@@ -123,7 +137,7 @@ export const createDiagnosticEvent = (
     if (typeof value === "string") {
       if (field === "eventName") {
         validateStringField(field, value, MAX_EVENT_NAME_LENGTH);
-        if (!DIAGNOSTIC_EVENT_NAMES.includes(value as never))
+        if (!DIAGNOSTIC_EVENT_NAMES.includes(value as DiagnosticEventName))
           throw new DiagnosticBoundaryError(
             "diagnostic event name is not recognized",
           );
@@ -208,16 +222,31 @@ export type DiagnosticSink = Readonly<{
   readonly purge: (now?: number) => number;
 }>;
 
+type DiagnosticTimer = Readonly<{
+  readonly set: (
+    callback: () => void,
+    delayMs: number,
+  ) => ReturnType<typeof setTimeout>;
+  readonly clear: (timer: ReturnType<typeof setTimeout>) => void;
+}>;
+
+const runtimeDiagnosticTimer: DiagnosticTimer = {
+  set: (callback, delayMs) => setTimeout(callback, delayMs),
+  clear: (timer) => clearTimeout(timer),
+};
+
 export const createInMemoryDiagnosticSink = (options?: {
   readonly sampleRate?: number;
   readonly now?: () => number;
   readonly random?: () => number;
+  readonly timer?: DiagnosticTimer;
 }): DiagnosticSink => {
   const sampleRate = options?.sampleRate ?? 1;
   if (!Number.isFinite(sampleRate) || sampleRate < 0 || sampleRate > 1)
     throw new DiagnosticBoundaryError("diagnostic sample rate is invalid");
   const now = options?.now ?? Date.now;
   const random = options?.random ?? Math.random;
+  const timer = options?.timer ?? runtimeDiagnosticTimer;
   type DiagnosticEntry = {
     readonly expiresAt: number;
     readonly value: string;
@@ -227,7 +256,8 @@ export const createInMemoryDiagnosticSink = (options?: {
   const purge = (at = now()) => {
     const retained = entries.filter((entry) => entry.expiresAt > at);
     for (const entry of entries) {
-      if (entry.expiresAt <= at && entry.timer) clearTimeout(entry.timer);
+      if (entry.expiresAt <= at && entry.timer !== undefined)
+        timer.clear(entry.timer);
     }
     const removed = entries.length - retained.length;
     entries.splice(0, entries.length, ...retained);
@@ -239,12 +269,15 @@ export const createInMemoryDiagnosticSink = (options?: {
       if (random() >= sampleRate) return;
       try {
         const value = serializeDiagnosticEvent(event);
-        if (entries.length >= MAX_DIAGNOSTIC_ENTRIES) entries.shift();
+        if (entries.length >= MAX_DIAGNOSTIC_ENTRIES) {
+          const evicted = entries.shift();
+          if (evicted?.timer !== undefined) timer.clear(evicted.timer);
+        }
         const entry: DiagnosticEntry = {
           expiresAt: now() + DIAGNOSTIC_RETENTION_MS,
           value,
         };
-        entry.timer = setTimeout(() => purge(), DIAGNOSTIC_RETENTION_MS);
+        entry.timer = timer.set(() => purge(), DIAGNOSTIC_RETENTION_MS);
         (entry.timer as unknown as { readonly unref?: () => void }).unref?.();
         entries.push(entry);
       } catch {
@@ -266,9 +299,9 @@ export const SAFE_METRIC_DIMENSIONS = Object.freeze([
 ] as const);
 
 export type SafeMetricDimensions = Readonly<{
-  readonly eventName: string;
-  readonly outcome?: string;
-  readonly problemCode?: string;
+  readonly eventName: DiagnosticEventName;
+  readonly outcome?: DiagnosticOutcome;
+  readonly problemCode?: DiagnosticProblemCode;
 }>;
 
 export const metricDimensionsFromEvent = (
@@ -286,20 +319,20 @@ export const metricDimensionsFromEvent = (
 
 export type PrivateDiagnosticTrace = Readonly<{
   readonly schemaVersion: 1;
-  readonly traceName: string;
+  readonly traceName: DiagnosticEventName;
   readonly correlationId: CorrelationId;
   readonly durationMs: number;
-  readonly outcome?: string;
+  readonly outcome?: DiagnosticOutcome;
   readonly expiresAt: number;
 }>;
 
 export const createPrivateTrace = (
   input: {
     readonly enabled: boolean;
-    readonly traceName: string;
+    readonly traceName: DiagnosticEventName;
     readonly correlationId: CorrelationId;
     readonly durationMs: number;
-    readonly outcome?: string;
+    readonly outcome?: DiagnosticOutcome;
   },
   now = Date.now(),
 ): PrivateDiagnosticTrace | null => {
@@ -328,14 +361,14 @@ export type ExplicitCrashReport = Readonly<{
   readonly schemaVersion: 1;
   readonly eventName: "client.crash.reported";
   readonly correlationId: CorrelationId;
-  readonly problemCode: string;
+  readonly problemCode: DiagnosticProblemCode;
   readonly expiresAt: number;
 }>;
 
 export const createExplicitCrashReport = (
   input: {
     readonly correlationId: CorrelationId;
-    readonly problemCode: string;
+    readonly problemCode: DiagnosticProblemCode;
   },
   now = Date.now(),
 ): ExplicitCrashReport => {
@@ -350,7 +383,7 @@ export const createExplicitCrashReport = (
     schemaVersion: DIAGNOSTIC_SCHEMA_VERSION,
     eventName: "client.crash.reported",
     correlationId: event.correlationId as CorrelationId,
-    problemCode: event.problemCode as string,
+    problemCode: event.problemCode as DiagnosticProblemCode,
     expiresAt: now + OPTIONAL_TRACE_RETENTION_MS,
   });
 };
@@ -365,6 +398,7 @@ export type LocalDiagnosticStore = Readonly<{
 
 export const createLocalDiagnosticStore = (
   now: () => number = Date.now,
+  timer: DiagnosticTimer = runtimeDiagnosticTimer,
 ): LocalDiagnosticStore => {
   const traces: PrivateDiagnosticTrace[] = [];
   const crashReports: ExplicitCrashReport[] = [];
@@ -372,14 +406,29 @@ export const createLocalDiagnosticStore = (
     PrivateDiagnosticTrace | ExplicitCrashReport,
     ReturnType<typeof setTimeout>
   >();
+  let nextExpirationAt = Number.POSITIVE_INFINITY;
   const scheduleExpiration = (
     value: PrivateDiagnosticTrace | ExplicitCrashReport,
+    at: number,
   ) => {
-    const timer = setTimeout(() => purge(), OPTIONAL_TRACE_RETENTION_MS);
-    (timer as unknown as { readonly unref?: () => void }).unref?.();
-    expirationTimers.set(value, timer);
+    const expirationTimer = timer.set(
+      () => purge(),
+      Math.max(0, value.expiresAt - at),
+    );
+    (expirationTimer as unknown as { readonly unref?: () => void }).unref?.();
+    expirationTimers.set(value, expirationTimer);
+    nextExpirationAt = Math.min(nextExpirationAt, value.expiresAt);
+  };
+  const clearExpirationTimer = (
+    value: PrivateDiagnosticTrace | ExplicitCrashReport,
+  ) => {
+    const expirationTimer = expirationTimers.get(value);
+    if (expirationTimer === undefined) return;
+    timer.clear(expirationTimer);
+    expirationTimers.delete(value);
   };
   const purge = (at = now()) => {
+    if (at < nextExpirationAt) return 0;
     const traceCount = traces.length;
     const crashCount = crashReports.length;
     traces.splice(
@@ -392,15 +441,19 @@ export const createLocalDiagnosticStore = (
       crashReports.length,
       ...crashReports.filter((report) => report.expiresAt > at),
     );
-    for (const [value, timer] of expirationTimers) {
+    for (const value of expirationTimers.keys()) {
       if (
         !traces.includes(value as PrivateDiagnosticTrace) &&
         !crashReports.includes(value as ExplicitCrashReport)
       ) {
-        clearTimeout(timer);
-        expirationTimers.delete(value);
+        clearExpirationTimer(value);
       }
     }
+    nextExpirationAt = Number.POSITIVE_INFINITY;
+    for (const trace of traces)
+      nextExpirationAt = Math.min(nextExpirationAt, trace.expiresAt);
+    for (const report of crashReports)
+      nextExpirationAt = Math.min(nextExpirationAt, report.expiresAt);
     return traceCount - traces.length + crashCount - crashReports.length;
   };
   const sanitizeTrace = (value: unknown, at: number) => {
@@ -427,10 +480,12 @@ export const createLocalDiagnosticStore = (
       return null;
     try {
       const event = createDiagnosticEvent({
-        eventName: value.traceName,
+        eventName: value.traceName as DiagnosticEventName,
         correlationId: value.correlationId as CorrelationId,
         durationMs: value.durationMs,
-        ...(value.outcome === undefined ? {} : { outcome: value.outcome }),
+        ...(value.outcome === undefined
+          ? {}
+          : { outcome: value.outcome as DiagnosticOutcome }),
       });
       return Object.freeze({
         schemaVersion: 1,
@@ -467,7 +522,7 @@ export const createLocalDiagnosticStore = (
     try {
       const report = createExplicitCrashReport({
         correlationId: value.correlationId as CorrelationId,
-        problemCode: value.problemCode,
+        problemCode: value.problemCode as DiagnosticProblemCode,
       });
       return Object.freeze({ ...report, expiresAt: value.expiresAt });
     } catch {
@@ -480,18 +535,24 @@ export const createLocalDiagnosticStore = (
       purge(at);
       const sanitized = sanitizeTrace(trace, at);
       if (!sanitized) return;
-      if (traces.length >= MAX_DIAGNOSTIC_ENTRIES) traces.shift();
+      if (traces.length >= MAX_DIAGNOSTIC_ENTRIES) {
+        const evicted = traces.shift();
+        if (evicted) clearExpirationTimer(evicted);
+      }
       traces.push(sanitized);
-      scheduleExpiration(sanitized);
+      scheduleExpiration(sanitized, at);
     },
     addCrashReport: (report: ExplicitCrashReport) => {
       const at = now();
       purge(at);
       const sanitized = sanitizeCrashReport(report, at);
       if (!sanitized) return;
-      if (crashReports.length >= MAX_DIAGNOSTIC_ENTRIES) crashReports.shift();
+      if (crashReports.length >= MAX_DIAGNOSTIC_ENTRIES) {
+        const evicted = crashReports.shift();
+        if (evicted) clearExpirationTimer(evicted);
+      }
       crashReports.push(sanitized);
-      scheduleExpiration(sanitized);
+      scheduleExpiration(sanitized, at);
     },
     traces: (at?: number) => {
       purge(at);

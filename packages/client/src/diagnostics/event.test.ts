@@ -3,10 +3,12 @@ import {
   createCorrelationId,
   createDiagnosticEvent,
   createExplicitCrashReport,
+  createInMemoryDiagnosticSink,
   createLocalDiagnosticStore,
   createPrivateTrace,
   DIAGNOSTIC_RETENTION_MS,
   DiagnosticBoundaryError,
+  MAX_DIAGNOSTIC_ENTRIES,
   metricDimensionsFromEvent,
   OPTIONAL_TRACE_RETENTION_MS,
   redactDiagnosticEvent,
@@ -24,6 +26,25 @@ describe("value-blind diagnostics", () => {
     });
     expect(event.eventName).toBe("client.storage.load");
     expect(serializeDiagnosticEvent(event)).not.toContain("secret");
+
+    // @ts-expect-error event names are closed at the type boundary
+    expect(() =>
+      createDiagnosticEvent({ eventName: "client.unallowlisted" }),
+    ).toThrow(DiagnosticBoundaryError);
+    // @ts-expect-error outcomes are closed at the type boundary
+    expect(() =>
+      createDiagnosticEvent({
+        eventName: "client.sync",
+        outcome: "unexpected",
+      }),
+    ).toThrow(DiagnosticBoundaryError);
+    // @ts-expect-error cryptographic problem codes are closed at the type boundary
+    expect(() =>
+      createDiagnosticEvent({
+        eventName: "client.sync",
+        problemCode: "invalid_crypto_object",
+      }),
+    ).toThrow(DiagnosticBoundaryError);
   });
 
   test("rejects arbitrary diagnostic content", () => {
@@ -74,6 +95,32 @@ describe("value-blind diagnostics", () => {
         "schemaVersion",
       ]
     `);
+  });
+
+  test("evicts diagnostic entries together with their retention timers", () => {
+    const activeTimers = new Set<number>();
+    let nextTimer = 0;
+    const timer = {
+      set: (callback: () => void, _delayMs: number) => {
+        void callback;
+        const timerId = ++nextTimer;
+        activeTimers.add(timerId);
+        return timerId as unknown as ReturnType<typeof setTimeout>;
+      },
+      clear: (timerId: ReturnType<typeof setTimeout>) => {
+        activeTimers.delete(timerId as unknown as number);
+      },
+    };
+    const diagnostics = createInMemoryDiagnosticSink({
+      now: () => 0,
+      sampleRate: 1,
+      timer,
+    });
+    const correlationId = createCorrelationId();
+    for (let index = 0; index <= MAX_DIAGNOSTIC_ENTRIES; index += 1)
+      diagnostics.emit({ eventName: "client.sync", correlationId });
+    expect(diagnostics.records()).toHaveLength(MAX_DIAGNOSTIC_ENTRIES);
+    expect(activeTimers.size).toBe(MAX_DIAGNOSTIC_ENTRIES);
   });
 
   test("bounds safe fields and rejects malformed values", () => {
@@ -227,5 +274,74 @@ describe("value-blind diagnostics", () => {
     });
     expect(store.traces()).toEqual([]);
     expect(store.crashReports()).toEqual([]);
+  });
+
+  test("evicts local trace and crash records together with their timers", () => {
+    const activeTimers = new Set<number>();
+    let nextTimer = 0;
+    const timer = {
+      set: (callback: () => void, _delayMs: number) => {
+        void callback;
+        const timerId = ++nextTimer;
+        activeTimers.add(timerId);
+        return timerId as unknown as ReturnType<typeof setTimeout>;
+      },
+      clear: (timerId: ReturnType<typeof setTimeout>) => {
+        activeTimers.delete(timerId as unknown as number);
+      },
+    };
+    const correlationId = createCorrelationId();
+    const store = createLocalDiagnosticStore(() => 0, timer);
+    for (let index = 0; index <= MAX_DIAGNOSTIC_ENTRIES; index += 1)
+      store.addTrace({
+        schemaVersion: 1,
+        traceName: "client.sync",
+        correlationId,
+        durationMs: 1,
+        expiresAt: OPTIONAL_TRACE_RETENTION_MS,
+      });
+    expect(store.traces()).toHaveLength(MAX_DIAGNOSTIC_ENTRIES);
+    expect(activeTimers.size).toBe(MAX_DIAGNOSTIC_ENTRIES);
+
+    const crashStore = createLocalDiagnosticStore(() => 0, timer);
+    for (let index = 0; index <= MAX_DIAGNOSTIC_ENTRIES; index += 1)
+      crashStore.addCrashReport({
+        schemaVersion: 1,
+        eventName: "client.crash.reported",
+        correlationId,
+        problemCode: "service_unavailable",
+        expiresAt: OPTIONAL_TRACE_RETENTION_MS,
+      });
+    expect(crashStore.crashReports()).toHaveLength(MAX_DIAGNOSTIC_ENTRIES);
+    expect(activeTimers.size).toBe(MAX_DIAGNOSTIC_ENTRIES * 2);
+  });
+
+  test("schedules local retention timers for the actual expiry", () => {
+    const delays: number[] = [];
+    const timer = {
+      set: (callback: () => void, delayMs: number) => {
+        void callback;
+        delays.push(delayMs);
+        return delays.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clear: () => undefined,
+    };
+    const correlationId = createCorrelationId();
+    const store = createLocalDiagnosticStore(() => 0, timer);
+    store.addTrace({
+      schemaVersion: 1,
+      traceName: "client.sync",
+      correlationId,
+      durationMs: 1,
+      expiresAt: 1,
+    });
+    store.addCrashReport({
+      schemaVersion: 1,
+      eventName: "client.crash.reported",
+      correlationId,
+      problemCode: "service_unavailable",
+      expiresAt: 2,
+    });
+    expect(delays).toEqual([1, 2]);
   });
 });

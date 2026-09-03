@@ -63,6 +63,19 @@ export type MemoryDiagnosticSink = ServerDiagnosticSink &
     readonly purge: (now?: number) => number;
   }>;
 
+type DiagnosticTimer = Readonly<{
+  readonly set: (
+    callback: () => void,
+    delayMs: number,
+  ) => ReturnType<typeof setTimeout>;
+  readonly clear: (timer: ReturnType<typeof setTimeout>) => void;
+}>;
+
+const runtimeDiagnosticTimer: DiagnosticTimer = {
+  set: (callback, delayMs) => setTimeout(callback, delayMs),
+  clear: (timer) => clearTimeout(timer),
+};
+
 export type ApiObservability = Readonly<{
   readonly diagnostics: ServerDiagnosticSink;
   readonly expireSecurityRequestLogs: (at?: Date) => Promise<number>;
@@ -117,6 +130,7 @@ export const createServerCorrelationId = createCorrelationId;
 
 export const createInMemoryDiagnosticSink = (
   now: () => number = Date.now,
+  timer: DiagnosticTimer = runtimeDiagnosticTimer,
 ): MemoryDiagnosticSink => {
   type DiagnosticEntry = {
     readonly event: ServerDiagnosticEvent;
@@ -127,7 +141,8 @@ export const createInMemoryDiagnosticSink = (
   const purge = (at = now()) => {
     const retained = entries.filter((entry) => entry.expiresAt > at);
     for (const entry of entries) {
-      if (entry.expiresAt <= at && entry.timer) clearTimeout(entry.timer);
+      if (entry.expiresAt <= at && entry.timer !== undefined)
+        timer.clear(entry.timer);
     }
     const removed = entries.length - retained.length;
     entries.splice(0, entries.length, ...retained);
@@ -138,12 +153,15 @@ export const createInMemoryDiagnosticSink = (
       const sanitized = sanitizeServerDiagnosticEvent(event);
       if (!sanitized) return;
       purge();
-      if (entries.length >= MAX_DIAGNOSTIC_ENTRIES) entries.shift();
+      if (entries.length >= MAX_DIAGNOSTIC_ENTRIES) {
+        const evicted = entries.shift();
+        if (evicted?.timer !== undefined) timer.clear(evicted.timer);
+      }
       const entry: DiagnosticEntry = {
         event: sanitized,
         expiresAt: now() + DIAGNOSTIC_RETENTION_MS,
       };
-      entry.timer = setTimeout(() => purge(), DIAGNOSTIC_RETENTION_MS);
+      entry.timer = timer.set(() => purge(), DIAGNOSTIC_RETENTION_MS);
       if (typeof entry.timer === "object" && "unref" in entry.timer)
         entry.timer.unref();
       entries.push(entry);

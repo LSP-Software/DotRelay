@@ -55,6 +55,32 @@ describe("API observability boundary", () => {
     expect(endpointTemplateFor("/api/v1/unknown?secret=value")).toBeNull();
   });
 
+  test("evicts diagnostic entries together with their retention timers", () => {
+    const activeTimers = new Set<number>();
+    let nextTimer = 0;
+    const timer = {
+      set: (callback: () => void, _delayMs: number) => {
+        void callback;
+        const timerId = ++nextTimer;
+        activeTimers.add(timerId);
+        return timerId as unknown as ReturnType<typeof setTimeout>;
+      },
+      clear: (timerId: ReturnType<typeof setTimeout>) => {
+        activeTimers.delete(timerId as unknown as number);
+      },
+    };
+    const diagnostics = createInMemoryDiagnosticSink(() => 0, timer);
+    const correlationId = createServerCorrelationId();
+    for (let index = 0; index <= 10_000; index += 1)
+      diagnostics.emit({
+        schemaVersion: 1,
+        eventName: "api.request.completed",
+        correlationId,
+      });
+    expect(diagnostics.records()).toHaveLength(10_000);
+    expect(activeTimers.size).toBe(10_000);
+  });
+
   test("emits bounded diagnostics and separately records approved request metadata", async () => {
     const now = new Date("2026-01-01T00:00:00.000Z");
     const diagnostics = createInMemoryDiagnosticSink(() => now.getTime());
