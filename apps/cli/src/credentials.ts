@@ -160,8 +160,21 @@ const base64 = (bytes: Uint8Array): string => {
     .replace(/=+$/, "");
 };
 
-const windowsTarget = (service: string, account: string): string =>
+const windowsLegacyTarget = (service: string, account: string): string =>
   `DotRelay/${base64(new TextEncoder().encode(`${service}\0${account}`))}`;
+
+const windowsTarget = async (
+  service: string,
+  account: string,
+): Promise<string> =>
+  `DotRelay/v2/${base64(
+    new Uint8Array(
+      await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(`${service}\0${account}`),
+      ),
+    ),
+  )}`;
 
 const WINDOWS_CREDENTIAL_TYPE = [
   "Add-Type @'",
@@ -197,18 +210,25 @@ const windowsScript = (
 const createWindowsCredentialStore = (): NativeCredentialStore =>
   Object.freeze({
     get: async (service, account) => {
-      const target = windowsTarget(service, account);
-      const result = await command("powershell.exe", [
+      const target = await windowsTarget(service, account);
+      const args = [
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
         "-Command",
         windowsScript("read", target),
-      ]);
+      ];
+      let result = await command("powershell.exe", args);
+      if (result.status !== 0) {
+        result = await command("powershell.exe", [
+          ...args.slice(0, -1),
+          windowsScript("read", windowsLegacyTarget(service, account)),
+        ]);
+      }
       return result.status === 0 ? decodeStandardBase64(result.stdout) : null;
     },
     set: async (service, account, secret) => {
-      const target = windowsTarget(service, account);
+      const target = await windowsTarget(service, account);
       const result = await command(
         "powershell.exe",
         [
@@ -229,15 +249,25 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
         );
     },
     delete: async (service, account) => {
-      const target = windowsTarget(service, account);
-      const result = await command("powershell.exe", [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        windowsScript("delete", target),
-      ]);
-      if (result.status !== 0 && result.status !== 1168)
+      const targets = [
+        await windowsTarget(service, account),
+        windowsLegacyTarget(service, account),
+      ];
+      const results = await Promise.all(
+        targets.map((target) =>
+          command("powershell.exe", [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            windowsScript("delete", target),
+          ]),
+        ),
+      );
+      const failed = results.find(
+        (result) => result.status !== 0 && result.status !== 1168,
+      );
+      if (failed)
         throw new CliError(
           "local-io",
           "could not remove a credential from the operating-system store",
