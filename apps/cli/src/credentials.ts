@@ -227,7 +227,7 @@ const windowsDpapiScript = (
     "$path = Join-Path $root ($key + '.bin')",
     `$operation = '${operation}'`,
     "$inputText = [Console]::In.ReadToEnd()",
-    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $secure = ConvertTo-SecureString -String ([IO.File]::ReadAllText($path)); $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure); try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer); $encoded = [Text.Encoding]::ASCII.GetBytes($plain); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) } }",
+    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $secure = ConvertTo-SecureString -String ([IO.File]::ReadAllText($path)); $plain = [System.Net.NetworkCredential]::new('', $secure).Password; $encoded = [Text.Encoding]::ASCII.GetBytes($plain); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
     "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secure = ConvertTo-SecureString -String $inputText -AsPlainText -Force; $protected = ConvertFrom-SecureString -SecureString $secure; [IO.File]::WriteAllText($path, $protected, [Text.Encoding]::UTF8); exit 0 }",
     "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
   ].join("\n");
