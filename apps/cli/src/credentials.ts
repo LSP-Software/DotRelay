@@ -278,6 +278,7 @@ const windowsDpapiScript = (
     operation === "write"
       ? `$client = [Net.Sockets.TcpClient]::new('127.0.0.1', ${windowsInputPortMarker}); $stream = $client.GetStream(); $inputText = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII).ReadToEnd(); $client.Dispose()`
       : "$inputText = ''",
+    "Add-Type -AssemblyName System.Security",
     `if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $protected = [IO.File]::ReadAllBytes($path); $secret = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [System.Security.Cryptography.DataProtectionScope]::${windowsDpapiScope}); $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }`,
     `if ($operation -eq 'write') { if ($inputText.Length -eq 0) { [Console]::Error.WriteLine('credential input was empty'); exit 2 }; [IO.Directory]::CreateDirectory($root) | Out-Null; $secret = [Convert]::FromBase64String($inputText); $protected = [System.Security.Cryptography.ProtectedData]::Protect($secret, $null, [System.Security.Cryptography.DataProtectionScope]::${windowsDpapiScope}); [IO.File]::WriteAllBytes($path, $protected); exit 0 }`,
     "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
