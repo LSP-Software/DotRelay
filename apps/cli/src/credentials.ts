@@ -227,9 +227,8 @@ const windowsDpapiScript = (
     "$path = Join-Path $root ($key + '.bin')",
     `$operation = '${operation}'`,
     "$inputText = [Console]::In.ReadToEnd()",
-    "Add-Type -AssemblyName System.Security",
-    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $protected = [IO.File]::ReadAllBytes($path); $secret = [Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser); $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
-    "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secret = [Convert]::FromBase64String($inputText); $protected = [Security.Cryptography.ProtectedData]::Protect($secret, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser); [IO.File]::WriteAllBytes($path, $protected); exit 0 }",
+    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $secure = ConvertTo-SecureString ([IO.File]::ReadAllText($path)); $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure); try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer); $encoded = [Text.Encoding]::ASCII.GetBytes($plain); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) } }",
+    "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secure = ConvertTo-SecureString $inputText -AsPlainText -Force; $protected = ConvertFrom-SecureString $secure; [IO.File]::WriteAllText($path, $protected, [Text.Encoding]::UTF8); exit 0 }",
     "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
   ].join("\n");
 
