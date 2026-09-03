@@ -84,6 +84,10 @@ const decodeStandardBase64 = (value: Uint8Array): Uint8Array => {
   }
 };
 
+const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.length === right.length &&
+  left.every((byte, index) => byte === right[index]);
+
 const interactiveCredentialCommand = async (
   args: readonly string[],
   secret: Uint8Array,
@@ -251,30 +255,37 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
         windowsScript("write", target),
         input,
       );
+      let nativeVerified = false;
       if (nativeResult.status === 0) {
         const verification = await runWindowsCommand(
           windowsScript("read", target),
         );
         if (verification.status === 0) {
           const stored = decodeStandardBase64(verification.stdout);
-          if (
-            stored.length === secret.length &&
-            stored.every((byte, index) => byte === secret[index])
-          )
-            return;
+          nativeVerified = sameBytes(stored, secret);
         }
       }
       const dpapiResult = await runWindowsCommand(
         windowsDpapiScript("write", target),
         input,
       );
-      if (dpapiResult.status !== 0)
-        throw new CliError(
-          "local-io",
-          "could not save a credential in the operating-system store",
-          {},
-          "credential_store_write_failed",
+      if (dpapiResult.status === 0) {
+        const verification = await runWindowsCommand(
+          windowsDpapiScript("read", target),
         );
+        if (
+          verification.status === 0 &&
+          sameBytes(decodeStandardBase64(verification.stdout), secret)
+        )
+          return;
+      }
+      if (nativeVerified) return;
+      throw new CliError(
+        "local-io",
+        "could not save a credential in the operating-system store",
+        {},
+        "credential_store_write_failed",
+      );
     },
     delete: async (service, account) => {
       const target = await windowsTarget(service, account);
