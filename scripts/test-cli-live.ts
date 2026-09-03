@@ -717,7 +717,7 @@ try {
   const outputMode = (await stat(outputPath)).mode & 0o777;
   if (
     output !== 'SHARED_VALUE="two"\nUSER_VALUE="secret"\nEMPTY=""\n' ||
-    outputMode !== 0o600
+    (process.platform !== "win32" && outputMode !== 0o600)
   )
     throw new Error("packaged CLI safe pull contract failed");
   if (process.platform !== "win32") {
