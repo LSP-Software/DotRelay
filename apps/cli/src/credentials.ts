@@ -170,11 +170,11 @@ const WINDOWS_CREDENTIAL_TYPE = [
   "public static class DotRelayCredential {",
   "[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct CREDENTIAL {",
   "public uint Flags; public uint Type; public IntPtr TargetName; public IntPtr Comment; public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten; public uint CredentialBlobSize; public IntPtr CredentialBlob; public uint Persist; public uint AttributeCount; public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName; }",
-  '[DllImport("advapi32.dll", EntryPoint="CredReadW", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredRead(string target, uint type, uint flags, out IntPtr credential);',
+  '[DllImport("advapi32.dll", EntryPoint="CredReadW", SetLastError=true)] public static extern bool CredRead(IntPtr target, uint type, uint flags, out IntPtr credential);',
   '[DllImport("advapi32.dll", EntryPoint="CredWriteW", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredWrite(ref CREDENTIAL credential, uint flags);',
-  '[DllImport("advapi32.dll", EntryPoint="CredDeleteW", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CredDelete(string target, uint type, uint flags);',
+  '[DllImport("advapi32.dll", EntryPoint="CredDeleteW", SetLastError=true)] public static extern bool CredDelete(IntPtr target, uint type, uint flags);',
   '[DllImport("advapi32.dll")] public static extern void CredFree(IntPtr credential);',
-  "public static byte[] Read(string target) { IntPtr pointer; if (!CredRead(target, 1, 0, out pointer)) return null; var value = (CREDENTIAL)Marshal.PtrToStructure(pointer, typeof(CREDENTIAL)); var bytes = new byte[value.CredentialBlobSize]; Marshal.Copy(value.CredentialBlob, bytes, 0, (int)value.CredentialBlobSize); CredFree(pointer); return bytes; }",
+  "public static byte[] Read(string target) { var targetPointer = Marshal.StringToCoTaskMemUni(target); try { IntPtr pointer; if (!CredRead(targetPointer, 1, 0, out pointer)) return null; var value = (CREDENTIAL)Marshal.PtrToStructure(pointer, typeof(CREDENTIAL)); var bytes = new byte[value.CredentialBlobSize]; Marshal.Copy(value.CredentialBlob, bytes, 0, (int)value.CredentialBlobSize); CredFree(pointer); return bytes; } finally { Marshal.FreeCoTaskMem(targetPointer); } }",
   "public static bool Write(string target, byte[] bytes) { var targetPointer = Marshal.StringToCoTaskMemUni(target); var blobPointer = Marshal.AllocHGlobal(bytes.Length); try { Marshal.Copy(bytes, 0, blobPointer, bytes.Length); var value = new CREDENTIAL { Type=1, TargetName=targetPointer, CredentialBlob=blobPointer, CredentialBlobSize=(uint)bytes.Length, Persist=2 }; if (CredWrite(ref value, 0)) return true; value.Persist=1; return CredWrite(ref value, 0); } finally { Marshal.FreeHGlobal(blobPointer); Marshal.FreeCoTaskMem(targetPointer); } }",
   "}",
   "'@",
@@ -191,7 +191,7 @@ const windowsScript = (
     "$inputText = [Console]::In.ReadToEnd()",
     "if ($operation -eq 'read') { $secret = [DotRelayCredential]::Read($target); if ($null -eq $secret) { exit 1 }; $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
     "if ($operation -eq 'write') { $secret = [Convert]::FromBase64String($inputText); if (![DotRelayCredential]::Write($target, $secret)) { exit 1 }; exit 0 }",
-    "if (![DotRelayCredential]::CredDelete($target, 1, 0)) { exit 1 }; exit 0",
+    "$targetPointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($target); try { if (![DotRelayCredential]::CredDelete($targetPointer, 1, 0)) { exit 1 }; exit 0 } finally { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($targetPointer) }",
   ].join("\n");
 
 const createWindowsCredentialStore = (): NativeCredentialStore =>
