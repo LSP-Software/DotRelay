@@ -207,40 +207,68 @@ const windowsScript = (
     "$targetPointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($target); try { if (![DotRelayCredential]::CredDelete($targetPointer, 1, 0)) { exit 1 }; exit 0 } finally { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($targetPointer) }",
   ].join("\n");
 
+const windowsDpapiScript = (
+  operation: "read" | "write" | "delete",
+  target: string,
+): string =>
+  [
+    `$key = '${target.replaceAll("/", "_")}'`,
+    "$root = Join-Path $env:LOCALAPPDATA 'DotRelay\\credentials'",
+    "$path = Join-Path $root ($key + '.bin')",
+    `$operation = '${operation}'`,
+    "$inputText = [Console]::In.ReadToEnd()",
+    "Add-Type -AssemblyName System.Security",
+    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $protected = [IO.File]::ReadAllBytes($path); $secret = [Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser); $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
+    "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secret = [Convert]::FromBase64String($inputText); $protected = [Security.Cryptography.ProtectedData]::Protect($secret, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser); [IO.File]::WriteAllBytes($path, $protected); exit 0 }",
+    "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
+  ].join("\n");
+
+const runWindowsCommand = async (script: string, input?: Uint8Array) =>
+  command(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    input,
+  );
+
 const createWindowsCredentialStore = (): NativeCredentialStore =>
   Object.freeze({
     get: async (service, account) => {
       const target = await windowsTarget(service, account);
-      const args = [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        windowsScript("read", target),
-      ];
-      let result = await command("powershell.exe", args);
+      let result = await runWindowsCommand(windowsScript("read", target));
       if (result.status !== 0) {
-        result = await command("powershell.exe", [
-          ...args.slice(0, -1),
+        result = await runWindowsCommand(
           windowsScript("read", windowsLegacyTarget(service, account)),
-        ]);
+        );
       }
+      if (result.status === 0) return decodeStandardBase64(result.stdout);
+      result = await runWindowsCommand(windowsDpapiScript("read", target));
       return result.status === 0 ? decodeStandardBase64(result.stdout) : null;
     },
     set: async (service, account, secret) => {
       const target = await windowsTarget(service, account);
-      const result = await command(
-        "powershell.exe",
-        [
-          "-NoLogo",
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          windowsScript("write", target),
-        ],
-        new TextEncoder().encode(base64(secret)),
+      const input = new TextEncoder().encode(base64(secret));
+      const nativeResult = await runWindowsCommand(
+        windowsScript("write", target),
+        input,
       );
-      if (result.status !== 0)
+      if (nativeResult.status === 0) {
+        const verification = await runWindowsCommand(
+          windowsScript("read", target),
+        );
+        if (verification.status === 0) {
+          const stored = decodeStandardBase64(verification.stdout);
+          if (
+            stored.length === secret.length &&
+            stored.every((byte, index) => byte === secret[index])
+          )
+            return;
+        }
+      }
+      const dpapiResult = await runWindowsCommand(
+        windowsDpapiScript("write", target),
+        input,
+      );
+      if (dpapiResult.status !== 0)
         throw new CliError(
           "local-io",
           "could not save a credential in the operating-system store",
@@ -249,25 +277,20 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
         );
     },
     delete: async (service, account) => {
-      const targets = [
-        await windowsTarget(service, account),
-        windowsLegacyTarget(service, account),
-      ];
+      const target = await windowsTarget(service, account);
+      const targets = [target, windowsLegacyTarget(service, account)];
       const results = await Promise.all(
         targets.map((target) =>
-          command("powershell.exe", [
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            windowsScript("delete", target),
-          ]),
+          runWindowsCommand(windowsScript("delete", target)),
         ),
+      );
+      const dpapiResult = await runWindowsCommand(
+        windowsDpapiScript("delete", target),
       );
       const failed = results.find(
         (result) => result.status !== 0 && result.status !== 1168,
       );
-      if (failed)
+      if (failed || dpapiResult.status !== 0)
         throw new CliError(
           "local-io",
           "could not remove a credential from the operating-system store",
