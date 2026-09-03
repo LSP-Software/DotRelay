@@ -108,7 +108,7 @@ const runWindowsCommand = async (script: string, input?: Uint8Array) => {
       script,
     ]);
   const server = createServer((socket) => {
-    socket.end(Buffer.from(input));
+    socket.write(Buffer.from(input), () => socket.end());
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
