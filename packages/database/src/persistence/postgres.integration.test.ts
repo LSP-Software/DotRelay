@@ -26,6 +26,7 @@ import {
 } from "..";
 
 const integrationDescribe = process.env.DATABASE_URL ? describe : describe.skip;
+const INTEGRATION_HOOK_TIMEOUT_MS = 30_000;
 const sourceDatabaseUrl = process.env.DATABASE_URL;
 const testDatabaseName = `dotrelay_repository_${crypto
   .randomUUID()
@@ -280,7 +281,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     await database.$executeRawUnsafe(
       "GRANT dotrelay_security_response TO CURRENT_USER",
     );
-  });
+  }, INTEGRATION_HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     await database.$disconnect();
@@ -298,7 +299,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     } finally {
       await admin.end();
     }
-  });
+  }, INTEGRATION_HOOK_TIMEOUT_MS);
 
   test("handles concurrent operation retries and rejects conflicting bytes", async () => {
     const { device, user } = await createAuthorizedDeviceFixture();

@@ -20,6 +20,7 @@ import {
 } from "..";
 
 const integrationDescribe = process.env.DATABASE_URL ? describe : describe.skip;
+const INTEGRATION_HOOK_TIMEOUT_MS = 30_000;
 const sourceDatabaseUrl = process.env.DATABASE_URL;
 const testDatabaseName = `dotrelay_trust_${crypto
   .randomUUID()
@@ -174,7 +175,7 @@ integrationDescribe("trust workflow integration", () => {
       await admin.end();
     }
     await runMigrations();
-  });
+  }, INTEGRATION_HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     await database.$disconnect();
@@ -188,7 +189,7 @@ integrationDescribe("trust workflow integration", () => {
     } finally {
       await admin.end();
     }
-  });
+  }, INTEGRATION_HOOK_TIMEOUT_MS);
 
   test("bootstraps the first Device for a User", async () => {
     const user = await createUserFixture();
