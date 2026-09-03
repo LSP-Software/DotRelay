@@ -17,7 +17,9 @@ const command = async (
   executable: string,
   args: readonly string[],
   input?: Uint8Array,
-): Promise<Readonly<{ status: number; stdout: Uint8Array }>> => {
+): Promise<
+  Readonly<{ status: number; stdout: Uint8Array; stderr: Uint8Array }>
+> => {
   try {
     const child = Bun.spawn([executable, ...args], {
       stdin: input ? "pipe" : undefined,
@@ -28,11 +30,12 @@ const command = async (
       child.stdin.write(input);
       child.stdin.end();
     }
-    const [stdout, status] = await Promise.all([
+    const [stdout, stderr, status] = await Promise.all([
       new Response(child.stdout).bytes(),
+      new Response(child.stderr).bytes(),
       child.exited,
     ]);
-    return { status, stdout };
+    return { status, stdout, stderr };
   } catch {
     throw new CliError(
       "local-io",
@@ -87,6 +90,9 @@ const decodeStandardBase64 = (value: Uint8Array): Uint8Array => {
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
   left.length === right.length &&
   left.every((byte, index) => byte === right[index]);
+
+const commandStderr = (value: Uint8Array): string =>
+  new TextDecoder().decode(value).trim().slice(0, 500);
 
 const interactiveCredentialCommand = async (
   args: readonly string[],
@@ -282,7 +288,7 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
       if (nativeVerified) return;
       throw new CliError(
         "local-io",
-        "could not save a credential in the operating-system store",
+        `could not save a credential in the operating-system store${dpapiResult.status === 0 ? ": DPAPI read-back verification failed" : commandStderr(dpapiResult.stderr) ? `: ${commandStderr(dpapiResult.stderr)}` : ""}`,
         {},
         "credential_store_write_failed",
       );
