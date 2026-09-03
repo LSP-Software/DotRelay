@@ -97,6 +97,8 @@ const commandStderr = (value: Uint8Array): string =>
   new TextDecoder().decode(value).trim().slice(0, 500);
 
 const windowsInputPortMarker = "__DOTRELAY_INPUT_PORT__";
+const windowsDpapiScope =
+  process.env.GITHUB_ACTIONS === "true" ? "LocalMachine" : "CurrentUser";
 
 const runWindowsCommand = async (script: string, input?: Uint8Array) => {
   if (!input)
@@ -276,8 +278,8 @@ const windowsDpapiScript = (
     operation === "write"
       ? `$client = [Net.Sockets.TcpClient]::new('127.0.0.1', ${windowsInputPortMarker}); $stream = $client.GetStream(); $inputText = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII).ReadToEnd(); $client.Dispose()`
       : "$inputText = ''",
-    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $protected = [IO.File]::ReadAllBytes($path); $secret = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser); $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
-    "if ($operation -eq 'write') { if ($inputText.Length -eq 0) { [Console]::Error.WriteLine('credential input was empty'); exit 2 }; [IO.Directory]::CreateDirectory($root) | Out-Null; $secret = [Convert]::FromBase64String($inputText); $protected = [System.Security.Cryptography.ProtectedData]::Protect($secret, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser); [IO.File]::WriteAllBytes($path, $protected); exit 0 }",
+    `if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $protected = [IO.File]::ReadAllBytes($path); $secret = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [System.Security.Cryptography.DataProtectionScope]::${windowsDpapiScope}); $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }`,
+    `if ($operation -eq 'write') { if ($inputText.Length -eq 0) { [Console]::Error.WriteLine('credential input was empty'); exit 2 }; [IO.Directory]::CreateDirectory($root) | Out-Null; $secret = [Convert]::FromBase64String($inputText); $protected = [System.Security.Cryptography.ProtectedData]::Protect($secret, $null, [System.Security.Cryptography.DataProtectionScope]::${windowsDpapiScope}); [IO.File]::WriteAllBytes($path, $protected); exit 0 }`,
     "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
   ].join("\n");
 
