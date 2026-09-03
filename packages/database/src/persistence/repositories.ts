@@ -345,15 +345,16 @@ export class OperationRepository {
         select: { id: true, actorUserId: true, actorDeviceId: true },
       });
       if (expired.length === 0) return 0;
-      const ids = expired.map(({ id }) => id);
-      await transaction.stagedObject.deleteMany({
-        where: { operationId: { in: ids }, committedAt: null },
-      });
-      const result = await transaction.operation.updateMany({
-        where: { id: { in: ids }, status: "STAGED" },
-        data: { status: "EXPIRED" },
-      });
+      let expiredCount = 0;
       for (const operation of expired) {
+        const result = await transaction.operation.updateMany({
+          where: { id: operation.id, status: "STAGED" },
+          data: { status: "EXPIRED" },
+        });
+        if (result.count !== 1) continue;
+        await transaction.stagedObject.deleteMany({
+          where: { operationId: operation.id, committedAt: null },
+        });
         await transaction.auditEvent.create({
           data: {
             operationId: operation.id,
@@ -366,8 +367,9 @@ export class OperationRepository {
             entityId: operation.id,
           },
         });
+        expiredCount += 1;
       }
-      return result.count;
+      return expiredCount;
     });
   }
 
@@ -543,16 +545,12 @@ export class SecurityRequestLogRepository {
       SECURITY_REQUEST_LOG_RETENTION_MS
     )
       throw new Error("Security Request Log retention exceeds 30 days");
-    return database.securityRequestLog.create({
-      data: {
-        ipAddress: input.ipAddress,
-        endpointTemplate: input.endpointTemplate,
-        httpStatus: input.httpStatus,
-        transferBytes: input.transferBytes,
-        requestedAt: input.requestedAt,
-        expiresAt: input.expiresAt,
-      },
-    });
+    return database.$executeRaw`
+      INSERT INTO "security_request_logs"
+        ("id", "ipAddress", "endpointTemplate", "httpStatus", "transferBytes", "requestedAt", "expiresAt")
+      VALUES
+        (${crypto.randomUUID()}, CAST(${input.ipAddress} AS INET), ${input.endpointTemplate}, ${input.httpStatus}, ${input.transferBytes}, ${input.requestedAt}, ${input.expiresAt})
+    `;
   }
 
   async expire(database: TransactionDatabase, now: Date) {

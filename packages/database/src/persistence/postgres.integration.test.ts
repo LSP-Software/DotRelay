@@ -1132,7 +1132,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       expect(visibleRows).toBe(0);
     } finally {
       await database.$executeRawUnsafe(
-        `REVOKE ${ordinaryRole} FROM CURRENT_USER; DROP ROLE ${ordinaryRole};`,
+        `REVOKE ${ordinaryRole} FROM CURRENT_USER; REVOKE SELECT ON TABLE "security_request_logs" FROM ${ordinaryRole}; DROP ROLE ${ordinaryRole};`,
       );
     }
   });

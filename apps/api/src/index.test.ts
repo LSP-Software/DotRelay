@@ -364,6 +364,35 @@ describe("API foundation", () => {
     expect(await rejectedCallback.text()).not.toContain("state.mjs");
   });
 
+  test("sanitizes Better Auth error responses", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+
+    const response = await testApp.request(
+      `${profile.origin}/api/auth/sign-in/social`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.origin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ provider: "not-configured" }),
+      },
+    );
+    const problem = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toContain(
+      "application/problem+json",
+    );
+    expect(problem).toMatchObject({
+      code: "service_unavailable",
+      detail: "Service unavailable",
+    });
+    expect(JSON.stringify(problem)).not.toContain("PROVIDER_NOT_FOUND");
+  });
+
   test("applies logout, remote revocation, and expiry on the next bearer request", async () => {
     const profile = loadServerProfileConfig({});
     const auth = createInMemoryAuth(profile);

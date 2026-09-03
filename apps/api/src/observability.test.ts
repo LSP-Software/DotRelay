@@ -25,6 +25,21 @@ describe("API observability boundary", () => {
       // @ts-expect-error adversarial fields are rejected at runtime
       secret: "plaintext",
     });
+    diagnostics.emit({
+      ...event,
+      // @ts-expect-error event names are closed at the type boundary
+      eventName: "api.request.unallowlisted",
+    });
+    diagnostics.emit({
+      ...event,
+      // @ts-expect-error cryptographic problem codes are closed at the type boundary
+      problemCode: "invalid_crypto_object",
+    });
+    diagnostics.emit({
+      ...event,
+      // @ts-expect-error Correlation IDs are issued by the server factory
+      correlationId: "00000000-0000-4000-8000-000000000042",
+    });
     expect(diagnostics.records()).toHaveLength(1);
   });
 
@@ -45,11 +60,12 @@ describe("API observability boundary", () => {
     const diagnostics = createInMemoryDiagnosticSink(() => now.getTime());
     const securityRows: unknown[] = [];
     const database = {
-      securityRequestLog: {
-        create: async (input: unknown) => {
-          securityRows.push(input);
-          return input;
-        },
+      $executeRaw: async (
+        _strings: TemplateStringsArray,
+        ...values: unknown[]
+      ) => {
+        securityRows.push(values);
+        return 1;
       },
       $transaction: async (callback: (database: unknown) => unknown) =>
         callback({
@@ -92,14 +108,15 @@ describe("API observability boundary", () => {
     ]);
     expect(JSON.stringify(diagnostics.records())).not.toContain("192.0.2.10");
     expect(securityRows).toHaveLength(1);
-    expect(securityRows[0]).toMatchObject({
-      data: expect.objectContaining({
-        endpointTemplate: "/api/v1/session",
-        ipAddress: "192.0.2.10",
-        httpStatus: 401,
-        transferBytes: 17n,
-      }),
-    });
+    expect(securityRows[0]).toEqual([
+      expect.any(String),
+      "192.0.2.10",
+      "/api/v1/session",
+      401,
+      17n,
+      now,
+      expect.any(Date),
+    ]);
     await expect(observability.expireSecurityRequestLogs(now)).resolves.toBe(2);
   });
 

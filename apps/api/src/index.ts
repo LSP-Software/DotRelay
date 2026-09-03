@@ -68,6 +68,43 @@ const jsonProblem = (context: Context, code: ProblemCode) => {
   });
 };
 
+const safeAuthErrorCodes = new Set([
+  "access_denied",
+  "authorization_pending",
+  "expired_token",
+  "slow_down",
+]);
+
+const sanitizeAuthResponse = async (
+  context: Context,
+  response: Response,
+): Promise<Response> => {
+  if (response.status < 400) return response;
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("x-retry-after");
+    if (retryAfter) context.header("X-Retry-After", retryAfter);
+    return jsonProblem(context, "rate_limited");
+  }
+  if (response.headers.get("content-type")?.includes("application/json")) {
+    try {
+      const body = (await response.clone().json()) as {
+        readonly error?: unknown;
+      };
+      if (typeof body.error === "string" && safeAuthErrorCodes.has(body.error))
+        return Response.json(
+          { error: body.error },
+          {
+            status: response.status,
+            headers: { "Cache-Control": "no-store" },
+          },
+        );
+    } catch {
+      // Fall through to the generic problem response.
+    }
+  }
+  return jsonProblem(context, "service_unavailable");
+};
+
 const escapeHtml = (value: string) =>
   value.replace(
     /[&<>"']/g,
@@ -360,7 +397,7 @@ const createApi = ({
     try {
       const response = await auth.handler(context.req.raw);
       response.headers.set("Cache-Control", "no-store");
-      return response;
+      return sanitizeAuthResponse(context, response);
     } catch {
       return jsonProblem(context, "service_unavailable");
     }

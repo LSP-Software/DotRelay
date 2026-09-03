@@ -53,8 +53,6 @@ const safeDiagnosticCodes = new Set([
   "credential_store_unavailable",
   "credential_store_unsupported",
   "credential_store_write_failed",
-  "crypto",
-  "crypto_provider_unavailable",
   "device_authorization_denied",
   "device_authorization_expired",
   "device_authorization_failed",
@@ -63,7 +61,6 @@ const safeDiagnosticCodes = new Set([
   "environment_ambiguous",
   "environment_not_found",
   "incomplete-export",
-  "invalid_crypto_object",
   "invalid_id",
   "invalid_request",
   "invitation_expired",
@@ -96,8 +93,6 @@ const safeDiagnosticCodes = new Set([
   "transient",
   "unsafe_stdout",
   "unsupported_api_version",
-  "unsupported_crypto_runtime",
-  "unsupported_crypto_suite",
   "unsupported_media_type",
   "unexpected_failure",
 ]);
@@ -154,6 +149,15 @@ export type CliDiagnostic = Readonly<{
   readonly [key: string]: string | number | boolean;
 }>;
 
+const safeDiagnosticCategory = (
+  category: CliErrorCategory,
+): CliErrorCategory => (category === "crypto" ? "transient" : category);
+
+const safeDiagnosticExitCode = (
+  category: CliErrorCategory,
+  exitCode: number,
+): number => (category === "crypto" ? EXIT_CODES.transient : exitCode);
+
 export const diagnosticForError = (error: unknown): CliDiagnostic => {
   if (error instanceof CliError) {
     const safeDetails = Object.fromEntries(
@@ -170,13 +174,13 @@ export const diagnosticForError = (error: unknown): CliDiagnostic => {
     );
     return {
       ok: false,
-      category: error.category,
+      category: safeDiagnosticCategory(error.category),
       code: safeDiagnosticCodes.has(error.code)
         ? error.code
         : "unexpected_failure",
       detail: "The command could not complete.",
       ...safeDetails,
-      exitCode: error.exitCode,
+      exitCode: safeDiagnosticExitCode(error.category, error.exitCode),
     };
   }
   return {

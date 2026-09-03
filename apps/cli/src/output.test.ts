@@ -48,6 +48,29 @@ describe("CLI output safety", () => {
       new CliError("local-io", "failure", {}, "domain-id-secret"),
     );
     expect(unknownCode.code).toBe("unexpected_failure");
+    for (const code of [
+      "crypto_provider_unavailable",
+      "invalid_crypto_object",
+      "unsupported_crypto_runtime",
+      "unsupported_crypto_suite",
+      "crypto",
+    ]) {
+      expect(
+        diagnosticForError(
+          new CliError("crypto", "cryptographic component failure", {}, code),
+        ).code,
+      ).toBe("unexpected_failure");
+      expect(
+        diagnosticForError(
+          new CliError("crypto", "cryptographic component failure", {}, code),
+        ).category,
+      ).toBe("transient");
+      expect(
+        diagnosticForError(
+          new CliError("crypto", "cryptographic component failure", {}, code),
+        ).exitCode,
+      ).toBe(EXIT_CODES.transient);
+    }
     const terminalControl = diagnosticForError(
       new CliError("local-io", "ordinary\u001b[31m text\b"),
     );

@@ -7,13 +7,11 @@ import {
 
 describe("Security Request Log boundary", () => {
   test("accepts only a known endpoint template and bounded metadata", async () => {
-    const created: unknown[] = [];
+    const executed: unknown[] = [];
     const database = {
-      securityRequestLog: {
-        create: async (input: unknown) => {
-          created.push(input);
-          return input;
-        },
+      $executeRaw: async (input: unknown) => {
+        executed.push(input);
+        return 1;
       },
     } as never;
     const repository = new SecurityRequestLogRepository();
@@ -28,7 +26,7 @@ describe("Security Request Log boundary", () => {
       requestedAt,
       expiresAt: new Date(requestedAt.getTime() + 1),
     });
-    expect(created).toHaveLength(1);
+    expect(executed).toHaveLength(1);
   });
 
   test("rejects arbitrary endpoint, status, size, and expiry values", async () => {

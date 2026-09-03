@@ -483,7 +483,17 @@ integrationDescribe("trust workflow integration", () => {
         await database.operation.findUnique({
           where: { id: rejectedGrantOperation.id },
         }),
-      ).toBeNull();
+      ).toMatchObject({ status: "STAGED", committedAt: null });
+      expect(
+        await database.stagedObject.findUnique({
+          where: {
+            operationId_objectId: {
+              operationId: rejectedGrantOperation.id,
+              objectId: rejectedGrantObject.id,
+            },
+          },
+        }),
+      ).toMatchObject({ committedAt: null });
       expect(
         await database.protocolObject.findUnique({
           where: { id: rejectedGrantObject.id },

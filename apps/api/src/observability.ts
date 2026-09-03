@@ -1,4 +1,4 @@
-import { PROBLEM_STATUS } from "@dotrelay/contracts";
+import { PROBLEM_STATUS, type ProblemCode } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
@@ -12,13 +12,44 @@ export const DIAGNOSTIC_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_DIAGNOSTIC_ENTRIES = 10_000;
 const DEFAULT_DIAGNOSTIC_SAMPLE_RATE = 0.1;
 
+export const SERVER_DIAGNOSTIC_EVENT_NAMES = Object.freeze([
+  "api.request.completed",
+] as const);
+export type ServerDiagnosticEventName =
+  (typeof SERVER_DIAGNOSTIC_EVENT_NAMES)[number];
+const FORBIDDEN_PROBLEM_CODES = [
+  "invalid_crypto_object",
+  "unsupported_crypto_suite",
+  "unsupported_crypto_runtime",
+  "crypto_provider_unavailable",
+] as const;
+export type ServerDiagnosticProblemCode = Exclude<
+  ProblemCode,
+  (typeof FORBIDDEN_PROBLEM_CODES)[number]
+>;
+export const SERVER_DIAGNOSTIC_FIELDS = Object.freeze([
+  "schemaVersion",
+  "eventName",
+  "correlationId",
+  "durationMs",
+  "outcome",
+  "problemCode",
+  "retryAfterSeconds",
+] as const);
+export type ServerDiagnosticField = (typeof SERVER_DIAGNOSTIC_FIELDS)[number];
+
+declare const serverCorrelationIdBrand: unique symbol;
+export type ServerCorrelationId = string & {
+  readonly [serverCorrelationIdBrand]: "ServerCorrelationId";
+};
+
 export type ServerDiagnosticEvent = Readonly<{
   readonly schemaVersion: 1;
-  readonly eventName: string;
-  readonly correlationId: string;
+  readonly eventName: ServerDiagnosticEventName;
+  readonly correlationId: ServerCorrelationId;
   readonly durationMs?: number;
   readonly outcome?: "success" | "failure";
-  readonly problemCode?: string;
+  readonly problemCode?: ServerDiagnosticProblemCode;
   readonly retryAfterSeconds?: number;
 }>;
 
@@ -39,33 +70,47 @@ export type ApiObservability = Readonly<{
     readonly request: Request;
     readonly path: string;
     readonly status: number;
-    readonly correlationId: string;
+    readonly correlationId: ServerCorrelationId;
     readonly durationMs: number;
   }) => void;
 }>;
 
 const safeToken = /^[A-Za-z0-9._:-]+$/;
-const forbiddenProblemCodes = new Set([
-  "invalid_crypto_object",
-  "unsupported_crypto_suite",
-  "unsupported_crypto_runtime",
-  "crypto_provider_unavailable",
-]);
-const SERVER_DIAGNOSTIC_EVENT_NAMES = new Set(["api.request.completed"]);
+const forbiddenProblemCodes = new Set<string>(FORBIDDEN_PROBLEM_CODES);
+const serverDiagnosticEventNames = new Set<string>(
+  SERVER_DIAGNOSTIC_EVENT_NAMES,
+);
+const serverDiagnosticFields = new Set<string>(SERVER_DIAGNOSTIC_FIELDS);
 const SERVER_DIAGNOSTIC_OUTCOMES = new Set(["success", "failure"]);
 const CORRELATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const MAX_ISSUED_CORRELATION_IDS = 100_000;
+const issuedCorrelationIds = new Set<string>();
 
-const createCorrelationId = (): string => {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] ?? 0) & 0x0f;
-  bytes[6] = (bytes[6] ?? 0) | 0x40;
-  bytes[8] = (bytes[8] ?? 0) & 0x3f;
-  bytes[8] = (bytes[8] ?? 0) | 0x80;
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
-  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
-    .slice(6, 8)
-    .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+const createCorrelationId = (): ServerCorrelationId => {
+  let correlationId = "";
+  while (
+    correlationId.length === 0 ||
+    issuedCorrelationIds.has(correlationId)
+  ) {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] ?? 0) & 0x0f;
+    bytes[6] = (bytes[6] ?? 0) | 0x40;
+    bytes[8] = (bytes[8] ?? 0) & 0x3f;
+    bytes[8] = (bytes[8] ?? 0) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+    correlationId = `${hex.slice(0, 4).join("")}-${hex
+      .slice(4, 6)
+      .join("")}-${hex.slice(6, 8).join("")}-${hex
+      .slice(8, 10)
+      .join("")}-${hex.slice(10).join("")}`;
+  }
+  issuedCorrelationIds.add(correlationId);
+  if (issuedCorrelationIds.size > MAX_ISSUED_CORRELATION_IDS) {
+    const oldest = issuedCorrelationIds.values().next().value;
+    if (typeof oldest === "string") issuedCorrelationIds.delete(oldest);
+  }
+  return correlationId as ServerCorrelationId;
 };
 
 export const createServerCorrelationId = createCorrelationId;
@@ -152,22 +197,15 @@ const sanitizeServerDiagnosticEvent = (
   if (input === null || typeof input !== "object" || Array.isArray(input))
     return null;
   const object = input as Record<string, unknown>;
-  const allowed = new Set([
-    "schemaVersion",
-    "eventName",
-    "correlationId",
-    "durationMs",
-    "outcome",
-    "problemCode",
-    "retryAfterSeconds",
-  ]);
-  if (Object.keys(object).some((key) => !allowed.has(key))) return null;
+  if (Object.keys(object).some((key) => !serverDiagnosticFields.has(key)))
+    return null;
   if (
     object.schemaVersion !== 1 ||
     typeof object.eventName !== "string" ||
-    !SERVER_DIAGNOSTIC_EVENT_NAMES.has(object.eventName) ||
+    !serverDiagnosticEventNames.has(object.eventName) ||
     typeof object.correlationId !== "string" ||
-    !CORRELATION_ID_PATTERN.test(object.correlationId)
+    !CORRELATION_ID_PATTERN.test(object.correlationId) ||
+    !issuedCorrelationIds.has(object.correlationId)
   )
     return null;
   if (
@@ -204,7 +242,7 @@ const sanitizeServerDiagnosticEvent = (
   return Object.freeze({
     schemaVersion: 1,
     eventName: object.eventName,
-    correlationId: object.correlationId,
+    correlationId: object.correlationId as ServerCorrelationId,
     ...(object.durationMs === undefined
       ? {}
       : { durationMs: object.durationMs }),
