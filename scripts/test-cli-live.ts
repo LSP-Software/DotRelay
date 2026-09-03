@@ -619,6 +619,16 @@ try {
   initialDeviceId = requireString(enrolled.deviceId, "initial Device id");
   if (enrolled.active !== true || state.bootstrapCount !== 1)
     throw new Error("packaged CLI Device bootstrap contract failed");
+  try {
+    await deviceStorage.load({
+      pin,
+      deviceId: uuidBytes(initialDeviceId),
+    });
+  } catch (error) {
+    throw new Error(
+      `native Device storage round trip failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const dotenvPath = join(isolatedDirectory, "source.env");
   await Bun.write(dotenvPath, "SHARED_VALUE=one\nUSER_VALUE=secret\nEMPTY=\n");
   const initialized = await runJson(
