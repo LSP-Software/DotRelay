@@ -96,6 +96,14 @@ const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
 const commandStderr = (value: Uint8Array): string =>
   new TextDecoder().decode(value).trim().slice(0, 500);
 
+const commandDiagnostic = (result: {
+  readonly stdout: Uint8Array;
+  readonly stderr: Uint8Array;
+}): string =>
+  [commandStderr(result.stderr), commandStderr(result.stdout)]
+    .filter((value) => value.length > 0)
+    .join(" | ");
+
 const windowsInputPortMarker = "__DOTRELAY_INPUT_PORT__";
 const windowsDpapiScope =
   process.env.GITHUB_ACTIONS === "true" ? "LocalMachine" : "CurrentUser";
@@ -328,7 +336,10 @@ const createWindowsCredentialStore = (): NativeCredentialStore =>
           const stored = decodeStandardBase64(verification.stdout);
           if (sameBytes(stored, secret)) return;
           dpapiVerificationDetail = `returned ${stored.length} bytes for ${secret.length}-byte secret`;
-        }
+        } else
+          dpapiVerificationDetail =
+            commandDiagnostic(verification) ||
+            `read exited with code ${verification.status}`;
       } else if (commandStderr(dpapiResult.stderr)) {
         dpapiVerificationDetail = commandStderr(dpapiResult.stderr);
       }
