@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import { CliError } from "./errors";
 
 export type NativeCredentialStore = Readonly<{
@@ -94,6 +95,38 @@ const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
 
 const commandStderr = (value: Uint8Array): string =>
   new TextDecoder().decode(value).trim().slice(0, 500);
+
+const windowsInputPipeMarker = "__DOTRELAY_INPUT_PIPE__";
+
+const runWindowsCommand = async (script: string, input?: Uint8Array) => {
+  if (!input)
+    return command("powershell.exe", [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      script,
+    ]);
+  const pipeName = `dotrelay-${crypto.randomUUID()}`;
+  const server = createServer((socket) => {
+    socket.end(Buffer.from(input));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(`\\\\.\\pipe\\${pipeName}`, () => resolve());
+  });
+  try {
+    return await command("powershell.exe", [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      script.replaceAll(windowsInputPipeMarker, pipeName),
+    ]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+};
 
 const interactiveCredentialCommand = async (
   args: readonly string[],
@@ -213,7 +246,9 @@ const windowsScript = (
     WINDOWS_CREDENTIAL_TYPE,
     `$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${btoa(target)}'))`,
     `$operation = '${operation}'`,
-    "$inputText = [IO.StreamReader]::new([Console]::OpenStandardInput(), [Text.Encoding]::ASCII).ReadToEnd()",
+    operation === "write"
+      ? `$pipe = [IO.Pipes.NamedPipeClientStream]::new('.', '${windowsInputPipeMarker}', [IO.Pipes.PipeDirection]::In); $pipe.Connect(15000); $inputText = [IO.StreamReader]::new($pipe, [Text.Encoding]::ASCII).ReadToEnd(); $pipe.Dispose()`
+      : "$inputText = ''",
     "if ($operation -eq 'read') { $secret = [DotRelayCredential]::Read($target); if ($null -eq $secret) { exit 1 }; $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
     "if ($operation -eq 'write') { $secret = [Convert]::FromBase64String($inputText); if (![DotRelayCredential]::Write($target, $secret)) { exit 1 }; exit 0 }",
     "$targetPointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($target); try { if (![DotRelayCredential]::CredDelete($targetPointer, 1, 0)) { exit 1 }; exit 0 } finally { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($targetPointer) }",
@@ -228,18 +263,13 @@ const windowsDpapiScript = (
     "$root = Join-Path $env:LOCALAPPDATA 'DotRelay\\credentials'",
     "$path = Join-Path $root ($key + '.bin')",
     `$operation = '${operation}'`,
-    "$inputText = [IO.StreamReader]::new([Console]::OpenStandardInput(), [Text.Encoding]::ASCII).ReadToEnd()",
+    operation === "write"
+      ? `$pipe = [IO.Pipes.NamedPipeClientStream]::new('.', '${windowsInputPipeMarker}', [IO.Pipes.PipeDirection]::In); $pipe.Connect(15000); $inputText = [IO.StreamReader]::new($pipe, [Text.Encoding]::ASCII).ReadToEnd(); $pipe.Dispose()`
+      : "$inputText = ''",
     "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $secure = ConvertTo-SecureString -String ([IO.File]::ReadAllText($path)); $plain = [System.Net.NetworkCredential]::new('', $secure).Password; $encoded = [Text.Encoding]::ASCII.GetBytes($plain); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
     "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secure = ConvertTo-SecureString -String $inputText -AsPlainText -Force; $protected = ConvertFrom-SecureString -SecureString $secure; [IO.File]::WriteAllText($path, $protected, [Text.Encoding]::UTF8); exit 0 }",
     "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
   ].join("\n");
-
-const runWindowsCommand = async (script: string, input?: Uint8Array) =>
-  command(
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    input,
-  );
 
 const createWindowsCredentialStore = (): NativeCredentialStore =>
   Object.freeze({
