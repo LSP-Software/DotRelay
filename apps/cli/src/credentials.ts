@@ -258,6 +258,7 @@ const windowsScript = (
     operation === "write"
       ? `$client = [Net.Sockets.TcpClient]::new('127.0.0.1', ${windowsInputPortMarker}); $stream = $client.GetStream(); $inputText = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII).ReadToEnd(); $client.Dispose()`
       : "$inputText = ''",
+    "Add-Type -AssemblyName System.Security",
     "if ($operation -eq 'read') { $secret = [DotRelayCredential]::Read($target); if ($null -eq $secret) { exit 1 }; $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
     "if ($operation -eq 'write') { $secret = [Convert]::FromBase64String($inputText); if (![DotRelayCredential]::Write($target, $secret)) { exit 1 }; exit 0 }",
     "$targetPointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($target); try { if (![DotRelayCredential]::CredDelete($targetPointer, 1, 0)) { exit 1 }; exit 0 } finally { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($targetPointer) }",
@@ -275,8 +276,8 @@ const windowsDpapiScript = (
     operation === "write"
       ? `$client = [Net.Sockets.TcpClient]::new('127.0.0.1', ${windowsInputPortMarker}); $stream = $client.GetStream(); $inputText = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII).ReadToEnd(); $client.Dispose()`
       : "$inputText = ''",
-    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $secure = ConvertTo-SecureString -String ([IO.File]::ReadAllText($path)); $plain = [System.Net.NetworkCredential]::new('', $secure).Password; $encoded = [Text.Encoding]::ASCII.GetBytes($plain); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
-    "if ($operation -eq 'write') { [IO.Directory]::CreateDirectory($root) | Out-Null; $secure = ConvertTo-SecureString -String $inputText -AsPlainText -Force; $protected = ConvertFrom-SecureString -SecureString $secure; [IO.File]::WriteAllText($path, $protected, [Text.Encoding]::UTF8); exit 0 }",
+    "if ($operation -eq 'read') { if (![IO.File]::Exists($path)) { exit 1 }; $protected = [IO.File]::ReadAllBytes($path); $secret = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser); $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
+    "if ($operation -eq 'write') { if ($inputText.Length -eq 0) { [Console]::Error.WriteLine('credential input was empty'); exit 2 }; [IO.Directory]::CreateDirectory($root) | Out-Null; $secret = [Convert]::FromBase64String($inputText); $protected = [System.Security.Cryptography.ProtectedData]::Protect($secret, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser); [IO.File]::WriteAllBytes($path, $protected); exit 0 }",
     "if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }; exit 0",
   ].join("\n");
 
