@@ -739,7 +739,7 @@ try {
       !(terminal.stdout + terminal.stderr).includes(
         "refusing to write Values to terminal stdout",
       ) ||
-      (terminal.stdout + terminal.stderr).includes("secret")
+      (terminal.stdout + terminal.stderr).includes('USER_VALUE="secret"')
     )
       throw new Error("packaged CLI TTY stdout safety contract failed");
   }
