@@ -1048,7 +1048,7 @@ try {
     environment,
   );
   if (
-    invalidRecovery.exitCode !== 5 ||
+    invalidRecovery.exitCode !== 7 ||
     !invalidRecovery.stderr.includes('"code":"recovery_kit_invalid"') ||
     invalidRecovery.stderr.includes("secret")
   )
