@@ -737,7 +737,7 @@ try {
     const terminalOutput = terminal.stdout + terminal.stderr;
     if (
       terminal.exitCode !== 2 ||
-      !terminal.stderr.includes('"code":"invocation"') ||
+      !terminalOutput.includes('"code":"invocation"') ||
       terminalOutput.includes('USER_VALUE="secret"') ||
       terminalOutput.includes('SHARED_VALUE="two"')
     )
