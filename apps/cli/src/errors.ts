@@ -67,6 +67,7 @@ const safeDiagnosticCodes = new Set([
   "invocation",
   "local-io",
   "membership_not_key_provisioned",
+  "missing_values",
   "operation_conflict",
   "output_write_failed",
   "profile_catalog_invalid",
