@@ -495,12 +495,8 @@ export const WorkspaceShell = ({
       setDeviceSetupMessage(
         "This browser Device is active and its private keys are stored locally.",
       );
-    } catch (error) {
-      setDeviceSetupMessage(
-        error instanceof Error
-          ? error.message
-          : "Device enrollment could not be completed.",
-      );
+    } catch {
+      setDeviceSetupMessage("Device enrollment could not be completed.");
     } finally {
       setDeviceSetupInProgress(false);
     }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createDevicePrivateBundle } from "../device/bundle";
+import { createInMemoryDiagnosticSink } from "../diagnostics/event";
 import {
   createBrowserDeviceStorage,
   createMemoryDeviceRecordStore,
@@ -66,6 +67,25 @@ describe("browser device storage", () => {
     await storage.save(bundle);
     const loaded = await storage.load({ pin, deviceId });
     expect(loaded.userIdentityGeneration).toBe(2);
+  });
+
+  test("emits only local value-blind diagnostics", async () => {
+    resetMemoryDeviceRecordStore();
+    const diagnostics = createInMemoryDiagnosticSink(() => 0);
+    const storage = createBrowserDeviceStorage(pin, { diagnostics });
+    const deviceId = crypto.getRandomValues(new Uint8Array(16));
+    const bundle = await createDevicePrivateBundle({
+      pin,
+      userId: crypto.getRandomValues(new Uint8Array(16)),
+      deviceId,
+      userIdentityGeneration: 1,
+    });
+    await storage.save(bundle);
+    await storage.load({ pin, deviceId });
+    const records = diagnostics.records();
+    expect(records).toHaveLength(2);
+    expect(records.join(" ")).not.toContain(pin.serverProfileId);
+    expect(records.join(" ")).not.toContain("ciphertext");
   });
 
   test("isolates bundles across origins and profiles", async () => {

@@ -15,6 +15,7 @@ const createAuthWithAdapter = (
     basePath: "/api/auth",
     secret: profile.authSecret,
     trustedOrigins: [profile.origin, profile.webOrigin],
+    logger: { disabled: true },
     ...(database ? { database } : {}),
     ...(database
       ? {
