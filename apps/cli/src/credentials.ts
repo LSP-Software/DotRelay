@@ -59,6 +59,9 @@ const standardBase64 = (bytes: Uint8Array): string => {
 
 const textCredentialPrefix = "dotrelay-v1:";
 
+const versionedCredentialService = (service: string): string =>
+  `dotrelay-v1/${service}`;
+
 const decodeTextCredential = (value: Uint8Array): Uint8Array => {
   const text = new TextDecoder().decode(value).trimEnd();
   if (!text.startsWith(textCredentialPrefix)) return value;
@@ -253,6 +256,7 @@ const WINDOWS_CREDENTIAL_TYPE = [
   '[DllImport("advapi32.dll")] public static extern void CredFree(IntPtr credential);',
   "public static byte[] Read(string target) { var targetPointer = Marshal.StringToCoTaskMemUni(target); try { IntPtr pointer; if (!CredRead(targetPointer, 1, 0, out pointer)) return null; var value = (CREDENTIAL)Marshal.PtrToStructure(pointer, typeof(CREDENTIAL)); var bytes = new byte[value.CredentialBlobSize]; Marshal.Copy(value.CredentialBlob, bytes, 0, (int)value.CredentialBlobSize); CredFree(pointer); return bytes; } finally { Marshal.FreeCoTaskMem(targetPointer); } }",
   "public static bool Write(string target, byte[] bytes) { var targetPointer = Marshal.StringToCoTaskMemUni(target); var blobPointer = Marshal.AllocHGlobal(bytes.Length); try { Marshal.Copy(bytes, 0, blobPointer, bytes.Length); var value = new CREDENTIAL { Type=1, TargetName=targetPointer, CredentialBlob=blobPointer, CredentialBlobSize=(uint)bytes.Length, Persist=2 }; if (CredWrite(ref value, 0) && Read(target) != null) return true; value.Persist=1; return CredWrite(ref value, 0); } finally { Marshal.FreeHGlobal(blobPointer); Marshal.FreeCoTaskMem(targetPointer); } }",
+  "public static int Delete(string target) { var targetPointer = Marshal.StringToCoTaskMemUni(target); try { return CredDelete(targetPointer, 1, 0) ? 0 : Marshal.GetLastWin32Error(); } finally { Marshal.FreeCoTaskMem(targetPointer); } }",
   "}",
   "'@",
 ].join("\n");
@@ -271,7 +275,7 @@ const windowsScript = (
     "Add-Type -AssemblyName System.Security",
     "if ($operation -eq 'read') { $secret = [DotRelayCredential]::Read($target); if ($null -eq $secret) { exit 1 }; $encoded = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($secret)); [Console]::OpenStandardOutput().Write($encoded, 0, $encoded.Length); exit 0 }",
     "if ($operation -eq 'write') { $secret = [Convert]::FromBase64String($inputText); if (![DotRelayCredential]::Write($target, $secret)) { exit 1 }; exit 0 }",
-    "$targetPointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($target); try { if (![DotRelayCredential]::CredDelete($targetPointer, 1, 0)) { exit 1 }; exit 0 } finally { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($targetPointer) }",
+    "$deleteError = [DotRelayCredential]::Delete($target); if ($deleteError -ne 0) { exit $deleteError }; exit 0",
   ].join("\n");
 
 const windowsDpapiScript = (
@@ -381,7 +385,17 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
   if (executable === "security") {
     return Object.freeze({
       get: async (service, account) => {
-        const result = await command(executable, [
+        const versioned = await command(executable, [
+          "find-generic-password",
+          "-s",
+          versionedCredentialService(service),
+          "-a",
+          account,
+          "-w",
+        ]);
+        if (versioned.status === 0)
+          return decodeTextCredential(versioned.stdout);
+        const legacy = await command(executable, [
           "find-generic-password",
           "-s",
           service,
@@ -389,7 +403,7 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
           account,
           "-w",
         ]);
-        return result.status === 0 ? decodeTextCredential(result.stdout) : null;
+        return legacy.status === 0 ? legacy.stdout : null;
       },
       set: async (service, account, secret) => {
         // macOS security has no password-stdin mode. Its final -w prompts on
@@ -401,7 +415,7 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
             "add-generic-password",
             "-U",
             "-s",
-            service,
+            versionedCredentialService(service),
             "-a",
             account,
             "-T",
@@ -421,33 +435,46 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
           );
       },
       delete: async (service, account) => {
-        const result = await command(executable, [
-          "delete-generic-password",
-          "-s",
+        for (const candidateService of [
+          versionedCredentialService(service),
           service,
-          "-a",
-          account,
-        ]);
-        if (result.status !== 0 && result.status !== 44)
-          throw new CliError(
-            "local-io",
-            "could not remove a credential from the operating-system store",
-            {},
-            "credential_store_delete_failed",
-          );
+        ]) {
+          const result = await command(executable, [
+            "delete-generic-password",
+            "-s",
+            candidateService,
+            "-a",
+            account,
+          ]);
+          if (result.status !== 0 && result.status !== 44)
+            throw new CliError(
+              "local-io",
+              "could not remove a credential from the operating-system store",
+              {},
+              "credential_store_delete_failed",
+            );
+        }
       },
     });
   }
   return Object.freeze({
     get: async (service, account) => {
-      const result = await command(executable, [
+      const versioned = await command(executable, [
+        "lookup",
+        "service",
+        versionedCredentialService(service),
+        "account",
+        account,
+      ]);
+      if (versioned.status === 0) return decodeTextCredential(versioned.stdout);
+      const legacy = await command(executable, [
         "lookup",
         "service",
         service,
         "account",
         account,
       ]);
-      return result.status === 0 ? decodeTextCredential(result.stdout) : null;
+      return legacy.status === 0 ? legacy.stdout : null;
     },
     set: async (service, account, secret) => {
       const result = await command(
@@ -457,7 +484,7 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
           "--label",
           "DotRelay",
           "service",
-          service,
+          versionedCredentialService(service),
           "account",
           account,
         ],
@@ -474,20 +501,33 @@ export const createNativeCredentialStore = (): NativeCredentialStore => {
         );
     },
     delete: async (service, account) => {
-      const result = await command(executable, [
-        "clear",
-        "service",
+      for (const candidateService of [
+        versionedCredentialService(service),
         service,
-        "account",
-        account,
-      ]);
-      if (result.status !== 0)
-        throw new CliError(
-          "local-io",
-          "could not remove a credential from the operating-system store",
-          {},
-          "credential_store_delete_failed",
-        );
+      ]) {
+        const existing = await command(executable, [
+          "lookup",
+          "service",
+          candidateService,
+          "account",
+          account,
+        ]);
+        if (existing.status !== 0) continue;
+        const result = await command(executable, [
+          "clear",
+          "service",
+          candidateService,
+          "account",
+          account,
+        ]);
+        if (result.status !== 0)
+          throw new CliError(
+            "local-io",
+            "could not remove a credential from the operating-system store",
+            {},
+            "credential_store_delete_failed",
+          );
+      }
     },
   });
 };
