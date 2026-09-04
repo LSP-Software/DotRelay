@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import {
   decideLaneDisclosure,
   decideTeamAction,
@@ -341,18 +342,34 @@ export class OperationRepository {
     return inShortTransaction(database, async (transaction) => {
       const expired = await transaction.operation.findMany({
         where: { status: "STAGED", expiresAt: { lte: now } },
-        select: { id: true },
+        select: { id: true, actorUserId: true, actorDeviceId: true },
       });
       if (expired.length === 0) return 0;
-      const ids = expired.map(({ id }) => id);
-      await transaction.stagedObject.deleteMany({
-        where: { operationId: { in: ids }, committedAt: null },
-      });
-      const result = await transaction.operation.updateMany({
-        where: { id: { in: ids }, status: "STAGED" },
-        data: { status: "EXPIRED" },
-      });
-      return result.count;
+      let expiredCount = 0;
+      for (const operation of expired) {
+        const result = await transaction.operation.updateMany({
+          where: { id: operation.id, status: "STAGED" },
+          data: { status: "EXPIRED" },
+        });
+        if (result.count !== 1) continue;
+        await transaction.stagedObject.deleteMany({
+          where: { operationId: operation.id, committedAt: null },
+        });
+        await transaction.auditEvent.create({
+          data: {
+            operationId: operation.id,
+            kind: "OPERATION_EXPIRED",
+            actorUserId: operation.actorUserId,
+            ...(operation.actorDeviceId
+              ? { actorDeviceId: operation.actorDeviceId }
+              : {}),
+            entityKind: "OPERATION",
+            entityId: operation.id,
+          },
+        });
+        expiredCount += 1;
+      }
+      return expiredCount;
     });
   }
 
@@ -402,6 +419,16 @@ export class OperationRepository {
         where: { id: operation.id },
       });
       if (!cancelled) throw new OperationNotFoundError();
+      await transaction.auditEvent.create({
+        data: {
+          operationId: cancelled.id,
+          kind: "OPERATION_CANCELLED",
+          actorUserId: input.actorUserId,
+          actorDeviceId: input.actorDeviceId,
+          entityKind: "OPERATION",
+          entityId: cancelled.id,
+        },
+      });
       return Object.freeze({ operation: cancelled, idempotent: false });
     });
   }
@@ -427,7 +454,12 @@ export type AuditFactInput = Readonly<{
     | "ENVIRONMENT_RESTORED"
     | "REVISION_PUBLISHED"
     | "ROLLBACK_PUBLISHED"
-    | "EPOCH_ROTATED";
+    | "EPOCH_ROTATED"
+    | "GRANT_CREATED"
+    | "DEVICE_ENROLLMENT_STARTED"
+    | "DEVICE_ENROLLMENT_APPROVED"
+    | "OPERATION_CANCELLED"
+    | "OPERATION_EXPIRED";
   readonly actorUserId?: string;
   readonly actorDeviceId?: string;
   readonly entityKind:
@@ -480,25 +512,45 @@ export class SecurityRequestLogRepository {
     database: PersistenceClient,
     input: Readonly<{
       readonly ipAddress: string;
-      readonly endpointTemplate: string;
+      readonly endpointTemplate: SecurityRequestEndpointTemplate;
       readonly httpStatus: number;
       readonly transferBytes: bigint;
       readonly requestedAt: Date;
       readonly expiresAt: Date;
     }>,
   ) {
+    if (!SECURITY_REQUEST_ENDPOINT_TEMPLATES.includes(input.endpointTemplate))
+      throw new Error(
+        "Security Request Log endpoint template is not allowlisted",
+      );
+    if (isIP(input.ipAddress) === 0)
+      throw new Error("Security Request Log IP address is invalid");
+    if (
+      !Number.isInteger(input.httpStatus) ||
+      input.httpStatus < 100 ||
+      input.httpStatus > 599
+    )
+      throw new Error("Security Request Log status is invalid");
+    if (input.transferBytes < 0n)
+      throw new Error("Security Request Log transfer size is invalid");
+    if (
+      Number.isNaN(input.requestedAt.getTime()) ||
+      Number.isNaN(input.expiresAt.getTime())
+    )
+      throw new Error("Security Request Log timestamp is invalid");
     if (input.expiresAt <= input.requestedAt)
       throw new Error("Security Request Log must expire after receipt");
-    return database.securityRequestLog.create({
-      data: {
-        ipAddress: input.ipAddress,
-        endpointTemplate: input.endpointTemplate,
-        httpStatus: input.httpStatus,
-        transferBytes: input.transferBytes,
-        requestedAt: input.requestedAt,
-        expiresAt: input.expiresAt,
-      },
-    });
+    if (
+      input.expiresAt.getTime() - input.requestedAt.getTime() >
+      SECURITY_REQUEST_LOG_RETENTION_MS
+    )
+      throw new Error("Security Request Log retention exceeds 30 days");
+    return database.$executeRaw`
+      INSERT INTO "security_request_logs"
+        ("id", "ipAddress", "endpointTemplate", "httpStatus", "transferBytes", "requestedAt", "expiresAt")
+      VALUES
+        (${crypto.randomUUID()}, CAST(${input.ipAddress} AS INET), ${input.endpointTemplate}, ${input.httpStatus}, ${input.transferBytes}, ${input.requestedAt}, ${input.expiresAt})
+    `;
   }
 
   async expire(database: TransactionDatabase, now: Date) {
@@ -509,6 +561,25 @@ export class SecurityRequestLogRepository {
     );
   }
 }
+
+export const SECURITY_REQUEST_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const SECURITY_REQUEST_ENDPOINT_TEMPLATES = Object.freeze([
+  "/health",
+  "/api/v1/capabilities",
+  "/api/v1/session",
+  "/device",
+  "/api/auth/*",
+  "/api/v1/operations/:operationId/begin",
+  "/api/v1/operations/:operationId/staging/:objectId",
+  "/api/v1/operations/:operationId/finalize",
+  "/api/v1/operations/:operationId",
+  "/api/v1/environments/:environmentId/sync",
+  "/api/v1/operations/:operationId/epoch-transitions",
+] as const);
+
+export type SecurityRequestEndpointTemplate =
+  (typeof SECURITY_REQUEST_ENDPOINT_TEMPLATES)[number];
 
 export type TeamCreationInput = Readonly<{
   readonly teamId?: string;
@@ -1911,6 +1982,14 @@ export class DeviceRepository {
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
       });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "DEVICE_ENROLLMENT_STARTED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "OPERATION",
+        entityId: operation.operation.id,
+      });
       return { operation: operation.operation, enrollment };
     });
   }
@@ -1971,6 +2050,15 @@ export class DeviceRepository {
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "DEVICE_ENROLLMENT_APPROVED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "OPERATION",
+        entityId: operation.operation.id,
+        outcomeObjectId: approvalObject.id,
       });
       return { operation: operation.operation, enrollment };
     });
@@ -2633,6 +2721,17 @@ export class GrantRepository {
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          operationId: operation.operation.id,
+          kind: "GRANT_CREATED",
+          actorUserId: input.operation.actorUserId,
+          actorDeviceId: input.operation.actorDeviceId,
+          entityKind: "PROTOCOL_OBJECT",
+          entityId: protocolObject.id,
+          outcomeObjectId: protocolObject.id,
+        },
       });
       return { operation: operation.operation, grant };
     });

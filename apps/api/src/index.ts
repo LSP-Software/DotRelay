@@ -31,6 +31,12 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
 import {
+  API_CORRELATION_HEADER,
+  type ApiObservability,
+  createApiObservability,
+  createServerCorrelationId,
+} from "./observability";
+import {
   createCapabilitiesDocument,
   etagFor,
   hasMixedCredentials,
@@ -42,17 +48,61 @@ import {
 import { registerProtocolRoutes } from "./protocol";
 import { requireProtocolActor } from "./protocol/context";
 
-type ApiDependencies = Readonly<{
+export type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
   readonly profile: ServerProfileConfig;
   readonly auth: DotRelayAuth;
+  readonly observability?: ApiObservability;
+  readonly resolveClientIp?: (request: Request) => string | null;
 }>;
 
 const jsonProblem = (context: Context, code: ProblemCode) => {
-  const problem = createProblem(code);
+  const correlationId = context.get("correlationId" as never) as
+    | string
+    | undefined;
+  const problem = createProblem(code, {
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
   return context.json(problem, problem.status as ContentfulStatusCode, {
     "Content-Type": "application/problem+json",
   });
+};
+
+const safeAuthErrorCodes = new Set([
+  "access_denied",
+  "authorization_pending",
+  "expired_token",
+  "slow_down",
+]);
+
+const sanitizeAuthResponse = async (
+  context: Context,
+  response: Response,
+): Promise<Response> => {
+  if (response.status < 400) return response;
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("x-retry-after");
+    if (retryAfter) context.header("X-Retry-After", retryAfter);
+    return jsonProblem(context, "rate_limited");
+  }
+  if (response.headers.get("content-type")?.includes("application/json")) {
+    try {
+      const body = (await response.clone().json()) as {
+        readonly error?: unknown;
+      };
+      if (typeof body.error === "string" && safeAuthErrorCodes.has(body.error))
+        return Response.json(
+          { error: body.error },
+          {
+            status: response.status,
+            headers: { "Cache-Control": "no-store" },
+          },
+        );
+    } catch {
+      // Fall through to the generic problem response.
+    }
+  }
+  return jsonProblem(context, "service_unavailable");
 };
 
 const escapeHtml = (value: string) =>
@@ -213,6 +263,7 @@ const protocolCors = (profile: ServerProfileConfig) =>
     credentials: true,
     allowHeaders: ["Content-Type", "Authorization", DEVICE_ID_HEADER],
     allowMethods: ["POST", "OPTIONS"],
+    exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
     maxAge: 600,
   });
 
@@ -227,14 +278,50 @@ const parseUuidBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
-const createApi = ({ database, profile, auth }: ApiDependencies) => {
+const createApi = ({
+  database,
+  profile,
+  auth,
+  observability: suppliedObservability,
+  resolveClientIp,
+}: ApiDependencies) => {
   const app = new Hono();
+  const observability =
+    suppliedObservability ??
+    createApiObservability(
+      database,
+      resolveClientIp === undefined ? {} : { resolveClientIp },
+    );
   const capabilities = createCapabilitiesDocument(profile);
   let capabilitiesEtagPromise: Promise<string> | undefined;
   const getCapabilitiesEtag = () => {
     capabilitiesEtagPromise ??= etagFor(capabilities);
     return capabilitiesEtagPromise;
   };
+
+  app.use("*", async (context, next) => {
+    const correlationId = createServerCorrelationId();
+    const startedAt = performance.now();
+    context.set("correlationId" as never, correlationId);
+    context.header(API_CORRELATION_HEADER, correlationId);
+    try {
+      await next();
+    } finally {
+      try {
+        observability.recordRequest({
+          request: context.req.raw,
+          path: context.req.path,
+          status: context.res.status,
+          correlationId,
+          durationMs: performance.now() - startedAt,
+        });
+      } catch {
+        // Observability loss must never affect the response or domain behavior.
+      }
+    }
+  });
+
+  app.onError((_error, context) => jsonProblem(context, "service_unavailable"));
 
   app.use("*", async (context, next) => {
     if (!isSecureRequest(context.req.raw, profile))
@@ -269,7 +356,7 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
       credentials: true,
       allowHeaders: ["Content-Type", "Authorization"],
       allowMethods: ["GET", "POST", "OPTIONS"],
-      exposeHeaders: ["X-Retry-After", "Set-Auth-Token"],
+      exposeHeaders: ["X-Correlation-ID", "X-Retry-After", "Set-Auth-Token"],
       maxAge: 600,
     }),
   );
@@ -310,7 +397,7 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
     try {
       const response = await auth.handler(context.req.raw);
       response.headers.set("Cache-Control", "no-store");
-      return response;
+      return sanitizeAuthResponse(context, response);
     } catch {
       return jsonProblem(context, "service_unavailable");
     }
@@ -679,17 +766,28 @@ const createApi = ({ database, profile, auth }: ApiDependencies) => {
 
   registerProtocolRoutes(app, { database, profile, auth });
 
-  void database;
   return app;
 };
 
 const profile = loadServerProfileConfig();
 const database = createDatabaseClient();
+type RequestIpServer = {
+  readonly requestIP: (request: Request) => { readonly address: string } | null;
+};
+let server: RequestIpServer | undefined;
+const runtimeObservability = createApiObservability(database, {
+  resolveClientIp: (request) => server?.requestIP(request)?.address ?? null,
+});
 export const auth = createAuth(
   createBetterAuthDatabaseAdapter(database),
   profile,
 );
-export const app = createApi({ database, profile, auth });
+export const app = createApi({
+  database,
+  profile,
+  auth,
+  observability: runtimeObservability,
+});
 export { createApi, loadServerProfileConfig };
 
 if (import.meta.main) {
@@ -698,5 +796,15 @@ if (import.meta.main) {
     origin: profile.origin,
     allowRebind: profile.allowRebind,
   });
-  Bun.serve({ fetch: app.fetch, port: Number(process.env.PORT ?? 3001) });
+  server = Bun.serve({
+    fetch: app.fetch,
+    port: Number(process.env.PORT ?? 3001),
+  });
+  const cleanupTimer = setInterval(
+    () => {
+      void runtimeObservability.expireSecurityRequestLogs();
+    },
+    60 * 60 * 1000,
+  );
+  cleanupTimer.unref?.();
 }

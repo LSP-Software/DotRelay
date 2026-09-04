@@ -106,7 +106,7 @@ describe("CLI foundation", () => {
   test("rejects forbidden flags even when help is requested", async () => {
     const result = await run(["--insecure", "--help"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("--insecure is not supported");
+    expect(result.stderr).toBe("The command could not complete.\n");
   });
 
   test("maps an empty Git remote result to repository_missing", async () => {
