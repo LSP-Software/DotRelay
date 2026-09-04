@@ -115,6 +115,28 @@ jobs:
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - run: bun run test:cli
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install --no-install-recommends -y dbus-x11 gnome-keyring libsecret-tools
+      - if: runner.os == 'Linux'
+        run: >-
+          dbus-run-session -- bash -c 'set -euo pipefail;
+          printf "%s\n" dotrelay | gnome-keyring-daemon --daemonize --unlock --components=secrets;
+          eval "$(gnome-keyring-daemon --start --components=secrets)";
+          export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK;
+          bun run test:cli:live'
+      - if: runner.os == 'macOS'
+        name: Create isolated macOS keychain
+        run: |
+          keychain="$RUNNER_TEMP/dotrelay.keychain-db"
+          security create-keychain -p dotrelay "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p dotrelay "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -s "$keychain"
+      - if: runner.os != 'Linux'
+        run: bun run test:cli:live
       - run: bun run tracked-tree:clean
 
   prisma:

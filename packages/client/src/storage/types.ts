@@ -35,7 +35,21 @@ export const scopeKey = (scope: DeviceStorageScope): string => {
   return `${scope.pin.origin}\0${scope.pin.serverProfileId}\0${deviceHex}`;
 };
 
+const base64Url = (value: string): string => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+};
+
 export const credentialAccount = (scope: DeviceStorageScope): string =>
+  `v1:${base64Url(scopeKey(scope))}`;
+
+/** The pre-v1 account format is retained only for one-time migration. */
+export const legacyCredentialAccount = (scope: DeviceStorageScope): string =>
   scopeKey(scope);
 
 export const DOTRELAY_CREDENTIAL_SERVICE = "dotrelay-device-wrap" as const;

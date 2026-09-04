@@ -26,6 +26,7 @@
     "test:integration": "bun scripts/test-services.ts && turbo run test:integration",
     "test:e2e": "playwright test --config=playwright.config.ts",
     "test:cli": "turbo run test:cli --filter=@dotrelay/cli",
+    "test:cli:live": "bun scripts/test-cli-live.ts",
     "prisma:generate": "bun x prisma generate --config packages/database/prisma.config.ts",
     "db:validate": "bun scripts/validate-prisma.ts",
     "db:migrate-check": "bun scripts/check-migrations.ts",
@@ -34,7 +35,7 @@
     "security:audit": "bun audit",
     "postinstall": "bun run prisma:generate",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run boundaries && bun run openapi:check && bun run vectors:verify-sources && bun run test:unit",
-    "verify": "bun run check && bun run build && bun run smoke && bun run test:integration && bun run test:e2e && bun run test:cli && bun run db:validate && bun run db:migrate-check && bun run docs:validate && bun run tracked-tree:clean"
+    "verify": "bun run check && bun run build && bun run smoke && bun run test:integration && bun run test:e2e && bun run test:cli && bun run test:cli:live && bun run db:validate && bun run db:migrate-check && bun run docs:validate && bun run tracked-tree:clean"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.9",

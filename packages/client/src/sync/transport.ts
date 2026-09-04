@@ -189,12 +189,21 @@ export const createProtocolTransport = (
   input: Readonly<{
     readonly origin: string;
     readonly fetch?: FetchLike;
+    readonly authorization?: string;
   }>,
 ): ProtocolTransport => {
-  const fetcher =
+  const baseFetcher =
     input.fetch ??
     ((url, init) =>
       fetch(url, init as never) as unknown as Promise<ResponseLike>);
+  const fetcher: FetchLike = (url, init) =>
+    baseFetcher(url, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+        ...(input.authorization ? { Authorization: input.authorization } : {}),
+      },
+    });
   const endpoint = (path: string): string =>
     `${input.origin.replace(/\/$/, "")}${path}`;
 

@@ -541,6 +541,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
           "mismatched-acceptance",
           "INVITATION",
         ),
+        now: invitedAt,
       }),
     ).rejects.toThrow("addressed to another User");
     const accepted = await memberships.accept(database, {
@@ -554,6 +555,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
         )),
         actorDeviceId: invited.device.id,
       },
+      now: invitedAt,
     });
     if (!("membership" in accepted))
       throw new Error("invitation acceptance was unexpectedly idempotent");

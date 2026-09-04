@@ -16,6 +16,7 @@ import {
   type DeviceRecordStore,
   type DeviceStorageScope,
   DOTRELAY_CREDENTIAL_SERVICE,
+  legacyCredentialAccount,
   zeroize,
 } from "./types";
 import {
@@ -59,12 +60,36 @@ const loadWrappingKey = async (
   credentialStore: CredentialStore,
   runtime: Crypto,
 ): Promise<CryptoKey> => {
-  const material = await credentialStore.get(
+  let material = await credentialStore.get(
     DOTRELAY_CREDENTIAL_SERVICE,
     credentialAccount(scope),
   );
+  if (!material) {
+    try {
+      material = await credentialStore.get(
+        DOTRELAY_CREDENTIAL_SERVICE,
+        legacyCredentialAccount(scope),
+      );
+    } catch {
+      material = null;
+    }
+  }
   if (!material) throw new Error("cli wrapping secret is missing");
   try {
+    if (
+      !(await credentialStore.get(
+        DOTRELAY_CREDENTIAL_SERVICE,
+        credentialAccount(scope),
+      ))
+    )
+      await credentialStore.set(
+        DOTRELAY_CREDENTIAL_SERVICE,
+        credentialAccount(scope),
+        material,
+      );
+    await credentialStore
+      .delete(DOTRELAY_CREDENTIAL_SERVICE, legacyCredentialAccount(scope))
+      .catch(() => undefined);
     return await importWrappingKeyMaterial(material, false, runtime);
   } finally {
     zeroize(material);
@@ -85,6 +110,30 @@ const ensureWrappingKey = async (
       return await importWrappingKeyMaterial(existing, false, runtime);
     } finally {
       zeroize(existing);
+    }
+  }
+  let legacy: Uint8Array | null = null;
+  try {
+    legacy = await credentialStore.get(
+      DOTRELAY_CREDENTIAL_SERVICE,
+      legacyCredentialAccount(scope),
+    );
+  } catch {
+    legacy = null;
+  }
+  if (legacy) {
+    try {
+      await credentialStore.set(
+        DOTRELAY_CREDENTIAL_SERVICE,
+        credentialAccount(scope),
+        legacy,
+      );
+      await credentialStore
+        .delete(DOTRELAY_CREDENTIAL_SERVICE, legacyCredentialAccount(scope))
+        .catch(() => undefined);
+      return await importWrappingKeyMaterial(legacy, false, runtime);
+    } finally {
+      zeroize(legacy);
     }
   }
   const exportable = await runtime.subtle.generateKey(
@@ -214,6 +263,15 @@ export const createCliDeviceStorage = (
         DOTRELAY_CREDENTIAL_SERVICE,
         credentialAccount(scope),
       );
+      try {
+        await credentialStore.delete(
+          DOTRELAY_CREDENTIAL_SERVICE,
+          legacyCredentialAccount(scope),
+        );
+      } catch {
+        // Legacy accounts can be unaddressable on POSIX stores because their
+        // original format contained a NUL separator.
+      }
     },
   });
 };

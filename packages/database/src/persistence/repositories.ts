@@ -1912,6 +1912,10 @@ export type DeviceBootstrapInput = Readonly<{
     readonly ed25519PublicKey: Uint8Array;
   }>;
   readonly certificateObject: ProtocolObjectInput;
+  readonly recoveryAttempt?: Readonly<{
+    readonly envelopeId: string;
+    readonly challengeHash: Uint8Array;
+  }>;
   readonly now?: Date;
 }>;
 
@@ -2070,6 +2074,14 @@ export class DeviceRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
+      const operation = await this.operations.begin(transaction, {
+        ...input.operation,
+        kind:
+          input.operation.kind === "RECOVERY"
+            ? "RECOVERY"
+            : "DEVICE_ENROLLMENT",
+      });
+      if (operation.idempotent) return operation;
       const activeDeviceCount = await transaction.device.count({
         where: {
           userId: input.operation.actorUserId,
@@ -2078,11 +2090,16 @@ export class DeviceRepository {
       });
       if (activeDeviceCount > 0)
         throw new Error("bootstrap enrollment requires no active devices");
-      const operation = await this.operations.begin(transaction, {
-        ...input.operation,
-        kind: "DEVICE_ENROLLMENT",
-      });
-      if (operation.idempotent) return operation;
+      if (input.recoveryAttempt) {
+        const priorAttempt = await transaction.recoveryAttempt.findFirst({
+          where: {
+            userId: input.operation.actorUserId,
+            envelopeId: input.recoveryAttempt.envelopeId,
+            succeeded: true,
+          },
+        });
+        if (priorAttempt) throw new Error("recovery envelope already used");
+      }
       const user = await transaction.user.findUnique({
         where: { id: input.operation.actorUserId },
         select: { identityGeneration: true },
@@ -2129,13 +2146,31 @@ export class DeviceRepository {
       });
       await this.audit.append(transaction, {
         operationId: operation.operation.id,
-        kind: "DEVICE_ENROLLED",
+        kind:
+          input.operation.kind === "RECOVERY"
+            ? "RECOVERY_COMPLETED"
+            : "DEVICE_ENROLLED",
         actorUserId: input.operation.actorUserId,
         entityKind: "DEVICE",
         entityId: device.id,
         newLifecycle: "ACTIVE",
         outcomeObjectId: certificateObject.id,
       });
+      if (input.recoveryAttempt) {
+        await transaction.recoveryAttempt.create({
+          data: {
+            userId: input.operation.actorUserId,
+            envelopeId: input.recoveryAttempt.envelopeId,
+            challengeHash: databaseBytes(
+              validateDigest(
+                input.recoveryAttempt.challengeHash,
+                "challenge hash",
+              ),
+            ),
+            succeeded: true,
+          },
+        });
+      }
       return { operation: operation.operation, device };
     });
   }

@@ -22,6 +22,12 @@ documentation validation:
 bun run verify
 ```
 
+The packaged CLI job also runs `bun run test:cli:live` on Linux, macOS, and Windows. It starts a
+short-lived HTTP Server Profile fixture and drives the compiled binary through profile pinning,
+first-Device bootstrap, dual-control enrollment, encrypted Recovery Kit backup, simulated Device
+loss, and Recovery Kit restore. The test uses each runner's native credential store; Linux CI
+starts an isolated Secret Service session for the job.
+
 CI runs the slower gates as independent required jobs in parallel and cancels superseded runs.
 Coverage is a review signal rather than a merge threshold; product tickets should report percentage
 and absolute covered-line changes against the base commit. A clean checkout must remain clean after

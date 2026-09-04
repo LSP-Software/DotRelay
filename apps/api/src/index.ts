@@ -30,6 +30,7 @@ import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
+import { registerDeviceRoutes } from "./device-routes";
 import {
   API_CORRELATION_HEADER,
   type ApiObservability,
@@ -672,31 +673,74 @@ const createApi = ({
     });
     if (!user) return jsonProblem(context, "service_unavailable");
 
+    const requestedEnvironmentId = context.req.query("environment");
+    const requestedEnvironment = requestedEnvironmentId
+      ? await database.environment.findFirst({
+          where: {
+            id: requestedEnvironmentId,
+            lifecycle: "ACTIVE",
+            project: {
+              lifecycle: "ACTIVE",
+              team: {
+                memberships: {
+                  some: { userId: user.id, lifecycle: "ACTIVE" },
+                },
+              },
+            },
+          },
+          select: { id: true, projectId: true },
+        })
+      : null;
     const membership = await database.membership.findFirst({
       where: { userId: user.id, lifecycle: "ACTIVE" },
       orderBy: { id: "asc" },
       select: { teamId: true },
     });
-    const project = membership
-      ? await database.project.findFirst({
-          where: { teamId: membership.teamId, lifecycle: "ACTIVE" },
-          orderBy: { id: "asc" },
-          select: { id: true, currentEpoch: true },
-        })
-      : null;
-    const environment = project
-      ? await database.environment.findFirst({
-          where: { projectId: project.id, lifecycle: "ACTIVE" },
-          orderBy: { id: "asc" },
-          select: {
-            id: true,
-            currentHeadId: true,
-            currentHead: {
-              select: { protocolObject: { select: { digest: true } } },
-            },
-          },
-        })
-      : null;
+    const project =
+      requestedEnvironmentId !== undefined
+        ? requestedEnvironment
+          ? await database.project.findFirst({
+              where: {
+                id: requestedEnvironment.projectId,
+                lifecycle: "ACTIVE",
+              },
+              select: { id: true, teamId: true, currentEpoch: true },
+            })
+          : null
+        : membership
+          ? await database.project.findFirst({
+              where: { teamId: membership.teamId, lifecycle: "ACTIVE" },
+              orderBy: { id: "asc" },
+              select: { id: true, teamId: true, currentEpoch: true },
+            })
+          : null;
+    const environment =
+      requestedEnvironmentId !== undefined
+        ? requestedEnvironment && project
+          ? await database.environment.findUnique({
+              where: { id: requestedEnvironment.id },
+              select: {
+                id: true,
+                currentHeadId: true,
+                currentHead: {
+                  select: { protocolObject: { select: { digest: true } } },
+                },
+              },
+            })
+          : null
+        : project
+          ? await database.environment.findFirst({
+              where: { projectId: project.id, lifecycle: "ACTIVE" },
+              orderBy: { id: "asc" },
+              select: {
+                id: true,
+                currentHeadId: true,
+                currentHead: {
+                  select: { protocolObject: { select: { digest: true } } },
+                },
+              },
+            })
+          : null;
     const requestedDeviceId = context.req.header(DEVICE_ID_HEADER);
     const device = await database.device.findFirst({
       where: {
@@ -721,11 +765,16 @@ const createApi = ({
         : 0;
     return context.json(
       {
+        session: {
+          active: true,
+          userId: user.id,
+          displayName: session.user.name,
+        },
         environment: {
           headRevision: environment?.currentHeadId ?? "empty-environment",
           id: environment?.id ?? null,
           projectId: project?.id ?? null,
-          teamId: membership?.teamId ?? null,
+          teamId: project?.teamId ?? null,
           headHash: environment?.currentHead?.protocolObject.digest
             ? bytesToHex(
                 new Uint8Array(environment.currentHead.protocolObject.digest),
@@ -756,6 +805,13 @@ const createApi = ({
         epochCurrent: project !== null,
         rotationRequired: false,
         projectEpoch: project?.currentEpoch.toString() ?? null,
+        profile: {
+          name: "DotRelay Server Profile",
+          origin: profile.origin,
+          pinned: true,
+          serverProfileId: profile.id,
+        },
+        crypto: { available: true },
       },
       200,
       { "Cache-Control": "no-store" },
@@ -763,6 +819,8 @@ const createApi = ({
   });
 
   registerAdministrationRoutes(app, { database, profile, auth });
+
+  registerDeviceRoutes(app, { database, profile, auth });
 
   registerProtocolRoutes(app, { database, profile, auth });
 
