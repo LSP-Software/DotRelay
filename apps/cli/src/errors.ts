@@ -79,6 +79,7 @@ const safeDiagnosticCodes = new Set([
   "repository_missing",
   "repository_resolution_failed",
   "request_failed",
+  "recovery_kit_invalid",
   "resource_not_found",
   "response_invalid",
   "response_too_large",
