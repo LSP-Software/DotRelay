@@ -4,6 +4,11 @@ import {
   encodeDevicePrivateBundle,
   parseDevicePrivateBundle,
 } from "../device/bundle";
+import {
+  createCorrelationId,
+  createDiagnosticEvent,
+  type DiagnosticSink,
+} from "../diagnostics/event";
 import { createMemoryDeviceRecordStore } from "./browser";
 import {
   type CredentialStore,
@@ -156,27 +161,46 @@ export const createCliDeviceStorage = (
   options?: Readonly<{
     readonly recordStore?: DeviceRecordStore;
     readonly runtime?: Crypto;
+    readonly diagnostics?: DiagnosticSink;
   }>,
 ): CliDeviceStorage => {
   const runtime = options?.runtime ?? globalThis.crypto;
   const recordStore = options?.recordStore ?? createMemoryDeviceRecordStore();
+  const emitDiagnostic = (
+    eventName: "client.storage.load" | "client.storage.save",
+    outcome: "success" | "failure",
+  ) => {
+    try {
+      options?.diagnostics?.emit(
+        createDiagnosticEvent({
+          eventName,
+          correlationId: createCorrelationId(),
+          outcome,
+        }),
+      );
+    } catch {
+      // Diagnostic loss is intentionally non-blocking.
+    }
+  };
 
   return Object.freeze({
     save: async (bundle) => {
-      if (
-        bundle.pin.serverProfileId !== pin.serverProfileId ||
-        bundle.pin.origin !== pin.origin
-      )
-        throw new Error("device bundle origin or profile isolation violation");
-      const scope = Object.freeze({ pin, deviceId: bundle.deviceId });
-      const wrappingKey = await ensureWrappingKey(
-        scope,
-        credentialStore,
-        runtime,
-      );
-      const associatedData = wrappingAssociatedData(pin, bundle.deviceId);
       let plaintext: Uint8Array | undefined;
       try {
+        if (
+          bundle.pin.serverProfileId !== pin.serverProfileId ||
+          bundle.pin.origin !== pin.origin
+        )
+          throw new Error(
+            "device bundle origin or profile isolation violation",
+          );
+        const scope = Object.freeze({ pin, deviceId: bundle.deviceId });
+        const wrappingKey = await ensureWrappingKey(
+          scope,
+          credentialStore,
+          runtime,
+        );
+        const associatedData = wrappingAssociatedData(pin, bundle.deviceId);
         plaintext = encodeDevicePrivateBundle(bundle);
         const wrapped = await wrapBytes(
           wrappingKey,
@@ -192,26 +216,30 @@ export const createCliDeviceStorage = (
             ciphertext: wrapped.ciphertext,
           }),
         );
+        emitDiagnostic("client.storage.save", "success");
+      } catch (error) {
+        emitDiagnostic("client.storage.save", "failure");
+        throw error;
       } finally {
         zeroize(plaintext);
       }
     },
     load: async (scope) => {
-      if (
-        scope.pin.serverProfileId !== pin.serverProfileId ||
-        scope.pin.origin !== pin.origin
-      )
-        throw new Error("device storage scope isolation violation");
-      const wrappingKey = await loadWrappingKey(
-        scope,
-        credentialStore,
-        runtime,
-      );
-      const record = await recordStore.read(scope);
-      if (!record) throw new Error("encrypted device bundle is missing");
-      const associatedData = wrappingAssociatedData(pin, scope.deviceId);
       let plaintext: Uint8Array | undefined;
       try {
+        if (
+          scope.pin.serverProfileId !== pin.serverProfileId ||
+          scope.pin.origin !== pin.origin
+        )
+          throw new Error("device storage scope isolation violation");
+        const wrappingKey = await loadWrappingKey(
+          scope,
+          credentialStore,
+          runtime,
+        );
+        const record = await recordStore.read(scope);
+        if (!record) throw new Error("encrypted device bundle is missing");
+        const associatedData = wrappingAssociatedData(pin, scope.deviceId);
         plaintext = await unwrapBytes(
           wrappingKey,
           record.iv,
@@ -219,7 +247,12 @@ export const createCliDeviceStorage = (
           associatedData,
           runtime,
         );
-        return parseDevicePrivateBundle(plaintext, pin);
+        const bundle = parseDevicePrivateBundle(plaintext, pin);
+        emitDiagnostic("client.storage.load", "success");
+        return bundle;
+      } catch (error) {
+        emitDiagnostic("client.storage.load", "failure");
+        throw error;
       } finally {
         zeroize(plaintext);
       }

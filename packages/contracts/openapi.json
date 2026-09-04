@@ -1027,6 +1027,10 @@
           "detail": {
             "type": "string"
           },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "instance": {
             "type": "string",
             "format": "uri-reference"
