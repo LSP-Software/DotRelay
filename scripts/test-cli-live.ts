@@ -734,12 +734,12 @@ try {
       ],
       environment,
     );
+    const terminalOutput = terminal.stdout + terminal.stderr;
     if (
       terminal.exitCode !== 2 ||
-      !(terminal.stdout + terminal.stderr).includes(
-        "refusing to write Values to terminal stdout",
-      ) ||
-      (terminal.stdout + terminal.stderr).includes('USER_VALUE="secret"')
+      !terminal.stderr.includes('"code":"invocation"') ||
+      terminalOutput.includes('USER_VALUE="secret"') ||
+      terminalOutput.includes('SHARED_VALUE="two"')
     )
       throw new Error("packaged CLI TTY stdout safety contract failed");
   }
@@ -799,7 +799,7 @@ try {
   );
   if (
     missingClassification.exitCode !== 2 ||
-    !missingClassification.stderr.includes("requires interactive input") ||
+    !missingClassification.stderr.includes('"code":"invocation"') ||
     missingClassification.stderr.includes("secret")
   )
     throw new Error("packaged CLI classification-prompt contract failed");
