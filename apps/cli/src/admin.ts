@@ -9,7 +9,7 @@ import type { NativeCredentialStore } from "./credentials";
 import { CliError, CliInvocationError } from "./errors";
 import type { FetchFunction } from "./profile";
 import type { TerminalIo } from "./terminal";
-import { selectOption } from "./ui";
+import { renderCard, selectOption } from "./ui";
 
 export type StrictJsonClient = Readonly<{
   readonly get: (
@@ -318,7 +318,7 @@ const askForTeamName = async (
   options: ResolveTeamOptions,
 ): Promise<string> => {
   const write = options.write ?? (() => undefined);
-  write("No Team yet. Create one to continue.\n");
+  write(renderCard("No Team yet", { body: ["Create one to continue."] }));
   const answer = (
     await options.prompt(`Team name [${options.suggestedName}]`)
   ).trim();
@@ -350,7 +350,7 @@ export const resolveTeamForProject = async (
     );
   const write = options.write ?? (() => undefined);
   const selectedId = await selectOption(
-    "Team",
+    "Choose a Team",
     [
       ...teams.map((team) => ({ id: team.id, label: team.name })),
       { id: "create", label: "Create a new Team" },
@@ -366,7 +366,7 @@ export const resolveTeamForProject = async (
     if (!selected) throw new CliInvocationError("choose a Team from the list");
     return selected;
   }
-  write("Create a Team to continue.\n");
+  write(renderCard("Create a Team", { body: ["Choose a name to continue."] }));
   const name = (
     await options.prompt(`Team name [${options.suggestedName}]`)
   ).trim();

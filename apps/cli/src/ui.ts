@@ -1,19 +1,43 @@
 import { CliInvocationError } from "./errors";
 import { type TerminalIo, readTerminalLine } from "./terminal";
 
-export type ColorRole = "graphite" | "paper" | "wax" | "dim" | "ok";
+export type ColorRole =
+  | "graphite"
+  | "paper"
+  | "wax"
+  | "dim"
+  | "ok"
+  | "warn"
+  | "danger";
+
+export const PRODUCT_WORDMARK = "dotrelay — DotRelay standalone CLI";
+
+export const MARK = Object.freeze({
+  brand: "{·}",
+  step: "·",
+  cursor: "❯",
+  ok: "✓",
+  error: "✕",
+});
+
+export const GUTTER = "  ";
+export const BODY = "     ";
 
 const RESET = "\x1b[0m";
+const BOLD = "\x1b[1m";
+const ANSI = /\x1b\[[0-9;]*m/g;
 
 const palette: Record<
   ColorRole,
   Readonly<{ readonly truecolor: string; readonly indexed: string }>
 > = {
-  graphite: { truecolor: "\x1b[38;2;138;134;128m", indexed: "\x1b[38;5;245m" },
-  paper: { truecolor: "\x1b[38;2;244;241;236m", indexed: "\x1b[97m" },
-  wax: { truecolor: "\x1b[38;2;196;92;74m", indexed: "\x1b[38;5;167m" },
-  dim: { truecolor: "\x1b[38;2;92;88;84m", indexed: "\x1b[2m" },
-  ok: { truecolor: "\x1b[38;2;111;143;106m", indexed: "\x1b[38;5;107m" },
+  graphite: { truecolor: "\x1b[38;2;154;168;164m", indexed: "\x1b[38;5;246m" },
+  paper: { truecolor: "\x1b[38;2;232;239;236m", indexed: "\x1b[97m" },
+  wax: { truecolor: "\x1b[38;2;110;226;164m", indexed: "\x1b[38;5;79m" },
+  dim: { truecolor: "\x1b[38;2;107;122;118m", indexed: "\x1b[2m" },
+  ok: { truecolor: "\x1b[38;2;110;226;164m", indexed: "\x1b[38;5;79m" },
+  warn: { truecolor: "\x1b[38;2;232;196;92m", indexed: "\x1b[38;5;179m" },
+  danger: { truecolor: "\x1b[38;2;224;112;96m", indexed: "\x1b[38;5;167m" },
 };
 
 const supportsTruecolor = (): boolean => {
@@ -21,28 +45,197 @@ const supportsTruecolor = (): boolean => {
   return term.includes("truecolor") || term.includes("24bit");
 };
 
-export const paint = (text: string, role: ColorRole): string => {
-  if (!process.stderr.isTTY && !process.stdout.isTTY) return text;
+export const colorEnabled = (): boolean => {
+  if (process.env.NO_COLOR !== undefined) return false;
+  if (process.env.FORCE_COLOR === "0") return false;
+  if (process.env.TERM === "dumb") return false;
+  if (process.env.FORCE_COLOR) return true;
+  return Boolean(process.stderr.isTTY || process.stdout.isTTY);
+};
+
+export const paint = (
+  text: string,
+  role: ColorRole,
+  options: Readonly<{ readonly bold?: boolean }> = {},
+): string => {
+  if (!colorEnabled()) return text;
   const color = supportsTruecolor()
     ? palette[role].truecolor
     : palette[role].indexed;
-  return `${color}${text}${RESET}`;
+  const weight = options.bold ? BOLD : "";
+  return `${weight}${color}${text}${RESET}`;
 };
+
+export const visibleWidth = (text: string): number =>
+  Array.from(text.replace(ANSI, "")).length;
+
+export const padVisible = (text: string, width: number): string =>
+  `${text}${" ".repeat(Math.max(0, width - visibleWidth(text)))}`;
+
+const markerFor = (role: ColorRole): string => {
+  if (role === "ok") return paint(MARK.ok, "ok");
+  if (role === "danger") return paint(MARK.error, "danger");
+  if (role === "warn") return paint(MARK.step, "warn");
+  return paint(MARK.step, role);
+};
+
+export type HelpEntry = Readonly<{
+  readonly command: string;
+  readonly detail: string;
+}>;
+
+export type HelpSection = Readonly<{
+  readonly title: string;
+  readonly entries: readonly HelpEntry[];
+}>;
+
+export const renderWordmark = (): string =>
+  `${GUTTER}${paint(MARK.brand, "wax")}  ${paint(PRODUCT_WORDMARK, "paper", {
+    bold: true,
+  })}`;
+
+export const renderSectionTitle = (title: string): string =>
+  `${GUTTER}${paint(title, "wax")}`;
+
+export const renderHelpEntries = (
+  entries: readonly HelpEntry[],
+  options: Readonly<{ readonly commandRole?: ColorRole }> = {},
+): string => {
+  const width = Math.max(...entries.map((entry) => entry.command.length), 8);
+  const commandRole = options.commandRole ?? "paper";
+  return entries
+    .map((entry) => {
+      const command = paint(entry.command.padEnd(width, " "), commandRole);
+      return `${BODY}${command}  ${paint(entry.detail, "graphite")}`;
+    })
+    .join("\n");
+};
+
+export const renderHelpDocument = (
+  sections: readonly HelpSection[],
+  footer: readonly string[] = [],
+): string => {
+  const lines = [
+    renderWordmark(),
+    "",
+    renderSectionTitle("Usage"),
+    `${BODY}${paint("$", "dim")}  ${paint("dotrelay <command>", "paper")}`,
+  ];
+  for (const section of sections) {
+    lines.push(
+      "",
+      renderSectionTitle(section.title),
+      renderHelpEntries(section.entries),
+    );
+  }
+  if (footer.length > 0) {
+    lines.push("", renderSectionTitle("Notes"));
+    for (const line of footer) lines.push(`${BODY}${paint(line, "graphite")}`);
+  }
+  return lines.join("\n");
+};
+
+export type LabeledRow = Readonly<{
+  readonly label: string;
+  readonly value: string;
+  readonly tone?: ColorRole;
+}>;
+
+export const renderLabeledRows = (rows: readonly LabeledRow[]): string => {
+  if (rows.length === 0) return "";
+  const width = Math.max(...rows.map((row) => row.label.length), 6);
+  return rows
+    .map((row) => {
+      const label = paint(row.label.padEnd(width, " "), "dim");
+      const value = paint(row.value, row.tone ?? "graphite");
+      return `${BODY}${label}  ${value}`;
+    })
+    .join("\n");
+};
+
+export const renderCard = (
+  title: string,
+  options: Readonly<{
+    readonly tone?: ColorRole;
+    readonly mark?: "brand" | "status";
+    readonly body?: readonly string[];
+    readonly rows?: readonly LabeledRow[];
+    readonly hint?: string;
+    readonly highlight?: string;
+  }> = {},
+): string => {
+  const tone = options.tone ?? "wax";
+  const marker =
+    options.mark === "brand"
+      ? paint(MARK.brand, "wax")
+      : markerFor(tone);
+  const lines = [
+    `${GUTTER}${marker}  ${paint(title, "paper", { bold: true })}`,
+  ];
+  const body = options.body ?? [];
+  if (body.length > 0 || options.highlight || (options.rows?.length ?? 0) > 0)
+    lines.push("");
+  for (const row of body)
+    lines.push(row.length === 0 ? "" : `${BODY}${paint(row, "graphite")}`);
+  if (options.highlight) {
+    if (body.length > 0) lines.push("");
+    lines.push(`${BODY}${paint(options.highlight, "paper", { bold: true })}`);
+  }
+  if (options.rows && options.rows.length > 0) {
+    if (body.length > 0 || options.highlight) lines.push("");
+    lines.push(renderLabeledRows(options.rows));
+  }
+  if (options.hint) {
+    lines.push("");
+    lines.push(`${BODY}${paint(options.hint, "dim")}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+};
+
+export const renderTable = (
+  title: string,
+  headers: readonly string[],
+  rows: readonly (readonly string[])[],
+  options: Readonly<{ readonly empty?: string }> = {},
+): string => {
+  if (rows.length === 0)
+    return renderCard(title, { body: [options.empty ?? "Nothing to show"] });
+  const widths = headers.map((header, index) =>
+    Math.max(
+      header.length,
+      ...rows.map((row) => (row[index] ?? "").length),
+      header.length === 0 ? 1 : 4,
+    ),
+  );
+  const format = (cells: readonly string[], role: ColorRole): string =>
+    `${BODY}${cells
+      .map((cell, index) =>
+        paint(padVisible(cell, widths[index] ?? cell.length), role),
+      )
+      .join("  ")}`;
+  return [
+    `${GUTTER}${paint(MARK.brand, "wax")}  ${paint(title, "paper", {
+      bold: true,
+    })}`,
+    "",
+    format(headers, "dim"),
+    ...rows.map((row) => format(row, "graphite")),
+    "",
+  ].join("\n");
+};
+
+export const renderError = (detail: string): string =>
+  renderCard("Could not continue", {
+    tone: "danger",
+    body: [detail],
+  });
 
 export const renderStep = (
   title: string,
   body: readonly string[] = [],
   hint?: string,
-): string => {
-  const lines = [`  ${paint("·", "wax")}  ${paint(title, "paper")}`, ""];
-  for (const row of body) lines.push(row.length === 0 ? "" : `     ${row}`);
-  if (hint) {
-    lines.push("");
-    lines.push(`     ${paint(hint, "dim")}`);
-  }
-  lines.push("");
-  return lines.join("\n");
-};
+): string => renderCard(title, { body, hint });
 
 type WritableTty = NodeJS.WritableStream &
   Partial<{ readonly isTTY: boolean }>;
@@ -100,31 +293,43 @@ export type SelectOption = Readonly<{
   readonly label: string;
 }>;
 
+const markerColumnWidth = (count: number, interactive: boolean): number =>
+  interactive ? MARK.cursor.length : String(count).length + 1;
+
 const renderSelect = (
   title: string,
   options: readonly SelectOption[],
   cursor: number,
   interactive: boolean,
 ): string => {
-  const header = `  ${paint("·", "wax")}  ${paint(title, "paper")}\n\n`;
+  const markerWidth = markerColumnWidth(options.length, interactive);
   const rows = options
     .map((option, index) => {
+      const selected = interactive && index === cursor;
       const marker = interactive
-        ? index === cursor
-          ? paint("·", "wax")
+        ? selected
+          ? paint(MARK.cursor, "wax")
           : " "
         : `${index + 1}.`;
-      const label =
-        interactive && index === cursor
-          ? paint(option.label, "paper")
-          : paint(option.label, "graphite");
-      return `     ${marker}  ${label}`;
+      const label = selected
+        ? paint(option.label, "paper", { bold: true })
+        : paint(option.label, "graphite");
+      return `${BODY}${padVisible(marker, markerWidth)}  ${label}`;
     })
     .join("\n");
   const hint = interactive
-    ? "↑/↓ move · enter select"
+    ? "↑/↓ move  ·  enter select"
     : "Enter a number, or press Enter for the first option";
-  return `${header}${rows}\n\n     ${paint(hint, "dim")}\n`;
+  return [
+    `${GUTTER}${paint(MARK.brand, "wax")}  ${paint(title, "paper", {
+      bold: true,
+    })}`,
+    "",
+    rows,
+    "",
+    `${BODY}${paint(hint, "dim")}`,
+    "",
+  ].join("\n");
 };
 
 export const selectOption = async (
@@ -222,8 +427,11 @@ export const writeNotice = (
   tone: ColorRole = "ok",
 ): void => {
   const line = detail
-    ? `  ${paint("·", tone)}  ${paint(title, "paper")}  ${paint(detail, "graphite")}\n`
-    : `  ${paint("·", tone)}  ${paint(title, "paper")}\n`;
+    ? `${GUTTER}${markerFor(tone)}  ${paint(title, "paper")}  ${paint(
+        detail,
+        "graphite",
+      )}\n`
+    : `${GUTTER}${markerFor(tone)}  ${paint(title, "paper")}\n`;
   output.write(line);
 };
 

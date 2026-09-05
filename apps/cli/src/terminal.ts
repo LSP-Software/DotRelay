@@ -11,7 +11,11 @@ export const readTerminalLine = async (
 ): Promise<string> => {
   const input = terminal?.input ?? process.stdin;
   const output = terminal?.output ?? process.stderr;
-  output.write(`${question}: `);
+  const lines = question.split("\n");
+  const prompt = lines.at(-1) ?? "";
+  for (const line of lines.slice(0, -1))
+    output.write(line.length === 0 ? "\n" : `     ${line}\n`);
+  output.write(`     ${prompt}: `);
 
   let buffer = leftovers.get(input) ?? "";
   const lineBreak = (): string | null => {

@@ -61,64 +61,169 @@ import {
   restoreRecoveryKit,
   runProtectedWorkflow,
 } from "./workflow";
-import { paint, renderStep, rewriteRegion, writeNotice } from "./ui";
+import {
+  renderCard,
+  renderError,
+  renderHelpDocument,
+  renderTable,
+  rewriteRegion,
+  writeNotice,
+} from "./ui";
 
 export type { TerminalIo };
 
 export const version = "0.0.0-foundation";
 
-export const renderHelp = (): string => {
-  return [
-    "Usage: dotrelay <command>",
-    "",
-    "  setup <origin>   Trust this Server Profile, sign in, enroll this machine",
-    "  login            Sign in and enroll this machine",
-    "  init             Publish this repo's .env for the first time",
-    "  push             Publish changes from .env",
-    "  pull             Write decrypted Values to .env",
-    "  status           Show this machine's connection",
-    "",
-    "More commands: dotrelay help",
-    "Automation: --json  --no-input  --debug",
-  ].join("\n");
-};
+const everydayHelp = [
+  {
+    command: "setup <origin>",
+    detail: "Trust this Server Profile, sign in, enroll this machine",
+  },
+  {
+    command: "login",
+    detail: "Sign in and enroll this machine",
+  },
+  {
+    command: "init",
+    detail: "Publish this repo's .env for the first time",
+  },
+  {
+    command: "push",
+    detail: "Publish changes from .env",
+  },
+  {
+    command: "pull",
+    detail: "Write decrypted Values to .env",
+  },
+  {
+    command: "status",
+    detail: "Show this machine's connection",
+  },
+] as const;
 
-export const renderPowerHelp = (): string => {
-  return [
-    "Usage: dotrelay <command>",
-    "",
-    "Everyday:",
-    "  setup <origin>   Trust this Server Profile, sign in, enroll this machine",
-    "  login            Sign in and enroll this machine",
-    "  init             Publish this repo's .env for the first time",
-    "  push             Publish changes from .env",
-    "  pull             Write decrypted Values to .env",
-    "  status           Show this machine's connection",
-    "",
-    "Power:",
-    "  profile add <name> <origin>   Trust and save a Server Profile",
-    "  profile use <name>            Select the global Server Profile",
-    "  profile list                  List saved Server Profiles",
-    "  logout                        Remove the local session",
-    "  device enroll                 Bootstrap or begin Device enrollment",
-    "  device begin --output <file>  Begin dual-control enrollment",
-    "  device approve --from <file>  Approve an enrollment handoff",
-    "  device complete --from <file> Complete an approved enrollment",
-    "  device backup --output <file> Create a Recovery Kit",
-    "  device recover --from <file>  Restore a Device from a Recovery Kit",
-    "  context                       Detect the GitHub Repository",
-    "  project link --team <team>    Link a Project explicitly",
-    "  env use <environment-id>      Select an Environment by opaque id",
-    "  history                       List verified Revision metadata",
-    "  rollback <revision>           Append a lane-scoped Rollback",
-    "",
-    "Global: --profile  --environment  --json  --debug  --no-input",
-    "Publish: --classify NAME=shared|user-defined  --from <file>  --team <id>",
-    "Pull: --output <file>  --stdout  --reveal",
-    "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
-    "Values are never diagnostic data. --insecure and credential flags are not supported.",
-  ].join("\n");
-};
+export const renderHelp = (): string =>
+  renderHelpDocument(
+    [
+      { title: "Everyday", entries: everydayHelp },
+      {
+        title: "Automation",
+        entries: [
+          { command: "--json", detail: "Machine-readable output" },
+          { command: "--no-input", detail: "Never prompt or guess" },
+          {
+            command: "--debug",
+            detail: "Sanitized detail on unexpected errors",
+          },
+        ],
+      },
+      {
+        title: "More",
+        entries: [{ command: "help", detail: "Power commands and flags" }],
+      },
+    ],
+  );
+
+export const renderPowerHelp = (): string =>
+  renderHelpDocument(
+    [
+      { title: "Everyday", entries: everydayHelp },
+      {
+        title: "Power",
+        entries: [
+          {
+            command: "profile add <name> <origin>",
+            detail: "Trust and save a Server Profile",
+          },
+          {
+            command: "profile use <name>",
+            detail: "Select the global Server Profile",
+          },
+          {
+            command: "profile list",
+            detail: "List saved Server Profiles",
+          },
+          { command: "logout", detail: "Remove the local session" },
+          {
+            command: "device enroll",
+            detail: "Bootstrap or begin Device enrollment",
+          },
+          {
+            command: "device begin --output <file>",
+            detail: "Begin dual-control enrollment",
+          },
+          {
+            command: "device approve --from <file>",
+            detail: "Approve an enrollment handoff",
+          },
+          {
+            command: "device complete --from <file>",
+            detail: "Complete an approved enrollment",
+          },
+          {
+            command: "device backup --output <file>",
+            detail: "Create a Recovery Kit",
+          },
+          {
+            command: "device recover --from <file>",
+            detail: "Restore a Device from a Recovery Kit",
+          },
+          { command: "context", detail: "Detect the GitHub Repository" },
+          {
+            command: "project link --team <team>",
+            detail: "Link a Project explicitly",
+          },
+          {
+            command: "env use <environment-id>",
+            detail: "Select an Environment by opaque id",
+          },
+          { command: "history", detail: "List verified Revision metadata" },
+          {
+            command: "rollback <revision>",
+            detail: "Append a lane-scoped Rollback",
+          },
+        ],
+      },
+      {
+        title: "Flags",
+        entries: [
+          { command: "--profile", detail: "Server Profile name" },
+          { command: "--environment", detail: "Opaque Environment id" },
+          { command: "--json", detail: "Machine-readable output" },
+          { command: "--no-input", detail: "Never prompt or guess" },
+          {
+            command: "--debug",
+            detail: "Sanitized detail on unexpected errors",
+          },
+          {
+            command: "--classify NAME=shared|user-defined",
+            detail: "Set ownership for new Variables",
+          },
+          {
+            command: "--from <file>",
+            detail: "Dotenv source, or Device handoff",
+          },
+          {
+            command: "--team <id>",
+            detail: "Team for init, push, or project link",
+          },
+          {
+            command: "--output <file>",
+            detail: "Pull target or Device handoff",
+          },
+          { command: "--stdout", detail: "Write decrypted Values to stdout" },
+          { command: "--reveal", detail: "Allow Values on a terminal stdout" },
+          {
+            command: "--accept-profile <id>",
+            detail: "Trust a Server Profile under --no-input",
+          },
+        ],
+      },
+    ],
+    [
+      "Values are never diagnostic data.",
+      "--insecure and credential flags are not supported.",
+    ],
+  );
 
 export const main = (args: string[]): string => {
   rejectForbiddenFlags(args);
@@ -207,23 +312,147 @@ const defaultWorktreeConfigPath = async (): Promise<string> => {
 
 const json = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
+const asString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
+const formatHumanValue = (value: unknown): string => {
+  if (typeof value === "string") return sanitizeCliText(value);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return String(value);
+  if (value === null || value === undefined) return "—";
+  if (Array.isArray(value))
+    return value
+      .map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry)))
+      .join(", ");
+  return sanitizeCliText(JSON.stringify(value) ?? "");
+};
+
+const formatAuthoredAt = (value: unknown): string => {
+  if (typeof value !== "string" && typeof value !== "number") return "—";
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds)) return formatHumanValue(value);
+  return new Date(milliseconds)
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d+Z$/, " UTC");
+};
+
 const renderStatusCard = (value: Record<string, unknown>): string => {
-  const profile =
-    typeof value.profile === "string" ? value.profile : "No Server Profile";
-  const origin =
-    typeof value.origin === "string"
-      ? value.origin
-      : "run dotrelay setup <origin>";
+  const profile = asString(value.profile) ?? "No Server Profile";
+  const origin = asString(value.origin) ?? "run dotrelay setup <origin>";
   const signedIn = value.authenticated === true;
   const enrolled = value.device === "enrolled";
-  return [
-    `  ${paint("·", "wax")}  ${paint(profile, "paper")}`,
-    `     ${paint(origin, "graphite")}`,
-    `     ${paint(signedIn ? "Signed in" : "Not signed in", signedIn ? "ok" : "dim")}`,
-    `     ${paint(enrolled ? "Device enrolled" : "No Device", enrolled ? "ok" : "dim")}`,
-    "",
-  ].join("\n");
+  return renderCard(profile, {
+    mark: "brand",
+    body: [origin],
+    rows: [
+      {
+        label: "session",
+        value: signedIn ? "Signed in" : "Not signed in",
+        tone: signedIn ? "ok" : "dim",
+      },
+      {
+        label: "device",
+        value: enrolled ? "Enrolled" : "No Device",
+        tone: enrolled ? "ok" : "dim",
+      },
+    ],
+  });
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const renderProfileList = (value: Record<string, unknown>): string => {
+  const selected = asString(value.selected);
+  const profiles = Array.isArray(value.profiles) ? value.profiles : [];
+  const rows = profiles.flatMap((profile) => {
+    if (!isRecord(profile) || typeof profile.name !== "string") return [];
+    const marker = profile.name === selected ? "*" : "";
+    return [
+      [
+        marker,
+        profile.name,
+        asString(profile.origin) ?? "—",
+        asString(profile.serverProfileId) ?? "",
+      ],
+    ];
+  });
+  return renderTable("Server Profiles", ["", "name", "origin", "id"], rows, {
+    empty: "run dotrelay setup <origin>",
+  });
+};
+
+const renderHistory = (value: Record<string, unknown>): string => {
+  const revisions = Array.isArray(value.revisions) ? value.revisions : [];
+  const rows = revisions.flatMap((revision) => {
+    if (!isRecord(revision)) return [];
+    return [
+      [
+        asString(revision.id) ?? "—",
+        asString(revision.mutation) ?? "—",
+        formatHumanValue(revision.projectEpoch),
+        formatAuthoredAt(revision.authoredAtMs),
+      ],
+    ];
+  });
+  return renderTable(
+    "History",
+    ["revision", "mutation", "epoch", "authored"],
+    rows,
+    {
+      empty: "No revisions yet",
+    },
+  );
+};
+
+const successTitle = (
+  parsed: ParsedArguments,
+  value: Record<string, unknown>,
+): string => {
+  if (typeof value.message === "string") return sanitizeCliText(value.message);
+  if (parsed.command === "logout") return "Signed out";
+  if (parsed.command === "profile" && parsed.subcommand === "use")
+    return "Using this Server Profile";
+  if (parsed.command === "env") return "Using this Environment";
+  if (parsed.command === "context") return "Repository";
+  if (parsed.command === "device") {
+    if (parsed.subcommand === "enroll")
+      return value.existing === true
+        ? "Device already enrolled"
+        : "Device enrolled";
+    if (parsed.subcommand === "begin") return "Enrollment request written";
+    if (parsed.subcommand === "approve") return "Enrollment approved";
+    if (parsed.subcommand === "complete") return "Device enrolled";
+    if (parsed.subcommand === "backup") return "Recovery Kit written";
+    if (parsed.subcommand === "recover") return "Device restored";
+  }
+  return parsed.subcommand
+    ? `${parsed.command} ${parsed.subcommand}`
+    : parsed.command;
+};
+
+const HIDDEN_SUCCESS_KEYS = new Set([
+  "message",
+  "ok",
+  "selected",
+  "loggedOut",
+  "approved",
+  "existing",
+  "profiles",
+  "revisions",
+]);
+
+const successRows = (
+  value: Record<string, unknown>,
+): ReadonlyArray<Readonly<{ label: string; value: string }>> =>
+  Object.entries(value)
+    .filter(([key]) => !HIDDEN_SUCCESS_KEYS.has(key))
+    .map(([key, entry]) => ({
+      label: key.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase(),
+      value: formatHumanValue(entry),
+    }))
+    .filter((row) => row.value.length > 0);
 
 const renderSuccess = (
   parsed: ParsedArguments,
@@ -231,19 +460,22 @@ const renderSuccess = (
 ): string => {
   if (parsed.json) return json({ ok: true, ...value });
   if (parsed.command === "status") return renderStatusCard(value);
-  if (typeof value.message === "string")
-    return `${sanitizeCliText(value.message)}\n`;
-  return `${Object.entries(value)
-    .map(([key, entry]) => {
-      const rendered =
-        typeof entry === "string"
-          ? entry
-          : entry !== null && typeof entry === "object"
-            ? JSON.stringify(entry)
-            : String(entry);
-      return `${sanitizeCliText(key)}: ${sanitizeCliText(rendered ?? "")}`;
-    })
-    .join("\n")}\n`;
+  if (parsed.command === "profile" && parsed.subcommand === "list")
+    return renderProfileList(value);
+  if (parsed.command === "history") return renderHistory(value);
+  const title = successTitle(parsed, value);
+  const rows = typeof value.message === "string" ? [] : successRows(value);
+  return renderCard(title, {
+    tone: "ok",
+    mark: "status",
+    ...(parsed.command === "context" && asString(value.repository)
+      ? { body: [value.repository] }
+      : {}),
+    rows:
+      parsed.command === "context"
+        ? rows.filter((row) => row.label !== "repository")
+        : rows,
+  });
 };
 
 const profileNameFromOrigin = (origin: string): string => {
@@ -275,10 +507,12 @@ const confirmProfileTrust = async (
   if (parsed.noInput) return false;
   const output = runtime.terminal?.output ?? process.stderr;
   output.write(
-    renderStep("Trust this Server Profile?", [
-      candidate.origin,
-      candidate.pin.serverProfileId,
-    ]),
+    renderCard("Trust this Server Profile?", {
+      mark: "brand",
+      body: [candidate.origin],
+      highlight: candidate.pin.serverProfileId,
+      hint: "Enter confirms this pin",
+    }),
   );
   if (runtime.confirm) return runtime.confirm(`Trust ${candidate.origin}?`);
   const { readTerminalLine } = await import("./terminal");
@@ -335,7 +569,12 @@ const loginAndEnroll = async (
         waitLines = rewriteRegion(
           output,
           0,
-          renderStep("Allow this CLI?", [authorization.userCode], "Waiting for the browser"),
+          renderCard("Allow this CLI?", {
+            mark: "brand",
+            body: ["Enter this code in the browser"],
+            highlight: authorization.userCode,
+            hint: "Waiting for the browser",
+          }),
         );
       },
     },
@@ -865,9 +1104,11 @@ export const run = async (
       stdout: "",
       stderr: parsed
         ? json(diagnostic)
-        : `${humanDetailForError(error, {
-            debug: args.includes("--debug"),
-          })}\n`,
+        : renderError(
+            humanDetailForError(error, {
+              debug: args.includes("--debug"),
+            }),
+          ),
     };
   }
 };

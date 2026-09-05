@@ -34,6 +34,7 @@ describe("classification board", () => {
     expect(board).toContain("LOCAL_PATH");
     expect(board).toContain("Team");
     expect(board).toContain("Only you");
+    expect(board).toContain("Who can read");
     expect(board).not.toContain("secret");
     expect(board).not.toContain("=");
   });

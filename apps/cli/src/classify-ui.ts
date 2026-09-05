@@ -1,7 +1,11 @@
 import { CliInvocationError, sanitizeCliText } from "./errors";
 import { type TerminalIo, readTerminalLine } from "./terminal";
 import {
+  BODY,
+  GUTTER,
+  MARK,
   paint,
+  padVisible,
   readRawKey,
   type ReadableRaw,
   rewriteRegion,
@@ -62,28 +66,38 @@ export const renderClassificationBoard = (
     state.drafts.length === 1
       ? "1 variable from .env"
       : `${state.drafts.length} variables from .env`;
+  const markerWidth = options.interactive
+    ? MARK.cursor.length
+    : String(state.drafts.length).length + 1;
+  const heading = `${BODY}${padVisible("", markerWidth)}  ${paint(
+    "Variable".padEnd(width, " "),
+    "dim",
+  )}  ${paint("Who can read", "dim")}`;
   const rows = state.drafts.map((draft, index) => {
     const selected = options.interactive && index === state.cursor;
     const marker = options.interactive
       ? selected
-        ? paint("·", "wax")
+        ? paint(MARK.cursor, "wax")
         : " "
       : `${index + 1}.`;
     const name = sanitizeCliText(draft.name).padEnd(width, " ");
     const owner = ownershipCopy(draft.classification);
-    const namePaint = selected ? paint(name, "paper") : paint(name, "graphite");
+    const namePaint = selected
+      ? paint(name, "paper", { bold: true })
+      : paint(name, "graphite");
     const ownerPaint = selected ? paint(owner, "wax") : paint(owner, "dim");
-    return `     ${marker}  ${namePaint}  ${ownerPaint}`;
+    return `${BODY}${padVisible(marker, markerWidth)}  ${namePaint}  ${ownerPaint}`;
   });
   const hint = options.interactive
-    ? "Space changes who can read it. Enter publishes."
+    ? "space toggle  ·  enter publish"
     : "Enter a number to toggle, or press Enter to publish";
   return [
-    `  ${paint("·", "wax")}  ${paint(title, "paper")}`,
+    `${GUTTER}${paint(MARK.brand, "wax")}  ${paint(title, "paper", { bold: true })}`,
     "",
+    heading,
     ...rows,
     "",
-    `     ${paint(hint, "dim")}`,
+    `${BODY}${paint(hint, "dim")}`,
     "",
   ].join("\n");
 };

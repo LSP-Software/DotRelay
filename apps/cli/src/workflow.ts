@@ -2051,9 +2051,14 @@ const publish = async (
     !(await confirm(options, publicationConfirmQuestion(changes)))
   )
     throw new CliInvocationError("publication confirmation was declined");
-  const progress = (title: string): void => {
+  const progress = (title: string, tone: "wax" | "ok" = "wax"): void => {
     if (options.noInput || parsed.json) return;
-    writeNotice(options.terminal?.output ?? process.stderr, title);
+    writeNotice(
+      options.terminal?.output ?? process.stderr,
+      title,
+      undefined,
+      tone,
+    );
   };
   progress("Encrypting");
   let artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>;
@@ -2126,7 +2131,7 @@ const publish = async (
       code,
     );
   }
-  progress("Published");
+  progress("Published", "ok");
   return {
     revision: artifacts.request.revision.id,
     lanes: artifacts.encryptedLaneCount,
