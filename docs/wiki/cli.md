@@ -23,11 +23,14 @@ are rejected.
 ## Repository and worktree context
 
 `context` normalizes GitHub SSH and HTTPS remotes, then resolves GitHub's stable numeric Repository
-id. Missing or different repository remotes fail closed and require an explicit choice. Repository
+id. Protected commands use that identity to automatically find the accessible Project, so a saved
+Project selection is not required when running from its repository. Missing or different repository
+remotes, or an unlinked repository, fail closed and require an explicit choice. Repository
 detection only finds a Project; it never grants Membership or secret access. The identity lookup
 uses GitHub's public repository metadata endpoint and never receives a GitHub token from the CLI.
 Environment selection is by opaque id and is worktree local. `.git/dotrelay/config` may contain
-only the Server Profile, Project, and Environment opaque ids, never names or Values.
+only the Server Profile, Project, and Environment opaque ids, never names or Values. `--no-input`
+requires the profile and Environment to be supplied explicitly and does not perform this lookup.
 
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. It requires an authenticated session and an active enrolled Device; a session from
@@ -37,8 +40,10 @@ store readable names.
 
 ## Encrypted workflows
 
-`init <environment> --from <dotenv>` creates the signed genesis Revision. `push --from <dotenv>`
-appends a signed Manifest Revision. Every input Variable must be explicitly classified with
+`init [environment]` uses `.env` by default, selects the first active Team when creating a new
+Project, and creates the signed genesis Revision. Use `--team <team-id>` or `--from <dotenv>` only
+to override those defaults. `push` uses `.env` by default and appends a signed Manifest Revision.
+Every input Variable must be explicitly classified with
 `--classify NAME=shared` or `--classify NAME=user-defined`; interactive classification is available
 when those flags are omitted. Existing Variable ids are retained, omitted Variables become signed
 tombstones, and empty Values remain Values rather than being dropped.

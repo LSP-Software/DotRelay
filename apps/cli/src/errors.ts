@@ -29,6 +29,8 @@ const categoryExitCode: Record<CliErrorCategory, number> = {
 };
 
 const safeDiagnosticKeys = new Set([
+  "requestPath",
+  "correlationId",
   "count",
   "variableCount",
   "sharedValueCount",
@@ -165,6 +167,8 @@ export const diagnosticForError = (error: unknown): CliDiagnostic => {
     const safeDetails = Object.fromEntries(
       Object.entries(error.details).filter(([key, value]) => {
         if (!safeDiagnosticKeys.has(key)) return false;
+        if (key === "requestPath" || key === "correlationId")
+          return typeof value === "string" && value.length <= 256;
         return (
           safeDiagnosticNumericKeys.has(key) &&
           typeof value === "number" &&

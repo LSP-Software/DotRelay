@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createProblem } from "@dotrelay/contracts";
 import { createInMemoryAuth } from "./auth";
 import { app, createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
@@ -87,6 +88,40 @@ describe("API foundation", () => {
       response.headers.get("x-correlation-id"),
     );
     expect(JSON.stringify(problem)).not.toContain("secret request body");
+  });
+
+  test("attaches only the structured problem code to request diagnostics", async () => {
+    const profile = loadServerProfileConfig({});
+    const records: Array<Record<string, unknown>> = [];
+    const testApp = createApi({
+      database: {} as never,
+      profile,
+      auth: createInMemoryAuth(profile),
+      observability: {
+        diagnostics: { emit: () => undefined },
+        expireSecurityRequestLogs: async () => 0,
+        recordRequest: (input) => records.push(input),
+      },
+    });
+    testApp.get("/test-problem", (context) => {
+      const problem = createProblem("rate_limited", {
+        retryAfterSeconds: 60,
+      });
+      return context.json(problem, 429, {
+        "Content-Type": "application/problem+json",
+      });
+    });
+
+    const response = await testApp.request(`${profile.origin}/test-problem`);
+
+    expect(response.status).toBe(429);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      status: 429,
+      problemCode: "rate_limited",
+      retryAfterSeconds: 60,
+    });
+    expect(records[0]).not.toHaveProperty("responseBody");
   });
 
   test("publishes a profile-bound capabilities document with an ETag", async () => {

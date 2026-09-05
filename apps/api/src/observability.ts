@@ -14,6 +14,8 @@ const DEFAULT_DIAGNOSTIC_SAMPLE_RATE = 0.1;
 
 export const SERVER_DIAGNOSTIC_EVENT_NAMES = Object.freeze([
   "api.request.completed",
+  "api.security_request_log.write_failed",
+  "api.security_request_log.expiry_failed",
 ] as const);
 export type ServerDiagnosticEventName =
   (typeof SERVER_DIAGNOSTIC_EVENT_NAMES)[number];
@@ -57,6 +59,16 @@ export type ServerDiagnosticSink = Readonly<{
   readonly emit: (event: ServerDiagnosticEvent) => void;
 }>;
 
+export const createConsoleDiagnosticSink = (
+  write: (line: string) => void = (line) => console.error(line),
+): ServerDiagnosticSink =>
+  Object.freeze({
+    emit: (event: ServerDiagnosticEvent) => {
+      const sanitized = sanitizeServerDiagnosticEvent(event);
+      if (sanitized) write(JSON.stringify(sanitized));
+    },
+  });
+
 export type MemoryDiagnosticSink = ServerDiagnosticSink &
   Readonly<{
     readonly records: (now?: number) => readonly ServerDiagnosticEvent[];
@@ -85,6 +97,8 @@ export type ApiObservability = Readonly<{
     readonly status: number;
     readonly correlationId: ServerCorrelationId;
     readonly durationMs: number;
+    readonly problemCode?: ServerDiagnosticProblemCode;
+    readonly retryAfterSeconds?: number;
   }) => void;
 }>;
 
@@ -99,6 +113,30 @@ const CORRELATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_ISSUED_CORRELATION_IDS = 100_000;
 const issuedCorrelationIds = new Set<string>();
+
+export const toServerDiagnosticProblemCode = (
+  value: unknown,
+): ServerDiagnosticProblemCode | undefined => {
+  if (
+    typeof value !== "string" ||
+    value.length > 64 ||
+    !safeToken.test(value) ||
+    !Object.hasOwn(PROBLEM_STATUS, value) ||
+    forbiddenProblemCodes.has(value)
+  )
+    return undefined;
+  return value as ServerDiagnosticProblemCode;
+};
+
+export const toServerDiagnosticRetryAfterSeconds = (
+  value: unknown,
+): number | undefined =>
+  typeof value === "number" &&
+  Number.isInteger(value) &&
+  value >= 0 &&
+  value <= 86_400
+    ? value
+    : undefined;
 
 const createCorrelationId = (): ServerCorrelationId => {
   let correlationId = "";
@@ -209,6 +247,19 @@ const emitSafely = (
   }
 };
 
+const emitDiagnosticFailure = (
+  diagnostics: ServerDiagnosticSink,
+  eventName: ServerDiagnosticEventName,
+  correlationId: ServerCorrelationId,
+) => {
+  emitSafely(diagnostics, {
+    schemaVersion: 1,
+    eventName,
+    correlationId,
+    outcome: "failure",
+  });
+};
+
 const sanitizeServerDiagnosticEvent = (
   input: unknown,
 ): ServerDiagnosticEvent | null => {
@@ -242,19 +293,12 @@ const sanitizeServerDiagnosticEvent = (
     return null;
   if (
     object.problemCode !== undefined &&
-    (typeof object.problemCode !== "string" ||
-      object.problemCode.length > 64 ||
-      !safeToken.test(object.problemCode) ||
-      !Object.hasOwn(PROBLEM_STATUS, object.problemCode) ||
-      forbiddenProblemCodes.has(object.problemCode))
+    toServerDiagnosticProblemCode(object.problemCode) === undefined
   )
     return null;
   if (
     object.retryAfterSeconds !== undefined &&
-    (typeof object.retryAfterSeconds !== "number" ||
-      !Number.isInteger(object.retryAfterSeconds) ||
-      object.retryAfterSeconds < 0 ||
-      object.retryAfterSeconds > 86_400)
+    toServerDiagnosticRetryAfterSeconds(object.retryAfterSeconds) === undefined
   )
     return null;
   return Object.freeze({
@@ -293,12 +337,25 @@ export const createApiObservability = (
   const securityLogs = new SecurityRequestLogRepository();
   return Object.freeze({
     diagnostics,
-    expireSecurityRequestLogs: async (at = now()) =>
-      (await securityLogs.expire(database, at)).count,
+    expireSecurityRequestLogs: async (at = now()) => {
+      try {
+        return (await securityLogs.expire(database, at)).count;
+      } catch (error) {
+        emitDiagnosticFailure(
+          diagnostics,
+          "api.security_request_log.expiry_failed",
+          createServerCorrelationId(),
+        );
+        throw error;
+      }
+    },
     recordRequest: (input) => {
       try {
         const status = Number.isInteger(input.status) ? input.status : 500;
-        if (random() < sampleRate)
+        const retryAfterSeconds = toServerDiagnosticRetryAfterSeconds(
+          input.retryAfterSeconds,
+        );
+        if (status >= 400 || random() < sampleRate)
           emitSafely(diagnostics, {
             schemaVersion: 1,
             eventName: "api.request.completed",
@@ -308,6 +365,10 @@ export const createApiObservability = (
               Math.min(Math.round(input.durationMs), 86_400_000),
             ),
             outcome: status >= 400 ? "failure" : "success",
+            ...(input.problemCode === undefined
+              ? {}
+              : { problemCode: input.problemCode }),
+            ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
           });
 
         const endpointTemplate = endpointTemplateFor(input.path);
@@ -331,10 +392,18 @@ export const createApiObservability = (
             ),
           })
           .catch(() => {
-            // Request logging is a best-effort security signal and never blocks a response.
+            emitDiagnosticFailure(
+              diagnostics,
+              "api.security_request_log.write_failed",
+              input.correlationId,
+            );
           });
       } catch {
-        // Request logging is a best-effort security signal and never blocks a response.
+        emitDiagnosticFailure(
+          diagnostics,
+          "api.security_request_log.write_failed",
+          input.correlationId,
+        );
       }
     },
   });

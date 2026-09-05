@@ -122,6 +122,54 @@ export const registerAdministrationRoutes = (
     }),
   );
 
+  app.get("/api/v1/projects", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const repositoryId = requireRepositoryId(
+        context.req.query("githubRepositoryId"),
+      );
+      const projects = await database.project.findMany({
+        where: {
+          githubRepositoryId: repositoryId,
+          team: {
+            memberships: {
+              some: { userId: actor.userId, lifecycle: "ACTIVE" },
+            },
+          },
+        },
+        select: {
+          id: true,
+          teamId: true,
+          githubRepositoryId: true,
+          lifecycle: true,
+        },
+      });
+      if (projects.length > 1)
+        return responseProblem(context, "state_conflict");
+      return context.json(
+        { project: projects[0] ? projectResponse(projects[0]) : null },
+        200,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      return responseProblem(context, mapAdministrationError(error));
+    }
+  });
+
+  app.get("/api/v1/teams", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    const teams = await database.team.findMany({
+      where: {
+        memberships: { some: { userId: actor.userId, lifecycle: "ACTIVE" } },
+      },
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    return context.json({ teams }, 200, { "Cache-Control": "no-store" });
+  });
+
   app.post("/api/v1/projects", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;

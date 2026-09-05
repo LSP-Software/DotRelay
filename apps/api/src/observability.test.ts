@@ -1,12 +1,38 @@
 import { describe, expect, test } from "bun:test";
 import {
   createApiObservability,
+  createConsoleDiagnosticSink,
   createInMemoryDiagnosticSink,
   createServerCorrelationId,
   endpointTemplateFor,
 } from "./observability";
 
 describe("API observability boundary", () => {
+  test("writes only allowlisted diagnostic fields to the server log", () => {
+    const lines: string[] = [];
+    const diagnostics = createConsoleDiagnosticSink((line) => lines.push(line));
+    const correlationId = createServerCorrelationId();
+
+    diagnostics.emit({
+      schemaVersion: 1,
+      eventName: "api.request.completed",
+      correlationId,
+      durationMs: 12,
+      outcome: "failure",
+      problemCode: "service_unavailable",
+    });
+
+    expect(lines).toEqual([
+      JSON.stringify({
+        schemaVersion: 1,
+        eventName: "api.request.completed",
+        correlationId,
+        durationMs: 12,
+        outcome: "failure",
+        problemCode: "service_unavailable",
+      }),
+    ]);
+  });
   test("sanitizes direct sink input before retaining it", () => {
     const diagnostics = createInMemoryDiagnosticSink(() => 0);
     const event = {
@@ -121,8 +147,10 @@ describe("API observability boundary", () => {
       status: 401,
       correlationId,
       durationMs: 4.4,
+      problemCode: "authentication_required",
+      retryAfterSeconds: 60,
     });
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(diagnostics.records()).toEqual([
       expect.objectContaining({
@@ -130,6 +158,8 @@ describe("API observability boundary", () => {
         correlationId,
         durationMs: 4,
         outcome: "failure",
+        problemCode: "authentication_required",
+        retryAfterSeconds: 60,
       }),
     ]);
     expect(JSON.stringify(diagnostics.records())).not.toContain("192.0.2.10");
@@ -144,6 +174,26 @@ describe("API observability boundary", () => {
       expect.any(Date),
     ]);
     await expect(observability.expireSecurityRequestLogs(now)).resolves.toBe(2);
+  });
+
+  test("always emits failures when successful requests are sampled out", () => {
+    const diagnostics = createInMemoryDiagnosticSink(() => 0);
+    const observability = createApiObservability({} as never, {
+      diagnostics,
+      random: () => 1,
+      sampleRate: 0,
+    });
+
+    observability.recordRequest({
+      request: new Request("https://relay.example/health"),
+      path: "/health",
+      status: 503,
+      correlationId: createServerCorrelationId(),
+      durationMs: 1,
+    });
+
+    expect(diagnostics.records()).toHaveLength(1);
+    expect(diagnostics.records()[0]?.outcome).toBe("failure");
   });
 
   test("does not let a diagnostic or security sink failure affect requests", () => {
@@ -163,6 +213,64 @@ describe("API observability boundary", () => {
         durationMs: 0,
       }),
     ).not.toThrow();
+  });
+
+  test("records security log write failures without exposing database errors", async () => {
+    const diagnostics = createInMemoryDiagnosticSink(() => 0);
+    const observability = createApiObservability(
+      {
+        $executeRaw: async () => {
+          throw new Error("database password and SQL details");
+        },
+      } as never,
+      {
+        diagnostics,
+        sampleRate: 0,
+        resolveClientIp: () => "192.0.2.10",
+      },
+    );
+
+    observability.recordRequest({
+      request: new Request("https://relay.example/health"),
+      path: "/health",
+      status: 200,
+      correlationId: createServerCorrelationId(),
+      durationMs: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(diagnostics.records()).toEqual([
+      expect.objectContaining({
+        eventName: "api.security_request_log.write_failed",
+        outcome: "failure",
+      }),
+    ]);
+    expect(JSON.stringify(diagnostics.records())).not.toContain(
+      "database password",
+    );
+  });
+
+  test("records security log expiry failures and preserves the rejection", async () => {
+    const diagnostics = createInMemoryDiagnosticSink(() => 0);
+    const observability = createApiObservability(
+      {
+        $transaction: async () => {
+          throw new Error("database password and SQL details");
+        },
+      } as never,
+      { diagnostics },
+    );
+
+    await expect(observability.expireSecurityRequestLogs()).rejects.toThrow(
+      "database password",
+    );
+    expect(diagnostics.records()).toEqual([
+      expect.objectContaining({
+        eventName: "api.security_request_log.expiry_failed",
+        outcome: "failure",
+      }),
+    ]);
+    expect(JSON.stringify(diagnostics.records())).not.toContain("SQL details");
   });
 
   test("keeps hosted and self-hosted request policy identical", async () => {

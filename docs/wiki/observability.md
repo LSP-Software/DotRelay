@@ -9,7 +9,8 @@ security investigation. A record must never be used as a substitute for one of t
 
 The fixed schema is version `1`. Its Diagnostic Field Allowlist is:
 
-- `eventName`, a bounded operational token;
+- `eventName`, one of the bounded operational tokens `api.request.completed`,
+  `api.security_request_log.write_failed`, or `api.security_request_log.expiry_failed`;
 - `correlationId`, a fresh opaque UUID used only to link one request or bounded execution;
 - `durationMs`, a non-negative bounded integer;
 - `outcome`, a bounded operational token;

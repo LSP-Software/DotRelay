@@ -2,6 +2,8 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import type { CliDeviceStorage } from "@dotrelay/client";
 import {
   createStrictJsonClient,
+  findDefaultTeam,
+  findProjectByRepository,
   linkProject,
   type StrictJsonClient,
   selectEnvironment,
@@ -29,6 +31,7 @@ import {
   createNativeCredentialStore,
   type NativeCredentialStore,
 } from "./credentials";
+import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import {
   CliError,
   CliInvocationError,
@@ -79,7 +82,7 @@ export const renderHelp = (): string => {
     "  context                             Detect the GitHub Repository",
     "  project link --team <team>          Link a Project explicitly",
     "  env use <environment-id>            Select an Environment by opaque id",
-    "  init <environment> --from <file>    Create a reviewed genesis Revision",
+    "  init [environment]                   Set up or use the Project, then create a genesis Revision from .env",
     "  push --from <file>                  Publish a reviewed Revision",
     "  pull --output <file>                Safely export locally decrypted Values",
     "  history | rollback <revision>       Verify history or append a Rollback",
@@ -511,6 +514,55 @@ const execute = async (
     const profile = await resolveServerProfile(store, parsed.profile);
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+    const stateDirectory =
+      runtime.stateDirectory ??
+      dirname(runtime.profilePath ?? profileCatalogPath());
+    const deviceId =
+      runtime.deviceId ??
+      (await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)));
+    if (!parsed.noInput && !runtime.admin) {
+      const localContext = await readWorktreeContext(contextPath);
+      const repository = await resolveGitHubRepository(
+        detectGitHubRepository(
+          await (runtime.readGitRemotes ?? readGitRemotes)(),
+        ),
+        { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
+      );
+      const credentials = runtime.credentials ?? createNativeCredentialStore();
+      const admin =
+        runtime.admin ??
+        createStrictJsonClient(profile.pin, credentials, {
+          ...(deviceId ? { deviceId } : {}),
+        });
+      const project = await findProjectByRepository(
+        admin,
+        repository.githubRepositoryId ?? "",
+      );
+      if (!project && parsed.command !== "init")
+        throw new CliInvocationError(
+          "this GitHub Repository is not linked to an accessible Project; run dotrelay init first",
+        );
+      const initializedProject =
+        project ??
+        (await linkProject(admin, {
+          teamId: parsed.team ?? (await findDefaultTeam(admin)).id,
+          repository: {
+            ...repository,
+            githubRepositoryId: repository.githubRepositoryId ?? "",
+          },
+        }));
+      if (localContext && localContext.projectId !== initializedProject.id)
+        throw new CliInvocationError(
+          "the saved Project does not match this GitHub Repository",
+        );
+      await writeWorktreeContext(contextPath, {
+        serverProfileId: profile.pin.serverProfileId,
+        projectId: initializedProject.id,
+        ...(localContext?.environmentId
+          ? { environmentId: localContext.environmentId }
+          : {}),
+      });
+    }
     const workflowResult = await runProtectedWorkflow(
       {
         profile,
@@ -520,10 +572,8 @@ const execute = async (
           ? { deviceStorage: runtime.deviceStorage }
           : {}),
         ...(runtime.admin ? { admin: runtime.admin } : {}),
-        ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
-        stateDirectory:
-          runtime.stateDirectory ??
-          dirname(runtime.profilePath ?? profileCatalogPath()),
+        ...(deviceId ? { deviceId } : {}),
+        stateDirectory,
         contextPath,
         ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
         ...(runtime.confirm ? { confirm: runtime.confirm } : {}),

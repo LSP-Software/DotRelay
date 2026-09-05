@@ -34,8 +34,12 @@ import { registerDeviceRoutes } from "./device-routes";
 import {
   API_CORRELATION_HEADER,
   type ApiObservability,
+  type ServerDiagnosticProblemCode,
   createApiObservability,
+  createConsoleDiagnosticSink,
   createServerCorrelationId,
+  toServerDiagnosticProblemCode,
+  toServerDiagnosticRetryAfterSeconds,
 } from "./observability";
 import {
   createCapabilitiesDocument,
@@ -68,6 +72,44 @@ const jsonProblem = (context: Context, code: ProblemCode) => {
     "Content-Type": "application/problem+json",
   });
 };
+
+const readDiagnosticProblemDetails = async (
+  response: Response,
+): Promise<DiagnosticProblemDetails> => {
+  if (response.status < 400) return {};
+  if (
+    !response.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .includes("application/problem+json")
+  )
+    return {};
+  try {
+    const body = (await response.clone().json()) as unknown;
+    if (body === null || typeof body !== "object" || Array.isArray(body))
+      return {};
+    const object = body as Record<string, unknown>;
+    const problemCode = toServerDiagnosticProblemCode(object.code);
+    const retryAfterSeconds = toServerDiagnosticRetryAfterSeconds(
+      object.retryAfterSeconds,
+    );
+    const details: {
+      problemCode?: ServerDiagnosticProblemCode;
+      retryAfterSeconds?: number;
+    } = {};
+    if (problemCode !== undefined) details.problemCode = problemCode;
+    if (retryAfterSeconds !== undefined)
+      details.retryAfterSeconds = retryAfterSeconds;
+    return details;
+  } catch {
+    return {};
+  }
+};
+
+type DiagnosticProblemDetails = Readonly<{
+  readonly problemCode?: ServerDiagnosticProblemCode;
+  readonly retryAfterSeconds?: number;
+}>;
 
 const safeAuthErrorCodes = new Set([
   "access_denied",
@@ -324,12 +366,14 @@ const createApi = ({
       await next();
     } finally {
       try {
+        const problemDetails = await readDiagnosticProblemDetails(context.res);
         observability.recordRequest({
           request: context.req.raw,
           path: context.req.path,
           status: context.res.status,
           correlationId,
           durationMs: performance.now() - startedAt,
+          ...problemDetails,
         });
       } catch {
         // Observability loss must never affect the response or domain behavior.
@@ -849,6 +893,7 @@ type RequestIpServer = {
 };
 let server: RequestIpServer | undefined;
 const runtimeObservability = createApiObservability(database, {
+  ...(import.meta.main ? { diagnostics: createConsoleDiagnosticSink() } : {}),
   resolveClientIp: (request) => server?.requestIP(request)?.address ?? null,
 });
 export const auth = createAuth(
@@ -873,9 +918,12 @@ if (import.meta.main) {
     fetch: app.fetch,
     port: Number(process.env.PORT ?? 3001),
   });
+  console.error(`DotRelay API listening on ${profile.origin}`);
   const cleanupTimer = setInterval(
     () => {
-      void runtimeObservability.expireSecurityRequestLogs();
+      void runtimeObservability.expireSecurityRequestLogs().catch(() => {
+        // The expiry failure is already recorded by the observability adapter.
+      });
     },
     60 * 60 * 1000,
   );

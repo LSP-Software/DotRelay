@@ -6,7 +6,7 @@ import {
 } from "@dotrelay/contracts";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
-import { CliError } from "./errors";
+import { CliError, CliInvocationError } from "./errors";
 import type { FetchFunction } from "./profile";
 
 export type StrictJsonClient = Readonly<{
@@ -38,6 +38,7 @@ export type ProjectSummary = Readonly<{
   readonly githubRepositoryId: string;
   readonly lifecycle: "active" | "archived";
 }>;
+export type TeamSummary = Readonly<{ readonly id: string }>;
 
 export type EnvironmentSummary = Readonly<{
   readonly id: string;
@@ -47,6 +48,8 @@ export type EnvironmentSummary = Readonly<{
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
 
 const requireOpaqueId = (value: unknown, label: string): string => {
   if (typeof value !== "string" || !opaqueId.test(value))
@@ -166,6 +169,52 @@ export const linkProject = async (
     githubRepositoryId: requireGitHubRepositoryId(response.githubRepositoryId),
     lifecycle: requireLifecycle(response.lifecycle, "Project lifecycle"),
   });
+};
+
+export const findProjectByRepository = async (
+  client: Pick<StrictJsonClient, "get">,
+  githubRepositoryId: string,
+): Promise<ProjectSummary | null> => {
+  const response = await client.get(
+    `/api/v1/projects?githubRepositoryId=${encodeURIComponent(requireGitHubRepositoryId(githubRepositoryId))}`,
+    ["project"],
+  );
+  if (response.project === null) return null;
+  if (!isRecord(response.project))
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Project",
+      {},
+      "response_invalid",
+    );
+  return Object.freeze({
+    id: requireOpaqueId(response.project.id, "Project id"),
+    teamId: requireOpaqueId(response.project.teamId, "Team id"),
+    githubRepositoryId: requireGitHubRepositoryId(
+      response.project.githubRepositoryId,
+    ),
+    lifecycle: requireLifecycle(
+      response.project.lifecycle,
+      "Project lifecycle",
+    ),
+  });
+};
+
+export const findDefaultTeam = async (
+  client: Pick<StrictJsonClient, "get">,
+): Promise<TeamSummary> => {
+  const response = await client.get("/api/v1/teams", ["teams"]);
+  if (!Array.isArray(response.teams) || response.teams.length === 0)
+    throw new CliInvocationError("no Team is available for this Project");
+  const first = response.teams[0];
+  if (!isRecord(first))
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Team list",
+      {},
+      "response_invalid",
+    );
+  return Object.freeze({ id: requireOpaqueId(first.id, "Team id") });
 };
 
 export const selectEnvironment = async (
@@ -359,7 +408,16 @@ export const createStrictJsonClient = (
         throw new CliError(
           categoryForProblem(problem.code),
           detailForProblem(problem.code),
-          {},
+          {
+            requestPath: path,
+            ...(response.headers.get("X-Correlation-ID")
+              ? {
+                  correlationId: response.headers.get(
+                    "X-Correlation-ID",
+                  ) as string,
+                }
+              : {}),
+          },
           problem.code,
         );
       } catch (error) {

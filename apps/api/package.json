@@ -2,7 +2,7 @@
   "name": "@dotrelay/api",
   "private": true,
   "scripts": {
-    "dev": "bun --env-file=../../.env run src/index.ts",
+    "dev": "bun --hot --env-file=../../.env run src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "smoke": "bun ../../scripts/smoke-api.ts",
     "format": "biome format . --write",

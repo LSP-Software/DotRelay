@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { CBOR_LIMITS, type ServerProfilePin } from "@dotrelay/contracts";
 import {
   createStrictJsonClient,
+  findProjectByRepository,
   linkProject,
   selectEnvironment,
 } from "./admin";
@@ -12,6 +13,30 @@ const profile: ServerProfilePin = {
 };
 
 describe("strict administration client", () => {
+  test("finds an accessible Project by GitHub Repository id", async () => {
+    await expect(
+      findProjectByRepository(
+        {
+          get: async (path) => {
+            expect(path).toBe("/api/v1/projects?githubRepositoryId=1311418611");
+            return {
+              project: {
+                id: "00000000-0000-4000-8000-000000000002",
+                teamId: "00000000-0000-4000-8000-000000000001",
+                githubRepositoryId: "1311418611",
+                lifecycle: "active",
+              },
+            };
+          },
+        },
+        "1311418611",
+      ),
+    ).resolves.toMatchObject({
+      id: "00000000-0000-4000-8000-000000000002",
+      githubRepositoryId: "1311418611",
+    });
+  });
+
   test("uses the profile-scoped bearer session and rejects extra response fields", async () => {
     const credentials = {
       get: async () => new TextEncoder().encode("session-token"),

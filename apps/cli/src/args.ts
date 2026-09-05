@@ -157,7 +157,7 @@ const validateCommand = (parsed: MutableArguments) => {
     device: 0,
     project: 0,
     env: parsed.subcommand === "use" && parsed.environment ? 0 : 1,
-    init: 1,
+    init: [0, 1],
     rollback: 1,
   };
   const expected = positionalCounts[command];
@@ -196,7 +196,11 @@ const validateCommand = (parsed: MutableArguments) => {
     throw new CliInvocationError(
       "--from is only valid with init, push, or a Device handoff command",
     );
-  if (parsed.team && !(command === "project" && parsed.subcommand === "link"))
+  if (
+    parsed.team &&
+    !(command === "project" && parsed.subcommand === "link") &&
+    !(command === "init" && !parsed.subcommand)
+  )
     throw new CliInvocationError("--team is only valid with project link");
   if (
     command === "env" &&

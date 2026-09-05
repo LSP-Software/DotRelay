@@ -5,7 +5,6 @@ import {
   GitBranch,
   KeyRound,
   LockKeyhole,
-  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -57,20 +56,14 @@ const HomePage = () => {
 
       <section className="relative mx-auto grid max-w-7xl gap-16 px-5 pb-20 pt-16 lg:grid-cols-[1.15fr_0.85fr] lg:px-8 lg:pb-32 lg:pt-28">
         <div className="relative z-10">
-          <Badge
-            className="mb-7 border-primary/30 bg-primary/10 text-primary"
-            variant="outline"
-          >
-            <ShieldCheck aria-hidden="true" /> v3 classical WebCrypto
-          </Badge>
           <h1 className="max-w-3xl font-heading text-5xl font-semibold leading-[0.98] tracking-[-0.045em] sm:text-7xl">
-            Configuration moves.{" "}
-            <span className="text-primary">Plaintext doesn&apos;t.</span>
+            Team .env files,{" "}
+            <span className="text-primary">without the headache.</span>
           </h1>
           <p className="mt-7 max-w-2xl text-balance text-lg leading-8 text-muted-foreground sm:text-xl">
-            Revisioned environment configuration for Teams that need
-            collaboration without giving the synchronization service readable
-            Values.
+            DotRelay keeps your local development environment files organized and
+            shared with the people who need them. New machine, new teammate, same
+            setup. Secrets stay encrypted on your devices, so we never see them.
           </p>
           <div className="mt-10 flex flex-wrap gap-3">
             <Link
@@ -80,19 +73,19 @@ const HomePage = () => {
               )}
               href="/sign-in"
             >
-              Enter workspace <ArrowRight aria-hidden="true" />
+              Get started <ArrowRight aria-hidden="true" />
             </Link>
             <a
               className={buttonVariants({ variant: "outline", size: "lg" })}
               href="#how-it-works"
             >
-              Trace the trust boundary
+              How it works
             </a>
           </div>
           <div className="mt-12 flex flex-wrap gap-x-8 gap-y-3 font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            <span>Client-only plaintext</span>
-            <span>Immutable Revisions</span>
-            <span>One closed suite</span>
+            <span>Encrypted on device</span>
+            <span>Shared with your team</span>
+            <span>Full change history</span>
           </div>
         </div>
 
@@ -106,9 +99,9 @@ const HomePage = () => {
                   REV_0184
                 </span>
               </div>
-              <CardTitle className="mt-3 text-xl">production</CardTitle>
+              <CardTitle className="mt-3 text-xl">local</CardTitle>
               <CardDescription>
-                Verified locally · encrypted before transit
+                Shared with your team · encrypted on your device
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-2 font-mono text-xs">
@@ -132,10 +125,10 @@ const HomePage = () => {
               <div className="mb-2 flex size-9 items-center justify-center rounded-lg bg-amber-400/10 text-amber-300">
                 <LockKeyhole aria-hidden="true" />
               </div>
-              <CardTitle>Service sees ciphertext</CardTitle>
+              <CardTitle>We never see your secrets</CardTitle>
               <CardDescription>
-                DotRelay synchronizes opaque lanes, heads, and grants.
-                Human-readable content stays with authorized Devices.
+                Everything is encrypted on your device before it leaves. We only
+                store the encrypted form. That&apos;s it.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -147,21 +140,21 @@ const HomePage = () => {
           {[
             {
               icon: Fingerprint,
-              step: "01 / IDENTITY",
-              title: "Sign in is not authorization",
-              body: "GitHub establishes a stable identity. Persisted Membership and an active Device decide access.",
+              step: "01 / TEAM",
+              title: "Share with the people who need it",
+              body: "Sign in with GitHub, then invite your teammates. You decide who can pull the environment files for each project.",
             },
             {
               icon: KeyRound,
-              step: "02 / TRUST",
-              title: "Pin the Server Profile",
-              body: "Clients pin the profile id and origin before credentials, recovery material, or encrypted Values are read.",
+              step: "02 / ENCRYPTION",
+              title: "Secrets stay on your devices",
+              body: "Your secrets are encrypted on device before anything is uploaded. We never get readable copies, and neither does anyone outside your team.",
             },
             {
               icon: GitBranch,
               step: "03 / HISTORY",
-              title: "Every change is a Revision",
-              body: "Rollback records a new immutable Revision. Continuity is verified by the client, never assumed from the service.",
+              title: "Every change is saved",
+              body: "When someone updates a value, you get a full history. Roll back if a change breaks local setup, without digging through old Slack threads.",
             },
           ].map((feature, index) => (
             <article className="p-8 lg:p-10" key={feature.title}>

@@ -1578,7 +1578,9 @@ const loadWorkflowSession = async (
   const { readWorktreeContext } = await import("./context");
   const localContext = await readWorktreeContext(options.contextPath);
   const requestedEnvironment =
-    (parsed.command === "init" ? parsed.positionals[0] : undefined) ??
+    (parsed.command === "init"
+      ? (parsed.positionals[0] ?? "development")
+      : undefined) ??
     parsed.environment ??
     localContext?.environmentId;
   const boundary = parseBoundary(
@@ -2029,11 +2031,10 @@ export const runProtectedWorkflow = async (
       : { output: parsed.output ?? "" };
   }
   if (parsed.command === "init" || parsed.command === "push") {
-    if (!parsed.from)
-      throw new CliInvocationError(`${parsed.command} requires --from <file>`);
+    const inputPath = parsed.from ?? ".env";
     let source: string;
     try {
-      source = await readFile(parsed.from, "utf8");
+      source = await readFile(inputPath, "utf8");
     } catch {
       throw new CliError(
         "local-io",
