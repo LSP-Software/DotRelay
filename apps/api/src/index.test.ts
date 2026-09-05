@@ -474,6 +474,8 @@ describe("API foundation", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(page).toContain("&lt;script&gt;");
     expect(page).not.toContain("<strong><script>");
+    expect(page).toContain('/api/auth/device?user_code="');
+    expect(page).not.toContain("/api/auth/device/verify");
   });
 
   test("exposes only opaque Environment metadata to an active Device", async () => {

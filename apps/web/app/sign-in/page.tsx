@@ -1,7 +1,6 @@
-import { Braces, GitBranch, LockKeyhole, Server } from "lucide-react";
+import { Braces, LockKeyhole, Server } from "lucide-react";
 import Link from "next/link";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -14,6 +13,7 @@ import {
   resolveApiOrigin,
   resolveOAuthCallbackUrl,
 } from "@/lib/workspace-boundary";
+import { GitHubSignInButton } from "./github-sign-in-button";
 
 const SignInPage = () => {
   const apiOrigin = resolveApiOrigin() ?? "http://localhost:3001";
@@ -51,13 +51,10 @@ const SignInPage = () => {
                 {apiOrigin}
               </div>
             </div>
-            <form action={`${apiOrigin}/api/auth/sign-in/social`} method="post">
-              <input name="provider" type="hidden" value="github" />
-              <input name="callbackURL" type="hidden" value={callbackUrl} />
-              <Button className="w-full" size="lg" type="submit">
-                <GitBranch aria-hidden="true" /> Continue with GitHub
-              </Button>
-            </form>
+            <GitHubSignInButton
+              apiOrigin={apiOrigin}
+              callbackUrl={callbackUrl}
+            />
             <Alert className="border-amber-300/20 bg-amber-300/5">
               <LockKeyhole aria-hidden="true" className="text-amber-300" />
               <AlertTitle>Identity is not access</AlertTitle>

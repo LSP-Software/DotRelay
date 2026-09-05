@@ -87,11 +87,14 @@ export const fetchWorkspaceBoundary = async (
 };
 
 export const resolveWebOrigin = (): string =>
-  process.env.NEXT_PUBLIC_WEB_ORIGIN ?? "http://127.0.0.1:3000";
+  process.env.NEXT_PUBLIC_WEB_ORIGIN ??
+  process.env.WEB_ORIGIN ??
+  "http://localhost:3000";
 
 export const resolveApiOrigin = (): string | undefined =>
   process.env.NEXT_PUBLIC_DOTRELAY_API_ORIGIN ??
-  process.env.DOTRELAY_API_ORIGIN;
+  process.env.DOTRELAY_API_ORIGIN ??
+  process.env.SERVER_PROFILE_ORIGIN;
 
 export const resolveOAuthCallbackUrl = (): string =>
   `${resolveWebOrigin()}/workspace`;

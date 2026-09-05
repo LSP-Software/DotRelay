@@ -125,16 +125,31 @@ const devicePage = (userCode: string) => {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>DotRelay device sign-in</title></head>
 <body><main><h1>Sign in to DotRelay</h1><p>Device code: <strong>${safeCode}</strong></p>
-<form method="post" action="/api/auth/sign-in/social">
-<input type="hidden" name="provider" value="github">
-<input type="hidden" name="callbackURL" value="/device?user_code=${encodeURIComponent(userCode)}">
-<button type="submit">Continue with GitHub</button></form>
+<button id="github" type="button">Continue with GitHub</button>
 <button id="approve" type="button" hidden>Approve this device</button><p id="status"></p></main>
 <script>
 const userCode = ${scriptCode};
 const status = document.getElementById("status");
 const approve = document.getElementById("approve");
-fetch("/api/auth/device/verify?user_code=" + encodeURIComponent(userCode), {credentials: "include"})
+const github = document.getElementById("github");
+github.addEventListener("click", async () => {
+  const response = await fetch("/api/auth/sign-in/social", {
+    method: "POST",
+    credentials: "include",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      provider: "github",
+      callbackURL: "/device?user_code=" + encodeURIComponent(userCode),
+    }),
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body || typeof body.url !== "string") {
+    status.textContent = "GitHub sign-in could not be started.";
+    return;
+  }
+  window.location.assign(body.url);
+});
+fetch("/api/auth/device?user_code=" + encodeURIComponent(userCode), {credentials: "include"})
   .then((response) => response.ok ? response.json() : null)
   .then((device) => { if (device && device.status === "pending") approve.hidden = false; });
 approve.addEventListener("click", async () => {
