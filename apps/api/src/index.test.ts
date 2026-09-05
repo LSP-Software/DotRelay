@@ -563,4 +563,52 @@ describe("API foundation", () => {
       ],
     });
   });
+
+  test("lists Team names and rejects an empty Team create body", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({
+          user: { id: "auth-user", name: "Ari" },
+        }),
+      },
+    } as never;
+    const database = {
+      authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
+      user: { upsert: async () => ({ id: "user-id" }) },
+      device: { findFirst: async () => ({ id: "device-id" }) },
+      team: {
+        findMany: async () => [
+          { id: "00000000-0000-4000-8000-000000000001", name: "Personal" },
+        ],
+      },
+    } as never;
+    const testApp = createApi({ database, profile, auth });
+    const listed = await testApp.request(`${profile.origin}/api/v1/teams`, {
+      headers: {
+        Origin: profile.origin,
+        Authorization: "Bearer session-token",
+        "X-DotRelay-Device-Id": "device-id",
+      },
+    });
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual({
+      teams: [
+        { id: "00000000-0000-4000-8000-000000000001", name: "Personal" },
+      ],
+    });
+
+    const created = await testApp.request(`${profile.origin}/api/v1/teams`, {
+      method: "POST",
+      headers: {
+        Origin: profile.origin,
+        Authorization: "Bearer session-token",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000099",
+        "X-DotRelay-Device-Id": "device-id",
+      },
+      body: JSON.stringify({ name: "   " }),
+    });
+    expect(created.status).toBe(400);
+  });
 });

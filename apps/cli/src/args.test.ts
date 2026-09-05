@@ -113,4 +113,8 @@ describe("CLI argument contract", () => {
     expect(() => parseArguments(["device", "backup"])).toThrow("--output");
     expect(() => parseArguments(["device", "recover"])).toThrow("--from");
   });
+
+  test("accepts --debug as a global flag", () => {
+    expect(parseArguments(["status", "--debug"]).debug).toBe(true);
+  });
 });

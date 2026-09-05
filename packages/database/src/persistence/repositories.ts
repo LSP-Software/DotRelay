@@ -1743,8 +1743,70 @@ export type EnvironmentGenesisInput = Readonly<{
   readonly publication: RevisionPublicationInput;
 }>;
 
+export type EnvironmentCreationInput = Readonly<{
+  readonly environmentId?: string;
+  readonly projectId: string;
+  readonly createdByUserId: string;
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly now?: Date;
+}>;
+
 export class EnvironmentRepository {
   private readonly publication = new PublicationRepository();
+  private readonly operations = new OperationRepository();
+  private readonly audit = new AuditFactRepository();
+
+  async create(
+    database: TransactionDatabase,
+    input: EnvironmentCreationInput,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
+      const project = await transaction.project.findUnique({
+        where: { id: input.projectId },
+        select: { lifecycle: true, teamId: true },
+      });
+      if (project?.lifecycle !== "ACTIVE")
+        throw new Error("Project is not active");
+      await requireTeamAction(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        project.teamId,
+        "ADMINISTER_ENVIRONMENT",
+      );
+      if (input.createdByUserId !== input.operation.actorUserId)
+        throw new Error("Environment creator must be the operation actor");
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      const environment = await transaction.environment.create({
+        data: {
+          id: input.environmentId ?? crypto.randomUUID(),
+          projectId: input.projectId,
+          createdByUserId: input.createdByUserId,
+          createdAt: now,
+        },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "ENVIRONMENT_CREATED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "ENVIRONMENT",
+        entityId: environment.id,
+        newLifecycle: "ACTIVE",
+      });
+      return { operation: operation.operation, environment };
+    });
+  }
 
   async createWithGenesis(
     database: TransactionDatabase,

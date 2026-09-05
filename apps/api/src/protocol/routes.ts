@@ -258,15 +258,6 @@ export const registerProtocolRoutes = (
     );
     const createdAt = new Date();
     try {
-      await staging.put(database, {
-        operationId,
-        objectId: COMMAND_STAGE_OBJECT_ID,
-        actorDeviceId: actor.deviceId,
-        canonicalBytes: commandBody,
-        digest: commandDigest,
-        createdAt,
-        expiresAt,
-      });
       const result = await operations.begin(database, {
         id: operationId,
         actorUserId: actor.userId,
@@ -274,6 +265,15 @@ export const registerProtocolRoutes = (
         kind,
         commandBytes: commandBody,
         commandDigest,
+        expiresAt,
+      });
+      await staging.put(database, {
+        operationId,
+        objectId: COMMAND_STAGE_OBJECT_ID,
+        actorDeviceId: actor.deviceId,
+        canonicalBytes: commandBody,
+        digest: commandDigest,
+        createdAt,
         expiresAt,
       });
       return context.json(
@@ -513,19 +513,19 @@ export const registerProtocolRoutes = (
           "Content-Type": "application/problem+json",
         });
       }
-      if (
-        !(await verifyRevisionSignature(
-          revisionObject,
-          signingDevice.ed25519PublicKey,
-        ))
-      ) {
-        const problem = respondProblem("invalid_crypto_object");
-        return context.json(problem.body, problem.status, {
-          "Cache-Control": "no-store",
-          "Content-Type": "application/problem+json",
-        });
-      }
       try {
+        if (
+          !(await verifyRevisionSignature(
+            revisionObject,
+            signingDevice.ed25519PublicKey,
+          ))
+        ) {
+          const problem = respondProblem("invalid_crypto_object");
+          return context.json(problem.body, problem.status, {
+            "Cache-Control": "no-store",
+            "Content-Type": "application/problem+json",
+          });
+        }
         const result = await publications.publishRevision(
           database,
           buildPublicationInput({

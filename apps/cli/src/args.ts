@@ -37,6 +37,7 @@ export type ParsedArguments = Readonly<{
   readonly noOpen: boolean;
   readonly noInput: boolean;
   readonly json: boolean;
+  readonly debug: boolean;
   readonly stdout: boolean;
   readonly reveal: boolean;
 }>;
@@ -58,6 +59,7 @@ type MutableArguments = {
   noOpen: boolean;
   noInput: boolean;
   json: boolean;
+  debug: boolean;
   stdout: boolean;
   reveal: boolean;
 };
@@ -249,6 +251,7 @@ export const parseArguments = (
     noOpen: false,
     noInput: false,
     json: false,
+    debug: false,
     stdout: false,
     reveal: false,
     classifications: {},
@@ -279,6 +282,7 @@ export const parseArguments = (
       } else if (flag === "--no-open") parsed.noOpen = true;
       else if (flag === "--no-input") parsed.noInput = true;
       else if (flag === "--json") parsed.json = true;
+      else if (flag === "--debug") parsed.debug = true;
       else if (flag === "--stdout") parsed.stdout = true;
       else if (flag === "--reveal") parsed.reveal = true;
       else throw new CliInvocationError(`unknown option: ${flag}`);

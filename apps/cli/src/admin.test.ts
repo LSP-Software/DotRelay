@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { CBOR_LIMITS, type ServerProfilePin } from "@dotrelay/contracts";
 import {
   createStrictJsonClient,
+  createTeam,
   findProjectByRepository,
   linkProject,
+  listTeams,
+  resolveTeamForProject,
   selectEnvironment,
 } from "./admin";
 
@@ -143,5 +146,118 @@ describe("strict administration client", () => {
     await expect(client.get("/api/v1/teams", ["id"])).rejects.toThrow(
       "response was too large",
     );
+  });
+
+  test("lists Teams and creates one when none exist", async () => {
+    const posts: Array<Record<string, unknown>> = [];
+    const client = {
+      get: async () => ({ teams: [] }),
+      post: async (_path: string, body: Record<string, unknown>) => {
+        posts.push(body);
+        return {
+          id: "00000000-0000-4000-8000-000000000001",
+          name: String(body.name),
+        };
+      },
+    };
+    await expect(listTeams(client)).resolves.toEqual([]);
+    await expect(createTeam(client, "Personal")).resolves.toEqual({
+      id: "00000000-0000-4000-8000-000000000001",
+      name: "Personal",
+    });
+    expect(posts).toEqual([{ name: "Personal" }]);
+  });
+
+  test("resolves a single Team without prompting", async () => {
+    const prompts: string[] = [];
+    await expect(
+      resolveTeamForProject(
+        {
+          get: async () => ({
+            teams: [
+              {
+                id: "00000000-0000-4000-8000-000000000001",
+                name: "Personal",
+              },
+            ],
+          }),
+          post: async () => {
+            throw new Error("should not create");
+          },
+        },
+        {
+          suggestedName: "LSP-Software",
+          noInput: false,
+          prompt: async (question) => {
+            prompts.push(question);
+            return "";
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      id: "00000000-0000-4000-8000-000000000001",
+      name: "Personal",
+    });
+    expect(prompts).toEqual([]);
+  });
+
+  test("creates a Team interactively when none are available", async () => {
+    const lines: string[] = [];
+    await expect(
+      resolveTeamForProject(
+        {
+          get: async () => ({ teams: [] }),
+          post: async (_path, body) => ({
+            id: "00000000-0000-4000-8000-000000000009",
+            name: String(body.name),
+          }),
+        },
+        {
+          suggestedName: "LSP-Software",
+          noInput: false,
+          prompt: async () => "",
+          write: (message) => {
+            lines.push(message);
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      id: "00000000-0000-4000-8000-000000000009",
+      name: "LSP-Software",
+    });
+    expect(lines.join("")).toContain("No Team yet");
+  });
+
+  test("lets the operator pick among multiple Teams", async () => {
+    await expect(
+      resolveTeamForProject(
+        {
+          get: async () => ({
+            teams: [
+              {
+                id: "00000000-0000-4000-8000-000000000001",
+                name: "Personal",
+              },
+              {
+                id: "00000000-0000-4000-8000-000000000002",
+                name: "Acme",
+              },
+            ],
+          }),
+          post: async () => {
+            throw new Error("should not create");
+          },
+        },
+        {
+          suggestedName: "LSP-Software",
+          noInput: false,
+          prompt: async () => "2",
+          write: () => undefined,
+        },
+      ),
+    ).resolves.toEqual({
+      id: "00000000-0000-4000-8000-000000000002",
+      name: "Acme",
+    });
   });
 });

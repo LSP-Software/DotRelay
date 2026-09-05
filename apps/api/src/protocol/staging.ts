@@ -2,7 +2,6 @@ import {
   bytesToUuid,
   ContractError,
   type FinalizePublicationRequest,
-  importSigningPublicKey,
   parseProtocolObject,
   validateProtocolObject,
   verifyProtocolObject,
@@ -67,11 +66,16 @@ export const verifyRevisionSignature = async (
   const parsedRevision = parseProtocolObject(revisionObject.canonicalBytes);
   const signature = parsedRevision.get(4);
   if (!(signature instanceof Uint8Array)) return false;
-  return verifyProtocolObject(
-    parsedRevision,
-    signature,
-    await importSigningPublicKey(new Uint8Array(ed25519PublicKey)),
+  const rawKey = new Uint8Array(ed25519PublicKey);
+  if (rawKey.byteLength !== 32) return false;
+  const publicKey = await crypto.subtle.importKey(
+    "raw",
+    rawKey.slice().buffer,
+    { name: "Ed25519" },
+    false,
+    ["verify"],
   );
+  return verifyProtocolObject(parsedRevision, signature, publicKey);
 };
 
 export const buildPublicationInput = (input: {

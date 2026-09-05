@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { PassThrough } from "node:stream";
 import {
   createCliDeviceStorage,
   createDeviceBootstrap,
@@ -168,6 +169,79 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('"ok":true');
     expect(result.stdout).not.toContain("postgres://secret");
+  });
+
+  test("classifies and confirms genesis publication from the terminal", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const terminalInput = new PassThrough();
+    const terminalOutput = new PassThrough();
+    const renderedChunks: string[] = [];
+    terminalOutput.on("data", (chunk) => {
+      renderedChunks.push(chunk.toString("utf8"));
+    });
+    terminalInput.write("\ny\n");
+    terminalInput.end();
+    const result = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--json",
+      ],
+      {
+        ...runtime,
+        terminal: { input: terminalInput, output: terminalOutput },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"ok":true');
+    expect(result.stdout).not.toContain("postgres://secret");
+    const rendered = renderedChunks.join("");
+    expect(rendered).toContain("Classify Variables");
+    expect(rendered).toContain("DATABASE_URL");
+    expect(rendered).toContain("[shared]");
+  });
+
+  test("toggles Variable ownership from the classification board", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const terminalInput = new PassThrough();
+    const terminalOutput = new PassThrough();
+    const renderedChunks: string[] = [];
+    terminalOutput.on("data", (chunk) => {
+      renderedChunks.push(chunk.toString("utf8"));
+    });
+    terminalInput.write("1\n\ny\n");
+    terminalInput.end();
+    const result = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--json",
+      ],
+      {
+        ...runtime,
+        terminal: { input: terminalInput, output: terminalOutput },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const rendered = renderedChunks.join("");
+    expect(rendered).toContain("API_KEY");
+    expect(rendered).toContain("[user-defined]");
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {

@@ -40,13 +40,17 @@ store readable names.
 
 ## Encrypted workflows
 
-`init [environment]` uses `.env` by default, selects the first active Team when creating a new
-Project, and creates the signed genesis Revision. Use `--team <team-id>` or `--from <dotenv>` only
-to override those defaults. `push` uses `.env` by default and appends a signed Manifest Revision.
-Every input Variable must be explicitly classified with
-`--classify NAME=shared` or `--classify NAME=user-defined`; interactive classification is available
-when those flags are omitted. Existing Variable ids are retained, omitted Variables become signed
-tombstones, and empty Values remain Values rather than being dropped.
+`init [environment-id]` uses `.env` by default. When the GitHub Repository is not yet linked, it
+resolves a Team without requiring flags: the only Team is used automatically, multiple Teams are
+chosen from a terminal list, and zero Teams prompts to create one (defaulting the name to the
+repository owner). When the Project has no Environment yet, `init` creates one automatically.
+Use `--team <team-id>`, an opaque Environment id, or `--from <dotenv>` only to override those
+defaults. `push` uses `.env` by default and appends a signed Manifest Revision.
+Every input Variable must be classified as shared or user-defined. Interactive `init`/`push` shows
+a board of every Variable name (never Values) and lets you toggle ownership before continuing;
+`--classify NAME=shared` or `--classify NAME=user-defined` skips the board when every Variable is
+covered, and is required under `--no-input`. Existing Variable ids are retained, omitted Variables
+become signed tombstones, and empty Values remain Values rather than being dropped.
 
 The CLI reviews the publication summary before beginning staging. It then uploads the signed
 command and encrypted protocol objects, finalizes the operation with the expected head and epoch,
@@ -89,4 +93,5 @@ and never answers a confirmation prompt on the user's behalf.
 The stable exit categories are invocation/configuration (2), incomplete export (3), unresolved
 conflict (4), cryptographic/integrity/compatibility (5), authentication/device/authorization (6),
 transient service (7), and local I/O/credential-store (8). `--json` diagnostics contain category,
-code, safe detail, exit code, and non-secret counts only.
+code, safe detail, exit code, and non-secret counts only. `--debug` replaces the opaque detail with
+the sanitized operational error message so operators can see failures such as a missing Team.

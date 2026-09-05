@@ -38,7 +38,10 @@ export type ProjectSummary = Readonly<{
   readonly githubRepositoryId: string;
   readonly lifecycle: "active" | "archived";
 }>;
-export type TeamSummary = Readonly<{ readonly id: string }>;
+export type TeamSummary = Readonly<{
+  readonly id: string;
+  readonly name: string;
+}>;
 
 export type EnvironmentSummary = Readonly<{
   readonly id: string;
@@ -200,21 +203,138 @@ export const findProjectByRepository = async (
   });
 };
 
-export const findDefaultTeam = async (
+export const listTeams = async (
   client: Pick<StrictJsonClient, "get">,
-): Promise<TeamSummary> => {
+): Promise<readonly TeamSummary[]> => {
   const response = await client.get("/api/v1/teams", ["teams"]);
-  if (!Array.isArray(response.teams) || response.teams.length === 0)
-    throw new CliInvocationError("no Team is available for this Project");
-  const first = response.teams[0];
-  if (!isRecord(first))
+  if (!Array.isArray(response.teams))
     throw new CliError(
       "transient",
       "the server returned an invalid Team list",
       {},
       "response_invalid",
     );
-  return Object.freeze({ id: requireOpaqueId(first.id, "Team id") });
+  return Object.freeze(
+    response.teams.map((entry) => {
+      if (!isRecord(entry))
+        throw new CliError(
+          "transient",
+          "the server returned an invalid Team list",
+          {},
+          "response_invalid",
+        );
+      if (typeof entry.name !== "string" || entry.name.trim().length === 0)
+        throw new CliError(
+          "transient",
+          "the server returned an invalid Team name",
+          {},
+          "response_invalid",
+        );
+      return Object.freeze({
+        id: requireOpaqueId(entry.id, "Team id"),
+        name: entry.name.trim(),
+      });
+    }),
+  );
+};
+
+export const createTeam = async (
+  client: Pick<StrictJsonClient, "post">,
+  name: string,
+): Promise<TeamSummary> => {
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > 255)
+    throw new CliInvocationError("Team name must be 1 to 255 characters");
+  const response = await client.post(
+    "/api/v1/teams",
+    { name: trimmed },
+    ["id", "name"],
+    { idempotencyKey: crypto.randomUUID() },
+  );
+  if (typeof response.name !== "string" || response.name.trim().length === 0)
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Team",
+      {},
+      "response_invalid",
+    );
+  return Object.freeze({
+    id: requireOpaqueId(response.id, "Team id"),
+    name: response.name.trim(),
+  });
+};
+
+export const findDefaultTeam = async (
+  client: Pick<StrictJsonClient, "get">,
+): Promise<TeamSummary> => {
+  const teams = await listTeams(client);
+  if (teams.length === 0)
+    throw new CliInvocationError("no Team is available for this Project");
+  return teams[0]!;
+};
+
+export type ResolveTeamOptions = Readonly<{
+  readonly teamId?: string;
+  readonly suggestedName: string;
+  readonly noInput: boolean;
+  readonly prompt: (question: string) => Promise<string>;
+  readonly write?: (message: string) => void;
+}>;
+
+const askForTeamName = async (
+  options: ResolveTeamOptions,
+): Promise<string> => {
+  const write = options.write ?? (() => undefined);
+  write("No Team yet. Create one to continue.\n");
+  const answer = (
+    await options.prompt(`Team name [${options.suggestedName}]`)
+  ).trim();
+  return answer.length > 0 ? answer : options.suggestedName;
+};
+
+export const resolveTeamForProject = async (
+  client: Pick<StrictJsonClient, "get" | "post">,
+  options: ResolveTeamOptions,
+): Promise<TeamSummary> => {
+  const teams = await listTeams(client);
+  if (options.teamId) {
+    const selected = teams.find((team) => team.id === options.teamId);
+    if (!selected)
+      throw new CliInvocationError("the specified Team is not available");
+    return selected;
+  }
+  if (teams.length === 1) return teams[0]!;
+  if (teams.length === 0) {
+    if (options.noInput)
+      throw new CliInvocationError(
+        "no Team is available; run init interactively or pass --team",
+      );
+    return createTeam(client, await askForTeamName(options));
+  }
+  if (options.noInput)
+    throw new CliInvocationError(
+      "multiple Teams are available; pass --team <team-id>",
+    );
+  const write = options.write ?? (() => undefined);
+  write("Select a Team for this Project:\n");
+  for (const [index, team] of teams.entries())
+    write(`  ${index + 1}) ${team.name}\n`);
+  write(`  ${teams.length + 1}) Create a new Team\n`);
+  const answer = (await options.prompt("Team [1]")).trim();
+  const choice =
+    answer.length === 0 ? 1 : Number.parseInt(answer, 10);
+  if (!Number.isInteger(choice) || choice < 1 || choice > teams.length + 1)
+    throw new CliInvocationError("choose a Team from the list");
+  if (choice === teams.length + 1) {
+    const name = (
+      await options.prompt(`Team name [${options.suggestedName}]`)
+    ).trim();
+    return createTeam(
+      client,
+      name.length > 0 ? name : options.suggestedName,
+    );
+  }
+  return teams[choice - 1]!;
 };
 
 export const selectEnvironment = async (
@@ -293,6 +413,27 @@ export const selectEnvironment = async (
       environment.currentHeadId === null
         ? null
         : requireOpaqueId(environment.currentHeadId, "Environment head id"),
+  });
+};
+
+export const createEnvironment = async (
+  client: Pick<StrictJsonClient, "post">,
+  projectId: string,
+): Promise<EnvironmentSummary> => {
+  const response = await client.post(
+    `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
+    {},
+    ["id", "projectId", "lifecycle", "currentHeadId"],
+    { idempotencyKey: crypto.randomUUID() },
+  );
+  return Object.freeze({
+    id: requireOpaqueId(response.id, "Environment id"),
+    projectId: requireOpaqueId(response.projectId, "Project id"),
+    lifecycle: requireLifecycle(response.lifecycle, "Environment lifecycle"),
+    currentHeadId:
+      response.currentHeadId === null
+        ? null
+        : requireOpaqueId(response.currentHeadId, "Environment head id"),
   });
 };
 

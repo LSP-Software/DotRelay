@@ -7,7 +7,9 @@ import {
   parseUuid,
 } from "@dotrelay/contracts";
 import {
+  AdministrationRepository,
   type DatabaseClient,
+  EnvironmentRepository,
   OperationConflictError,
   ProjectRepository,
   sha384Digest,
@@ -45,7 +47,8 @@ const mapAdministrationError = (error: unknown): ProblemCode => {
   if (error.message.includes("authorized")) return "forbidden";
   if (
     error.message.includes("must be positive") ||
-    error.message.includes("unsupported media type")
+    error.message.includes("unsupported media type") ||
+    error.message.includes("Team name")
   )
     return "invalid_request";
   return "state_conflict";
@@ -53,6 +56,7 @@ const mapAdministrationError = (error: unknown): ProblemCode => {
 
 const readJsonBody = async (
   context: Context,
+  allowedFields: readonly string[],
 ): Promise<Record<string, unknown>> => {
   if (
     context.req.header("Content-Type")?.split(";", 1)[0]?.trim() !==
@@ -65,13 +69,15 @@ const readJsonBody = async (
   } catch {
     throw new ContractError("invalid_request");
   }
-  return parseJsonObject(body, [
-    "teamId",
-    "repositoryHost",
-    "repositoryOwner",
-    "repositoryName",
-    "githubRepositoryId",
-  ]);
+  return parseJsonObject(body, allowedFields);
+};
+
+const requireTeamName = (value: unknown): string => {
+  if (typeof value !== "string") throw new Error("Team name is required");
+  const name = value.trim();
+  if (name.length === 0 || name.length > 255)
+    throw new Error("Team name must be 1 to 255 characters");
+  return name;
 };
 
 const requireRepositoryId = (value: unknown): bigint => {
@@ -112,10 +118,26 @@ export const registerAdministrationRoutes = (
   app: Hono,
   { database, profile, auth }: AdministrationRouteDependencies,
 ) => {
+  const administration = new AdministrationRepository();
+  const environments = new EnvironmentRepository();
   const projects = new ProjectRepository();
 
   app.use(
     "/api/v1/projects",
+    bodyLimit({
+      maxSize: profile.limits.adminBodyBytes,
+      onError: (context) => responseProblem(context, "payload_too_large"),
+    }),
+  );
+  app.use(
+    "/api/v1/projects/*",
+    bodyLimit({
+      maxSize: profile.limits.adminBodyBytes,
+      onError: (context) => responseProblem(context, "payload_too_large"),
+    }),
+  );
+  app.use(
+    "/api/v1/teams",
     bodyLimit({
       maxSize: profile.limits.adminBodyBytes,
       onError: (context) => responseProblem(context, "payload_too_large"),
@@ -164,17 +186,60 @@ export const registerAdministrationRoutes = (
       where: {
         memberships: { some: { userId: actor.userId, lifecycle: "ACTIVE" } },
       },
-      select: { id: true },
+      select: { id: true, name: true },
       orderBy: { createdAt: "asc" },
     });
     return context.json({ teams }, 200, { "Cache-Control": "no-store" });
+  });
+
+  app.post("/api/v1/teams", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const body = await readJsonBody(context, ["name"]);
+      const name = requireTeamName(body.name);
+      const operationId = parseIdempotencyKey(
+        context.req.header("Idempotency-Key"),
+      );
+      const commandBytes = new TextEncoder().encode(
+        JSON.stringify({ action: "team.create", name }),
+      );
+      const result = await administration.createTeamWithOwner(database, {
+        serverProfileId: profile.id,
+        ownerUserId: actor.userId,
+        name,
+        operation: {
+          id: operationId,
+          actorUserId: actor.userId,
+          actorDeviceId: actor.deviceId,
+          kind: "ADMINISTRATION",
+          commandBytes,
+          commandDigest: await sha384Digest(commandBytes),
+        },
+      });
+      if (!("team" in result))
+        return responseProblem(context, "state_conflict");
+      return context.json(
+        { id: result.team.id, name: result.team.name },
+        201,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      return responseProblem(context, mapAdministrationError(error));
+    }
   });
 
   app.post("/api/v1/projects", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
     try {
-      const body = await readJsonBody(context);
+      const body = await readJsonBody(context, [
+        "teamId",
+        "repositoryHost",
+        "repositoryOwner",
+        "repositoryName",
+        "githubRepositoryId",
+      ]);
       if (
         body.repositoryHost !== "github.com" ||
         typeof body.repositoryOwner !== "string" ||
@@ -254,6 +319,40 @@ export const registerAdministrationRoutes = (
         200,
         { "Cache-Control": "no-store" },
       );
+    } catch (error) {
+      return responseProblem(context, mapAdministrationError(error));
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/environments", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const projectId = parseUuid(context.req.param("projectId"), "projectId");
+      await readJsonBody(context, []);
+      const operationId = parseIdempotencyKey(
+        context.req.header("Idempotency-Key"),
+      );
+      const commandBytes = new TextEncoder().encode(
+        JSON.stringify({ action: "environment.create", projectId }),
+      );
+      const result = await environments.create(database, {
+        projectId,
+        createdByUserId: actor.userId,
+        operation: {
+          id: operationId,
+          actorUserId: actor.userId,
+          actorDeviceId: actor.deviceId,
+          kind: "ADMINISTRATION",
+          commandBytes,
+          commandDigest: await sha384Digest(commandBytes),
+        },
+      });
+      if (!("environment" in result))
+        return responseProblem(context, "state_conflict");
+      return context.json(environmentResponse(result.environment), 201, {
+        "Cache-Control": "no-store",
+      });
     } catch (error) {
       return responseProblem(context, mapAdministrationError(error));
     }

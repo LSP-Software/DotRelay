@@ -41,6 +41,20 @@ export const mapPersistenceError = (
   if (message.includes("archived")) return { code: "archived_resource" };
   if (message.includes("not staged")) return { code: "staged_object_missing" };
   if (message.includes("expired")) return { code: "staging_expired" };
+  if (
+    message.includes("must ") ||
+    message.includes("cannot ") ||
+    message.includes("does not match") ||
+    message.includes("outside the Environment") ||
+    message.includes("incomplete") ||
+    message.includes("malformed") ||
+    message.includes("invalid")
+  )
+    return { code: "invalid_request" };
+  if (message.includes("Unique constraint") || message.includes("unique constraint"))
+    return { code: "state_conflict" };
+  if (message.includes("check constraint") || message.includes("Check constraint"))
+    return { code: "invalid_request" };
   return null;
 };
 

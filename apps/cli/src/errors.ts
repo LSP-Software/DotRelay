@@ -162,7 +162,10 @@ const safeDiagnosticExitCode = (
   exitCode: number,
 ): number => (category === "crypto" ? EXIT_CODES.transient : exitCode);
 
-export const diagnosticForError = (error: unknown): CliDiagnostic => {
+export const diagnosticForError = (
+  error: unknown,
+  options: Readonly<{ readonly debug?: boolean }> = {},
+): CliDiagnostic => {
   if (error instanceof CliError) {
     const safeDetails = Object.fromEntries(
       Object.entries(error.details).filter(([key, value]) => {
@@ -178,22 +181,31 @@ export const diagnosticForError = (error: unknown): CliDiagnostic => {
         );
       }),
     );
+    const detail = options.debug
+      ? sanitizeCliText(error.message).slice(0, 512) ||
+        "The command could not complete."
+      : "The command could not complete.";
     return {
       ok: false,
       category: safeDiagnosticCategory(error.category),
       code: safeDiagnosticCodes.has(error.code)
         ? error.code
         : "unexpected_failure",
-      detail: "The command could not complete.",
+      detail,
       ...safeDetails,
       exitCode: safeDiagnosticExitCode(error.category, error.exitCode),
     };
   }
+  const unexpectedDetail =
+    options.debug && error instanceof Error
+      ? sanitizeCliText(error.message).slice(0, 512) ||
+        "The command could not complete."
+      : "The command could not complete.";
   return {
     ok: false,
     category: "local-io",
     code: "unexpected_failure",
-    detail: "The command could not complete.",
+    detail: unexpectedDetail,
     exitCode: EXIT_CODES.localIo,
   };
 };

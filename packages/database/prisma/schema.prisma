@@ -808,7 +808,6 @@ model StagedObject {
   actorDevice Device    @relation(fields: [actorDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@id([operationId, objectId])
-  @@unique([operationId, digest])
   @@index([expiresAt])
   @@map("staged_objects")
 }

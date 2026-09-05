@@ -42,6 +42,7 @@ import {
 } from "@dotrelay/contracts";
 import {
   categoryForProblem,
+  createEnvironment,
   createStrictJsonClient,
   type StrictJsonClient,
 } from "./admin";
@@ -61,9 +62,11 @@ import {
   parseDotenv,
   serializeDotenv,
 } from "./dotenv";
+import { classifyVariablesInteractively } from "./classify-ui";
 import { CliError, CliInvocationError } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
+import { readTerminalLine, type TerminalIo } from "./terminal";
 
 export type WorkflowOptions = Readonly<{
   readonly profile: CliServerProfile;
@@ -75,6 +78,7 @@ export type WorkflowOptions = Readonly<{
   readonly contextPath: string;
   readonly prompt?: (question: string) => Promise<string>;
   readonly confirm?: (question: string) => Promise<boolean>;
+  readonly terminal?: TerminalIo;
   readonly noInput: boolean;
   readonly stdoutIsTerminal: boolean;
   readonly admin?: StrictJsonClient;
@@ -270,13 +274,11 @@ const ask = async (
   if (options.prompt) return options.prompt(question);
   if (options.noInput)
     throw new CliInvocationError(`${question} requires interactive input`);
-  const prompt = (
-    globalThis as unknown as { prompt?: (value: string) => string | null }
-  ).prompt;
-  const answer = prompt?.(question);
-  if (typeof answer !== "string")
+  try {
+    return await readTerminalLine(question, options.terminal);
+  } catch {
     throw new CliInvocationError(`${question} requires interactive input`);
-  return answer;
+  }
 };
 
 const confirm = async (
@@ -1566,6 +1568,26 @@ export const restoreRecoveryKit = async (
   };
 };
 
+const opaqueEnvironmentId =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const resolveRequestedEnvironmentId = (
+  parsed: ParsedArguments,
+  localContext: Readonly<{ readonly environmentId?: string }> | null,
+): string | undefined => {
+  const positional =
+    parsed.command === "init" ? parsed.positionals[0] : undefined;
+  if (positional) {
+    if (!opaqueEnvironmentId.test(positional))
+      throw new CliInvocationError(
+        "init environment must be an opaque Environment id",
+      );
+    return positional.toLowerCase();
+  }
+  if (parsed.environment) return parsed.environment;
+  return localContext?.environmentId;
+};
+
 const loadWorkflowSession = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -1575,14 +1597,14 @@ const loadWorkflowSession = async (
     createStrictJsonClient(options.profile.pin, options.credentials, {
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
-  const { readWorktreeContext } = await import("./context");
+  const { readWorktreeContext, writeWorktreeContext } = await import(
+    "./context"
+  );
   const localContext = await readWorktreeContext(options.contextPath);
-  const requestedEnvironment =
-    (parsed.command === "init"
-      ? (parsed.positionals[0] ?? "development")
-      : undefined) ??
-    parsed.environment ??
-    localContext?.environmentId;
+  const requestedEnvironment = resolveRequestedEnvironmentId(
+    parsed,
+    localContext,
+  );
   const boundary = parseBoundary(
     await admin.get(
       `/api/v1/workspace/boundary${requestedEnvironment ? `?environment=${encodeURIComponent(requestedEnvironment)}` : ""}`,
@@ -1660,10 +1682,6 @@ const loadWorkflowSession = async (
       {},
       "rotation_required",
     );
-  const environmentId = requestedEnvironment;
-  const selectedEnvironment = environmentId ?? boundary.environment.id;
-  if (!selectedEnvironment)
-    throw new CliInvocationError("an Environment must be selected");
   if (
     !boundary.environment.projectId ||
     !boundary.environment.teamId ||
@@ -1675,6 +1693,22 @@ const loadWorkflowSession = async (
       {},
       "environment_context_missing",
     );
+  let selectedEnvironment =
+    requestedEnvironment ?? boundary.environment.id ?? undefined;
+  if (!selectedEnvironment) {
+    if (parsed.command !== "init")
+      throw new CliInvocationError("an Environment must be selected");
+    const created = await createEnvironment(
+      admin,
+      boundary.environment.projectId,
+    );
+    selectedEnvironment = created.id;
+    await writeWorktreeContext(options.contextPath, {
+      serverProfileId: options.profile.pin.serverProfileId,
+      projectId: boundary.environment.projectId,
+      environmentId: created.id,
+    });
+  }
   const token = await createSessionStore(options.credentials).get(
     options.profile.pin,
   );
@@ -1797,23 +1831,44 @@ const classify = async (
   parsed: ParsedArguments,
   entries: readonly DotenvEntry[],
 ): Promise<readonly ClassifiedDotenvEntry[]> => {
-  const classifications: Record<
-    string,
-    { classification: "shared" | "user-defined" }
-  > = {};
-  for (const entry of entries) {
-    const value =
-      parsed.classifications[entry.name] ??
-      (
-        await ask(options, `Classify ${entry.name} as shared or user-defined`)
-      ).trim();
-    if (value !== "shared" && value !== "user-defined")
-      throw new CliInvocationError(
-        `classification for ${entry.name} must be shared or user-defined`,
-      );
-    classifications[entry.name] = { classification: value };
-  }
-  return classifyDotenv(entries, classifications);
+  const provided = Object.fromEntries(
+    Object.entries(parsed.classifications).map(([name, classification]) => [
+      name,
+      classification,
+    ]),
+  ) as Readonly<Partial<Record<string, "shared" | "user-defined">>>;
+  const missing = entries.filter((entry) => !(entry.name in provided));
+  if (missing.length === 0)
+    return classifyDotenv(
+      entries,
+      Object.fromEntries(
+        Object.entries(provided).map(([name, classification]) => [
+          name,
+          { classification: classification! },
+        ]),
+      ),
+    );
+  if (options.noInput)
+    throw new CliInvocationError(
+      "every Variable requires --classify NAME=shared|user-defined under --no-input",
+    );
+  const selected = await classifyVariablesInteractively(
+    entries.map((entry) => entry.name),
+    provided,
+    {
+      ...(options.terminal ? { terminal: options.terminal } : {}),
+      ...(options.prompt ? { prompt: options.prompt } : {}),
+    },
+  );
+  return classifyDotenv(
+    entries,
+    Object.fromEntries(
+      Object.entries(selected).map(([name, classification]) => [
+        name,
+        { classification },
+      ]),
+    ),
+  );
 };
 
 const variablesFromDotenv = (
@@ -1907,11 +1962,14 @@ const publish = async (
   );
   const review = reviewPublication(artifacts.commandBytes);
   assertPublicationAccepted(review);
+  const liveVariableCount = variables.filter(
+    (variable) => !variable.tombstone,
+  ).length;
   if (
     !options.noInput &&
     !(await confirm(
       options,
-      `Publish ${review.manifestVariables} Variables and ${review.manifestLaneCommitments} encrypted lanes?`,
+      `Publish ${liveVariableCount} Variables?`,
     ))
   )
     throw new CliInvocationError("publication confirmation was declined");
@@ -1961,7 +2019,7 @@ const publish = async (
       category,
       category === "conflict"
         ? "the publication conflicts with current Server Profile state"
-        : "the Server Profile could not publish the Revision",
+        : `the Server Profile could not publish the Revision (${code})`,
       {},
       code,
     );

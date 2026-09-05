@@ -2,9 +2,9 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import type { CliDeviceStorage } from "@dotrelay/client";
 import {
   createStrictJsonClient,
-  findDefaultTeam,
   findProjectByRepository,
   linkProject,
+  resolveTeamForProject,
   type StrictJsonClient,
   selectEnvironment,
 } from "./admin";
@@ -47,6 +47,7 @@ import {
   resolveServerProfile,
   useServerProfile,
 } from "./profile";
+import type { TerminalIo } from "./terminal";
 import {
   approveDeviceEnrollment,
   beginDeviceEnrollment,
@@ -56,6 +57,8 @@ import {
   restoreRecoveryKit,
   runProtectedWorkflow,
 } from "./workflow";
+
+export type { TerminalIo };
 
 export const version = "0.0.0-foundation";
 
@@ -82,13 +85,13 @@ export const renderHelp = (): string => {
     "  context                             Detect the GitHub Repository",
     "  project link --team <team>          Link a Project explicitly",
     "  env use <environment-id>            Select an Environment by opaque id",
-    "  init [environment]                   Set up or use the Project, then create a genesis Revision from .env",
+    "  init [environment-id]                Set up Project/Environment, then create a genesis Revision from .env",
     "  push --from <file>                  Publish a reviewed Revision",
     "  pull --output <file>                Safely export locally decrypted Values",
     "  history | rollback <revision>       Verify history or append a Rollback",
     "  status                              Show non-secret local state",
     "",
-    "Global options: --profile, --environment, --json, --no-input",
+    "Global options: --profile, --environment, --json, --debug, --no-input",
     "Publication options: --classify NAME=shared|user-defined",
     "Rollback options: --variable <id> (repeat for lane-scoped Rollback)",
     "Profile trust: profile add requires --accept-profile <server-profile-id>",
@@ -116,6 +119,7 @@ export type CliRuntime = Readonly<{
   readonly stdoutIsTerminal?: boolean;
   readonly prompt?: (question: string) => Promise<string>;
   readonly confirm?: (question: string) => Promise<boolean>;
+  readonly terminal?: TerminalIo;
   readonly deviceStorage?: CliDeviceStorage;
   readonly stateDirectory?: string;
 }>;
@@ -463,6 +467,7 @@ const execute = async (
       contextPath: runtime.worktreeConfig ?? "",
       ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
       ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+      ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
       noInput: parsed.noInput,
       stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
     };
@@ -507,9 +512,17 @@ const execute = async (
     const hasExplicitEnvironment =
       parsed.environment !== undefined ||
       (parsed.command === "init" && parsed.positionals.length === 1);
-    if (parsed.noInput && (!parsed.profile || !hasExplicitEnvironment))
+    if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError(
-        "--no-input requires explicit --profile and --environment context",
+        "--no-input requires explicit --profile",
+      );
+    if (
+      parsed.noInput &&
+      parsed.command !== "init" &&
+      !hasExplicitEnvironment
+    )
+      throw new CliInvocationError(
+        "--no-input requires explicit --environment context",
       );
     const profile = await resolveServerProfile(store, parsed.profile);
     const contextPath =
@@ -542,10 +555,27 @@ const execute = async (
         throw new CliInvocationError(
           "this GitHub Repository is not linked to an accessible Project; run dotrelay init first",
         );
+      const ask = async (question: string): Promise<string> => {
+        if (runtime.prompt) return runtime.prompt(question);
+        const { readTerminalLine } = await import("./terminal");
+        return readTerminalLine(question, runtime.terminal);
+      };
+      const write = (message: string): void => {
+        const output = runtime.terminal?.output ?? process.stderr;
+        output.write(message);
+      };
       const initializedProject =
         project ??
         (await linkProject(admin, {
-          teamId: parsed.team ?? (await findDefaultTeam(admin)).id,
+          teamId: (
+            await resolveTeamForProject(admin, {
+              ...(parsed.team ? { teamId: parsed.team } : {}),
+              suggestedName: repository.owner,
+              noInput: parsed.noInput,
+              prompt: ask,
+              write,
+            })
+          ).id,
           repository: {
             ...repository,
             githubRepositoryId: repository.githubRepositoryId ?? "",
@@ -577,6 +607,7 @@ const execute = async (
         contextPath,
         ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
         ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+        ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
         noInput: parsed.noInput,
         stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
       },
@@ -626,7 +657,9 @@ export const run = async (
       stderr: "",
     };
   } catch (error) {
-    const diagnostic = diagnosticForError(error);
+    const diagnostic = diagnosticForError(error, {
+      debug: args.includes("--debug"),
+    });
     const parsed = args.includes("--json");
     return {
       exitCode: diagnostic.exitCode,

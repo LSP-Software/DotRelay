@@ -733,6 +733,13 @@ const createApi = ({
     if (!user) return jsonProblem(context, "service_unavailable");
 
     const requestedEnvironmentId = context.req.query("environment");
+    if (requestedEnvironmentId !== undefined) {
+      try {
+        parseUuid(requestedEnvironmentId, "environment");
+      } catch {
+        return jsonProblem(context, "invalid_request");
+      }
+    }
     const requestedEnvironment = requestedEnvironmentId
       ? await database.environment.findFirst({
           where: {

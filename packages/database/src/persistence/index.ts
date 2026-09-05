@@ -6,6 +6,7 @@ export type {
   DeviceEnrollmentApprovalInput,
   DeviceEnrollmentBeginInput,
   DeviceEnrollmentCompletionInput,
+  EnvironmentCreationInput,
   EnvironmentGenesisInput,
   EnvironmentMetadata,
   EpochRotationInput,
