@@ -55,12 +55,17 @@ the repository owner). Use `--team <team-id>`, an opaque Environment id, or `--f
 to override those defaults. If the Environment already has a genesis Revision, `init` continues as
 `push` instead of failing.
 
-Every input Variable must be classified as shared or user-defined. Interactive `init`/`push` shows
-a board of every Variable name (never Values) and lets you toggle Team vs Only you before
-continuing. JSON and `--classify` still use `shared` and `user-defined`. `--classify NAME=shared`
-or `--classify NAME=user-defined` skips the board when every Variable is covered, and is required
-under `--no-input`. Existing Variable ids are retained, omitted Variables become signed tombstones,
-and empty Values remain Values rather than being dropped.
+New Variables must be classified as shared or user-defined. Interactive `init` shows a board of
+every Variable name (never Values) and lets you toggle Team vs Only you before continuing. `push`
+shows that board only for names that are not already in the Environment; existing Variables keep
+their ownership. JSON and `--classify` still use `shared` and `user-defined`. `--classify NAME=shared`
+or `--classify NAME=user-defined` skips the board when every new Variable is covered, and is required
+under `--no-input` for unclassified names. Existing Variable ids are retained, omitted Variables
+become signed tombstones, and empty Values remain Values rather than being dropped.
+
+Interactive `init` and `push` confirm only Variables that will change. Added and updated Values
+are shown as `NAME -> value`; removals are shown by name. Unchanged Variables are omitted.
+`--no-input` skips the prompt. JSON, progress, and diagnostics still never contain Values.
 
 Publication progress is Encrypting, Uploading, then Published. The CLI reviews the publication
 summary before beginning staging. It then uploads the signed command and encrypted protocol

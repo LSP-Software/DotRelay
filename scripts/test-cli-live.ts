@@ -685,12 +685,6 @@ try {
       environmentId,
       "--from",
       dotenvPath,
-      "--classify",
-      "SHARED_VALUE=shared",
-      "--classify",
-      "USER_VALUE=user-defined",
-      "--classify",
-      "EMPTY=shared",
       "--no-input",
       "--json",
     ],
@@ -783,6 +777,10 @@ try {
   );
   if (failedOutput.exitCode !== 8 || !(await stat(preservedPath)).isDirectory())
     throw new Error("packaged CLI atomic-output preservation contract failed");
+  await Bun.write(
+    dotenvPath,
+    "SHARED_VALUE=two\nUSER_VALUE=secret\nEMPTY=\nNEW_VALUE=added\n",
+  );
   const missingClassification = await runBinary(
     [
       "push",

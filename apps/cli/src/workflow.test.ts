@@ -6,7 +6,13 @@ import {
   createMemoryCredentialStore,
   createMemoryDeviceRecordStore,
 } from "@dotrelay/client";
-import { encodeSyncPage } from "@dotrelay/contracts";
+import {
+  bytesToUuid,
+  encodeSyncPage,
+  parseProtocolObject,
+  sha384,
+  type SyncPageWire,
+} from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
@@ -56,7 +62,10 @@ const setup = async (): Promise<{
   fetch: FetchFunction;
   profilePath: string;
 }> => {
-  const profilePath = `${import.meta.dir}/.tmp-workflow-profile-${crypto.randomUUID()}`;
+  const { mkdir } = await import("node:fs/promises");
+  const stateDirectory = `${import.meta.dir}/.tmp-workflow-state-${crypto.randomUUID()}`;
+  await mkdir(stateDirectory, { recursive: true });
+  const profilePath = `${stateDirectory}/profile.json`;
   await Bun.write(
     profilePath,
     JSON.stringify({ version: 1, profiles: [profile] }),
@@ -80,50 +89,112 @@ const setup = async (): Promise<{
     },
     post: async () => ({}),
   };
-  const emptyPage = encodeSyncPage({
-    environmentId: ids.environment,
-    trustedRevisionId: ids.environment,
-    trustedRevisionHash: new Uint8Array(48),
-    currentHeadId: null,
-    currentHeadHash: null,
-    projectEpoch: 1n,
-    revisions: [],
-    nextCursor: null,
-  });
+  const stagedObjects = new Map<string, Uint8Array>();
+  let revisions: SyncPageWire["revisions"] = [];
+  const syncPage = () => {
+    const previous = revisions.at(-1);
+    return encodeSyncPage({
+      environmentId: ids.environment,
+      trustedRevisionId: ids.environment,
+      trustedRevisionHash: new Uint8Array(48),
+      currentHeadId: previous?.id ?? null,
+      currentHeadHash: previous?.digest ?? null,
+      projectEpoch: 1n,
+      revisions,
+      nextCursor: null,
+    });
+  };
   const fetcher: FetchFunction = async (
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
     const request = new Request(input as never, init);
-    if (request.url.endsWith("/sync")) return new Response(emptyPage);
-    if (request.url.endsWith("/begin"))
+    const path = new URL(request.url).pathname;
+    if (path.endsWith("/sync")) return new Response(syncPage());
+    if (path.endsWith("/begin"))
       return Response.json({
         operationId: crypto.randomUUID(),
         status: "STAGED",
         idempotent: false,
         expiresAt: "2026-09-02T00:00:00Z",
       });
+    const staging = /\/staging\/([^/]+)$/u.exec(path);
+    if (staging?.[1] && request.method === "PUT") {
+      stagedObjects.set(staging[1], new Uint8Array(await request.arrayBuffer()));
+      return Response.json({ staged: true }, { status: 201 });
+    }
+    if (path.endsWith("/finalize") && request.method === "POST") {
+      const body = (await request.json()) as Record<string, unknown>;
+      const revisionBody = body.revision as Record<string, unknown>;
+      const revisionObjectId = revisionBody.protocolObjectId;
+      if (typeof revisionObjectId !== "string")
+        return Response.json({ error: "revision object id missing" }, { status: 400 });
+      const revisionBytes = stagedObjects.get(revisionObjectId);
+      if (!revisionBytes)
+        return Response.json({ error: "revision object was not staged" }, { status: 400 });
+      const parsedRevision = parseProtocolObject(revisionBytes);
+      const revisionId = parsedRevision.get(16);
+      const mutation = parsedRevision.get(35);
+      const authoredAtMs = parsedRevision.get(34);
+      if (!(revisionId instanceof Uint8Array) || typeof mutation !== "number")
+        return Response.json({ error: "staged revision is malformed" }, { status: 400 });
+      const previous = revisions.at(-1);
+      const objects = await Promise.all(
+        [...stagedObjects.entries()].map(async ([objectId, bytes]) =>
+          Object.freeze({
+            objectId,
+            canonicalBytes: bytes,
+            digest: await sha384(bytes),
+          }),
+        ),
+      );
+      const digest = await sha384(revisionBytes);
+      const revision = Object.freeze({
+        id: bytesToUuid(revisionId),
+        digest,
+        parentId: previous?.id ?? null,
+        parentHash: previous?.digest ?? null,
+        mutation,
+        projectEpoch: 1n,
+        authoredAtMs:
+          typeof authoredAtMs === "bigint"
+            ? authoredAtMs
+            : BigInt(typeof authoredAtMs === "number" ? authoredAtMs : 0),
+        rollbackTargetId:
+          typeof revisionBody.rollbackTargetId === "string"
+            ? revisionBody.rollbackTargetId
+            : null,
+        objects: Object.freeze(objects),
+      });
+      revisions = Object.freeze([...revisions, revision]);
+      stagedObjects.clear();
+      return Response.json(
+        { revisionId: revision.id, idempotent: false },
+        { status: 201 },
+      );
+    }
+    if (request.method === "DELETE") {
+      stagedObjects.clear();
+      return Response.json({ cancelled: true });
+    }
     return Response.json({});
   };
   return { credentials, deviceStorage, admin, fetch: fetcher, profilePath };
 };
 
 afterEach(async () => {
+  const { readdir, rm, unlink } = await import("node:fs/promises");
   for (const file of [".tmp-workflow-input", ".tmp-workflow-output"])
-    await (await import("node:fs/promises"))
-      .unlink(`${import.meta.dir}/${file}`)
-      .catch(() => undefined);
-  for (const file of await (await import("node:fs/promises")).readdir(
-    import.meta.dir,
-  ))
+    await unlink(`${import.meta.dir}/${file}`).catch(() => undefined);
+  for (const file of await readdir(import.meta.dir))
     if (
       file.startsWith(".tmp-workflow-profile-") ||
+      file.startsWith(".tmp-workflow-state-") ||
+      file.startsWith("head-") ||
       ((file.startsWith("device-") || file.startsWith("enrollment-")) &&
         file.endsWith(".json"))
     )
-      await (await import("node:fs/promises"))
-        .unlink(`${import.meta.dir}/${file}`)
-        .catch(() => undefined);
+      await rm(`${import.meta.dir}/${file}`, { recursive: true, force: true });
 });
 
 describe("protected CLI workflows", () => {
@@ -242,6 +313,255 @@ describe("protected CLI workflows", () => {
     const rendered = renderedChunks.join("");
     expect(rendered).toContain("API_KEY");
     expect(rendered).toContain("Only you");
+  });
+
+  test("push keeps existing Variable ownership and only classifies new names", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(
+      input,
+      "DATABASE_URL=postgres://secret\nAPI_KEY=tok\nNEW_TOKEN=fresh\n",
+    );
+    const terminalInput = new PassThrough();
+    const terminalOutput = new PassThrough();
+    const renderedChunks: string[] = [];
+    terminalOutput.on("data", (chunk) => {
+      renderedChunks.push(chunk.toString("utf8"));
+    });
+    terminalInput.write("\ny\n");
+    terminalInput.end();
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--json",
+      ],
+      {
+        ...runtime,
+        terminal: { input: terminalInput, output: terminalOutput },
+      },
+    );
+    expect(pushed.exitCode).toBe(0);
+    const rendered = renderedChunks.join("");
+    expect(rendered).toContain("NEW_TOKEN");
+    expect(rendered).not.toContain("DATABASE_URL");
+    expect(rendered).not.toContain("API_KEY");
+  });
+
+  test("push of existing Variables does not require --classify under --no-input", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://changed\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(pushed.stdout).toContain('"ok":true');
+  });
+
+  test("push still requires --classify for new Variables under --no-input", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nNEW_TOKEN=fresh\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(2);
+    expect(pushed.stderr).toContain("new Variables require --classify");
+  });
+
+  test("push confirmation describes the changed Variable instead of the live count", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=abc\nAPI_KEY=tok\n");
+    const questions: string[] = [];
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      },
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(questions).toEqual([
+      "1 variable being updated, DATABASE_URL -> abc?",
+    ]);
+    expect(pushed.stdout).not.toContain("abc");
+    expect(pushed.stdout).not.toContain("postgres://secret");
+  });
+
+  test("push confirmation lists added and removed Variables", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nNEW_TOKEN=fresh\n");
+    const questions: string[] = [];
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "NEW_TOKEN=shared",
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      },
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(questions).toEqual([
+      "1 variable being added, 1 variable being removed\n  NEW_TOKEN -> fresh\n  API_KEY\nPublish?",
+    ]);
+    expect(pushed.stdout).not.toContain("fresh");
+    expect(pushed.stdout).not.toContain("tok");
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {

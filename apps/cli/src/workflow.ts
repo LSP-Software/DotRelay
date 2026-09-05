@@ -1842,34 +1842,44 @@ const syncWorkflow = async (
   return { workflow, page, variables };
 };
 
+const classificationFromOwnership = (
+  ownership: DecodedVariable["ownership"],
+): "shared" | "user-defined" =>
+  ownership === "SHARED_VALUE" ? "shared" : "user-defined";
+
+const toDotenvClassifications = (
+  classifications: Readonly<Record<string, "shared" | "user-defined">>,
+) =>
+  Object.fromEntries(
+    Object.entries(classifications).map(([name, classification]) => [
+      name,
+      { classification },
+    ]),
+  );
+
 const classify = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
   entries: readonly DotenvEntry[],
+  existing: readonly DecodedVariable[],
 ): Promise<readonly ClassifiedDotenvEntry[]> => {
-  const provided = Object.fromEntries(
-    Object.entries(parsed.classifications).map(([name, classification]) => [
-      name,
-      classification,
-    ]),
-  ) as Readonly<Partial<Record<string, "shared" | "user-defined">>>;
+  const provided: Record<string, "shared" | "user-defined"> = {
+    ...parsed.classifications,
+  };
+  for (const variable of existing) {
+    if (variable.tombstone) continue;
+    if (!(variable.name in provided))
+      provided[variable.name] = classificationFromOwnership(variable.ownership);
+  }
   const missing = entries.filter((entry) => !(entry.name in provided));
   if (missing.length === 0)
-    return classifyDotenv(
-      entries,
-      Object.fromEntries(
-        Object.entries(provided).map(([name, classification]) => [
-          name,
-          { classification: classification! },
-        ]),
-      ),
-    );
+    return classifyDotenv(entries, toDotenvClassifications(provided));
   if (options.noInput)
     throw new CliInvocationError(
-      "every Variable requires --classify NAME=shared|user-defined under --no-input",
+      "new Variables require --classify NAME=shared|user-defined under --no-input",
     );
   const selected = await classifyVariablesInteractively(
-    entries.map((entry) => entry.name),
+    missing.map((entry) => entry.name),
     provided,
     {
       ...(options.terminal ? { terminal: options.terminal } : {}),
@@ -1878,12 +1888,7 @@ const classify = async (
   );
   return classifyDotenv(
     entries,
-    Object.fromEntries(
-      Object.entries(selected).map(([name, classification]) => [
-        name,
-        { classification },
-      ]),
-    ),
+    toDotenvClassifications({ ...provided, ...selected }),
   );
 };
 
@@ -1949,6 +1954,64 @@ const toPublicationVariable = (
   };
 };
 
+type PublicationDraft = ReturnType<typeof toPublicationVariable>;
+
+type PublicationChange = Readonly<{
+  readonly kind: "added" | "updated" | "removed";
+  readonly name: string;
+  readonly value: string | null;
+}>;
+
+const publicationChangeFor = (
+  variable: PublicationDraft,
+  existing: readonly DecodedVariable[],
+): PublicationChange | null => {
+  if (!variable.hasDraftChange) return null;
+  const prior = existing.find((candidate) => candidate.id === variable.id);
+  if (variable.tombstone)
+    return Object.freeze({
+      kind: "removed",
+      name: variable.name,
+      value: null,
+    });
+  return Object.freeze({
+    kind: !prior || prior.tombstone ? "added" : "updated",
+    name: variable.name,
+    value: variable.value,
+  });
+};
+
+const countLabel = (count: number, action: string): string =>
+  `${count} ${count === 1 ? "variable" : "variables"} being ${action}`;
+
+const displayPublicationValue = (value: string | null): string => {
+  const flattened = sanitizeCliText(value ?? "").replace(/[\r\n\t]+/g, " ");
+  if (flattened.length <= 120) return flattened;
+  return `${flattened.slice(0, 117)}...`;
+};
+
+const formatPublicationChange = (change: PublicationChange): string => {
+  const name = sanitizeCliText(change.name);
+  if (change.kind === "removed") return name;
+  return `${name} -> ${displayPublicationValue(change.value)}`;
+};
+
+const publicationConfirmQuestion = (
+  changes: readonly PublicationChange[],
+): string => {
+  const added = changes.filter((change) => change.kind === "added").length;
+  const updated = changes.filter((change) => change.kind === "updated").length;
+  const removed = changes.filter((change) => change.kind === "removed").length;
+  const summary = [
+    ...(added > 0 ? [countLabel(added, "added")] : []),
+    ...(updated > 0 ? [countLabel(updated, "updated")] : []),
+    ...(removed > 0 ? [countLabel(removed, "removed")] : []),
+  ].join(", ");
+  const details = changes.map(formatPublicationChange);
+  if (changes.length === 1) return `${summary}, ${details[0]}?`;
+  return `${summary}\n${details.map((line) => `  ${line}`).join("\n")}\nPublish?`;
+};
+
 const publish = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -1980,15 +2043,12 @@ const publish = async (
       tombstones: 0,
       message: "Already published",
     };
-  const liveVariableCount = variables.filter(
-    (variable) => !variable.tombstone,
-  ).length;
+  const changes = draftVariables
+    .map((variable) => publicationChangeFor(variable, synced.variables))
+    .filter((change): change is PublicationChange => change !== null);
   if (
     !options.noInput &&
-    !(await confirm(
-      options,
-      `Publish ${liveVariableCount} ${liveVariableCount === 1 ? "variable" : "variables"}?`,
-    ))
+    !(await confirm(options, publicationConfirmQuestion(changes)))
   )
     throw new CliInvocationError("publication confirmation was declined");
   const progress = (title: string): void => {
@@ -2160,13 +2220,17 @@ export const runProtectedWorkflow = async (
         "input_read_failed",
       );
     }
-    const entries = await classify(options, parsed, parseDotenv(source));
     const synced = await syncWorkflow(options, parsed);
     const empty = synced.page.currentHeadId === null;
-    const variables = variablesFromDotenv(
-      entries,
-      parsed.command === "init" && empty ? [] : synced.variables,
+    const existing =
+      parsed.command === "init" && empty ? [] : synced.variables;
+    const entries = await classify(
+      options,
+      parsed,
+      parseDotenv(source),
+      existing,
     );
+    const variables = variablesFromDotenv(entries, existing);
     return publish(
       options,
       parsed,
