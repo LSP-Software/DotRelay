@@ -4,6 +4,7 @@ export type WorkspaceBoundary = Readonly<{
   readonly environment: Readonly<{
     readonly headRevision: string;
     readonly id?: string;
+    readonly label?: string;
     readonly projectId?: string;
     readonly teamId?: string;
     readonly headHash?: string | null;

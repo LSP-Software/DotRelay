@@ -25,13 +25,15 @@ describe("classification board", () => {
 
   test("renders every Variable without exposing Values", () => {
     const board = renderClassificationBoard(
-      createClassificationBoard(["DATABASE_URL", "LOCAL_PATH"]),
+      createClassificationBoard(["DATABASE_URL", "LOCAL_PATH"], {
+        LOCAL_PATH: "user-defined",
+      }),
       { interactive: false },
     );
     expect(board).toContain("DATABASE_URL");
     expect(board).toContain("LOCAL_PATH");
-    expect(board).toContain("[shared]");
-    expect(board).toContain("user-defined");
+    expect(board).toContain("Team");
+    expect(board).toContain("Only you");
     expect(board).not.toContain("secret");
     expect(board).not.toContain("=");
   });

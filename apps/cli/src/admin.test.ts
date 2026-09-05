@@ -128,6 +128,7 @@ describe("strict administration client", () => {
     ).resolves.toEqual({
       id: "00000000-0000-4000-8000-000000000003",
       projectId: "project-id",
+      label: "default",
       lifecycle: "active",
       currentHeadId: null,
     });

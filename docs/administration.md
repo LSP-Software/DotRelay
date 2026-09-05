@@ -53,8 +53,9 @@ Owners and admins explicitly create, archive, and restore Environments. An archi
 retains immutable history and its opaque identity, but its Manifest lanes are not disclosed until
 restored; restoration also requires an active parent Project.
 
-The service stores no readable Environment name. Naming and name uniqueness are client-enforced
-against verified encrypted Manifests. Operator-visible metadata is limited to opaque ids, lifecycle,
-current head, role, and Membership lifecycle. Read-side queries require an active Membership and
-Device and exclude every User-defined Value lane not owned by the requesting User before returning
-rows.
+The service stores an operator-visible Environment label (default `default`) alongside opaque ids,
+lifecycle, and current head. Variable naming and name uniqueness remain client-enforced against
+verified encrypted Manifests. Operator-visible metadata is limited to opaque ids, Environment
+label, lifecycle, current head, role, and Membership lifecycle. Read-side queries require an
+active Membership and Device and exclude every User-defined Value lane not owned by the requesting
+User before returning rows.

@@ -2,8 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { main, renderHelp, run, version } from "./index";
 
 describe("CLI foundation", () => {
-  test("renders help without requiring a runtime dependency", () => {
+  test("renders everyday help by default and power commands under help", async () => {
     expect(main(["--help"])).toBe(renderHelp());
+    expect(renderHelp()).toContain("setup <origin>");
+    expect(renderHelp()).not.toContain("device begin");
+    const result = await run(["help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("device begin");
   });
 
   test("reports its foundation version", () => {
@@ -106,7 +111,7 @@ describe("CLI foundation", () => {
   test("rejects forbidden flags even when help is requested", async () => {
     const result = await run(["--insecure", "--help"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toBe("The command could not complete.\n");
+    expect(result.stderr).toBe("--insecure is not supported\n");
   });
 
   test("maps an empty Git remote result to repository_missing", async () => {

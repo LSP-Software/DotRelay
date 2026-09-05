@@ -26,6 +26,7 @@ import {
   Settings2,
   ShieldAlert,
   ShieldCheck,
+  SquareTerminal,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -748,6 +749,23 @@ export const WorkspaceShell = ({
               />
             </div>
 
+            <div className="mt-4 rounded-lg border bg-background/45 px-4 py-3">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <SquareTerminal aria-hidden="true" className="size-4 text-primary" />
+                Set up the CLI
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                On this machine, trust this Server Profile, sign in, and enroll
+                the first Device.
+              </p>
+              <code
+                className="mt-2 block overflow-x-auto rounded-md bg-background/80 px-3 py-2 font-mono text-xs"
+                data-testid="cli-setup-command"
+              >
+                {`dotrelay setup ${profile.origin}`}
+              </code>
+            </div>
+
             {!displayBoundary.crypto.available ? (
               <Alert className="mt-5 border-amber-300/25 bg-amber-300/5 py-4">
                 <LockKeyhole aria-hidden="true" className="text-amber-300" />
@@ -1064,7 +1082,9 @@ export const WorkspaceShell = ({
                       <Badge className="mb-2" variant="outline">
                         Environment
                       </Badge>
-                      <CardTitle>production</CardTitle>
+                      <CardTitle>
+                        {displayBoundary.environment.label ?? "default"}
+                      </CardTitle>
                       <CardDescription>
                         Current head rev_0184 · opaque continuity reference
                       </CardDescription>

@@ -20,16 +20,19 @@ describe("CLI output safety", () => {
       ok: false,
       category: "conflict",
       code: "conflict",
-      detail: "The command could not complete.",
+      detail: "stale head",
       count: 1,
       exitCode: EXIT_CODES.conflict,
     });
     const hostile = diagnosticForError(
-      new CliError("local-io", "bearer=secret private-key=ciphertext"),
+      new CliError("local-io", "bearer=secret private-key=ciphertext", {
+        value: "secret",
+        token: "bearer",
+      }),
     );
-    expect(hostile.detail).toBe("The command could not complete.");
-    expect(JSON.stringify(hostile)).not.toContain("secret");
-    expect(JSON.stringify(hostile)).not.toContain("private-key");
+    expect(hostile.detail).toBe("bearer=secret private-key=ciphertext");
+    expect(JSON.stringify(hostile)).not.toContain('"value"');
+    expect(JSON.stringify(hostile)).not.toContain('"token"');
     expect(JSON.stringify(diagnostic)).not.toContain("value");
     const secret = diagnosticForError(
       new CliError("local-io", "operation failed", {
@@ -74,9 +77,12 @@ describe("CLI output safety", () => {
     const terminalControl = diagnosticForError(
       new CliError("local-io", "ordinary\u001b[31m text\b"),
     );
-    expect(terminalControl.detail).toBe("The command could not complete.");
+    expect(terminalControl.detail).toBe("ordinary[31m text");
     expect(terminalControl.detail).not.toContain("\u001b");
     expect(terminalControl.detail).not.toContain("\b");
+    expect(
+      diagnosticForError(new Error("ordinary\u001b[31m secret")).detail,
+    ).toBe("The command could not complete.");
   });
 
   test("atomically writes a protected output file", async () => {

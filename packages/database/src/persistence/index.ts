@@ -48,6 +48,9 @@ export {
   StagedObjectRepository,
   StaleEpochError,
   StaleHeadError,
+  GenesisExistsError,
+  DEFAULT_ENVIRONMENT_LABEL,
+  normalizeEnvironmentLabel,
 } from "./repositories";
 export type { SyncInput, SyncObject, SyncPage, SyncRevision } from "./sync";
 export { mutationToWire, SyncIntegrityError, SyncRepository } from "./sync";

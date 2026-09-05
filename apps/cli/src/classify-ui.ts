@@ -1,5 +1,12 @@
 import { CliInvocationError, sanitizeCliText } from "./errors";
 import { type TerminalIo, readTerminalLine } from "./terminal";
+import {
+  paint,
+  readRawKey,
+  type ReadableRaw,
+  rewriteRegion,
+  supportsRawMode,
+} from "./ui";
 
 export type VariableClassification = "shared" | "user-defined";
 
@@ -17,6 +24,10 @@ export const toggleClassification = (
   classification: VariableClassification,
 ): VariableClassification =>
   classification === "shared" ? "user-defined" : "shared";
+
+export const ownershipCopy = (
+  classification: VariableClassification,
+): string => (classification === "shared" ? "Team" : "Only you");
 
 export const createClassificationBoard = (
   names: readonly string[],
@@ -47,29 +58,32 @@ export const renderClassificationBoard = (
   },
 ): string => {
   const width = labelWidth(state.drafts);
+  const title =
+    state.drafts.length === 1
+      ? "1 variable from .env"
+      : `${state.drafts.length} variables from .env`;
   const rows = state.drafts.map((draft, index) => {
+    const selected = options.interactive && index === state.cursor;
     const marker = options.interactive
-      ? index === state.cursor
-        ? ">"
+      ? selected
+        ? paint("·", "wax")
         : " "
       : `${index + 1}.`;
     const name = sanitizeCliText(draft.name).padEnd(width, " ");
-    const shared =
-      draft.classification === "shared" ? "[shared]" : " shared ";
-    const userDefined =
-      draft.classification === "user-defined"
-        ? "[user-defined]"
-        : " user-defined ";
-    return `${marker} ${name}  ${shared}  ${userDefined}`;
+    const owner = ownershipCopy(draft.classification);
+    const namePaint = selected ? paint(name, "paper") : paint(name, "graphite");
+    const ownerPaint = selected ? paint(owner, "wax") : paint(owner, "dim");
+    return `     ${marker}  ${namePaint}  ${ownerPaint}`;
   });
+  const hint = options.interactive
+    ? "Space changes who can read it. Enter publishes."
+    : "Enter a number to toggle, or press Enter to publish";
   return [
-    "Classify Variables",
+    `  ${paint("·", "wax")}  ${paint(title, "paper")}`,
     "",
     ...rows,
     "",
-    options.interactive
-      ? "↑/↓ move · space toggle · enter continue"
-      : "Enter a number to toggle, or press Enter to continue",
+    `     ${paint(hint, "dim")}`,
     "",
   ].join("\n");
 };
@@ -107,55 +121,20 @@ export const applyClassificationAction = (
   });
 };
 
-const parseLineAction = (
-  line: string,
-): "done" | number => {
+const parseLineAction = (line: string): "done" | number => {
   const trimmed = line.trim().toLowerCase();
-  if (trimmed === "" || trimmed === "done" || trimmed === "y" || trimmed === "yes")
+  if (
+    trimmed === "" ||
+    trimmed === "done" ||
+    trimmed === "y" ||
+    trimmed === "yes"
+  )
     return "done";
   const choice = Number.parseInt(trimmed, 10);
   if (!Number.isInteger(choice))
     throw new CliInvocationError("enter a Variable number or press Enter");
   return choice;
 };
-
-type ReadableWithRawMode = NodeJS.ReadableStream &
-  Partial<{
-    readonly isTTY: boolean;
-    setRawMode: (enabled: boolean) => void;
-    resume: () => void;
-    pause: () => void;
-    setEncoding: (encoding: BufferEncoding) => void;
-  }>;
-
-type WritableWithClear = NodeJS.WritableStream &
-  Partial<{
-    readonly isTTY: boolean;
-  }>;
-
-const supportsRawMode = (input: ReadableWithRawMode): boolean =>
-  Boolean(input.isTTY && typeof input.setRawMode === "function");
-
-const readRawKey = async (
-  input: ReadableWithRawMode,
-): Promise<string> =>
-  await new Promise((resolve, reject) => {
-    const onData = (chunk: string | Buffer) => {
-      cleanup();
-      resolve(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      input.off("data", onData);
-      input.off("error", onError);
-    };
-    input.once("data", onData);
-    input.once("error", onError);
-    input.resume?.();
-  });
 
 const keyAction = (
   key: string,
@@ -169,25 +148,13 @@ const keyAction = (
   return "ignore";
 };
 
-const rewriteBoard = (
-  output: WritableWithClear,
-  previousLines: number,
-  board: string,
-): number => {
-  const lines = board.split("\n").length;
-  if (output.isTTY) output.write("\x1b[H\x1b[2J");
-  else if (previousLines > 0) output.write("\n");
-  output.write(board);
-  return lines;
-};
-
 const runRawClassificationBoard = async (
   names: readonly string[],
   initial: Readonly<Partial<Record<string, VariableClassification>>>,
   terminal: TerminalIo,
 ): Promise<Readonly<Record<string, VariableClassification>>> => {
-  const input = terminal.input as ReadableWithRawMode;
-  const output = terminal.output as WritableWithClear;
+  const input = terminal.input as ReadableRaw;
+  const output = terminal.output;
   let state = createClassificationBoard(names, initial);
   input.setEncoding?.("utf8");
   input.setRawMode?.(true);
@@ -195,7 +162,7 @@ const runRawClassificationBoard = async (
   let rendered = 0;
   try {
     output.write("\x1b[?25l");
-    rendered = rewriteBoard(
+    rendered = rewriteRegion(
       output,
       0,
       renderClassificationBoard(state, { interactive: true }),
@@ -203,18 +170,21 @@ const runRawClassificationBoard = async (
     for (;;) {
       const action = keyAction(await readRawKey(input));
       if (action === "ignore") continue;
-      const next = applyClassificationAction(state, action);
-      state = next;
-      rendered = rewriteBoard(
+      if (action === "done") {
+        state = applyClassificationAction(state, "done");
+        break;
+      }
+      state = applyClassificationAction(state, action);
+      rendered = rewriteRegion(
         output,
         rendered,
         renderClassificationBoard(state, { interactive: true }),
       );
-      if ("done" in next && next.done) break;
     }
   } finally {
     output.write("\x1b[?25h");
     input.setRawMode?.(false);
+    input.pause?.();
   }
   return Object.freeze(
     Object.fromEntries(
@@ -234,7 +204,9 @@ const runLineClassificationBoard = async (
   let state = createClassificationBoard(names, initial);
   const output = options.terminal?.output ?? process.stderr;
   for (;;) {
-    output.write(`${renderClassificationBoard(state, { interactive: false })}`);
+    output.write(
+      `${renderClassificationBoard(state, { interactive: false })}`,
+    );
     const line = options.prompt
       ? await options.prompt("Toggle")
       : await readTerminalLine("Toggle", options.terminal);
@@ -262,7 +234,7 @@ export const classifyVariablesInteractively = async (
     input: process.stdin,
     output: process.stderr,
   };
-  if (!options.prompt && supportsRawMode(terminal.input as ReadableWithRawMode))
+  if (!options.prompt && supportsRawMode(terminal.input))
     return runRawClassificationBoard(names, initial, terminal);
   return runLineClassificationBoard(names, initial, {
     ...options,

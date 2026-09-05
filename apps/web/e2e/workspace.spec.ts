@@ -1,5 +1,22 @@
 import { expect, test } from "@playwright/test";
 
+test("workspace shows the CLI setup command for this Server Profile", async ({
+  page,
+}) => {
+  await page.goto("/workspace");
+  await expect(page.getByTestId("cli-setup-command")).toContainText(
+    "dotrelay setup https://relay.dotrelay.dev",
+  );
+});
+
+test("device approval page asks to allow the CLI", async ({ page }) => {
+  await page.goto("/device?user_code=ABCD-EFGH");
+  await expect(
+    page.getByRole("heading", { name: "Allow this CLI?" }),
+  ).toBeVisible();
+  await expect(page.getByText("ABCD-EFGH")).toBeVisible();
+});
+
 test("landing page leads to GitHub sign-in without implying GitHub grants access", async ({
   page,
 }) => {

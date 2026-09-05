@@ -1,9 +1,11 @@
 import { dirname, isAbsolute, resolve } from "node:path";
 import type { CliDeviceStorage } from "@dotrelay/client";
 import {
+  createEnvironment,
   createStrictJsonClient,
   findProjectByRepository,
   linkProject,
+  listEnvironments,
   resolveTeamForProject,
   type StrictJsonClient,
   selectEnvironment,
@@ -37,6 +39,7 @@ import {
   CliInvocationError,
   diagnosticForError,
   EXIT_CODES,
+  humanDetailForError,
   sanitizeCliText,
 } from "./errors";
 import {
@@ -54,9 +57,11 @@ import {
   completeDeviceEnrollment,
   createRecoveryBackup,
   enrollDevice,
+  enrollFirstDevice,
   restoreRecoveryKit,
   runProtectedWorkflow,
 } from "./workflow";
+import { paint, renderStep, rewriteRegion, writeNotice } from "./ui";
 
 export type { TerminalIo };
 
@@ -64,39 +69,54 @@ export const version = "0.0.0-foundation";
 
 export const renderHelp = (): string => {
   return [
-    "dotrelay — DotRelay standalone CLI",
+    "Usage: dotrelay <command>",
     "",
-    "Usage: dotrelay <command> [options]",
+    "  setup <origin>   Trust this Server Profile, sign in, enroll this machine",
+    "  login            Sign in and enroll this machine",
+    "  init             Publish this repo's .env for the first time",
+    "  push             Publish changes from .env",
+    "  pull             Write decrypted Values to .env",
+    "  status           Show this machine's connection",
     "",
-    "Server Profile and authentication:",
-    "  profile add <name> <https-origin>   Trust and save a Server Profile",
-    "  profile use <name>                  Select the global Server Profile",
-    "  profile list                        List saved Server Profiles",
-    "  login [--profile <name>]            Authenticate in a browser",
-    "  logout [--profile <name>]           Remove the local session",
-    "  device enroll                         Bootstrap or begin Device enrollment",
-    "  device begin --output <file>         Begin dual-control enrollment",
-    "  device approve --from <file>         Approve an enrollment handoff",
-    "  device complete --from <file>        Complete an approved enrollment",
-    "  device backup --output <file>         Create and store a Recovery Kit",
-    "  device recover --from <file>         Restore a Device from a Recovery Kit",
+    "More commands: dotrelay help",
+    "Automation: --json  --no-input  --debug",
+  ].join("\n");
+};
+
+export const renderPowerHelp = (): string => {
+  return [
+    "Usage: dotrelay <command>",
     "",
-    "Context and protected workflows:",
-    "  context                             Detect the GitHub Repository",
-    "  project link --team <team>          Link a Project explicitly",
-    "  env use <environment-id>            Select an Environment by opaque id",
-    "  init [environment-id]                Set up Project/Environment, then create a genesis Revision from .env",
-    "  push --from <file>                  Publish a reviewed Revision",
-    "  pull --output <file>                Safely export locally decrypted Values",
-    "  history | rollback <revision>       Verify history or append a Rollback",
-    "  status                              Show non-secret local state",
+    "Everyday:",
+    "  setup <origin>   Trust this Server Profile, sign in, enroll this machine",
+    "  login            Sign in and enroll this machine",
+    "  init             Publish this repo's .env for the first time",
+    "  push             Publish changes from .env",
+    "  pull             Write decrypted Values to .env",
+    "  status           Show this machine's connection",
     "",
-    "Global options: --profile, --environment, --json, --debug, --no-input",
-    "Publication options: --classify NAME=shared|user-defined",
-    "Rollback options: --variable <id> (repeat for lane-scoped Rollback)",
-    "Profile trust: profile add requires --accept-profile <server-profile-id>",
-    "Output: --stdout requires --reveal when stdout is a terminal; Values are never diagnostic data.",
-    "Security: --insecure and credential-bearing flags are not supported.",
+    "Power:",
+    "  profile add <name> <origin>   Trust and save a Server Profile",
+    "  profile use <name>            Select the global Server Profile",
+    "  profile list                  List saved Server Profiles",
+    "  logout                        Remove the local session",
+    "  device enroll                 Bootstrap or begin Device enrollment",
+    "  device begin --output <file>  Begin dual-control enrollment",
+    "  device approve --from <file>  Approve an enrollment handoff",
+    "  device complete --from <file> Complete an approved enrollment",
+    "  device backup --output <file> Create a Recovery Kit",
+    "  device recover --from <file>  Restore a Device from a Recovery Kit",
+    "  context                       Detect the GitHub Repository",
+    "  project link --team <team>    Link a Project explicitly",
+    "  env use <environment-id>      Select an Environment by opaque id",
+    "  history                       List verified Revision metadata",
+    "  rollback <revision>           Append a lane-scoped Rollback",
+    "",
+    "Global: --profile  --environment  --json  --debug  --no-input",
+    "Publish: --classify NAME=shared|user-defined  --from <file>  --team <id>",
+    "Pull: --output <file>  --stdout  --reveal",
+    "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
+    "Values are never diagnostic data. --insecure and credential flags are not supported.",
   ].join("\n");
 };
 
@@ -187,23 +207,162 @@ const defaultWorktreeConfigPath = async (): Promise<string> => {
 
 const json = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
+const renderStatusCard = (value: Record<string, unknown>): string => {
+  const profile =
+    typeof value.profile === "string" ? value.profile : "No Server Profile";
+  const origin =
+    typeof value.origin === "string"
+      ? value.origin
+      : "run dotrelay setup <origin>";
+  const signedIn = value.authenticated === true;
+  const enrolled = value.device === "enrolled";
+  return [
+    `  ${paint("·", "wax")}  ${paint(profile, "paper")}`,
+    `     ${paint(origin, "graphite")}`,
+    `     ${paint(signedIn ? "Signed in" : "Not signed in", signedIn ? "ok" : "dim")}`,
+    `     ${paint(enrolled ? "Device enrolled" : "No Device", enrolled ? "ok" : "dim")}`,
+    "",
+  ].join("\n");
+};
+
 const renderSuccess = (
   parsed: ParsedArguments,
   value: Record<string, unknown>,
-): string =>
-  parsed.json
-    ? json({ ok: true, ...value })
-    : `${Object.entries(value)
-        .map(([key, entry]) => {
-          const rendered =
-            typeof entry === "string"
-              ? entry
-              : entry !== null && typeof entry === "object"
-                ? JSON.stringify(entry)
-                : String(entry);
-          return `${sanitizeCliText(key)}: ${sanitizeCliText(rendered ?? "")}`;
-        })
-        .join("\n")}\n`;
+): string => {
+  if (parsed.json) return json({ ok: true, ...value });
+  if (parsed.command === "status") return renderStatusCard(value);
+  if (typeof value.message === "string")
+    return `${sanitizeCliText(value.message)}\n`;
+  return `${Object.entries(value)
+    .map(([key, entry]) => {
+      const rendered =
+        typeof entry === "string"
+          ? entry
+          : entry !== null && typeof entry === "object"
+            ? JSON.stringify(entry)
+            : String(entry);
+      return `${sanitizeCliText(key)}: ${sanitizeCliText(rendered ?? "")}`;
+    })
+    .join("\n")}\n`;
+};
+
+const profileNameFromOrigin = (origin: string): string => {
+  let host = "default";
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    throw new CliInvocationError(
+      "Server Profile origin must be an absolute URL",
+    );
+  }
+  const normalized = host
+    .replace(/[^A-Za-z0-9._-]/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(normalized)
+    ? normalized
+    : "default";
+};
+
+const confirmProfileTrust = async (
+  parsed: ParsedArguments,
+  runtime: CliRuntime,
+  candidate: Readonly<{
+    readonly origin: string;
+    readonly pin: { readonly serverProfileId: string };
+  }>,
+): Promise<boolean> => {
+  if (parsed.acceptProfile === candidate.pin.serverProfileId) return true;
+  if (parsed.noInput) return false;
+  const output = runtime.terminal?.output ?? process.stderr;
+  output.write(
+    renderStep("Trust this Server Profile?", [
+      candidate.origin,
+      candidate.pin.serverProfileId,
+    ]),
+  );
+  if (runtime.confirm) return runtime.confirm(`Trust ${candidate.origin}?`);
+  const { readTerminalLine } = await import("./terminal");
+  const answer = runtime.prompt
+    ? await runtime.prompt(`Trust ${candidate.origin}? [Y/n]`)
+    : await readTerminalLine(`Trust ${candidate.origin}? [Y/n]`, runtime.terminal);
+  const trimmed = answer.trim().toLowerCase();
+  return trimmed === "" || trimmed === "y" || trimmed === "yes";
+};
+
+const deviceWorkflowOptions = (
+  parsed: ParsedArguments,
+  runtime: CliRuntime,
+  profile: Awaited<ReturnType<typeof resolveServerProfile>>,
+  credentials: NativeCredentialStore,
+) => {
+  const stateDirectory =
+    runtime.stateDirectory ??
+    dirname(runtime.profilePath ?? profileCatalogPath());
+  return {
+    profile,
+    credentials,
+    ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+    ...(runtime.deviceStorage ? { deviceStorage: runtime.deviceStorage } : {}),
+    ...(runtime.admin ? { admin: runtime.admin } : {}),
+    ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
+    stateDirectory,
+    contextPath: runtime.worktreeConfig ?? "",
+    ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+    ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+    ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+    noInput: parsed.noInput,
+    stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
+  };
+};
+
+const loginAndEnroll = async (
+  parsed: ParsedArguments,
+  runtime: CliRuntime,
+  profile: Awaited<ReturnType<typeof resolveServerProfile>>,
+): Promise<Record<string, unknown>> => {
+  const credentials = runtime.credentials ?? createNativeCredentialStore();
+  const output = runtime.terminal?.output ?? process.stderr;
+  let waitLines = 0;
+  const login = await loginWithDeviceAuthorization(
+    profile.pin,
+    createSessionStore(credentials),
+    {
+      noOpen: parsed.noOpen || parsed.noInput,
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      open: runtime.open ?? openVerificationPage,
+      onAuthorization: async (authorization) => {
+        if (parsed.json) return;
+        waitLines = rewriteRegion(
+          output,
+          0,
+          renderStep("Allow this CLI?", [authorization.userCode], "Waiting for the browser"),
+        );
+      },
+    },
+  );
+  if (!parsed.json) {
+    waitLines = rewriteRegion(output, waitLines, "");
+    writeNotice(output, "Signed in");
+  }
+  const enrollment = await enrollFirstDevice(
+    deviceWorkflowOptions(parsed, runtime, profile, credentials),
+  );
+  if (!parsed.json)
+    writeNotice(
+      output,
+      enrollment.existing ? "Device already enrolled" : "Device enrolled",
+    );
+  return {
+    profile: profile.name,
+    userCode: login.userCode,
+    verificationUri: login.verificationUri,
+    deviceId: enrollment.deviceId,
+    device: enrollment.active ? "enrolled" : "not enrolled",
+    message: enrollment.existing
+      ? "Signed in. Device already enrolled."
+      : "Signed in. Device enrolled.",
+  };
+};
 
 const execute = async (
   args: readonly string[],
@@ -220,20 +379,40 @@ const execute = async (
   const store = createFileProfileCatalog(
     runtime.profilePath ?? profileCatalogPath(),
   );
+  if (parsed.command === "help")
+    return { value: { stdout: `${renderPowerHelp()}\n` } };
+  if (parsed.command === "setup") {
+    const origin = parsed.positionals[0];
+    if (!origin) throw new CliInvocationError("setup requires an origin");
+    const catalog = await store.read();
+    const existing = catalog.profiles.find(
+      (profile) => profile.origin === origin,
+    );
+    const profile =
+      existing ??
+      (await addServerProfile(store, profileNameFromOrigin(origin), origin, {
+        ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+        confirm: (candidate) =>
+          confirmProfileTrust(parsed, runtime, candidate),
+      }));
+    const selected = (await store.read()).selected;
+    if (selected !== profile.name) await useServerProfile(store, profile.name);
+    return { value: await loginAndEnroll(parsed, runtime, profile) };
+  }
   if (parsed.command === "profile" && parsed.subcommand === "add") {
     const [name, origin] = parsed.positionals;
     if (!name || !origin)
       throw new Error("profile add requires a name and origin");
     const profile = await addServerProfile(store, name, origin, {
       ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
-      confirm: async (candidate) =>
-        parsed.acceptProfile === candidate.pin.serverProfileId,
+      confirm: (candidate) => confirmProfileTrust(parsed, runtime, candidate),
     });
     return {
       value: {
         profile: profile.name,
         origin: profile.origin,
         serverProfileId: profile.pin.serverProfileId,
+        message: `Trusted ${profile.origin}`,
       },
     };
   }
@@ -274,36 +453,26 @@ const execute = async (
           ).get(selected.pin),
         )
       : false;
+    const stateDirectory =
+      runtime.stateDirectory ??
+      dirname(runtime.profilePath ?? profileCatalogPath());
+    const enrolled = selected
+      ? Boolean(
+          await readDeviceId(deviceMetadataPath(stateDirectory, selected.pin)),
+        )
+      : false;
     return {
       value: {
         profile: selected?.name ?? null,
         origin: selected?.origin ?? null,
         authenticated,
-        device: "not loaded",
+        device: enrolled ? "enrolled" : "not enrolled",
       },
     };
   }
   if (parsed.command === "login") {
     const profile = await resolveServerProfile(store, parsed.profile);
-    const credentials = runtime.credentials ?? createNativeCredentialStore();
-    const login = await loginWithDeviceAuthorization(
-      profile.pin,
-      createSessionStore(credentials),
-      {
-        noOpen: parsed.noOpen || parsed.noInput,
-        ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
-        open: runtime.open ?? openVerificationPage,
-      },
-    );
-    return {
-      value: {
-        profile: profile.name,
-        userCode: login.userCode,
-        verificationUri: login.verificationUri,
-        device: "not enrolled",
-        next: "dotrelay device enroll",
-      },
-    };
+    return { value: await loginAndEnroll(parsed, runtime, profile) };
   }
   if (parsed.command === "logout") {
     const profile = await resolveServerProfile(store, parsed.profile);
@@ -385,6 +554,9 @@ const execute = async (
       {
         serverProfileId: profile.pin.serverProfileId,
         projectId: project.id,
+        ...(project.environment
+          ? { environmentId: project.environment.id }
+          : {}),
       },
     );
     return {
@@ -392,6 +564,10 @@ const execute = async (
         profile: profile.name,
         projectId: project.id,
         repository: `${repository.host}/${repository.owner}/${repository.name}`,
+        ...(project.environment
+          ? { environmentId: project.environment.id }
+          : {}),
+        message: `Linked ${repository.owner}/${repository.name}`,
       },
     };
   }
@@ -519,6 +695,7 @@ const execute = async (
     if (
       parsed.noInput &&
       parsed.command !== "init" &&
+      parsed.command !== "push" &&
       !hasExplicitEnvironment
     )
       throw new CliInvocationError(
@@ -533,7 +710,7 @@ const execute = async (
     const deviceId =
       runtime.deviceId ??
       (await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)));
-    if (!parsed.noInput && !runtime.admin) {
+    if (!runtime.admin) {
       const localContext = await readWorktreeContext(contextPath);
       const repository = await resolveGitHubRepository(
         detectGitHubRepository(
@@ -546,14 +723,19 @@ const execute = async (
         runtime.admin ??
         createStrictJsonClient(profile.pin, credentials, {
           ...(deviceId ? { deviceId } : {}),
+          ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
         });
-      const project = await findProjectByRepository(
+      const existingProject = await findProjectByRepository(
         admin,
         repository.githubRepositoryId ?? "",
       );
-      if (!project && parsed.command !== "init")
+      if (
+        !existingProject &&
+        parsed.command !== "init" &&
+        parsed.command !== "push"
+      )
         throw new CliInvocationError(
-          "this GitHub Repository is not linked to an accessible Project; run dotrelay init first",
+          "this GitHub Repository is not linked; run dotrelay init first",
         );
       const ask = async (question: string): Promise<string> => {
         if (runtime.prompt) return runtime.prompt(question);
@@ -565,7 +747,7 @@ const execute = async (
         output.write(message);
       };
       const initializedProject =
-        project ??
+        existingProject ??
         (await linkProject(admin, {
           teamId: (
             await resolveTeamForProject(admin, {
@@ -574,6 +756,7 @@ const execute = async (
               noInput: parsed.noInput,
               prompt: ask,
               write,
+              ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
             })
           ).id,
           repository: {
@@ -585,12 +768,28 @@ const execute = async (
         throw new CliInvocationError(
           "the saved Project does not match this GitHub Repository",
         );
+      let environmentId =
+        parsed.environment ??
+        (parsed.command === "init" ? parsed.positionals[0] : undefined) ??
+        localContext?.environmentId ??
+        initializedProject.environment?.id;
+      if (!environmentId) {
+        const environments = await listEnvironments(
+          admin,
+          initializedProject.id,
+        );
+        environmentId = environments[0]?.id;
+      }
+      if (
+        !environmentId &&
+        (parsed.command === "init" || parsed.command === "push")
+      )
+        environmentId = (await createEnvironment(admin, initializedProject.id))
+          .id;
       await writeWorktreeContext(contextPath, {
         serverProfileId: profile.pin.serverProfileId,
         projectId: initializedProject.id,
-        ...(localContext?.environmentId
-          ? { environmentId: localContext.environmentId }
-          : {}),
+        ...(environmentId ? { environmentId } : {}),
       });
     }
     const workflowResult = await runProtectedWorkflow(
@@ -664,7 +863,11 @@ export const run = async (
     return {
       exitCode: diagnostic.exitCode,
       stdout: "",
-      stderr: parsed ? json(diagnostic) : `${diagnostic.detail}\n`,
+      stderr: parsed
+        ? json(diagnostic)
+        : `${humanDetailForError(error, {
+            debug: args.includes("--debug"),
+          })}\n`,
     };
   }
 };
@@ -678,5 +881,8 @@ if (import.meta.main) {
   );
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
-  process.exitCode = result.exitCode;
+  if (typeof process.stdin.setRawMode === "function")
+    process.stdin.setRawMode(false);
+  process.stdin.pause();
+  process.exit(result.exitCode);
 }

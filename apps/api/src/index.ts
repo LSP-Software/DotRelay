@@ -148,61 +148,6 @@ const sanitizeAuthResponse = async (
   return jsonProblem(context, "service_unavailable");
 };
 
-const escapeHtml = (value: string) =>
-  value.replace(
-    /[&<>"']/g,
-    (character) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      })[character] ?? character,
-  );
-
-const devicePage = (userCode: string) => {
-  const safeCode = escapeHtml(userCode);
-  const scriptCode = JSON.stringify(userCode).replaceAll("<", "\\u003c");
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>DotRelay device sign-in</title></head>
-<body><main><h1>Sign in to DotRelay</h1><p>Device code: <strong>${safeCode}</strong></p>
-<button id="github" type="button">Continue with GitHub</button>
-<button id="approve" type="button" hidden>Approve this device</button><p id="status"></p></main>
-<script>
-const userCode = ${scriptCode};
-const status = document.getElementById("status");
-const approve = document.getElementById("approve");
-const github = document.getElementById("github");
-github.addEventListener("click", async () => {
-  const response = await fetch("/api/auth/sign-in/social", {
-    method: "POST",
-    credentials: "include",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      provider: "github",
-      callbackURL: "/device?user_code=" + encodeURIComponent(userCode),
-    }),
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok || !body || typeof body.url !== "string") {
-    status.textContent = "GitHub sign-in could not be started.";
-    return;
-  }
-  window.location.assign(body.url);
-});
-fetch("/api/auth/device?user_code=" + encodeURIComponent(userCode), {credentials: "include"})
-  .then((response) => response.ok ? response.json() : null)
-  .then((device) => { if (device && device.status === "pending") approve.hidden = false; });
-approve.addEventListener("click", async () => {
-  const response = await fetch("/api/auth/device/approve", {method: "POST", credentials: "include",
-    headers: {"Content-Type": "application/json"}, body: JSON.stringify({userCode})});
-  status.textContent = response.ok ? "Device approved. You may close this page." : "This device could not be approved.";
-  approve.hidden = true;
-});
-</script></body></html>`;
-};
-
 const equalBytes = (left: Uint8Array, right: Uint8Array): boolean =>
   left.length === right.length &&
   left.every((value, index) => value === right[index]);
@@ -443,14 +388,9 @@ const createApi = ({
   app.get("/device", (context) => {
     const userCode = context.req.query("user_code");
     if (!userCode) return jsonProblem(context, "invalid_request");
-    return new Response(devicePage(userCode), {
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Security-Policy":
-          "default-src 'self'; script-src 'unsafe-inline'",
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-    });
+    const target = new URL("/device", profile.webOrigin);
+    target.searchParams.set("user_code", userCode);
+    return context.redirect(target.toString(), 302);
   });
 
   app.all("/api/auth/*", async (context) => {
@@ -733,12 +673,20 @@ const createApi = ({
     if (!user) return jsonProblem(context, "service_unavailable");
 
     const requestedEnvironmentId = context.req.query("environment");
+    const requestedRepositoryId = context.req.query("githubRepositoryId");
     if (requestedEnvironmentId !== undefined) {
       try {
         parseUuid(requestedEnvironmentId, "environment");
       } catch {
         return jsonProblem(context, "invalid_request");
       }
+    }
+    if (requestedRepositoryId !== undefined) {
+      if (
+        !/^[1-9][0-9]{0,18}$/.test(requestedRepositoryId) ||
+        BigInt(requestedRepositoryId) > 9_223_372_036_854_775_807n
+      )
+        return jsonProblem(context, "invalid_request");
     }
     const requestedEnvironment = requestedEnvironmentId
       ? await database.environment.findFirst({
@@ -773,13 +721,26 @@ const createApi = ({
               select: { id: true, teamId: true, currentEpoch: true },
             })
           : null
-        : membership
+        : requestedRepositoryId !== undefined
           ? await database.project.findFirst({
-              where: { teamId: membership.teamId, lifecycle: "ACTIVE" },
-              orderBy: { id: "asc" },
+              where: {
+                githubRepositoryId: BigInt(requestedRepositoryId),
+                lifecycle: "ACTIVE",
+                team: {
+                  memberships: {
+                    some: { userId: user.id, lifecycle: "ACTIVE" },
+                  },
+                },
+              },
               select: { id: true, teamId: true, currentEpoch: true },
             })
-          : null;
+          : membership
+            ? await database.project.findFirst({
+                where: { teamId: membership.teamId, lifecycle: "ACTIVE" },
+                orderBy: { id: "asc" },
+                select: { id: true, teamId: true, currentEpoch: true },
+              })
+            : null;
     const environment =
       requestedEnvironmentId !== undefined
         ? requestedEnvironment && project
@@ -787,6 +748,7 @@ const createApi = ({
               where: { id: requestedEnvironment.id },
               select: {
                 id: true,
+                label: true,
                 currentHeadId: true,
                 currentHead: {
                   select: { protocolObject: { select: { digest: true } } },
@@ -797,9 +759,10 @@ const createApi = ({
         : project
           ? await database.environment.findFirst({
               where: { projectId: project.id, lifecycle: "ACTIVE" },
-              orderBy: { id: "asc" },
+              orderBy: [{ createdAt: "asc" }, { id: "asc" }],
               select: {
                 id: true,
+                label: true,
                 currentHeadId: true,
                 currentHead: {
                   select: { protocolObject: { select: { digest: true } } },
@@ -839,6 +802,7 @@ const createApi = ({
         environment: {
           headRevision: environment?.currentHeadId ?? "empty-environment",
           id: environment?.id ?? null,
+          label: environment?.label ?? null,
           projectId: project?.id ?? null,
           teamId: project?.teamId ?? null,
           headHash: environment?.currentHead?.protocolObject.digest

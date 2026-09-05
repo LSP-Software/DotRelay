@@ -452,6 +452,7 @@ model Environment {
   id              String            @id @db.Uuid
   projectId       String            @db.Uuid
   createdByUserId String            @db.Uuid
+  label           String            @default("default") @db.VarChar(64)
   lifecycle       ResourceLifecycle @default(ACTIVE)
   currentHeadId   String?           @unique @db.Uuid
   createdAt       DateTime          @default(now()) @db.Timestamptz(3)
@@ -466,6 +467,7 @@ model Environment {
   manifestDescriptors ManifestDescriptor[]
 
   @@index([projectId, lifecycle])
+  @@index([projectId, label])
   @@map("environments")
 }
 

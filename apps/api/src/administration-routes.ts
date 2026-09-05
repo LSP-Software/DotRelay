@@ -12,6 +12,7 @@ import {
   EnvironmentRepository,
   OperationConflictError,
   ProjectRepository,
+  normalizeEnvironmentLabel,
   sha384Digest,
 } from "@dotrelay/database";
 import type { Context, Hono } from "hono";
@@ -48,7 +49,8 @@ const mapAdministrationError = (error: unknown): ProblemCode => {
   if (
     error.message.includes("must be positive") ||
     error.message.includes("unsupported media type") ||
-    error.message.includes("Team name")
+    error.message.includes("Team name") ||
+    error.message.includes("Environment label")
   )
     return "invalid_request";
   return "state_conflict";
@@ -105,13 +107,34 @@ const projectResponse = (project: {
 const environmentResponse = (environment: {
   readonly id: string;
   readonly projectId: string;
+  readonly label: string;
   readonly lifecycle: "ACTIVE" | "ARCHIVED";
   readonly currentHeadId: string | null;
 }) => ({
   id: environment.id,
   projectId: environment.projectId,
+  label: environment.label,
   lifecycle: environment.lifecycle.toLowerCase(),
   currentHeadId: environment.currentHeadId,
+});
+
+const projectWithEnvironmentResponse = (
+  project: {
+    readonly id: string;
+    readonly teamId: string;
+    readonly githubRepositoryId: bigint;
+    readonly lifecycle: "ACTIVE" | "ARCHIVED";
+  },
+  environment: {
+    readonly id: string;
+    readonly projectId: string;
+    readonly label: string;
+    readonly lifecycle: "ACTIVE" | "ARCHIVED";
+    readonly currentHeadId: string | null;
+  },
+) => ({
+  ...projectResponse(project),
+  environment: environmentResponse(environment),
 });
 
 export const registerAdministrationRoutes = (
@@ -217,6 +240,12 @@ export const registerAdministrationRoutes = (
           commandDigest: await sha384Digest(commandBytes),
         },
       });
+      if ("existing" in result && result.existing)
+        return context.json(
+          { id: result.team.id, name: result.team.name },
+          200,
+          { "Cache-Control": "no-store" },
+        );
       if (!("team" in result))
         return responseProblem(context, "state_conflict");
       return context.json(
@@ -275,11 +304,19 @@ export const registerAdministrationRoutes = (
           commandDigest: await sha384Digest(commandBytes),
         },
       });
-      if (!("project" in result))
+      if ("existing" in result && result.existing)
+        return context.json(
+          projectWithEnvironmentResponse(result.project, result.environment),
+          200,
+          { "Cache-Control": "no-store" },
+        );
+      if (!("project" in result) || !("environment" in result))
         return responseProblem(context, "state_conflict");
-      return context.json(projectResponse(result.project), 201, {
-        "Cache-Control": "no-store",
-      });
+      return context.json(
+        projectWithEnvironmentResponse(result.project, result.environment),
+        201,
+        { "Cache-Control": "no-store" },
+      );
     } catch (error) {
       return responseProblem(context, mapAdministrationError(error));
     }
@@ -309,6 +346,7 @@ export const registerAdministrationRoutes = (
         select: {
           id: true,
           projectId: true,
+          label: true,
           lifecycle: true,
           currentHeadId: true,
         },
@@ -329,16 +367,18 @@ export const registerAdministrationRoutes = (
     if (actor instanceof Response) return actor;
     try {
       const projectId = parseUuid(context.req.param("projectId"), "projectId");
-      await readJsonBody(context, []);
+      const body = await readJsonBody(context, ["label"]);
+      const label = normalizeEnvironmentLabel(body.label);
       const operationId = parseIdempotencyKey(
         context.req.header("Idempotency-Key"),
       );
       const commandBytes = new TextEncoder().encode(
-        JSON.stringify({ action: "environment.create", projectId }),
+        JSON.stringify({ action: "environment.create", projectId, label }),
       );
       const result = await environments.create(database, {
         projectId,
         createdByUserId: actor.userId,
+        label,
         operation: {
           id: operationId,
           actorUserId: actor.userId,
@@ -348,6 +388,10 @@ export const registerAdministrationRoutes = (
           commandDigest: await sha384Digest(commandBytes),
         },
       });
+      if ("existing" in result && result.existing)
+        return context.json(environmentResponse(result.environment), 200, {
+          "Cache-Control": "no-store",
+        });
       if (!("environment" in result))
         return responseProblem(context, "state_conflict");
       return context.json(environmentResponse(result.environment), 201, {

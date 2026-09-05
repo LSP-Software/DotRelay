@@ -12,7 +12,9 @@ Devices and Recovery. Desktop navigation becomes a keyboard-operable sheet on sm
 skip link reaches the main workspace.
 
 The Project panel discloses the linked GitHub Repository and stable repository id as descriptive
-metadata. GitHub admission and permissions do not grant DotRelay access.
+metadata. GitHub admission and permissions do not grant DotRelay access. The workspace shows
+`dotrelay setup <origin>` for the first CLI machine. Environment cards use the operator-visible
+label. Device approval lives at `/device` and is opened from CLI setup or login.
 
 ## Four independent gates
 

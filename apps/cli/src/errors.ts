@@ -62,6 +62,7 @@ const safeDiagnosticCodes = new Set([
   "device_authorization_unavailable",
   "environment_ambiguous",
   "environment_not_found",
+  "genesis_exists",
   "incomplete-export",
   "invalid_id",
   "invalid_request",
@@ -73,6 +74,7 @@ const safeDiagnosticCodes = new Set([
   "operation_conflict",
   "output_write_failed",
   "profile_catalog_invalid",
+  "publication_invalid",
   "profile_catalog_read_failed",
   "profile_catalog_write_failed",
   "profile_selection_invalid",
@@ -181,10 +183,9 @@ export const diagnosticForError = (
         );
       }),
     );
-    const detail = options.debug
-      ? sanitizeCliText(error.message).slice(0, 512) ||
-        "The command could not complete."
-      : "The command could not complete.";
+    const detail =
+      sanitizeCliText(error.message).slice(0, 512) ||
+      "The command could not complete.";
     return {
       ok: false,
       category: safeDiagnosticCategory(error.category),
@@ -208,4 +209,15 @@ export const diagnosticForError = (
     detail: unexpectedDetail,
     exitCode: EXIT_CODES.localIo,
   };
+};
+
+export const humanDetailForError = (
+  error: unknown,
+  options: Readonly<{ readonly debug?: boolean }> = {},
+): string => {
+  if (error instanceof Error) {
+    const detail = sanitizeCliText(error.message).slice(0, 512);
+    if (detail.length > 0) return detail;
+  }
+  return diagnosticForError(error, options).detail;
 };

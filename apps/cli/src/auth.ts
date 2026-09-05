@@ -29,6 +29,9 @@ export type LoginOptions = Readonly<{
   readonly open?: (url: string) => Promise<void>;
   readonly noOpen?: boolean;
   readonly maxPolls?: number;
+  readonly onAuthorization?: (
+    authorization: DeviceAuthorization,
+  ) => Promise<void> | void;
 }>;
 
 const sessionAccount = (profile: ServerProfilePin): string =>
@@ -259,6 +262,7 @@ export const loginWithDeviceAuthorization = async (
         verificationUri.searchParams.set("user_code", authorization.userCode);
         return verificationUri.toString();
       })();
+  if (options.onAuthorization) await options.onAuthorization(authorization);
   if (!options.noOpen && options.open) await options.open(verificationUrl);
   const sleep =
     options.sleep ??

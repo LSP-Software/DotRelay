@@ -26,6 +26,7 @@
       "stale_generation": 409,
       "rotation_required": 409,
       "archived_resource": 409,
+      "genesis_exists": 409,
       "state_conflict": 409,
       "staged_object_missing": 409,
       "invitation_expired": 410,
@@ -97,7 +98,11 @@
             "required": true,
             "schema": {
               "type": "string",
-              "enum": ["REVISION_PUBLICATION", "ROLLBACK", "EPOCH_ROTATION"]
+              "enum": [
+                "REVISION_PUBLICATION",
+                "ROLLBACK",
+                "EPOCH_ROTATION"
+              ]
             }
           },
           {
@@ -978,7 +983,13 @@
     "schemas": {
       "Problem": {
         "type": "object",
-        "required": ["type", "title", "status", "code", "detail"],
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
         "additionalProperties": false,
         "properties": {
           "type": {
@@ -1009,6 +1020,7 @@
               "stale_generation",
               "rotation_required",
               "archived_resource",
+              "genesis_exists",
               "state_conflict",
               "staged_object_missing",
               "invitation_expired",
@@ -1074,7 +1086,10 @@
           "suite": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "value"],
+            "required": [
+              "name",
+              "value"
+            ],
             "properties": {
               "name": {
                 "type": "string",

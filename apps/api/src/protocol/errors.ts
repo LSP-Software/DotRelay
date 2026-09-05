@@ -4,6 +4,7 @@ import {
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
+  GenesisExistsError,
   StagedObjectConflictError,
   StaleEpochError,
   StaleHeadError,
@@ -21,6 +22,11 @@ export const mapPersistenceError = (
     return {
       code: "stale_head",
       ...(error.currentHeadId ? { headId: error.currentHeadId } : {}),
+    };
+  if (error instanceof GenesisExistsError)
+    return {
+      code: "genesis_exists",
+      headId: error.currentHeadId,
     };
   if (error instanceof StaleEpochError) return { code: "stale_epoch" };
   if (error instanceof OperationConflictError)

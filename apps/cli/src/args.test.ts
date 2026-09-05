@@ -117,4 +117,23 @@ describe("CLI argument contract", () => {
   test("accepts --debug as a global flag", () => {
     expect(parseArguments(["status", "--debug"]).debug).toBe(true);
   });
+
+  test("accepts setup, help, and --team on push", () => {
+    expect(parseArguments(["setup", "https://relay.example"])).toMatchObject({
+      command: "setup",
+      positionals: ["https://relay.example"],
+    });
+    expect(parseArguments(["help"]).command).toBe("help");
+    expect(
+      parseArguments(["push", "--from", ".env", "--team", "team-1"]).team,
+    ).toBe("team-1");
+    expect(
+      parseArguments([
+        "setup",
+        "https://relay.example",
+        "--accept-profile",
+        "00000000-0000-4000-8000-000000000042",
+      ]).acceptProfile,
+    ).toBe("00000000-0000-4000-8000-000000000042");
+  });
 });

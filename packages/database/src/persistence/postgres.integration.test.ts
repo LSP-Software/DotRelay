@@ -681,16 +681,17 @@ integrationDescribe("PostgreSQL persistence integration", () => {
         },
       }),
     ).rejects.toThrow("must be positive");
-    await expect(
-      projects.create(database, {
-        teamId,
-        githubRepositoryId: project.githubRepositoryId,
-        operation: {
-          ...(await createOperationInput(owner.id, "duplicate-project")),
-          actorDeviceId: device.id,
-        },
-      }),
-    ).rejects.toThrow();
+    const duplicate = await projects.create(database, {
+      teamId,
+      githubRepositoryId: project.githubRepositoryId,
+      operation: {
+        ...(await createOperationInput(owner.id, "duplicate-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("existing" in duplicate) || !duplicate.existing)
+      throw new Error("duplicate Project create should return the existing Project");
+    expect(duplicate.project.id).toBe(project.id);
     await administration.archiveProject(database, {
       projectId,
       operation: {
@@ -777,6 +778,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
         id: environmentId,
         projectId,
         createdByUserId: owner.id,
+        label: "disclosure",
       },
     });
     const createLane = async (

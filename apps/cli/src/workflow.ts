@@ -1,5 +1,5 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import { readFile, unlink } from "node:fs/promises";
+import { access, constants, readFile, unlink } from "node:fs/promises";
 import {
   assertPublicationAccepted,
   type CliDeviceStorage,
@@ -63,10 +63,11 @@ import {
   serializeDotenv,
 } from "./dotenv";
 import { classifyVariablesInteractively } from "./classify-ui";
-import { CliError, CliInvocationError } from "./errors";
+import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
 import { readTerminalLine, type TerminalIo } from "./terminal";
+import { writeNotice } from "./ui";
 
 export type WorkflowOptions = Readonly<{
   readonly profile: CliServerProfile;
@@ -752,15 +753,13 @@ const loadAuthorizedDevice = async (
   });
 };
 
-export const enrollDevice = async (
+export const enrollFirstDevice = async (
   options: WorkflowOptions,
-  output?: string,
 ): Promise<
   Readonly<{
     deviceId: string;
     active: boolean;
-    enrollmentId?: string;
-    request?: string;
+    existing: boolean;
   }>
 > => {
   const sessions = createSessionStore(options.credentials);
@@ -799,7 +798,8 @@ export const enrollDevice = async (
       "projectEpoch",
     ]),
   );
-  if (boundary.device.active) return beginDeviceEnrollment(options, output);
+  if (boundary.device.active && boundary.device.id)
+    return { deviceId: boundary.device.id, active: true, existing: true };
   const bootstrap = await createDeviceBootstrap({
     pin: options.profile.pin,
     userId,
@@ -821,7 +821,23 @@ export const enrollDevice = async (
     options.profile.pin,
     bootstrap.deviceId,
   );
-  return { deviceId: bootstrap.deviceId, active: true };
+  return { deviceId: bootstrap.deviceId, active: true, existing: false };
+};
+
+export const enrollDevice = async (
+  options: WorkflowOptions,
+  output?: string,
+): Promise<
+  Readonly<{
+    deviceId: string;
+    active: boolean;
+    enrollmentId?: string;
+    request?: string;
+  }>
+> => {
+  const first = await enrollFirstDevice(options);
+  if (first.existing) return beginDeviceEnrollment(options, output);
+  return { deviceId: first.deviceId, active: first.active };
 };
 
 const enrollmentStatePath = (directory: string, enrollmentId: string): string =>
@@ -1954,14 +1970,16 @@ const publish = async (
         }
       : {}),
   };
-  const artifacts = await createPublicationArtifacts(
-    variables.map((variable) =>
-      toPublicationVariable(variable, synced.variables),
-    ),
-    context,
+  const draftVariables = variables.map((variable) =>
+    toPublicationVariable(variable, synced.variables),
   );
-  const review = reviewPublication(artifacts.commandBytes);
-  assertPublicationAccepted(review);
+  if (!draftVariables.some((variable) => variable.hasDraftChange))
+    return {
+      revision: synced.page.currentHeadId,
+      lanes: 0,
+      tombstones: 0,
+      message: "Already published",
+    };
   const liveVariableCount = variables.filter(
     (variable) => !variable.tombstone,
   ).length;
@@ -1969,11 +1987,34 @@ const publish = async (
     !options.noInput &&
     !(await confirm(
       options,
-      `Publish ${liveVariableCount} Variables?`,
+      `Publish ${liveVariableCount} ${liveVariableCount === 1 ? "variable" : "variables"}?`,
     ))
   )
     throw new CliInvocationError("publication confirmation was declined");
+  const progress = (title: string): void => {
+    if (options.noInput || parsed.json) return;
+    writeNotice(options.terminal?.output ?? process.stderr, title);
+  };
+  progress("Encrypting");
+  let artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>;
+  try {
+    artifacts = await createPublicationArtifacts(draftVariables, context);
+    assertPublicationAccepted(reviewPublication(artifacts.commandBytes));
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "invocation",
+      sanitizeCliText(
+        error instanceof Error
+          ? error.message
+          : "could not build the publication",
+      ).slice(0, 512) || "could not build the publication",
+      {},
+      "publication_invalid",
+    );
+  }
   const operationId = crypto.randomUUID();
+  progress("Uploading");
   try {
     await synced.workflow.transport.begin({
       operationId,
@@ -2006,6 +2047,7 @@ const publish = async (
       "stale_epoch",
       "operation_conflict",
       "state_conflict",
+      "genesis_exists",
     ].includes(code)
       ? "conflict"
       : [
@@ -2024,10 +2066,12 @@ const publish = async (
       code,
     );
   }
+  progress("Published");
   return {
     revision: artifacts.request.revision.id,
     lanes: artifacts.encryptedLaneCount,
     tombstones: artifacts.tombstoneLaneCount,
+    message: "Published",
   };
 };
 
@@ -2048,7 +2092,8 @@ export const runProtectedWorkflow = async (
     };
   }
   if (parsed.command === "pull") {
-    if (!parsed.output && !parsed.stdout)
+    const outputPath = parsed.stdout ? undefined : (parsed.output ?? ".env");
+    if (!outputPath && !parsed.stdout)
       throw new CliInvocationError("pull requires --output <file> or --stdout");
     const synced = await syncWorkflow(options, parsed);
     const missing = synced.variables.filter(
@@ -2078,15 +2123,29 @@ export const runProtectedWorkflow = async (
       ))
     )
       throw new CliInvocationError("Value reveal confirmation was declined");
+    if (outputPath && !options.noInput) {
+      let exists = false;
+      try {
+        await access(outputPath, constants.F_OK);
+        exists = true;
+      } catch {
+        exists = false;
+      }
+      if (
+        exists &&
+        !(await confirm(options, `Replace ${outputPath} with decrypted Values?`))
+      )
+        throw new CliInvocationError("pull confirmation was declined");
+    }
     assertSafeStdout({
       requested: parsed.stdout,
       terminal: options.stdoutIsTerminal,
       reveal: parsed.reveal,
     });
-    if (parsed.output) await atomicWriteProtectedFile(parsed.output, contents);
+    if (outputPath) await atomicWriteProtectedFile(outputPath, contents);
     return parsed.stdout
       ? { stdout: contents }
-      : { output: parsed.output ?? "" };
+      : { output: outputPath ?? "", message: `Wrote ${entries.length} values to ${outputPath}` };
   }
   if (parsed.command === "init" || parsed.command === "push") {
     const inputPath = parsed.from ?? ".env";
@@ -2103,22 +2162,16 @@ export const runProtectedWorkflow = async (
     }
     const entries = await classify(options, parsed, parseDotenv(source));
     const synced = await syncWorkflow(options, parsed);
+    const empty = synced.page.currentHeadId === null;
     const variables = variablesFromDotenv(
       entries,
-      parsed.command === "init" ? [] : synced.variables,
+      parsed.command === "init" && empty ? [] : synced.variables,
     );
-    if (parsed.command === "init" && synced.page.currentHeadId !== null)
-      throw new CliError(
-        "conflict",
-        "the Environment already has a genesis Revision",
-        {},
-        "environment_not_empty",
-      );
     return publish(
       options,
       parsed,
       variables,
-      parsed.command === "init" ? "GENESIS" : "MANIFEST_UPDATE",
+      parsed.command === "init" && empty ? "GENESIS" : "MANIFEST_UPDATE",
     );
   }
   if (parsed.command === "rollback") {

@@ -37,8 +37,8 @@ An Environment is created, archived, or restored explicitly by a Team owner or a
 logical: immutable Revisions remain retained, but Manifest lanes are not disclosed until the
 Environment is restored under an active Project.
 
-The service stores opaque Environment ids, lifecycle, and current-head metadata, but no readable
-Environment name. Clients enforce names against verified encrypted Manifests. Operator-visible
-authorization state is limited to opaque resource ids, role, Membership lifecycle, resource
-lifecycle, and current head. Read queries exclude User-defined Value lanes owned by anyone other
-than the requesting User before returning data.
+The service stores opaque Environment ids, an operator-visible label (default `default`),
+lifecycle, and current-head metadata. Variable names still live only in verified encrypted
+Manifests. Operator-visible authorization state is limited to opaque resource ids, Environment
+label, role, Membership lifecycle, resource lifecycle, and current head. Read queries exclude
+User-defined Value lanes owned by anyone other than the requesting User before returning data.

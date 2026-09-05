@@ -3,19 +3,21 @@ import { CliInvocationError } from "./errors";
 export { CliInvocationError } from "./errors";
 
 export const COMMANDS = [
-  "profile",
+  "setup",
   "login",
   "logout",
+  "init",
+  "push",
+  "pull",
+  "status",
+  "help",
+  "profile",
   "device",
   "context",
   "project",
   "env",
-  "init",
-  "push",
-  "pull",
   "history",
   "rollback",
-  "status",
 ] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
@@ -160,6 +162,8 @@ const validateCommand = (parsed: MutableArguments) => {
     project: 0,
     env: parsed.subcommand === "use" && parsed.environment ? 0 : 1,
     init: [0, 1],
+    setup: 1,
+    help: 0,
     rollback: 1,
   };
   const expected = positionalCounts[command];
@@ -201,9 +205,12 @@ const validateCommand = (parsed: MutableArguments) => {
   if (
     parsed.team &&
     !(command === "project" && parsed.subcommand === "link") &&
-    !(command === "init" && !parsed.subcommand)
+    command !== "init" &&
+    command !== "push"
   )
-    throw new CliInvocationError("--team is only valid with project link");
+    throw new CliInvocationError(
+      "--team is only valid with init, push, or project link",
+    );
   if (
     command === "env" &&
     parsed.subcommand === "use" &&
@@ -215,10 +222,13 @@ const validateCommand = (parsed: MutableArguments) => {
     );
   if (
     parsed.acceptProfile &&
-    !(command === "profile" && parsed.subcommand === "add")
+    !(
+      (command === "profile" && parsed.subcommand === "add") ||
+      command === "setup"
+    )
   )
     throw new CliInvocationError(
-      "--accept-profile is only valid with profile add",
+      "--accept-profile is only valid with setup or profile add",
     );
   if (
     Object.keys(parsed.classifications).length > 0 &&

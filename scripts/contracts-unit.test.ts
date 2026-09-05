@@ -135,7 +135,8 @@ describe("dotrelay-e2ee-v3 classical registry", () => {
 describe("runtime-neutral API contracts", () => {
   test("has stable v1 problems, strict JSON objects, capabilities, and idempotency", () => {
     expect(API_VERSION).toBe("v1");
-    expect(PROBLEM_STATUS.invalid_crypto_object).toBe(400);
+    expect(PROBLEM_STATUS.genesis_exists).toBe(409);
+    expect(createProblem("genesis_exists").code).toBe("genesis_exists");
     expect(PROBLEM_STATUS.unsupported_crypto_runtime).toBe(422);
     expect(PROBLEM_STATUS.crypto_provider_unavailable).toBe(503);
     expect(createProblem("unsupported_crypto_suite").code).toBe(

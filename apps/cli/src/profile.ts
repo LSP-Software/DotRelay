@@ -293,7 +293,7 @@ export const addServerProfile = async (
     Object.freeze({
       version: 1,
       profiles,
-      ...(catalog.selected ? { selected: catalog.selected } : {}),
+      selected: catalog.selected ?? name,
     }),
   );
   return profile;
@@ -320,7 +320,7 @@ export const resolveServerProfile = async (
   const name = override ?? catalog.selected;
   if (!name)
     throw new CliInvocationError(
-      "No Server Profile selected; use profile add and profile use, or pass --profile",
+      "No Server Profile selected; run dotrelay setup <origin>",
     );
   const profile = catalog.profiles.find((candidate) => candidate.name === name);
   if (!profile)

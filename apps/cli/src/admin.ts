@@ -8,6 +8,8 @@ import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
 import { CliError, CliInvocationError } from "./errors";
 import type { FetchFunction } from "./profile";
+import type { TerminalIo } from "./terminal";
+import { selectOption } from "./ui";
 
 export type StrictJsonClient = Readonly<{
   readonly get: (
@@ -46,6 +48,7 @@ export type TeamSummary = Readonly<{
 export type EnvironmentSummary = Readonly<{
   readonly id: string;
   readonly projectId: string;
+  readonly label: string;
   readonly lifecycle: "active" | "archived";
   readonly currentHeadId: string | null;
 }>;
@@ -111,6 +114,7 @@ export const categoryForProblem = (
       "staged_object_missing",
       "invitation_expired",
       "staging_expired",
+      "genesis_exists",
     ].includes(code)
   )
     return "conflict";
@@ -143,6 +147,8 @@ const detailForProblem = (code: string): string => {
   if (code === "invalid_request")
     return "the Server Profile rejected the request";
   if (code === "payload_too_large") return "the request was too large";
+  if (code === "genesis_exists")
+    return "this Environment already has a genesis Revision";
   if (categoryForProblem(code) === "conflict")
     return "the requested change conflicts with current Server Profile state";
   if (categoryForProblem(code) === "crypto")
@@ -150,10 +156,33 @@ const detailForProblem = (code: string): string => {
   return "the Server Profile could not complete the request";
 };
 
+const parseEnvironment = (value: unknown): EnvironmentSummary => {
+  if (!isRecord(value))
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Environment",
+      {},
+      "response_invalid",
+    );
+  return Object.freeze({
+    id: requireOpaqueId(value.id, "Environment id"),
+    projectId: requireOpaqueId(value.projectId, "Project id"),
+    label:
+      typeof value.label === "string" && value.label.trim().length > 0
+        ? value.label.trim()
+        : "default",
+    lifecycle: requireLifecycle(value.lifecycle, "Environment lifecycle"),
+    currentHeadId:
+      value.currentHeadId === null
+        ? null
+        : requireOpaqueId(value.currentHeadId, "Environment head id"),
+  });
+};
+
 export const linkProject = async (
   client: Pick<StrictJsonClient, "post">,
   input: ProjectLinkInput,
-): Promise<ProjectSummary> => {
+): Promise<ProjectSummary & { readonly environment?: EnvironmentSummary }> => {
   const response = await client.post(
     "/api/v1/projects",
     {
@@ -163,7 +192,7 @@ export const linkProject = async (
       repositoryName: input.repository.name,
       githubRepositoryId: input.repository.githubRepositoryId,
     },
-    ["id", "teamId", "githubRepositoryId", "lifecycle"],
+    ["id", "teamId", "githubRepositoryId", "lifecycle", "environment"],
     { idempotencyKey: crypto.randomUUID() },
   );
   return Object.freeze({
@@ -171,6 +200,9 @@ export const linkProject = async (
     teamId: requireOpaqueId(response.teamId, "Team id"),
     githubRepositoryId: requireGitHubRepositoryId(response.githubRepositoryId),
     lifecycle: requireLifecycle(response.lifecycle, "Project lifecycle"),
+    ...(response.environment !== undefined
+      ? { environment: parseEnvironment(response.environment) }
+      : {}),
   });
 };
 
@@ -279,6 +311,7 @@ export type ResolveTeamOptions = Readonly<{
   readonly noInput: boolean;
   readonly prompt: (question: string) => Promise<string>;
   readonly write?: (message: string) => void;
+  readonly terminal?: TerminalIo;
 }>;
 
 const askForTeamName = async (
@@ -316,32 +349,34 @@ export const resolveTeamForProject = async (
       "multiple Teams are available; pass --team <team-id>",
     );
   const write = options.write ?? (() => undefined);
-  write("Select a Team for this Project:\n");
-  for (const [index, team] of teams.entries())
-    write(`  ${index + 1}) ${team.name}\n`);
-  write(`  ${teams.length + 1}) Create a new Team\n`);
-  const answer = (await options.prompt("Team [1]")).trim();
-  const choice =
-    answer.length === 0 ? 1 : Number.parseInt(answer, 10);
-  if (!Number.isInteger(choice) || choice < 1 || choice > teams.length + 1)
-    throw new CliInvocationError("choose a Team from the list");
-  if (choice === teams.length + 1) {
-    const name = (
-      await options.prompt(`Team name [${options.suggestedName}]`)
-    ).trim();
-    return createTeam(
-      client,
-      name.length > 0 ? name : options.suggestedName,
-    );
+  const selectedId = await selectOption(
+    "Team",
+    [
+      ...teams.map((team) => ({ id: team.id, label: team.name })),
+      { id: "create", label: "Create a new Team" },
+    ],
+    {
+      prompt: options.prompt,
+      noInput: options.noInput,
+      ...(options.terminal ? { terminal: options.terminal } : {}),
+    },
+  );
+  if (selectedId !== "create") {
+    const selected = teams.find((team) => team.id === selectedId);
+    if (!selected) throw new CliInvocationError("choose a Team from the list");
+    return selected;
   }
-  return teams[choice - 1]!;
+  write("Create a Team to continue.\n");
+  const name = (
+    await options.prompt(`Team name [${options.suggestedName}]`)
+  ).trim();
+  return createTeam(client, name.length > 0 ? name : options.suggestedName);
 };
 
-export const selectEnvironment = async (
+export const listEnvironments = async (
   client: Pick<StrictJsonClient, "get">,
   projectId: string,
-  environmentId: string,
-): Promise<EnvironmentSummary> => {
+): Promise<readonly EnvironmentSummary[]> => {
   const response = await client.get(
     `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
     ["environments"],
@@ -353,32 +388,15 @@ export const selectEnvironment = async (
       {},
       "response_invalid",
     );
-  const environments = response.environments.map((candidate) => {
-    if (
-      candidate === null ||
-      typeof candidate !== "object" ||
-      Array.isArray(candidate)
-    )
-      throw new CliError(
-        "transient",
-        "the server returned an invalid Environment list",
-        {},
-        "response_invalid",
-      );
-    const environment = candidate as Record<string, unknown>;
-    return {
-      id: requireOpaqueId(environment.id, "Environment id"),
-      projectId: requireOpaqueId(environment.projectId, "Project id"),
-      lifecycle: requireLifecycle(
-        environment.lifecycle,
-        "Environment lifecycle",
-      ),
-      currentHeadId:
-        environment.currentHeadId === null
-          ? null
-          : requireOpaqueId(environment.currentHeadId, "Environment head id"),
-    };
-  });
+  return Object.freeze(response.environments.map(parseEnvironment));
+};
+
+export const selectEnvironment = async (
+  client: Pick<StrictJsonClient, "get">,
+  projectId: string,
+  environmentId: string,
+): Promise<EnvironmentSummary> => {
+  const environments = await listEnvironments(client, projectId);
   const selected = environments.filter(
     (candidate) =>
       candidate.id === environmentId && candidate.projectId === projectId,
@@ -405,36 +423,21 @@ export const selectEnvironment = async (
       {},
       "response_invalid",
     );
-  return Object.freeze({
-    id: requireOpaqueId(environment.id, "Environment id"),
-    projectId: requireOpaqueId(environment.projectId, "Project id"),
-    lifecycle: requireLifecycle(environment.lifecycle, "Environment lifecycle"),
-    currentHeadId:
-      environment.currentHeadId === null
-        ? null
-        : requireOpaqueId(environment.currentHeadId, "Environment head id"),
-  });
+  return environment;
 };
 
 export const createEnvironment = async (
   client: Pick<StrictJsonClient, "post">,
   projectId: string,
+  label = "default",
 ): Promise<EnvironmentSummary> => {
   const response = await client.post(
     `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
-    {},
-    ["id", "projectId", "lifecycle", "currentHeadId"],
+    { label },
+    ["id", "projectId", "label", "lifecycle", "currentHeadId"],
     { idempotencyKey: crypto.randomUUID() },
   );
-  return Object.freeze({
-    id: requireOpaqueId(response.id, "Environment id"),
-    projectId: requireOpaqueId(response.projectId, "Project id"),
-    lifecycle: requireLifecycle(response.lifecycle, "Environment lifecycle"),
-    currentHeadId:
-      response.currentHeadId === null
-        ? null
-        : requireOpaqueId(response.currentHeadId, "Environment head id"),
-  });
+  return parseEnvironment(response);
 };
 
 const readResponse = async (response: Response): Promise<unknown> => {

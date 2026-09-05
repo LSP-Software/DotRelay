@@ -499,18 +499,23 @@ describe("API foundation", () => {
     expect(auth.options.logger).toEqual({ disabled: true });
   });
 
-  test("serves the device verification page without reflecting markup", async () => {
-    const response = await app.request(
-      "http://localhost:3001/device?user_code=%3Cscript%3E",
+  test("redirects device verification to the web origin without reflecting markup", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createApi({
+      database: {} as never,
+      profile,
+      auth: createInMemoryAuth(profile),
+    });
+    const response = await testApp.request(
+      `${profile.origin}/device?user_code=%3Cscript%3E`,
+      { redirect: "manual" },
     );
-    const page = await response.text();
+    const location = response.headers.get("location") ?? "";
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(page).toContain("&lt;script&gt;");
-    expect(page).not.toContain("<strong><script>");
-    expect(page).toContain('/api/auth/device?user_code="');
-    expect(page).not.toContain("/api/auth/device/verify");
+    expect(response.status).toBe(302);
+    expect(location.startsWith(`${profile.webOrigin}/device?`)).toBe(true);
+    expect(location).toContain("user_code=%3Cscript%3E");
+    expect(location).not.toContain("<script>");
   });
 
   test("exposes only opaque Environment metadata to an active Device", async () => {
@@ -533,6 +538,7 @@ describe("API foundation", () => {
           {
             id: "00000000-0000-4000-8000-000000000003",
             projectId: "00000000-0000-4000-8000-000000000002",
+            label: "default",
             lifecycle: "ACTIVE",
             currentHeadId: null,
           },
@@ -557,6 +563,7 @@ describe("API foundation", () => {
         {
           id: "00000000-0000-4000-8000-000000000003",
           projectId: "00000000-0000-4000-8000-000000000002",
+          label: "default",
           lifecycle: "active",
           currentHeadId: null,
         },

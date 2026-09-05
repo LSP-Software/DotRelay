@@ -51,6 +51,7 @@ const fetchLiveBoundary = async (
     environment?: {
       headRevision?: unknown;
       id?: unknown;
+      label?: unknown;
       projectId?: unknown;
       teamId?: unknown;
       headHash?: unknown;
@@ -80,6 +81,9 @@ const fetchLiveBoundary = async (
       headRevision,
       ...(typeof workspaceBody.environment?.id === "string"
         ? { id: workspaceBody.environment.id }
+        : {}),
+      ...(typeof workspaceBody.environment?.label === "string"
+        ? { label: workspaceBody.environment.label }
         : {}),
       ...(typeof workspaceBody.environment?.projectId === "string"
         ? { projectId: workspaceBody.environment.projectId }

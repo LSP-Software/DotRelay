@@ -204,9 +204,9 @@ describe("protected CLI workflows", () => {
     expect(result.stdout).toContain('"ok":true');
     expect(result.stdout).not.toContain("postgres://secret");
     const rendered = renderedChunks.join("");
-    expect(rendered).toContain("Classify Variables");
+    expect(rendered).toContain("variable from .env");
     expect(rendered).toContain("DATABASE_URL");
-    expect(rendered).toContain("[shared]");
+    expect(rendered).toContain("Team");
   });
 
   test("toggles Variable ownership from the classification board", async () => {
@@ -241,7 +241,7 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(0);
     const rendered = renderedChunks.join("");
     expect(rendered).toContain("API_KEY");
-    expect(rendered).toContain("[user-defined]");
+    expect(rendered).toContain("Only you");
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {

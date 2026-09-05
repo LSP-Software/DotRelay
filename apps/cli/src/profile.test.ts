@@ -8,7 +8,7 @@ import {
 } from "./profile";
 
 describe("CLI Server Profile catalog", () => {
-  test("pins capabilities and does not select a profile implicitly", async () => {
+  test("pins capabilities and selects the first saved profile", async () => {
     const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
     const store = createFileProfileCatalog(path);
     const capabilities = createCapabilitiesDocument({
@@ -25,9 +25,7 @@ describe("CLI Server Profile catalog", () => {
         },
       );
       expect(profile.pin.serverProfileId).toBe(capabilities.serverProfileId);
-      await expect(resolveServerProfile(store)).rejects.toThrow(
-        "No Server Profile selected",
-      );
+      expect((await resolveServerProfile(store)).name).toBe("work");
       await useServerProfile(store, "work");
       expect((await resolveServerProfile(store)).name).toBe("work");
     } finally {

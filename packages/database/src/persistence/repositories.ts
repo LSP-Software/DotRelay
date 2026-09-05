@@ -128,6 +128,31 @@ export class StaleEpochError extends Error {
   }
 }
 
+export class GenesisExistsError extends Error {
+  readonly currentHeadId: string;
+
+  constructor(currentHeadId: string) {
+    super("the Environment already has a genesis Revision");
+    this.name = "GenesisExistsError";
+    this.currentHeadId = currentHeadId;
+  }
+}
+
+export const DEFAULT_ENVIRONMENT_LABEL = "default";
+
+const environmentLabelPattern = /^[A-Za-z][A-Za-z0-9._-]{0,62}$/;
+
+export const normalizeEnvironmentLabel = (value: unknown): string => {
+  if (value === undefined || value === null || value === "")
+    return DEFAULT_ENVIRONMENT_LABEL;
+  if (typeof value !== "string")
+    throw new Error("Environment label is invalid");
+  const label = value.trim();
+  if (!environmentLabelPattern.test(label))
+    throw new Error("Environment label is invalid");
+  return label;
+};
+
 export type ProtocolObjectInput = Readonly<{
   readonly id: string;
   readonly suite: string;
@@ -613,6 +638,25 @@ export class AdministrationRepository {
       });
       if (!owner || owner.serverProfileId !== input.serverProfileId)
         throw new Error("Team owner belongs to another Server Profile");
+      const existingTeam = await transaction.team.findFirst({
+        where: {
+          serverProfileId: input.serverProfileId,
+          name: input.name,
+          lifecycle: "ACTIVE",
+          memberships: {
+            some: {
+              userId: input.ownerUserId,
+              role: "OWNER",
+              lifecycle: "ACTIVE",
+            },
+          },
+        },
+      });
+      if (existingTeam)
+        return {
+          existing: true as const,
+          team: existingTeam,
+        };
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -1157,6 +1201,37 @@ export class ProjectRepository {
       if (team?.lifecycle !== "ACTIVE") throw new Error("Team is archived");
       if (input.githubRepositoryId <= 0n)
         throw new Error("GitHub Repository id must be positive");
+      const existingProject = await transaction.project.findFirst({
+        where: {
+          teamId: input.teamId,
+          githubRepositoryId: input.githubRepositoryId,
+          lifecycle: "ACTIVE",
+        },
+      });
+      if (existingProject) {
+        const environment =
+          (await transaction.environment.findFirst({
+            where: {
+              projectId: existingProject.id,
+              lifecycle: "ACTIVE",
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          })) ??
+          (await transaction.environment.create({
+            data: {
+              id: crypto.randomUUID(),
+              projectId: existingProject.id,
+              createdByUserId: input.operation.actorUserId,
+              label: DEFAULT_ENVIRONMENT_LABEL,
+              createdAt: input.now ?? new Date(),
+            },
+          }));
+        return {
+          existing: true as const,
+          project: existingProject,
+          environment,
+        };
+      }
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -1169,6 +1244,15 @@ export class ProjectRepository {
           teamId: input.teamId,
           githubRepositoryId: input.githubRepositoryId,
           createdByUserId: input.operation.actorUserId,
+          createdAt: now,
+        },
+      });
+      const environment = await transaction.environment.create({
+        data: {
+          id: crypto.randomUUID(),
+          projectId: project.id,
+          createdByUserId: input.operation.actorUserId,
+          label: DEFAULT_ENVIRONMENT_LABEL,
           createdAt: now,
         },
       });
@@ -1185,7 +1269,16 @@ export class ProjectRepository {
         entityId: project.id,
         newLifecycle: "ACTIVE",
       });
-      return { operation: operation.operation, project };
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "ENVIRONMENT_CREATED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "ENVIRONMENT",
+        entityId: environment.id,
+        newLifecycle: "ACTIVE",
+      });
+      return { operation: operation.operation, project, environment };
     });
   }
 }
@@ -1193,6 +1286,7 @@ export class ProjectRepository {
 export type EnvironmentMetadata = Readonly<{
   readonly id: string;
   readonly projectId: string;
+  readonly label: string;
   readonly lifecycle: "ACTIVE" | "ARCHIVED";
   readonly currentHeadId: string | null;
 }>;
@@ -1253,6 +1347,7 @@ export class AdministrationDisclosureRepository {
     return {
       id: environment.id,
       projectId: environment.projectId,
+      label: environment.label,
       lifecycle: environment.lifecycle,
       currentHeadId: environment.currentHeadId,
     };
@@ -1418,6 +1513,11 @@ export class PublicationRepository {
       include: { project: true },
     });
     if (!environment) throw new Error("Environment not found");
+    if (
+      input.revision.mutation === "GENESIS" &&
+      environment.currentHeadId !== null
+    )
+      throw new GenesisExistsError(environment.currentHeadId);
     if (environment.currentHeadId !== input.expectedHeadId)
       throw new StaleHeadError(environment.currentHeadId);
     if (
@@ -1740,6 +1840,7 @@ export type EnvironmentGenesisInput = Readonly<{
   readonly environmentId: string;
   readonly projectId: string;
   readonly createdByUserId: string;
+  readonly label?: string;
   readonly publication: RevisionPublicationInput;
 }>;
 
@@ -1747,6 +1848,7 @@ export type EnvironmentCreationInput = Readonly<{
   readonly environmentId?: string;
   readonly projectId: string;
   readonly createdByUserId: string;
+  readonly label?: string;
   readonly operation: OperationInput & { readonly actorDeviceId: string };
   readonly now?: Date;
 }>;
@@ -1777,6 +1879,19 @@ export class EnvironmentRepository {
       );
       if (input.createdByUserId !== input.operation.actorUserId)
         throw new Error("Environment creator must be the operation actor");
+      const label = normalizeEnvironmentLabel(input.label);
+      const existingEnvironment = await transaction.environment.findFirst({
+        where: {
+          projectId: input.projectId,
+          label,
+          lifecycle: "ACTIVE",
+        },
+      });
+      if (existingEnvironment)
+        return {
+          existing: true as const,
+          environment: existingEnvironment,
+        };
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -1788,6 +1903,7 @@ export class EnvironmentRepository {
           id: input.environmentId ?? crypto.randomUUID(),
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
+          label,
           createdAt: now,
         },
       });
@@ -1841,6 +1957,9 @@ export class EnvironmentRepository {
           id: input.environmentId,
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
+          label:
+            input.label ??
+            `env-${input.environmentId.replaceAll("-", "").slice(0, 8)}`,
         },
       });
       return this.publication.publishRevisionInTransaction(
