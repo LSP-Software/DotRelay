@@ -105,16 +105,18 @@ test("Environment archive and restore require explicit confirmation", async ({
     "History is kept. Variables stay hidden until you restore it.",
   );
   await page.getByRole("button", { name: "Confirm archive" }).click();
-  await expect(page.getByTestId("environment-lifecycle")).toHaveText(
-    "Archived",
-  );
+  await expect(
+    page.getByRole("button", { name: "Restore Environment" }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Restore Environment" }).click();
   await expect(page.getByRole("alertdialog")).toContainText(
     "Restoring makes this Environment eligible for protected access again.",
   );
   await page.getByRole("button", { name: "Confirm restore" }).click();
-  await expect(page.getByTestId("environment-lifecycle")).toHaveText("Active");
+  await expect(
+    page.getByRole("button", { name: "Archive Environment" }),
+  ).toBeVisible();
 });
 
 test("Server Profile switching asks to trust the new profile", async ({
@@ -209,9 +211,13 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await page.goto("/workspace?preview=protected");
 
   await expect(page.getByRole("heading", { name: "Variables" })).toBeVisible();
-  await expect(
-    page.getByText("Current revision", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+
+  const originRow = page.getByTestId("environment-variable-API_ORIGIN");
+  await page.getByLabel("API_ORIGIN Value").fill("https://changed.invalid");
+  await expect(originRow).toContainText("Draft change");
+  await page.getByLabel("API_ORIGIN Value").fill("");
+  await expect(originRow).not.toContainText("Draft change");
 
   await page.getByRole("button", { name: "Add Variable" }).click();
   await page.getByLabel("Variable name").fill("DATABASE_URL");
@@ -230,14 +236,11 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(value).toHaveAttribute("type", "text");
   await expect(value).toHaveValue("local-only-value");
 
-  await page.getByRole("button", { name: "Review & publish" }).click();
-  await expect(page.getByRole("dialog")).toContainText("Service plaintext");
-  await expect(page.getByRole("dialog")).toContainText("0 bytes");
-  await expect(page.getByRole("dialog")).toContainText("fresh lane encryption");
-  await page.getByRole("button", { name: "Encrypt, stage & publish" }).click();
-  await expect(
-    page.getByText(/Local cryptographic preview completed as rev_0185/),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Review changes" }).click();
+  await expect(page.getByRole("dialog")).toContainText("DATABASE_URL");
+  await expect(page.getByRole("dialog")).toContainText("local-only-value");
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page.getByText(/Local preview saved as rev_0185/)).toBeVisible();
 });
 
 test("protected Environment editor offers local conflict choices and lane rollback", async ({
@@ -246,24 +249,24 @@ test("protected Environment editor offers local conflict choices and lane rollba
   await page.goto("/workspace?preview=protected");
 
   await page.getByLabel("API_ORIGIN Value").fill("https://changed.invalid");
-  await page.getByRole("button", { name: "Sync & verify" }).click();
-  await expect(page.getByText("Stale head: resolve locally")).toBeVisible();
-  await page.getByRole("button", { name: "Keep local" }).click();
-  await expect(page.getByText("Stale head: resolve locally")).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "Retry against verified head" })
-    .click();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("Someone else published these")).toBeVisible();
+  await page.getByRole("button", { name: "Keep mine" }).click();
+  await expect(page.getByText("Someone else published these")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry publish" }).click();
   await expect(
-    page.getByText(/Local preview retry against verified head rev_0185/),
+    page.getByText(/Local preview retry against rev_0185/),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Rollback lanes" }).first().click();
-  await expect(page.getByRole("dialog")).toContainText("append-only Revision");
-  await page
-    .getByRole("button", { name: "Stage append-only rollback" })
-    .click();
-  await expect(page.getByText(/Rollback staged from rev_0183/)).toBeVisible();
-  await expect(page.getByText(/current head is never rewound/i)).toBeVisible();
+  await page.getByRole("button", { name: "Rollback" }).first().click();
+  await expect(page.getByRole("dialog")).toContainText("writes a new revision");
+  await expect(page.getByRole("dialog")).toContainText("API_ORIGIN");
+  await expect(page.getByRole("dialog")).not.toContainText("SIGNING_KEY");
+  await page.getByRole("button", { name: "Stage rollback" }).click();
+  await expect(
+    page.getByText(/Rollback from rev_0183 is staged as a new revision/),
+  ).toBeVisible();
+  await expect(page.getByText(/does not erase this one/i)).toBeVisible();
 });
 
 test("Environment drafts enforce unique names and preserve tombstones", async ({

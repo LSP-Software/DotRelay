@@ -204,6 +204,119 @@ export const updateVariableValue = (
   return Object.freeze({ ...variable, value, hasDraftChange: true });
 };
 
+export const variableHasDraftChange = (
+  variable: Pick<EnvironmentVariable, "value" | "tombstone">,
+  baseline: Pick<EnvironmentVariable, "value" | "tombstone"> | undefined,
+): boolean => {
+  if (!baseline) return true;
+  return (
+    Boolean(variable.tombstone) !== Boolean(baseline.tombstone) ||
+    variable.value !== baseline.value
+  );
+};
+
+export type VariableValueDiff = Readonly<{
+  readonly id: string;
+  readonly name: string;
+  readonly from: string | null | undefined;
+  readonly to: string | null | undefined;
+}>;
+
+export type InlineValueHunk = Readonly<{
+  readonly prefix: string;
+  readonly removed: string;
+  readonly added: string;
+  readonly suffix: string;
+}>;
+
+export const splitInlineValueDiff = (
+  from: string,
+  to: string,
+): InlineValueHunk => {
+  let prefixLength = 0;
+  const maxPrefix = Math.min(from.length, to.length);
+  while (prefixLength < maxPrefix && from[prefixLength] === to[prefixLength])
+    prefixLength += 1;
+  let suffixLength = 0;
+  const maxSuffix = Math.min(
+    from.length - prefixLength,
+    to.length - prefixLength,
+  );
+  while (
+    suffixLength < maxSuffix &&
+    from[from.length - 1 - suffixLength] === to[to.length - 1 - suffixLength]
+  )
+    suffixLength += 1;
+  return Object.freeze({
+    prefix: from.slice(0, prefixLength),
+    removed: from.slice(prefixLength, from.length - suffixLength),
+    added: to.slice(prefixLength, to.length - suffixLength),
+    suffix: from.slice(from.length - suffixLength),
+  });
+};
+
+export const draftValueDiffs = (
+  variables: readonly EnvironmentVariable[],
+  baseline: readonly EnvironmentVariable[],
+): readonly VariableValueDiff[] => {
+  const baselineById = new Map(
+    baseline.map((variable) => [variable.id, variable]),
+  );
+  return Object.freeze(
+    variables.flatMap((variable): readonly VariableValueDiff[] => {
+      if (!variable.hasDraftChange) return [];
+      const previous = baselineById.get(variable.id);
+      if (!previous)
+        return [
+          {
+            id: variable.id,
+            name: variable.name,
+            from: undefined,
+            to: variable.tombstone ? undefined : variable.value,
+          },
+        ];
+      if (variable.tombstone)
+        return [
+          {
+            id: variable.id,
+            name: variable.name,
+            from: previous.value,
+            to: undefined,
+          },
+        ];
+      return [
+        {
+          id: variable.id,
+          name: variable.name,
+          from: previous.value,
+          to: variable.value,
+        },
+      ];
+    }),
+  );
+};
+
+export const rollbackValueDiffs = (
+  variables: readonly EnvironmentVariable[],
+  historicalValues: ReadonlyMap<string, string | null>,
+): readonly VariableValueDiff[] =>
+  Object.freeze(
+    variables.flatMap((variable): readonly VariableValueDiff[] => {
+      if (!historicalValues.has(variable.id)) return [];
+      const to = historicalValues.get(variable.id) ?? null;
+      const from = variable.tombstone ? null : variable.value;
+      if (from === to) return [];
+      return [
+        {
+          id: variable.id,
+          name: variable.name,
+          from,
+          to,
+        },
+      ];
+    }),
+  );
+
 export const changedLaneCount = (
   variables: readonly EnvironmentVariable[],
 ): number => variables.filter((variable) => variable.hasDraftChange).length;

@@ -1143,15 +1143,6 @@ export const WorkspaceShell = ({
                   ))}
                 </TabsList>
               </Tabs>
-              <Badge
-                className="mb-4"
-                data-testid="environment-lifecycle"
-                variant={
-                  environmentLifecycle === "ACTIVE" ? "default" : "secondary"
-                }
-              >
-                {environmentLifecycle === "ACTIVE" ? "Active" : "Archived"}
-              </Badge>
               <EnvironmentEditor
                 available={protectedWorkflowAvailable}
                 environmentLabel={selectedEnvironment.label}

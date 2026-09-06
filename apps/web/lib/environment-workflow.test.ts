@@ -6,11 +6,15 @@ import {
   createRollbackPlan,
   deleteEnvironmentVariable,
   displayedSetupAction,
+  draftValueDiffs,
   nextSetupAction,
   prepareEncryptedPublication,
+  rollbackValueDiffs,
+  splitInlineValueDiff,
   updateVariableValue,
   validateEnvironmentVariables,
   validateVariableDraft,
+  variableHasDraftChange,
 } from "./environment-workflow";
 
 const sharedDraft = {
@@ -215,6 +219,93 @@ test("rollback applies only selected historical lanes while retaining the curren
   expect(rolledBack[0]?.value).toBe("historical-a");
   expect(rolledBack[1]?.value).toBe("current-b");
   expect(rolledBack[0]?.hasDraftChange).toBe(true);
+});
+
+test("restoring the published Value is not a draft change", () => {
+  const published = {
+    ...createEnvironmentVariable({ ...sharedDraft, value: "live" }, "lane-1"),
+    hasDraftChange: false,
+  };
+  const edited = updateVariableValue(published, "scratch");
+
+  expect(variableHasDraftChange(edited, published)).toBe(true);
+  expect(
+    variableHasDraftChange(updateVariableValue(edited, "live"), published),
+  ).toBe(false);
+});
+
+test("draft diffs describe added, changed, and deleted Variables", () => {
+  const published = {
+    ...createEnvironmentVariable({ ...sharedDraft, value: "live" }, "lane-1"),
+    hasDraftChange: false,
+  };
+  const changed = updateVariableValue(published, "next");
+  const added = createEnvironmentVariable(
+    { ...sharedDraft, name: "NEW_TOKEN", value: "secret" },
+    "lane-2",
+  );
+  const removed = deleteEnvironmentVariable(published);
+
+  expect(draftValueDiffs([changed, added, removed], [published])).toEqual([
+    { id: "lane-1", name: "API_ORIGIN", from: "live", to: "next" },
+    { id: "lane-2", name: "NEW_TOKEN", from: undefined, to: "secret" },
+    { id: "lane-1", name: "API_ORIGIN", from: "live", to: undefined },
+  ]);
+});
+
+test("inline value diffs keep the shared characters and mark only the edit", () => {
+  expect(splitInlineValueDiff("abc", "abcd")).toEqual({
+    prefix: "abc",
+    removed: "",
+    added: "d",
+    suffix: "",
+  });
+  expect(splitInlineValueDiff("abcd", "abc")).toEqual({
+    prefix: "abc",
+    removed: "d",
+    added: "",
+    suffix: "",
+  });
+  expect(splitInlineValueDiff("abc", "abd")).toEqual({
+    prefix: "ab",
+    removed: "c",
+    added: "d",
+    suffix: "",
+  });
+  expect(
+    splitInlineValueDiff("postgres://old@host/db", "postgres://new@host/db"),
+  ).toEqual({
+    prefix: "postgres://",
+    removed: "old",
+    added: "new",
+    suffix: "@host/db",
+  });
+});
+
+test("rollback diffs omit Variables whose Values already match history", () => {
+  const current = [
+    {
+      ...createEnvironmentVariable({ ...sharedDraft, value: "now" }, "lane-1"),
+      hasDraftChange: false,
+    },
+    {
+      ...createEnvironmentVariable(
+        { ...sharedDraft, name: "SAME", value: "kept" },
+        "lane-2",
+      ),
+      hasDraftChange: false,
+    },
+  ];
+
+  expect(
+    rollbackValueDiffs(
+      current,
+      new Map([
+        ["lane-1", "then"],
+        ["lane-2", "kept"],
+      ]),
+    ),
+  ).toEqual([{ id: "lane-1", name: "API_ORIGIN", from: "now", to: "then" }]);
 });
 
 test("rollback refuses a selected lane without verified historical state", () => {

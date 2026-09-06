@@ -19,7 +19,7 @@ import {
   Plus,
   RefreshCcw,
   RotateCcw,
-  ShieldCheck,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
@@ -51,12 +51,17 @@ import {
   createEnvironmentVariable,
   createRollbackPlan,
   deleteEnvironmentVariable,
+  draftValueDiffs,
   type EnvironmentVariable,
   prepareEncryptedPublication,
+  rollbackValueDiffs,
   type SetupAction,
+  splitInlineValueDiff,
   updateVariableValue,
   type VariableDraft,
+  type VariableValueDiff,
   validateVariableDraft,
+  variableHasDraftChange,
 } from "@/lib/environment-workflow";
 
 type EnvironmentEditorProps = Readonly<{
@@ -145,8 +150,219 @@ const revisionNumber = (revision: string): number =>
 const valueStateLabel = (variable: EnvironmentVariable): string => {
   if (variable.tombstone) return "Will delete";
   if (variable.value === null) return "Not set";
-  if (variable.value === "") return "Empty";
   return "Hidden";
+};
+
+const formatDiffValue = (
+  value: string | null | undefined,
+  revealed: boolean,
+): string | null => {
+  if (value === undefined) return null;
+  if (value === null) return "not set";
+  if (value === "") return "empty";
+  return revealed ? value : "••••••••";
+};
+
+const InlineHunk = ({
+  hunk,
+  side,
+}: {
+  readonly hunk: ReturnType<typeof splitInlineValueDiff>;
+  readonly side: "from" | "to";
+}) => {
+  const changed = side === "from" ? hunk.removed : hunk.added;
+  return (
+    <span className="break-all">
+      {hunk.prefix ? (
+        <span className="text-muted-foreground">{hunk.prefix}</span>
+      ) : null}
+      {changed ? (
+        <span className={side === "from" ? "text-red-300" : "text-emerald-300"}>
+          {changed}
+        </span>
+      ) : null}
+      {hunk.suffix ? (
+        <span className="text-muted-foreground">{hunk.suffix}</span>
+      ) : null}
+    </span>
+  );
+};
+
+const ValueDiffLines = ({
+  diff,
+  revealed,
+}: {
+  readonly diff: VariableValueDiff;
+  readonly revealed: boolean;
+}) => {
+  const bothStrings =
+    typeof diff.from === "string" && typeof diff.to === "string";
+  if (bothStrings && revealed) {
+    const hunk = splitInlineValueDiff(diff.from, diff.to);
+    const showFrom = hunk.removed.length > 0;
+    const showTo = hunk.added.length > 0 || !showFrom;
+    return (
+      <div className="min-w-0 font-mono text-[13px] leading-5">
+        <p className="truncate font-medium text-foreground" title={diff.name}>
+          {diff.name}
+        </p>
+        {showFrom ? (
+          <p>
+            {showTo ? <span className="text-muted-foreground">- </span> : null}
+            <InlineHunk hunk={hunk} side="from" />
+          </p>
+        ) : null}
+        {showTo ? (
+          <p>
+            {showFrom ? (
+              <span className="text-muted-foreground">+ </span>
+            ) : null}
+            <InlineHunk hunk={hunk} side="to" />
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  const from = formatDiffValue(diff.from, revealed);
+  const to = formatDiffValue(diff.to, revealed);
+  return (
+    <div className="min-w-0 font-mono text-[13px] leading-5">
+      <p className="truncate font-medium text-foreground" title={diff.name}>
+        {diff.name}
+      </p>
+      {from ? (
+        <p className="break-all text-red-300/90" title={from}>
+          - {from}
+        </p>
+      ) : null}
+      {to ? (
+        <p className="break-all text-emerald-300/90" title={to}>
+          + {to}
+        </p>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">Will be deleted</p>
+      )}
+    </div>
+  );
+};
+
+const VariableRow = ({
+  variable,
+  revealed,
+  canUndoDelete,
+  onDelete,
+  onSetAbsent,
+  onToggleReveal,
+  onUndoDelete,
+  onValueChange,
+}: {
+  readonly variable: EnvironmentVariable;
+  readonly revealed: boolean;
+  readonly canUndoDelete: boolean;
+  readonly onDelete: () => void;
+  readonly onSetAbsent: () => void;
+  readonly onToggleReveal: () => void;
+  readonly onUndoDelete: () => void;
+  readonly onValueChange: (value: string) => void;
+}) => {
+  const state = valueStateLabel(variable);
+  const showState = state !== "Hidden";
+
+  return (
+    <li
+      className="px-4 py-1.5 hover:bg-muted/20"
+      data-testid={`environment-variable-${variable.name}`}
+    >
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+        <div className="min-w-0 sm:w-[min(22rem,36%)] sm:shrink-0">
+          <div className="flex min-w-0 items-baseline gap-x-2">
+            <span
+              className="truncate font-mono text-[13px] font-medium tracking-tight"
+              title={variable.name}
+            >
+              {variable.name}
+            </span>
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {ownershipLabel(variable.ownership)}
+            </span>
+            {variable.hasDraftChange ? (
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-200">
+                Draft change
+              </span>
+            ) : null}
+          </div>
+          {variable.description ? (
+            <p
+              className="truncate text-[11px] leading-4 text-muted-foreground/80"
+              title={variable.description}
+            >
+              {variable.description}
+            </p>
+          ) : null}
+        </div>
+
+        {variable.tombstone ? (
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+            <span className="text-xs text-muted-foreground">
+              This Variable is marked for deletion.
+            </span>
+            {variable.hasDraftChange && canUndoDelete ? (
+              <Button onClick={onUndoDelete} size="xs" variant="outline">
+                Undo delete
+              </Button>
+            ) : null}
+          </div>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Label className="sr-only" htmlFor={`value-${variable.id}`}>
+              {variable.name} Value
+            </Label>
+            <Input
+              autoComplete="off"
+              className="h-7 font-mono text-[13px]"
+              id={`value-${variable.id}`}
+              onChange={(event) => onValueChange(event.target.value)}
+              placeholder={variable.value === null ? "Absent" : "Empty Value"}
+              type={revealed ? "text" : "password"}
+              value={variable.value ?? ""}
+            />
+            {showState ? (
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {state}
+              </span>
+            ) : null}
+            <Button
+              aria-label={`${revealed ? "Hide" : "Reveal"} ${variable.name}`}
+              onClick={onToggleReveal}
+              size="icon-sm"
+              variant="ghost"
+            >
+              {revealed ? (
+                <EyeOff aria-hidden="true" />
+              ) : (
+                <Eye aria-hidden="true" />
+              )}
+            </Button>
+            {!variable.required && variable.value !== null ? (
+              <Button onClick={onSetAbsent} size="xs" variant="ghost">
+                Set absent
+              </Button>
+            ) : null}
+            <Button
+              aria-label={`Delete ${variable.name}`}
+              className="text-muted-foreground hover:text-destructive"
+              onClick={onDelete}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <Trash2 aria-hidden="true" />
+            </Button>
+          </div>
+        )}
+      </div>
+    </li>
+  );
 };
 
 const AddVariableDialog = ({
@@ -426,7 +642,25 @@ export const EnvironmentEditor = ({
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
   >(() => new Map());
+  const [rollbackHistoricalValues, setRollbackHistoricalValues] = useState<
+    ReadonlyMap<string, string | null>
+  >(() => new Map());
+  const [reviewValuesRevealed, setReviewValuesRevealed] = useState(true);
+  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(true);
+  const baselineFor = (id: string): EnvironmentVariable | undefined =>
+    remoteVariables.find((variable) => variable.id === id);
+  const withDraftFlag = (
+    variable: EnvironmentVariable,
+  ): EnvironmentVariable => ({
+    ...variable,
+    hasDraftChange: variableHasDraftChange(variable, baselineFor(variable.id)),
+  });
   const changedCount = changedLaneCount(variables);
+  const pendingDiffs = draftValueDiffs(variables, remoteVariables);
+  const pendingRollbackDiffs = rollbackValueDiffs(
+    variables,
+    rollbackHistoricalValues,
+  );
   const canPublish =
     changedCount > 0 &&
     conflictingLaneIds.size === 0 &&
@@ -442,7 +676,9 @@ export const EnvironmentEditor = ({
     setPublishMessage(null);
     setVariables((current) =>
       current.map((variable) =>
-        variable.id === id ? updateVariableValue(variable, value) : variable,
+        variable.id === id
+          ? withDraftFlag(updateVariableValue(variable, value))
+          : variable,
       ),
     );
   };
@@ -474,7 +710,7 @@ export const EnvironmentEditor = ({
     setVariables((current) =>
       current.map((variable) =>
         variable.id === id
-          ? { ...snapshot, hasDraftChange: true, tombstone: false }
+          ? withDraftFlag({ ...snapshot, tombstone: false })
           : variable,
       ),
     );
@@ -507,9 +743,44 @@ export const EnvironmentEditor = ({
     setAddOpen(false);
   };
 
-  const openRollback = (revision: string) => {
+  const loadHistoricalValues = async (
+    revision: string,
+    variableIds: readonly string[],
+  ): Promise<ReadonlyMap<string, string | null>> => {
+    if (!protocolSession?.resolveRollbackValues) return historicalValues;
+    try {
+      return await protocolSession.resolveRollbackValues({
+        targetRevision: revision,
+        selectedVariableIds: variableIds,
+      });
+    } catch {
+      const values = new Map<string, string | null>();
+      for (const variableId of variableIds) {
+        try {
+          const one = await protocolSession.resolveRollbackValues({
+            targetRevision: revision,
+            selectedVariableIds: [variableId],
+          });
+          if (one.has(variableId))
+            values.set(variableId, one.get(variableId) ?? null);
+        } catch {
+          // This Variable did not exist in that revision.
+        }
+      }
+      return values;
+    }
+  };
+
+  const openRollback = async (revision: string) => {
+    const values = await loadHistoricalValues(
+      revision,
+      variables.map((variable) => variable.id),
+    );
+    const diffs = rollbackValueDiffs(variables, values);
+    setRollbackHistoricalValues(values);
+    setRollbackLanes(new Set(diffs.map((diff) => diff.id)));
+    setRollbackValuesRevealed(true);
     setRollbackTarget(revision);
-    setRollbackLanes(new Set(variables.map((variable) => variable.id)));
   };
 
   const publish = async () => {
@@ -592,12 +863,10 @@ export const EnvironmentEditor = ({
         setStaleHeadRevision(null);
         setRetryReady(false);
         setReviewOpen(false);
-        setPublishMessage(
-          `Published as ${artifacts.request.revision.id}. ${artifacts.encryptedLaneCount} encrypted lane${artifacts.encryptedLaneCount === 1 ? "" : "s"} (${artifacts.encryptedBytes} bytes); ${artifacts.tombstoneLaneCount} tombstone${artifacts.tombstoneLaneCount === 1 ? "" : "s"}; service plaintext 0 bytes.`,
-        );
+        setPublishMessage(`Published as ${artifacts.request.revision.id}.`);
         return;
       }
-      const preparation = await prepareEncryptedPublication(variables);
+      await prepareEncryptedPublication(variables);
       const nextRevision = revisionNumber(headRevision) + 1;
       setHeadRevision(`rev_${String(nextRevision).padStart(4, "0")}`);
       setVariables((current) =>
@@ -609,7 +878,7 @@ export const EnvironmentEditor = ({
       setRetryReady(false);
       setReviewOpen(false);
       setPublishMessage(
-        `Local cryptographic preview completed as rev_${String(nextRevision).padStart(4, "0")}. ${preparation.encryptedLaneCount} changed lane${preparation.encryptedLaneCount === 1 ? " was" : "s were"} encrypted (${preparation.encryptedBytes} bytes), and ${preparation.tombstoneLaneCount} tombstone${preparation.tombstoneLaneCount === 1 ? " was" : "s were"} signed (${preparation.signatureBytes} bytes). No service publication occurred because this workspace has no live protocol session.`,
+        `Local preview saved as rev_${String(nextRevision).padStart(4, "0")}.`,
       );
     } catch (error) {
       if (
@@ -667,19 +936,17 @@ export const EnvironmentEditor = ({
           setReviewOpen(false);
           setPublishMessage(
             conflictingVariableIds.length > 0
-              ? "Publication was not committed because the verified head changed on overlapping lanes. Resolve them, then retry."
-              : "Publication was not committed, but the verified head changed on other lanes; the local draft remains publishable.",
+              ? "Publish did not go through because someone else changed the same variables. Pick which value to keep, then retry."
+              : "Someone else published other variables. Your draft is still ready to publish.",
           );
         } catch {
           setPublishMessage(
-            "Publication stopped after a stale head response. The verified head could not be synchronized.",
+            "Publish stopped after someone else updated this Environment. Refresh and try again.",
           );
         }
         return;
       }
-      setPublishMessage(
-        "Publication stopped because the verified server rejected the draft.",
-      );
+      setPublishMessage("Publish was rejected. Refresh and try again.");
     } finally {
       setPublishing(false);
     }
@@ -689,34 +956,22 @@ export const EnvironmentEditor = ({
     if (!rollbackTarget || rollbackLanes.size === 0) return;
     try {
       createRollbackPlan(rollbackTarget, [...rollbackLanes]);
-      const rollbackValues = protocolSession
-        ? protocolSession.resolveRollbackValues
-          ? await protocolSession.resolveRollbackValues({
-              targetRevision: rollbackTarget,
-              selectedVariableIds: [...rollbackLanes],
-            })
-          : null
-        : historicalValues;
-      if (!rollbackValues)
-        throw new Error(
-          "verified historical Values are unavailable for this live session",
-        );
       const nextVariables = applyRollbackToVariables(
         variables,
-        rollbackValues,
+        rollbackHistoricalValues,
         [...rollbackLanes],
       );
-      setVariables([...nextVariables]);
+      setVariables(nextVariables.map(withDraftFlag));
     } catch {
       setPublishMessage(
-        "Rollback stopped because verified historical state is unavailable.",
+        "Rollback stopped because this revision's values could not be read.",
       );
       return;
     }
     setRollbackTarget(null);
     setRollbackMutationTarget(rollbackTarget);
     setPublishMessage(
-      `Rollback staged from ${rollbackTarget}. This will append a new Revision; ${headRevision} remains in history.`,
+      `Rollback from ${rollbackTarget} is staged as a new revision.`,
     );
   };
 
@@ -786,8 +1041,110 @@ export const EnvironmentEditor = ({
     setStaleHeadRevision(null);
     setRetryReady(false);
     setPublishMessage(
-      `${protocolSession ? "Retrying" : "Local preview retry"} against verified head ${staleHeadRevision}. The local choices remain in the draft.`,
+      `${protocolSession ? "Retrying" : "Local preview retry"} against ${staleHeadRevision}. Your choices are still in the draft.`,
     );
+  };
+
+  const refresh = async () => {
+    if (protocolSession) {
+      try {
+        const context = protocolSession.context;
+        if (
+          (context.expectedHeadId && !context.expectedHeadHash) ||
+          !context.trustedRevisionId ||
+          !context.trustedRevisionHash
+        )
+          throw new Error("a verified head is required before synchronization");
+        const useGenesisTrust = remoteVariables.length === 0;
+        const trustedRevisionId = context.trustedRevisionId;
+        const trustedRevisionHash = context.trustedRevisionHash;
+        const syncTrustedRevisionId = useGenesisTrust
+          ? trustedRevisionId
+          : (protocolHead?.id ?? context.expectedHeadId);
+        const syncTrustedRevisionHash = useGenesisTrust
+          ? trustedRevisionHash
+          : (protocolHead?.hash ?? context.expectedHeadHash);
+        if (!syncTrustedRevisionId || !syncTrustedRevisionHash)
+          throw new Error("a verified synchronization anchor is unavailable");
+        const page = await protocolSession.transport.syncAll({
+          environmentId: context.environmentId,
+          deviceId: context.actorDeviceId,
+          request: {
+            trustedRevisionId: syncTrustedRevisionId,
+            trustedRevisionHash: syncTrustedRevisionHash,
+            pagination: {},
+          },
+        });
+        await verifySyncPage(page, sessionTrustKeys(protocolSession), {
+          actorUserId: context.actorUserId,
+        });
+        setVerifiedHistory(page.revisions.map((revision) => revision.id));
+        const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
+        const decodedVariables = protocolSession.decodeVariables
+          ? await protocolSession.decodeVariables(page, remoteVariables)
+          : undefined;
+        if (decodedVariables) {
+          setRemoteVariables(decodedVariables);
+          if (changedCount === 0) setVariables([...decodedVariables]);
+        }
+        if (page.currentHeadId && page.currentHeadHash) {
+          const localHeadId = protocolHead?.id ?? context.expectedHeadId;
+          const headChanged =
+            localHeadId !== null && localHeadId !== page.currentHeadId;
+          setProtocolHead({
+            id: page.currentHeadId,
+            hash: page.currentHeadHash,
+          });
+          setHeadRevision(page.currentHeadId);
+          if (headChanged && changedCount > 0) {
+            const localChangedVariableIds = variables
+              .filter((variable) => variable.hasDraftChange)
+              .map((variable) => variable.id);
+            const conflictingVariableIds =
+              page.nextCursor !== null
+                ? localChangedVariableIds
+                : localChangedVariableIds.filter((id) =>
+                    remoteChangedVariableIds.has(id),
+                  );
+            setConflictingLaneIds(new Set(conflictingVariableIds));
+            setStaleHeadRevision(
+              conflictingVariableIds.length > 0 ? page.currentHeadId : null,
+            );
+            setRetryReady(false);
+            setPublishMessage(
+              conflictingVariableIds.length > 0
+                ? "Someone else changed the same variables. Pick which value to keep, then retry."
+                : "Someone else published other variables. Your draft is still ready to publish.",
+            );
+            return;
+          }
+        }
+        setPublishMessage("Up to date.");
+        return;
+      } catch {
+        setPublishMessage("Could not refresh this Environment.");
+        return;
+      }
+    }
+    setConflictingLaneIds(
+      new Set(
+        variables
+          .filter((variable) => variable.hasDraftChange)
+          .map((variable) => variable.id),
+      ),
+    );
+    setPublishMessage(
+      changedCount > 0
+        ? "Someone else published while this draft was open. Pick which value to keep."
+        : "Up to date.",
+    );
+    if (changedCount > 0 && remoteHeadRevision !== headRevision) {
+      setStaleHeadRevision(remoteHeadRevision);
+      setRetryReady(false);
+    } else {
+      setStaleHeadRevision(null);
+      setRetryReady(false);
+    }
   };
 
   if (!available) {
@@ -853,181 +1210,10 @@ export const EnvironmentEditor = ({
 
   return (
     <section className="scroll-mt-24" id="environment">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 className="font-heading text-2xl font-semibold">Variables</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {environmentLabel}. Values stay on this Device.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={async () => {
-              if (protocolSession) {
-                try {
-                  const context = protocolSession.context;
-                  if (
-                    (context.expectedHeadId && !context.expectedHeadHash) ||
-                    !context.trustedRevisionId ||
-                    !context.trustedRevisionHash
-                  )
-                    throw new Error(
-                      "a verified head is required before synchronization",
-                    );
-                  const useGenesisTrust = remoteVariables.length === 0;
-                  const trustedRevisionId = context.trustedRevisionId;
-                  const trustedRevisionHash = context.trustedRevisionHash;
-                  const syncTrustedRevisionId = useGenesisTrust
-                    ? trustedRevisionId
-                    : (protocolHead?.id ?? context.expectedHeadId);
-                  const syncTrustedRevisionHash = useGenesisTrust
-                    ? trustedRevisionHash
-                    : (protocolHead?.hash ?? context.expectedHeadHash);
-                  if (!syncTrustedRevisionId || !syncTrustedRevisionHash)
-                    throw new Error(
-                      "a verified synchronization anchor is unavailable",
-                    );
-                  const page = await protocolSession.transport.syncAll({
-                    environmentId: context.environmentId,
-                    deviceId: context.actorDeviceId,
-                    request: {
-                      trustedRevisionId: syncTrustedRevisionId,
-                      trustedRevisionHash: syncTrustedRevisionHash,
-                      pagination: {},
-                    },
-                  });
-                  await verifySyncPage(
-                    page,
-                    sessionTrustKeys(protocolSession),
-                    {
-                      actorUserId: context.actorUserId,
-                    },
-                  );
-                  setVerifiedHistory(
-                    page.revisions.map((revision) => revision.id),
-                  );
-                  const remoteChangedVariableIds =
-                    changedVariableIdsFromSyncPage(page);
-                  const decodedVariables = protocolSession.decodeVariables
-                    ? await protocolSession.decodeVariables(
-                        page,
-                        remoteVariables,
-                      )
-                    : undefined;
-                  if (decodedVariables) {
-                    setRemoteVariables(decodedVariables);
-                    if (changedCount === 0) setVariables([...decodedVariables]);
-                  }
-                  if (page.currentHeadId && page.currentHeadHash) {
-                    const localHeadId =
-                      protocolHead?.id ?? context.expectedHeadId;
-                    const headChanged =
-                      localHeadId !== null &&
-                      localHeadId !== page.currentHeadId;
-                    setProtocolHead({
-                      id: page.currentHeadId,
-                      hash: page.currentHeadHash,
-                    });
-                    setHeadRevision(page.currentHeadId);
-                    if (headChanged && changedCount > 0) {
-                      const localChangedVariableIds = variables
-                        .filter((variable) => variable.hasDraftChange)
-                        .map((variable) => variable.id);
-                      const conflictingVariableIds =
-                        page.nextCursor !== null
-                          ? localChangedVariableIds
-                          : localChangedVariableIds.filter((id) =>
-                              remoteChangedVariableIds.has(id),
-                            );
-                      setConflictingLaneIds(new Set(conflictingVariableIds));
-                      setStaleHeadRevision(
-                        conflictingVariableIds.length > 0
-                          ? page.currentHeadId
-                          : null,
-                      );
-                      setRetryReady(false);
-                      setPublishMessage(
-                        conflictingVariableIds.length > 0
-                          ? "The verified server head changed on overlapping lanes. Choose a three-way resolution before retrying."
-                          : "The verified server head changed on other lanes; the local draft remains publishable against the verified head.",
-                      );
-                      return;
-                    }
-                  }
-                  setPublishMessage(
-                    "Verified synchronization completed; no plaintext was requested.",
-                  );
-                  return;
-                } catch {
-                  setPublishMessage(
-                    "Synchronization stopped because verified history could not be read.",
-                  );
-                  return;
-                }
-              }
-              setConflictingLaneIds(
-                new Set(
-                  variables
-                    .filter((variable) => variable.hasDraftChange)
-                    .map((variable) => variable.id),
-                ),
-              );
-              setPublishMessage(
-                changedCount > 0
-                  ? "Local preview: the server head changed while this draft was open. Choose a local three-way resolution."
-                  : "Head verified against the local trust store.",
-              );
-              if (changedCount > 0 && remoteHeadRevision !== headRevision) {
-                setStaleHeadRevision(remoteHeadRevision);
-                setRetryReady(false);
-              } else {
-                setStaleHeadRevision(null);
-                setRetryReady(false);
-              }
-            }}
-            variant="outline"
-          >
-            <RefreshCcw aria-hidden="true" /> Sync &amp; verify
-          </Button>
-          <Button disabled={!canPublish} onClick={() => setReviewOpen(true)}>
-            <ShieldCheck aria-hidden="true" /> Review &amp; publish
-          </Button>
-        </div>
-      </div>
-
-      <div className="mb-4 grid gap-3 md:grid-cols-3">
-        <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <ShieldCheck className="size-4 text-primary" /> Current revision
-          </div>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">
-            {headRevision}
-          </p>
-        </div>
-        <div className="rounded-lg border bg-card/50 p-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <GitBranch className="size-4" /> Local draft
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {changedCount === 0
-              ? "No unpublished changes"
-              : `${changedCount} unpublished change${changedCount === 1 ? "" : "s"}`}
-          </p>
-        </div>
-        <div className="rounded-lg border bg-card/50 p-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <LockKeyhole className="size-4 text-primary" /> Device
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Values stay on this browser.
-          </p>
-        </div>
-      </div>
-
       {publishMessage ? (
         <Alert className="mb-4 bg-card/60">
           <Check className="text-primary" />
-          <AlertTitle>Draft status</AlertTitle>
+          <AlertTitle>Status</AlertTitle>
           <AlertDescription>{publishMessage}</AlertDescription>
         </Alert>
       ) : null}
@@ -1035,10 +1221,9 @@ export const EnvironmentEditor = ({
       {conflictingLaneIds.size > 0 ? (
         <Card className="mb-4 border-amber-300/30">
           <CardHeader>
-            <CardTitle>Stale head: resolve locally</CardTitle>
+            <CardTitle>Someone else published these</CardTitle>
             <CardDescription>
-              Someone else published while you were editing. Pick what to keep
-              for each conflict, then retry.
+              Pick which value to keep for each conflict, then retry.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
@@ -1049,19 +1234,14 @@ export const EnvironmentEditor = ({
                   className="flex flex-col gap-3 rounded-lg border bg-background/40 p-3 sm:flex-row sm:items-center sm:justify-between"
                   key={variable.id}
                 >
-                  <div>
-                    <p className="font-mono text-sm">{variable.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Local: hidden · Remote: hidden · choose a lane result
-                    </p>
-                  </div>
+                  <p className="font-mono text-sm">{variable.name}</p>
                   <div className="flex flex-wrap gap-2">
                     <Button
                       onClick={() => resolveConflict(variable.id, "local")}
                       size="sm"
                       variant="outline"
                     >
-                      Keep local
+                      Keep mine
                     </Button>
                     <Button
                       disabled={remoteVariables.length === 0}
@@ -1069,14 +1249,14 @@ export const EnvironmentEditor = ({
                       size="sm"
                       variant="outline"
                     >
-                      Use remote
+                      Use theirs
                     </Button>
                     <Button
                       disabled={remoteVariables.length === 0}
                       onClick={() => resolveConflict(variable.id, "merge")}
                       size="sm"
                     >
-                      Merge
+                      Keep my value
                     </Button>
                   </div>
                 </div>
@@ -1087,159 +1267,100 @@ export const EnvironmentEditor = ({
 
       {retryReady && staleHeadRevision ? (
         <Alert className="mb-4 border-primary/25 bg-primary/5">
-          <ShieldCheck className="text-primary" />
-          <AlertTitle>Conflict choices are ready to retry</AlertTitle>
+          <Check className="text-primary" />
+          <AlertTitle>Ready to retry</AlertTitle>
           <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <span>
-              Verify the new parent {staleHeadRevision} before preparing the
-              signed mutation.
+              Your choices are saved. Publish them on top of the latest
+              revision.
             </span>
             <Button onClick={retryAgainstVerifiedHead} size="sm">
-              Retry against verified head
+              Retry publish
             </Button>
           </AlertDescription>
         </Alert>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <Card className="gap-0" size="sm">
+        <CardHeader className="border-b pb-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle>Variables</CardTitle>
+              <CardTitle>
+                <h2>Variables</h2>
+              </CardTitle>
               <CardDescription>
-                Names and values. Hidden until you reveal them.
+                {environmentLabel}
+                {changedCount > 0
+                  ? ` · ${changedCount} unpublished change${changedCount === 1 ? "" : "s"}`
+                  : ""}
               </CardDescription>
             </div>
-            <Button
-              onClick={() => {
-                setAddError(null);
-                setAddOpen(true);
-              }}
-            >
-              <Plus aria-hidden="true" /> Add Variable
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                aria-label="Refresh"
+                onClick={() => {
+                  void refresh();
+                }}
+                size="sm"
+                variant="outline"
+              >
+                <RefreshCcw aria-hidden="true" /> Refresh
+              </Button>
+              <Button
+                disabled={!canPublish}
+                onClick={() => {
+                  setReviewValuesRevealed(true);
+                  setReviewOpen(true);
+                }}
+                size="sm"
+              >
+                Review changes
+              </Button>
+              <Button
+                onClick={() => {
+                  setAddError(null);
+                  setAddOpen(true);
+                }}
+                size="sm"
+                variant="outline"
+              >
+                <Plus aria-hidden="true" /> Add Variable
+              </Button>
+            </div>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3">
-          {variables.map((variable) => {
-            const isRevealed = revealed.has(variable.id);
-            return (
-              <div
-                className="rounded-lg border bg-background/35 p-4"
-                data-testid={`environment-variable-${variable.name}`}
-                key={variable.id}
-              >
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-sm font-medium">
-                        {variable.name}
-                      </span>
-                      <Badge variant="outline">
-                        {ownershipLabel(variable.ownership)}
-                      </Badge>
-                      {variable.hasDraftChange ? (
-                        <Badge
-                          className="border-amber-300/25 text-amber-200"
-                          variant="outline"
-                        >
-                          Draft change
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {variable.description || "No description"}
-                    </p>
-                  </div>
-                  <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-                    {valueStateLabel(variable)}
-                  </span>
-                </div>
-                {variable.tombstone ? (
-                  <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-                    <span>This Variable is marked for deletion.</span>
-                    {variable.hasDraftChange &&
-                    deletedVariableSnapshots.has(variable.id) ? (
-                      <Button
-                        onClick={() => undoDelete(variable.id)}
-                        size="sm"
-                        variant="outline"
-                      >
-                        Undo delete
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : (
-                  <>
-                    <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <Label
-                        className="sr-only"
-                        htmlFor={`value-${variable.id}`}
-                      >
-                        {variable.name} Value
-                      </Label>
-                      <Input
-                        autoComplete="off"
-                        id={`value-${variable.id}`}
-                        onChange={(event) =>
-                          updateValue(variable.id, event.target.value)
-                        }
-                        placeholder={
-                          variable.value === null ? "Absent" : "Empty Value"
-                        }
-                        type={isRevealed ? "text" : "password"}
-                        value={variable.value ?? ""}
-                      />
-                      <Button
-                        aria-label={`${isRevealed ? "Hide" : "Reveal"} ${variable.name}`}
-                        onClick={() => toggleReveal(variable.id)}
-                        size="icon"
-                        variant="outline"
-                      >
-                        {isRevealed ? (
-                          <EyeOff aria-hidden="true" />
-                        ) : (
-                          <Eye aria-hidden="true" />
-                        )}
-                      </Button>
-                      <Button
-                        aria-label={`Delete ${variable.name}`}
-                        onClick={() => deleteVariable(variable.id)}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        Delete
-                      </Button>
-                      {!variable.required && variable.value !== null ? (
-                        <Button
-                          onClick={() =>
-                            setVariables((current) =>
-                              current.map((candidate) =>
-                                candidate.id === variable.id
-                                  ? updateVariableValue(candidate, null)
-                                  : candidate,
-                              ),
-                            )
-                          }
-                          size="sm"
-                          variant="ghost"
-                        >
-                          Set absent
-                        </Button>
-                      ) : null}
-                    </div>
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      {isRevealed
-                        ? "Visible on this Device only."
-                        : "Hidden until you reveal it."}
-                    </p>
-                  </>
-                )}
-              </div>
-            );
-          })}
+        <CardContent className="px-0">
+          {variables.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-muted-foreground">
+              Add a Variable to start this Manifest.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {variables.map((variable) => (
+                <VariableRow
+                  canUndoDelete={deletedVariableSnapshots.has(variable.id)}
+                  key={variable.id}
+                  onDelete={() => deleteVariable(variable.id)}
+                  onSetAbsent={() =>
+                    setVariables((current) =>
+                      current.map((candidate) =>
+                        candidate.id === variable.id
+                          ? withDraftFlag(updateVariableValue(candidate, null))
+                          : candidate,
+                      ),
+                    )
+                  }
+                  onToggleReveal={() => toggleReveal(variable.id)}
+                  onUndoDelete={() => undoDelete(variable.id)}
+                  onValueChange={(value) => updateValue(variable.id, value)}
+                  revealed={revealed.has(variable.id)}
+                  variable={variable}
+                />
+              ))}
+            </ul>
+          )}
         </CardContent>
-        <CardFooter className="border-t text-xs text-muted-foreground">
+        <CardFooter className="border-t py-2.5 text-xs text-muted-foreground">
           <LockKeyhole className="mr-2 size-3" /> The server never sees these
           values.
         </CardFooter>
@@ -1251,8 +1372,8 @@ export const EnvironmentEditor = ({
             <GitBranch className="size-4" /> History
           </CardTitle>
           <CardDescription>
-            Past publishes. Rollback writes a new revision. The current head is
-            never rewound.
+            Past publishes. Rollback writes a new revision. It does not erase
+            this one.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2">
@@ -1267,20 +1388,20 @@ export const EnvironmentEditor = ({
               <div>
                 <p className="font-mono text-sm">{revision}</p>
                 <p className="text-xs text-muted-foreground">
-                  {revision === headRevision
-                    ? "Current verified head"
-                    : "Verified historical Revision"}
+                  {revision === headRevision ? "Current" : "Earlier revision"}
                 </p>
               </div>
               {revision === headRevision ? (
-                <Badge>Current head</Badge>
+                <Badge>Current</Badge>
               ) : (
                 <Button
-                  onClick={() => openRollback(revision)}
+                  onClick={() => {
+                    void openRollback(revision);
+                  }}
                   size="sm"
                   variant="outline"
                 >
-                  <RotateCcw aria-hidden="true" /> Rollback lanes
+                  <RotateCcw aria-hidden="true" /> Rollback
                 </Button>
               )}
             </div>
@@ -1300,70 +1421,48 @@ export const EnvironmentEditor = ({
         open={addOpen}
       />
 
-      <Dialog onOpenChange={setReviewOpen} open={reviewOpen}>
-        <DialogContent>
+      <Dialog
+        onOpenChange={(open) => {
+          setReviewOpen(open);
+          if (open) setReviewValuesRevealed(true);
+        }}
+        open={reviewOpen}
+      >
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Review &amp; publish</DialogTitle>
+            <DialogTitle>Review changes</DialogTitle>
             <DialogDescription>
-              Review metadata before the active Device encrypts changed lanes,
-              signs the v3 mutation, stages objects, and finalizes publication.
+              These values stay on this browser. Publishing encrypts them here,
+              then writes a new revision.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 text-sm">
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">Expected parent</span>
-              <span className="font-mono">{headRevision}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">Signing Device</span>
-              <span>Current active Device</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">Changed lanes</span>
-              <span>{changedCount}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">Service plaintext</span>
-              <span className="text-primary">0 bytes</span>
-            </div>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => setReviewValuesRevealed((current) => !current)}
+              size="xs"
+              variant="ghost"
+            >
+              {reviewValuesRevealed ? (
+                <EyeOff aria-hidden="true" />
+              ) : (
+                <Eye aria-hidden="true" />
+              )}
+              {reviewValuesRevealed ? "Hide values" : "Show values"}
+            </Button>
           </div>
-          <div className="grid gap-2">
-            {variables
-              .filter((variable) => variable.hasDraftChange)
-              .map((variable) => (
-                <div
-                  className="flex items-center justify-between rounded-lg border p-3"
-                  key={variable.id}
-                >
-                  <div>
-                    <p className="font-mono text-sm">{variable.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {variable.tombstone
-                        ? "append-only tombstone"
-                        : `${ownershipLabel(variable.ownership)} · fresh lane encryption`}
-                    </p>
-                  </div>
-                  <span className="font-mono text-xs text-muted-foreground">
-                    ••••••••
-                  </span>
-                </div>
-              ))}
+          <div className="grid max-h-[min(50vh,28rem)] gap-2 overflow-y-auto">
+            {pendingDiffs.map((diff) => (
+              <div className="rounded-lg border p-3" key={diff.id}>
+                <ValueDiffLines diff={diff} revealed={reviewValuesRevealed} />
+              </div>
+            ))}
           </div>
-          <Alert className="bg-primary/5">
-            <ShieldCheck className="text-primary" />
-            <AlertTitle>Ready for signed v3 mutation</AlertTitle>
-            <AlertDescription>
-              The expected parent and current Project epoch will be checked by
-              the service. A stale head returns a reconciliation failure; it
-              does not overwrite history.
-            </AlertDescription>
-          </Alert>
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>
               Cancel
             </DialogClose>
             <Button disabled={!canPublish} onClick={publish}>
-              {publishing ? "Encrypting…" : "Encrypt, stage & publish"}
+              {publishing ? "Publishing…" : "Publish"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1371,53 +1470,77 @@ export const EnvironmentEditor = ({
 
       <Dialog
         onOpenChange={(open) => {
-          if (!open) setRollbackTarget(null);
+          if (!open) {
+            setRollbackTarget(null);
+            setRollbackHistoricalValues(new Map());
+          }
         }}
         open={rollbackTarget !== null}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Rollback selected lanes</DialogTitle>
+            <DialogTitle>Rollback</DialogTitle>
             <DialogDescription>
-              Select the lanes to restore from {rollbackTarget}. This publishes
-              a new append-only Revision after {headRevision}.
+              Restore these variables from an earlier revision. This writes a
+              new revision. It does not delete the current one.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-2">
-            {variables.map((variable) => (
-              <label
-                className="flex items-center gap-3 rounded-lg border p-3"
-                key={variable.id}
-              >
-                <input
-                  checked={rollbackLanes.has(variable.id)}
-                  onChange={(event) =>
-                    setRollbackLanes((current) => {
-                      const next = new Set(current);
-                      if (event.target.checked) next.add(variable.id);
-                      else next.delete(variable.id);
-                      return next;
-                    })
+          {pendingRollbackDiffs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nothing is different from this revision.
+            </p>
+          ) : (
+            <>
+              <div className="flex justify-end">
+                <Button
+                  onClick={() =>
+                    setRollbackValuesRevealed((current) => !current)
                   }
-                  type="checkbox"
-                />
-                <span>
-                  <span className="block font-mono text-sm">
-                    {variable.name}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {ownershipLabel(variable.ownership)} · Value hidden
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
+                  size="xs"
+                  variant="ghost"
+                >
+                  {rollbackValuesRevealed ? (
+                    <EyeOff aria-hidden="true" />
+                  ) : (
+                    <Eye aria-hidden="true" />
+                  )}
+                  {rollbackValuesRevealed ? "Hide values" : "Show values"}
+                </Button>
+              </div>
+              <div className="grid max-h-[min(50vh,28rem)] gap-2 overflow-y-auto">
+                {pendingRollbackDiffs.map((diff) => (
+                  <label
+                    className="flex items-start gap-3 rounded-lg border p-3"
+                    key={diff.id}
+                  >
+                    <input
+                      checked={rollbackLanes.has(diff.id)}
+                      className="mt-1"
+                      onChange={(event) =>
+                        setRollbackLanes((current) => {
+                          const next = new Set(current);
+                          if (event.target.checked) next.add(diff.id);
+                          else next.delete(diff.id);
+                          return next;
+                        })
+                      }
+                      type="checkbox"
+                    />
+                    <ValueDiffLines
+                      diff={diff}
+                      revealed={rollbackValuesRevealed}
+                    />
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>
               Cancel
             </DialogClose>
             <Button disabled={rollbackLanes.size === 0} onClick={applyRollback}>
-              Stage append-only rollback
+              Stage rollback
             </Button>
           </DialogFooter>
         </DialogContent>
