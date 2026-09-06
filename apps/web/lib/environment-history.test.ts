@@ -6,6 +6,7 @@ import {
   formatRelativeTime,
   groupHistoryByDay,
   historyEntriesFromSync,
+  mergeHistoryEntries,
   nextHistoryVisibleCount,
   previewHistoryEntries,
   summarizeManifestChange,
@@ -111,6 +112,28 @@ test("formatPublishSummary describes the first publish without a Revision id", (
 test("nextHistoryVisibleCount pages without passing the total", () => {
   expect(nextHistoryVisibleCount(25, 80)).toBe(50);
   expect(nextHistoryVisibleCount(75, 80)).toBe(80);
+});
+
+test("mergeHistoryEntries keeps current when a sync page is empty", () => {
+  const current = previewHistoryEntries("Ari Stone", 1_000);
+  expect(mergeHistoryEntries(current, [])).toBe(current);
+});
+
+test("mergeHistoryEntries adds unseen revisions without duplicating", () => {
+  const current = previewHistoryEntries("Ari Stone", 10_000);
+  const latest = current[0];
+  if (!latest) throw new Error("preview history is empty");
+  const incoming = [
+    Object.freeze({
+      ...latest,
+      revisionId: "rev_0185",
+      authoredAtMs: 10_000,
+    }),
+    latest,
+  ];
+  expect(
+    mergeHistoryEntries(current, incoming).map((entry) => entry.revisionId),
+  ).toEqual(["rev_0185", "rev_0184", "rev_0183", "rev_0182"]);
 });
 
 test("formatRelativeTime and day labels stay calendar-aware", () => {

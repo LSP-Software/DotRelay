@@ -47,6 +47,21 @@ export const nextHistoryVisibleCount = (
   total: number,
 ): number => Math.min(total, visibleCount + HISTORY_PAGE_SIZE);
 
+export const mergeHistoryEntries = (
+  current: readonly EnvironmentHistoryEntry[],
+  incoming: readonly EnvironmentHistoryEntry[],
+): readonly EnvironmentHistoryEntry[] => {
+  if (incoming.length === 0) return current;
+  const seen = new Set(current.map((entry) => entry.revisionId));
+  const additions = incoming.filter((entry) => !seen.has(entry.revisionId));
+  if (additions.length === 0) return current;
+  return Object.freeze(
+    [...current, ...additions].sort(
+      (left, right) => right.authoredAtMs - left.authoredAtMs,
+    ),
+  );
+};
+
 const NAMED_LIMIT = 3;
 const UNKNOWN_AUTHOR = "A Member";
 
@@ -203,10 +218,8 @@ const joinNames = (names: readonly string[]): string => {
 const variablePhrase = (count: number): string =>
   count === 1 ? "1 variable" : `${count} variables`;
 
-const namedClause = (
-  verb: string,
-  names: readonly string[],
-): string | null => (names.length === 0 ? null : `${verb} ${joinNames(names)}`);
+const namedClause = (verb: string, names: readonly string[]): string | null =>
+  names.length === 0 ? null : `${verb} ${joinNames(names)}`;
 
 const joinClauses = (clauses: readonly string[]): string =>
   clauses

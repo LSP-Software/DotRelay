@@ -7,6 +7,7 @@ import {
   deleteEnvironmentVariable,
   displayedSetupAction,
   draftValueDiffs,
+  mergeVerifiedHistory,
   nextSetupAction,
   prepareEncryptedPublication,
   rollbackValueDiffs,
@@ -268,6 +269,21 @@ test("inline value diffs keep the shared characters and mark only the edit", () 
     added: "new",
     suffix: "@host/db",
   });
+});
+
+test("verified history keeps existing revisions when a sync page is empty", () => {
+  expect(mergeVerifiedHistory(["rev_1", "rev_2"], [])).toEqual([
+    "rev_1",
+    "rev_2",
+  ]);
+});
+
+test("verified history appends new revisions without duplicating", () => {
+  expect(mergeVerifiedHistory(["rev_1", "rev_2"], ["rev_2", "rev_3"])).toEqual([
+    "rev_1",
+    "rev_2",
+    "rev_3",
+  ]);
 });
 
 test("rollback diffs omit Variables whose Values already match history", () => {

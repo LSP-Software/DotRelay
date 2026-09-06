@@ -19,7 +19,7 @@ The workspace presents information in this order:
 1. selected Server Profile and Team / Project / Environment context;
 2. Server Profile trust, browser session, and Device state as three separate signals;
 3. protected-content availability and a stable API problem code when unavailable;
-4. Revision continuity metadata and Project / GitHub Repository linkage disclosure;
+4. Revision continuity metadata;
 5. non-secret Membership and resource administration;
 6. Device authorization and Recovery Kit entry points.
 
@@ -58,17 +58,16 @@ lane enter the local draft together. Empty Values and absent optional Values rem
 Live Variable names are unique within the Manifest. Deletion creates a tombstone in the draft so
 the definition is not silently reused or removed from immutable history.
 
-Review & publish shows the expected parent Revision, signing Device, changed-lane count, and a
-zero-plaintext service boundary. A live protocol session then encrypts each changed definition
-and Value lane, signs the v3 mutation with the active Device key, begins an idempotent operation,
-stages immutable objects, and finalizes with compare-and-swap head checks. The client verifies
-sync object digests, manifest hashes, and revision links before accepting remote state. A stale
-head becomes a local three-way conflict with Keep local, Use remote, and Merge choices. Rollback
-is lane-scoped and always publishes a new Revision, so the current head remains in immutable
-history. The development protected preview uses the same cryptographic artifact builder but is
-explicitly local and never reports a service publication. Archived resources, stale epochs,
-missing grants, inactive Devices, unsupported crypto, and untrusted profiles keep the live
-workflow locked and disclose only actionable gate state.
+Save changes shows the draft Variable diffs and publishes a new Revision. A live protocol session
+then encrypts each changed definition and Value lane, signs the v3 mutation with the active Device
+key, begins an idempotent operation, stages immutable objects, and finalizes with compare-and-swap
+head checks. The client verifies sync object digests, manifest hashes, and revision links before
+accepting remote state. A stale head becomes a local three-way conflict with Keep local, Use
+remote, and Merge choices. Rollback is lane-scoped and always publishes a new Revision, so the
+current head remains in immutable history. The development protected preview uses the same
+cryptographic artifact builder but is explicitly local and never reports a service publication.
+Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
+untrusted profiles keep the live workflow locked and disclose only actionable gate state.
 
 ## Role and lifecycle disclosure
 

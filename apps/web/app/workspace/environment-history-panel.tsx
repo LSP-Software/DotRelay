@@ -54,10 +54,6 @@ export const EnvironmentHistoryPanel = ({
   const groups = groupHistoryByDay(visibleEntries);
   const hasMore = visibleCount < entries.length;
 
-  useEffect(() => {
-    setVisibleCount(HISTORY_PAGE_SIZE);
-  }, [entries]);
-
   useLayoutEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
@@ -100,10 +96,9 @@ export const EnvironmentHistoryPanel = ({
     );
     observer.observe(sentinel);
     const rootBox = root.getBoundingClientRect();
-    if (sentinel.getBoundingClientRect().top < rootBox.bottom + 160)
-      loadMore();
+    if (sentinel.getBoundingClientRect().top < rootBox.bottom + 160) loadMore();
     return () => observer.disconnect();
-  }, [entries.length, hasMore, visibleCount]);
+  }, [entries.length, hasMore]);
 
   return (
     <Card
@@ -130,7 +125,7 @@ export const EnvironmentHistoryPanel = ({
             Nothing published yet. The first publish starts this Environment.
           </p>
         ) : (
-          <div aria-label="Publish history">
+          <div>
             {groups.map((group) => (
               <section key={group.label}>
                 <h3
