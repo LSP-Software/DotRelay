@@ -670,7 +670,7 @@ export const EnvironmentEditor = ({
     staleHeadRevision === null &&
     !publishing;
   const historicalValues = new Map<string, string | null>([
-    ["00000000-0000-4000-8000-000000000001", ""],
+    ["00000000-0000-4000-8000-000000000001", "https://api.acme.example"],
     ["00000000-0000-4000-8000-000000000002", ""],
     ["00000000-0000-4000-8000-000000000003", null],
   ]);

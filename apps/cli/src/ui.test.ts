@@ -13,10 +13,9 @@ describe("CLI region rewrite", () => {
     expect(board).not.toContain("\x1b[H");
     const output = new PassThrough();
     let written = "";
-    output.write = (chunk: string | Uint8Array) => {
+    output.on("data", (chunk: string | Buffer) => {
       written += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      return true;
-    };
+    });
     rewriteRegion(output, 4, "next line\n");
     expect(written).not.toContain("\x1b[2J");
     expect(written).not.toContain("\x1b[H");
