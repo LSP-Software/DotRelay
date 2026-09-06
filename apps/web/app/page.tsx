@@ -61,9 +61,10 @@ const HomePage = () => {
             <span className="text-primary">without the headache.</span>
           </h1>
           <p className="mt-7 max-w-2xl text-balance text-lg leading-8 text-muted-foreground sm:text-xl">
-            DotRelay keeps your local development environment files organized and
-            shared with the people who need them. New machine, new teammate, same
-            setup. Secrets stay encrypted on your devices, so we never see them.
+            DotRelay keeps your local development environment files organized
+            and shared with the people who need them. New machine, new teammate,
+            same setup. Secrets stay encrypted on your devices, so we never see
+            them.
           </p>
           <div className="mt-10 flex flex-wrap gap-3">
             <Link

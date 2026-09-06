@@ -751,7 +751,10 @@ export const WorkspaceShell = ({
 
             <div className="mt-4 rounded-lg border bg-background/45 px-4 py-3">
               <p className="flex items-center gap-2 text-sm font-medium">
-                <SquareTerminal aria-hidden="true" className="size-4 text-primary" />
+                <SquareTerminal
+                  aria-hidden="true"
+                  className="size-4 text-primary"
+                />
                 Set up the CLI
               </p>
               <p className="mt-1 text-sm text-muted-foreground">

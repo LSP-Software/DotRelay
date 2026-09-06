@@ -7,8 +7,8 @@ import {
   linkProject,
   listEnvironments,
   resolveTeamForProject,
-  selectEnvironment,
   type StrictJsonClient,
+  selectEnvironment,
 } from "./admin";
 import {
   type ParsedArguments,
@@ -102,26 +102,24 @@ const everydayHelp = [
 ] as const;
 
 export const renderHelp = (): string =>
-  renderHelpDocument(
-    [
-      { title: "Everyday", entries: everydayHelp },
-      {
-        title: "Automation",
-        entries: [
-          { command: "--json", detail: "Machine-readable output" },
-          { command: "--no-input", detail: "Never prompt or guess" },
-          {
-            command: "--debug",
-            detail: "Sanitized detail on unexpected errors",
-          },
-        ],
-      },
-      {
-        title: "More",
-        entries: [{ command: "help", detail: "Power commands and flags" }],
-      },
-    ],
-  );
+  renderHelpDocument([
+    { title: "Everyday", entries: everydayHelp },
+    {
+      title: "Automation",
+      entries: [
+        { command: "--json", detail: "Machine-readable output" },
+        { command: "--no-input", detail: "Never prompt or guess" },
+        {
+          command: "--debug",
+          detail: "Sanitized detail on unexpected errors",
+        },
+      ],
+    },
+    {
+      title: "More",
+      entries: [{ command: "help", detail: "Power commands and flags" }],
+    },
+  ]);
 
 export const renderPowerHelp = (): string =>
   renderHelpDocument(
@@ -322,7 +320,9 @@ const formatHumanValue = (value: unknown): string => {
   if (value === null || value === undefined) return "—";
   if (Array.isArray(value))
     return value
-      .map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry)))
+      .map((entry) =>
+        typeof entry === "string" ? entry : JSON.stringify(entry),
+      )
       .join(", ");
   return sanitizeCliText(JSON.stringify(value) ?? "");
 };
@@ -518,7 +518,10 @@ const confirmProfileTrust = async (
   const { readTerminalLine } = await import("./terminal");
   const answer = runtime.prompt
     ? await runtime.prompt(`Trust ${candidate.origin}? [Y/n]`)
-    : await readTerminalLine(`Trust ${candidate.origin}? [Y/n]`, runtime.terminal);
+    : await readTerminalLine(
+        `Trust ${candidate.origin}? [Y/n]`,
+        runtime.terminal,
+      );
   const trimmed = answer.trim().toLowerCase();
   return trimmed === "" || trimmed === "y" || trimmed === "yes";
 };
@@ -631,8 +634,7 @@ const execute = async (
       existing ??
       (await addServerProfile(store, profileNameFromOrigin(origin), origin, {
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
-        confirm: (candidate) =>
-          confirmProfileTrust(parsed, runtime, candidate),
+        confirm: (candidate) => confirmProfileTrust(parsed, runtime, candidate),
       }));
     const selected = (await store.read()).selected;
     if (selected !== profile.name) await useServerProfile(store, profile.name);

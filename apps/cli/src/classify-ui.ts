@@ -1,13 +1,13 @@
 import { CliInvocationError, sanitizeCliText } from "./errors";
-import { type TerminalIo, readTerminalLine } from "./terminal";
+import { readTerminalLine, type TerminalIo } from "./terminal";
 import {
   BODY,
   GUTTER,
   MARK,
   padVisible,
   paint,
-  readRawKey,
   type ReadableRaw,
+  readRawKey,
   rewriteRegion,
   supportsRawMode,
 } from "./ui";
@@ -106,7 +106,8 @@ export const applyClassificationAction = (
   state: ClassificationBoardState,
   action: "up" | "down" | "toggle" | "done" | number,
 ): ClassificationBoardState & Readonly<{ readonly done?: true }> => {
-  if (action === "done") return Object.freeze({ ...state, done: true as const });
+  if (action === "done")
+    return Object.freeze({ ...state, done: true as const });
   if (action === "up")
     return Object.freeze({
       ...state,
@@ -156,7 +157,8 @@ const keyAction = (
   if (key === "\u0003")
     throw new CliInvocationError("classification cancelled");
   if (key === "\r" || key === "\n") return "done";
-  if (key === " " || key === "\t" || key === "h" || key === "l") return "toggle";
+  if (key === " " || key === "\t" || key === "h" || key === "l")
+    return "toggle";
   if (key === "\u001b[A" || key === "k") return "up";
   if (key === "\u001b[B" || key === "j") return "down";
   if (key === "\u001b[D" || key === "\u001b[C") return "toggle";
@@ -219,9 +221,7 @@ const runLineClassificationBoard = async (
   let state = createClassificationBoard(names, initial);
   const output = options.terminal?.output ?? process.stderr;
   for (;;) {
-    output.write(
-      `${renderClassificationBoard(state, { interactive: false })}`,
-    );
+    output.write(`${renderClassificationBoard(state, { interactive: false })}`);
     const line = options.prompt
       ? await options.prompt("Toggle")
       : await readTerminalLine("Toggle", options.terminal);

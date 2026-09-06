@@ -10,8 +10,8 @@ import {
   bytesToUuid,
   encodeSyncPage,
   parseProtocolObject,
-  sha384,
   type SyncPageWire,
+  sha384,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
@@ -120,7 +120,10 @@ const setup = async (): Promise<{
       });
     const staging = /\/staging\/([^/]+)$/u.exec(path);
     if (staging?.[1] && request.method === "PUT") {
-      stagedObjects.set(staging[1], new Uint8Array(await request.arrayBuffer()));
+      stagedObjects.set(
+        staging[1],
+        new Uint8Array(await request.arrayBuffer()),
+      );
       return Response.json({ staged: true }, { status: 201 });
     }
     if (path.endsWith("/finalize") && request.method === "POST") {
@@ -128,16 +131,25 @@ const setup = async (): Promise<{
       const revisionBody = body.revision as Record<string, unknown>;
       const revisionObjectId = revisionBody.protocolObjectId;
       if (typeof revisionObjectId !== "string")
-        return Response.json({ error: "revision object id missing" }, { status: 400 });
+        return Response.json(
+          { error: "revision object id missing" },
+          { status: 400 },
+        );
       const revisionBytes = stagedObjects.get(revisionObjectId);
       if (!revisionBytes)
-        return Response.json({ error: "revision object was not staged" }, { status: 400 });
+        return Response.json(
+          { error: "revision object was not staged" },
+          { status: 400 },
+        );
       const parsedRevision = parseProtocolObject(revisionBytes);
       const revisionId = parsedRevision.get(16);
       const mutation = parsedRevision.get(35);
       const authoredAtMs = parsedRevision.get(34);
       if (!(revisionId instanceof Uint8Array) || typeof mutation !== "number")
-        return Response.json({ error: "staged revision is malformed" }, { status: 400 });
+        return Response.json(
+          { error: "staged revision is malformed" },
+          { status: 400 },
+        );
       const previous = revisions.at(-1);
       const objects = await Promise.all(
         [...stagedObjects.entries()].map(async ([objectId, bytes]) =>

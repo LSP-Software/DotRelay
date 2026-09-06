@@ -66,7 +66,7 @@ import {
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
-import { type TerminalIo, readTerminalLine } from "./terminal";
+import { readTerminalLine, type TerminalIo } from "./terminal";
 import { writeNotice } from "./ui";
 
 export type WorkflowOptions = Readonly<{
@@ -2198,7 +2198,10 @@ export const runProtectedWorkflow = async (
       }
       if (
         exists &&
-        !(await confirm(options, `Replace ${outputPath} with decrypted Values?`))
+        !(await confirm(
+          options,
+          `Replace ${outputPath} with decrypted Values?`,
+        ))
       )
         throw new CliInvocationError("pull confirmation was declined");
     }
@@ -2210,7 +2213,10 @@ export const runProtectedWorkflow = async (
     if (outputPath) await atomicWriteProtectedFile(outputPath, contents);
     return parsed.stdout
       ? { stdout: contents }
-      : { output: outputPath ?? "", message: `Wrote ${entries.length} values to ${outputPath}` };
+      : {
+          output: outputPath ?? "",
+          message: `Wrote ${entries.length} values to ${outputPath}`,
+        };
   }
   if (parsed.command === "init" || parsed.command === "push") {
     const inputPath = parsed.from ?? ".env";
@@ -2227,8 +2233,7 @@ export const runProtectedWorkflow = async (
     }
     const synced = await syncWorkflow(options, parsed);
     const empty = synced.page.currentHeadId === null;
-    const existing =
-      parsed.command === "init" && empty ? [] : synced.variables;
+    const existing = parsed.command === "init" && empty ? [] : synced.variables;
     const entries = await classify(
       options,
       parsed,

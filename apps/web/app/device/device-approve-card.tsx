@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { GitHubSignInButton } from "@/app/sign-in/github-sign-in-button";
+import { Button } from "@/components/ui/button";
 import { resolveApiOrigin, resolveWebOrigin } from "@/lib/workspace-boundary";
 
 type DeviceApproveCardProps = Readonly<{

@@ -300,9 +300,10 @@ export const findDefaultTeam = async (
   client: Pick<StrictJsonClient, "get">,
 ): Promise<TeamSummary> => {
   const teams = await listTeams(client);
-  if (teams.length === 0)
+  const [firstTeam] = teams;
+  if (!firstTeam)
     throw new CliInvocationError("no Team is available for this Project");
-  return teams[0]!;
+  return firstTeam;
 };
 
 export type ResolveTeamOptions = Readonly<{
@@ -314,9 +315,7 @@ export type ResolveTeamOptions = Readonly<{
   readonly terminal?: TerminalIo;
 }>;
 
-const askForTeamName = async (
-  options: ResolveTeamOptions,
-): Promise<string> => {
+const askForTeamName = async (options: ResolveTeamOptions): Promise<string> => {
   const write = options.write ?? (() => undefined);
   write(renderCard("No Team yet", { body: ["Create one to continue."] }));
   const answer = (
@@ -336,7 +335,12 @@ export const resolveTeamForProject = async (
       throw new CliInvocationError("the specified Team is not available");
     return selected;
   }
-  if (teams.length === 1) return teams[0]!;
+  const [onlyTeam] = teams;
+  if (teams.length === 1) {
+    if (!onlyTeam)
+      throw new CliInvocationError("no Team is available for this Project");
+    return onlyTeam;
+  }
   if (teams.length === 0) {
     if (options.noInput)
       throw new CliInvocationError(

@@ -1,5 +1,5 @@
 import { CliInvocationError } from "./errors";
-import { type TerminalIo, readTerminalLine } from "./terminal";
+import { readTerminalLine, type TerminalIo } from "./terminal";
 
 export type ColorRole =
   | "danger"
@@ -236,8 +236,7 @@ export const renderStep = (
   hint?: string,
 ): string => renderCard(title, { body, hint });
 
-type WritableTty = NodeJS.WritableStream &
-  Partial<{ readonly isTTY: boolean }>;
+type WritableTty = NodeJS.WritableStream & Partial<{ readonly isTTY: boolean }>;
 
 export const rewriteRegion = (
   output: NodeJS.WritableStream,
@@ -340,9 +339,9 @@ export const selectOption = async (
     readonly noInput?: boolean;
   }> = {},
 ): Promise<string> => {
-  if (choices.length === 0)
-    throw new CliInvocationError("there is nothing to select");
-  if (choices.length === 1) return choices[0]!.id;
+  const firstChoice = choices[0];
+  if (!firstChoice) throw new CliInvocationError("there is nothing to select");
+  if (choices.length === 1) return firstChoice.id;
   if (options.noInput)
     throw new CliInvocationError(`${title} requires an explicit choice`);
   const terminal = options.terminal ?? {
@@ -367,7 +366,12 @@ export const selectOption = async (
         const key = await readRawKey(input);
         if (key === "\u0003")
           throw new CliInvocationError("selection cancelled");
-        if (key === "\r" || key === "\n") return choices[cursor]!.id;
+        if (key === "\r" || key === "\n") {
+          const selected = choices[cursor];
+          if (!selected)
+            throw new CliInvocationError("there is nothing to select");
+          return selected.id;
+        }
         if (key === "\u001b[A" || key === "k")
           cursor = (cursor - 1 + choices.length) % choices.length;
         else if (key === "\u001b[B" || key === "j")
@@ -391,11 +395,17 @@ export const selectOption = async (
     ? await options.prompt(title)
     : await readTerminalLine(title, terminal);
   const trimmed = line.trim();
-  if (trimmed.length === 0) return choices[0]!.id;
+  if (trimmed.length === 0) return firstChoice.id;
   const index = Number.parseInt(trimmed, 10);
-  if (!Number.isInteger(index) || index < 1 || index > choices.length)
+  const numbered = choices[index - 1];
+  if (
+    !Number.isInteger(index) ||
+    index < 1 ||
+    index > choices.length ||
+    !numbered
+  )
     throw new CliInvocationError("choose an option from the list");
-  return choices[index - 1]!.id;
+  return numbered.id;
 };
 
 export const confirmAction = async (

@@ -26,11 +26,14 @@ export {
   AdministrationDisclosureRepository,
   AdministrationRepository,
   AuditFactRepository,
+  DEFAULT_ENVIRONMENT_LABEL,
   DeviceRepository,
   EnvironmentRepository,
+  GenesisExistsError,
   GrantRepository,
   MembershipAdministrationRepository,
   MembershipRepository,
+  normalizeEnvironmentLabel,
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
@@ -48,9 +51,6 @@ export {
   StagedObjectRepository,
   StaleEpochError,
   StaleHeadError,
-  GenesisExistsError,
-  DEFAULT_ENVIRONMENT_LABEL,
-  normalizeEnvironmentLabel,
 } from "./repositories";
 export type { SyncInput, SyncObject, SyncPage, SyncRevision } from "./sync";
 export { mutationToWire, SyncIntegrityError, SyncRepository } from "./sync";
