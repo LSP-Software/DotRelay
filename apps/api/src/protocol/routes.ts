@@ -14,6 +14,7 @@ import {
   parseSyncCursorValue,
   parseSyncRequest,
   parseUuid,
+  takeSyncRevisionsWithinBudget,
   validateProtocolObject,
 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
@@ -625,6 +626,31 @@ export const registerProtocolRoutes = (
             : {}),
           limit,
         });
+        const wireRevisions = page.revisions.map((revision) => ({
+          id: revision.id,
+          digest: revision.digest,
+          parentId: revision.parentId,
+          parentHash: revision.parentHash,
+          mutation: mutationToWire(revision.mutation),
+          projectEpoch: revision.projectEpoch,
+          authoredAtMs: revision.authoredAtMs,
+          rollbackTargetId: revision.rollbackTargetId,
+          objects: revision.objects,
+        }));
+        const packedRevisions = takeSyncRevisionsWithinBudget(wireRevisions, {
+          maxSyncObjects: profile.limits.synchronizationObjects,
+          maxSyncBytes: profile.limits.synchronizationBytes,
+        });
+        const lastPacked = packedRevisions[packedRevisions.length - 1];
+        const nextCursor =
+          packedRevisions.length < wireRevisions.length && lastPacked
+            ? formatSyncCursor(lastPacked.id, lastPacked.digest)
+            : page.nextCursor === null
+              ? null
+              : formatSyncCursor(
+                  page.nextCursor.revisionId,
+                  page.nextCursor.revisionHash,
+                );
         const wirePage = encodeSyncPage({
           environmentId: page.environmentId,
           trustedRevisionId: page.trustedRevisionId,
@@ -632,24 +658,8 @@ export const registerProtocolRoutes = (
           currentHeadId: page.currentHeadId,
           currentHeadHash: page.currentHeadHash,
           projectEpoch: page.projectEpoch,
-          revisions: page.revisions.map((revision) => ({
-            id: revision.id,
-            digest: revision.digest,
-            parentId: revision.parentId,
-            parentHash: revision.parentHash,
-            mutation: mutationToWire(revision.mutation),
-            projectEpoch: revision.projectEpoch,
-            authoredAtMs: revision.authoredAtMs,
-            rollbackTargetId: revision.rollbackTargetId,
-            objects: revision.objects,
-          })),
-          nextCursor:
-            page.nextCursor === null
-              ? null
-              : formatSyncCursor(
-                  page.nextCursor.revisionId,
-                  page.nextCursor.revisionHash,
-                ),
+          revisions: packedRevisions,
+          nextCursor,
         });
         return new Response(wirePage, {
           status: 200,

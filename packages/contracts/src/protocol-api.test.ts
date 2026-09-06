@@ -12,7 +12,9 @@ import {
   parseSyncCursorValue,
   parseSyncRequest,
   parseUuid,
+  type SyncRevisionWire,
   sha384ToHex,
+  takeSyncRevisionsWithinBudget,
   uuidToBytes,
 } from "./protocol-api";
 
@@ -143,6 +145,66 @@ describe("protocol API contracts", () => {
     expect(decoded.revisions[0]?.objects[0]?.canonicalBytes).toEqual(
       objectBytes,
     );
+  });
+
+  test("pages Revisions so a long Environment still encodes", () => {
+    const digest = new Uint8Array(48).fill(0x09);
+    const revision = (index: number): SyncRevisionWire => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      digest,
+      parentId: null,
+      parentHash: null,
+      mutation: 2,
+      projectEpoch: 1n,
+      authoredAtMs: BigInt(index),
+      rollbackTargetId: null,
+      objects: [
+        {
+          objectId: `00000000-0000-4000-8001-${String(index).padStart(12, "0")}`,
+          canonicalBytes: new Uint8Array([index % 256]),
+          digest,
+        },
+        {
+          objectId: `00000000-0000-4000-8002-${String(index).padStart(12, "0")}`,
+          canonicalBytes: new Uint8Array([1, 2, 3]),
+          digest,
+        },
+      ],
+    });
+    const revisions = Array.from({ length: 200 }, (_, index) =>
+      revision(index + 1),
+    );
+    expect(() =>
+      encodeSyncPage({
+        environmentId: "00000000-0000-4000-8000-000000000060",
+        trustedRevisionId: "00000000-0000-4000-8000-000000000061",
+        trustedRevisionHash: digest,
+        currentHeadId: null,
+        currentHeadHash: null,
+        projectEpoch: 1n,
+        revisions,
+        nextCursor: null,
+      }),
+    ).toThrow(ContractError);
+
+    const packed = takeSyncRevisionsWithinBudget(revisions);
+    expect(packed.length).toBeGreaterThan(0);
+    expect(packed.length).toBeLessThan(revisions.length);
+    expect(
+      encodeSyncPage({
+        environmentId: "00000000-0000-4000-8000-000000000060",
+        trustedRevisionId: "00000000-0000-4000-8000-000000000061",
+        trustedRevisionHash: digest,
+        currentHeadId: null,
+        currentHeadHash: null,
+        projectEpoch: 1n,
+        revisions: packed,
+        nextCursor: formatSyncCursor(
+          packed[packed.length - 1]?.id ?? "",
+          digest,
+        ),
+      }).length,
+    ).toBeGreaterThan(0);
   });
 
   test("parses epoch rotation requests with embedded publications", () => {

@@ -582,20 +582,49 @@ const encodeRevision = (revision: SyncRevisionWire): CborValue => {
   return fields;
 };
 
-export const encodeSyncPage = (page: SyncPageWire): Uint8Array => {
+export type SyncPageBudgetLimits = Readonly<{
+  readonly maxSyncObjects: number;
+  readonly maxSyncBytes: number;
+}>;
+
+const syncPageBudget = (
+  revisions: readonly SyncRevisionWire[],
+): Readonly<{ objectCount: number; byteCount: number }> => {
   let objectCount = 0;
   let byteCount = 0;
-  for (const revision of page.revisions) {
+  for (const revision of revisions) {
     objectCount += revision.objects.length + 1;
-    for (const object of revision.objects) {
+    for (const object of revision.objects)
       byteCount += object.canonicalBytes.length;
-    }
   }
-  if (
-    objectCount > CBOR_LIMITS.maxSyncObjects ||
-    byteCount > CBOR_LIMITS.maxSyncBytes
-  )
-    contractError("payload_too_large");
+  return { objectCount, byteCount };
+};
+
+const syncPageFitsBudget = (
+  revisions: readonly SyncRevisionWire[],
+  limits: SyncPageBudgetLimits = CBOR_LIMITS,
+): boolean => {
+  const { objectCount, byteCount } = syncPageBudget(revisions);
+  return (
+    objectCount <= limits.maxSyncObjects && byteCount <= limits.maxSyncBytes
+  );
+};
+
+export const takeSyncRevisionsWithinBudget = (
+  revisions: readonly SyncRevisionWire[],
+  limits: SyncPageBudgetLimits = CBOR_LIMITS,
+): readonly SyncRevisionWire[] => {
+  const taken: SyncRevisionWire[] = [];
+  for (const revision of revisions) {
+    const candidate = [...taken, revision];
+    if (taken.length > 0 && !syncPageFitsBudget(candidate, limits)) break;
+    taken.push(revision);
+  }
+  return Object.freeze(taken);
+};
+
+export const encodeSyncPage = (page: SyncPageWire): Uint8Array => {
+  if (!syncPageFitsBudget(page.revisions)) contractError("payload_too_large");
   const envelope = new Map<number, CborValue>([
     [SYNC_FIELD.environmentId, uuidToBytes(page.environmentId)],
     [SYNC_FIELD.trustedRevisionId, uuidToBytes(page.trustedRevisionId)],

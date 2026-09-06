@@ -81,10 +81,12 @@ export {
   parseSyncCursorValue,
   parseSyncRequest,
   parseUuid,
+  type SyncPageBudgetLimits,
   type SyncPageWire,
   type SyncRequest,
   type SyncRevisionWire,
   sha384ToHex,
+  takeSyncRevisionsWithinBudget,
   uuidToBytes,
 } from "./protocol-api";
 export {
