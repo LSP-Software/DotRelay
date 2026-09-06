@@ -48,6 +48,7 @@ import {
 } from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
+import { classifyVariablesInteractively } from "./classify-ui";
 import type { NativeCredentialStore } from "./credentials";
 import {
   createFileDeviceRecordStore,
@@ -62,11 +63,10 @@ import {
   parseDotenv,
   serializeDotenv,
 } from "./dotenv";
-import { classifyVariablesInteractively } from "./classify-ui";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
-import { readTerminalLine, type TerminalIo } from "./terminal";
+import { type TerminalIo, readTerminalLine } from "./terminal";
 import { writeNotice } from "./ui";
 
 export type WorkflowOptions = Readonly<{

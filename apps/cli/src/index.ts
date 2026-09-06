@@ -7,8 +7,8 @@ import {
   linkProject,
   listEnvironments,
   resolveTeamForProject,
-  type StrictJsonClient,
   selectEnvironment,
+  type StrictJsonClient,
 } from "./admin";
 import {
   type ParsedArguments,
@@ -52,6 +52,14 @@ import {
 } from "./profile";
 import type { TerminalIo } from "./terminal";
 import {
+  renderCard,
+  renderError,
+  renderHelpDocument,
+  renderTable,
+  rewriteRegion,
+  writeNotice,
+} from "./ui";
+import {
   approveDeviceEnrollment,
   beginDeviceEnrollment,
   completeDeviceEnrollment,
@@ -61,14 +69,6 @@ import {
   restoreRecoveryKit,
   runProtectedWorkflow,
 } from "./workflow";
-import {
-  renderCard,
-  renderError,
-  renderHelpDocument,
-  renderTable,
-  rewriteRegion,
-  writeNotice,
-} from "./ui";
 
 export type { TerminalIo };
 
@@ -928,9 +928,7 @@ const execute = async (
       parsed.environment !== undefined ||
       (parsed.command === "init" && parsed.positionals.length === 1);
     if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError(
-        "--no-input requires explicit --profile",
-      );
+      throw new CliInvocationError("--no-input requires explicit --profile");
     if (
       parsed.noInput &&
       parsed.command !== "init" &&

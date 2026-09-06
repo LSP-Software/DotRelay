@@ -2,13 +2,13 @@ import { CliInvocationError } from "./errors";
 import { type TerminalIo, readTerminalLine } from "./terminal";
 
 export type ColorRole =
-  | "graphite"
-  | "paper"
-  | "wax"
+  | "danger"
   | "dim"
+  | "graphite"
   | "ok"
+  | "paper"
   | "warn"
-  | "danger";
+  | "wax";
 
 export const PRODUCT_WORDMARK = "dotrelay — DotRelay standalone CLI";
 
@@ -25,7 +25,8 @@ export const BODY = "     ";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
-const ANSI = /\x1b\[[0-9;]*m/g;
+const ESC = "\u001b";
+const ANSI = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
 const palette: Record<
   ColorRole,
@@ -166,9 +167,7 @@ export const renderCard = (
 ): string => {
   const tone = options.tone ?? "wax";
   const marker =
-    options.mark === "brand"
-      ? paint(MARK.brand, "wax")
-      : markerFor(tone);
+    options.mark === "brand" ? paint(MARK.brand, "wax") : markerFor(tone);
   const lines = [
     `${GUTTER}${marker}  ${paint(title, "paper", { bold: true })}`,
   ];
@@ -435,4 +434,4 @@ export const writeNotice = (
   output.write(line);
 };
 
-export { readRawKey, type ReadableRaw };
+export { type ReadableRaw, readRawKey };

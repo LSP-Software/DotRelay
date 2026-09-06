@@ -4,8 +4,8 @@ import {
   BODY,
   GUTTER,
   MARK,
-  paint,
   padVisible,
+  paint,
   readRawKey,
   type ReadableRaw,
   rewriteRegion,
@@ -153,7 +153,8 @@ const parseLineAction = (line: string): "done" | number => {
 const keyAction = (
   key: string,
 ): "up" | "down" | "toggle" | "done" | "ignore" => {
-  if (key === "\u0003") throw new CliInvocationError("classification cancelled");
+  if (key === "\u0003")
+    throw new CliInvocationError("classification cancelled");
   if (key === "\r" || key === "\n") return "done";
   if (key === " " || key === "\t" || key === "h" || key === "l") return "toggle";
   if (key === "\u001b[A" || key === "k") return "up";
