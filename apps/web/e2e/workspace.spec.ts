@@ -314,6 +314,7 @@ test("Members cannot create Environments", async ({ page }) => {
   await page
     .getByRole("combobox", { name: "Preview Membership role" })
     .selectOption("MEMBER");
+  await page.locator("aside").getByRole("button", { name: "Projects" }).click();
   await openFirstProject(page);
   await expect(
     page.getByRole("button", { name: "New Environment" }),
