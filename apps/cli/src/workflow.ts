@@ -62,7 +62,6 @@ import {
 import {
   type ClassifiedDotenvEntry,
   classifyDotenv,
-  type DotenvDiffChange,
   type DotenvEntry,
   diffDotenvEntries,
   parseDotenv,
@@ -72,7 +71,14 @@ import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
 import { readTerminalLine, type TerminalIo } from "./terminal";
-import { paint, writeNotice } from "./ui";
+import { writeNotice } from "./ui";
+import {
+  type PublicationChange,
+  publicationConfirmQuestion,
+  pullConfirmQuestion,
+  renderEnvDiff,
+  valueDiffsForPull,
+} from "./value-diff";
 
 export type WorkflowOptions = Readonly<{
   readonly profile: CliServerProfile;
@@ -2090,12 +2096,6 @@ const toPublicationVariable = (
 
 type PublicationDraft = ReturnType<typeof toPublicationVariable>;
 
-type PublicationChange = Readonly<{
-  readonly kind: "added" | "updated" | "removed";
-  readonly name: string;
-  readonly value: string | null;
-}>;
-
 const publicationChangeFor = (
   variable: PublicationDraft,
   existing: readonly DecodedVariable[],
@@ -2106,84 +2106,22 @@ const publicationChangeFor = (
     return Object.freeze({
       kind: "removed",
       name: variable.name,
-      value: null,
+      from: prior?.value ?? null,
+      to: undefined,
+    });
+  if (!prior || prior.tombstone)
+    return Object.freeze({
+      kind: "added",
+      name: variable.name,
+      from: undefined,
+      to: variable.value,
     });
   return Object.freeze({
-    kind: !prior || prior.tombstone ? "added" : "updated",
+    kind: "updated",
     name: variable.name,
-    value: variable.value,
+    from: prior.value,
+    to: variable.value,
   });
-};
-
-const countLabel = (count: number, action: string): string =>
-  `${count} ${count === 1 ? "variable" : "variables"} being ${action}`;
-
-const displayPublicationValue = (value: string | null): string => {
-  const flattened = sanitizeCliText(value ?? "").replace(/[\r\n\t]+/g, " ");
-  if (flattened.length <= 120) return flattened;
-  return `${flattened.slice(0, 117)}...`;
-};
-
-const formatPublicationChange = (change: PublicationChange): string => {
-  const name = sanitizeCliText(change.name);
-  if (change.kind === "removed") return name;
-  return `${name} -> ${displayPublicationValue(change.value)}`;
-};
-
-const formatEnvDiffChange = (
-  change: DotenvDiffChange,
-  reveal: boolean,
-): string => {
-  const marker =
-    change.kind === "added" ? "+" : change.kind === "removed" ? "-" : "~";
-  const name = sanitizeCliText(change.name);
-  if (!reveal) return `${marker}  ${name}`;
-  if (change.kind === "added")
-    return `${marker}  ${name} -> ${displayPublicationValue(change.localValue)}`;
-  if (change.kind === "removed")
-    return `${marker}  ${name} -> ${displayPublicationValue(change.remoteValue)}`;
-  return `${marker}  ${name}  ${displayPublicationValue(change.remoteValue)} -> ${displayPublicationValue(change.localValue)}`;
-};
-
-const renderEnvDiff = (
-  changes: readonly DotenvDiffChange[],
-  reveal: boolean,
-): string => {
-  if (changes.length === 0)
-    return [
-      `  ${paint("·", "wax")}  ${paint("Local .env matches the Environment", "paper")}`,
-      "",
-    ].join("\n");
-  const added = changes.filter((change) => change.kind === "added").length;
-  const updated = changes.filter((change) => change.kind === "updated").length;
-  const removed = changes.filter((change) => change.kind === "removed").length;
-  const summary = [
-    ...(added > 0 ? [`${added} added`] : []),
-    ...(updated > 0 ? [`${updated} updated`] : []),
-    ...(removed > 0 ? [`${removed} removed`] : []),
-  ].join(", ");
-  return [
-    `  ${paint("·", "wax")}  ${paint(summary, "paper")}`,
-    "",
-    ...changes.map((change) => `     ${formatEnvDiffChange(change, reveal)}`),
-    "",
-  ].join("\n");
-};
-
-const publicationConfirmQuestion = (
-  changes: readonly PublicationChange[],
-): string => {
-  const added = changes.filter((change) => change.kind === "added").length;
-  const updated = changes.filter((change) => change.kind === "updated").length;
-  const removed = changes.filter((change) => change.kind === "removed").length;
-  const summary = [
-    ...(added > 0 ? [countLabel(added, "added")] : []),
-    ...(updated > 0 ? [countLabel(updated, "updated")] : []),
-    ...(removed > 0 ? [countLabel(removed, "removed")] : []),
-  ].join(", ");
-  const details = changes.map(formatPublicationChange);
-  if (changes.length === 1) return `${summary}, ${details[0]}?`;
-  return `${summary}\n${details.map((line) => `  ${line}`).join("\n")}\nPublish?`;
 };
 
 const publish = async (
@@ -2384,6 +2322,23 @@ const shareEnvironmentWithPeerDevices = async (
   }
 };
 
+const localPullChanges = async (
+  outputPath: string,
+  incoming: readonly DotenvEntry[],
+): Promise<readonly PublicationChange[] | null> => {
+  let source: string;
+  try {
+    source = await readFile(outputPath, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    return valueDiffsForPull(diffDotenvEntries(parseDotenv(source), incoming));
+  } catch {
+    return null;
+  }
+};
+
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -2452,14 +2407,7 @@ export const runProtectedWorkflow = async (
         (change) => change.kind === "added" || change.kind === "updated",
       ).length;
     if (parsed.json) return { added, updated, removed, unchangedCount };
-    if (
-      parsed.reveal &&
-      changes.length > 0 &&
-      !options.noInput &&
-      !(await confirm(options, "Reveal decrypted Values in the diff?"))
-    )
-      throw new CliInvocationError("Value reveal confirmation was declined");
-    return { stdout: renderEnvDiff(changes, parsed.reveal) };
+    return { stdout: renderEnvDiff(changes) };
   }
   if (parsed.command === "pull") {
     const outputPath = parsed.stdout ? undefined : (parsed.output ?? ".env");
@@ -2494,7 +2442,7 @@ export const runProtectedWorkflow = async (
       ))
     )
       throw new CliInvocationError("Value reveal confirmation was declined");
-    if (outputPath && !options.noInput) {
+    if (outputPath) {
       let exists = false;
       try {
         await access(outputPath, constants.F_OK);
@@ -2502,14 +2450,25 @@ export const runProtectedWorkflow = async (
       } catch {
         exists = false;
       }
-      if (
-        exists &&
-        !(await confirm(
-          options,
-          `Replace ${outputPath} with decrypted Values?`,
-        ))
-      )
-        throw new CliInvocationError("pull confirmation was declined");
+      if (exists) {
+        const changes = await localPullChanges(outputPath, entries);
+        if (changes !== null && changes.length === 0)
+          return {
+            output: outputPath,
+            unchanged: true,
+            message: "No changes found",
+          };
+        if (
+          !options.noInput &&
+          !(await confirm(
+            options,
+            changes === null
+              ? `Replace ${outputPath} with decrypted Values?`
+              : pullConfirmQuestion(outputPath, changes),
+          ))
+        )
+          throw new CliInvocationError("pull confirmation was declined");
+      }
     }
     assertSafeStdout({
       requested: parsed.stdout,

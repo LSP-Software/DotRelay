@@ -63,26 +63,30 @@ or `--classify NAME=user-defined` skips the board when every new Variable is cov
 under `--no-input` for unclassified names. Existing Variable ids are retained, omitted Variables
 become signed tombstones, and empty Values remain Values rather than being dropped.
 
-Interactive `init` and `push` confirm only Variables that will change. Added and updated Values
-are shown as `NAME -> value`; removals are shown by name. Unchanged Variables are omitted.
-`--no-input` skips the prompt. JSON, progress, and diagnostics still never contain Values.
+Interactive `init` and `push` confirm only Variables that will change. Each change is a unified
+diff. The Variable name comes first, then a `-` line for the current Value and a `+` line for the
+next Value. Added Variables omit the `-` line. Removed Variables omit the `+` line. The shared
+prefix and suffix stay on both lines, and only the edited span is marked. Unchanged Variables are
+omitted. `--no-input` skips the prompt. JSON, progress, and diagnostics still never contain Values.
 
 Publication progress is Encrypting, Uploading, then Published. The CLI reviews the publication
 summary before beginning staging. It then uploads the signed command and encrypted protocol
 objects, finalizes the operation with the expected head and epoch, and cancels a failed operation
 when the Server Profile permits cancellation.
 
-`pull` writes decrypted Values to `.env` by default and confirms before replacing an existing file.
-`pull --output <path>` and `pull --stdout` first verify the complete v3 history from genesis. A
-missing Value fails the export before any output is written. Terminal stdout requires explicit
-`--reveal` and confirmation; ordinary diagnostics never contain Values.
+`pull` writes decrypted Values to `.env` by default. Interactive `pull` confirms before replacing
+an existing file, using the same unified Value diff as `push` but from the current file to the
+Environment. Identical Values report that no changes were found and leave the file untouched.
+`--no-input` skips the prompt. `pull --output <path>` and `pull --stdout` first verify the complete
+v3 history from genesis. A missing Value fails the export before any output is written. Terminal
+stdout requires explicit `--reveal` and confirmation; ordinary diagnostics never contain Values.
 
-`diff` compares `.env` with the decrypted Environment and reports added, updated, and removed
-Variable names. Unchanged Variables are omitted. `--from <dotenv>` selects another file. Values are
-omitted unless `--reveal` is supplied, which confirms before printing them unless `--no-input` is
-set. JSON reports only names and counts. A missing Value fails the comparison before any output is
-written. `history` reports only revision metadata. `rollback <revision> --variable <id>` creates a
-new signed Rollback Revision for the selected lanes, preserving all other current Values.
+`diff` compares `.env` with the decrypted Environment and prints added, updated, and removed
+Variables as the same unified diff, including Values. Unchanged Variables are omitted. `--from
+<dotenv>` selects another file. JSON reports only names and counts. A missing Value fails the
+comparison before any output is written. `history` reports only revision metadata. `rollback
+<revision> --variable <id>` creates a new signed Rollback Revision for the selected lanes,
+preserving all other current Values. Rollback confirmation uses the same unified Value diff.
 
 ## Output and automation
 

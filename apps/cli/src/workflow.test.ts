@@ -12,8 +12,8 @@ import {
   encodeSyncPage,
   generateSigningKeyPair,
   parseProtocolObject,
-  sha384,
   type SyncPageWire,
+  sha384,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
@@ -143,7 +143,10 @@ const setup = async (
       });
     const staging = /\/staging\/([^/]+)$/u.exec(path);
     if (staging?.[1] && request.method === "PUT") {
-      stagedObjects.set(staging[1], new Uint8Array(await request.arrayBuffer()));
+      stagedObjects.set(
+        staging[1],
+        new Uint8Array(await request.arrayBuffer()),
+      );
       return Response.json({ staged: true }, { status: 201 });
     }
     if (path.endsWith("/finalize") && request.method === "POST") {
@@ -151,16 +154,25 @@ const setup = async (
       const revisionBody = body.revision as Record<string, unknown>;
       const revisionObjectId = revisionBody.protocolObjectId;
       if (typeof revisionObjectId !== "string")
-        return Response.json({ error: "revision object id missing" }, { status: 400 });
+        return Response.json(
+          { error: "revision object id missing" },
+          { status: 400 },
+        );
       const revisionBytes = stagedObjects.get(revisionObjectId);
       if (!revisionBytes)
-        return Response.json({ error: "revision object was not staged" }, { status: 400 });
+        return Response.json(
+          { error: "revision object was not staged" },
+          { status: 400 },
+        );
       const parsedRevision = parseProtocolObject(revisionBytes);
       const revisionId = parsedRevision.get(16);
       const mutation = parsedRevision.get(35);
       const authoredAtMs = parsedRevision.get(34);
       if (!(revisionId instanceof Uint8Array) || typeof mutation !== "number")
-        return Response.json({ error: "staged revision is malformed" }, { status: 400 });
+        return Response.json(
+          { error: "staged revision is malformed" },
+          { status: 400 },
+        );
       const previous = revisions.at(-1);
       const objects = await Promise.all(
         [...stagedObjects.entries()].map(async ([objectId, bytes]) =>
@@ -291,9 +303,7 @@ describe("protected CLI workflows", () => {
     const digest = await sha384(revisionObject.bytes);
     const runtime = await setup({
       bootstrap,
-      signingTrustKeys: [
-        bytesToHex(await rawSigningPublicKey(peer.publicKey)),
-      ],
+      signingTrustKeys: [bytesToHex(await rawSigningPublicKey(peer.publicKey))],
       revisions: [
         {
           id: artifacts.request.revision.id,
@@ -329,7 +339,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("DATABASE_URL=\"postgres://example\"");
+    expect(result.stdout).toContain('DATABASE_URL="postgres://example"');
     expect(result.stderr).toBe("");
   });
 
@@ -630,7 +640,7 @@ describe("protected CLI workflows", () => {
     expect(result.stdout).not.toContain("prev");
   });
 
-  test("diff human output names changes and reveal prints Values", async () => {
+  test("diff human output prints a unified Value diff", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "KEEP=same\nCHANGED=prev\nGONE=old\n");
@@ -672,31 +682,15 @@ describe("protected CLI workflows", () => {
     );
     expect(namesOnly.exitCode).toBe(0);
     expect(namesOnly.stdout).toContain("1 added, 1 updated, 1 removed");
-    expect(namesOnly.stdout).toContain("+  NEW");
-    expect(namesOnly.stdout).toContain("~  CHANGED");
-    expect(namesOnly.stdout).toContain("-  GONE");
+    expect(namesOnly.stdout).toContain("NEW");
+    expect(namesOnly.stdout).toContain("+  fresh");
+    expect(namesOnly.stdout).toContain("CHANGED");
+    expect(namesOnly.stdout).toContain("-  prev");
+    expect(namesOnly.stdout).toContain("+  next");
+    expect(namesOnly.stdout).toContain("GONE");
+    expect(namesOnly.stdout).toContain("-  old");
     expect(namesOnly.stdout).not.toContain("KEEP");
-    expect(namesOnly.stdout).not.toContain("next");
-    expect(namesOnly.stdout).not.toContain("fresh");
-    expect(namesOnly.stdout).not.toContain("old");
-    const revealed = await run(
-      [
-        "diff",
-        "--profile",
-        "relay",
-        "--environment",
-        ids.environment,
-        "--from",
-        input,
-        "--reveal",
-        "--no-input",
-      ],
-      runtime,
-    );
-    expect(revealed.exitCode).toBe(0);
-    expect(revealed.stdout).toContain("+  NEW -> fresh");
-    expect(revealed.stdout).toContain("~  CHANGED  prev -> next");
-    expect(revealed.stdout).toContain("-  GONE -> old");
+    expect(namesOnly.stdout).not.toContain("••••••••");
     const matching = await run(
       [
         "diff",
@@ -731,27 +725,6 @@ describe("protected CLI workflows", () => {
     );
     expect(unchanged.exitCode).toBe(0);
     expect(unchanged.stdout).toContain("Local .env matches the Environment");
-    await Bun.write(input, "KEEP=same\nCHANGED=next\nNEW=fresh\n");
-    const declinedReveal = await run(
-      [
-        "diff",
-        "--profile",
-        "relay",
-        "--environment",
-        ids.environment,
-        "--from",
-        input,
-        "--reveal",
-      ],
-      {
-        ...runtime,
-        confirm: async () => false,
-      },
-    );
-    expect(declinedReveal.exitCode).toBe(2);
-    expect(declinedReveal.stderr).toContain("declined");
-    expect(declinedReveal.stdout).not.toContain("next");
-    expect(declinedReveal.stdout).not.toContain("fresh");
   });
 
   test("push confirmation describes the changed Variable instead of the live count", async () => {
@@ -801,7 +774,13 @@ describe("protected CLI workflows", () => {
     );
     expect(pushed.exitCode).toBe(0);
     expect(questions).toEqual([
-      "1 variable being updated, DATABASE_URL -> abc?",
+      [
+        "1 variable being updated",
+        "  DATABASE_URL",
+        "  -  postgres://secret",
+        "  +  abc",
+        "Publish?",
+      ].join("\n"),
     ]);
     expect(pushed.stdout).not.toContain("abc");
     expect(pushed.stdout).not.toContain("postgres://secret");
@@ -856,10 +835,130 @@ describe("protected CLI workflows", () => {
     );
     expect(pushed.exitCode).toBe(0);
     expect(questions).toEqual([
-      "1 variable being added, 1 variable being removed\n  NEW_TOKEN -> fresh\n  API_KEY\nPublish?",
+      [
+        "1 variable being added, 1 variable being removed",
+        "  NEW_TOKEN",
+        "  +  fresh",
+        "",
+        "  API_KEY",
+        "  -  tok",
+        "Publish?",
+      ].join("\n"),
     ]);
     expect(pushed.stdout).not.toContain("fresh");
     expect(pushed.stdout).not.toContain("tok");
+  });
+
+  test("pull confirmation shows the Values that will replace the local file", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://local\nGONE=old\n");
+    const questions: string[] = [];
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      },
+    );
+    expect(pulled.exitCode).toBe(0);
+    expect(questions).toEqual([
+      [
+        "1 variable being added, 1 variable being updated, 1 variable being removed",
+        "  DATABASE_URL",
+        "  -  postgres://local",
+        "  +  postgres://secret",
+        "",
+        "  GONE",
+        "  -  old",
+        "",
+        "  API_KEY",
+        "  +  tok",
+        `Replace ${input} with decrypted Values?`,
+      ].join("\n"),
+    ]);
+    expect(pulled.stdout).not.toContain("postgres://local");
+    expect(pulled.stdout).not.toContain("postgres://secret");
+  });
+
+  test("pull reports no changes when the local file already matches", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    const questions: string[] = [];
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return false;
+        },
+      },
+    );
+    expect(pulled.exitCode).toBe(0);
+    expect(questions).toEqual([]);
+    expect(pulled.stdout).toBe("No changes found\n");
+    expect(await Bun.file(input).text()).toBe("DATABASE_URL=postgres://secret\n");
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {

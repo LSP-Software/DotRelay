@@ -51,6 +51,7 @@ import {
   useServerProfile,
 } from "./profile";
 import type { TerminalIo } from "./terminal";
+import { paint, renderStep, rewriteRegion, writeNotice } from "./ui";
 import {
   approveDeviceEnrollment,
   beginDeviceEnrollment,
@@ -61,7 +62,6 @@ import {
   restoreRecoveryKit,
   runProtectedWorkflow,
 } from "./workflow";
-import { paint, renderStep, rewriteRegion, writeNotice } from "./ui";
 
 export type { TerminalIo };
 
@@ -117,7 +117,7 @@ export const renderPowerHelp = (): string => {
     "Global: --profile  --environment  --json  --debug  --no-input",
     "Publish: --classify NAME=shared|user-defined  --from <file>  --team <id>",
     "Pull: --output <file>  --stdout  --reveal",
-    "Diff: --from <file>  --reveal",
+    "Diff: --from <file>",
     "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
     "Values are never diagnostic data. --insecure and credential flags are not supported.",
   ].join("\n");
@@ -287,7 +287,10 @@ const confirmProfileTrust = async (
   const { readTerminalLine } = await import("./terminal");
   const answer = runtime.prompt
     ? await runtime.prompt(`Trust ${candidate.origin}? [Y/n]`)
-    : await readTerminalLine(`Trust ${candidate.origin}? [Y/n]`, runtime.terminal);
+    : await readTerminalLine(
+        `Trust ${candidate.origin}? [Y/n]`,
+        runtime.terminal,
+      );
   const trimmed = answer.trim().toLowerCase();
   return trimmed === "" || trimmed === "y" || trimmed === "yes";
 };
@@ -338,7 +341,11 @@ const loginAndEnroll = async (
         waitLines = rewriteRegion(
           output,
           0,
-          renderStep("Allow this CLI?", [authorization.userCode], "Waiting for the browser"),
+          renderStep(
+            "Allow this CLI?",
+            [authorization.userCode],
+            "Waiting for the browser",
+          ),
         );
       },
     },
@@ -395,8 +402,7 @@ const execute = async (
       existing ??
       (await addServerProfile(store, profileNameFromOrigin(origin), origin, {
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
-        confirm: (candidate) =>
-          confirmProfileTrust(parsed, runtime, candidate),
+        confirm: (candidate) => confirmProfileTrust(parsed, runtime, candidate),
       }));
     const selected = (await store.read()).selected;
     if (selected !== profile.name) await useServerProfile(store, profile.name);
@@ -693,9 +699,7 @@ const execute = async (
       parsed.environment !== undefined ||
       (parsed.command === "init" && parsed.positionals.length === 1);
     if (parsed.noInput && !parsed.profile)
-      throw new CliInvocationError(
-        "--no-input requires explicit --profile",
-      );
+      throw new CliInvocationError("--no-input requires explicit --profile");
     if (
       parsed.noInput &&
       parsed.command !== "init" &&
