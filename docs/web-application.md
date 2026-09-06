@@ -89,5 +89,6 @@ Project restoration states that a conflicting active stable GitHub Repository li
 
 Playwright coverage in `apps/web/e2e/workspace.spec.ts` exercises the public landing/sign-in flow,
 role-aware invitation controls, pending key grants, Environment archive/restore confirmation,
-Server Profile switching, keyboard and responsive navigation, Revision history, and the blocked
-secret-access state. Tests observe browser-visible behavior and never reach into component state.
+Server Profile switching, keyboard and responsive navigation, Revision history, enrolled Device
+listing, and the blocked secret-access state. Tests observe browser-visible behavior and never
+reach into component state.

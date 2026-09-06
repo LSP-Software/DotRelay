@@ -17,6 +17,18 @@ test("workspace shows a copyable CLI setup command after opening Devices", async
   await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
 });
 
+test("Devices lists enrolled Devices besides this browser", async ({
+  page,
+}) => {
+  await page.goto("/workspace");
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
+  const enrolled = page.getByRole("table", { name: "Enrolled Devices" });
+  await expect(enrolled).toContainText("00000000-0000-4000-8000-000000000041");
+  await expect(enrolled).toContainText("00000000-0000-4000-8000-000000000042");
+  await expect(enrolled).toContainText("Has Project access");
+  await expect(enrolled).toContainText("Pending Project access");
+});
+
 test("device approval page asks to allow the CLI", async ({ page }) => {
   await page.goto("/device?user_code=ABCD-EFGH");
   await expect(
@@ -63,7 +75,7 @@ test("the Team menu shows the current Team and lets you switch", async ({
     .selectOption("Acme Labs");
   await expect(page.getByRole("heading", { name: "Acme Labs" })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "acme / widget" }),
+    page.locator("main").getByRole("button", { name: "acme / widget" }),
   ).toBeVisible();
 });
 
@@ -90,7 +102,7 @@ test("role-aware administration and invitations expose pending key grants", asyn
     page.getByRole("button", { name: "Invite member" }),
   ).toBeDisabled();
   await expect(
-    page.getByText("Members can view this Team's Projects."),
+    page.getByRole("alert").getByText("Members can view this Team's Projects."),
   ).toBeVisible();
 });
 
@@ -255,7 +267,9 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   await page.goto("/workspace?preview=protected");
 
   await page.getByRole("button", { name: "Rollback" }).first().click();
-  await expect(page.getByRole("dialog")).toContainText("writes a new revision");
+  await expect(page.getByRole("dialog")).toContainText(
+    "This writes a new revision",
+  );
   await expect(page.getByRole("dialog")).toContainText("API_ORIGIN");
   await expect(page.getByRole("dialog")).not.toContainText("SIGNING_KEY");
   await page.getByRole("button", { name: "Stage rollback" }).click();

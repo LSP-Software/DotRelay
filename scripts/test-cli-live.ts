@@ -262,6 +262,18 @@ const handle = async (request: Request): Promise<Response> => {
     });
   if (url.pathname === "/api/v1/workspace/boundary" && request.method === "GET")
     return jsonResponse(boundary());
+  if (url.pathname === "/api/v1/projects" && request.method === "GET") {
+    const githubRepositoryId = url.searchParams.get("githubRepositoryId");
+    if (!githubRepositoryId) return problemResponse("invalid_request");
+    return jsonResponse({
+      project: {
+        id: projectId,
+        teamId,
+        githubRepositoryId,
+        lifecycle: "active",
+      },
+    });
+  }
   if (
     url.pathname === "/api/v1/grants/bootstrap" &&
     request.method === "POST"

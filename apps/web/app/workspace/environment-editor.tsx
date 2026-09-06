@@ -69,11 +69,11 @@ import {
 
 type EnvironmentEditorProps = Readonly<{
   readonly available: boolean;
-  readonly setupAction?: SetupAction | null;
-  readonly setupCommand?: string;
-  readonly setupMessage?: string | null;
-  readonly setupBusy?: boolean;
-  readonly onSetupAction?: () => void;
+  readonly setupAction?: SetupAction | null | undefined;
+  readonly setupCommand?: string | undefined;
+  readonly setupMessage?: string | null | undefined;
+  readonly setupBusy?: boolean | undefined;
+  readonly onSetupAction?: (() => void) | undefined;
   readonly protocolSession?: Readonly<{
     readonly context: PublicationContext;
     readonly transport: ProtocolTransport;
@@ -670,7 +670,7 @@ export const EnvironmentEditor = ({
     staleHeadRevision === null &&
     !publishing;
   const historicalValues = new Map<string, string | null>([
-    ["00000000-0000-4000-8000-000000000001", ""],
+    ["00000000-0000-4000-8000-000000000001", "https://api.acme.example"],
     ["00000000-0000-4000-8000-000000000002", ""],
     ["00000000-0000-4000-8000-000000000003", null],
   ]);

@@ -180,6 +180,61 @@ const parseRepository = (
   return { owner, name };
 };
 
+export type EnrolledDeviceRow = Readonly<{
+  readonly id: string;
+  readonly current: boolean;
+  readonly hasEpochGrant: boolean;
+}>;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+export const parsePeerDevices = (
+  value: unknown,
+): NonNullable<WorkspaceBoundary["peerDevices"]> => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const id = asString(entry.id);
+    const encryptionPublicKey = asString(entry.encryptionPublicKey);
+    if (!id || !encryptionPublicKey) return [];
+    return [
+      {
+        id,
+        encryptionPublicKey,
+        signingPublicKey: asString(entry.signingPublicKey) ?? "",
+        hasEpochGrant: entry.hasEpochGrant === true,
+      },
+    ];
+  });
+};
+
+export const enrolledDeviceRows = (
+  boundary: Pick<WorkspaceBoundary, "device" | "peerDevices" | "grantsReady">,
+  options: Readonly<{ readonly thisBrowserEnrolled: boolean }>,
+): readonly EnrolledDeviceRow[] => {
+  const rows: EnrolledDeviceRow[] = [];
+  const seen = new Set<string>();
+  if (boundary.device.id) {
+    seen.add(boundary.device.id);
+    rows.push({
+      id: boundary.device.id,
+      current: options.thisBrowserEnrolled,
+      hasEpochGrant: boundary.grantsReady,
+    });
+  }
+  for (const peer of boundary.peerDevices ?? []) {
+    if (seen.has(peer.id)) continue;
+    seen.add(peer.id);
+    rows.push({
+      id: peer.id,
+      current: false,
+      hasEpochGrant: peer.hasEpochGrant,
+    });
+  }
+  return rows;
+};
+
 export const parseWorkspaceCatalog = (value: unknown): WorkspaceCatalog => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     return { teams: [], projects: [] };
@@ -267,6 +322,20 @@ export const e2eWorkspaceBoundary = (
     session: { active: true, displayName: "Ari Stone" },
     profile: { id: profileId, ...profile },
     device: { active: false, label: "No active Device" },
+    peerDevices: [
+      {
+        id: "00000000-0000-4000-8000-000000000041",
+        encryptionPublicKey: "11".repeat(32),
+        signingPublicKey: "22".repeat(32),
+        hasEpochGrant: true,
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000042",
+        encryptionPublicKey: "33".repeat(32),
+        signingPublicKey: "44".repeat(32),
+        hasEpochGrant: false,
+      },
+    ],
     grantsReady: false,
     epochCurrent: true,
     rotationRequired: false,

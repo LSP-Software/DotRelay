@@ -122,16 +122,22 @@ export const openProjectEpochGrant = async (
 ): Promise<Uint8Array> => {
   const object = parseProtocolObject(canonicalBytes);
   if (object.get(1) !== 7) throw new TypeError("expected a grant object");
+  const requiredField = (key: number): CborValue => {
+    const value = object.get(key);
+    if (value === undefined)
+      throw new TypeError(`grant object is missing field ${key}`);
+    return value;
+  };
   const envelope = canonicalEncode(
     new Map<number, CborValue>([
-      [0, object.get(0)],
-      [44, object.get(44)],
-      [45, object.get(45)],
-      [46, object.get(46)],
-      [47, object.get(47)],
-      [48, object.get(48)],
-      [71, object.get(71)],
-      [72, object.get(72)],
+      [0, requiredField(0)],
+      [44, requiredField(44)],
+      [45, requiredField(45)],
+      [46, requiredField(46)],
+      [47, requiredField(47)],
+      [48, requiredField(48)],
+      [71, requiredField(71)],
+      [72, requiredField(72)],
     ]),
   );
   return open(envelope, recipientPrivateKey);

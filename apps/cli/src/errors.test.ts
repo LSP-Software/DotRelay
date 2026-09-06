@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { CliInvocationError, diagnosticForError, humanDetailForError } from "./errors";
+import {
+  CliInvocationError,
+  diagnosticForError,
+  humanDetailForError,
+} from "./errors";
 
 describe("CLI diagnostics", () => {
   test("shows the sanitized CliError next action by default", () => {
@@ -17,9 +21,9 @@ describe("CLI diagnostics", () => {
   });
 
   test("prints the Error message on human stderr", () => {
-    expect(humanDetailForError(new Error("publication has no changed lanes"))).toBe(
-      "publication has no changed lanes",
-    );
+    expect(
+      humanDetailForError(new Error("publication has no changed lanes")),
+    ).toBe("publication has no changed lanes");
     expect(
       humanDetailForError(new CliInvocationError("no Team is available")),
     ).toBe("no Team is available");

@@ -1,6 +1,7 @@
 import {
   BROWSER_DEVICE_ID_HEADER,
   e2eWorkspaceBoundary,
+  parsePeerDevices,
   parseWorkspaceCatalog,
   resolveLiveApiOrigin,
   type WorkspaceBoundary,
@@ -111,6 +112,7 @@ const fetchLiveBoundary = async (
     catalog?: unknown;
     signingTrustKeys?: unknown;
     epochGrant?: unknown;
+    peerDevices?: unknown;
   };
   const headRevision =
     typeof workspaceBody.environment?.headRevision === "string"
@@ -186,6 +188,7 @@ const fetchLiveBoundary = async (
     ...(typeof workspaceBody.epochGrant === "string"
       ? { epochGrant: workspaceBody.epochGrant }
       : {}),
+    peerDevices: parsePeerDevices(workspaceBody.peerDevices),
     crypto: { available: true },
   };
 };

@@ -776,11 +776,16 @@ const execute = async (
         throw new CliInvocationError(
           "the saved Project does not match this GitHub Repository",
         );
+      const linkedEnvironmentId =
+        existingProject === null
+          ? (initializedProject as Awaited<ReturnType<typeof linkProject>>)
+              .environment?.id
+          : undefined;
       let environmentId =
         parsed.environment ??
         (parsed.command === "init" ? parsed.positionals[0] : undefined) ??
         localContext?.environmentId ??
-        initializedProject.environment?.id;
+        linkedEnvironmentId;
       if (!environmentId) {
         const environments = await listEnvironments(
           admin,

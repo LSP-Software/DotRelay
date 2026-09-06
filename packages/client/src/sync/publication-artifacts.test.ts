@@ -43,8 +43,7 @@ const syncPageFor = async (
   artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
 ) => {
   const revisionObject = artifacts.stagedObjects.find(
-    (object) =>
-      object.objectId === artifacts.request.revision.protocolObjectId,
+    (object) => object.objectId === artifacts.request.revision.protocolObjectId,
   );
   if (!revisionObject) throw new Error("revision object is missing");
   const revision = parseProtocolObject(revisionObject.bytes);

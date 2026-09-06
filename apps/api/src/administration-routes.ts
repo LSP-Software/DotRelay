@@ -10,9 +10,9 @@ import {
   AdministrationRepository,
   type DatabaseClient,
   EnvironmentRepository,
+  normalizeEnvironmentLabel,
   OperationConflictError,
   ProjectRepository,
-  normalizeEnvironmentLabel,
   sha384Digest,
 } from "@dotrelay/database";
 import type { Context, Hono } from "hono";
@@ -248,11 +248,9 @@ export const registerAdministrationRoutes = (
         );
       if (!("team" in result))
         return responseProblem(context, "state_conflict");
-      return context.json(
-        { id: result.team.id, name: result.team.name },
-        201,
-        { "Cache-Control": "no-store" },
-      );
+      return context.json({ id: result.team.id, name: result.team.name }, 201, {
+        "Cache-Control": "no-store",
+      });
     } catch (error) {
       return responseProblem(context, mapAdministrationError(error));
     }

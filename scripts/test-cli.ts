@@ -42,10 +42,7 @@ const expectSuccess = (result: Completed, description: string): string => {
 
 await access(binary, process.platform === "win32" ? undefined : constants.X_OK);
 const help = await run(["--help"]);
-if (
-  help.exitCode !== 0 ||
-  !help.stdout.includes("dotrelay — DotRelay standalone CLI")
-)
+if (help.exitCode !== 0 || !help.stdout.includes("Usage: dotrelay <command>"))
   throw new Error("packaged CLI help contract failed");
 const version = expectSuccess(await run(["--version"]), "packaged CLI version");
 if (version !== "0.0.0-foundation")

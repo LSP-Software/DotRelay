@@ -53,14 +53,15 @@ export const readTerminalLine = async (
       cleanup();
       reject(error);
     };
+    const events = input as unknown as NodeJS.EventEmitter;
     const cleanup = () => {
-      input.off("data", onData);
-      input.off("end", onEnd);
-      input.off("error", onError);
+      events.off("data", onData);
+      events.off("end", onEnd);
+      events.off("error", onError);
     };
-    input.on("data", onData);
-    input.on("end", onEnd);
-    input.on("error", onError);
+    events.on("data", onData);
+    events.on("end", onEnd);
+    events.on("error", onError);
     if (
       typeof (input as NodeJS.ReadableStream & { resume?: () => void })
         .resume === "function"
