@@ -107,6 +107,57 @@ export const summarizeClassification = (
     names: Object.freeze(entries.map((entry) => entry.name)),
   });
 
+export type DotenvDiffChange = Readonly<{
+  readonly kind: "added" | "updated" | "removed";
+  readonly name: string;
+  readonly localValue: string | null;
+  readonly remoteValue: string | null;
+}>;
+
+export const diffDotenvEntries = (
+  local: readonly DotenvEntry[],
+  remote: readonly DotenvEntry[],
+): readonly DotenvDiffChange[] => {
+  const remoteByName = new Map(
+    remote.map((entry) => [entry.name, entry.value]),
+  );
+  const localNames = new Set(local.map((entry) => entry.name));
+  const changes: DotenvDiffChange[] = [];
+  for (const entry of local) {
+    const remoteValue = remoteByName.get(entry.name);
+    if (remoteValue === undefined)
+      changes.push(
+        Object.freeze({
+          kind: "added",
+          name: entry.name,
+          localValue: entry.value,
+          remoteValue: null,
+        }),
+      );
+    else if (remoteValue !== entry.value)
+      changes.push(
+        Object.freeze({
+          kind: "updated",
+          name: entry.name,
+          localValue: entry.value,
+          remoteValue,
+        }),
+      );
+  }
+  for (const entry of remote) {
+    if (localNames.has(entry.name)) continue;
+    changes.push(
+      Object.freeze({
+        kind: "removed",
+        name: entry.name,
+        localValue: null,
+        remoteValue: entry.value,
+      }),
+    );
+  }
+  return Object.freeze(changes);
+};
+
 export const serializeDotenv = (entries: readonly DotenvEntry[]): string =>
   `${entries
     .map(({ name, value }) => {

@@ -64,6 +64,7 @@ const safeDiagnosticCodes = new Set([
   "environment_not_found",
   "genesis_exists",
   "incomplete-export",
+  "input_read_failed",
   "invalid_id",
   "invalid_request",
   "invitation_expired",

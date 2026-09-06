@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { classifyDotenv, parseDotenv, summarizeClassification } from "./dotenv";
+import {
+  classifyDotenv,
+  diffDotenvEntries,
+  parseDotenv,
+  summarizeClassification,
+} from "./dotenv";
 
 describe("local dotenv parsing", () => {
   test("preserves empty values and parses quoted values", () => {
@@ -36,5 +41,37 @@ describe("local dotenv parsing", () => {
       names: ["PUBLIC", "LOCAL", "EMPTY"],
     });
     expect(JSON.stringify(summary)).not.toContain("secret");
+  });
+
+  test("diffs local dotenv entries against remote names and values", () => {
+    expect(
+      diffDotenvEntries(
+        [
+          { name: "KEEP", value: "same" },
+          { name: "CHANGED", value: "next" },
+          { name: "NEW", value: "fresh" },
+        ],
+        [
+          { name: "KEEP", value: "same" },
+          { name: "CHANGED", value: "prev" },
+          { name: "GONE", value: "old" },
+        ],
+      ),
+    ).toEqual([
+      {
+        kind: "updated",
+        name: "CHANGED",
+        localValue: "next",
+        remoteValue: "prev",
+      },
+      { kind: "added", name: "NEW", localValue: "fresh", remoteValue: null },
+      { kind: "removed", name: "GONE", localValue: null, remoteValue: "old" },
+    ]);
+    expect(
+      diffDotenvEntries(
+        [{ name: "EMPTY", value: "" }],
+        [{ name: "EMPTY", value: "" }],
+      ),
+    ).toEqual([]);
   });
 });

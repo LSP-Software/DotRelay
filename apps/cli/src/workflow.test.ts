@@ -573,6 +573,187 @@ describe("protected CLI workflows", () => {
     expect(pushed.stderr).toContain("new Variables require --classify");
   });
 
+  test("diffs local dotenv names against the Environment without Values", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "KEEP=same\nCHANGED=prev\nGONE=old\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "KEEP=shared",
+        "--classify",
+        "CHANGED=shared",
+        "--classify",
+        "GONE=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "KEEP=same\nCHANGED=next\nNEW=fresh\n");
+    const result = await run(
+      [
+        "diff",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--reveal",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      added: ["NEW"],
+      updated: ["CHANGED"],
+      removed: ["GONE"],
+      unchangedCount: 1,
+    });
+    expect(result.stdout).not.toContain("same");
+    expect(result.stdout).not.toContain("next");
+    expect(result.stdout).not.toContain("fresh");
+    expect(result.stdout).not.toContain("old");
+    expect(result.stdout).not.toContain("prev");
+  });
+
+  test("diff human output names changes and reveal prints Values", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "KEEP=same\nCHANGED=prev\nGONE=old\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "KEEP=shared",
+        "--classify",
+        "CHANGED=shared",
+        "--classify",
+        "GONE=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "KEEP=same\nCHANGED=next\nNEW=fresh\n");
+    const namesOnly = await run(
+      [
+        "diff",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(namesOnly.exitCode).toBe(0);
+    expect(namesOnly.stdout).toContain("1 added, 1 updated, 1 removed");
+    expect(namesOnly.stdout).toContain("+  NEW");
+    expect(namesOnly.stdout).toContain("~  CHANGED");
+    expect(namesOnly.stdout).toContain("-  GONE");
+    expect(namesOnly.stdout).not.toContain("KEEP");
+    expect(namesOnly.stdout).not.toContain("next");
+    expect(namesOnly.stdout).not.toContain("fresh");
+    expect(namesOnly.stdout).not.toContain("old");
+    const revealed = await run(
+      [
+        "diff",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--reveal",
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(revealed.exitCode).toBe(0);
+    expect(revealed.stdout).toContain("+  NEW -> fresh");
+    expect(revealed.stdout).toContain("~  CHANGED  prev -> next");
+    expect(revealed.stdout).toContain("-  GONE -> old");
+    const matching = await run(
+      [
+        "diff",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        `${import.meta.dir}/.tmp-workflow-missing`,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(matching.exitCode).toBe(8);
+    expect(JSON.parse(matching.stderr)).toMatchObject({
+      code: "input_read_failed",
+    });
+    await Bun.write(input, "KEEP=same\nCHANGED=prev\nGONE=old\n");
+    const unchanged = await run(
+      [
+        "diff",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(unchanged.exitCode).toBe(0);
+    expect(unchanged.stdout).toContain("Local .env matches the Environment");
+    await Bun.write(input, "KEEP=same\nCHANGED=next\nNEW=fresh\n");
+    const declinedReveal = await run(
+      [
+        "diff",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--reveal",
+      ],
+      {
+        ...runtime,
+        confirm: async () => false,
+      },
+    );
+    expect(declinedReveal.exitCode).toBe(2);
+    expect(declinedReveal.stderr).toContain("declined");
+    expect(declinedReveal.stdout).not.toContain("next");
+    expect(declinedReveal.stdout).not.toContain("fresh");
+  });
+
   test("push confirmation describes the changed Variable instead of the live count", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;

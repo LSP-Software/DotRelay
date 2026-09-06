@@ -118,6 +118,16 @@ describe("CLI argument contract", () => {
     expect(parseArguments(["status", "--debug"]).debug).toBe(true);
   });
 
+  test("accepts diff with --from and --reveal", () => {
+    expect(parseArguments(["diff", "--from", ".env.local"])).toMatchObject({
+      command: "diff",
+      from: ".env.local",
+    });
+    expect(parseArguments(["diff", "--reveal"]).reveal).toBe(true);
+    expect(() => parseArguments(["status", "--reveal"])).toThrow("--reveal");
+    expect(() => parseArguments(["diff", "extra"])).toThrow("invalid number");
+  });
+
   test("accepts setup, help, and --team on push", () => {
     expect(parseArguments(["setup", "https://relay.example"])).toMatchObject({
       command: "setup",

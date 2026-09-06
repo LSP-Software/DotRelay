@@ -76,6 +76,7 @@ export const renderHelp = (): string => {
     "  init             Publish this repo's .env for the first time",
     "  push             Publish changes from .env",
     "  pull             Write decrypted Values to .env",
+    "  diff             Compare .env with the Environment",
     "  status           Show this machine's connection",
     "",
     "More commands: dotrelay help",
@@ -93,6 +94,7 @@ export const renderPowerHelp = (): string => {
     "  init             Publish this repo's .env for the first time",
     "  push             Publish changes from .env",
     "  pull             Write decrypted Values to .env",
+    "  diff             Compare .env with the Environment",
     "  status           Show this machine's connection",
     "",
     "Power:",
@@ -115,6 +117,7 @@ export const renderPowerHelp = (): string => {
     "Global: --profile  --environment  --json  --debug  --no-input",
     "Publish: --classify NAME=shared|user-defined  --from <file>  --team <id>",
     "Pull: --output <file>  --stdout  --reveal",
+    "Diff: --from <file>  --reveal",
     "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
     "Values are never diagnostic data. --insecure and credential flags are not supported.",
   ].join("\n");
@@ -681,6 +684,7 @@ const execute = async (
     "init",
     "push",
     "pull",
+    "diff",
     "history",
     "rollback",
   ]);

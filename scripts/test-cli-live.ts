@@ -715,6 +715,30 @@ try {
     (process.platform !== "win32" && outputMode !== 0o600)
   )
     throw new Error("packaged CLI safe pull contract failed");
+  const matchingDiff = await runJson(
+    [
+      "diff",
+      "--profile",
+      "live",
+      "--environment",
+      environmentId,
+      "--from",
+      dotenvPath,
+      "--no-input",
+      "--json",
+    ],
+    environment,
+  );
+  if (
+    !Array.isArray(matchingDiff.added) ||
+    matchingDiff.added.length !== 0 ||
+    !Array.isArray(matchingDiff.updated) ||
+    matchingDiff.updated.length !== 0 ||
+    !Array.isArray(matchingDiff.removed) ||
+    matchingDiff.removed.length !== 0 ||
+    JSON.stringify(matchingDiff).includes("secret")
+  )
+    throw new Error("packaged CLI matching diff contract failed");
   if (process.platform !== "win32") {
     const terminal = await runTerminal(
       [
@@ -782,6 +806,27 @@ try {
     dotenvPath,
     "SHARED_VALUE=two\nUSER_VALUE=secret\nEMPTY=\nNEW_VALUE=added\n",
   );
+  const driftedDiff = await runJson(
+    [
+      "diff",
+      "--profile",
+      "live",
+      "--environment",
+      environmentId,
+      "--from",
+      dotenvPath,
+      "--no-input",
+      "--json",
+    ],
+    environment,
+  );
+  if (
+    !Array.isArray(driftedDiff.added) ||
+    driftedDiff.added.length !== 1 ||
+    driftedDiff.added[0] !== "NEW_VALUE" ||
+    JSON.stringify(driftedDiff).includes("secret")
+  )
+    throw new Error("packaged CLI drifted diff contract failed");
   const missingClassification = await runBinary(
     [
       "push",

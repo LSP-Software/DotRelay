@@ -5,6 +5,7 @@ describe("CLI foundation", () => {
   test("renders everyday help by default and power commands under help", async () => {
     expect(main(["--help"])).toBe(renderHelp());
     expect(renderHelp()).toContain("setup <origin>");
+    expect(renderHelp()).toContain("diff");
     expect(renderHelp()).not.toContain("device begin");
     const result = await run(["help"]);
     expect(result.exitCode).toBe(0);

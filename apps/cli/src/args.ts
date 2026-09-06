@@ -9,6 +9,7 @@ export const COMMANDS = [
   "init",
   "push",
   "pull",
+  "diff",
   "status",
   "help",
   "profile",
@@ -164,6 +165,7 @@ const validateCommand = (parsed: MutableArguments) => {
     init: [0, 1],
     setup: 1,
     help: 0,
+    diff: 0,
     rollback: 1,
   };
   const expected = positionalCounts[command];
@@ -178,8 +180,8 @@ const validateCommand = (parsed: MutableArguments) => {
   }
   if (parsed.stdout && command !== "pull")
     throw new CliInvocationError("--stdout is only valid with pull");
-  if (parsed.reveal && command !== "pull")
-    throw new CliInvocationError("--reveal is only valid with pull");
+  if (parsed.reveal && command !== "pull" && command !== "diff")
+    throw new CliInvocationError("--reveal is only valid with pull or diff");
   if (
     parsed.output &&
     command !== "pull" &&
@@ -193,14 +195,14 @@ const validateCommand = (parsed: MutableArguments) => {
     );
   if (
     parsed.from &&
-    !["init", "push"].includes(command) &&
+    !["init", "push", "diff"].includes(command) &&
     !(
       command === "device" &&
       ["approve", "complete", "recover"].includes(parsed.subcommand ?? "")
     )
   )
     throw new CliInvocationError(
-      "--from is only valid with init, push, or a Device handoff command",
+      "--from is only valid with init, push, diff, or a Device handoff command",
     );
   if (
     parsed.team &&

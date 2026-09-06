@@ -62,7 +62,9 @@ import {
 import {
   type ClassifiedDotenvEntry,
   classifyDotenv,
+  type DotenvDiffChange,
   type DotenvEntry,
+  diffDotenvEntries,
   parseDotenv,
   serializeDotenv,
 } from "./dotenv";
@@ -70,7 +72,7 @@ import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
 import { readTerminalLine, type TerminalIo } from "./terminal";
-import { writeNotice } from "./ui";
+import { paint, writeNotice } from "./ui";
 
 export type WorkflowOptions = Readonly<{
   readonly profile: CliServerProfile;
@@ -2128,6 +2130,46 @@ const formatPublicationChange = (change: PublicationChange): string => {
   return `${name} -> ${displayPublicationValue(change.value)}`;
 };
 
+const formatEnvDiffChange = (
+  change: DotenvDiffChange,
+  reveal: boolean,
+): string => {
+  const marker =
+    change.kind === "added" ? "+" : change.kind === "removed" ? "-" : "~";
+  const name = sanitizeCliText(change.name);
+  if (!reveal) return `${marker}  ${name}`;
+  if (change.kind === "added")
+    return `${marker}  ${name} -> ${displayPublicationValue(change.localValue)}`;
+  if (change.kind === "removed")
+    return `${marker}  ${name} -> ${displayPublicationValue(change.remoteValue)}`;
+  return `${marker}  ${name}  ${displayPublicationValue(change.remoteValue)} -> ${displayPublicationValue(change.localValue)}`;
+};
+
+const renderEnvDiff = (
+  changes: readonly DotenvDiffChange[],
+  reveal: boolean,
+): string => {
+  if (changes.length === 0)
+    return [
+      `  ${paint("·", "wax")}  ${paint("Local .env matches the Environment", "paper")}`,
+      "",
+    ].join("\n");
+  const added = changes.filter((change) => change.kind === "added").length;
+  const updated = changes.filter((change) => change.kind === "updated").length;
+  const removed = changes.filter((change) => change.kind === "removed").length;
+  const summary = [
+    ...(added > 0 ? [`${added} added`] : []),
+    ...(updated > 0 ? [`${updated} updated`] : []),
+    ...(removed > 0 ? [`${removed} removed`] : []),
+  ].join(", ");
+  return [
+    `  ${paint("·", "wax")}  ${paint(summary, "paper")}`,
+    "",
+    ...changes.map((change) => `     ${formatEnvDiffChange(change, reveal)}`),
+    "",
+  ].join("\n");
+};
+
 const publicationConfirmQuestion = (
   changes: readonly PublicationChange[],
 ): string => {
@@ -2357,6 +2399,67 @@ export const runProtectedWorkflow = async (
         rollbackTargetId: revision.rollbackTargetId,
       })),
     };
+  }
+  if (parsed.command === "diff") {
+    const inputPath = parsed.from ?? ".env";
+    let source: string;
+    try {
+      source = await readFile(inputPath, "utf8");
+    } catch {
+      throw new CliError(
+        "local-io",
+        "could not read the dotenv input file",
+        {},
+        "input_read_failed",
+      );
+    }
+    const local = parseDotenv(source);
+    const synced = await syncWorkflow(options, parsed);
+    const missing = synced.variables.filter(
+      (variable) => !variable.tombstone && variable.value === null,
+    );
+    if (missing.length > 0)
+      throw new CliError(
+        "incomplete-export",
+        "the Environment has Values that are not available on this Device",
+        { missingCount: missing.length },
+        "missing_values",
+      );
+    const remote = synced.variables
+      .filter((variable) => !variable.tombstone)
+      .map((variable) =>
+        Object.freeze({ name: variable.name, value: variable.value ?? "" }),
+      );
+    const changes = diffDotenvEntries(local, remote);
+    const added = Object.freeze(
+      changes
+        .filter((change) => change.kind === "added")
+        .map((change) => change.name),
+    );
+    const updated = Object.freeze(
+      changes
+        .filter((change) => change.kind === "updated")
+        .map((change) => change.name),
+    );
+    const removed = Object.freeze(
+      changes
+        .filter((change) => change.kind === "removed")
+        .map((change) => change.name),
+    );
+    const unchangedCount =
+      local.length -
+      changes.filter(
+        (change) => change.kind === "added" || change.kind === "updated",
+      ).length;
+    if (parsed.json) return { added, updated, removed, unchangedCount };
+    if (
+      parsed.reveal &&
+      changes.length > 0 &&
+      !options.noInput &&
+      !(await confirm(options, "Reveal decrypted Values in the diff?"))
+    )
+      throw new CliInvocationError("Value reveal confirmation was declined");
+    return { stdout: renderEnvDiff(changes, parsed.reveal) };
   }
   if (parsed.command === "pull") {
     const outputPath = parsed.stdout ? undefined : (parsed.output ?? ".env");

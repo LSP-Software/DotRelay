@@ -3,7 +3,7 @@
 The `dotrelay` binary exposes the command contract. The `dotrelay` npm package selects the native
 binary staged for the current platform and forwards the same arguments to it.
 
-Everyday commands are `setup`, `login`, `init`, `push`, `pull`, and `status`. Power commands stay
+Everyday commands are `setup`, `login`, `init`, `push`, `pull`, `diff`, and `status`. Power commands stay
 available and are listed by `dotrelay help`.
 
 ## First machine and sign-in
@@ -75,9 +75,14 @@ when the Server Profile permits cancellation.
 `pull` writes decrypted Values to `.env` by default and confirms before replacing an existing file.
 `pull --output <path>` and `pull --stdout` first verify the complete v3 history from genesis. A
 missing Value fails the export before any output is written. Terminal stdout requires explicit
-`--reveal` and confirmation; ordinary diagnostics never contain Values. `history` reports only
-revision metadata. `rollback <revision> --variable <id>` creates a new signed Rollback Revision
-for the selected lanes, preserving all other current Values.
+`--reveal` and confirmation; ordinary diagnostics never contain Values.
+
+`diff` compares `.env` with the decrypted Environment and reports added, updated, and removed
+Variable names. Unchanged Variables are omitted. `--from <dotenv>` selects another file. Values are
+omitted unless `--reveal` is supplied, which confirms before printing them unless `--no-input` is
+set. JSON reports only names and counts. A missing Value fails the comparison before any output is
+written. `history` reports only revision metadata. `rollback <revision> --variable <id>` creates a
+new signed Rollback Revision for the selected lanes, preserving all other current Values.
 
 ## Output and automation
 
