@@ -34,10 +34,10 @@ import { registerDeviceRoutes } from "./device-routes";
 import {
   API_CORRELATION_HEADER,
   type ApiObservability,
-  type ServerDiagnosticProblemCode,
   createApiObservability,
   createConsoleDiagnosticSink,
   createServerCorrelationId,
+  type ServerDiagnosticProblemCode,
   toServerDiagnosticProblemCode,
   toServerDiagnosticRetryAfterSeconds,
 } from "./observability";

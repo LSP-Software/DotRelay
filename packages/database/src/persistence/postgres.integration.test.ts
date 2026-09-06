@@ -690,7 +690,9 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       },
     });
     if (!("existing" in duplicate) || !duplicate.existing)
-      throw new Error("duplicate Project create should return the existing Project");
+      throw new Error(
+        "duplicate Project create should return the existing Project",
+      );
     expect(duplicate.project.id).toBe(project.id);
     await administration.archiveProject(database, {
       projectId,
@@ -829,6 +831,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     expect(metadata).toEqual({
       id: environmentId,
       projectId,
+      label: "disclosure",
       lifecycle: "ACTIVE",
       currentHeadId: null,
     });

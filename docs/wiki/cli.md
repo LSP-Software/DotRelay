@@ -3,7 +3,8 @@
 The `dotrelay` binary exposes the command contract. The `dotrelay` npm package selects the native
 binary staged for the current platform and forwards the same arguments to it.
 
-Everyday commands are `setup`, `login`, `init`, `push`, `pull`, and `status`. Power commands stay
+Everyday commands are `setup`, `login`, `init`, `push`, `pull`, and `status`. The default help
+opens with `dotrelay — DotRelay standalone CLI` and lists those commands; power commands stay
 available and are listed by `dotrelay help`.
 
 ## First machine and sign-in
@@ -93,7 +94,7 @@ limited to a previously authenticated, enrolled persistent Device with explicit 
 Portable plaintext or environment-variable credential bundles and auto-approved ephemeral Devices
 are not supported.
 
-`status` prints a short card: profile, origin, signed-in, Device enrolled. It never dumps key:value
+`status` prints a short card: profile, origin, session, and Device enrollment. It never dumps key:value
 local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle

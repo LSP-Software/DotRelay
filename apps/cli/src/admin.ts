@@ -9,7 +9,7 @@ import type { NativeCredentialStore } from "./credentials";
 import { CliError, CliInvocationError } from "./errors";
 import type { FetchFunction } from "./profile";
 import type { TerminalIo } from "./terminal";
-import { selectOption } from "./ui";
+import { renderCard, selectOption } from "./ui";
 
 export type StrictJsonClient = Readonly<{
   readonly get: (
@@ -300,9 +300,10 @@ export const findDefaultTeam = async (
   client: Pick<StrictJsonClient, "get">,
 ): Promise<TeamSummary> => {
   const teams = await listTeams(client);
-  if (teams.length === 0)
+  const [firstTeam] = teams;
+  if (!firstTeam)
     throw new CliInvocationError("no Team is available for this Project");
-  return teams[0]!;
+  return firstTeam;
 };
 
 export type ResolveTeamOptions = Readonly<{
@@ -314,11 +315,9 @@ export type ResolveTeamOptions = Readonly<{
   readonly terminal?: TerminalIo;
 }>;
 
-const askForTeamName = async (
-  options: ResolveTeamOptions,
-): Promise<string> => {
+const askForTeamName = async (options: ResolveTeamOptions): Promise<string> => {
   const write = options.write ?? (() => undefined);
-  write("No Team yet. Create one to continue.\n");
+  write(renderCard("No Team yet", { body: ["Create one to continue."] }));
   const answer = (
     await options.prompt(`Team name [${options.suggestedName}]`)
   ).trim();
@@ -336,7 +335,12 @@ export const resolveTeamForProject = async (
       throw new CliInvocationError("the specified Team is not available");
     return selected;
   }
-  if (teams.length === 1) return teams[0]!;
+  const [onlyTeam] = teams;
+  if (teams.length === 1) {
+    if (!onlyTeam)
+      throw new CliInvocationError("no Team is available for this Project");
+    return onlyTeam;
+  }
   if (teams.length === 0) {
     if (options.noInput)
       throw new CliInvocationError(
@@ -350,7 +354,7 @@ export const resolveTeamForProject = async (
     );
   const write = options.write ?? (() => undefined);
   const selectedId = await selectOption(
-    "Team",
+    "Choose a Team",
     [
       ...teams.map((team) => ({ id: team.id, label: team.name })),
       { id: "create", label: "Create a new Team" },
@@ -366,7 +370,7 @@ export const resolveTeamForProject = async (
     if (!selected) throw new CliInvocationError("choose a Team from the list");
     return selected;
   }
-  write("Create a Team to continue.\n");
+  write(renderCard("Create a Team", { body: ["Choose a name to continue."] }));
   const name = (
     await options.prompt(`Team name [${options.suggestedName}]`)
   ).trim();

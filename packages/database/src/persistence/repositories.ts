@@ -1858,10 +1858,7 @@ export class EnvironmentRepository {
   private readonly operations = new OperationRepository();
   private readonly audit = new AuditFactRepository();
 
-  async create(
-    database: TransactionDatabase,
-    input: EnvironmentCreationInput,
-  ) {
+  async create(database: TransactionDatabase, input: EnvironmentCreationInput) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
       const project = await transaction.project.findUnique({

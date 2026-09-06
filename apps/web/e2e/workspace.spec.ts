@@ -24,10 +24,10 @@ test("landing page leads to GitHub sign-in without implying GitHub grants access
 
   await expect(
     page.getByRole("heading", {
-      name: "Configuration moves. Plaintext doesn't.",
+      name: "Team .env files, without the headache.",
     }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Enter workspace" }).click();
+  await page.getByRole("link", { name: "Get started" }).click();
   await expect(
     page.getByRole("heading", { name: "Sign in to your Server Profile" }),
   ).toBeVisible();

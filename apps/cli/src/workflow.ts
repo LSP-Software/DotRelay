@@ -48,6 +48,7 @@ import {
 } from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
+import { classifyVariablesInteractively } from "./classify-ui";
 import type { NativeCredentialStore } from "./credentials";
 import {
   createFileDeviceRecordStore,
@@ -62,7 +63,6 @@ import {
   parseDotenv,
   serializeDotenv,
 } from "./dotenv";
-import { classifyVariablesInteractively } from "./classify-ui";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
@@ -2051,9 +2051,14 @@ const publish = async (
     !(await confirm(options, publicationConfirmQuestion(changes)))
   )
     throw new CliInvocationError("publication confirmation was declined");
-  const progress = (title: string): void => {
+  const progress = (title: string, tone: "wax" | "ok" = "wax"): void => {
     if (options.noInput || parsed.json) return;
-    writeNotice(options.terminal?.output ?? process.stderr, title);
+    writeNotice(
+      options.terminal?.output ?? process.stderr,
+      title,
+      undefined,
+      tone,
+    );
   };
   progress("Encrypting");
   let artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>;
@@ -2126,7 +2131,7 @@ const publish = async (
       code,
     );
   }
-  progress("Published");
+  progress("Published", "ok");
   return {
     revision: artifacts.request.revision.id,
     lanes: artifacts.encryptedLaneCount,
@@ -2193,7 +2198,10 @@ export const runProtectedWorkflow = async (
       }
       if (
         exists &&
-        !(await confirm(options, `Replace ${outputPath} with decrypted Values?`))
+        !(await confirm(
+          options,
+          `Replace ${outputPath} with decrypted Values?`,
+        ))
       )
         throw new CliInvocationError("pull confirmation was declined");
     }
@@ -2205,7 +2213,10 @@ export const runProtectedWorkflow = async (
     if (outputPath) await atomicWriteProtectedFile(outputPath, contents);
     return parsed.stdout
       ? { stdout: contents }
-      : { output: outputPath ?? "", message: `Wrote ${entries.length} values to ${outputPath}` };
+      : {
+          output: outputPath ?? "",
+          message: `Wrote ${entries.length} values to ${outputPath}`,
+        };
   }
   if (parsed.command === "init" || parsed.command === "push") {
     const inputPath = parsed.from ?? ".env";
@@ -2222,8 +2233,7 @@ export const runProtectedWorkflow = async (
     }
     const synced = await syncWorkflow(options, parsed);
     const empty = synced.page.currentHeadId === null;
-    const existing =
-      parsed.command === "init" && empty ? [] : synced.variables;
+    const existing = parsed.command === "init" && empty ? [] : synced.variables;
     const entries = await classify(
       options,
       parsed,

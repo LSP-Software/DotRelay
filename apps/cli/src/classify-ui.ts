@@ -1,9 +1,13 @@
 import { CliInvocationError, sanitizeCliText } from "./errors";
-import { type TerminalIo, readTerminalLine } from "./terminal";
+import { readTerminalLine, type TerminalIo } from "./terminal";
 import {
+  BODY,
+  GUTTER,
+  MARK,
+  padVisible,
   paint,
-  readRawKey,
   type ReadableRaw,
+  readRawKey,
   rewriteRegion,
   supportsRawMode,
 } from "./ui";
@@ -62,28 +66,38 @@ export const renderClassificationBoard = (
     state.drafts.length === 1
       ? "1 variable from .env"
       : `${state.drafts.length} variables from .env`;
+  const markerWidth = options.interactive
+    ? MARK.cursor.length
+    : String(state.drafts.length).length + 1;
+  const heading = `${BODY}${padVisible("", markerWidth)}  ${paint(
+    "Variable".padEnd(width, " "),
+    "dim",
+  )}  ${paint("Who can read", "dim")}`;
   const rows = state.drafts.map((draft, index) => {
     const selected = options.interactive && index === state.cursor;
     const marker = options.interactive
       ? selected
-        ? paint("·", "wax")
+        ? paint(MARK.cursor, "wax")
         : " "
       : `${index + 1}.`;
     const name = sanitizeCliText(draft.name).padEnd(width, " ");
     const owner = ownershipCopy(draft.classification);
-    const namePaint = selected ? paint(name, "paper") : paint(name, "graphite");
+    const namePaint = selected
+      ? paint(name, "paper", { bold: true })
+      : paint(name, "graphite");
     const ownerPaint = selected ? paint(owner, "wax") : paint(owner, "dim");
-    return `     ${marker}  ${namePaint}  ${ownerPaint}`;
+    return `${BODY}${padVisible(marker, markerWidth)}  ${namePaint}  ${ownerPaint}`;
   });
   const hint = options.interactive
-    ? "Space changes who can read it. Enter publishes."
+    ? "space toggle  ·  enter publish"
     : "Enter a number to toggle, or press Enter to publish";
   return [
-    `  ${paint("·", "wax")}  ${paint(title, "paper")}`,
+    `${GUTTER}${paint(MARK.brand, "wax")}  ${paint(title, "paper", { bold: true })}`,
     "",
+    heading,
     ...rows,
     "",
-    `     ${paint(hint, "dim")}`,
+    `${BODY}${paint(hint, "dim")}`,
     "",
   ].join("\n");
 };
@@ -92,7 +106,8 @@ export const applyClassificationAction = (
   state: ClassificationBoardState,
   action: "up" | "down" | "toggle" | "done" | number,
 ): ClassificationBoardState & Readonly<{ readonly done?: true }> => {
-  if (action === "done") return Object.freeze({ ...state, done: true as const });
+  if (action === "done")
+    return Object.freeze({ ...state, done: true as const });
   if (action === "up")
     return Object.freeze({
       ...state,
@@ -139,9 +154,11 @@ const parseLineAction = (line: string): "done" | number => {
 const keyAction = (
   key: string,
 ): "up" | "down" | "toggle" | "done" | "ignore" => {
-  if (key === "\u0003") throw new CliInvocationError("classification cancelled");
+  if (key === "\u0003")
+    throw new CliInvocationError("classification cancelled");
   if (key === "\r" || key === "\n") return "done";
-  if (key === " " || key === "\t" || key === "h" || key === "l") return "toggle";
+  if (key === " " || key === "\t" || key === "h" || key === "l")
+    return "toggle";
   if (key === "\u001b[A" || key === "k") return "up";
   if (key === "\u001b[B" || key === "j") return "down";
   if (key === "\u001b[D" || key === "\u001b[C") return "toggle";
@@ -204,9 +221,7 @@ const runLineClassificationBoard = async (
   let state = createClassificationBoard(names, initial);
   const output = options.terminal?.output ?? process.stderr;
   for (;;) {
-    output.write(
-      `${renderClassificationBoard(state, { interactive: false })}`,
-    );
+    output.write(`${renderClassificationBoard(state, { interactive: false })}`);
     const line = options.prompt
       ? await options.prompt("Toggle")
       : await readTerminalLine("Toggle", options.terminal);

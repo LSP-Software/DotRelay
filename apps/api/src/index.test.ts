@@ -600,9 +600,7 @@ describe("API foundation", () => {
     });
     expect(listed.status).toBe(200);
     expect(await listed.json()).toEqual({
-      teams: [
-        { id: "00000000-0000-4000-8000-000000000001", name: "Personal" },
-      ],
+      teams: [{ id: "00000000-0000-4000-8000-000000000001", name: "Personal" }],
     });
 
     const created = await testApp.request(`${profile.origin}/api/v1/teams`, {
