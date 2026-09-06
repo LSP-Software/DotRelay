@@ -1055,9 +1055,6 @@ export const WorkspaceShell = ({
                   <EnvironmentEditor
                     available={false}
                     onSetupAction={handleSetupAction}
-                    remoteHeadRevision={
-                      displayBoundary.environment.headRevision
-                    }
                     setupAction={setupAction}
                     setupBusy={deviceSetupInProgress}
                     setupCommand={cliSetupCommand}
@@ -1145,12 +1142,7 @@ export const WorkspaceShell = ({
               </Tabs>
               <EnvironmentEditor
                 available={protectedWorkflowAvailable}
-                environmentLabel={selectedEnvironment.label}
                 onSetupAction={handleSetupAction}
-                remoteHeadRevision={
-                  selectedEnvironment.currentHeadId ??
-                  displayBoundary.environment.headRevision
-                }
                 setupAction={editorSetupAction}
                 setupBusy={deviceSetupInProgress}
                 setupCommand={cliSetupCommand}
@@ -1159,10 +1151,6 @@ export const WorkspaceShell = ({
                   ? { protocolSession: liveProtocolSession ?? protocolSession }
                   : {})}
               />
-              <p className="mt-6 text-xs text-muted-foreground">
-                Linked GitHub repository {selectedProject.githubRepositoryId}.
-                GitHub access does not grant DotRelay access.
-              </p>
             </section>
           ) : null}
 

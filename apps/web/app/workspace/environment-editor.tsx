@@ -15,10 +15,11 @@ import {
   Eye,
   EyeOff,
   GitBranch,
+  List,
   LockKeyhole,
   Plus,
-  RefreshCcw,
   RotateCcw,
+  Save,
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -28,6 +29,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -53,6 +55,7 @@ import {
   deleteEnvironmentVariable,
   draftValueDiffs,
   type EnvironmentVariable,
+  mergeVerifiedHistory,
   prepareEncryptedPublication,
   rollbackValueDiffs,
   type SetupAction,
@@ -71,8 +74,6 @@ type EnvironmentEditorProps = Readonly<{
   readonly setupMessage?: string | null;
   readonly setupBusy?: boolean;
   readonly onSetupAction?: () => void;
-  readonly environmentLabel?: string;
-  readonly remoteHeadRevision: string;
   readonly protocolSession?: Readonly<{
     readonly context: PublicationContext;
     readonly transport: ProtocolTransport;
@@ -385,8 +386,7 @@ const AddVariableDialog = ({
       <DialogHeader>
         <DialogTitle>Add Variable</DialogTitle>
         <DialogDescription>
-          Name it, choose who can read it, and set the first value. Encryption
-          happens in this browser.
+          Name it, choose who can read it, and set the first value.
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4">
@@ -519,8 +519,6 @@ export const EnvironmentEditor = ({
   setupMessage,
   setupBusy,
   onSetupAction,
-  environmentLabel = "default",
-  remoteHeadRevision,
   protocolSession,
 }: EnvironmentEditorProps) => {
   const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
@@ -619,7 +617,12 @@ export const EnvironmentEditor = ({
             ? current
             : [...decoded],
         );
-        setVerifiedHistory(page.revisions.map((revision) => revision.id));
+        setVerifiedHistory((current) =>
+          mergeVerifiedHistory(
+            current,
+            page.revisions.map((revision) => revision.id),
+          ),
+        );
         if (page.currentHeadId && page.currentHeadHash) {
           setProtocolHead({
             id: page.currentHeadId,
@@ -847,6 +850,9 @@ export const EnvironmentEditor = ({
             hash: nextHeadHash,
           });
           setHeadRevision(artifacts.request.revision.id);
+          setVerifiedHistory((current) =>
+            mergeVerifiedHistory(current, [artifacts.request.revision.id]),
+          );
         }
         setVariables((current) =>
           current.map((variable) => ({ ...variable, hasDraftChange: false })),
@@ -904,7 +910,12 @@ export const EnvironmentEditor = ({
           await verifySyncPage(page, sessionTrustKeys(protocolSession), {
             actorUserId: context.actorUserId,
           });
-          setVerifiedHistory(page.revisions.map((revision) => revision.id));
+          setVerifiedHistory((current) =>
+            mergeVerifiedHistory(
+              current,
+              page.revisions.map((revision) => revision.id),
+            ),
+          );
           const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
           const decodedVariables = protocolSession.decodeVariables
             ? await protocolSession.decodeVariables(page, remoteVariables)
@@ -1045,108 +1056,6 @@ export const EnvironmentEditor = ({
     );
   };
 
-  const refresh = async () => {
-    if (protocolSession) {
-      try {
-        const context = protocolSession.context;
-        if (
-          (context.expectedHeadId && !context.expectedHeadHash) ||
-          !context.trustedRevisionId ||
-          !context.trustedRevisionHash
-        )
-          throw new Error("a verified head is required before synchronization");
-        const useGenesisTrust = remoteVariables.length === 0;
-        const trustedRevisionId = context.trustedRevisionId;
-        const trustedRevisionHash = context.trustedRevisionHash;
-        const syncTrustedRevisionId = useGenesisTrust
-          ? trustedRevisionId
-          : (protocolHead?.id ?? context.expectedHeadId);
-        const syncTrustedRevisionHash = useGenesisTrust
-          ? trustedRevisionHash
-          : (protocolHead?.hash ?? context.expectedHeadHash);
-        if (!syncTrustedRevisionId || !syncTrustedRevisionHash)
-          throw new Error("a verified synchronization anchor is unavailable");
-        const page = await protocolSession.transport.syncAll({
-          environmentId: context.environmentId,
-          deviceId: context.actorDeviceId,
-          request: {
-            trustedRevisionId: syncTrustedRevisionId,
-            trustedRevisionHash: syncTrustedRevisionHash,
-            pagination: {},
-          },
-        });
-        await verifySyncPage(page, sessionTrustKeys(protocolSession), {
-          actorUserId: context.actorUserId,
-        });
-        setVerifiedHistory(page.revisions.map((revision) => revision.id));
-        const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
-        const decodedVariables = protocolSession.decodeVariables
-          ? await protocolSession.decodeVariables(page, remoteVariables)
-          : undefined;
-        if (decodedVariables) {
-          setRemoteVariables(decodedVariables);
-          if (changedCount === 0) setVariables([...decodedVariables]);
-        }
-        if (page.currentHeadId && page.currentHeadHash) {
-          const localHeadId = protocolHead?.id ?? context.expectedHeadId;
-          const headChanged =
-            localHeadId !== null && localHeadId !== page.currentHeadId;
-          setProtocolHead({
-            id: page.currentHeadId,
-            hash: page.currentHeadHash,
-          });
-          setHeadRevision(page.currentHeadId);
-          if (headChanged && changedCount > 0) {
-            const localChangedVariableIds = variables
-              .filter((variable) => variable.hasDraftChange)
-              .map((variable) => variable.id);
-            const conflictingVariableIds =
-              page.nextCursor !== null
-                ? localChangedVariableIds
-                : localChangedVariableIds.filter((id) =>
-                    remoteChangedVariableIds.has(id),
-                  );
-            setConflictingLaneIds(new Set(conflictingVariableIds));
-            setStaleHeadRevision(
-              conflictingVariableIds.length > 0 ? page.currentHeadId : null,
-            );
-            setRetryReady(false);
-            setPublishMessage(
-              conflictingVariableIds.length > 0
-                ? "Someone else changed the same variables. Pick which value to keep, then retry."
-                : "Someone else published other variables. Your draft is still ready to publish.",
-            );
-            return;
-          }
-        }
-        setPublishMessage("Up to date.");
-        return;
-      } catch {
-        setPublishMessage("Could not refresh this Environment.");
-        return;
-      }
-    }
-    setConflictingLaneIds(
-      new Set(
-        variables
-          .filter((variable) => variable.hasDraftChange)
-          .map((variable) => variable.id),
-      ),
-    );
-    setPublishMessage(
-      changedCount > 0
-        ? "Someone else published while this draft was open. Pick which value to keep."
-        : "Up to date.",
-    );
-    if (changedCount > 0 && remoteHeadRevision !== headRevision) {
-      setStaleHeadRevision(remoteHeadRevision);
-      setRetryReady(false);
-    } else {
-      setStaleHeadRevision(null);
-      setRetryReady(false);
-    }
-  };
-
   if (!available) {
     const action = setupAction;
     return (
@@ -1281,53 +1190,34 @@ export const EnvironmentEditor = ({
         </Alert>
       ) : null}
 
-      <Card className="gap-0" size="sm">
-        <CardHeader className="border-b pb-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle>
-                <h2>Variables</h2>
-              </CardTitle>
-              <CardDescription>
-                {environmentLabel}
-                {changedCount > 0
-                  ? ` · ${changedCount} unpublished change${changedCount === 1 ? "" : "s"}`
-                  : ""}
-              </CardDescription>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                aria-label="Refresh"
-                onClick={() => {
-                  void refresh();
-                }}
-                size="sm"
-                variant="outline"
-              >
-                <RefreshCcw aria-hidden="true" /> Refresh
-              </Button>
-              <Button
-                disabled={!canPublish}
-                onClick={() => {
-                  setReviewValuesRevealed(true);
-                  setReviewOpen(true);
-                }}
-                size="sm"
-              >
-                Review changes
-              </Button>
-              <Button
-                onClick={() => {
-                  setAddError(null);
-                  setAddOpen(true);
-                }}
-                size="sm"
-                variant="outline"
-              >
-                <Plus aria-hidden="true" /> Add Variable
-              </Button>
-            </div>
-          </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <List aria-hidden="true" className="size-4" />
+            <h2>Variables</h2>
+          </CardTitle>
+          <CardAction className="flex flex-wrap justify-end gap-2">
+            <Button
+              onClick={() => {
+                setAddError(null);
+                setAddOpen(true);
+              }}
+              size="sm"
+              variant="outline"
+            >
+              <Plus aria-hidden="true" /> Add Variable
+            </Button>
+            <Button
+              disabled={!canPublish}
+              onClick={() => {
+                setReviewValuesRevealed(true);
+                setReviewOpen(true);
+              }}
+              size="sm"
+            >
+              <Save aria-hidden="true" /> Save changes
+            </Button>
+          </CardAction>
         </CardHeader>
         <CardContent className="px-0">
           {variables.length === 0 ? (
@@ -1360,10 +1250,6 @@ export const EnvironmentEditor = ({
             </ul>
           )}
         </CardContent>
-        <CardFooter className="border-t py-2.5 text-xs text-muted-foreground">
-          <LockKeyhole className="mr-2 size-3" /> The server never sees these
-          values.
-        </CardFooter>
       </Card>
 
       <Card className="mt-4">
@@ -1371,10 +1257,6 @@ export const EnvironmentEditor = ({
           <CardTitle className="flex items-center gap-2 text-lg">
             <GitBranch className="size-4" /> History
           </CardTitle>
-          <CardDescription>
-            Past publishes. Rollback writes a new revision. It does not erase
-            this one.
-          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2">
           {(protocolSession
@@ -1430,10 +1312,9 @@ export const EnvironmentEditor = ({
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Review changes</DialogTitle>
+            <DialogTitle>Save changes</DialogTitle>
             <DialogDescription>
-              These values stay on this browser. Publishing encrypts them here,
-              then writes a new revision.
+              These Variables will be published as a new revision.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end">

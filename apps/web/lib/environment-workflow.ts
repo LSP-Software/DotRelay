@@ -290,6 +290,21 @@ export const changedLaneCount = (
   variables: readonly EnvironmentVariable[],
 ): number => variables.filter((variable) => variable.hasDraftChange).length;
 
+export const mergeVerifiedHistory = (
+  current: readonly string[],
+  incoming: readonly string[],
+): readonly string[] => {
+  if (incoming.length === 0) return current;
+  const seen = new Set(current);
+  const next = [...current];
+  for (const id of incoming) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    next.push(id);
+  }
+  return Object.freeze(next);
+};
+
 export const createRollbackPlan = (
   targetRevision: string,
   selectedVariableIds: readonly string[],

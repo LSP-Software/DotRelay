@@ -211,7 +211,15 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await page.goto("/workspace?preview=protected");
 
   await expect(page.getByRole("heading", { name: "Variables" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
+  await expect(page.getByText("rev_0184", { exact: true })).toBeVisible();
+  await expect(page.getByText("rev_0183", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("The server never sees these values."),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("GitHub access does not grant DotRelay access."),
+  ).toHaveCount(0);
 
   const originRow = page.getByTestId("environment-variable-API_ORIGIN");
   await page.getByLabel("API_ORIGIN Value").fill("https://changed.invalid");
@@ -236,27 +244,15 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(value).toHaveAttribute("type", "text");
   await expect(value).toHaveValue("local-only-value");
 
-  await page.getByRole("button", { name: "Review changes" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByRole("dialog")).toContainText("DATABASE_URL");
   await expect(page.getByRole("dialog")).toContainText("local-only-value");
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByText(/Local preview saved as rev_0185/)).toBeVisible();
 });
 
-test("protected Environment editor offers local conflict choices and lane rollback", async ({
-  page,
-}) => {
+test("protected Environment editor offers lane rollback", async ({ page }) => {
   await page.goto("/workspace?preview=protected");
-
-  await page.getByLabel("API_ORIGIN Value").fill("https://changed.invalid");
-  await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Someone else published these")).toBeVisible();
-  await page.getByRole("button", { name: "Keep mine" }).click();
-  await expect(page.getByText("Someone else published these")).toHaveCount(0);
-  await page.getByRole("button", { name: "Retry publish" }).click();
-  await expect(
-    page.getByText(/Local preview retry against rev_0185/),
-  ).toBeVisible();
 
   await page.getByRole("button", { name: "Rollback" }).first().click();
   await expect(page.getByRole("dialog")).toContainText("writes a new revision");
@@ -266,7 +262,6 @@ test("protected Environment editor offers local conflict choices and lane rollba
   await expect(
     page.getByText(/Rollback from rev_0183 is staged as a new revision/),
   ).toBeVisible();
-  await expect(page.getByText(/does not erase this one/i)).toBeVisible();
 });
 
 test("Environment drafts enforce unique names and preserve tombstones", async ({

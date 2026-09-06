@@ -11,9 +11,8 @@ Team, Devices, and Recovery. You pick a Project, then an Environment, then Varia
 navigation becomes a keyboard-operable sheet on small screens, and a skip link reaches the main
 workspace.
 
-A Project shows its linked GitHub owner and name when they are known, and otherwise the
-stable numeric GitHub repository id as descriptive metadata. GitHub admission and
-permissions do not grant DotRelay access. Environment tabs use the operator-visible label. Device
+A Project is listed by its linked GitHub owner and name when they are known, otherwise by
+the stable numeric GitHub repository id. Environment tabs use the operator-visible label. Device
 approval lives at `/device` and is opened from CLI setup or login.
 
 ## One next action
@@ -54,6 +53,6 @@ New Variables require explicit ownership. Shared Values are Team-readable. A Use
 readable only by that User's authorized Devices. Live Variable names remain unique. Deletion stages
 a tombstone until publication.
 
-Review and publish encrypts changed Values in the browser. Sync verifies history before remote
-state is accepted. Stale heads require a local choice. Rollback chooses Variables and appends a new
-Revision rather than rewinding the head.
+Save changes encrypts changed Values in the browser, then publishes a new Revision. Sync verifies
+history before remote state is accepted. Stale heads require a local choice. Rollback chooses
+Variables and appends a new Revision rather than rewinding the head.
