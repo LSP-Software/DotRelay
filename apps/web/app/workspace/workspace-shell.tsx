@@ -75,6 +75,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   e2eWorkspaceBoundary,
+  enrolledDeviceRows,
   fetchWorkspaceBoundary,
   type MembershipRole,
   projectDisplayName,
@@ -343,6 +344,9 @@ export const WorkspaceShell = ({
   const cliCommand = `dotrelay setup ${displayBoundary.profile.origin}`;
   const thisBrowserEnrolled =
     protectedPreview || Boolean(liveProtocolSession ?? protocolSession);
+  const enrolledDevices = enrolledDeviceRows(displayBoundary, {
+    thisBrowserEnrolled,
+  });
 
   const setupAction = nextSetupAction({
     sessionActive: displayBoundary.session.active,
@@ -1298,7 +1302,60 @@ export const WorkspaceShell = ({
                 A Device is this browser, or the CLI on a machine. Signing in is
                 not enough to read variables.
               </p>
-              <Card className="mt-6">
+              {enrolledDevices.length > 0 ? (
+                <Card className="mt-6">
+                  <CardHeader>
+                    <CardTitle>Enrolled Devices</CardTitle>
+                    <CardDescription>
+                      Active Devices that can decrypt variables for your User.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Table aria-label="Enrolled Devices">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Device</TableHead>
+                          <TableHead>Project access</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {enrolledDevices.map((device) => (
+                          <TableRow
+                            data-testid={`enrolled-device-${device.id}`}
+                            key={device.id}
+                          >
+                            <TableCell>
+                              <div className="font-medium">
+                                {device.current
+                                  ? "This browser"
+                                  : "Enrolled Device"}
+                              </div>
+                              <div className="font-mono text-[10px] text-muted-foreground">
+                                {device.id}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                className={
+                                  device.hasEpochGrant
+                                    ? undefined
+                                    : "border-amber-300/25 text-amber-200"
+                                }
+                                variant="outline"
+                              >
+                                {device.hasEpochGrant
+                                  ? "Has Project access"
+                                  : "Pending Project access"}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              ) : null}
+              <Card className={enrolledDevices.length > 0 ? "mt-4" : "mt-6"}>
                 <CardHeader>
                   <CardTitle>
                     {thisBrowserEnrolled

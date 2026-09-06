@@ -17,6 +17,18 @@ test("workspace shows a copyable CLI setup command after opening Devices", async
   await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
 });
 
+test("Devices lists enrolled Devices besides this browser", async ({
+  page,
+}) => {
+  await page.goto("/workspace");
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
+  const enrolled = page.getByRole("table", { name: "Enrolled Devices" });
+  await expect(enrolled).toContainText("00000000-0000-4000-8000-000000000041");
+  await expect(enrolled).toContainText("00000000-0000-4000-8000-000000000042");
+  await expect(enrolled).toContainText("Has Project access");
+  await expect(enrolled).toContainText("Pending Project access");
+});
+
 test("device approval page asks to allow the CLI", async ({ page }) => {
   await page.goto("/device?user_code=ABCD-EFGH");
   await expect(

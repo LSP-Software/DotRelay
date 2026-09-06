@@ -15,6 +15,9 @@ A Project is listed by its linked GitHub owner and name when they are known, oth
 the stable numeric GitHub repository id. Environment tabs use the operator-visible label. Device
 approval lives at `/device` and is opened from CLI setup or login.
 
+The Devices page lists every enrolled Device for your User, including CLI
+installations, and whether this browser is one of them.
+
 ## One next action
 
 The interface still tracks four independent gates: Server Profile trust, session, Device, and

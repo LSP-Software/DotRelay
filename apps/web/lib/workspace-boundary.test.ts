@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+  enrolledDeviceRows,
+  parsePeerDevices,
   parseWorkspaceCatalog,
   projectDisplayName,
   resolveLiveApiOrigin,
@@ -65,4 +67,56 @@ test("catalog display uses the GitHub owner and name when present", () => {
   expect(project).toBeDefined();
   if (!project) throw new Error("expected a Project");
   expect(projectDisplayName(project)).toBe("LSP-Software / DotRelay");
+});
+
+test("workspace boundary keeps enrolled peer Devices", () => {
+  expect(
+    parsePeerDevices([
+      {
+        id: "00000000-0000-4000-8000-000000000041",
+        encryptionPublicKey: "aa",
+        signingPublicKey: "bb",
+        hasEpochGrant: true,
+      },
+      { id: "not-a-device" },
+    ]),
+  ).toEqual([
+    {
+      id: "00000000-0000-4000-8000-000000000041",
+      encryptionPublicKey: "aa",
+      signingPublicKey: "bb",
+      hasEpochGrant: true,
+    },
+  ]);
+});
+
+test("enrolled Device rows include this browser and peer Devices", () => {
+  expect(
+    enrolledDeviceRows(
+      {
+        device: { active: true, id: "00000000-0000-4000-8000-000000000040" },
+        grantsReady: true,
+        peerDevices: [
+          {
+            id: "00000000-0000-4000-8000-000000000041",
+            encryptionPublicKey: "aa",
+            signingPublicKey: "bb",
+            hasEpochGrant: false,
+          },
+        ],
+      },
+      { thisBrowserEnrolled: true },
+    ),
+  ).toEqual([
+    {
+      id: "00000000-0000-4000-8000-000000000040",
+      current: true,
+      hasEpochGrant: true,
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000041",
+      current: false,
+      hasEpochGrant: false,
+    },
+  ]);
 });
