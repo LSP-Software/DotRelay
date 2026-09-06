@@ -50,8 +50,7 @@ const syncPageFor = async (
   artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
 ) => {
   const revisionObject = artifacts.stagedObjects.find(
-    (object) =>
-      object.objectId === artifacts.request.revision.protocolObjectId,
+    (object) => object.objectId === artifacts.request.revision.protocolObjectId,
   );
   if (!revisionObject) throw new Error("revision object is missing");
   const revision = parseProtocolObject(revisionObject.bytes);
@@ -127,17 +126,21 @@ describe("verified Environment session", () => {
         sharedValuePrivateKey: encryption.privateKey,
       }).syncAndDecode(request),
     ).rejects.toThrow("signature verification failed");
-    const synced = await createVerifiedEnvironmentSession({
+    const session = createVerifiedEnvironmentSession({
       context,
       transport: transportFor(page),
       sharedValuePrivateKey: encryption.privateKey,
       signingTrustKeys: [localKey, authorKey],
-    }).syncAndDecode(request);
+    });
+    const synced = await session.syncAndDecode(request);
     expect(synced.variables).toEqual([
       expect.objectContaining({
         name: "DATABASE_URL",
         value: "postgres://example",
       }),
     ]);
+    expect(session.revisionSnapshots().get(page.currentHeadId ?? "")).toEqual(
+      synced.variables,
+    );
   });
 });

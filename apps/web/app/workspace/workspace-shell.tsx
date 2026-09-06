@@ -1054,6 +1054,12 @@ export const WorkspaceShell = ({
                 <div className="mb-6">
                   <EnvironmentEditor
                     available={false}
+                    {...(displayBoundary.session.displayName
+                      ? {
+                          currentUserDisplayName:
+                            displayBoundary.session.displayName,
+                        }
+                      : {})}
                     onSetupAction={handleSetupAction}
                     remoteHeadRevision={
                       displayBoundary.environment.headRevision
@@ -1145,6 +1151,12 @@ export const WorkspaceShell = ({
               </Tabs>
               <EnvironmentEditor
                 available={protectedWorkflowAvailable}
+                {...(displayBoundary.session.displayName
+                  ? {
+                      currentUserDisplayName:
+                        displayBoundary.session.displayName,
+                    }
+                  : {})}
                 environmentLabel={selectedEnvironment.label}
                 onSetupAction={handleSetupAction}
                 remoteHeadRevision={

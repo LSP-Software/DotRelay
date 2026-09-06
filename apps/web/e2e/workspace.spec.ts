@@ -213,6 +213,19 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(page.getByRole("heading", { name: "Variables" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
 
+  const history = page.getByTestId("environment-history");
+  await expect(history).toContainText("Ari Stone");
+  await expect(history).toContainText("Maya Okonkwo");
+  await expect(history).toContainText("Changed API_ORIGIN");
+  await expect(history).toContainText("Added FEATURE_GATE");
+  await expect(history).toContainText("Started with API_ORIGIN");
+  await expect(history).toContainText("Live");
+  await expect(history).not.toContainText("rev_0184");
+  await expect(history).not.toContainText("~");
+  await expect(history.getByRole("button", { name: "Rollback" })).toHaveCount(
+    2,
+  );
+
   const originRow = page.getByTestId("environment-variable-API_ORIGIN");
   await page.getByLabel("API_ORIGIN Value").fill("https://changed.invalid");
   await expect(originRow).toContainText("Draft change");
@@ -240,7 +253,7 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(page.getByRole("dialog")).toContainText("DATABASE_URL");
   await expect(page.getByRole("dialog")).toContainText("local-only-value");
   await page.getByRole("button", { name: "Publish" }).click();
-  await expect(page.getByText(/Local preview saved as rev_0185/)).toBeVisible();
+  await expect(page.getByText("Local preview saved.")).toBeVisible();
 });
 
 test("protected Environment editor offers local conflict choices and lane rollback", async ({
@@ -264,7 +277,7 @@ test("protected Environment editor offers local conflict choices and lane rollba
   await expect(page.getByRole("dialog")).not.toContainText("SIGNING_KEY");
   await page.getByRole("button", { name: "Stage rollback" }).click();
   await expect(
-    page.getByText(/Rollback from rev_0183 is staged as a new revision/),
+    page.getByText("Rollback is staged as a new Revision."),
   ).toBeVisible();
   await expect(page.getByText(/does not erase this one/i)).toBeVisible();
 });

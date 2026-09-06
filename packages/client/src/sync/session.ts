@@ -28,6 +28,10 @@ export type VerifiedEnvironmentSession = Readonly<{
     readonly targetRevision: string;
     readonly selectedVariableIds: readonly string[];
   }) => Promise<ReadonlyMap<string, string | null>>;
+  readonly revisionSnapshots: () => ReadonlyMap<
+    string,
+    readonly DecodedVariable[]
+  >;
 }>;
 
 export const createVerifiedEnvironmentSession = (input: {
@@ -85,6 +89,7 @@ export const createVerifiedEnvironmentSession = (input: {
       const variables = await decodeVariables(page);
       return Object.freeze({ page, variables });
     },
+    revisionSnapshots: () => new Map(snapshots),
     resolveRollbackValues: async ({ targetRevision, selectedVariableIds }) => {
       const snapshot = snapshots.get(targetRevision);
       if (!snapshot)

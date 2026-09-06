@@ -14,17 +14,14 @@ import {
   Check,
   Eye,
   EyeOff,
-  GitBranch,
   LockKeyhole,
   Plus,
   RefreshCcw,
-  RotateCcw,
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -46,6 +43,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  type EnvironmentHistoryEntry,
+  historyEntriesFromSync,
+  previewHistoryEntries,
+  summarizeManifestChange,
+} from "@/lib/environment-history";
+import {
   applyRollbackToVariables,
   changedLaneCount,
   createEnvironmentVariable,
@@ -63,6 +66,7 @@ import {
   validateVariableDraft,
   variableHasDraftChange,
 } from "@/lib/environment-workflow";
+import { EnvironmentHistoryPanel } from "./environment-history-panel";
 
 type EnvironmentEditorProps = Readonly<{
   readonly available: boolean;
@@ -73,6 +77,7 @@ type EnvironmentEditorProps = Readonly<{
   readonly onSetupAction?: () => void;
   readonly environmentLabel?: string;
   readonly remoteHeadRevision: string;
+  readonly currentUserDisplayName?: string;
   readonly protocolSession?: Readonly<{
     readonly context: PublicationContext;
     readonly transport: ProtocolTransport;
@@ -85,6 +90,10 @@ type EnvironmentEditorProps = Readonly<{
       readonly targetRevision: string;
       readonly selectedVariableIds: readonly string[];
     }) => Promise<ReadonlyMap<string, string | null>>;
+    readonly revisionSnapshots?: () => ReadonlyMap<
+      string,
+      readonly EnvironmentVariable[]
+    >;
   }>;
 }>;
 
@@ -146,6 +155,22 @@ const nextVariableId = (): string => globalThis.crypto.randomUUID();
 
 const revisionNumber = (revision: string): number =>
   Number.parseInt(revision.replace("rev_", ""), 10);
+
+const historyFromPage = (
+  revisions: Parameters<typeof historyEntriesFromSync>[0]["revisions"],
+  session: EnvironmentEditorProps["protocolSession"],
+  currentUserDisplayName: string,
+): readonly EnvironmentHistoryEntry[] =>
+  historyEntriesFromSync({
+    revisions,
+    snapshots: session?.revisionSnapshots?.() ?? new Map(),
+    ...(session?.context.actorUserId
+      ? { currentUserId: session.context.actorUserId }
+      : {}),
+    ...(currentUserDisplayName
+      ? { currentUserLabel: currentUserDisplayName }
+      : {}),
+  });
 
 const valueStateLabel = (variable: EnvironmentVariable): string => {
   if (variable.tombstone) return "Will delete";
@@ -521,6 +546,7 @@ export const EnvironmentEditor = ({
   onSetupAction,
   environmentLabel = "default",
   remoteHeadRevision,
+  currentUserDisplayName,
   protocolSession,
 }: EnvironmentEditorProps) => {
   const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
@@ -532,7 +558,12 @@ export const EnvironmentEditor = ({
   const [headRevision, setHeadRevision] = useState(
     protocolSession?.context.expectedHeadId ?? "rev_0184",
   );
-  const [verifiedHistory, setVerifiedHistory] = useState<readonly string[]>([]);
+  const [history, setHistory] = useState<readonly EnvironmentHistoryEntry[]>(
+    () =>
+      protocolSession
+        ? []
+        : previewHistoryEntries(currentUserDisplayName ?? "You"),
+  );
   const [addOpen, setAddOpen] = useState(false);
   const [addDraft, setAddDraft] =
     useState<AddVariableState>(emptyVariableDraft);
@@ -569,6 +600,21 @@ export const EnvironmentEditor = ({
   const [rollbackMutationTarget, setRollbackMutationTarget] = useState<
     string | null
   >(null);
+  const entryForPublish = (revisionId: string): EnvironmentHistoryEntry => {
+    const change = summarizeManifestChange(remoteVariables, variables);
+    return Object.freeze({
+      revisionId,
+      authoredAtMs: Date.now(),
+      authorUserId: protocolSession?.context.actorUserId ?? null,
+      authorLabel: currentUserDisplayName ?? "You",
+      kind: rollbackMutationTarget
+        ? "rollback"
+        : remoteVariables.length === 0
+          ? "genesis"
+          : "update",
+      ...change,
+    });
+  };
   useEffect(() => {
     if (!protocolSession) return;
     setVariables((current) =>
@@ -578,7 +624,7 @@ export const EnvironmentEditor = ({
     setHeadRevision(
       protocolSession.context.expectedHeadId ?? "empty-environment",
     );
-    setVerifiedHistory([]);
+    setHistory([]);
     setProtocolHead(
       protocolSession.context.expectedHeadId &&
         protocolSession.context.expectedHeadHash
@@ -619,7 +665,13 @@ export const EnvironmentEditor = ({
             ? current
             : [...decoded],
         );
-        setVerifiedHistory(page.revisions.map((revision) => revision.id));
+        setHistory(
+          historyFromPage(
+            page.revisions,
+            protocolSession,
+            currentUserDisplayName ?? "You",
+          ),
+        );
         if (page.currentHeadId && page.currentHeadHash) {
           setProtocolHead({
             id: page.currentHeadId,
@@ -638,7 +690,7 @@ export const EnvironmentEditor = ({
     return () => {
       cancelled = true;
     };
-  }, [protocolSession, available]);
+  }, [protocolSession, available, currentUserDisplayName]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
   >(() => new Map());
@@ -863,12 +915,19 @@ export const EnvironmentEditor = ({
         setStaleHeadRevision(null);
         setRetryReady(false);
         setReviewOpen(false);
-        setPublishMessage(`Published as ${artifacts.request.revision.id}.`);
+        setHistory((current) => [
+          entryForPublish(artifacts.request.revision.id),
+          ...current.filter(
+            (entry) => entry.revisionId !== artifacts.request.revision.id,
+          ),
+        ]);
+        setPublishMessage("Published. This is now the live Environment.");
         return;
       }
       await prepareEncryptedPublication(variables);
       const nextRevision = revisionNumber(headRevision) + 1;
-      setHeadRevision(`rev_${String(nextRevision).padStart(4, "0")}`);
+      const nextRevisionId = `rev_${String(nextRevision).padStart(4, "0")}`;
+      setHeadRevision(nextRevisionId);
       setVariables((current) =>
         current.map((variable) => ({ ...variable, hasDraftChange: false })),
       );
@@ -877,9 +936,8 @@ export const EnvironmentEditor = ({
       setStaleHeadRevision(null);
       setRetryReady(false);
       setReviewOpen(false);
-      setPublishMessage(
-        `Local preview saved as rev_${String(nextRevision).padStart(4, "0")}.`,
-      );
+      setHistory((current) => [entryForPublish(nextRevisionId), ...current]);
+      setPublishMessage("Local preview saved.");
     } catch (error) {
       if (
         protocolSession &&
@@ -904,12 +962,18 @@ export const EnvironmentEditor = ({
           await verifySyncPage(page, sessionTrustKeys(protocolSession), {
             actorUserId: context.actorUserId,
           });
-          setVerifiedHistory(page.revisions.map((revision) => revision.id));
           const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
           const decodedVariables = protocolSession.decodeVariables
             ? await protocolSession.decodeVariables(page, remoteVariables)
             : undefined;
           if (decodedVariables) setRemoteVariables(decodedVariables);
+          setHistory(
+            historyFromPage(
+              page.revisions,
+              protocolSession,
+              currentUserDisplayName ?? "You",
+            ),
+          );
           if (!page.currentHeadId || !page.currentHeadHash)
             throw new Error(
               "the stale response did not provide a verified head",
@@ -970,9 +1034,7 @@ export const EnvironmentEditor = ({
     }
     setRollbackTarget(null);
     setRollbackMutationTarget(rollbackTarget);
-    setPublishMessage(
-      `Rollback from ${rollbackTarget} is staged as a new revision.`,
-    );
+    setPublishMessage("Rollback is staged as a new Revision.");
   };
 
   const resolveConflict = (
@@ -1078,7 +1140,6 @@ export const EnvironmentEditor = ({
         await verifySyncPage(page, sessionTrustKeys(protocolSession), {
           actorUserId: context.actorUserId,
         });
-        setVerifiedHistory(page.revisions.map((revision) => revision.id));
         const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
         const decodedVariables = protocolSession.decodeVariables
           ? await protocolSession.decodeVariables(page, remoteVariables)
@@ -1087,6 +1148,13 @@ export const EnvironmentEditor = ({
           setRemoteVariables(decodedVariables);
           if (changedCount === 0) setVariables([...decodedVariables]);
         }
+        setHistory(
+          historyFromPage(
+            page.revisions,
+            protocolSession,
+            currentUserDisplayName ?? "You",
+          ),
+        );
         if (page.currentHeadId && page.currentHeadHash) {
           const localHeadId = protocolHead?.id ?? context.expectedHeadId;
           const headChanged =
@@ -1281,133 +1349,102 @@ export const EnvironmentEditor = ({
         </Alert>
       ) : null}
 
-      <Card className="gap-0" size="sm">
-        <CardHeader className="border-b pb-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle>
-                <h2>Variables</h2>
-              </CardTitle>
-              <CardDescription>
-                {environmentLabel}
-                {changedCount > 0
-                  ? ` · ${changedCount} unpublished change${changedCount === 1 ? "" : "s"}`
-                  : ""}
-              </CardDescription>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                aria-label="Refresh"
-                onClick={() => {
-                  void refresh();
-                }}
-                size="sm"
-                variant="outline"
-              >
-                <RefreshCcw aria-hidden="true" /> Refresh
-              </Button>
-              <Button
-                disabled={!canPublish}
-                onClick={() => {
-                  setReviewValuesRevealed(true);
-                  setReviewOpen(true);
-                }}
-                size="sm"
-              >
-                Review changes
-              </Button>
-              <Button
-                onClick={() => {
-                  setAddError(null);
-                  setAddOpen(true);
-                }}
-                size="sm"
-                variant="outline"
-              >
-                <Plus aria-hidden="true" /> Add Variable
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="px-0">
-          {variables.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              Add a Variable to start this Manifest.
-            </p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {variables.map((variable) => (
-                <VariableRow
-                  canUndoDelete={deletedVariableSnapshots.has(variable.id)}
-                  key={variable.id}
-                  onDelete={() => deleteVariable(variable.id)}
-                  onSetAbsent={() =>
-                    setVariables((current) =>
-                      current.map((candidate) =>
-                        candidate.id === variable.id
-                          ? withDraftFlag(updateVariableValue(candidate, null))
-                          : candidate,
-                      ),
-                    )
-                  }
-                  onToggleReveal={() => toggleReveal(variable.id)}
-                  onUndoDelete={() => undoDelete(variable.id)}
-                  onValueChange={(value) => updateValue(variable.id, value)}
-                  revealed={revealed.has(variable.id)}
-                  variable={variable}
-                />
-              ))}
-            </ul>
-          )}
-        </CardContent>
-        <CardFooter className="border-t py-2.5 text-xs text-muted-foreground">
-          <LockKeyhole className="mr-2 size-3" /> The server never sees these
-          values.
-        </CardFooter>
-      </Card>
-
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <GitBranch className="size-4" /> History
-          </CardTitle>
-          <CardDescription>
-            Past publishes. Rollback writes a new revision. It does not erase
-            this one.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-2">
-          {(protocolSession
-            ? verifiedHistory
-            : [headRevision, "rev_0183", "rev_0182"]
-          ).map((revision) => (
-            <div
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
-              key={revision}
-            >
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]">
+        <Card className="gap-0" size="sm">
+          <CardHeader className="border-b pb-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="font-mono text-sm">{revision}</p>
-                <p className="text-xs text-muted-foreground">
-                  {revision === headRevision ? "Current" : "Earlier revision"}
-                </p>
+                <CardTitle>
+                  <h2>Variables</h2>
+                </CardTitle>
+                <CardDescription>
+                  {environmentLabel}
+                  {changedCount > 0
+                    ? ` · ${changedCount} unpublished change${changedCount === 1 ? "" : "s"}`
+                    : ""}
+                </CardDescription>
               </div>
-              {revision === headRevision ? (
-                <Badge>Current</Badge>
-              ) : (
+              <div className="flex flex-wrap gap-2">
                 <Button
+                  aria-label="Refresh"
                   onClick={() => {
-                    void openRollback(revision);
+                    void refresh();
                   }}
                   size="sm"
                   variant="outline"
                 >
-                  <RotateCcw aria-hidden="true" /> Rollback
+                  <RefreshCcw aria-hidden="true" /> Refresh
                 </Button>
-              )}
+                <Button
+                  disabled={!canPublish}
+                  onClick={() => {
+                    setReviewValuesRevealed(true);
+                    setReviewOpen(true);
+                  }}
+                  size="sm"
+                >
+                  Review changes
+                </Button>
+                <Button
+                  onClick={() => {
+                    setAddError(null);
+                    setAddOpen(true);
+                  }}
+                  size="sm"
+                  variant="outline"
+                >
+                  <Plus aria-hidden="true" /> Add Variable
+                </Button>
+              </div>
             </div>
-          ))}
-        </CardContent>
-      </Card>
+          </CardHeader>
+          <CardContent className="px-0">
+            {variables.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                Add a Variable to start this Manifest.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {variables.map((variable) => (
+                  <VariableRow
+                    canUndoDelete={deletedVariableSnapshots.has(variable.id)}
+                    key={variable.id}
+                    onDelete={() => deleteVariable(variable.id)}
+                    onSetAbsent={() =>
+                      setVariables((current) =>
+                        current.map((candidate) =>
+                          candidate.id === variable.id
+                            ? withDraftFlag(
+                                updateVariableValue(candidate, null),
+                              )
+                            : candidate,
+                        ),
+                      )
+                    }
+                    onToggleReveal={() => toggleReveal(variable.id)}
+                    onUndoDelete={() => undoDelete(variable.id)}
+                    onValueChange={(value) => updateValue(variable.id, value)}
+                    revealed={revealed.has(variable.id)}
+                    variable={variable}
+                  />
+                ))}
+              </ul>
+            )}
+          </CardContent>
+          <CardFooter className="border-t py-2.5 text-xs text-muted-foreground">
+            <LockKeyhole className="mr-2 size-3" /> The server never sees these
+            values.
+          </CardFooter>
+        </Card>
+
+        <EnvironmentHistoryPanel
+          entries={history}
+          headRevision={headRevision}
+          onRollback={(revision) => {
+            void openRollback(revision);
+          }}
+        />
+      </div>
 
       <AddVariableDialog
         draft={addDraft}

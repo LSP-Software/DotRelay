@@ -18,6 +18,10 @@ export type EnvironmentProtocolSession = Readonly<{
     readonly targetRevision: string;
     readonly selectedVariableIds: readonly string[];
   }) => Promise<ReadonlyMap<string, string | null>>;
+  readonly revisionSnapshots: () => ReadonlyMap<
+    string,
+    readonly EnvironmentVariable[]
+  >;
 }>;
 
 export const createEnvironmentProtocolSession = (input: {
@@ -57,5 +61,19 @@ export const createEnvironmentProtocolSession = (input: {
       );
     },
     resolveRollbackValues: session.resolveRollbackValues,
+    revisionSnapshots: () => {
+      const mapped = new Map<string, readonly EnvironmentVariable[]>();
+      for (const [revisionId, variables] of session.revisionSnapshots()) {
+        mapped.set(
+          revisionId,
+          Object.freeze(
+            variables.map((variable) =>
+              Object.freeze({ ...variable, hasDraftChange: false }),
+            ),
+          ),
+        );
+      }
+      return mapped;
+    },
   });
 };
