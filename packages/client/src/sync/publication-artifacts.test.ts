@@ -39,6 +39,46 @@ const variable = (
   ...overrides,
 });
 
+const syncPageFor = async (
+  artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
+) => {
+  const revisionObject = artifacts.stagedObjects.find(
+    (object) =>
+      object.objectId === artifacts.request.revision.protocolObjectId,
+  );
+  if (!revisionObject) throw new Error("revision object is missing");
+  const revision = parseProtocolObject(revisionObject.bytes);
+  const revisionDigest = await sha384(revisionObject.bytes);
+  return {
+    environmentId: ids.environmentId,
+    trustedRevisionId: ids.environmentId,
+    trustedRevisionHash: new Uint8Array(48),
+    currentHeadId: artifacts.request.revision.id,
+    currentHeadHash: revisionDigest,
+    projectEpoch: 1n,
+    revisions: [
+      {
+        id: artifacts.request.revision.id,
+        digest: revisionDigest,
+        parentId: ids.environmentId,
+        parentHash: new Uint8Array(48),
+        mutation: revision.get(35) as number,
+        projectEpoch: BigInt(revision.get(30) as number),
+        authoredAtMs: BigInt(revision.get(34) as number),
+        rollbackTargetId: null,
+        objects: await Promise.all(
+          artifacts.stagedObjects.map(async (object) => ({
+            objectId: object.objectId,
+            canonicalBytes: object.bytes,
+            digest: await sha384(object.bytes),
+          })),
+        ),
+      },
+    ],
+    nextCursor: null,
+  };
+};
+
 describe("publication artifacts", () => {
   test("creates encrypted definition and value lanes signed by the supplied Device key", async () => {
     const encryption = await generateEncryptionKeyPair();
@@ -177,38 +217,32 @@ describe("publication artifacts", () => {
     const revision = parseProtocolObject(revisionObject.bytes);
     expect(revision.get(19)).toEqual(uuidToBytes(ids.environmentId));
     expect(revision.get(34)).toBe(artifacts.request.revision.authoredAtMs);
-    const revisionDigest = await sha384(revisionObject.bytes);
     await verifySyncPage(
-      {
-        environmentId: ids.environmentId,
-        trustedRevisionId: ids.environmentId,
-        trustedRevisionHash: new Uint8Array(48),
-        currentHeadId: artifacts.request.revision.id,
-        currentHeadHash: revisionDigest,
-        projectEpoch: 1n,
-        revisions: [
-          {
-            id: artifacts.request.revision.id,
-            digest: revisionDigest,
-            parentId: ids.environmentId,
-            parentHash: new Uint8Array(48),
-            mutation: 1,
-            projectEpoch: 1n,
-            authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
-            rollbackTargetId: null,
-            objects: await Promise.all(
-              artifacts.stagedObjects.map(async (object) => ({
-                objectId: object.objectId,
-                canonicalBytes: object.bytes,
-                digest: await sha384(object.bytes),
-              })),
-            ),
-          },
-        ],
-        nextCursor: null,
-      },
+      await syncPageFor(artifacts),
       await exportSigningPublicKey(signing.publicKey),
     );
+  });
+
+  test("accepts a peer Device signature when that Device is in the trust set", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const author = await generateSigningKeyPair();
+    const other = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts([variable()], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: author.privateKey,
+      mutation: "GENESIS",
+    });
+    const page = await syncPageFor(artifacts);
+    const otherKey = await exportSigningPublicKey(other.publicKey);
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    await expect(verifySyncPage(page, otherKey)).rejects.toThrow(
+      "signature verification failed",
+    );
+    await verifySyncPage(page, [otherKey, authorKey]);
   });
 
   test("rolls back only the selected Value lane without rewriting its definition", async () => {

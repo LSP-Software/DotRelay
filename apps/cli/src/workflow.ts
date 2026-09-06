@@ -112,6 +112,7 @@ type Boundary = Readonly<{
   readonly rotationRequired: boolean;
   readonly cryptoAvailable: boolean;
   readonly epochGrant?: string;
+  readonly signingTrustKeys: readonly string[];
   readonly peerDevices: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
@@ -208,6 +209,11 @@ const parseBoundary = (value: Record<string, unknown>): Boundary => {
     ...(typeof value.epochGrant === "string"
       ? { epochGrant: value.epochGrant }
       : {}),
+    signingTrustKeys: Array.isArray(value.signingTrustKeys)
+      ? value.signingTrustKeys.filter(
+          (key): key is string => typeof key === "string",
+        )
+      : [],
     peerDevices: Array.isArray(value.peerDevices)
       ? value.peerDevices.flatMap((entry) => {
           if (!isRecord(entry)) return [];
@@ -249,6 +255,31 @@ const hexToBytes = (value: string): Uint8Array => {
   for (let index = 0; index < bytes.length; index += 1)
     bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
   return bytes;
+};
+
+const collectSigningTrustKeys = (
+  boundary: Boundary,
+  localSigningPublicKey: Uint8Array,
+): Uint8Array[] => {
+  const keys = [localSigningPublicKey];
+  const seen = new Set([bytesToHex(localSigningPublicKey)]);
+  const addHex = (value: string): void => {
+    try {
+      const bytes = hexToBytes(value);
+      const hex = bytesToHex(bytes);
+      if (seen.has(hex)) return;
+      seen.add(hex);
+      keys.push(bytes);
+    } catch {
+      return;
+    }
+  };
+  for (const key of boundary.signingTrustKeys) addHex(key);
+  if (boundary.device.signingPublicKey)
+    addHex(boundary.device.signingPublicKey);
+  for (const peer of boundary.peerDevices)
+    if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
+  return keys;
 };
 
 const statePath = (directory: string, environmentId: string): string =>
@@ -1841,6 +1872,7 @@ const loadWorkflowSession = async (
     ...(options.fetch ? { fetch: options.fetch as never } : {}),
   });
   const signingPublicKey = await exportSigningPublicKey(keys.signingPublicKey);
+  const signingTrustKeys = collectSigningTrustKeys(boundary, signingPublicKey);
   const publicationContext: PublicationContext = {
     serverProfileId: options.profile.pin.serverProfileId,
     teamId: boundary.environment.teamId,
@@ -1862,6 +1894,7 @@ const loadWorkflowSession = async (
     transport,
     sharedValuePrivateKey: keys.encryptionPrivateKey,
     userDefinedValuePrivateKey: keys.encryptionPrivateKey,
+    signingTrustKeys,
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),
   });
   return {

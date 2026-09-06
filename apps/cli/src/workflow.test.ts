@@ -5,10 +5,12 @@ import {
   createDeviceBootstrap,
   createMemoryCredentialStore,
   createMemoryDeviceRecordStore,
+  createPublicationArtifacts,
 } from "@dotrelay/client";
 import {
   bytesToUuid,
   encodeSyncPage,
+  generateSigningKeyPair,
   parseProtocolObject,
   sha384,
   type SyncPageWire,
@@ -55,12 +57,25 @@ const boundary = {
   crypto: { available: true },
 } as const;
 
-const setup = async (): Promise<{
+const bytesToHex = (value: Uint8Array): string =>
+  [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const rawSigningPublicKey = async (key: CryptoKey): Promise<Uint8Array> =>
+  new Uint8Array(await crypto.subtle.exportKey("raw", key)).slice(0, 32);
+
+const setup = async (
+  options: Readonly<{
+    readonly signingTrustKeys?: readonly string[];
+    readonly revisions?: SyncPageWire["revisions"];
+    readonly bootstrap?: Awaited<ReturnType<typeof createDeviceBootstrap>>;
+  }> = {},
+): Promise<{
   credentials: NativeCredentialStore;
   deviceStorage: ReturnType<typeof createCliDeviceStorage>;
   admin: StrictJsonClient;
   fetch: FetchFunction;
   profilePath: string;
+  bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>;
 }> => {
   const { mkdir } = await import("node:fs/promises");
   const stateDirectory = `${import.meta.dir}/.tmp-workflow-state-${crypto.randomUUID()}`;
@@ -75,22 +90,30 @@ const setup = async (): Promise<{
   const deviceStorage = createCliDeviceStorage(profile.pin, credentials, {
     recordStore: createMemoryDeviceRecordStore(),
   });
-  const bootstrap = await createDeviceBootstrap({
-    pin: profile.pin,
-    userId: ids.user,
-    deviceId: ids.device,
-  });
+  const bootstrap =
+    options.bootstrap ??
+    (await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    }));
   await deviceStorage.save(bootstrap.bundle);
+  const workspaceBoundary = {
+    ...boundary,
+    ...(options.signingTrustKeys
+      ? { signingTrustKeys: options.signingTrustKeys }
+      : {}),
+  };
   const admin: StrictJsonClient = {
     get: async (path) => {
       if (path === "/api/v1/session")
         return { authenticated: true, user: { id: ids.user } };
-      return boundary;
+      return workspaceBoundary;
     },
     post: async () => ({}),
   };
   const stagedObjects = new Map<string, Uint8Array>();
-  let revisions: SyncPageWire["revisions"] = [];
+  let revisions: SyncPageWire["revisions"] = options.revisions ?? [];
   const syncPage = () => {
     const previous = revisions.at(-1);
     return encodeSyncPage({
@@ -179,7 +202,14 @@ const setup = async (): Promise<{
     }
     return Response.json({});
   };
-  return { credentials, deviceStorage, admin, fetch: fetcher, profilePath };
+  return {
+    credentials,
+    deviceStorage,
+    admin,
+    fetch: fetcher,
+    profilePath,
+    bootstrap,
+  };
 };
 
 afterEach(async () => {
@@ -213,6 +243,93 @@ describe("protected CLI workflows", () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("\n");
+    expect(result.stderr).toBe("");
+  });
+
+  test("pulls Values signed by a peer Device using workspace signing trust keys", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const peer = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://example",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: peer.privateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    const parsedRevision = parseProtocolObject(revisionObject.bytes);
+    const digest = await sha384(revisionObject.bytes);
+    const runtime = await setup({
+      bootstrap,
+      signingTrustKeys: [
+        bytesToHex(await rawSigningPublicKey(peer.publicKey)),
+      ],
+      revisions: [
+        {
+          id: artifacts.request.revision.id,
+          digest,
+          parentId: ids.environment,
+          parentHash: new Uint8Array(48),
+          mutation: parsedRevision.get(35) as number,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            artifacts.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+      ],
+    });
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DATABASE_URL=\"postgres://example\"");
     expect(result.stderr).toBe("");
   });
 

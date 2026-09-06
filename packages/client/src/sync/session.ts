@@ -36,8 +36,12 @@ export const createVerifiedEnvironmentSession = (input: {
   readonly sharedValuePrivateKey: CryptoKey;
   readonly userDefinedValuePrivateKey?: CryptoKey;
   readonly sharedValueSecret?: Uint8Array;
+  readonly signingTrustKeys?: readonly Uint8Array[];
 }): VerifiedEnvironmentSession => {
-  const revisionSigningPublicKey = input.context.revisionSigningPublicKey;
+  const revisionSigningPublicKey =
+    input.signingTrustKeys && input.signingTrustKeys.length > 0
+      ? input.signingTrustKeys
+      : input.context.revisionSigningPublicKey;
   if (!revisionSigningPublicKey)
     throw new Error("revision signing trust key is required for live sync");
   const snapshots = new Map<string, readonly DecodedVariable[]>();

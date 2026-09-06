@@ -28,13 +28,16 @@ export const createEnvironmentProtocolSession = (input: {
   readonly signingTrustKeys?: readonly Uint8Array[];
   readonly sharedValueSecret?: Uint8Array;
 }): EnvironmentProtocolSession => {
-  const session = createVerifiedEnvironmentSession(input);
   const signingTrustKeys =
     input.signingTrustKeys && input.signingTrustKeys.length > 0
       ? input.signingTrustKeys
       : input.context.revisionSigningPublicKey
         ? [input.context.revisionSigningPublicKey]
         : [];
+  const session = createVerifiedEnvironmentSession({
+    ...input,
+    ...(signingTrustKeys.length > 0 ? { signingTrustKeys } : {}),
+  });
   return Object.freeze({
     context: input.context,
     transport: input.transport,
