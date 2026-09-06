@@ -20,7 +20,7 @@ import {
   RotateCcw,
   Users,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -367,24 +367,30 @@ export const WorkspaceShell = ({
   const protectedWorkflowAvailable =
     setupAction === null && !localDeviceBlockers;
   const cliSetupCommand =
-    setupAction?.id === "crypto-unavailable" ? cliCommand : undefined;
+    setupAction?.id === "crypto-unavailable" ||
+    setupAction?.id === "enroll-device"
+      ? cliCommand
+      : undefined;
   const editorSetupAction = displayedSetupAction(setupAction, {
     localDeviceBlockers,
     inProgress: deviceSetupInProgress,
   });
 
-  const syncSelection = (next: {
-    readonly teamId: string | null;
-    readonly projectId: string | null;
-    readonly environmentId: string | null;
-    readonly view?: WorkspaceView;
-  }) => {
-    setTeamId(next.teamId);
-    setProjectId(next.projectId);
-    setEnvironmentId(next.environmentId);
-    if (next.view) setView(next.view);
-    writeWorkspaceParams(next);
-  };
+  const syncSelection = useCallback(
+    (next: {
+      readonly teamId: string | null;
+      readonly projectId: string | null;
+      readonly environmentId: string | null;
+      readonly view?: WorkspaceView;
+    }) => {
+      setTeamId(next.teamId);
+      setProjectId(next.projectId);
+      setEnvironmentId(next.environmentId);
+      if (next.view) setView(next.view);
+      writeWorkspaceParams(next);
+    },
+    [],
+  );
 
   const openProject = (project: WorkspaceProject) => {
     const firstEnvironment = project.environments[0];
@@ -430,7 +436,14 @@ export const WorkspaceShell = ({
       return;
     }
     if (!teamId) setTeamId(firstTeam.id);
-  }, [displayBoundary.catalog.projects, preview, projectId, teamId, teams]);
+  }, [
+    displayBoundary.catalog.projects,
+    preview,
+    projectId,
+    syncSelection,
+    teamId,
+    teams,
+  ]);
 
   useEffect(() => {
     let cancelled = false;

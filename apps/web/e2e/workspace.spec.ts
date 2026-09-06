@@ -75,7 +75,7 @@ test("the Team menu shows the current Team and lets you switch", async ({
     .selectOption("Acme Labs");
   await expect(page.getByRole("heading", { name: "Acme Labs" })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "acme / widget" }),
+    page.locator("main").getByRole("button", { name: "acme / widget" }),
   ).toBeVisible();
 });
 
@@ -102,7 +102,7 @@ test("role-aware administration and invitations expose pending key grants", asyn
     page.getByRole("button", { name: "Invite member" }),
   ).toBeDisabled();
   await expect(
-    page.getByText("Members can view this Team's Projects."),
+    page.getByRole("alert").getByText("Members can view this Team's Projects."),
   ).toBeVisible();
 });
 
@@ -267,7 +267,9 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   await page.goto("/workspace?preview=protected");
 
   await page.getByRole("button", { name: "Rollback" }).first().click();
-  await expect(page.getByRole("dialog")).toContainText("writes a new revision");
+  await expect(page.getByRole("dialog")).toContainText(
+    "This writes a new revision",
+  );
   await expect(page.getByRole("dialog")).toContainText("API_ORIGIN");
   await expect(page.getByRole("dialog")).not.toContainText("SIGNING_KEY");
   await page.getByRole("button", { name: "Stage rollback" }).click();

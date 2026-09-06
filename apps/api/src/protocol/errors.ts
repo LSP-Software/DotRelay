@@ -1,10 +1,10 @@
 import { type ProblemCode, sha384 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
+  GenesisExistsError,
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
-  GenesisExistsError,
   StagedObjectConflictError,
   StaleEpochError,
   StaleHeadError,
@@ -57,9 +57,15 @@ export const mapPersistenceError = (
     message.includes("invalid")
   )
     return { code: "invalid_request" };
-  if (message.includes("Unique constraint") || message.includes("unique constraint"))
+  if (
+    message.includes("Unique constraint") ||
+    message.includes("unique constraint")
+  )
     return { code: "state_conflict" };
-  if (message.includes("check constraint") || message.includes("Check constraint"))
+  if (
+    message.includes("check constraint") ||
+    message.includes("Check constraint")
+  )
     return { code: "invalid_request" };
   return null;
 };

@@ -958,7 +958,9 @@ describe("protected CLI workflows", () => {
     expect(pulled.exitCode).toBe(0);
     expect(questions).toEqual([]);
     expect(pulled.stdout).toBe("No changes found\n");
-    expect(await Bun.file(input).text()).toBe("DATABASE_URL=postgres://secret\n");
+    expect(await Bun.file(input).text()).toBe(
+      "DATABASE_URL=postgres://secret\n",
+    );
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {

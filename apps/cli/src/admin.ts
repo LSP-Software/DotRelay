@@ -314,9 +314,7 @@ export type ResolveTeamOptions = Readonly<{
   readonly terminal?: TerminalIo;
 }>;
 
-const askForTeamName = async (
-  options: ResolveTeamOptions,
-): Promise<string> => {
+const askForTeamName = async (options: ResolveTeamOptions): Promise<string> => {
   const write = options.write ?? (() => undefined);
   write("No Team yet. Create one to continue.\n");
   const answer = (

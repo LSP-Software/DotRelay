@@ -1,5 +1,5 @@
 import { CliInvocationError } from "./errors";
-import { type TerminalIo, readTerminalLine } from "./terminal";
+import { readTerminalLine, type TerminalIo } from "./terminal";
 
 export type ColorRole = "graphite" | "paper" | "wax" | "dim" | "ok";
 
@@ -44,8 +44,7 @@ export const renderStep = (
   return lines.join("\n");
 };
 
-type WritableTty = NodeJS.WritableStream &
-  Partial<{ readonly isTTY: boolean }>;
+type WritableTty = NodeJS.WritableStream & Partial<{ readonly isTTY: boolean }>;
 
 export const rewriteRegion = (
   output: NodeJS.WritableStream,
@@ -227,4 +226,4 @@ export const writeNotice = (
   output.write(line);
 };
 
-export { readRawKey, type ReadableRaw };
+export { type ReadableRaw, readRawKey };
