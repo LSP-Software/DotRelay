@@ -352,6 +352,48 @@ export const applyRollbackToVariables = (
   );
 };
 
+const ENVIRONMENT_LABEL_PATTERN = /^[A-Za-z][A-Za-z0-9._-]{0,62}$/;
+
+export type EnvironmentVariableSeedChoice = "copy" | "blank" | "omit";
+
+export const validateEnvironmentLabel = (
+  label: string,
+  existingActiveLabels: readonly string[] = [],
+): string | null => {
+  const trimmed = label.trim();
+  if (!trimmed) return "Environment label is required.";
+  if (!ENVIRONMENT_LABEL_PATTERN.test(trimmed))
+    return "Use letters, numbers, dots, underscores, and hyphens; the first character must be a letter.";
+  if (existingActiveLabels.includes(trimmed))
+    return `Environment label "${trimmed}" already exists.`;
+  return null;
+};
+
+export const seedEnvironmentVariables = (
+  source: readonly EnvironmentVariable[],
+  choices: Readonly<Partial<Record<string, EnvironmentVariableSeedChoice>>>,
+  nextId: () => string,
+): readonly EnvironmentVariable[] =>
+  Object.freeze(
+    source.flatMap((variable) => {
+      if (variable.tombstone) return [];
+      const choice = choices[variable.id] ?? "omit";
+      if (choice === "omit") return [];
+      return [
+        Object.freeze({
+          id: nextId(),
+          name: variable.name,
+          description: variable.description,
+          ownership: variable.ownership,
+          value: choice === "blank" ? "" : variable.value,
+          required: variable.required,
+          hasDraftChange: true,
+          tombstone: false,
+        }),
+      ];
+    }),
+  );
+
 export type ProtectedWorkflowState = Readonly<{
   readonly sessionActive: boolean;
   readonly profileTrusted: boolean;

@@ -12,8 +12,10 @@ navigation becomes a keyboard-operable sheet on small screens, and a skip link r
 workspace.
 
 A Project is listed by its linked GitHub owner and name when they are known, otherwise by
-the stable numeric GitHub repository id. Environment tabs use the operator-visible label. Device
-approval lives at `/device` and is opened from CLI setup or login.
+the stable numeric GitHub repository id. Environment tabs use the operator-visible label. Owners
+and admins can create another Environment from those tabs, choosing a base Environment and whether
+each Variable is copied, left blank, or omitted. Device approval lives at `/device` and is opened
+from CLI setup or login.
 
 The Devices page lists every enrolled Device for your User, including CLI
 installations, and whether this browser is one of them.

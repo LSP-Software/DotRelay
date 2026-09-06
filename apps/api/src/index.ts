@@ -496,6 +496,8 @@ const createApi = ({
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
   app.use("/api/v1/operations/*", protocolCors(profile));
   app.use("/api/v1/environments/*", protocolCors(profile));
+  app.use("/api/v1/projects", protocolCors(profile));
+  app.use("/api/v1/projects/*", protocolCors(profile));
   app.post(
     "/api/v1/devices/bootstrap",
     bodyLimit({

@@ -74,6 +74,11 @@ type EnvironmentEditorProps = Readonly<{
   readonly setupMessage?: string | null | undefined;
   readonly setupBusy?: boolean | undefined;
   readonly onSetupAction?: (() => void) | undefined;
+  readonly remoteHeadRevision?: string | undefined;
+  readonly seedVariables?: readonly EnvironmentVariable[];
+  readonly onVariablesChange?: (
+    variables: readonly EnvironmentVariable[],
+  ) => void;
   readonly protocolSession?: Readonly<{
     readonly context: PublicationContext;
     readonly transport: ProtocolTransport;
@@ -120,6 +125,8 @@ const initialVariables: readonly EnvironmentVariable[] = [
     hasDraftChange: false,
   },
 ];
+
+export const fixtureEnvironmentVariables = initialVariables;
 
 const emptyVariableDraft: AddVariableState = {
   name: "",
@@ -519,16 +526,26 @@ export const EnvironmentEditor = ({
   setupMessage,
   setupBusy,
   onSetupAction,
+  remoteHeadRevision = "rev_0184",
+  seedVariables,
+  onVariablesChange,
   protocolSession,
 }: EnvironmentEditorProps) => {
-  const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
-    protocolSession ? [] : [...initialVariables],
-  );
+  const [variables, setVariables] = useState<EnvironmentVariable[]>(() => {
+    if (seedVariables) return [...seedVariables];
+    return protocolSession ? [] : [...initialVariables];
+  });
   const [remoteVariables, setRemoteVariables] = useState<
     readonly EnvironmentVariable[]
-  >(() => (protocolSession ? [] : initialVariables));
+  >(() => {
+    if (seedVariables)
+      return seedVariables.some((variable) => variable.hasDraftChange)
+        ? []
+        : [...seedVariables];
+    return protocolSession ? [] : initialVariables;
+  });
   const [headRevision, setHeadRevision] = useState(
-    protocolSession?.context.expectedHeadId ?? "rev_0184",
+    protocolSession?.context.expectedHeadId ?? remoteHeadRevision,
   );
   const [verifiedHistory, setVerifiedHistory] = useState<readonly string[]>([]);
   const [addOpen, setAddOpen] = useState(false);
@@ -567,6 +584,9 @@ export const EnvironmentEditor = ({
   const [rollbackMutationTarget, setRollbackMutationTarget] = useState<
     string | null
   >(null);
+  useEffect(() => {
+    onVariablesChange?.(variables);
+  }, [onVariablesChange, variables]);
   useEffect(() => {
     if (!protocolSession) return;
     setVariables((current) =>

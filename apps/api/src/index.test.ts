@@ -292,6 +292,36 @@ describe("API foundation", () => {
     );
   });
 
+  test("allows the web origin to preflight Environment create", async () => {
+    const profile = loadServerProfileConfig({
+      WEB_ORIGIN: "http://localhost:3000",
+    });
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    const projectId = "00000000-0000-4000-8000-000000000002";
+
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/projects/${projectId}/environments`,
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: profile.webOrigin,
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers":
+            "content-type,x-dotrelay-device-id,idempotency-key,accept",
+        },
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe(
+      profile.webOrigin,
+    );
+    expect(response.headers.get("access-control-allow-credentials")).toBe(
+      "true",
+    );
+  });
+
   test("enforces device polling intervals, expiry, and endpoint rate limits", async () => {
     const profile = loadServerProfileConfig({});
     const auth = createInMemoryAuth(profile);
