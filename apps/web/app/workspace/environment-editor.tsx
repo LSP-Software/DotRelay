@@ -119,6 +119,11 @@ type EnvironmentEditorProps = Readonly<{
   readonly setupMessage?: string | null | undefined;
   readonly setupBusy?: boolean | undefined;
   readonly onSetupAction?: (() => void) | undefined;
+  readonly remoteHeadRevision?: string | undefined;
+  readonly seedVariables?: readonly EnvironmentVariable[];
+  readonly onVariablesChange?: (
+    variables: readonly EnvironmentVariable[],
+  ) => void;
   readonly protocolSession?:
     | Readonly<{
         readonly context: PublicationContext;
@@ -167,6 +172,8 @@ const initialVariables: readonly EnvironmentVariable[] = [
     hasDraftChange: false,
   },
 ];
+
+export const fixtureEnvironmentVariables = initialVariables;
 
 const emptyVariableDraft: AddVariableState = {
   name: "",
@@ -893,6 +900,9 @@ export const EnvironmentEditor = ({
   setupMessage,
   setupBusy,
   onSetupAction,
+  remoteHeadRevision = "rev_0184",
+  seedVariables,
+  onVariablesChange,
   protocolSession,
 }: EnvironmentEditorProps) => {
   const session =
@@ -903,14 +913,21 @@ export const EnvironmentEditor = ({
   const actorUserId = session?.context.actorUserId ?? null;
   const actor: EditorActor = { role, actorUserId };
   const canChangeDefinitions = canActorChangeDefinitions(actor);
-  const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
-    session ? [] : [...initialVariables],
-  );
+  const [variables, setVariables] = useState<EnvironmentVariable[]>(() => {
+    if (seedVariables) return [...seedVariables];
+    return session ? [] : [...initialVariables];
+  });
   const [remoteVariables, setRemoteVariables] = useState<
     readonly EnvironmentVariable[]
-  >(() => (session ? [] : initialVariables));
+  >(() => {
+    if (seedVariables)
+      return seedVariables.some((variable) => variable.hasDraftChange)
+        ? []
+        : [...seedVariables];
+    return session ? [] : initialVariables;
+  });
   const [headRevision, setHeadRevision] = useState(
-    session?.context.expectedHeadId ?? "rev_0184",
+    session?.context.expectedHeadId ?? remoteHeadRevision,
   );
   const [loadPhase, setLoadPhase] = useState<"loading" | "ready" | "failed">(
     () => (session ? "loading" : "ready"),
@@ -950,6 +967,9 @@ export const EnvironmentEditor = ({
   const [rollbackMutationTarget, setRollbackMutationTarget] = useState<
     string | null
   >(null);
+  useEffect(() => {
+    onVariablesChange?.(variables);
+  }, [onVariablesChange, variables]);
   useEffect(() => {
     if (!session) return;
     setVariables((current) =>

@@ -74,6 +74,11 @@ lane enter the local draft together. Empty Values and absent optional Values rem
 Live Variable names are unique within the Manifest. Deletion creates a tombstone in the draft so
 the definition is not silently reused or removed from immutable history.
 
+Owners and admins can create another Environment from the current Project. The create flow asks
+for a unique operator-visible label, a base Environment (or none), and a per-Variable choice to
+copy the Value, leave it blank, or omit the Variable. Copied Values stay in the browser; the
+service still stores only encrypted lanes after publication.
+
 Save changes shows the draft Variable diffs and publishes a new Revision. A live protocol session
 then encrypts each changed definition and Value lane, signs the v3 mutation with the active Device
 key, begins an idempotent operation, stages immutable objects, and finalizes with compare-and-swap
@@ -158,9 +163,10 @@ problem response, and no Better Auth detail text is ever exposed.
 ## Browser quality boundary
 
 Playwright coverage in `apps/web/e2e/workspace.spec.ts` exercises the public landing/sign-in flow,
-role-aware invitation controls, pending key grants, Environment archive/restore confirmation, the
-development fixture's Server Profile preview, keyboard and responsive navigation, Revision
-history, enrolled Device listing, and the blocked secret-access state. `apps/web/e2e/workspace-offline.spec.ts` adds the
+role-aware invitation controls, pending key grants, Environment create from an existing
+Environment, Environment archive/restore confirmation, the development fixture's Server Profile
+preview, keyboard and responsive navigation, Revision history, enrolled Device listing, and the
+blocked secret-access state. `apps/web/e2e/workspace-offline.spec.ts` adds the
 offline and stale connection states: an unreachable, malformed, or non-200 boundary response on
 a fresh visit, and a failed refresh that keeps last verified data stale until automatic
 reconnection or an explicit retry succeeds. `apps/web/e2e/workspace-draft-protection.spec.ts`
