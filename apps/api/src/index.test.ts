@@ -523,6 +523,47 @@ describe("API foundation", () => {
     expect(auth.options.session?.cookieCache).toEqual({ enabled: false });
   });
 
+  test("lets a User change the name on the next session read", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    const context = await auth.$context;
+    const user = await context.internalAdapter.createUser(
+      {
+        email: "name-test@example.com",
+        emailVerified: true,
+        name: "Ari Stone",
+      },
+      {
+        method: "oauth",
+        oauth: { providerId: "github" },
+      },
+    );
+    const session = await context.internalAdapter.createSession(user.id, false);
+    if (!session) throw new Error("test session was not created");
+    const headers = {
+      Authorization: `Bearer ${session.token}`,
+      "Content-Type": "application/json",
+    };
+
+    const updated = await testApp.request(
+      `${profile.origin}/api/auth/update-user`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "Sam Personal" }),
+      },
+    );
+    expect(updated.status).toBe(200);
+    expect(
+      (
+        await auth.api.getSession({
+          headers: new Headers({ Authorization: `Bearer ${session.token}` }),
+        })
+      )?.user.name,
+    ).toBe("Sam Personal");
+  });
+
   test("disables Better Auth logging at the privacy boundary", () => {
     const auth = createInMemoryAuth(loadServerProfileConfig());
 
