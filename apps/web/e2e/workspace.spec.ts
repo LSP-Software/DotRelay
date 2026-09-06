@@ -155,6 +155,37 @@ test("Server Profile switching asks to trust the new profile", async ({
   ).toBeVisible();
 });
 
+test("the user card opens Settings and saves a name", async ({ page }) => {
+  await page.goto("/workspace");
+
+  await page
+    .locator("aside")
+    .getByRole("button", { name: "Open user menu" })
+    .click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByLabel("Name")).toHaveValue("Ari Stone");
+  await page.getByLabel("Name").fill("Sam Personal");
+  await page.getByRole("button", { name: "Save name" }).click();
+
+  await expect(page.locator("aside").getByText("Sam Personal")).toBeVisible();
+});
+
+test("signing out from the user card returns to sign-in", async ({ page }) => {
+  await page.goto("/workspace");
+
+  await page
+    .locator("aside")
+    .getByRole("button", { name: "Open user menu" })
+    .click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Sign in to your Server Profile" }),
+  ).toBeVisible();
+});
+
 test("keyboard and responsive navigation keep critical routes reachable", async ({
   page,
 }) => {

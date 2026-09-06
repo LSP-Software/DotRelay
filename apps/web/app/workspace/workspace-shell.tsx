@@ -23,7 +23,6 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,6 +71,10 @@ import {
   displayedSetupAction,
   nextSetupAction,
 } from "@/lib/environment-workflow";
+import {
+  signOutFromServerProfile,
+  updateUserName,
+} from "@/lib/session-actions";
 import { cn } from "@/lib/utils";
 import {
   e2eWorkspaceBoundary,
@@ -87,6 +90,7 @@ import {
   workspaceProfileCatalog,
 } from "@/lib/workspace-boundary";
 import { EnvironmentEditor } from "./environment-editor";
+import { UserSessionCard } from "./user-session-card";
 
 type ProfileId = WorkspaceProfileId;
 type WorkspaceView =
@@ -94,7 +98,8 @@ type WorkspaceView =
   | "environment"
   | "team"
   | "devices"
-  | "recovery";
+  | "recovery"
+  | "settings";
 
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -286,6 +291,12 @@ export const WorkspaceShell = ({
   const [trustedOverride, setTrustedOverride] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [browserCrypto, setBrowserCrypto] = useState(true);
+  const [displayNameOverride, setDisplayNameOverride] = useState<string | null>(
+    null,
+  );
+  const [nameDraft, setNameDraft] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
 
   const protectedPreview = preview === "protected";
   const noCryptoPreview = preview === "no-crypto";
@@ -323,6 +334,9 @@ export const WorkspaceShell = ({
   ]);
 
   const teams = displayBoundary.catalog.teams;
+  const sessionDisplayName =
+    displayNameOverride ?? displayBoundary.session.displayName;
+  const apiOrigin = resolveApiOrigin() ?? displayBoundary.profile.origin;
   const selectedTeam =
     teams.find((team) => team.id === teamId) ?? teams[0] ?? null;
   const teamProjects = displayBoundary.catalog.projects.filter(
@@ -802,6 +816,60 @@ export const WorkspaceShell = ({
 
   const closeMobile = () => setMobileOpen(false);
 
+  const openSettings = () => {
+    setNameDraft(sessionDisplayName ?? "");
+    setSettingsMessage(null);
+    setView("settings");
+  };
+
+  const handleSignOut = () => {
+    const finish = () => {
+      window.location.assign("/sign-in");
+    };
+    if (displayBoundary.source !== "live") {
+      finish();
+      return;
+    }
+    void signOutFromServerProfile(apiOrigin).finally(finish);
+  };
+
+  const handleSignIn = () => {
+    window.location.assign("/sign-in");
+  };
+
+  const handleSaveName = async () => {
+    const nextName = nameDraft.trim();
+    if (!nextName) return;
+    setSettingsBusy(true);
+    setSettingsMessage(null);
+    try {
+      if (displayBoundary.source === "live") {
+        const saved = await updateUserName(apiOrigin, nextName);
+        if (!saved) {
+          setSettingsMessage("Your name could not be saved.");
+          return;
+        }
+      }
+      setDisplayNameOverride(nextName);
+      setSettingsMessage("Name saved.");
+    } catch {
+      setSettingsMessage("Your name could not be saved.");
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const sessionCardProps = {
+    ...(sessionDisplayName ? { displayName: sessionDisplayName } : {}),
+    onOpenSettings: () => {
+      openSettings();
+      closeMobile();
+    },
+    onSignIn: handleSignIn,
+    onSignOut: handleSignOut,
+    sessionActive: displayBoundary.session.active,
+  } as const;
+
   const NavLinks = ({ onNavigate }: { readonly onNavigate?: () => void }) => (
     <nav aria-label="Workspace navigation" className="grid gap-1">
       <button
@@ -930,25 +998,7 @@ export const WorkspaceShell = ({
           <NavLinks />
         </div>
         <div className="mt-auto border-t p-4">
-          <div className="flex items-center gap-3">
-            <Avatar size="sm">
-              <AvatarFallback>
-                {(displayBoundary.session.displayName ?? "DR")
-                  .slice(0, 2)
-                  .toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">
-                {displayBoundary.session.displayName ?? "Signed out"}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {displayBoundary.session.active
-                  ? "Signed in"
-                  : "Sign in required"}
-              </p>
-            </div>
-          </div>
+          <UserSessionCard {...sessionCardProps} />
         </div>
       </aside>
 
@@ -994,6 +1044,9 @@ export const WorkspaceShell = ({
                     ))}
                   </select>
                   <NavLinks onNavigate={closeMobile} />
+                </div>
+                <div className="mt-auto border-t p-4">
+                  <UserSessionCard {...sessionCardProps} />
                 </div>
               </SheetContent>
             </Sheet>
@@ -1237,7 +1290,7 @@ export const WorkspaceShell = ({
                       <TableRow>
                         <TableCell>
                           <div className="font-medium">
-                            {displayBoundary.session.displayName ?? "You"}
+                            {sessionDisplayName ?? "You"}
                           </div>
                         </TableCell>
                         <TableCell>
@@ -1426,6 +1479,59 @@ export const WorkspaceShell = ({
                 <CardContent>
                   <CopyableCommand value="dotrelay recover" />
                 </CardContent>
+              </Card>
+            </section>
+          ) : null}
+
+          {view === "settings" ? (
+            <section id="settings">
+              <h1 className="font-heading text-3xl font-semibold">Settings</h1>
+              <p className="mt-2 max-w-2xl text-muted-foreground">
+                Your name is shown to Members of your Teams.
+              </p>
+              <Card className="mt-6">
+                <CardHeader>
+                  <CardTitle>Name</CardTitle>
+                  <CardDescription>
+                    This is the name other Members see for your User.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form
+                    className="space-y-2"
+                    id="settings-name-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleSaveName();
+                    }}
+                  >
+                    <Label htmlFor="user-name">Name</Label>
+                    <Input
+                      autoComplete="name"
+                      id="user-name"
+                      maxLength={255}
+                      onChange={(event) => setNameDraft(event.target.value)}
+                      value={nameDraft}
+                    />
+                    {settingsMessage ? (
+                      <p
+                        className="text-sm text-muted-foreground"
+                        role="status"
+                      >
+                        {settingsMessage}
+                      </p>
+                    ) : null}
+                  </form>
+                </CardContent>
+                <CardFooter>
+                  <Button
+                    disabled={settingsBusy || nameDraft.trim().length === 0}
+                    form="settings-name-form"
+                    type="submit"
+                  >
+                    {settingsBusy ? "Saving…" : "Save name"}
+                  </Button>
+                </CardFooter>
               </Card>
             </section>
           ) : null}
