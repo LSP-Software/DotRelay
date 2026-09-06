@@ -1,79 +1,59 @@
 # Web application and trust states
 
-DotRelay's web application is dark-only and workspace-first. Its Tailwind CSS interface uses stock
-shadcn/ui components, with high-contrast neutral surfaces, green verified-state signals, amber trust
-warnings, clear keyboard focus, and reduced-motion support.
+DotRelay's web application is dark-only. The workspace is Team-first, then Project, then
+Environment. Stock shadcn/ui components, high-contrast surfaces, green verified-state signals,
+amber only when there is a next action, keyboard focus, and reduced-motion support.
 
 ## Workspace hierarchy
 
-The shell keeps the selected Server Profile visible beside the current Team, Project, and
-Environment. Revision history and administration are first-class navigation areas, followed by
-Devices and Recovery. Desktop navigation becomes a keyboard-operable sheet on small screens, and a
-skip link reaches the main workspace.
+The sidebar names the current Team and lets you switch. Projects for that Team are listed next to
+Team, Devices, and Recovery. You pick a Project, then an Environment, then Variables. Desktop
+navigation becomes a keyboard-operable sheet on small screens, and a skip link reaches the main
+workspace.
 
-The Project panel discloses the linked GitHub Repository and stable repository id as descriptive
-metadata. GitHub admission and permissions do not grant DotRelay access. The workspace shows
-`dotrelay setup <origin>` for the first CLI machine. Environment cards use the operator-visible
-label. Device approval lives at `/device` and is opened from CLI setup or login.
+A Project shows its linked GitHub owner and name when they are known, and otherwise the
+stable numeric GitHub repository id as descriptive metadata. GitHub admission and
+permissions do not grant DotRelay access. Environment tabs use the operator-visible label. Device
+approval lives at `/device` and is opened from CLI setup or login.
 
-## Four independent gates
+## One next action
 
-The interface reports four separate states:
+The interface still tracks four independent gates: Server Profile trust, session, Device, and
+cryptography. Being signed in does not authorize a Device. Being known to GitHub does not create a
+Membership.
 
-- **Server Profile trust** pins one profile id and canonical origin.
-- **Session** authenticates one server-local User through Better Auth and GitHub.
-- **Device** authorizes one client installation for that User.
-- **Cryptography** confirms the complete closed v3 WebCrypto suite is available.
+The workspace shows only the next action the person can take. It does not stack overlapping
+warnings or API problem codes. Enroll this browser, trust this Server Profile, sign in, or copy the
+CLI command. Command snippets include a Copy control. `dotrelay setup <origin>` enrolls the CLI
+Device. Enroll browser enrolls this browser as its own Device, including after the CLI is already
+enrolled.
 
-Being signed in does not authorize a Device. Being known to GitHub does not create a Membership.
-Selecting another Server Profile requires its own explicit trust decision.
+There is no reduced-security mode, alternate cryptographic suite, provider fallback, or server-side
+plaintext rendering.
 
 ## Roles and lifecycle
 
 Owners can manage roles, Members, Projects, and Environments. Admins can invite or remove Members
 and administer Projects and Environments, but cannot manage owners or admins. Members can view
-active Team content only. These disclosures explain the controls; the API remains the authorization
-boundary.
+this Team's Projects.
 
 Membership Invitations target a stable GitHub subject and expire after seven days. An accepted
 invitation stays **Pending key grant** until all required grants activate the Membership.
 
 Archive and restore operations require confirmation. Archiving an Environment keeps immutable
-Revision history but prevents its Manifest lanes from being disclosed. Restoring a Project fails
-closed if another active Project holds the same stable GitHub Repository linkage.
-
-## When protected access is unavailable
-
-If there is no active Device or the required v3 cryptographic runtime/provider is unavailable, the
-browser does not request or display Manifest lanes, Variable names, Shared Values, or User-defined
-Values. It shows a stable API problem code and leaves only permitted non-secret actions: sign-in and
-profile trust, role/lifecycle metadata, invitations, archive/restore administration, Device
-authorization, and Recovery Kit entry.
-
-There is no reduced-security mode, alternate cryptographic suite, provider fallback, or server-side
-plaintext rendering.
+Revision history but hides Variables until restore. Restoring a Project fails closed if another
+active Project holds the same stable GitHub Repository linkage.
 
 ## Environment editor
 
-The protected editor is available only after Server Profile trust, v3 runtime verification, an
-active Device, required grants, active resource state, and a current Project epoch all pass. It
-shows verified-head metadata and Variable definitions while keeping Values masked by default.
-Reveal is an explicit per-Value action on the active Device and is never an output path for
-diagnostics or logs.
+The editor is available only after Server Profile trust, WebCrypto, an active Device, required
+grants, an active Project and Environment, and a current Project epoch. Values stay masked until
+you reveal them on this Device.
 
-New Variables require explicit ownership classification. Shared Values are Team-readable; a
-User-defined Value is readable only by that User's authorized Devices. Definitions and their
-required initial Value lanes are added atomically to the local draft, preserving exact UTF-8 and
-empty-versus-absent semantics.
-Live Variable names remain unique within the Manifest. Deletion stages a tombstone, preserving the
-definition's history until publication.
+New Variables require explicit ownership. Shared Values are Team-readable. A User-defined Value is
+readable only by that User's authorized Devices. Live Variable names remain unique. Deletion stages
+a tombstone until publication.
 
-Review & publish displays the expected parent, signing Device, changed lanes, and the client-only
-encryption boundary. With a live protocol session, the active Device builds encrypted definition
-and Value lanes, signs the v3 mutation, begins an idempotent operation, stages immutable objects,
-and finalizes with compare-and-swap head checks. Sync verifies object digests, manifest hashes,
-and revision links before remote state is accepted. Stale heads require local three-way
-resolution. Rollback chooses lanes and appends a new Revision rather than rewinding the head.
-The protected development preview is explicitly local and never claims service publication.
-Unsupported crypto, inactive Devices, pending grants, archived resources, stale epochs, and
-required rotation fail closed without requesting protected content.
+Review and publish encrypts changed Values in the browser. Sync verifies history before remote
+state is accepted. Stale heads require a local choice. Rollback chooses Variables and appends a new
+Revision rather than rewinding the head.

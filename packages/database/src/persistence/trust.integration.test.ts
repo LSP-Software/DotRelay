@@ -219,29 +219,31 @@ integrationDescribe("trust workflow integration", () => {
     expect(await database.device.count({ where: { userId: user.id } })).toBe(1);
   });
 
-  test("rejects bootstrap when an active Device already exists", async () => {
+  test("bootstraps an additional Device when one is already active", async () => {
     const user = await createUserFixture();
     await createActiveDevice(user.id);
     const devices = new DeviceRepository();
     const deviceId = crypto.randomUUID();
     const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
-    await expect(
-      devices.completeBootstrap(database, {
-        operation: await createOperationInput(
-          user.id,
-          "duplicate-bootstrap",
-          "DEVICE_ENROLLMENT",
-        ),
-        device: {
-          id: deviceId,
-          identityGeneration: 1n,
-          keyId: new Uint8Array(await sha384Digest(x25519PublicKey)),
-          x25519PublicKey,
-          ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
-        },
-        certificateObject: await createProtocolObjectInput(2),
-      }),
-    ).rejects.toThrow("bootstrap enrollment requires no active devices");
+    const result = await devices.completeBootstrap(database, {
+      operation: await createOperationInput(
+        user.id,
+        "additional-bootstrap",
+        "DEVICE_ENROLLMENT",
+      ),
+      device: {
+        id: deviceId,
+        identityGeneration: 1n,
+        keyId: new Uint8Array(await sha384Digest(x25519PublicKey)),
+        x25519PublicKey,
+        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      },
+      certificateObject: await createProtocolObjectInput(2),
+    });
+    if (!("device" in result))
+      throw new Error("bootstrap did not return a device");
+    expect(result.device.lifecycle).toBe("ACTIVE");
+    expect(await database.device.count({ where: { userId: user.id } })).toBe(2);
   });
 
   test("completes dual-control enrollment with approval", async () => {

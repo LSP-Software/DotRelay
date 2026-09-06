@@ -395,6 +395,45 @@ export const seal = async (
   }
 };
 
+export const sealWithSharedSecret = async (
+  plaintext: Uint8Array,
+  sharedSecret: Uint8Array,
+  associatedData: Uint8Array = new Uint8Array(),
+): Promise<Uint8Array> => {
+  if (!(plaintext instanceof Uint8Array))
+    throw new TypeError("plaintext must be bytes");
+  if (!(sharedSecret instanceof Uint8Array) || sharedSecret.length !== 32)
+    throw new TypeError("shared secret must be 32 bytes");
+  const salt = randomBytes(FIXED_LENGTHS.hkdfSalt);
+  const iv = randomBytes(FIXED_LENGTHS.iv);
+  const ephemeralPublicKey = randomBytes(FIXED_LENGTHS.x25519);
+  const aesKey = await deriveAesKey(sharedSecret, salt);
+  const ciphertext = bytes(
+    await crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv: asBufferSource(iv),
+        additionalData: asBufferSource(associatedData),
+        tagLength: AES_GCM_TAG_LENGTH,
+      },
+      aesKey,
+      asBufferSource(plaintext),
+    ),
+  );
+  const envelope = new Map<number, CborValue>([
+    [0, SUITE_VALUE],
+    [44, salt],
+    [45, ephemeralPublicKey],
+    [46, iv],
+    [47, ciphertext],
+    [48, await sha384(ciphertext)],
+    [71, plaintext.length],
+    [72, ciphertext.length],
+  ]);
+  validateEnvelope(envelope);
+  return canonicalEncode(envelope);
+};
+
 export const open = async (
   encodedEnvelope: Uint8Array,
   recipientPrivateKey: CryptoKey,
@@ -439,6 +478,42 @@ export const open = async (
     } finally {
       sharedSecret?.fill(0);
     }
+  } catch {
+    throw new InvalidCiphertextError();
+  }
+};
+
+export const openWithSharedSecret = async (
+  encodedEnvelope: Uint8Array,
+  sharedSecret: Uint8Array,
+  expectedAssociatedData: Uint8Array = new Uint8Array(),
+): Promise<Uint8Array> => {
+  if (!(sharedSecret instanceof Uint8Array) || sharedSecret.length !== 32)
+    throw new InvalidCiphertextError();
+  try {
+    const envelope = parseEnvelope(encodedEnvelope);
+    const salt = readBytes(envelope, 44, FIXED_LENGTHS.hkdfSalt);
+    readBytes(envelope, 45, FIXED_LENGTHS.x25519);
+    const iv = readBytes(envelope, 46, FIXED_LENGTHS.iv);
+    const ciphertext = readBytes(envelope, 47);
+    const expectedDigest = await sha384(ciphertext);
+    if (
+      !sameBytes(expectedDigest, readBytes(envelope, 48, FIXED_LENGTHS.digest))
+    )
+      throw new InvalidCiphertextError();
+    const aesKey = await deriveAesKey(sharedSecret, salt);
+    return bytes(
+      await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: asBufferSource(iv),
+          additionalData: asBufferSource(expectedAssociatedData),
+          tagLength: AES_GCM_TAG_LENGTH,
+        },
+        aesKey,
+        asBufferSource(ciphertext),
+      ),
+    );
   } catch {
     throw new InvalidCiphertextError();
   }

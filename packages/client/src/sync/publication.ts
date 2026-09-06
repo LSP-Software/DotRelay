@@ -5,13 +5,16 @@ import {
   decodeCiphertextEnvelope,
   encodeProtocolObject,
   type FinalizePublicationRequest,
+  InvalidCiphertextError,
   open,
+  openWithSharedSecret,
   type ProtocolObject,
   parseProtocolObject,
   protocolObjectFromFields,
   SUITE_VALUE,
   type SyncPageWire,
   seal,
+  sealWithSharedSecret,
   sha384,
   signProtocolObject,
   uuidToBytes,
@@ -100,6 +103,7 @@ export type PublicationContext = Readonly<{
   readonly expectedHeadHash: Uint8Array | null;
   readonly valueRecipientPublicKey: CryptoKey;
   readonly userDefinedValueRecipientPublicKey?: CryptoKey;
+  readonly sharedValueSecret?: Uint8Array;
   readonly signingPrivateKey: CryptoKey;
   readonly revisionSigningPublicKey?: Uint8Array;
   readonly trustedRevisionId?: string;
@@ -290,6 +294,7 @@ const makeLane = async (
     readonly scope: 2 | 3 | 4;
     readonly plaintext: Uint8Array;
     readonly recipientPublicKey: CryptoKey;
+    readonly sharedSecret?: Uint8Array;
     readonly ownerUserId?: string;
     readonly originalProviderUserId?: string;
   }>,
@@ -303,11 +308,17 @@ const makeLane = async (
 > => {
   const { context, variable } = input;
   const laneId = uuid();
-  const envelopeBytes = await seal(
-    input.plaintext,
-    input.recipientPublicKey,
-    associatedData(variable.id, input.revisionId, input.scope),
-  );
+  const envelopeBytes = input.sharedSecret
+    ? await sealWithSharedSecret(
+        input.plaintext,
+        input.sharedSecret,
+        associatedData(variable.id, input.revisionId, input.scope),
+      )
+    : await seal(
+        input.plaintext,
+        input.recipientPublicKey,
+        associatedData(variable.id, input.revisionId, input.scope),
+      );
   const envelope = decodeCiphertextEnvelope(envelopeBytes);
   const ciphertext = envelope.get(47);
   const ciphertextHash = envelope.get(48);
@@ -437,6 +448,9 @@ export const createPublicationArtifacts = async (
           scope: 2,
           plaintext: definition,
           recipientPublicKey: context.valueRecipientPublicKey,
+          ...(context.sharedValueSecret
+            ? { sharedSecret: context.sharedValueSecret }
+            : {}),
         });
         lanes.push(definitionLane.lane);
         commitments.push({
@@ -467,6 +481,9 @@ export const createPublicationArtifacts = async (
                   );
                 })())
               : context.valueRecipientPublicKey,
+          ...(variable.ownership === "SHARED_VALUE" && context.sharedValueSecret
+            ? { sharedSecret: context.sharedValueSecret }
+            : {}),
           ...(variable.ownership === "USER_DEFINED_VALUE"
             ? { ownerUserId: context.actorUserId }
             : { originalProviderUserId: context.actorUserId }),
@@ -589,6 +606,7 @@ export const decodeSyncVariables = async (
     scope: "SHARED_VALUE" | "USER_DEFINED_VALUE",
   ) => CryptoKey,
   existingVariables: readonly DecodedVariable[] = [],
+  sharedValueSecret?: Uint8Array,
 ): Promise<readonly DecodedVariable[]> => {
   const variables = new Map<
     string,
@@ -633,14 +651,13 @@ export const decodeSyncVariables = async (
         throw new ProtocolVerificationError("sync lane identity is malformed");
       const id = bytesToUuid(variableId);
       if (scope === 2) {
-        const definition = JSON.parse(
-          new TextDecoder().decode(
-            await openLane(
-              object.canonicalBytes,
-              resolvePrivateKey("SHARED_VALUE"),
-            ),
-          ),
-        ) as {
+        const plaintext = await openReadableLane(
+          object.canonicalBytes,
+          resolvePrivateKey("SHARED_VALUE"),
+          sharedValueSecret,
+        );
+        if (!plaintext) continue;
+        const definition = JSON.parse(new TextDecoder().decode(plaintext)) as {
           name: string;
           description: string;
           ownership: "SHARED_VALUE" | "USER_DEFINED_VALUE";
@@ -674,14 +691,15 @@ export const decodeSyncVariables = async (
           throw new ProtocolVerificationError(
             "sync Value lane ownership does not match its definition",
           );
-        existing.value = new TextDecoder().decode(
-          await openLane(
-            object.canonicalBytes,
-            resolvePrivateKey(
-              scope === 3 ? "SHARED_VALUE" : "USER_DEFINED_VALUE",
-            ),
+        const plaintext = await openReadableLane(
+          object.canonicalBytes,
+          resolvePrivateKey(
+            scope === 3 ? "SHARED_VALUE" : "USER_DEFINED_VALUE",
           ),
+          scope === 3 ? sharedValueSecret : undefined,
         );
+        if (!plaintext) continue;
+        existing.value = new TextDecoder().decode(plaintext);
       }
     }
   }
@@ -728,11 +746,38 @@ const scopeValueFromCommitment = (
         ? 4
         : 1;
 
+const signingTrustKeys = (
+  signingPublicKey: Uint8Array | readonly Uint8Array[],
+): readonly Uint8Array[] =>
+  signingPublicKey instanceof Uint8Array
+    ? [signingPublicKey]
+    : signingPublicKey;
+
+const verifySignedProtocolObjectWithKeys = async (
+  canonicalBytes: Uint8Array,
+  keys: readonly Uint8Array[],
+): Promise<void> => {
+  if (keys.length === 0)
+    throw new ProtocolVerificationError("sync object signature is invalid");
+  let lastError: unknown;
+  for (const key of keys) {
+    try {
+      await verifySignedProtocolObject(canonicalBytes, key);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError instanceof ProtocolVerificationError) throw lastError;
+  throw new ProtocolVerificationError("sync object signature is invalid");
+};
+
 export const verifySyncPage = async (
   page: SyncPageWire,
-  signingPublicKey: Uint8Array,
+  signingPublicKey: Uint8Array | readonly Uint8Array[],
   options: SyncDisclosureOptions = {},
 ): Promise<void> => {
+  const trustKeys = signingTrustKeys(signingPublicKey);
   let environmentId: Uint8Array;
   let trustedRevisionId: Uint8Array;
   try {
@@ -783,9 +828,9 @@ export const verifySyncPage = async (
     const actualRevisionDigest = await sha384(revisionObject.canonicalBytes);
     if (!bytesEqual(actualRevisionDigest, revision.digest))
       throw new ProtocolVerificationError("revision digest mismatch");
-    await verifySignedProtocolObject(
+    await verifySignedProtocolObjectWithKeys(
       revisionObject.canonicalBytes,
-      signingPublicKey,
+      trustKeys,
     );
     if (revision.parentId !== null) {
       const parentId = parsedRevision.get(19);
@@ -881,9 +926,9 @@ export const verifySyncPage = async (
         throw new ProtocolVerificationError("sync object digest mismatch");
       const parsed = parseProtocolObject(object.canonicalBytes);
       if ([13, 15, 16].includes(parsed.get(1) as number))
-        await verifySignedProtocolObject(
+        await verifySignedProtocolObjectWithKeys(
           object.canonicalBytes,
-          signingPublicKey,
+          trustKeys,
         );
       const objectEnvironmentId = parsed.get(14);
       if (
@@ -985,9 +1030,23 @@ export const verifySyncPage = async (
     );
 };
 
+const openReadableLane = async (
+  laneBytes: Uint8Array,
+  recipientPrivateKey: CryptoKey,
+  sharedValueSecret?: Uint8Array,
+): Promise<Uint8Array | null> => {
+  try {
+    return await openLane(laneBytes, recipientPrivateKey, sharedValueSecret);
+  } catch (error) {
+    if (error instanceof InvalidCiphertextError) return null;
+    throw error;
+  }
+};
+
 export const openLane = async (
   laneBytes: Uint8Array,
   recipientPrivateKey: CryptoKey,
+  sharedValueSecret?: Uint8Array,
 ): Promise<Uint8Array> => {
   const lane = parseProtocolObject(laneBytes);
   if (lane.get(1) !== 13)
@@ -1030,15 +1089,19 @@ export const openLane = async (
     [71, plaintextLength],
     [72, ciphertextLength],
   ]);
-  return open(
-    canonicalEncode(envelope),
-    recipientPrivateKey,
-    canonicalEncode(
-      new Map<number, CborValue>([
-        [15, variableId],
-        [16, revisionId],
-        [36, scope],
-      ]),
-    ),
+  const associated = canonicalEncode(
+    new Map<number, CborValue>([
+      [15, variableId],
+      [16, revisionId],
+      [36, scope],
+    ]),
   );
+  const encoded = canonicalEncode(envelope);
+  try {
+    return await open(encoded, recipientPrivateKey, associated);
+  } catch (error) {
+    if (!sharedValueSecret || !(error instanceof InvalidCiphertextError))
+      throw error;
+    return openWithSharedSecret(encoded, sharedValueSecret, associated);
+  }
 };

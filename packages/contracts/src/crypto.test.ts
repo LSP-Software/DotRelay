@@ -17,7 +17,9 @@ import {
   importSigningPrivateKey,
   importSigningPublicKey,
   open,
+  openWithSharedSecret,
   seal,
+  sealWithSharedSecret,
   sha384,
   sign,
   signProtocolObject,
@@ -141,6 +143,23 @@ describe("v3 native WebCrypto core", () => {
     expect(CRYPTO_SUITE.mediaType).toBe(
       "application/vnd.dotrelay.e2ee-v3+cbor",
     );
+  });
+
+  test("round-trips a Project epoch shared secret without a Device key pair", async () => {
+    const secret = crypto.getRandomValues(new Uint8Array(32));
+    const other = crypto.getRandomValues(new Uint8Array(32));
+    const context = encoder.encode("lane-aad");
+    const envelope = await sealWithSharedSecret(
+      encoder.encode("team shared value"),
+      secret,
+      context,
+    );
+    expect(await openWithSharedSecret(envelope, secret, context)).toEqual(
+      encoder.encode("team shared value"),
+    );
+    await expect(
+      openWithSharedSecret(envelope, other, context),
+    ).rejects.toBeInstanceOf(InvalidCiphertextError);
   });
 
   test("uses the canonical protocol signature input", async () => {

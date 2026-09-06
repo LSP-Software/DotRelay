@@ -35,6 +35,7 @@ export const createVerifiedEnvironmentSession = (input: {
   readonly transport: ProtocolTransport;
   readonly sharedValuePrivateKey: CryptoKey;
   readonly userDefinedValuePrivateKey?: CryptoKey;
+  readonly sharedValueSecret?: Uint8Array;
 }): VerifiedEnvironmentSession => {
   const revisionSigningPublicKey = input.context.revisionSigningPublicKey;
   if (!revisionSigningPublicKey)
@@ -60,6 +61,7 @@ export const createVerifiedEnvironmentSession = (input: {
         { ...page, revisions: [revision] },
         resolvePrivateKey,
         snapshot,
+        input.sharedValueSecret,
       );
       snapshots.set(revision.id, snapshot);
     }

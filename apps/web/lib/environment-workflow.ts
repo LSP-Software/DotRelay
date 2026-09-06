@@ -256,6 +256,7 @@ export const applyRollbackToVariables = (
 };
 
 export type ProtectedWorkflowState = Readonly<{
+  readonly sessionActive: boolean;
   readonly profileTrusted: boolean;
   readonly cryptoAvailable: boolean;
   readonly deviceActive: boolean;
@@ -265,20 +266,104 @@ export type ProtectedWorkflowState = Readonly<{
   readonly rotationRequired: boolean;
 }>;
 
+export type SetupActionId =
+  | "sign-in"
+  | "trust-profile"
+  | "crypto-unavailable"
+  | "enroll-device"
+  | "pending-grants"
+  | "archived"
+  | "stale-epoch"
+  | "rotation";
+
+export type SetupAction = Readonly<{
+  readonly id: SetupActionId;
+  readonly title: string;
+  readonly body: string;
+  readonly actionLabel: string;
+}>;
+
+export const nextSetupAction = (
+  state: ProtectedWorkflowState,
+): SetupAction | null => {
+  if (!state.sessionActive)
+    return {
+      id: "sign-in",
+      title: "Sign in",
+      body: "GitHub only identifies you. Sign in to see your Teams.",
+      actionLabel: "Sign in",
+    };
+  if (!state.profileTrusted)
+    return {
+      id: "trust-profile",
+      title: "Trust this Server Profile",
+      body: "Confirm this origin is the Server Profile you meant to use.",
+      actionLabel: "Trust this profile",
+    };
+  if (!state.cryptoAvailable)
+    return {
+      id: "crypto-unavailable",
+      title: "This browser can't decrypt variables",
+      body: "DotRelay needs the Web Crypto API. Use an up-to-date Chrome, Firefox, or Safari, or the CLI on this machine.",
+      actionLabel: "Copy CLI command",
+    };
+  if (!state.deviceActive)
+    return {
+      id: "enroll-device",
+      title: "Enroll this browser",
+      body: "A Device is this browser's key pair. The CLI is a different Device, so setup there does not enroll this page. Keys stay on this machine.",
+      actionLabel: "Enroll browser",
+    };
+  if (!state.grantsReady)
+    return {
+      id: "pending-grants",
+      title: "This Device doesn't have Project access yet",
+      body: "Run bun apps/cli/src/index.ts pull on this machine to share Project keys with this browser.",
+      actionLabel: "Retry access",
+    };
+  if (!state.resourceActive)
+    return {
+      id: "archived",
+      title: "This Environment is archived",
+      body: "History is kept. Restore it to view and edit variables.",
+      actionLabel: "Restore Environment",
+    };
+  if (!state.epochCurrent)
+    return {
+      id: "stale-epoch",
+      title: "This Project's keys were rotated",
+      body: "Enroll again, or use a Device that already has the current keys.",
+      actionLabel: "Enroll browser",
+    };
+  if (state.rotationRequired)
+    return {
+      id: "rotation",
+      title: "Key rotation is still running",
+      body: "Wait until it finishes, then refresh.",
+      actionLabel: "Refresh",
+    };
+  return null;
+};
+
+export const displayedSetupAction = (
+  setupAction: SetupAction | null,
+  options: Readonly<{
+    readonly localDeviceBlockers: boolean;
+    readonly inProgress?: boolean;
+  }>,
+): SetupAction | null => {
+  if (!options.localDeviceBlockers) return setupAction;
+  return {
+    id: "enroll-device",
+    title: "Unlock variables on this browser",
+    body: "A Device is this browser's key pair. The CLI is a different Device. Enroll this browser to read variables here.",
+    actionLabel: options.inProgress ? "Enrolling…" : "Enroll browser",
+  };
+};
+
 export const protectedWorkflowBlockers = (
   state: ProtectedWorkflowState,
 ): readonly string[] => {
-  const blockers: string[] = [];
-  if (!state.profileTrusted) blockers.push("Server Profile trust is required.");
-  if (!state.cryptoAvailable)
-    blockers.push("The closed v3 cryptographic suite is unavailable.");
-  if (!state.deviceActive) blockers.push("An active Device is required.");
-  if (!state.grantsReady)
-    blockers.push("Required key grants are still pending.");
-  if (!state.resourceActive)
-    blockers.push("Archived Projects and Environments are read-only.");
-  if (!state.epochCurrent) blockers.push("The Project epoch is stale.");
-  if (state.rotationRequired)
-    blockers.push("Required key rotation must complete before publishing.");
-  return Object.freeze(blockers);
+  const action = nextSetupAction(state);
+  return Object.freeze(action ? [action.title] : []);
 };

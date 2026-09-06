@@ -5,8 +5,9 @@ import {
   createEnvironmentVariable,
   createRollbackPlan,
   deleteEnvironmentVariable,
+  displayedSetupAction,
+  nextSetupAction,
   prepareEncryptedPublication,
-  protectedWorkflowBlockers,
   updateVariableValue,
   validateEnvironmentVariables,
   validateVariableDraft,
@@ -224,20 +225,48 @@ test("rollback refuses a selected lane without verified historical state", () =>
   ).toThrow("historical Value");
 });
 
-test("protected workflows report every unmet security gate", () => {
+const blockedSetup = {
+  sessionActive: false,
+  profileTrusted: false,
+  cryptoAvailable: false,
+  deviceActive: false,
+  grantsReady: false,
+  resourceActive: false,
+  epochCurrent: false,
+  rotationRequired: true,
+} as const;
+
+test("setup reports only the next action the person can take", () => {
+  expect(nextSetupAction(blockedSetup)?.id).toBe("sign-in");
+  expect(nextSetupAction({ ...blockedSetup, sessionActive: true })?.id).toBe(
+    "trust-profile",
+  );
   expect(
-    protectedWorkflowBlockers({
-      profileTrusted: false,
-      cryptoAvailable: false,
-      deviceActive: false,
-      grantsReady: false,
-      resourceActive: false,
-      epochCurrent: false,
-      rotationRequired: true,
-    }),
-  ).toHaveLength(7);
+    nextSetupAction({
+      ...blockedSetup,
+      sessionActive: true,
+      profileTrusted: true,
+    })?.id,
+  ).toBe("crypto-unavailable");
   expect(
-    protectedWorkflowBlockers({
+    nextSetupAction({
+      ...blockedSetup,
+      sessionActive: true,
+      profileTrusted: true,
+      cryptoAvailable: true,
+    })?.id,
+  ).toBe("enroll-device");
+  expect(
+    nextSetupAction({
+      ...blockedSetup,
+      sessionActive: true,
+      profileTrusted: true,
+      cryptoAvailable: true,
+    })?.body,
+  ).toContain("CLI is a different Device");
+  expect(
+    nextSetupAction({
+      sessionActive: true,
       profileTrusted: true,
       cryptoAvailable: true,
       deviceActive: true,
@@ -246,5 +275,8 @@ test("protected workflows report every unmet security gate", () => {
       epochCurrent: true,
       rotationRequired: false,
     }),
-  ).toEqual([]);
+  ).toBeNull();
+  expect(displayedSetupAction(null, { localDeviceBlockers: true })?.id).toBe(
+    "enroll-device",
+  );
 });

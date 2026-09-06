@@ -9,7 +9,7 @@
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc --project tsconfig.json",
-    "test:unit": "bun test app",
+    "test:unit": "bun test app lib",
     "test:e2e": "playwright test --config=../../playwright.config.ts"
   },
   "dependencies": {

@@ -31,13 +31,14 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
 import { registerDeviceRoutes } from "./device-routes";
+import { lookupGitHubRepositoryDisplay } from "./github-repository";
 import {
   API_CORRELATION_HEADER,
   type ApiObservability,
-  type ServerDiagnosticProblemCode,
   createApiObservability,
   createConsoleDiagnosticSink,
   createServerCorrelationId,
+  type ServerDiagnosticProblemCode,
   toServerDiagnosticProblemCode,
   toServerDiagnosticRetryAfterSeconds,
 } from "./observability";
@@ -155,6 +156,67 @@ const equalBytes = (left: Uint8Array, right: Uint8Array): boolean =>
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+const bytesToBase64 = (value: Uint8Array): string =>
+  Buffer.from(value).toString("base64");
+
+const loadWorkspaceCatalog = async (
+  database: DatabaseClient,
+  userId: string,
+) => {
+  const memberships = await database.membership.findMany({
+    where: { userId, lifecycle: "ACTIVE" },
+    select: {
+      role: true,
+      team: { select: { id: true, name: true } },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const teamIds = memberships.map((membership) => membership.team.id);
+  const projects = teamIds.length
+    ? await database.project.findMany({
+        where: { teamId: { in: teamIds } },
+        select: {
+          id: true,
+          teamId: true,
+          githubRepositoryId: true,
+          lifecycle: true,
+          environments: {
+            select: {
+              id: true,
+              label: true,
+              lifecycle: true,
+              currentHeadId: true,
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          },
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      })
+    : [];
+  return {
+    teams: memberships.map((membership) => ({
+      id: membership.team.id,
+      name: membership.team.name,
+      role: membership.role,
+    })),
+    projects: await Promise.all(
+      projects.map(async (project) => {
+        const githubRepositoryId = project.githubRepositoryId.toString();
+        const repository =
+          await lookupGitHubRepositoryDisplay(githubRepositoryId);
+        return {
+          id: project.id,
+          teamId: project.teamId,
+          githubRepositoryId,
+          lifecycle: project.lifecycle,
+          environments: project.environments,
+          ...(repository ? { repository } : {}),
+        };
+      }),
+    ),
+  };
+};
+
 const decodeHex = (
   value: unknown,
   length: number,
@@ -264,8 +326,16 @@ const protocolCors = (profile: ServerProfileConfig) =>
         ? origin
         : undefined,
     credentials: true,
-    allowHeaders: ["Content-Type", "Authorization", DEVICE_ID_HEADER],
-    allowMethods: ["POST", "OPTIONS"],
+    allowHeaders: [
+      "Accept",
+      "Content-Type",
+      "Authorization",
+      DEVICE_ID_HEADER,
+      "Idempotency-Key",
+      "X-DotRelay-Operation-Kind",
+      "X-DotRelay-Expires-At",
+    ],
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
     maxAge: 600,
   });
@@ -424,6 +494,8 @@ const createApi = ({
 
   app.use("/api/v1/devices/bootstrap", protocolCors(profile));
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
+  app.use("/api/v1/operations/*", protocolCors(profile));
+  app.use("/api/v1/environments/*", protocolCors(profile));
   app.post(
     "/api/v1/devices/bootstrap",
     bodyLimit({
@@ -526,11 +598,12 @@ const createApi = ({
         };
         const requiredUuid = (field: number): string =>
           bytesToUuid(requiredBytes(field, 16));
+        const senderDeviceId = requiredUuid(24);
+        const recipientDeviceId = requiredUuid(25);
         if (
           requiredUuid(11) !== request.teamId ||
           requiredUuid(13) !== request.projectId ||
-          requiredUuid(24) !== actor.deviceId ||
-          requiredUuid(25) !== actor.deviceId
+          senderDeviceId !== actor.deviceId
         )
           throw new ContractError("invalid_crypto_object");
         const project = await database.project.findUnique({
@@ -541,15 +614,35 @@ const createApi = ({
           throw new Error("Project not found");
         if (project.lifecycle !== "ACTIVE")
           throw new Error("Project is archived");
-        const device = await database.device.findUnique({
+        const sender = await database.device.findUnique({
           where: { id: actor.deviceId },
-          select: { x25519PublicKey: true, ed25519PublicKey: true },
+          select: {
+            x25519PublicKey: true,
+            ed25519PublicKey: true,
+            userId: true,
+          },
         });
-        if (!device) throw new Error("Device is not active");
+        if (!sender) throw new Error("Device is not active");
+        const recipient =
+          recipientDeviceId === actor.deviceId
+            ? sender
+            : await database.device.findFirst({
+                where: {
+                  id: recipientDeviceId,
+                  userId: sender.userId,
+                  lifecycle: "ACTIVE",
+                },
+                select: {
+                  x25519PublicKey: true,
+                  ed25519PublicKey: true,
+                  userId: true,
+                },
+              });
+        if (!recipient) throw new Error("grant recipient device is not active");
         if (
           !equalBytes(
             requiredBytes(39, 32),
-            new Uint8Array(device.x25519PublicKey),
+            new Uint8Array(recipient.x25519PublicKey),
           )
         )
           throw new ContractError("invalid_crypto_object");
@@ -572,7 +665,7 @@ const createApi = ({
         const signature = requiredBytes(4, 64);
         const signingKey = await crypto.subtle.importKey(
           "raw",
-          new Uint8Array(device.ed25519PublicKey).buffer,
+          new Uint8Array(sender.ed25519PublicKey).buffer,
           { name: "Ed25519" },
           false,
           ["verify"],
@@ -625,14 +718,14 @@ const createApi = ({
             projectId: request.projectId,
             teamId: request.teamId,
             senderDeviceId: actor.deviceId,
-            recipientDeviceId: actor.deviceId,
+            recipientDeviceId,
             keyKind: "PROJECT_EPOCH",
             grantKind: "CURRENT_PROJECT_EPOCH",
             projectEpoch: BigInt(epoch),
             plaintextLength: Number(grant.get(71)),
             ciphertextLength: ciphertext.length,
             ciphertextHash,
-            recipientDeviceIds: [actor.deviceId],
+            recipientDeviceIds: [recipientDeviceId],
           },
         });
         if ("idempotent" in result && result.idempotent)
@@ -771,15 +864,17 @@ const createApi = ({
             })
           : null;
     const requestedDeviceId = context.req.header(DEVICE_ID_HEADER);
-    const device = await database.device.findFirst({
-      where: {
-        ...(requestedDeviceId ? { id: requestedDeviceId } : {}),
-        userId: user.id,
-        lifecycle: "ACTIVE",
-      },
+    const devices = await database.device.findMany({
+      where: { userId: user.id, lifecycle: "ACTIVE" },
       orderBy: { createdAt: "asc" },
       select: { id: true, x25519PublicKey: true, ed25519PublicKey: true },
     });
+    const device =
+      (requestedDeviceId
+        ? devices.find((candidate) => candidate.id === requestedDeviceId)
+        : undefined) ??
+      devices[0] ??
+      null;
     const deviceActive = device !== null;
     const currentEpochGrantCount =
       device && project
@@ -792,6 +887,38 @@ const createApi = ({
             },
           })
         : 0;
+    const epochGrant =
+      device && project && currentEpochGrantCount > 0
+        ? await database.grantObject.findFirst({
+            where: {
+              projectId: project.id,
+              recipientDeviceId: device.id,
+              projectEpoch: project.currentEpoch,
+              grantKind: "CURRENT_PROJECT_EPOCH",
+            },
+            select: {
+              protocolObject: { select: { canonicalBytes: true } },
+            },
+            orderBy: { protocolObject: { acceptedAt: "desc" } },
+          })
+        : null;
+    const peerGrantRecipients = project
+      ? new Set(
+          (
+            await database.grantObject.findMany({
+              where: {
+                projectId: project.id,
+                projectEpoch: project.currentEpoch,
+                grantKind: "CURRENT_PROJECT_EPOCH",
+                recipientDeviceId: {
+                  in: devices.map((candidate) => candidate.id),
+                },
+              },
+              select: { recipientDeviceId: true },
+            })
+          ).map((grant) => grant.recipientDeviceId),
+        )
+      : new Set<string>();
     return context.json(
       {
         session: {
@@ -827,6 +954,28 @@ const createApi = ({
               }
             : {}),
         },
+        signingTrustKeys: devices.map((candidate) =>
+          bytesToHex(new Uint8Array(candidate.ed25519PublicKey)),
+        ),
+        ...(epochGrant?.protocolObject.canonicalBytes
+          ? {
+              epochGrant: bytesToBase64(
+                new Uint8Array(epochGrant.protocolObject.canonicalBytes),
+              ),
+            }
+          : {}),
+        peerDevices: devices
+          .filter((candidate) => candidate.id !== device?.id)
+          .map((candidate) => ({
+            id: candidate.id,
+            encryptionPublicKey: bytesToHex(
+              new Uint8Array(candidate.x25519PublicKey),
+            ),
+            signingPublicKey: bytesToHex(
+              new Uint8Array(candidate.ed25519PublicKey),
+            ),
+            hasEpochGrant: peerGrantRecipients.has(candidate.id),
+          })),
         grantsReady:
           deviceActive &&
           membership !== null &&
@@ -842,6 +991,7 @@ const createApi = ({
           serverProfileId: profile.id,
         },
         crypto: { available: true },
+        catalog: await loadWorkspaceCatalog(database, user.id),
       },
       200,
       { "Cache-Control": "no-store" },

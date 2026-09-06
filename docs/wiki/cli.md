@@ -98,11 +98,13 @@ local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle
 in the native credential store, with a protected local record for its profile and Device id.
-`device enroll` still begins the dual-control flow when an active Device already exists. The
-explicit form is `device begin --output <request>`. Move that signed request artifact to a second
-authorized installation and run `device approve --from <request>`. Return the request artifact to
-the initiator and run `device complete --from <request>`. The request contains public protocol
-objects only; the pending private bundle stays in encrypted local Device storage.
+The browser is a separate Device. Session bootstrap may enroll it after the CLI is already active.
+`device enroll` still begins the dual-control flow when adding a Device whose keys are generated on
+an already enrolled installation. The explicit form is `device begin --output <request>`. Move that
+signed request artifact to a second authorized installation and run `device approve --from
+<request>`. Return the request artifact to the initiator and run `device complete --from <request>`.
+The request contains public protocol objects only; the pending private bundle stays in encrypted
+local Device storage.
 
 Create a Recovery Kit with `device backup --output <path>`. The protected file contains the kit and
 the public key needed to verify its signed envelope. It is never printed in normal or JSON output.

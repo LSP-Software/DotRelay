@@ -9,6 +9,7 @@ import type { EnvironmentVariable } from "./environment-workflow";
 export type EnvironmentProtocolSession = Readonly<{
   readonly context: PublicationContext;
   readonly transport: ProtocolTransport;
+  readonly signingTrustKeys: readonly Uint8Array[];
   readonly decodeVariables: (
     page: SyncPageWire,
     previousVariables: readonly EnvironmentVariable[],
@@ -24,11 +25,20 @@ export const createEnvironmentProtocolSession = (input: {
   readonly transport: ProtocolTransport;
   readonly sharedValuePrivateKey: CryptoKey;
   readonly userDefinedValuePrivateKey?: CryptoKey;
+  readonly signingTrustKeys?: readonly Uint8Array[];
+  readonly sharedValueSecret?: Uint8Array;
 }): EnvironmentProtocolSession => {
   const session = createVerifiedEnvironmentSession(input);
+  const signingTrustKeys =
+    input.signingTrustKeys && input.signingTrustKeys.length > 0
+      ? input.signingTrustKeys
+      : input.context.revisionSigningPublicKey
+        ? [input.context.revisionSigningPublicKey]
+        : [];
   return Object.freeze({
     context: input.context,
     transport: input.transport,
+    signingTrustKeys,
     decodeVariables: async (page, previousVariables) => {
       const decoded = await session.decodeVariables(
         page,

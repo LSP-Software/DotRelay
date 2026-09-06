@@ -19,8 +19,10 @@ import {
   type DeviceEnrollmentRequest,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
+  decodeSyncVariables,
   exportSigningPublicKey,
   loadDeviceKeyMaterial,
+  openProjectEpochGrant,
   openRecoveryKit,
   type ProtocolTransport,
   type PublicationContext,
@@ -33,6 +35,7 @@ import {
   encodeProtocolObject,
   exportEncryptionPrivateKey,
   exportSigningPrivateKey,
+  generateEncryptionKeyPair,
   importEncryptionPublicKey,
   importSigningPublicKey,
   parseProtocolObject,
@@ -48,6 +51,7 @@ import {
 } from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
+import { classifyVariablesInteractively } from "./classify-ui";
 import type { NativeCredentialStore } from "./credentials";
 import {
   createFileDeviceRecordStore,
@@ -62,7 +66,6 @@ import {
   parseDotenv,
   serializeDotenv,
 } from "./dotenv";
-import { classifyVariablesInteractively } from "./classify-ui";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
@@ -108,6 +111,13 @@ type Boundary = Readonly<{
   readonly epochCurrent: boolean;
   readonly rotationRequired: boolean;
   readonly cryptoAvailable: boolean;
+  readonly epochGrant?: string;
+  readonly peerDevices: readonly Readonly<{
+    readonly id: string;
+    readonly encryptionPublicKey: string;
+    readonly signingPublicKey: string;
+    readonly hasEpochGrant: boolean;
+  }>[];
 }>;
 
 type WorkflowSession = Readonly<{
@@ -133,6 +143,22 @@ const requiredString = (value: unknown, label: string): string => {
     );
   return value;
 };
+
+const workspaceBoundaryFields = [
+  "environment",
+  "session",
+  "profile",
+  "device",
+  "grantsReady",
+  "epochCurrent",
+  "rotationRequired",
+  "crypto",
+  "projectEpoch",
+  "catalog",
+  "signingTrustKeys",
+  "epochGrant",
+  "peerDevices",
+] as const;
 
 const parseBoundary = (value: Record<string, unknown>): Boundary => {
   const environment = value.environment;
@@ -179,6 +205,30 @@ const parseBoundary = (value: Record<string, unknown>): Boundary => {
     epochCurrent: value.epochCurrent === true,
     rotationRequired: value.rotationRequired === true,
     cryptoAvailable: isRecord(value.crypto) && value.crypto.available === true,
+    ...(typeof value.epochGrant === "string"
+      ? { epochGrant: value.epochGrant }
+      : {}),
+    peerDevices: Array.isArray(value.peerDevices)
+      ? value.peerDevices.flatMap((entry) => {
+          if (!isRecord(entry)) return [];
+          if (
+            typeof entry.id !== "string" ||
+            typeof entry.encryptionPublicKey !== "string"
+          )
+            return [];
+          return [
+            {
+              id: entry.id,
+              encryptionPublicKey: entry.encryptionPublicKey,
+              signingPublicKey:
+                typeof entry.signingPublicKey === "string"
+                  ? entry.signingPublicKey
+                  : "",
+              hasEpochGrant: entry.hasEpochGrant === true,
+            },
+          ];
+        })
+      : [],
   });
 };
 
@@ -186,6 +236,20 @@ const zeros = (length: number): Uint8Array => new Uint8Array(length);
 
 const bytesToHex = (bytes: Uint8Array): string =>
   [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const hexToBytes = (value: string): Uint8Array => {
+  if (!/^[0-9a-f]+$/i.test(value) || value.length % 2 !== 0)
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Device public key",
+      {},
+      "response_invalid",
+    );
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1)
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  return bytes;
+};
 
 const statePath = (directory: string, environmentId: string): string =>
   `${directory}/head-${environmentId}.json`;
@@ -322,7 +386,7 @@ const bootstrapProjectGrant = async (
   boundary: Boundary,
   deviceId: string,
   keys: DeviceKeyMaterial,
-): Promise<void> => {
+): Promise<Uint8Array> => {
   if (!boundary.environment.projectId || !boundary.environment.teamId)
     throw new CliError(
       "conflict",
@@ -349,6 +413,58 @@ const bootstrapProjectGrant = async (
     recipientEncryptionPublicKey: keys.encryptionPublicKey,
     signingPrivateKey: keys.signingPrivateKey,
   });
+  await submitEpochGrant(options, token, boundary, deviceId, grant);
+  return grant.plaintextKey;
+};
+
+const wrapEpochKeyToPeers = async (
+  options: WorkflowOptions,
+  token: string,
+  boundary: Boundary,
+  deviceId: string,
+  keys: DeviceKeyMaterial,
+  epochKey: Uint8Array,
+): Promise<void> => {
+  if (
+    !keys.encryptionPublicKey ||
+    !boundary.environment.projectId ||
+    !boundary.environment.teamId
+  )
+    return;
+  for (const peer of boundary.peerDevices) {
+    if (peer.id === deviceId) continue;
+    const recipientX25519PublicKey = hexToBytes(peer.encryptionPublicKey);
+    if (recipientX25519PublicKey.length !== 32) continue;
+    const recipientEncryptionPublicKey = await crypto.subtle.importKey(
+      "raw",
+      new Uint8Array(recipientX25519PublicKey),
+      { name: "X25519" },
+      true,
+      [],
+    );
+    const grant = await createProjectEpochGrantBootstrap({
+      serverProfileId: options.profile.pin.serverProfileId,
+      teamId: boundary.environment.teamId ?? "",
+      projectId: boundary.environment.projectId ?? "",
+      projectEpoch: safeProjectEpoch(boundary.environment.projectEpoch),
+      senderDeviceId: deviceId,
+      recipientDeviceId: peer.id,
+      recipientX25519PublicKey,
+      recipientEncryptionPublicKey,
+      signingPrivateKey: keys.signingPrivateKey,
+      plaintextKey: epochKey,
+    });
+    await submitEpochGrant(options, token, boundary, deviceId, grant);
+  }
+};
+
+const submitEpochGrant = async (
+  options: WorkflowOptions,
+  token: string,
+  boundary: Boundary,
+  deviceId: string,
+  grant: Awaited<ReturnType<typeof createProjectEpochGrantBootstrap>>,
+): Promise<void> => {
   let response: Response;
   try {
     response = await (options.fetch ?? fetch)(
@@ -683,17 +799,7 @@ const loadAuthorizedDevice = async (
     );
   const userId = requiredString(session.user.id, "User id");
   const boundary = parseBoundary(
-    await firstAdmin.get("/api/v1/workspace/boundary", [
-      "environment",
-      "session",
-      "profile",
-      "device",
-      "grantsReady",
-      "epochCurrent",
-      "rotationRequired",
-      "crypto",
-      "projectEpoch",
-    ]),
+    await firstAdmin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
   );
   if (!boundary.device.active)
     throw new CliError(
@@ -786,17 +892,7 @@ export const enrollFirstDevice = async (
     );
   const userId = requiredString(session.user.id, "User id");
   const boundary = parseBoundary(
-    await admin.get("/api/v1/workspace/boundary", [
-      "environment",
-      "session",
-      "profile",
-      "device",
-      "grantsReady",
-      "epochCurrent",
-      "rotationRequired",
-      "crypto",
-      "projectEpoch",
-    ]),
+    await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
   );
   if (boundary.device.active && boundary.device.id)
     return { deviceId: boundary.device.id, active: true, existing: true };
@@ -1419,17 +1515,7 @@ const loadRecoveryIdentity = async (
     );
   const userId = requiredString(session.user.id, "User id");
   const boundary = parseBoundary(
-    await admin.get("/api/v1/workspace/boundary", [
-      "environment",
-      "session",
-      "profile",
-      "device",
-      "grantsReady",
-      "epochCurrent",
-      "rotationRequired",
-      "crypto",
-      "projectEpoch",
-    ]),
+    await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
   );
   if (boundary.device.active)
     throw new CliError(
@@ -1624,17 +1710,7 @@ const loadWorkflowSession = async (
   const boundary = parseBoundary(
     await admin.get(
       `/api/v1/workspace/boundary${requestedEnvironment ? `?environment=${encodeURIComponent(requestedEnvironment)}` : ""}`,
-      [
-        "environment",
-        "session",
-        "profile",
-        "device",
-        "grantsReady",
-        "epochCurrent",
-        "rotationRequired",
-        "crypto",
-        "projectEpoch",
-      ],
+      workspaceBoundaryFields,
     ),
   );
   if (!boundary.session.active || !boundary.session.userId)
@@ -1735,9 +1811,30 @@ const loadWorkflowSession = async (
       {},
       "authentication_required",
     );
+  let epochKey: Uint8Array | undefined;
   if (!boundary.grantsReady) {
-    await bootstrapProjectGrant(options, token, boundary, deviceId, keys);
+    epochKey = await bootstrapProjectGrant(
+      options,
+      token,
+      boundary,
+      deviceId,
+      keys,
+    );
+  } else if (boundary.epochGrant) {
+    epochKey = await openProjectEpochGrant(
+      fromBase64(boundary.epochGrant, "Project epoch grant"),
+      keys.encryptionPrivateKey,
+    );
   }
+  if (epochKey)
+    await wrapEpochKeyToPeers(
+      options,
+      token,
+      boundary,
+      deviceId,
+      keys,
+      epochKey,
+    );
   const transport = createProtocolTransport({
     origin: options.profile.origin,
     authorization: `Bearer ${token}`,
@@ -1758,12 +1855,14 @@ const loadWorkflowSession = async (
     userDefinedValueRecipientPublicKey: keys.encryptionPublicKey,
     signingPrivateKey: keys.signingPrivateKey,
     revisionSigningPublicKey: signingPublicKey,
+    ...(epochKey ? { sharedValueSecret: epochKey } : {}),
   };
   const session = createVerifiedEnvironmentSession({
     context: publicationContext,
     transport,
     sharedValuePrivateKey: keys.encryptionPrivateKey,
     userDefinedValuePrivateKey: keys.encryptionPrivateKey,
+    ...(epochKey ? { sharedValueSecret: epochKey } : {}),
   });
   return {
     boundary,
@@ -2135,6 +2234,81 @@ const publish = async (
   };
 };
 
+const shareEnvironmentWithPeerDevices = async (
+  synced: Awaited<ReturnType<typeof syncWorkflow>>,
+): Promise<void> => {
+  const epochKey = synced.workflow.publicationContext.sharedValueSecret;
+  if (
+    !epochKey ||
+    synced.workflow.boundary.peerDevices.length === 0 ||
+    synced.variables.filter((variable) => !variable.tombstone).length === 0
+  )
+    return;
+  const probe = await generateEncryptionKeyPair();
+  try {
+    await decodeSyncVariables(
+      synced.page,
+      () => probe.privateKey,
+      [],
+      epochKey,
+    );
+    return;
+  } catch {
+    // Shared Values are still sealed to this Device. Republish them with the
+    // Project epoch key so other Devices can read them.
+  }
+  const context: PublicationContext = {
+    ...synced.workflow.publicationContext,
+    expectedHeadId: synced.page.currentHeadId,
+    expectedHeadHash: synced.page.currentHeadHash,
+    projectEpoch: safeProjectEpoch(synced.page.projectEpoch),
+    mutation: synced.page.currentHeadId ? "MANIFEST_UPDATE" : "GENESIS",
+  };
+  const draft = synced.variables.map((variable) =>
+    Object.freeze({
+      ...variable,
+      hasDraftChange: true,
+    }),
+  );
+  const artifacts = await createPublicationArtifacts(draft, context);
+  assertPublicationAccepted(reviewPublication(artifacts.commandBytes));
+  const operationId = crypto.randomUUID();
+  const deviceId = synced.workflow.deviceId;
+  try {
+    await synced.workflow.transport.begin({
+      operationId,
+      deviceId,
+      kind: "REVISION_PUBLICATION",
+      commandBytes: artifacts.commandBytes,
+      commandDigest: await sha384(artifacts.commandBytes),
+    });
+    for (const staged of artifacts.stagedObjects)
+      await synced.workflow.transport.stage({
+        operationId,
+        deviceId,
+        objectId: staged.objectId,
+        bytes: staged.bytes,
+      });
+    await synced.workflow.transport.finalize({
+      operationId,
+      deviceId,
+      request: artifacts.request,
+    });
+  } catch (error) {
+    await synced.workflow.transport
+      .cancel({ operationId, deviceId })
+      .catch(() => undefined);
+    throw error instanceof CliError
+      ? error
+      : new CliError(
+          "transient",
+          "could not share this Environment with your other Devices",
+          {},
+          "peer_share_failed",
+        );
+  }
+};
+
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -2166,6 +2340,7 @@ export const runProtectedWorkflow = async (
         { missingCount: missing.length },
         "missing_values",
       );
+    await shareEnvironmentWithPeerDevices(synced);
     const entries = synced.variables
       .filter((variable) => !variable.tombstone)
       .map((variable) => ({
@@ -2193,7 +2368,10 @@ export const runProtectedWorkflow = async (
       }
       if (
         exists &&
-        !(await confirm(options, `Replace ${outputPath} with decrypted Values?`))
+        !(await confirm(
+          options,
+          `Replace ${outputPath} with decrypted Values?`,
+        ))
       )
         throw new CliInvocationError("pull confirmation was declined");
     }
@@ -2205,7 +2383,10 @@ export const runProtectedWorkflow = async (
     if (outputPath) await atomicWriteProtectedFile(outputPath, contents);
     return parsed.stdout
       ? { stdout: contents }
-      : { output: outputPath ?? "", message: `Wrote ${entries.length} values to ${outputPath}` };
+      : {
+          output: outputPath ?? "",
+          message: `Wrote ${entries.length} values to ${outputPath}`,
+        };
   }
   if (parsed.command === "init" || parsed.command === "push") {
     const inputPath = parsed.from ?? ".env";
@@ -2222,8 +2403,7 @@ export const runProtectedWorkflow = async (
     }
     const synced = await syncWorkflow(options, parsed);
     const empty = synced.page.currentHeadId === null;
-    const existing =
-      parsed.command === "init" && empty ? [] : synced.variables;
+    const existing = parsed.command === "init" && empty ? [] : synced.variables;
     const entries = await classify(
       options,
       parsed,

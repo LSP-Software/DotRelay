@@ -1,12 +1,20 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
-test("workspace shows the CLI setup command for this Server Profile", async ({
+const openFirstProject = async (page: Page) => {
+  await page.getByRole("heading", { name: "LSP-Software / DotRelay" }).click();
+};
+
+test("workspace shows a copyable CLI setup command after opening Devices", async ({
   page,
 }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/workspace");
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
   await expect(page.getByTestId("cli-setup-command")).toContainText(
-    "dotrelay setup https://relay.dotrelay.dev",
+    "dotrelay setup",
   );
+  await page.getByRole("button", { name: "Copy command" }).click();
+  await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
 });
 
 test("device approval page asks to allow the CLI", async ({ page }) => {
@@ -24,10 +32,10 @@ test("landing page leads to GitHub sign-in without implying GitHub grants access
 
   await expect(
     page.getByRole("heading", {
-      name: "Configuration moves. Plaintext doesn't.",
+      name: "Team .env files, without the headache.",
     }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Enter workspace" }).click();
+  await page.getByRole("link", { name: "Get started" }).click();
   await expect(
     page.getByRole("heading", { name: "Sign in to your Server Profile" }),
   ).toBeVisible();
@@ -39,10 +47,31 @@ test("landing page leads to GitHub sign-in without implying GitHub grants access
   ).toBeVisible();
 });
 
+test("the Team menu shows the current Team and lets you switch", async ({
+  page,
+}) => {
+  await page.goto("/workspace");
+  await expect(
+    page.getByRole("combobox", { name: "Team" }).first(),
+  ).toHaveValue("00000000-0000-4000-8000-000000000011");
+  await expect(
+    page.getByRole("heading", { name: "LSP Software" }),
+  ).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Team" })
+    .first()
+    .selectOption("Acme Labs");
+  await expect(page.getByRole("heading", { name: "Acme Labs" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "acme / widget" }),
+  ).toBeVisible();
+});
+
 test("role-aware administration and invitations expose pending key grants", async ({
   page,
 }) => {
   await page.goto("/workspace");
+  await page.locator("aside").getByRole("button", { name: "Team" }).click();
 
   await page
     .getByRole("combobox", { name: "Preview Membership role" })
@@ -61,7 +90,7 @@ test("role-aware administration and invitations expose pending key grants", asyn
     page.getByRole("button", { name: "Invite member" }),
   ).toBeDisabled();
   await expect(
-    page.getByText("Members can view active Team content only."),
+    page.getByText("Members can view this Team's Projects."),
   ).toBeVisible();
 });
 
@@ -69,11 +98,11 @@ test("Environment archive and restore require explicit confirmation", async ({
   page,
 }) => {
   await page.goto("/workspace");
+  await openFirstProject(page);
 
-  await page.getByRole("tab", { name: "Resources" }).click();
   await page.getByRole("button", { name: "Archive Environment" }).click();
   await expect(page.getByRole("alertdialog")).toContainText(
-    "Encrypted history is retained, but Manifest lanes will not be disclosed.",
+    "History is kept. Variables stay hidden until you restore it.",
   );
   await page.getByRole("button", { name: "Confirm archive" }).click();
   await expect(page.getByTestId("environment-lifecycle")).toHaveText(
@@ -88,7 +117,7 @@ test("Environment archive and restore require explicit confirmation", async ({
   await expect(page.getByTestId("environment-lifecycle")).toHaveText("Active");
 });
 
-test("Server Profile switching separates profile trust, session, and Device state", async ({
+test("Server Profile switching asks to trust the new profile", async ({
   page,
 }) => {
   await page.goto("/workspace");
@@ -96,16 +125,20 @@ test("Server Profile switching separates profile trust, session, and Device stat
   await page
     .getByRole("combobox", { name: "Server Profile" })
     .selectOption("self-hosted");
-  await expect(page.getByText("Trust confirmation required")).toBeVisible();
-  await expect(page.getByText("Session active")).toBeVisible();
   await expect(
-    page.getByText("No active Device", { exact: true }),
+    page.getByRole("heading", { name: "Trust this Server Profile" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Trust this profile" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Trust this Server Profile" }),
+  ).toHaveCount(0);
 
   await page
     .getByRole("combobox", { name: "Server Profile" })
     .selectOption("hosted");
-  await expect(page.getByText("Profile pinned")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "LSP Software" }),
+  ).toBeVisible();
 });
 
 test("keyboard and responsive navigation keep critical routes reachable", async ({
@@ -123,29 +156,51 @@ test("keyboard and responsive navigation keep critical routes reachable", async 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Open navigation" }).click();
   await expect(
-    page.getByRole("dialog").getByRole("link", { name: "Administration" }),
+    page.getByRole("dialog").getByRole("button", { name: "Team" }),
   ).toBeVisible();
 });
 
-test("unsupported cryptography blocks protected content but leaves non-secret flows", async ({
+test("missing Device setup has one action and does not dump problem codes", async ({
   page,
 }) => {
   await page.goto("/workspace");
+  await openFirstProject(page);
 
   await expect(
-    page.getByText("Protected content is unavailable"),
+    page.getByRole("heading", { name: "Enroll this browser" }),
   ).toBeVisible();
-  await expect(page.getByText("crypto_provider_unavailable")).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Manage Devices" }),
+    page.getByRole("button", { name: "Enroll browser" }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open recovery" })).toBeVisible();
+  await expect(page.getByTestId("cli-setup-command")).toContainText(
+    "dotrelay setup",
+  );
   await expect(
-    page.getByRole("heading", { name: "Revision history" }),
+    page.getByRole("button", { name: "Copy command" }),
   ).toBeVisible();
+  await expect(page.getByText("crypto_provider_unavailable")).toHaveCount(0);
+  await expect(page.getByText("Protected content is unavailable")).toHaveCount(
+    0,
+  );
   await expect(page.getByText("DATABASE_URL=", { exact: false })).toHaveCount(
     0,
   );
+});
+
+test("unsupported cryptography explains how to continue", async ({ page }) => {
+  await page.goto("/workspace?preview=no-crypto");
+  await expect(
+    page.getByRole("heading", { name: "This browser can't decrypt variables" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Copy CLI command" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("cli-setup-command")).toContainText(
+    "dotrelay setup",
+  );
+  await expect(
+    page.getByRole("button", { name: "Copy command" }),
+  ).toBeVisible();
 });
 
 test("protected Environment editor keeps Values masked and previews a local draft", async ({
@@ -153,10 +208,10 @@ test("protected Environment editor keeps Values masked and previews a local draf
 }) => {
   await page.goto("/workspace?preview=protected");
 
+  await expect(page.getByRole("heading", { name: "Variables" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Environment editor" }),
+    page.getByText("Current revision", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Verified head", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Add Variable" }).click();
   await page.getByLabel("Variable name").fill("DATABASE_URL");
@@ -231,10 +286,10 @@ test("Environment drafts enforce unique names and preserve tombstones", async ({
   await page.getByRole("button", { name: "Add Variable" }).last().click();
   await expect(page.getByText("OPTIONAL_FLAG", { exact: true })).toBeVisible();
   const optionalRow = page.getByTestId("environment-variable-OPTIONAL_FLAG");
-  await expect(optionalRow).toContainText("Absent");
+  await expect(optionalRow).toContainText("Not set");
   await page.getByLabel("OPTIONAL_FLAG Value").fill("enabled");
   await page.getByRole("button", { name: "Set absent" }).click();
-  await expect(optionalRow).toContainText("Absent");
+  await expect(optionalRow).toContainText("Not set");
 
   await page.getByRole("button", { name: "Delete FEATURE_GATE" }).click();
   await expect(

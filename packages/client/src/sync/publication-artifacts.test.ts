@@ -10,6 +10,7 @@ import {
 } from "@dotrelay/contracts";
 import {
   createPublicationArtifacts,
+  decodeSyncVariables,
   openLane,
   type PublicationVariable,
   reviewPublication,
@@ -344,5 +345,128 @@ describe("publication artifacts", () => {
       },
       await exportSigningPublicKey(signing.publicKey),
     );
+  });
+
+  test("a second Device reads Shared Values sealed with the Project epoch key", async () => {
+    const first = await generateEncryptionKeyPair();
+    const second = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const epochKey = crypto.getRandomValues(new Uint8Array(32));
+    const artifacts = await createPublicationArtifacts([variable()], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: ids.environmentId,
+      expectedHeadHash: new Uint8Array(48),
+      valueRecipientPublicKey: first.publicKey,
+      signingPrivateKey: signing.privateKey,
+      sharedValueSecret: epochKey,
+    });
+    const definition = artifacts.stagedObjects.find((staged) => {
+      const object = parseProtocolObject(staged.bytes);
+      return object.get(1) === 13 && object.get(36) === 2;
+    });
+    if (!definition) throw new Error("definition lane is missing");
+    await expect(
+      openLane(definition.bytes, second.privateKey),
+    ).rejects.toBeInstanceOf(Error);
+    const decoded = JSON.parse(
+      new TextDecoder().decode(
+        await openLane(definition.bytes, second.privateKey, epochKey),
+      ),
+    ) as { name: string };
+    expect(decoded.name).toBe("DATABASE_URL");
+  });
+
+  test("a second Device skips Device-sealed genesis and reads the epoch-sealed head", async () => {
+    const first = await generateEncryptionKeyPair();
+    const second = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const epochKey = crypto.getRandomValues(new Uint8Array(32));
+    const genesis = await createPublicationArtifacts([variable()], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: ids.environmentId,
+      expectedHeadHash: new Uint8Array(48),
+      valueRecipientPublicKey: first.publicKey,
+      signingPrivateKey: signing.privateKey,
+    });
+    const live = await createPublicationArtifacts(
+      [variable({ hasDraftChange: true })],
+      {
+        ...ids,
+        projectEpoch: 1,
+        expectedHeadId: genesis.request.revision.id,
+        expectedHeadHash: await sha384(
+          genesis.stagedObjects.find(
+            (object) =>
+              object.objectId === genesis.request.revision.protocolObjectId,
+          )?.bytes ?? new Uint8Array(),
+        ),
+        valueRecipientPublicKey: first.publicKey,
+        signingPrivateKey: signing.privateKey,
+        sharedValueSecret: epochKey,
+        mutation: "MANIFEST_UPDATE",
+      },
+    );
+    const pageObjects = async (
+      artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
+    ) =>
+      Promise.all(
+        artifacts.stagedObjects.map(async (object) => ({
+          objectId: object.objectId,
+          canonicalBytes: object.bytes,
+          digest: await sha384(object.bytes),
+        })),
+      );
+    const genesisDigest = await sha384(
+      genesis.stagedObjects.find(
+        (object) =>
+          object.objectId === genesis.request.revision.protocolObjectId,
+      )?.bytes ?? new Uint8Array(),
+    );
+    const decoded = await decodeSyncVariables(
+      {
+        environmentId: ids.environmentId,
+        trustedRevisionId: ids.environmentId,
+        trustedRevisionHash: new Uint8Array(48),
+        currentHeadId: live.request.revision.id,
+        currentHeadHash: new Uint8Array(48),
+        projectEpoch: 1n,
+        revisions: [
+          {
+            id: genesis.request.revision.id,
+            digest: genesisDigest,
+            parentId: ids.environmentId,
+            parentHash: new Uint8Array(48),
+            mutation: 1,
+            projectEpoch: 1n,
+            authoredAtMs: BigInt(genesis.request.revision.authoredAtMs),
+            rollbackTargetId: null,
+            objects: await pageObjects(genesis),
+          },
+          {
+            id: live.request.revision.id,
+            digest: new Uint8Array(48),
+            parentId: genesis.request.revision.id,
+            parentHash: genesisDigest,
+            mutation: 2,
+            projectEpoch: 1n,
+            authoredAtMs: BigInt(live.request.revision.authoredAtMs),
+            rollbackTargetId: null,
+            objects: await pageObjects(live),
+          },
+        ],
+        nextCursor: null,
+      },
+      () => second.privateKey,
+      [],
+      epochKey,
+    );
+    expect(decoded).toEqual([
+      expect.objectContaining({
+        name: "DATABASE_URL",
+        value: "postgres://example",
+      }),
+    ]);
   });
 });

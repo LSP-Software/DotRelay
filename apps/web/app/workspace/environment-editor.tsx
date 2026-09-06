@@ -12,7 +12,6 @@ import {
 } from "@dotrelay/client";
 import {
   Check,
-  CircleAlert,
   Eye,
   EyeOff,
   GitBranch,
@@ -23,6 +22,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,7 @@ import {
   deleteEnvironmentVariable,
   type EnvironmentVariable,
   prepareEncryptedPublication,
+  type SetupAction,
   updateVariableValue,
   type VariableDraft,
   validateVariableDraft,
@@ -60,11 +61,17 @@ import {
 
 type EnvironmentEditorProps = Readonly<{
   readonly available: boolean;
-  readonly blockers: readonly string[];
+  readonly setupAction?: SetupAction | null;
+  readonly setupCommand?: string;
+  readonly setupMessage?: string | null;
+  readonly setupBusy?: boolean;
+  readonly onSetupAction?: () => void;
+  readonly environmentLabel?: string;
   readonly remoteHeadRevision: string;
   readonly protocolSession?: Readonly<{
     readonly context: PublicationContext;
     readonly transport: ProtocolTransport;
+    readonly signingTrustKeys?: readonly Uint8Array[];
     readonly decodeVariables?: (
       page: SyncPageWire,
       previousVariables: readonly EnvironmentVariable[],
@@ -120,28 +127,27 @@ const emptyVariableDraft: AddVariableState = {
 const ownershipLabel = (ownership: EnvironmentVariable["ownership"]): string =>
   ownership === "SHARED_VALUE" ? "Shared Value" : "User-defined Value";
 
+const sessionTrustKeys = (
+  session: NonNullable<EnvironmentEditorProps["protocolSession"]>,
+): Uint8Array | readonly Uint8Array[] => {
+  if (session.signingTrustKeys && session.signingTrustKeys.length > 0)
+    return session.signingTrustKeys;
+  if (!session.context.revisionSigningPublicKey)
+    throw new Error("revision signing trust key is unavailable");
+  return session.context.revisionSigningPublicKey;
+};
+
 const nextVariableId = (): string => globalThis.crypto.randomUUID();
 
 const revisionNumber = (revision: string): number =>
   Number.parseInt(revision.replace("rev_", ""), 10);
 
 const valueStateLabel = (variable: EnvironmentVariable): string => {
-  if (variable.tombstone) return "Tombstone";
-  if (variable.value === null) return "Absent";
-  if (variable.value === "") return "Empty Value";
-  return "Set · hidden";
+  if (variable.tombstone) return "Will delete";
+  if (variable.value === null) return "Not set";
+  if (variable.value === "") return "Empty";
+  return "Hidden";
 };
-
-const GateList = ({ blockers }: { readonly blockers: readonly string[] }) => (
-  <ul className="mt-4 grid gap-2 text-sm text-muted-foreground">
-    {blockers.map((blocker) => (
-      <li className="flex items-start gap-2" key={blocker}>
-        <CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-300" />
-        {blocker}
-      </li>
-    ))}
-  </ul>
-);
 
 const AddVariableDialog = ({
   open,
@@ -163,8 +169,8 @@ const AddVariableDialog = ({
       <DialogHeader>
         <DialogTitle>Add Variable</DialogTitle>
         <DialogDescription>
-          Define the lane and its initial Value together. The initial Value is
-          encrypted in this browser before it can leave the active Device.
+          Name it, choose who can read it, and set the first value. Encryption
+          happens in this browser.
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4">
@@ -209,7 +215,7 @@ const AddVariableDialog = ({
             <span>
               <span className="block text-sm font-medium">Shared Value</span>
               <span className="block text-xs text-muted-foreground">
-                Team-readable; the original provider and admins can change it.
+                Everyone in the Team can read this. Admins can change it.
               </span>
             </span>
           </label>
@@ -227,7 +233,7 @@ const AddVariableDialog = ({
                 User-defined Value
               </span>
               <span className="block text-xs text-muted-foreground">
-                Readable only by this User&apos;s authorized Devices.
+                Only this User&apos;s Devices can read it.
               </span>
             </span>
           </label>
@@ -292,7 +298,12 @@ const AddVariableDialog = ({
 
 export const EnvironmentEditor = ({
   available,
-  blockers,
+  setupAction,
+  setupCommand,
+  setupMessage,
+  setupBusy,
+  onSetupAction,
+  environmentLabel = "default",
   remoteHeadRevision,
   protocolSession,
 }: EnvironmentEditorProps) => {
@@ -362,6 +373,56 @@ export const EnvironmentEditor = ({
         : null,
     );
   }, [protocolSession]);
+  useEffect(() => {
+    if (!protocolSession || !available) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const context = protocolSession.context;
+        if (!context.trustedRevisionId || !context.trustedRevisionHash) return;
+        const page = await protocolSession.transport.syncAll({
+          environmentId: context.environmentId,
+          deviceId: context.actorDeviceId,
+          request: {
+            trustedRevisionId: context.trustedRevisionId,
+            trustedRevisionHash: context.trustedRevisionHash,
+            pagination: {},
+          },
+        });
+        await verifySyncPage(page, sessionTrustKeys(protocolSession), {
+          actorUserId: context.actorUserId,
+        });
+        if (cancelled) return;
+        const decoded = protocolSession.decodeVariables
+          ? await protocolSession.decodeVariables(page, [])
+          : undefined;
+        if (cancelled || !decoded) return;
+        setRemoteVariables(decoded);
+        setVariables((current) =>
+          current.some((variable) => variable.hasDraftChange)
+            ? current
+            : [...decoded],
+        );
+        setVerifiedHistory(page.revisions.map((revision) => revision.id));
+        if (page.currentHeadId && page.currentHeadHash) {
+          setProtocolHead({
+            id: page.currentHeadId,
+            hash: page.currentHeadHash,
+          });
+          setHeadRevision(page.currentHeadId);
+        }
+      } catch {
+        if (!cancelled)
+          setPublishMessage(
+            "This Device could not read the current Environment.",
+          );
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [protocolSession, available]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
   >(() => new Map());
@@ -571,9 +632,7 @@ export const EnvironmentEditor = ({
               pagination: {},
             },
           });
-          if (!context.revisionSigningPublicKey)
-            throw new Error("revision signing trust key is unavailable");
-          await verifySyncPage(page, context.revisionSigningPublicKey, {
+          await verifySyncPage(page, sessionTrustKeys(protocolSession), {
             actorUserId: context.actorUserId,
           });
           setVerifiedHistory(page.revisions.map((revision) => revision.id));
@@ -732,52 +791,73 @@ export const EnvironmentEditor = ({
   };
 
   if (!available) {
+    const action = setupAction;
     return (
-      <section className="mt-8 scroll-mt-24" id="environment">
+      <section className="scroll-mt-24" id="environment">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <LockKeyhole className="size-5 text-amber-300" />
-              Environment editor
+              <h2>{action?.title ?? "Variables are hidden"}</h2>
             </CardTitle>
             <CardDescription>
-              Protected Manifest lanes stay undisclosed until every client gate
-              is satisfied.
+              {action?.body ??
+                "Enroll this browser to view and edit variables."}
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <Alert className="border-amber-300/25 bg-amber-300/5">
-              <CircleAlert className="text-amber-300" />
-              <AlertTitle>Protected workflow unavailable</AlertTitle>
-              <AlertDescription>
-                No Variable names, descriptions, ownership lanes, or Values were
-                requested or rendered.
-                <GateList blockers={blockers} />
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-          <CardFooter className="text-xs text-muted-foreground">
-            Sign in and profile administration remain available. An active
-            Device with the verified v3 suite is required to continue.
-          </CardFooter>
+          {setupCommand || setupMessage ? (
+            <CardContent className="space-y-3">
+              {setupCommand ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Use the CLI on this machine instead of this browser:
+                  </p>
+                  <CopyableCommand
+                    className="mt-2"
+                    data-testid="cli-setup-command"
+                    value={setupCommand}
+                  />
+                </>
+              ) : null}
+              {setupMessage ? (
+                <p className="text-sm text-muted-foreground" role="status">
+                  {setupMessage}
+                </p>
+              ) : null}
+            </CardContent>
+          ) : null}
+          {action && (onSetupAction || action.id === "sign-in") ? (
+            <CardFooter>
+              {action.id === "sign-in" ? (
+                <a
+                  className="inline-flex h-8 items-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
+                  href="/sign-in"
+                >
+                  {action.actionLabel}
+                </a>
+              ) : (
+                <Button
+                  disabled={setupBusy}
+                  onClick={onSetupAction}
+                  type="button"
+                >
+                  {action.actionLabel}
+                </Button>
+              )}
+            </CardFooter>
+          ) : null}
         </Card>
       </section>
     );
   }
 
   return (
-    <section className="mt-8 scroll-mt-24" id="environment">
+    <section className="scroll-mt-24" id="environment">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-primary">
-            Protected client workspace
-          </p>
-          <h2 className="mt-2 font-heading text-2xl font-semibold">
-            Environment editor
-          </h2>
+          <h2 className="font-heading text-2xl font-semibold">Variables</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            production · Variables and Value lanes are held by this active
-            Device.
+            {environmentLabel}. Values stay on this Device.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -816,13 +896,13 @@ export const EnvironmentEditor = ({
                       pagination: {},
                     },
                   });
-                  if (!context.revisionSigningPublicKey)
-                    throw new Error(
-                      "revision signing trust key is unavailable",
-                    );
-                  await verifySyncPage(page, context.revisionSigningPublicKey, {
-                    actorUserId: context.actorUserId,
-                  });
+                  await verifySyncPage(
+                    page,
+                    sessionTrustKeys(protocolSession),
+                    {
+                      actorUserId: context.actorUserId,
+                    },
+                  );
                   setVerifiedHistory(
                     page.revisions.map((revision) => revision.id),
                   );
@@ -918,10 +998,10 @@ export const EnvironmentEditor = ({
       <div className="mb-4 grid gap-3 md:grid-cols-3">
         <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <ShieldCheck className="size-4 text-primary" /> Verified head
+            <ShieldCheck className="size-4 text-primary" /> Current revision
           </div>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
-            {headRevision} · sha384 continuity verified
+            {headRevision}
           </p>
         </div>
         <div className="rounded-lg border bg-card/50 p-3">
@@ -930,17 +1010,16 @@ export const EnvironmentEditor = ({
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {changedCount === 0
-              ? "No unsaved lane changes"
-              : `${changedCount} changed lane${changedCount === 1 ? "" : "s"} · plaintext stays local`}
+              ? "No unpublished changes"
+              : `${changedCount} unpublished change${changedCount === 1 ? "" : "s"}`}
           </p>
         </div>
         <div className="rounded-lg border bg-card/50 p-3">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <LockKeyhole className="size-4 text-primary" /> Current epoch
+            <LockKeyhole className="size-4 text-primary" /> Device
           </div>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">
-            epoch {protocolSession?.context.projectEpoch ?? "preview"} · active
-            Device · grants ready
+          <p className="mt-1 text-xs text-muted-foreground">
+            Values stay on this browser.
           </p>
         </div>
       </div>
@@ -948,7 +1027,7 @@ export const EnvironmentEditor = ({
       {publishMessage ? (
         <Alert className="mb-4 bg-card/60">
           <Check className="text-primary" />
-          <AlertTitle>Workflow update</AlertTitle>
+          <AlertTitle>Draft status</AlertTitle>
           <AlertDescription>{publishMessage}</AlertDescription>
         </Alert>
       ) : null}
@@ -956,12 +1035,10 @@ export const EnvironmentEditor = ({
       {conflictingLaneIds.size > 0 ? (
         <Card className="mb-4 border-amber-300/30">
           <CardHeader>
-            <CardTitle className="text-lg">
-              Stale head: resolve locally
-            </CardTitle>
+            <CardTitle>Stale head: resolve locally</CardTitle>
             <CardDescription>
-              The server has a different verified head. Values remain hidden;
-              choose a three-way outcome for each changed lane before retrying.
+              Someone else published while you were editing. Pick what to keep
+              for each conflict, then retry.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
@@ -1030,8 +1107,7 @@ export const EnvironmentEditor = ({
             <div>
               <CardTitle>Variables</CardTitle>
               <CardDescription>
-                Definitions and required initial Value lanes are committed as
-                one local draft. Values are masked until individually revealed.
+                Names and values. Hidden until you reveal them.
               </CardDescription>
             </div>
             <Button
@@ -1154,8 +1230,8 @@ export const EnvironmentEditor = ({
                     </div>
                     <p className="mt-2 text-[11px] text-muted-foreground">
                       {isRevealed
-                        ? "Revealed only in this active Device view. It is not copied to diagnostics or logs."
-                        : "Hidden by default · reveal is explicit and local to this Device."}
+                        ? "Visible on this Device only."
+                        : "Hidden until you reveal it."}
                     </p>
                   </>
                 )}
@@ -1164,19 +1240,19 @@ export const EnvironmentEditor = ({
           })}
         </CardContent>
         <CardFooter className="border-t text-xs text-muted-foreground">
-          <LockKeyhole className="mr-2 size-3" /> No plaintext is sent to the
-          synchronization service.
+          <LockKeyhole className="mr-2 size-3" /> The server never sees these
+          values.
         </CardFooter>
       </Card>
 
       <Card className="mt-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
-            <GitBranch className="size-4" /> Verified history
+            <GitBranch className="size-4" /> History
           </CardTitle>
           <CardDescription>
-            Rollback creates a new Revision and selects only the lanes you
-            choose. The current head is never rewound.
+            Past publishes. Rollback writes a new revision. The current head is
+            never rewound.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2">

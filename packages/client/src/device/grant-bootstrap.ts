@@ -3,6 +3,8 @@ import {
   canonicalEncode,
   decodeCiphertextEnvelope,
   encodeProtocolObject,
+  open,
+  parseProtocolObject,
   protocolObjectFromFields,
   seal,
   sha384,
@@ -32,6 +34,7 @@ export const createProjectEpochGrantBootstrap = async (
     readonly recipientX25519PublicKey: Uint8Array;
     readonly recipientEncryptionPublicKey: CryptoKey;
     readonly signingPrivateKey: CryptoKey;
+    readonly plaintextKey?: Uint8Array;
   }>,
 ): Promise<ProjectEpochGrantBootstrap> => {
   if (
@@ -40,7 +43,11 @@ export const createProjectEpochGrantBootstrap = async (
     input.recipientX25519PublicKey.length !== 32
   )
     throw new TypeError("project grant context is invalid");
-  const plaintextKey = crypto.getRandomValues(new Uint8Array(32));
+  if (input.plaintextKey && input.plaintextKey.length !== 32)
+    throw new TypeError("project grant key must be 32 bytes");
+  const plaintextKey = input.plaintextKey
+    ? new Uint8Array(input.plaintextKey)
+    : crypto.getRandomValues(new Uint8Array(32));
   try {
     const envelopeBytes = await seal(
       plaintextKey,
@@ -107,4 +114,25 @@ export const createProjectEpochGrantBootstrap = async (
   } finally {
     zeroize(plaintextKey);
   }
+};
+
+export const openProjectEpochGrant = async (
+  canonicalBytes: Uint8Array,
+  recipientPrivateKey: CryptoKey,
+): Promise<Uint8Array> => {
+  const object = parseProtocolObject(canonicalBytes);
+  if (object.get(1) !== 7) throw new TypeError("expected a grant object");
+  const envelope = canonicalEncode(
+    new Map<number, CborValue>([
+      [0, object.get(0)],
+      [44, object.get(44)],
+      [45, object.get(45)],
+      [46, object.get(46)],
+      [47, object.get(47)],
+      [48, object.get(48)],
+      [71, object.get(71)],
+      [72, object.get(72)],
+    ]),
+  );
+  return open(envelope, recipientPrivateKey);
 };

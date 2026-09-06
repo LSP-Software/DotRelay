@@ -10,6 +10,7 @@ import {
 import {
   createProjectEpochGrantBootstrap,
   exportSigningPublicKey,
+  openProjectEpochGrant,
 } from "../index";
 
 describe("project epoch grant bootstrap", () => {
@@ -54,6 +55,42 @@ describe("project epoch grant bootstrap", () => {
       grant.plaintextKey,
     );
     expect(grant.plaintextKey).toHaveLength(32);
+  });
+
+  test("wraps an existing Project epoch key to a second Device", async () => {
+    const first = await generateEncryptionKeyPair();
+    const second = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const firstGrant = await createProjectEpochGrantBootstrap({
+      serverProfileId: "11111111-1111-4111-8111-111111111111",
+      teamId: "22222222-2222-4222-8222-222222222222",
+      projectId: "33333333-3333-4333-8333-333333333333",
+      projectEpoch: 1,
+      senderDeviceId: "44444444-4444-4444-8444-444444444444",
+      recipientDeviceId: "44444444-4444-4444-8444-444444444444",
+      recipientX25519PublicKey: new Uint8Array(32),
+      recipientEncryptionPublicKey: first.publicKey,
+      signingPrivateKey: signing.privateKey,
+    });
+    const epochKey = await openProjectEpochGrant(
+      firstGrant.canonicalBytes,
+      first.privateKey,
+    );
+    const peerGrant = await createProjectEpochGrantBootstrap({
+      serverProfileId: "11111111-1111-4111-8111-111111111111",
+      teamId: "22222222-2222-4222-8222-222222222222",
+      projectId: "33333333-3333-4333-8333-333333333333",
+      projectEpoch: 1,
+      senderDeviceId: "44444444-4444-4444-8444-444444444444",
+      recipientDeviceId: "55555555-5555-4555-8555-555555555555",
+      recipientX25519PublicKey: new Uint8Array(32),
+      recipientEncryptionPublicKey: second.publicKey,
+      signingPrivateKey: signing.privateKey,
+      plaintextKey: epochKey,
+    });
+    expect(
+      await openProjectEpochGrant(peerGrant.canonicalBytes, second.privateKey),
+    ).toEqual(epochKey);
   });
 });
 

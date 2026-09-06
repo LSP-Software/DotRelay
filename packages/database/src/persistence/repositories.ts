@@ -2263,14 +2263,6 @@ export class DeviceRepository {
             : "DEVICE_ENROLLMENT",
       });
       if (operation.idempotent) return operation;
-      const activeDeviceCount = await transaction.device.count({
-        where: {
-          userId: input.operation.actorUserId,
-          lifecycle: "ACTIVE",
-        },
-      });
-      if (activeDeviceCount > 0)
-        throw new Error("bootstrap enrollment requires no active devices");
       if (input.recoveryAttempt) {
         const priorAttempt = await transaction.recoveryAttempt.findFirst({
           where: {

@@ -163,6 +163,7 @@ const boundary = () => ({
   epochCurrent: true,
   rotationRequired: false,
   crypto: { available: true },
+  catalog: { teams: [], projects: [] },
 });
 
 const activeDevice = (request: Request): boolean =>

@@ -16,9 +16,13 @@ or plaintext that were already downloaded to a client.
 
 ## Initial trust bootstrap
 
-The first Device for a User uses **`DeviceRepository.completeBootstrap`**. Bootstrap is allowed only
-while the User has zero active Devices. It commits a Device certificate protocol object and creates
-the Device as `ACTIVE` without a dual-control enrollment record.
+A Device for a client installation uses **`DeviceRepository.completeBootstrap`**. The User must have
+an authenticated session. CLI and browser are distinct Devices, so bootstrap may run again for this
+browser after the CLI is already enrolled. It commits a Device certificate protocol object and
+creates the Device as `ACTIVE` without a dual-control enrollment record.
+
+Dual-control enrollment remains the CLI handoff for adding a Device whose keys are generated on an
+already enrolled installation.
 
 ## Dual-control enrollment
 
@@ -39,6 +43,12 @@ retries and conflict when an operation id or digest is reused with different byt
 Invitations create Memberships in `PENDING_KEY_GRANT`. **`GrantRepository.create`** stores encrypted
 grant protocol objects with exact recipient-set validation: every listed recipient Device must be
 active, and Membership-scoped grants require a pending Membership on the same Team.
+
+The same User's CLI and browser Devices share the current Project epoch key through grant bootstrap.
+The first Device creates the key. Later Devices receive a wrap of that key, then Shared Values can
+be sealed to it instead of to a single Device.
+
+**`MembershipRepository.activate`** commits a membership activation object only after the required
 
 **`MembershipRepository.activate`** commits a membership activation object only after the required
 grant count is present. Owner and admin authority for grant creation follows the same Team action

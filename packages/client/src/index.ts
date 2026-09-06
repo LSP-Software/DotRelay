@@ -24,6 +24,7 @@ export {
 } from "./device/enrollment";
 export {
   createProjectEpochGrantBootstrap,
+  openProjectEpochGrant,
   type ProjectEpochGrantBootstrap,
 } from "./device/grant-bootstrap";
 export {

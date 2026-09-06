@@ -3,7 +3,7 @@ import { WorkspaceShell } from "./workspace-shell";
 
 export const metadata: Metadata = {
   title: "Workspace",
-  description: "DotRelay Team, Project, and Environment workspace",
+  description: "Choose a Team and Project, then view Variables",
 };
 
 const WorkspacePage = () => <WorkspaceShell />;
