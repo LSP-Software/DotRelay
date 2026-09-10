@@ -267,13 +267,13 @@ export const loginWithDeviceAuthorization = async (
   if (options.onAuthorization)
     await options.onAuthorization(authorization, verificationUrl);
   if (!options.noOpen && options.open) {
-    let launched = true;
+    let openSucceeded = true;
     try {
       await options.open(verificationUrl);
     } catch {
-      launched = false;
+      openSucceeded = false;
     }
-    if (!launched) {
+    if (!openSucceeded) {
       try {
         if (options.onOpenFailed) await options.onOpenFailed();
       } catch {
@@ -374,13 +374,11 @@ export const verificationPageCommand = (
       ? ["explorer.exe", url]
       : ["xdg-open", url];
 
-const browserOpenFailure = (): CliError =>
-  new CliError(
-    "local-io",
-    "could not open the verification page in a browser; open the URL shown above",
-    {},
-    "browser_open_failed",
-  );
+export const browserOpenFailure = (detail: string): CliError =>
+  new CliError("local-io", detail, {}, "browser_open_failed");
+
+const BROWSER_OPEN_FAILED_DETAIL =
+  "could not open the verification page in a browser; open the URL shown above";
 
 export type VerificationPageProcess = Readonly<{
   readonly exited: Promise<number>;
@@ -403,15 +401,15 @@ export const openVerificationPage = async (
   try {
     child = spawn(command);
   } catch {
-    throw browserOpenFailure();
+    throw browserOpenFailure(BROWSER_OPEN_FAILED_DETAIL);
   }
   let grace: ReturnType<typeof setTimeout> | undefined;
   try {
+    const exitOutcome = child.exited
+      .then((exitCode) => ({ kind: "exited" as const, exitCode }))
+      .catch(() => ({ kind: "spawn-failed" as const }));
     const outcome = await Promise.race([
-      child.exited.then((exitCode) => ({
-        kind: "exited" as const,
-        exitCode,
-      })),
+      exitOutcome,
       new Promise<Readonly<{ readonly kind: "grace-expired" }>>((resolve) => {
         grace = setTimeout(
           () => resolve({ kind: "grace-expired" }),
@@ -420,7 +418,10 @@ export const openVerificationPage = async (
       }),
     ]);
     if (outcome.kind === "grace-expired") return;
-    if (outcome.exitCode !== 0) throw browserOpenFailure();
+    if (outcome.kind === "spawn-failed")
+      throw browserOpenFailure(BROWSER_OPEN_FAILED_DETAIL);
+    if (outcome.exitCode !== 0)
+      throw browserOpenFailure(BROWSER_OPEN_FAILED_DETAIL);
   } finally {
     if (grace !== undefined) clearTimeout(grace);
   }

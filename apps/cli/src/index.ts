@@ -16,6 +16,7 @@ import {
   rejectForbiddenFlags,
 } from "./args";
 import {
+  browserOpenFailure,
   createSessionStore,
   loginWithDeviceAuthorization,
   openVerificationPage,
@@ -423,11 +424,8 @@ const loginAndEnroll = async (
           output.write(
             json(
               diagnosticForError(
-                new CliError(
-                  "local-io",
+                browserOpenFailure(
                   "could not open the verification page in a browser; open the URL from the authorization event",
-                  {},
-                  "browser_open_failed",
                 ),
               ),
             ),

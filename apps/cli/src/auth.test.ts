@@ -12,6 +12,31 @@ const profile: ServerProfilePin = {
   serverProfileId: "00000000-0000-4000-8000-000000000042",
 };
 
+const memoryCredentials = () => {
+  const secrets = new Map<string, Uint8Array>();
+  return {
+    get: async (_service: string, account: string) =>
+      secrets.get(account) ?? null,
+    set: async (_service: string, account: string, secret: Uint8Array) =>
+      void secrets.set(account, secret),
+    delete: async (_service: string, account: string) =>
+      void secrets.delete(account),
+  };
+};
+
+const deviceCodeResponse = (extra: Record<string, unknown> = {}): Response =>
+  Response.json({
+    device_code: "device-code",
+    user_code: "KITE-MOSS",
+    verification_uri: "https://relay.example/device",
+    interval: 1,
+    expires_in: 600,
+    ...extra,
+  });
+
+const accessTokenResponse = (): Response =>
+  Response.json({ access_token: "bearer-secret", token_type: "Bearer" });
+
 describe("CLI device authorization", () => {
   test("uses printable profile-scoped native credential accounts", async () => {
     let account = "";
@@ -121,13 +146,7 @@ describe("CLI device authorization", () => {
   });
 
   test("exposes the validated URL, code, and expiry before polling", async () => {
-    const credentials = {
-      get: async () => null,
-      set: async (_service: string, _account: string, _secret: Uint8Array) =>
-        undefined,
-      delete: async () => undefined,
-    };
-    const sessions = createSessionStore(credentials);
+    const sessions = createSessionStore(memoryCredentials());
     let poll = 0;
     const seen: Array<
       Readonly<{ userCode: string; verificationUrl: string; expiresIn: number }>
@@ -136,18 +155,7 @@ describe("CLI device authorization", () => {
       sleep: async () => undefined,
       fetch: async () => {
         poll += 1;
-        return poll === 1
-          ? Response.json({
-              device_code: "device-code",
-              user_code: "KITE-MOSS",
-              verification_uri: "https://relay.example/device",
-              interval: 1,
-              expires_in: 600,
-            })
-          : Response.json({
-              access_token: "bearer-secret",
-              token_type: "Bearer",
-            });
+        return poll === 1 ? deviceCodeResponse() : accessTokenResponse();
       },
       open: async (url) => {
         seen.push({
@@ -178,13 +186,7 @@ describe("CLI device authorization", () => {
   });
 
   test("passes a server-supplied complete URL unchanged", async () => {
-    const credentials = {
-      get: async () => null,
-      set: async (_service: string, _account: string, _secret: Uint8Array) =>
-        undefined,
-      delete: async () => undefined,
-    };
-    const sessions = createSessionStore(credentials);
+    const sessions = createSessionStore(memoryCredentials());
     let poll = 0;
     let seenUrl = "";
     await loginWithDeviceAuthorization(profile, sessions, {
@@ -193,19 +195,11 @@ describe("CLI device authorization", () => {
       fetch: async () => {
         poll += 1;
         return poll === 1
-          ? Response.json({
-              device_code: "device-code",
-              user_code: "KITE-MOSS",
-              verification_uri: "https://relay.example/device",
+          ? deviceCodeResponse({
               verification_uri_complete:
                 "https://relay.example/device?code=KITE-MOSS&next=1",
-              interval: 1,
-              expires_in: 600,
             })
-          : Response.json({
-              access_token: "bearer-secret",
-              token_type: "Bearer",
-            });
+          : accessTokenResponse();
       },
       onAuthorization: (_authorization, verificationUrl) => {
         seenUrl = verificationUrl;
@@ -215,39 +209,20 @@ describe("CLI device authorization", () => {
   });
 
   test("keeps polling and surfaces the manual path when the launcher fails", async () => {
-    const secrets = new Map<string, Uint8Array>();
-    const credentials = {
-      get: async (_service: string, account: string) =>
-        secrets.get(account) ?? null,
-      set: async (_service: string, account: string, secret: Uint8Array) =>
-        void secrets.set(account, secret),
-      delete: async (_service: string, account: string) =>
-        void secrets.delete(account),
-    };
-    const sessions = createSessionStore(credentials);
+    const sessions = createSessionStore(memoryCredentials());
     let poll = 0;
     let failed = false;
     const result = await loginWithDeviceAuthorization(profile, sessions, {
       sleep: async () => undefined,
       fetch: async () => {
         poll += 1;
-        if (poll === 1)
-          return Response.json({
-            device_code: "device-code",
-            user_code: "KITE-MOSS",
-            verification_uri: "https://relay.example/device",
-            interval: 1,
-            expires_in: 600,
-          });
+        if (poll === 1) return deviceCodeResponse();
         if (poll === 2)
           return Response.json(
             { error: "authorization_pending" },
             { status: 400 },
           );
-        return Response.json({
-          access_token: "bearer-secret",
-          token_type: "Bearer",
-        });
+        return accessTokenResponse();
       },
       open: async () => {
         throw new Error("no browser available");
@@ -262,13 +237,7 @@ describe("CLI device authorization", () => {
   });
 
   test("reports an expired device authorization without a usable URL", async () => {
-    const credentials = {
-      get: async () => null,
-      set: async (_service: string, _account: string, _secret: Uint8Array) =>
-        undefined,
-      delete: async () => undefined,
-    };
-    const sessions = createSessionStore(credentials);
+    const sessions = createSessionStore(memoryCredentials());
     let poll = 0;
     let exposedBeforeWait = false;
     await expect(
@@ -277,14 +246,7 @@ describe("CLI device authorization", () => {
         sleep: async () => undefined,
         fetch: async () => {
           poll += 1;
-          if (poll === 1)
-            return Response.json({
-              device_code: "device-code",
-              user_code: "KITE-MOSS",
-              verification_uri: "https://relay.example/device",
-              interval: 1,
-              expires_in: 600,
-            });
+          if (poll === 1) return deviceCodeResponse();
           return Response.json({ error: "expired_token" }, { status: 400 });
         },
         onAuthorization: () => {
@@ -297,13 +259,7 @@ describe("CLI device authorization", () => {
   });
 
   test("reports a denied device authorization", async () => {
-    const credentials = {
-      get: async () => null,
-      set: async (_service: string, _account: string, _secret: Uint8Array) =>
-        undefined,
-      delete: async () => undefined,
-    };
-    const sessions = createSessionStore(credentials);
+    const sessions = createSessionStore(memoryCredentials());
     let poll = 0;
     await expect(
       loginWithDeviceAuthorization(profile, sessions, {
@@ -311,14 +267,7 @@ describe("CLI device authorization", () => {
         sleep: async () => undefined,
         fetch: async () => {
           poll += 1;
-          if (poll === 1)
-            return Response.json({
-              device_code: "device-code",
-              user_code: "KITE-MOSS",
-              verification_uri: "https://relay.example/device",
-              interval: 1,
-              expires_in: 600,
-            });
+          if (poll === 1) return deviceCodeResponse();
           return Response.json({ error: "access_denied" }, { status: 400 });
         },
       }),
