@@ -20,8 +20,15 @@ requires `--accept-profile <server-profile-id>`.
 
 `dotrelay login` reuses an existing profile: it waits on the user code, then enrolls the first
 Device if this machine does not already have one. It does not start dual-control enrollment and
-does not receive a GitHub token. `--no-open` suppresses opening the browser. Session material and
-encrypted Device bundles belong in the operating-system credential store, scoped by Server Profile.
+does not receive a GitHub token. Before it starts waiting it shows the copyable verification URL,
+the user code, and the code expiry. The shown URL is validated against the pinned Server Profile
+and is the one to open: when the service supplies a complete URL it already includes the user
+code. `--no-open` suppresses opening the browser, and `--no-input` never attempts to open one (for
+example over SSH); in both cases the same URL, code, and expiry are shown so the User can open the
+URL manually. When the browser launcher is unavailable, fails to start, or exits nonzero, the CLI
+shows that manual path instead of aborting and keeps polling for the authorization to complete.
+Session material and encrypted Device bundles belong in the operating-system credential store,
+scoped by Server Profile.
 
 `logout` removes the local session. `--insecure`, certificate bypasses, and token/device-key flags
 are rejected.
@@ -94,6 +101,14 @@ Protected Values are never included in status, ordinary progress, JSON responses
 Human stderr is the next action. `--json` diagnostics contain category, code, sanitized detail,
 exit code, and non-secret counts only. `--debug` replaces opaque unexpected-error detail with the
 sanitized operational message.
+
+During `setup` and `login`, `--json` mode emits one authorization event to stderr as soon as the
+device code is issued, before the final result, so an external UI can present the sign-in and
+complete the login: `{"ok":true,"event":"device_authorization","userCode":...,"verificationUri":...,"intervalSeconds":...,"expiresInSeconds":...}`.
+`verificationUri` is the validated URL to open and `userCode` is the code to enter; the device
+code itself is never emitted. When the browser launcher fails or exits nonzero, the run also
+emits a `browser_open_failed` diagnostic and keeps polling. The final result on stdout remains a
+single JSON document and also carries `verificationUri` and `userCode`.
 
 `pull --output <path>` is the explicit file path and is written only after a complete export is
 ready, using an atomic replace and mode `0600`. `pull --stdout` is explicit and refuses terminal
