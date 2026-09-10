@@ -11,6 +11,8 @@ set -Eeuo pipefail
 #   OPENCODE_AGENT=agent-name
 #   LOG_VIEW=pretty               # pretty or json
 #   CHECK_DISCOVERY_TIMEOUT=180
+#   CHECK_TIMEOUT=7200
+#   ADVISORY_CHECK_REGEX='^CodeRabbit$'
 #   MERGE_TIMEOUT=3600
 #   MAX_REPAIR_ATTEMPTS=3
 #   ALLOW_NO_CHECKS=0            # set to 1 only if this repo intentionally has no CI
@@ -19,6 +21,8 @@ BASE_BRANCH="${BASE_BRANCH:-main}"
 MERGE_METHOD="${MERGE_METHOD:-squash}"
 LOG_VIEW="${LOG_VIEW:-pretty}"
 CHECK_DISCOVERY_TIMEOUT="${CHECK_DISCOVERY_TIMEOUT:-180}"
+CHECK_TIMEOUT="${CHECK_TIMEOUT:-7200}"
+ADVISORY_CHECK_REGEX="${ADVISORY_CHECK_REGEX:-^CodeRabbit$}"
 MERGE_TIMEOUT="${MERGE_TIMEOUT:-3600}"
 MAX_REPAIR_ATTEMPTS="${MAX_REPAIR_ATTEMPTS:-3}"
 ALLOW_NO_CHECKS="${ALLOW_NO_CHECKS:-0}"
@@ -59,6 +63,8 @@ case "$MERGE_METHOD" in
 esac
 
 [[ "$CHECK_DISCOVERY_TIMEOUT" =~ ^[0-9]+$ ]] || die "CHECK_DISCOVERY_TIMEOUT must be an integer."
+[[ "$CHECK_TIMEOUT" =~ ^[0-9]+$ ]] || die "CHECK_TIMEOUT must be an integer."
+[[ -n "$ADVISORY_CHECK_REGEX" ]] || die "ADVISORY_CHECK_REGEX must not be empty."
 [[ "$MERGE_TIMEOUT" =~ ^[0-9]+$ ]] || die "MERGE_TIMEOUT must be an integer."
 [[ "$MAX_REPAIR_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || die "MAX_REPAIR_ATTEMPTS must be a positive integer."
 [[ "$ALLOW_NO_CHECKS" == "0" || "$ALLOW_NO_CHECKS" == "1" ]] || die "ALLOW_NO_CHECKS must be 0 or 1."
@@ -211,38 +217,91 @@ run_opencode_session() {
 
 wait_for_checks() {
   pr_url="$1"
-  deadline=$((SECONDS + CHECK_DISCOVERY_TIMEOUT))
+  expected_head_sha="$2"
+  discovery_deadline=$((SECONDS + CHECK_DISCOVERY_TIMEOUT))
+  check_deadline=$((SECONDS + CHECK_TIMEOUT))
+  last_check_signature=""
 
   while true; do
     set +e
-    check_probe="$(gh pr checks "$pr_url" 2>&1)"
+    checks_json="$(gh pr checks "$pr_url" --json name,bucket,workflow 2>&1)"
+    checks_status=$?
     set -e
 
-    if ! grep -qi 'no checks reported' <<<"$check_probe"; then
+    if ! jq -e 'type == "array"' <<<"$checks_json" >/dev/null 2>&1; then
+      printf '%s\n' "$checks_json" >&2
+      die "Could not read CI checks for $pr_url."
+    fi
+
+    core_checks="$(
+      jq -c --arg advisory "$ADVISORY_CHECK_REGEX" \
+        '[.[] | select((.name | test($advisory)) | not)]' <<<"$checks_json"
+    )"
+    core_check_count="$(jq 'length' <<<"$core_checks")"
+
+    if [[ "$core_check_count" -eq 0 ]]; then
+      if (( SECONDS < discovery_deadline )); then
+        sleep 5
+        continue
+      fi
+
+      if [[ "$ALLOW_NO_CHECKS" == "1" ]]; then
+        printf 'No non-advisory CI checks appeared; continuing because ALLOW_NO_CHECKS=1.\n'
+        break
+      fi
+      die "No non-advisory CI checks appeared within ${CHECK_DISCOVERY_TIMEOUT}s."
+    fi
+
+    check_signature="$(
+      jq -r 'sort_by(.name) | map(.name + ":" + .bucket) | join("|")' <<<"$core_checks"
+    )"
+    if [[ "$check_signature" != "$last_check_signature" ]]; then
+      printf '\nRequired project CI:\n'
+      jq -r '.[] | "  " + .name + "  " + .bucket' <<<"$core_checks"
+      last_check_signature="$check_signature"
+    fi
+
+    failed_check_count="$(
+      jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' <<<"$core_checks"
+    )"
+    if [[ "$failed_check_count" -gt 0 ]]; then
+      printf 'Project CI has a failed or cancelled check.\n' >&2
+      return 1
+    fi
+
+    pending_check_count="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$core_checks")"
+    if [[ "$pending_check_count" -eq 0 ]]; then
       break
     fi
 
-    if (( SECONDS >= deadline )); then
-      if [[ "$ALLOW_NO_CHECKS" == "1" ]]; then
-        printf 'No CI checks appeared; continuing because ALLOW_NO_CHECKS=1.\n'
-        return 0
-      fi
-      printf '%s\n' "$check_probe" >&2
-      die "No CI checks appeared within ${CHECK_DISCOVERY_TIMEOUT}s."
-    fi
-
-    sleep 5
+    (( SECONDS < check_deadline )) || die "Project CI did not finish within ${CHECK_TIMEOUT}s."
+    sleep 10
   done
 
-  # A pending check commonly gives a nonzero result in the probe above.
-  # This command waits until every reported check finishes and fails on a bad check.
-  if ! gh pr checks "$pr_url" --watch --fail-fast; then
-    return 1
-  fi
-
-  REVIEW_DECISION="$(gh pr view "$pr_url" --json reviewDecision --jq '.reviewDecision // ""')"
-  if [[ "$REVIEW_DECISION" == "CHANGES_REQUESTED" ]]; then
-    printf 'A PR reviewer requested changes.\n' >&2
+  # CodeRabbit is advisory because its free-tier run may be absent or stop. If it
+  # has actually requested changes on this exact commit, give the agent one chance
+  # to address them. A request on an older commit cannot block a repaired head.
+  pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
+  reviews_json="$(
+    gh api \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "repos/$REPO/pulls/$pr_number/reviews?per_page=100"
+  )"
+  coderabbit_state="$(
+    jq -r --arg sha "$expected_head_sha" '
+      [
+        .[]
+        | select(.commit_id == $sha)
+        | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai")
+      ]
+      | sort_by(.submitted_at)
+      | last
+      | .state // ""
+    ' <<<"$reviews_json"
+  )"
+  if [[ "$coderabbit_state" == "CHANGES_REQUESTED" ]]; then
+    printf 'CodeRabbit requested changes on the current PR commit.\n' >&2
     return 1
   fi
 
@@ -335,7 +394,7 @@ finish_pr() {
 
   validate_pr "$pr_url" "$issue_number" "$expected_branch"
   repair_attempt=0
-  while ! wait_for_checks "$pr_url"; do
+  while ! wait_for_checks "$pr_url" "$expected_head_sha"; do
     repair_attempt=$((repair_attempt + 1))
     (( repair_attempt <= MAX_REPAIR_ATTEMPTS )) || die "PR gates still fail after $MAX_REPAIR_ATTEMPTS repair attempts."
 
