@@ -165,6 +165,8 @@ describe("CLI device authorization", () => {
         });
       },
       onAuthorization: (authorization, verificationUrl) => {
+        // Only the device-code fetch has run, so token polling has not started.
+        expect(poll).toBe(1);
         seen.push({
           userCode: authorization.userCode,
           verificationUrl,

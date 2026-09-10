@@ -106,7 +106,7 @@ During `setup` and `login`, `--json` mode emits one authorization event to stder
 device code is issued, before the final result, so an external UI can present the sign-in and
 complete the login: `{"ok":true,"event":"device_authorization","userCode":...,"verificationUri":...,"intervalSeconds":...,"expiresInSeconds":...}`.
 `verificationUri` is the validated URL to open and `userCode` is the code to enter; the device
-code itself is never emitted. When the browser launcher fails or exits nonzero, the run instead
+code itself is never emitted. When the browser launcher fails or exits nonzero, the run also
 emits a `browser_open_failed` diagnostic and keeps polling. The final result on stdout remains a
 single JSON document and also carries `verificationUri` and `userCode`.
 
