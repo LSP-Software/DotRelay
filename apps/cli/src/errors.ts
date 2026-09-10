@@ -60,6 +60,8 @@ const safeDiagnosticCodes = new Set([
   "device_authorization_failed",
   "device_authorization_timeout",
   "device_authorization_unavailable",
+  "device_bundle_missing",
+  "device_not_active",
   "environment_ambiguous",
   "environment_not_found",
   "genesis_exists",

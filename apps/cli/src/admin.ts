@@ -139,8 +139,10 @@ export const categoryForProblem = (
 };
 
 const detailForProblem = (code: string): string => {
-  if (code === "authentication_required" || code === "device_not_active")
-    return "login or an active Device is required";
+  if (code === "authentication_required")
+    return "login is required for this Server Profile; run dotrelay login";
+  if (code === "device_not_active")
+    return "this Device is not active; run dotrelay device enroll to re-authorize it";
   if (code === "forbidden") return "the Server Profile denied the request";
   if (code === "resource_not_found")
     return "the requested resource was not found";

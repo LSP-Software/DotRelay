@@ -321,6 +321,35 @@ const deviceWorkflowOptions = (
   };
 };
 
+const requireEnrolledDevice = (deviceId: string | null): string => {
+  if (deviceId) return deviceId;
+  throw new CliError(
+    "authentication",
+    "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
+    {},
+    "device_bundle_missing",
+  );
+};
+
+const createAdminClient = async (
+  runtime: CliRuntime,
+  profile: Awaited<ReturnType<typeof resolveServerProfile>>,
+  credentials: NativeCredentialStore,
+): Promise<StrictJsonClient> => {
+  if (runtime.admin) return runtime.admin;
+  const stateDirectory =
+    runtime.stateDirectory ??
+    dirname(runtime.profilePath ?? profileCatalogPath());
+  const deviceId = requireEnrolledDevice(
+    runtime.deviceId ??
+      (await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin))),
+  );
+  return createStrictJsonClient(profile.pin, credentials, {
+    deviceId,
+    ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+  });
+};
+
 const loginAndEnroll = async (
   parsed: ParsedArguments,
   runtime: CliRuntime,
@@ -537,11 +566,7 @@ const execute = async (
       { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
     );
     const credentials = runtime.credentials ?? createNativeCredentialStore();
-    const admin =
-      runtime.admin ??
-      createStrictJsonClient(profile.pin, credentials, {
-        ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
-      });
+    const admin = await createAdminClient(runtime, profile, credentials);
     const project = await linkProject(admin, {
       teamId: team,
       repository: {
@@ -596,11 +621,7 @@ const execute = async (
     const environmentId = parsed.environment ?? parsed.positionals[0];
     if (!environmentId) throw new Error("env use requires an Environment id");
     const credentials = runtime.credentials ?? createNativeCredentialStore();
-    const admin =
-      runtime.admin ??
-      createStrictJsonClient(profile.pin, credentials, {
-        ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
-      });
+    const admin = await createAdminClient(runtime, profile, credentials);
     const environment = await selectEnvironment(
       admin,
       context.projectId,
@@ -719,6 +740,7 @@ const execute = async (
       runtime.deviceId ??
       (await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)));
     if (!runtime.admin) {
+      requireEnrolledDevice(deviceId);
       const localContext = await readWorktreeContext(contextPath);
       const repository = await resolveGitHubRepository(
         detectGitHubRepository(
