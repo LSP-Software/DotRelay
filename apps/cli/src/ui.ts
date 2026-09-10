@@ -104,6 +104,7 @@ const renderSelect = (
   options: readonly SelectOption[],
   cursor: number,
   interactive: boolean,
+  defaultToFirst = true,
 ): string => {
   const header = `  ${paint("·", "wax")}  ${paint(title, "paper")}\n\n`;
   const rows = options
@@ -122,7 +123,9 @@ const renderSelect = (
     .join("\n");
   const hint = interactive
     ? "↑/↓ move · enter select"
-    : "Enter a number, or press Enter for the first option";
+    : defaultToFirst
+      ? "Enter a number, or press Enter for the first option"
+      : "Enter a number";
   return `${header}${rows}\n\n     ${paint(hint, "dim")}\n`;
 };
 
@@ -133,6 +136,7 @@ export const selectOption = async (
     readonly terminal?: TerminalIo;
     readonly prompt?: (question: string) => Promise<string>;
     readonly noInput?: boolean;
+    readonly defaultToFirst?: boolean;
   }> = {},
 ): Promise<string> => {
   if (choices.length === 0)
@@ -181,16 +185,24 @@ export const selectOption = async (
     }
   }
   const output = terminal.output;
-  output.write(renderSelect(title, choices, 0, false));
+  output.write(renderSelect(title, choices, 0, false, options.defaultToFirst));
   const line = options.prompt
     ? await options.prompt(title)
     : await readTerminalLine(title, terminal);
   const trimmed = line.trim();
-  if (trimmed.length === 0) return choices[0]!.id;
+  if (trimmed.length === 0) {
+    if (options.defaultToFirst === false)
+      throw new CliInvocationError("choose an option from the list");
+    const first = choices[0];
+    if (!first) throw new CliInvocationError("there is nothing to select");
+    return first.id;
+  }
   const index = Number.parseInt(trimmed, 10);
   if (!Number.isInteger(index) || index < 1 || index > choices.length)
     throw new CliInvocationError("choose an option from the list");
-  return choices[index - 1]!.id;
+  const chosen = choices[index - 1];
+  if (!chosen) throw new CliInvocationError("choose an option from the list");
+  return chosen.id;
 };
 
 export const confirmAction = async (

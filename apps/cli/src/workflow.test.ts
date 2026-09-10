@@ -57,6 +57,13 @@ const boundary = {
   crypto: { available: true },
 } as const;
 
+const destinationLines = [
+  `Profile: ${profile.name}`,
+  "Team: Platform",
+  `Project: ${ids.project}`,
+  "Environment: development",
+];
+
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -108,6 +115,20 @@ const setup = async (
     get: async (path) => {
       if (path === "/api/v1/session")
         return { authenticated: true, user: { id: ids.user } };
+      if (path === `/api/v1/projects/${ids.project}/environments`)
+        return {
+          environments: [
+            {
+              id: ids.environment,
+              projectId: ids.project,
+              label: "development",
+              lifecycle: "active",
+              currentHeadId: null,
+            },
+          ],
+        };
+      if (path === "/api/v1/teams")
+        return { teams: [{ id: ids.team, name: "Platform" }] };
       return workspaceBoundary;
     },
     post: async () => ({}),
@@ -779,6 +800,8 @@ describe("protected CLI workflows", () => {
         "  DATABASE_URL",
         "  -  postgres://secret",
         "  +  abc",
+        "",
+        ...destinationLines,
         "Publish?",
       ].join("\n"),
     ]);
@@ -842,6 +865,8 @@ describe("protected CLI workflows", () => {
         "",
         "  API_KEY",
         "  -  tok",
+        "",
+        ...destinationLines,
         "Publish?",
       ].join("\n"),
     ]);
@@ -907,6 +932,8 @@ describe("protected CLI workflows", () => {
         "",
         "  API_KEY",
         "  +  tok",
+        "",
+        ...destinationLines,
         `Replace ${input} with decrypted Values?`,
       ].join("\n"),
     ]);

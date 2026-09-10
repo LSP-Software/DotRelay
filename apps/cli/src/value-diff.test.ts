@@ -7,6 +7,19 @@ import {
   valueDiffsForPull,
 } from "./value-diff";
 
+const destination = {
+  profile: "relay",
+  team: "Platform",
+  project: "55555555-5555-4555-8555-555555555555",
+  environment: "development",
+};
+const destinationLines = [
+  `Profile: ${destination.profile}`,
+  `Team: ${destination.team}`,
+  `Project: ${destination.project}`,
+  `Environment: ${destination.environment}`,
+];
+
 describe("CLI value diffs", () => {
   test("render a unified diff with the shared prefix and suffix intact", () => {
     expect(
@@ -86,40 +99,48 @@ describe("CLI value diffs", () => {
     );
   });
 
-  test("publication confirmation shows the same unified diff", () => {
+  test("publication confirmation shows the diff and the destination", () => {
     expect(
-      publicationConfirmQuestion([
-        {
-          kind: "updated",
-          name: "DATABASE_URL",
-          from: "postgres://secret",
-          to: "abc",
-        },
-      ]),
+      publicationConfirmQuestion(
+        [
+          {
+            kind: "updated",
+            name: "DATABASE_URL",
+            from: "postgres://secret",
+            to: "abc",
+          },
+        ],
+        destination,
+      ),
     ).toBe(
       [
         "1 variable being updated",
         "  DATABASE_URL",
         "  -  postgres://secret",
         "  +  abc",
+        "",
+        ...destinationLines,
         "Publish?",
       ].join("\n"),
     );
     expect(
-      publicationConfirmQuestion([
-        {
-          kind: "added",
-          name: "NEW_TOKEN",
-          from: undefined,
-          to: "fresh",
-        },
-        {
-          kind: "removed",
-          name: "API_KEY",
-          from: "tok",
-          to: undefined,
-        },
-      ]),
+      publicationConfirmQuestion(
+        [
+          {
+            kind: "added",
+            name: "NEW_TOKEN",
+            from: undefined,
+            to: "fresh",
+          },
+          {
+            kind: "removed",
+            name: "API_KEY",
+            from: "tok",
+            to: undefined,
+          },
+        ],
+        destination,
+      ),
     ).toBe(
       [
         "1 variable being added, 1 variable being removed",
@@ -128,8 +149,16 @@ describe("CLI value diffs", () => {
         "",
         "  API_KEY",
         "  -  tok",
+        "",
+        ...destinationLines,
         "Publish?",
       ].join("\n"),
+    );
+  });
+
+  test("confirmation without a diff still identifies the destination", () => {
+    expect(pullConfirmQuestion(".env", null, destination)).toBe(
+      [...destinationLines, "Replace .env with decrypted Values?"].join("\n"),
     );
   });
 
@@ -164,7 +193,7 @@ describe("CLI value diffs", () => {
       { kind: "removed", name: "GONE", from: "old", to: undefined },
       { kind: "added", name: "API_KEY", from: undefined, to: "tok" },
     ]);
-    expect(pullConfirmQuestion(".env", changes)).toBe(
+    expect(pullConfirmQuestion(".env", changes, destination)).toBe(
       [
         "1 variable being added, 1 variable being updated, 1 variable being removed",
         "  DATABASE_URL",
@@ -176,6 +205,8 @@ describe("CLI value diffs", () => {
         "",
         "  API_KEY",
         "  +  tok",
+        "",
+        ...destinationLines,
         "Replace .env with decrypted Values?",
       ].join("\n"),
     );

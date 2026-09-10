@@ -47,6 +47,8 @@ import {
   categoryForProblem,
   createEnvironment,
   createStrictJsonClient,
+  listEnvironments,
+  listTeams,
   type StrictJsonClient,
 } from "./admin";
 import type { ParsedArguments } from "./args";
@@ -74,8 +76,10 @@ import { readTerminalLine, type TerminalIo } from "./terminal";
 import { writeNotice } from "./ui";
 import {
   type PublicationChange,
+  type PublicationDestination,
   publicationConfirmQuestion,
   pullConfirmQuestion,
+  renderDestinationLines,
   renderEnvDiff,
   valueDiffsForPull,
 } from "./value-diff";
@@ -94,6 +98,7 @@ export type WorkflowOptions = Readonly<{
   readonly noInput: boolean;
   readonly stdoutIsTerminal: boolean;
   readonly admin?: StrictJsonClient;
+  readonly environmentId?: string;
 }>;
 
 type Boundary = Readonly<{
@@ -1729,23 +1734,22 @@ const resolveRequestedEnvironmentId = (
   return localContext?.environmentId;
 };
 
+const adminClient = (options: WorkflowOptions): StrictJsonClient =>
+  options.admin ??
+  createStrictJsonClient(options.profile.pin, options.credentials, {
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+  });
+
 const loadWorkflowSession = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
 ): Promise<WorkflowSession> => {
-  const admin =
-    options.admin ??
-    createStrictJsonClient(options.profile.pin, options.credentials, {
-      ...(options.fetch ? { fetch: options.fetch } : {}),
-    });
-  const { readWorktreeContext, writeWorktreeContext } = await import(
-    "./context"
-  );
+  const admin = adminClient(options);
+  const { readWorktreeContext } = await import("./context");
   const localContext = await readWorktreeContext(options.contextPath);
-  const requestedEnvironment = resolveRequestedEnvironmentId(
-    parsed,
-    localContext,
-  );
+  const requestedEnvironment =
+    options.environmentId ??
+    resolveRequestedEnvironmentId(parsed, localContext);
   const boundary = parseBoundary(
     await admin.get(
       `/api/v1/workspace/boundary${requestedEnvironment ? `?environment=${encodeURIComponent(requestedEnvironment)}` : ""}`,
@@ -1829,16 +1833,9 @@ const loadWorkflowSession = async (
   if (!selectedEnvironment) {
     if (parsed.command !== "init")
       throw new CliInvocationError("an Environment must be selected");
-    const created = await createEnvironment(
-      admin,
-      boundary.environment.projectId,
-    );
-    selectedEnvironment = created.id;
-    await writeWorktreeContext(options.contextPath, {
-      serverProfileId: options.profile.pin.serverProfileId,
-      projectId: boundary.environment.projectId,
-      environmentId: created.id,
-    });
+    selectedEnvironment = (
+      await createEnvironment(admin, boundary.environment.projectId)
+    ).id;
   }
   const token = await createSessionStore(options.credentials).get(
     options.profile.pin,
@@ -2124,6 +2121,37 @@ const publicationChangeFor = (
   });
 };
 
+const destinationFor = async (
+  options: WorkflowOptions,
+  context: PublicationContext,
+): Promise<PublicationDestination> => {
+  // A missing metadata lookup degrades the review to opaque ids; it must
+  // never block an operation the operator is about to confirm.
+  let environment:
+    | Awaited<ReturnType<typeof listEnvironments>>[number]
+    | undefined;
+  let team: Awaited<ReturnType<typeof listTeams>>[number] | undefined;
+  try {
+    const admin = adminClient(options);
+    const [environments, teams] = await Promise.all([
+      listEnvironments(admin, context.projectId),
+      listTeams(admin),
+    ]);
+    environment = environments.find(
+      (entry) => entry.id === context.environmentId,
+    );
+    team = teams.find((entry) => entry.id === context.teamId);
+  } catch {
+    // Keep the confirmation reachable even when metadata is unavailable.
+  }
+  return Object.freeze({
+    profile: options.profile.name,
+    team: team?.name ?? context.teamId ?? "unknown",
+    project: context.projectId,
+    environment: environment?.label ?? context.environmentId ?? "unknown",
+  });
+};
+
 const publish = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -2158,11 +2186,19 @@ const publish = async (
   const changes = draftVariables
     .map((variable) => publicationChangeFor(variable, synced.variables))
     .filter((change): change is PublicationChange => change !== null);
-  if (
-    !options.noInput &&
-    !(await confirm(options, publicationConfirmQuestion(changes)))
-  )
-    throw new CliInvocationError("publication confirmation was declined");
+  if (!options.noInput) {
+    const destination = await destinationFor(
+      options,
+      synced.workflow.publicationContext,
+    );
+    if (
+      !(await confirm(
+        options,
+        publicationConfirmQuestion(changes, destination),
+      ))
+    )
+      throw new CliInvocationError("publication confirmation was declined");
+  }
   const progress = (title: string): void => {
     if (options.noInput || parsed.json) return;
     writeNotice(options.terminal?.output ?? process.stderr, title);
@@ -2432,16 +2468,18 @@ export const runProtectedWorkflow = async (
         value: variable.value ?? "",
       }));
     const contents = serializeDotenv(entries);
-    if (
-      parsed.stdout &&
-      parsed.reveal &&
-      !options.noInput &&
-      !(await confirm(
+    if (parsed.stdout && parsed.reveal && !options.noInput) {
+      const destination = await destinationFor(
         options,
+        synced.workflow.publicationContext,
+      );
+      const question = [
+        ...renderDestinationLines(destination),
         `Reveal ${entries.length} decrypted Values to stdout?`,
-      ))
-    )
-      throw new CliInvocationError("Value reveal confirmation was declined");
+      ].join("\n");
+      if (!(await confirm(options, question)))
+        throw new CliInvocationError("Value reveal confirmation was declined");
+    }
     if (outputPath) {
       let exists = false;
       try {
@@ -2458,16 +2496,19 @@ export const runProtectedWorkflow = async (
             unchanged: true,
             message: "No changes found",
           };
-        if (
-          !options.noInput &&
-          !(await confirm(
+        if (!options.noInput) {
+          const destination = await destinationFor(
             options,
-            changes === null
-              ? `Replace ${outputPath} with decrypted Values?`
-              : pullConfirmQuestion(outputPath, changes),
-          ))
-        )
-          throw new CliInvocationError("pull confirmation was declined");
+            synced.workflow.publicationContext,
+          );
+          if (
+            !(await confirm(
+              options,
+              pullConfirmQuestion(outputPath, changes, destination),
+            ))
+          )
+            throw new CliInvocationError("pull confirmation was declined");
+        }
       }
     }
     assertSafeStdout({

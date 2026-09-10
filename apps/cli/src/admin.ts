@@ -4,6 +4,7 @@ import {
   parseProblem,
   type ServerProfilePin,
 } from "@dotrelay/contracts";
+import type { CommandName } from "./args";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
 import { CliError, CliInvocationError } from "./errors";
@@ -438,6 +439,67 @@ export const createEnvironment = async (
     { idempotencyKey: crypto.randomUUID() },
   );
   return parseEnvironment(response);
+};
+
+export type ResolveEnvironmentOptions = Readonly<{
+  readonly command: CommandName;
+  readonly noInput: boolean;
+  readonly prompt?: (question: string) => Promise<string>;
+  readonly terminal?: TerminalIo;
+}>;
+
+// Archived Environments are never eligible for automatic selection; an
+// operator can still address one explicitly with --environment.
+export const resolveEnvironmentForProject = async (
+  client: Pick<StrictJsonClient, "get" | "post">,
+  projectId: string,
+  options: ResolveEnvironmentOptions,
+): Promise<EnvironmentSummary> => {
+  const eligible = (await listEnvironments(client, projectId)).filter(
+    (environment) => environment.lifecycle === "active",
+  );
+  if (eligible.length === 1) {
+    const soleEligible = eligible[0];
+    if (!soleEligible)
+      throw new CliError(
+        "transient",
+        "the server returned an invalid Environment list",
+        {},
+        "response_invalid",
+      );
+    return soleEligible;
+  }
+  if (eligible.length > 1) {
+    if (options.noInput)
+      throw new CliInvocationError(
+        "multiple Environments are available; pass --environment <environment-id>",
+      );
+    const selectedId = await selectOption(
+      "Environment",
+      eligible.map((environment) => ({
+        id: environment.id,
+        label: environment.label,
+      })),
+      {
+        ...(options.terminal ? { terminal: options.terminal } : {}),
+        ...(options.prompt ? { prompt: options.prompt } : {}),
+        // An empty answer must not steer the change to the first
+        // Environment in list order.
+        defaultToFirst: false,
+      },
+    );
+    const selected = eligible.find(
+      (environment) => environment.id === selectedId,
+    );
+    if (!selected)
+      throw new CliInvocationError("choose an Environment from the list");
+    return selected;
+  }
+  if (options.command === "init" || options.command === "push")
+    return createEnvironment(client, projectId);
+  throw new CliInvocationError(
+    "no active Environment is available for this Project; pass --environment <environment-id>",
+  );
 };
 
 const readResponse = async (response: Response): Promise<unknown> => {
