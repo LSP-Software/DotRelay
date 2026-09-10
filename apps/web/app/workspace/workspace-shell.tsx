@@ -535,7 +535,6 @@ export const WorkspaceShell = ({
           userDefinedValueRecipientPublicKey: keyMaterial.encryptionPublicKey,
           signingPrivateKey: keyMaterial.signingPrivateKey,
           revisionSigningPublicKey: hexToBytes(device.signingPublicKey),
-          ...(expectedHeadId ? {} : { mutation: "GENESIS" as const }),
         };
         const transport = createProtocolTransport({ origin: profile.origin });
         const signingTrustKeys = (boundary.signingTrustKeys ?? [])

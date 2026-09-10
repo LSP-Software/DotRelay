@@ -12,6 +12,7 @@ import {
   AdministrationRepository,
   createDatabaseClient,
   EnvironmentRepository,
+  GenesisExistsError,
   MembershipAdministrationRepository,
   OperationConflictError,
   OperationRepository,
@@ -980,6 +981,71 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       mutation: "ROLLBACK",
     });
     expect(await database.revision.count({ where: { environmentId } })).toBe(3);
+  });
+
+  test("rejects a repeat GENESIS and accepts a MANIFEST_UPDATE on the second publication", async () => {
+    const { device, projectId, user } = await createProjectFixture(
+      "genesis-then-update",
+    );
+    const environments = new EnvironmentRepository();
+    const publications = new PublicationRepository();
+    const environmentId = crypto.randomUUID();
+
+    const genesis = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: null,
+      mutation: "GENESIS",
+      label: "genesis-then-update-genesis",
+    });
+    await environments.createWithGenesis(database, {
+      environmentId,
+      projectId,
+      createdByUserId: user.id,
+      publication: genesis,
+    });
+
+    const staleGenesis = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: genesis.revision.id,
+      parentHash: genesis.revisionObject.digest,
+      mutation: "GENESIS",
+      label: "genesis-then-update-stale-genesis",
+    });
+    await expect(
+      publications.publishRevision(database, staleGenesis),
+    ).rejects.toBeInstanceOf(GenesisExistsError);
+
+    const update = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: genesis.revision.id,
+      parentHash: genesis.revisionObject.digest,
+      mutation: "MANIFEST_UPDATE",
+      label: "genesis-then-update-second-publication",
+    });
+    await publications.publishRevision(database, update);
+
+    expect(
+      await database.environment.findUnique({
+        where: { id: environmentId },
+      }),
+    ).toMatchObject({ currentHeadId: update.revision.id });
+    expect(
+      await database.revision.findUnique({
+        where: { id: update.revision.id },
+      }),
+    ).toMatchObject({
+      parentId: genesis.revision.id,
+      mutation: "MANIFEST_UPDATE",
+    });
   });
 
   test("returns authorization-scoped synchronization pages after a trusted revision", async () => {

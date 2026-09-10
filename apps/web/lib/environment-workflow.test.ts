@@ -10,6 +10,7 @@ import {
   mergeVerifiedHistory,
   nextSetupAction,
   prepareEncryptedPublication,
+  publicationMutationForHead,
   rollbackValueDiffs,
   splitInlineValueDiff,
   updateVariableValue,
@@ -190,6 +191,25 @@ test("publication preparation signs tombstones without encrypting them as empty 
   });
   expect(preparation.tombstoneVariableIds).toEqual(["lane-1"]);
   expect(preparation.laneCiphertextHashes).toHaveLength(0);
+});
+
+test("publication mutation is derived from the verified head, not session state", () => {
+  expect(publicationMutationForHead({ expectedHeadId: null })).toBe("GENESIS");
+  expect(publicationMutationForHead({ expectedHeadId: "rev_0185" })).toBe(
+    "MANIFEST_UPDATE",
+  );
+  expect(
+    publicationMutationForHead({
+      expectedHeadId: "rev_0185",
+      rollbackTargetId: "rev_0183",
+    }),
+  ).toBe("ROLLBACK");
+  expect(
+    publicationMutationForHead({
+      expectedHeadId: null,
+      rollbackTargetId: "rev_0183",
+    }),
+  ).toBe("ROLLBACK");
 });
 
 test("rollback plans select lanes and never rewind the Environment head", () => {

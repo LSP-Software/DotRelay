@@ -222,6 +222,22 @@ describe("publication artifacts", () => {
     );
   });
 
+  test("rejects a stale GENESIS once a verified head exists", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    await expect(
+      createPublicationArtifacts([variable()], {
+        ...ids,
+        projectEpoch: 1,
+        expectedHeadId: "88888888-8888-4888-8888-888888888888",
+        expectedHeadHash: new Uint8Array(48).fill(9),
+        valueRecipientPublicKey: encryption.publicKey,
+        signingPrivateKey: signing.privateKey,
+        mutation: "GENESIS",
+      }),
+    ).rejects.toThrow("GENESIS requires an empty Environment head");
+  });
+
   test("accepts a peer Device signature when that Device is in the trust set", async () => {
     const encryption = await generateEncryptionKeyPair();
     const author = await generateSigningKeyPair();
