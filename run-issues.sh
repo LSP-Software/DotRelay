@@ -11,14 +11,20 @@ set -Eeuo pipefail
 #   OPENCODE_AGENT=agent-name
 #   LOG_VIEW=pretty               # pretty or json
 #   CHECK_DISCOVERY_TIMEOUT=180
+#   CHECK_TIMEOUT=7200
+#   ADVISORY_CHECK_REGEX='^CodeRabbit$'
 #   MERGE_TIMEOUT=3600
+#   MAX_REPAIR_ATTEMPTS=3
 #   ALLOW_NO_CHECKS=0            # set to 1 only if this repo intentionally has no CI
 
 BASE_BRANCH="${BASE_BRANCH:-main}"
 MERGE_METHOD="${MERGE_METHOD:-squash}"
 LOG_VIEW="${LOG_VIEW:-pretty}"
 CHECK_DISCOVERY_TIMEOUT="${CHECK_DISCOVERY_TIMEOUT:-180}"
+CHECK_TIMEOUT="${CHECK_TIMEOUT:-7200}"
+ADVISORY_CHECK_REGEX="${ADVISORY_CHECK_REGEX:-^CodeRabbit$}"
 MERGE_TIMEOUT="${MERGE_TIMEOUT:-3600}"
+MAX_REPAIR_ATTEMPTS="${MAX_REPAIR_ATTEMPTS:-3}"
 ALLOW_NO_CHECKS="${ALLOW_NO_CHECKS:-0}"
 
 ACTIVE_ISSUE=""
@@ -57,7 +63,10 @@ case "$MERGE_METHOD" in
 esac
 
 [[ "$CHECK_DISCOVERY_TIMEOUT" =~ ^[0-9]+$ ]] || die "CHECK_DISCOVERY_TIMEOUT must be an integer."
+[[ "$CHECK_TIMEOUT" =~ ^[0-9]+$ ]] || die "CHECK_TIMEOUT must be an integer."
+[[ -n "$ADVISORY_CHECK_REGEX" ]] || die "ADVISORY_CHECK_REGEX must not be empty."
 [[ "$MERGE_TIMEOUT" =~ ^[0-9]+$ ]] || die "MERGE_TIMEOUT must be an integer."
+[[ "$MAX_REPAIR_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || die "MAX_REPAIR_ATTEMPTS must be a positive integer."
 [[ "$ALLOW_NO_CHECKS" == "0" || "$ALLOW_NO_CHECKS" == "1" ]] || die "ALLOW_NO_CHECKS must be 0 or 1."
 [[ "$LOG_VIEW" == "pretty" || "$LOG_VIEW" == "json" ]] || die "LOG_VIEW must be pretty or json."
 
@@ -156,34 +165,147 @@ format_opencode_events() {
   '
 }
 
+run_opencode_session() {
+  session_title="$1"
+  session_prompt="$2"
+  session_log="$3"
+  ACTIVE_LOG="$session_log"
+
+  OPENCODE_ARGS=(
+    run
+    --dir "$REPO_ROOT"
+    --auto
+    --format json
+    --title "$session_title"
+  )
+  if [[ -n "${OPENCODE_MODEL:-}" ]]; then
+    OPENCODE_ARGS+=(--model "$OPENCODE_MODEL")
+  fi
+  if [[ -n "${OPENCODE_AGENT:-}" ]]; then
+    OPENCODE_ARGS+=(--agent "$OPENCODE_AGENT")
+  fi
+
+  printf '\nOpenCode live output. Raw event log: %s\n\n' "$ACTIVE_LOG"
+  set +e
+  if [[ "$LOG_VIEW" == "pretty" ]]; then
+    opencode "${OPENCODE_ARGS[@]}" "$session_prompt" | tee "$ACTIVE_LOG" | format_opencode_events
+    PIPELINE_STATUS=("${PIPESTATUS[@]}")
+    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
+    TEE_STATUS=${PIPELINE_STATUS[1]}
+    FORMATTER_STATUS=${PIPELINE_STATUS[2]}
+  else
+    opencode "${OPENCODE_ARGS[@]}" "$session_prompt" | tee "$ACTIVE_LOG"
+    PIPELINE_STATUS=("${PIPESTATUS[@]}")
+    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
+    TEE_STATUS=${PIPELINE_STATUS[1]}
+    FORMATTER_STATUS=0
+  fi
+  set -e
+
+  [[ "$OPENCODE_STATUS" -eq 0 ]] || die "OpenCode exited with status $OPENCODE_STATUS."
+  [[ "$TEE_STATUS" -eq 0 ]] || die "Could not save the OpenCode event log."
+  [[ "$FORMATTER_STATUS" -eq 0 ]] || die "Could not format the OpenCode event stream."
+  if jq -e 'select(.type == "error")' "$ACTIVE_LOG" >/dev/null 2>&1; then
+    die "OpenCode emitted a session error."
+  fi
+
+  TOOL_ERROR_COUNT="$(jq -s '[.[] | select(.type == "tool_use" and .part.state.status == "error")] | length' "$ACTIVE_LOG")"
+  if [[ "$TOOL_ERROR_COUNT" -gt 0 ]]; then
+    printf 'OpenCode reported %s failed tool call(s); relying on the final clean-tree and CI gates.\n' "$TOOL_ERROR_COUNT" >&2
+  fi
+}
+
 wait_for_checks() {
   pr_url="$1"
-  deadline=$((SECONDS + CHECK_DISCOVERY_TIMEOUT))
+  expected_head_sha="$2"
+  discovery_deadline=$((SECONDS + CHECK_DISCOVERY_TIMEOUT))
+  check_deadline=$((SECONDS + CHECK_TIMEOUT))
+  last_check_signature=""
 
   while true; do
     set +e
-    check_probe="$(gh pr checks "$pr_url" 2>&1)"
+    checks_json="$(gh pr checks "$pr_url" --json name,bucket,workflow 2>&1)"
+    checks_status=$?
     set -e
 
-    if ! grep -qi 'no checks reported' <<<"$check_probe"; then
+    if ! jq -e 'type == "array"' <<<"$checks_json" >/dev/null 2>&1; then
+      printf '%s\n' "$checks_json" >&2
+      die "Could not read CI checks for $pr_url."
+    fi
+
+    core_checks="$(
+      jq -c --arg advisory "$ADVISORY_CHECK_REGEX" \
+        '[.[] | select((.name | test($advisory)) | not)]' <<<"$checks_json"
+    )"
+    core_check_count="$(jq 'length' <<<"$core_checks")"
+
+    if [[ "$core_check_count" -eq 0 ]]; then
+      if (( SECONDS < discovery_deadline )); then
+        sleep 5
+        continue
+      fi
+
+      if [[ "$ALLOW_NO_CHECKS" == "1" ]]; then
+        printf 'No non-advisory CI checks appeared; continuing because ALLOW_NO_CHECKS=1.\n'
+        break
+      fi
+      die "No non-advisory CI checks appeared within ${CHECK_DISCOVERY_TIMEOUT}s."
+    fi
+
+    check_signature="$(
+      jq -r 'sort_by(.name) | map(.name + ":" + .bucket) | join("|")' <<<"$core_checks"
+    )"
+    if [[ "$check_signature" != "$last_check_signature" ]]; then
+      printf '\nRequired project CI:\n'
+      jq -r '.[] | "  " + .name + "  " + .bucket' <<<"$core_checks"
+      last_check_signature="$check_signature"
+    fi
+
+    failed_check_count="$(
+      jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' <<<"$core_checks"
+    )"
+    if [[ "$failed_check_count" -gt 0 ]]; then
+      printf 'Project CI has a failed or cancelled check.\n' >&2
+      return 1
+    fi
+
+    pending_check_count="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$core_checks")"
+    if [[ "$pending_check_count" -eq 0 ]]; then
       break
     fi
 
-    if (( SECONDS >= deadline )); then
-      if [[ "$ALLOW_NO_CHECKS" == "1" ]]; then
-        printf 'No CI checks appeared; continuing because ALLOW_NO_CHECKS=1.\n'
-        return 0
-      fi
-      printf '%s\n' "$check_probe" >&2
-      die "No CI checks appeared within ${CHECK_DISCOVERY_TIMEOUT}s."
-    fi
-
-    sleep 5
+    (( SECONDS < check_deadline )) || die "Project CI did not finish within ${CHECK_TIMEOUT}s."
+    sleep 10
   done
 
-  # A pending check commonly gives a nonzero result in the probe above.
-  # This command waits until every reported check finishes and fails on a bad check.
-  gh pr checks "$pr_url" --watch --fail-fast || die "CI failed for $pr_url"
+  # CodeRabbit is advisory because its free-tier run may be absent or stop. If it
+  # has actually requested changes on this exact commit, give the agent one chance
+  # to address them. A request on an older commit cannot block a repaired head.
+  pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
+  reviews_json="$(
+    gh api \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "repos/$REPO/pulls/$pr_number/reviews?per_page=100"
+  )"
+  coderabbit_state="$(
+    jq -r --arg sha "$expected_head_sha" '
+      [
+        .[]
+        | select(.commit_id == $sha)
+        | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai")
+      ]
+      | sort_by(.submitted_at)
+      | last
+      | .state // ""
+    ' <<<"$reviews_json"
+  )"
+  if [[ "$coderabbit_state" == "CHANGES_REQUESTED" ]]; then
+    printf 'CodeRabbit requested changes on the current PR commit.\n' >&2
+    return 1
+  fi
+
+  return 0
 }
 
 validate_pr() {
@@ -209,6 +331,61 @@ validate_pr() {
   [[ "$VALID_PR" == "true" ]] || die "The PR does not have the expected base, head, or exact closing line."
 }
 
+repair_pr() {
+  pr_url="$1"
+  issue_number="$2"
+  expected_branch="$3"
+  expected_head_sha="$4"
+  repair_attempt="$5"
+
+  printf '\nPR gates failed. Starting repair attempt %s of %s.\n' "$repair_attempt" "$MAX_REPAIR_ATTEMPTS"
+
+  [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "The worktree is dirty before PR repair."
+  git fetch origin "$expected_branch"
+
+  if git show-ref --verify --quiet "refs/heads/$expected_branch"; then
+    git switch "$expected_branch"
+  else
+    git switch --track -c "$expected_branch" "origin/$expected_branch"
+  fi
+  git merge --ff-only "origin/$expected_branch"
+
+  REPAIR_BASE_SHA="$(git rev-parse HEAD)"
+  [[ "$REPAIR_BASE_SHA" == "$expected_head_sha" ]] || die "The local repair branch does not match the PR head."
+
+  ISSUE_URL="https://github.com/$REPO/issues/$issue_number"
+  REPAIR_LOG="$RUN_LOG_DIR/issue-$issue_number-repair-$repair_attempt-$RUN_ID.ndjson"
+  printf -v REPAIR_PROMPT '%s\n' \
+    "Use the implement skill to repair this existing pull request: $pr_url" \
+    "The original ticket is: $ISSUE_URL" \
+    "This is repair attempt $repair_attempt of $MAX_REPAIR_ATTEMPTS. Read every failed or cancelled GitHub Actions log, all PR review summaries, and every unresolved inline review thread. Use the GitHub CLI to fetch details that are not in the page summary." \
+    "Fix every actionable failure within the ticket's scope. Address root causes; do not weaken, delete, or skip tests and do not dismiss valid review feedback. Treat infrastructure-only failures separately and rerun or explain them without changing unrelated code." \
+    "Run the relevant focused tests and repository checks. Use the code-review skill before finishing. If code or documentation changes, commit the repair. Leave a clean worktree." \
+    "Do not close or unassign the issue. Do not create another PR or merge. Do not ask questions in this unattended run."
+
+  run_opencode_session "dotrelay-issue-$issue_number-repair-$repair_attempt" "$REPAIR_PROMPT" "$REPAIR_LOG"
+
+  [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "OpenCode left uncommitted repair changes."
+  REPAIRED_HEAD_SHA="$(git rev-parse HEAD)"
+  if [[ "$REPAIRED_HEAD_SHA" == "$REPAIR_BASE_SHA" ]]; then
+    printf 'The repair session made no commit. It may have rerun an infrastructure-only failure.\n'
+    return 0
+  fi
+  git merge-base --is-ancestor "$REPAIR_BASE_SHA" "$REPAIRED_HEAD_SHA" || die "The repair commit does not descend from the PR head."
+
+  git push origin "$expected_branch"
+
+  PUSH_DEADLINE=$((SECONDS + 60))
+  while true; do
+    REMOTE_PR_HEAD="$(gh pr view "$pr_url" --json headRefOid --jq .headRefOid)"
+    [[ "$REMOTE_PR_HEAD" == "$REPAIRED_HEAD_SHA" ]] && break
+    (( SECONDS < PUSH_DEADLINE )) || die "GitHub did not update the PR head after the repair push."
+    sleep 2
+  done
+
+  printf 'Pushed repair commit %s to %s.\n' "$REPAIRED_HEAD_SHA" "$pr_url"
+}
+
 finish_pr() {
   pr_url="$1"
   issue_number="$2"
@@ -216,14 +393,25 @@ finish_pr() {
   expected_head_sha="$4"
 
   validate_pr "$pr_url" "$issue_number" "$expected_branch"
-  wait_for_checks "$pr_url"
+  repair_attempt=0
+  while ! wait_for_checks "$pr_url" "$expected_head_sha"; do
+    repair_attempt=$((repair_attempt + 1))
+    (( repair_attempt <= MAX_REPAIR_ATTEMPTS )) || die "PR gates still fail after $MAX_REPAIR_ATTEMPTS repair attempts."
+
+    repair_pr "$pr_url" "$issue_number" "$expected_branch" "$expected_head_sha" "$repair_attempt"
+    expected_head_sha="$REPAIRED_HEAD_SHA"
+    validate_pr "$pr_url" "$issue_number" "$expected_branch"
+  done
 
   PR_HEAD_SHA="$(gh pr view "$pr_url" --json headRefOid --jq .headRefOid)"
   [[ "$PR_HEAD_SHA" == "$expected_head_sha" ]] || die "The PR head changed after the OpenCode run."
 
   git switch "$BASE_BRANCH"
+  # The controller has already checked project CI and pinned the expected head.
+  # Use the repository administrator override for advisory review policies.
   gh pr merge "$pr_url" \
     "--$MERGE_METHOD" \
+    --admin \
     --delete-branch \
     --match-head-commit "$expected_head_sha" || die "GitHub did not merge $pr_url"
 
@@ -321,48 +509,7 @@ while true; do
     "Do not assign or unassign issues. Do not close the issue. Do not push, create a PR, or merge. The controller handles those steps." \
     "Do not ask questions in this unattended run. If the issue is already satisfied or a material decision is missing, make no speculative change and explain the blocker in your final response."
 
-  OPENCODE_ARGS=(
-    run
-    --dir "$REPO_ROOT"
-    --auto
-    --format json
-    --title "dotrelay-issue-$ACTIVE_ISSUE"
-  )
-  if [[ -n "${OPENCODE_MODEL:-}" ]]; then
-    OPENCODE_ARGS+=(--model "$OPENCODE_MODEL")
-  fi
-  if [[ -n "${OPENCODE_AGENT:-}" ]]; then
-    OPENCODE_ARGS+=(--agent "$OPENCODE_AGENT")
-  fi
-
-  printf '\nOpenCode live output. Raw event log: %s\n\n' "$ACTIVE_LOG"
-  set +e
-  if [[ "$LOG_VIEW" == "pretty" ]]; then
-    opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG" | format_opencode_events
-    PIPELINE_STATUS=("${PIPESTATUS[@]}")
-    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
-    TEE_STATUS=${PIPELINE_STATUS[1]}
-    FORMATTER_STATUS=${PIPELINE_STATUS[2]}
-  else
-    opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG"
-    PIPELINE_STATUS=("${PIPESTATUS[@]}")
-    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
-    TEE_STATUS=${PIPELINE_STATUS[1]}
-    FORMATTER_STATUS=0
-  fi
-  set -e
-
-  [[ "$OPENCODE_STATUS" -eq 0 ]] || die "OpenCode exited with status $OPENCODE_STATUS."
-  [[ "$TEE_STATUS" -eq 0 ]] || die "Could not save the OpenCode event log."
-  [[ "$FORMATTER_STATUS" -eq 0 ]] || die "Could not format the OpenCode event stream."
-  if jq -e 'select(.type == "error")' "$ACTIVE_LOG" >/dev/null 2>&1; then
-    die "OpenCode emitted a session error."
-  fi
-
-  TOOL_ERROR_COUNT="$(jq -s '[.[] | select(.type == "tool_use" and .part.state.status == "error")] | length' "$ACTIVE_LOG")"
-  if [[ "$TOOL_ERROR_COUNT" -gt 0 ]]; then
-    printf 'OpenCode reported %s failed tool call(s); relying on the final clean-tree and CI gates.\n' "$TOOL_ERROR_COUNT" >&2
-  fi
+  run_opencode_session "dotrelay-issue-$ACTIVE_ISSUE" "$PROMPT" "$ACTIVE_LOG"
 
   [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "OpenCode left uncommitted changes."
   HEAD_SHA="$(git rev-parse HEAD)"
