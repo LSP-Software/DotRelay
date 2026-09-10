@@ -186,12 +186,91 @@ wait_for_checks() {
   gh pr checks "$pr_url" --watch --fail-fast || die "CI failed for $pr_url"
 }
 
+validate_pr() {
+  pr_url="$1"
+  issue_number="$2"
+  expected_branch="$3"
+  closing_line="Closes #$issue_number"
+
+  # GitHub can take a few seconds to populate closingIssuesReferences after PR
+  # creation. Validate the exact closing line immediately, then prove that the
+  # issue closed after merge in finish_pr.
+  PR_META="$(gh pr view "$pr_url" --json baseRefName,headRefName,isDraft,body)"
+  VALID_PR="$(
+    jq -r \
+      --arg base "$BASE_BRANCH" \
+      --arg head "$expected_branch" \
+      --arg closing "$closing_line" \
+      '.baseRefName == $base
+       and .headRefName == $head
+       and (.isDraft | not)
+       and (((.body // "") | split("\n") | index($closing)) != null)' <<<"$PR_META"
+  )"
+  [[ "$VALID_PR" == "true" ]] || die "The PR does not have the expected base, head, or exact closing line."
+}
+
+finish_pr() {
+  pr_url="$1"
+  issue_number="$2"
+  expected_branch="$3"
+  expected_head_sha="$4"
+
+  validate_pr "$pr_url" "$issue_number" "$expected_branch"
+  wait_for_checks "$pr_url"
+
+  PR_HEAD_SHA="$(gh pr view "$pr_url" --json headRefOid --jq .headRefOid)"
+  [[ "$PR_HEAD_SHA" == "$expected_head_sha" ]] || die "The PR head changed after the OpenCode run."
+
+  git switch "$BASE_BRANCH"
+  gh pr merge "$pr_url" \
+    "--$MERGE_METHOD" \
+    --delete-branch \
+    --match-head-commit "$expected_head_sha" || die "GitHub did not merge $pr_url"
+
+  MERGE_DEADLINE=$((SECONDS + MERGE_TIMEOUT))
+  while true; do
+    PR_STATE="$(gh pr view "$pr_url" --json state --jq .state)"
+    [[ "$PR_STATE" == "MERGED" ]] && break
+    [[ "$PR_STATE" == "OPEN" ]] || die "PR state is $PR_STATE, not MERGED."
+    (( SECONDS < MERGE_DEADLINE )) || die "PR did not merge within ${MERGE_TIMEOUT}s."
+    sleep 10
+  done
+
+  ISSUE_STATE="$(gh issue view "$issue_number" --json state --jq .state)"
+  [[ "$ISSUE_STATE" == "CLOSED" ]] || die "Issue #$issue_number did not close after merge."
+
+  printf 'Merged issue #%s. Starting the next issue in a fresh OpenCode session.\n' "$issue_number"
+}
+
 while true; do
   ACTIVE_ISSUE=""
   ACTIVE_BRANCH=""
   ACTIVE_LOG=""
 
   sync_main
+
+  # Recover cleanly from a stopped controller after it opened the PR. The
+  # agent/issue-N branch namespace belongs to this script.
+  RESUME_JSON="$(
+    gh pr list \
+      --state open \
+      --base "$BASE_BRANCH" \
+      --author @me \
+      --limit 100 \
+      --json number,url,headRefName,headRefOid \
+      --jq '[.[] | select(.headRefName | test("^agent/issue-[0-9]+$"))] | sort_by(.number) | .[0] // empty'
+  )"
+  if [[ -n "$RESUME_JSON" ]]; then
+    PR_URL="$(jq -r .url <<<"$RESUME_JSON")"
+    ACTIVE_BRANCH="$(jq -r .headRefName <<<"$RESUME_JSON")"
+    ACTIVE_ISSUE="${ACTIVE_BRANCH#agent/issue-}"
+    HEAD_SHA="$(jq -r .headRefOid <<<"$RESUME_JSON")"
+    ACTIVE_LOG="$RUN_LOG_DIR/issue-$ACTIVE_ISSUE.ndjson"
+
+    printf '\nResuming open PR for issue #%s: %s\n' "$ACTIVE_ISSUE" "$PR_URL"
+    finish_pr "$PR_URL" "$ACTIVE_ISSUE" "$ACTIVE_BRANCH" "$HEAD_SHA"
+    continue
+  fi
 
   ISSUE_JSON="$(next_issue)"
   if [[ -z "$ISSUE_JSON" ]]; then
@@ -307,42 +386,5 @@ while true; do
   fi
 
   printf 'Opened %s\n' "$PR_URL"
-
-  PR_META="$(gh pr view "$PR_URL" --json baseRefName,headRefName,isDraft,closingIssuesReferences)"
-  VALID_PR="$(
-    jq -r \
-      --arg base "$BASE_BRANCH" \
-      --arg head "$ACTIVE_BRANCH" \
-      --argjson issue "$ACTIVE_ISSUE" \
-      '.baseRefName == $base
-       and .headRefName == $head
-       and (.isDraft | not)
-       and any(.closingIssuesReferences[]?; .number == $issue)' <<<"$PR_META"
-  )"
-  [[ "$VALID_PR" == "true" ]] || die "The PR does not have the expected base, head, or closing issue reference."
-
-  wait_for_checks "$PR_URL"
-
-  PR_HEAD_SHA="$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)"
-  [[ "$PR_HEAD_SHA" == "$HEAD_SHA" ]] || die "The PR head changed after the OpenCode run."
-
-  git switch "$BASE_BRANCH"
-  gh pr merge "$PR_URL" \
-    "--$MERGE_METHOD" \
-    --delete-branch \
-    --match-head-commit "$HEAD_SHA" || die "GitHub did not merge $PR_URL"
-
-  MERGE_DEADLINE=$((SECONDS + MERGE_TIMEOUT))
-  while true; do
-    PR_STATE="$(gh pr view "$PR_URL" --json state --jq .state)"
-    [[ "$PR_STATE" == "MERGED" ]] && break
-    [[ "$PR_STATE" == "OPEN" ]] || die "PR state is $PR_STATE, not MERGED."
-    (( SECONDS < MERGE_DEADLINE )) || die "PR did not merge within ${MERGE_TIMEOUT}s."
-    sleep 10
-  done
-
-  ISSUE_STATE="$(gh issue view "$ACTIVE_ISSUE" --json state --jq .state)"
-  [[ "$ISSUE_STATE" == "CLOSED" ]] || die "Issue #$ACTIVE_ISSUE did not close after merge."
-
-  printf 'Merged issue #%s. Starting the next issue in a fresh OpenCode session.\n' "$ACTIVE_ISSUE"
+  finish_pr "$PR_URL" "$ACTIVE_ISSUE" "$ACTIVE_BRANCH" "$HEAD_SHA"
 done
