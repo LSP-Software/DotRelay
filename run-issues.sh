@@ -12,6 +12,7 @@ set -Eeuo pipefail
 #   LOG_VIEW=pretty               # pretty or json
 #   CHECK_DISCOVERY_TIMEOUT=180
 #   MERGE_TIMEOUT=3600
+#   MAX_REPAIR_ATTEMPTS=3
 #   ALLOW_NO_CHECKS=0            # set to 1 only if this repo intentionally has no CI
 
 BASE_BRANCH="${BASE_BRANCH:-main}"
@@ -19,6 +20,7 @@ MERGE_METHOD="${MERGE_METHOD:-squash}"
 LOG_VIEW="${LOG_VIEW:-pretty}"
 CHECK_DISCOVERY_TIMEOUT="${CHECK_DISCOVERY_TIMEOUT:-180}"
 MERGE_TIMEOUT="${MERGE_TIMEOUT:-3600}"
+MAX_REPAIR_ATTEMPTS="${MAX_REPAIR_ATTEMPTS:-3}"
 ALLOW_NO_CHECKS="${ALLOW_NO_CHECKS:-0}"
 
 ACTIVE_ISSUE=""
@@ -39,6 +41,7 @@ die() {
   exit 1
 }
 
+for command_name in git gh jq opencode; do
 for command_name in git gh jq opencode tee; do
   command -v "$command_name" >/dev/null 2>&1 || die "Missing required command: $command_name"
 done
@@ -58,6 +61,7 @@ esac
 
 [[ "$CHECK_DISCOVERY_TIMEOUT" =~ ^[0-9]+$ ]] || die "CHECK_DISCOVERY_TIMEOUT must be an integer."
 [[ "$MERGE_TIMEOUT" =~ ^[0-9]+$ ]] || die "MERGE_TIMEOUT must be an integer."
+[[ "$MAX_REPAIR_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || die "MAX_REPAIR_ATTEMPTS must be a positive integer."
 [[ "$ALLOW_NO_CHECKS" == "0" || "$ALLOW_NO_CHECKS" == "1" ]] || die "ALLOW_NO_CHECKS must be 0 or 1."
 [[ "$LOG_VIEW" == "pretty" || "$LOG_VIEW" == "json" ]] || die "LOG_VIEW must be pretty or json."
 
@@ -156,6 +160,56 @@ format_opencode_events() {
   '
 }
 
+run_opencode_session() {
+  session_title="$1"
+  session_prompt="$2"
+  session_log="$3"
+  ACTIVE_LOG="$session_log"
+
+  OPENCODE_ARGS=(
+    run
+    --dir "$REPO_ROOT"
+    --auto
+    --format json
+    --title "$session_title"
+  )
+  if [[ -n "${OPENCODE_MODEL:-}" ]]; then
+    OPENCODE_ARGS+=(--model "$OPENCODE_MODEL")
+  fi
+  if [[ -n "${OPENCODE_AGENT:-}" ]]; then
+    OPENCODE_ARGS+=(--agent "$OPENCODE_AGENT")
+  fi
+
+  printf '\nOpenCode live output. Raw event log: %s\n\n' "$ACTIVE_LOG"
+  set +e
+  if [[ "$LOG_VIEW" == "pretty" ]]; then
+    opencode "${OPENCODE_ARGS[@]}" "$session_prompt" | tee "$ACTIVE_LOG" | format_opencode_events
+    PIPELINE_STATUS=("${PIPESTATUS[@]}")
+    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
+    TEE_STATUS=${PIPELINE_STATUS[1]}
+    FORMATTER_STATUS=${PIPELINE_STATUS[2]}
+  else
+    opencode "${OPENCODE_ARGS[@]}" "$session_prompt" | tee "$ACTIVE_LOG"
+    PIPELINE_STATUS=("${PIPESTATUS[@]}")
+    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
+    TEE_STATUS=${PIPELINE_STATUS[1]}
+    FORMATTER_STATUS=0
+  fi
+  set -e
+
+  [[ "$OPENCODE_STATUS" -eq 0 ]] || die "OpenCode exited with status $OPENCODE_STATUS."
+  [[ "$TEE_STATUS" -eq 0 ]] || die "Could not save the OpenCode event log."
+  [[ "$FORMATTER_STATUS" -eq 0 ]] || die "Could not format the OpenCode event stream."
+  if jq -e 'select(.type == "error")' "$ACTIVE_LOG" >/dev/null 2>&1; then
+    die "OpenCode emitted a session error."
+  fi
+
+  TOOL_ERROR_COUNT="$(jq -s '[.[] | select(.type == "tool_use" and .part.state.status == "error")] | length' "$ACTIVE_LOG")"
+  if [[ "$TOOL_ERROR_COUNT" -gt 0 ]]; then
+    printf 'OpenCode reported %s failed tool call(s); relying on the final clean-tree and CI gates.\n' "$TOOL_ERROR_COUNT" >&2
+  fi
+}
+
 wait_for_checks() {
   pr_url="$1"
   deadline=$((SECONDS + CHECK_DISCOVERY_TIMEOUT))
@@ -184,6 +238,17 @@ wait_for_checks() {
   # A pending check commonly gives a nonzero result in the probe above.
   # This command waits until every reported check finishes and fails on a bad check.
   gh pr checks "$pr_url" --watch --fail-fast || die "CI failed for $pr_url"
+  if ! gh pr checks "$pr_url" --watch --fail-fast; then
+    return 1
+  fi
+
+  REVIEW_DECISION="$(gh pr view "$pr_url" --json reviewDecision --jq '.reviewDecision // ""')"
+  if [[ "$REVIEW_DECISION" == "CHANGES_REQUESTED" ]]; then
+    printf 'A PR reviewer requested changes.\n' >&2
+    return 1
+  fi
+
+  return 0
 }
 
 validate_pr() {
@@ -209,6 +274,58 @@ validate_pr() {
   [[ "$VALID_PR" == "true" ]] || die "The PR does not have the expected base, head, or exact closing line."
 }
 
+repair_pr() {
+  pr_url="$1"
+  issue_number="$2"
+  expected_branch="$3"
+  expected_head_sha="$4"
+  repair_attempt="$5"
+
+  printf '\nPR gates failed. Starting repair attempt %s of %s.\n' "$repair_attempt" "$MAX_REPAIR_ATTEMPTS"
+
+  [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "The worktree is dirty before PR repair."
+  git fetch origin "$expected_branch"
+
+  if git show-ref --verify --quiet "refs/heads/$expected_branch"; then
+    git switch "$expected_branch"
+  else
+    git switch --track -c "$expected_branch" "origin/$expected_branch"
+  fi
+  git merge --ff-only "origin/$expected_branch"
+
+  REPAIR_BASE_SHA="$(git rev-parse HEAD)"
+  [[ "$REPAIR_BASE_SHA" == "$expected_head_sha" ]] || die "The local repair branch does not match the PR head."
+
+  ISSUE_URL="https://github.com/$REPO/issues/$issue_number"
+  REPAIR_LOG="$RUN_LOG_DIR/issue-$issue_number-repair-$repair_attempt.ndjson"
+  printf -v REPAIR_PROMPT '%s\n' \
+    "Use the implement skill to repair this existing pull request: $pr_url" \
+    "The original ticket is: $ISSUE_URL" \
+    "This is repair attempt $repair_attempt of $MAX_REPAIR_ATTEMPTS. Read every failed or cancelled GitHub Actions log, all PR review summaries, and every unresolved inline review thread. Use the GitHub CLI to fetch details that are not in the page summary." \
+    "Fix every actionable failure within the ticket's scope. Address root causes; do not weaken, delete, or skip tests and do not dismiss valid review feedback. Treat infrastructure-only failures separately and rerun or explain them without changing unrelated code." \
+    "Run the relevant focused tests and repository checks. Use the code-review skill before finishing. Commit the repair and leave a clean worktree." \
+    "Do not close or unassign the issue. Do not create another PR or merge. Do not ask questions in this unattended run."
+
+  run_opencode_session "dotrelay-issue-$issue_number-repair-$repair_attempt" "$REPAIR_PROMPT" "$REPAIR_LOG"
+
+  [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "OpenCode left uncommitted repair changes."
+  REPAIRED_HEAD_SHA="$(git rev-parse HEAD)"
+  [[ "$REPAIRED_HEAD_SHA" != "$REPAIR_BASE_SHA" ]] || die "The repair session produced no commit."
+  git merge-base --is-ancestor "$REPAIR_BASE_SHA" "$REPAIRED_HEAD_SHA" || die "The repair commit does not descend from the PR head."
+
+  git push origin "$expected_branch"
+
+  PUSH_DEADLINE=$((SECONDS + 60))
+  while true; do
+    REMOTE_PR_HEAD="$(gh pr view "$pr_url" --json headRefOid --jq .headRefOid)"
+    [[ "$REMOTE_PR_HEAD" == "$REPAIRED_HEAD_SHA" ]] && break
+    (( SECONDS < PUSH_DEADLINE )) || die "GitHub did not update the PR head after the repair push."
+    sleep 2
+  done
+
+  printf 'Pushed repair commit %s to %s.\n' "$REPAIRED_HEAD_SHA" "$pr_url"
+}
+
 finish_pr() {
   pr_url="$1"
   issue_number="$2"
@@ -216,7 +333,15 @@ finish_pr() {
   expected_head_sha="$4"
 
   validate_pr "$pr_url" "$issue_number" "$expected_branch"
-  wait_for_checks "$pr_url"
+  repair_attempt=0
+  while ! wait_for_checks "$pr_url"; do
+    repair_attempt=$((repair_attempt + 1))
+    (( repair_attempt <= MAX_REPAIR_ATTEMPTS )) || die "PR gates still fail after $MAX_REPAIR_ATTEMPTS repair attempts."
+
+    repair_pr "$pr_url" "$issue_number" "$expected_branch" "$expected_head_sha" "$repair_attempt"
+    expected_head_sha="$REPAIRED_HEAD_SHA"
+    validate_pr "$pr_url" "$issue_number" "$expected_branch"
+  done
 
   PR_HEAD_SHA="$(gh pr view "$pr_url" --json headRefOid --jq .headRefOid)"
   [[ "$PR_HEAD_SHA" == "$expected_head_sha" ]] || die "The PR head changed after the OpenCode run."
@@ -334,27 +459,14 @@ while true; do
   if [[ -n "${OPENCODE_AGENT:-}" ]]; then
     OPENCODE_ARGS+=(--agent "$OPENCODE_AGENT")
   fi
+  run_opencode_session "dotrelay-issue-$ACTIVE_ISSUE" "$PROMPT" "$ACTIVE_LOG"
 
-  printf '\nOpenCode live output. Raw event log: %s\n\n' "$ACTIVE_LOG"
   set +e
-  if [[ "$LOG_VIEW" == "pretty" ]]; then
-    opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG" | format_opencode_events
-    PIPELINE_STATUS=("${PIPESTATUS[@]}")
-    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
-    TEE_STATUS=${PIPELINE_STATUS[1]}
-    FORMATTER_STATUS=${PIPELINE_STATUS[2]}
-  else
-    opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG"
-    PIPELINE_STATUS=("${PIPESTATUS[@]}")
-    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
-    TEE_STATUS=${PIPELINE_STATUS[1]}
-    FORMATTER_STATUS=0
-  fi
+  opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG"
+  OPENCODE_STATUS=${PIPESTATUS[0]}
   set -e
 
   [[ "$OPENCODE_STATUS" -eq 0 ]] || die "OpenCode exited with status $OPENCODE_STATUS."
-  [[ "$TEE_STATUS" -eq 0 ]] || die "Could not save the OpenCode event log."
-  [[ "$FORMATTER_STATUS" -eq 0 ]] || die "Could not format the OpenCode event stream."
   if jq -e 'select(.type == "error")' "$ACTIVE_LOG" >/dev/null 2>&1; then
     die "OpenCode emitted a session error."
   fi
@@ -386,5 +498,43 @@ while true; do
   fi
 
   printf 'Opened %s\n' "$PR_URL"
+
+  PR_META="$(gh pr view "$PR_URL" --json baseRefName,headRefName,isDraft,closingIssuesReferences)"
+  VALID_PR="$(
+    jq -r \
+      --arg base "$BASE_BRANCH" \
+      --arg head "$ACTIVE_BRANCH" \
+      --argjson issue "$ACTIVE_ISSUE" \
+      '.baseRefName == $base
+       and .headRefName == $head
+       and (.isDraft | not)
+       and any(.closingIssuesReferences[]?; .number == $issue)' <<<"$PR_META"
+  )"
+  [[ "$VALID_PR" == "true" ]] || die "The PR does not have the expected base, head, or closing issue reference."
+
+  wait_for_checks "$PR_URL"
+
+  PR_HEAD_SHA="$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)"
+  [[ "$PR_HEAD_SHA" == "$HEAD_SHA" ]] || die "The PR head changed after the OpenCode run."
+
+  git switch "$BASE_BRANCH"
+  gh pr merge "$PR_URL" \
+    "--$MERGE_METHOD" \
+    --delete-branch \
+    --match-head-commit "$HEAD_SHA" || die "GitHub did not merge $PR_URL"
+
+  MERGE_DEADLINE=$((SECONDS + MERGE_TIMEOUT))
+  while true; do
+    PR_STATE="$(gh pr view "$PR_URL" --json state --jq .state)"
+    [[ "$PR_STATE" == "MERGED" ]] && break
+    [[ "$PR_STATE" == "OPEN" ]] || die "PR state is $PR_STATE, not MERGED."
+    (( SECONDS < MERGE_DEADLINE )) || die "PR did not merge within ${MERGE_TIMEOUT}s."
+    sleep 10
+  done
+
+  ISSUE_STATE="$(gh issue view "$ACTIVE_ISSUE" --json state --jq .state)"
+  [[ "$ISSUE_STATE" == "CLOSED" ]] || die "Issue #$ACTIVE_ISSUE did not close after merge."
+
+  printf 'Merged issue #%s. Starting the next issue in a fresh OpenCode session.\n' "$ACTIVE_ISSUE"
   finish_pr "$PR_URL" "$ACTIVE_ISSUE" "$ACTIVE_BRANCH" "$HEAD_SHA"
 done
