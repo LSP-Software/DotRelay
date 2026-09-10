@@ -39,6 +39,7 @@ die() {
   exit 1
 }
 
+for command_name in git gh jq opencode; do
 for command_name in git gh jq opencode tee; do
   command -v "$command_name" >/dev/null 2>&1 || die "Missing required command: $command_name"
 done
@@ -258,6 +259,8 @@ while true; do
 
   printf '\nOpenCode live output. Raw event log: %s\n\n' "$ACTIVE_LOG"
   set +e
+  opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG"
+  OPENCODE_STATUS=${PIPESTATUS[0]}
   if [[ "$LOG_VIEW" == "pretty" ]]; then
     opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG" | format_opencode_events
     PIPELINE_STATUS=("${PIPESTATUS[@]}")
