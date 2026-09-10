@@ -41,7 +41,6 @@ die() {
   exit 1
 }
 
-for command_name in git gh jq opencode; do
 for command_name in git gh jq opencode tee; do
   command -v "$command_name" >/dev/null 2>&1 || die "Missing required command: $command_name"
 done
@@ -237,7 +236,6 @@ wait_for_checks() {
 
   # A pending check commonly gives a nonzero result in the probe above.
   # This command waits until every reported check finishes and fails on a bad check.
-  gh pr checks "$pr_url" --watch --fail-fast || die "CI failed for $pr_url"
   if ! gh pr checks "$pr_url" --watch --fail-fast; then
     return 1
   fi
@@ -297,20 +295,23 @@ repair_pr() {
   [[ "$REPAIR_BASE_SHA" == "$expected_head_sha" ]] || die "The local repair branch does not match the PR head."
 
   ISSUE_URL="https://github.com/$REPO/issues/$issue_number"
-  REPAIR_LOG="$RUN_LOG_DIR/issue-$issue_number-repair-$repair_attempt.ndjson"
+  REPAIR_LOG="$RUN_LOG_DIR/issue-$issue_number-repair-$repair_attempt-$RUN_ID.ndjson"
   printf -v REPAIR_PROMPT '%s\n' \
     "Use the implement skill to repair this existing pull request: $pr_url" \
     "The original ticket is: $ISSUE_URL" \
     "This is repair attempt $repair_attempt of $MAX_REPAIR_ATTEMPTS. Read every failed or cancelled GitHub Actions log, all PR review summaries, and every unresolved inline review thread. Use the GitHub CLI to fetch details that are not in the page summary." \
     "Fix every actionable failure within the ticket's scope. Address root causes; do not weaken, delete, or skip tests and do not dismiss valid review feedback. Treat infrastructure-only failures separately and rerun or explain them without changing unrelated code." \
-    "Run the relevant focused tests and repository checks. Use the code-review skill before finishing. Commit the repair and leave a clean worktree." \
+    "Run the relevant focused tests and repository checks. Use the code-review skill before finishing. If code or documentation changes, commit the repair. Leave a clean worktree." \
     "Do not close or unassign the issue. Do not create another PR or merge. Do not ask questions in this unattended run."
 
   run_opencode_session "dotrelay-issue-$issue_number-repair-$repair_attempt" "$REPAIR_PROMPT" "$REPAIR_LOG"
 
   [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "OpenCode left uncommitted repair changes."
   REPAIRED_HEAD_SHA="$(git rev-parse HEAD)"
-  [[ "$REPAIRED_HEAD_SHA" != "$REPAIR_BASE_SHA" ]] || die "The repair session produced no commit."
+  if [[ "$REPAIRED_HEAD_SHA" == "$REPAIR_BASE_SHA" ]]; then
+    printf 'The repair session made no commit. It may have rerun an infrastructure-only failure.\n'
+    return 0
+  fi
   git merge-base --is-ancestor "$REPAIR_BASE_SHA" "$REPAIRED_HEAD_SHA" || die "The repair commit does not descend from the PR head."
 
   git push origin "$expected_branch"
@@ -446,35 +447,7 @@ while true; do
     "Do not assign or unassign issues. Do not close the issue. Do not push, create a PR, or merge. The controller handles those steps." \
     "Do not ask questions in this unattended run. If the issue is already satisfied or a material decision is missing, make no speculative change and explain the blocker in your final response."
 
-  OPENCODE_ARGS=(
-    run
-    --dir "$REPO_ROOT"
-    --auto
-    --format json
-    --title "dotrelay-issue-$ACTIVE_ISSUE"
-  )
-  if [[ -n "${OPENCODE_MODEL:-}" ]]; then
-    OPENCODE_ARGS+=(--model "$OPENCODE_MODEL")
-  fi
-  if [[ -n "${OPENCODE_AGENT:-}" ]]; then
-    OPENCODE_ARGS+=(--agent "$OPENCODE_AGENT")
-  fi
   run_opencode_session "dotrelay-issue-$ACTIVE_ISSUE" "$PROMPT" "$ACTIVE_LOG"
-
-  set +e
-  opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG"
-  OPENCODE_STATUS=${PIPESTATUS[0]}
-  set -e
-
-  [[ "$OPENCODE_STATUS" -eq 0 ]] || die "OpenCode exited with status $OPENCODE_STATUS."
-  if jq -e 'select(.type == "error")' "$ACTIVE_LOG" >/dev/null 2>&1; then
-    die "OpenCode emitted a session error."
-  fi
-
-  TOOL_ERROR_COUNT="$(jq -s '[.[] | select(.type == "tool_use" and .part.state.status == "error")] | length' "$ACTIVE_LOG")"
-  if [[ "$TOOL_ERROR_COUNT" -gt 0 ]]; then
-    printf 'OpenCode reported %s failed tool call(s); relying on the final clean-tree and CI gates.\n' "$TOOL_ERROR_COUNT" >&2
-  fi
 
   [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "OpenCode left uncommitted changes."
   HEAD_SHA="$(git rev-parse HEAD)"
@@ -498,43 +471,5 @@ while true; do
   fi
 
   printf 'Opened %s\n' "$PR_URL"
-
-  PR_META="$(gh pr view "$PR_URL" --json baseRefName,headRefName,isDraft,closingIssuesReferences)"
-  VALID_PR="$(
-    jq -r \
-      --arg base "$BASE_BRANCH" \
-      --arg head "$ACTIVE_BRANCH" \
-      --argjson issue "$ACTIVE_ISSUE" \
-      '.baseRefName == $base
-       and .headRefName == $head
-       and (.isDraft | not)
-       and any(.closingIssuesReferences[]?; .number == $issue)' <<<"$PR_META"
-  )"
-  [[ "$VALID_PR" == "true" ]] || die "The PR does not have the expected base, head, or closing issue reference."
-
-  wait_for_checks "$PR_URL"
-
-  PR_HEAD_SHA="$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)"
-  [[ "$PR_HEAD_SHA" == "$HEAD_SHA" ]] || die "The PR head changed after the OpenCode run."
-
-  git switch "$BASE_BRANCH"
-  gh pr merge "$PR_URL" \
-    "--$MERGE_METHOD" \
-    --delete-branch \
-    --match-head-commit "$HEAD_SHA" || die "GitHub did not merge $PR_URL"
-
-  MERGE_DEADLINE=$((SECONDS + MERGE_TIMEOUT))
-  while true; do
-    PR_STATE="$(gh pr view "$PR_URL" --json state --jq .state)"
-    [[ "$PR_STATE" == "MERGED" ]] && break
-    [[ "$PR_STATE" == "OPEN" ]] || die "PR state is $PR_STATE, not MERGED."
-    (( SECONDS < MERGE_DEADLINE )) || die "PR did not merge within ${MERGE_TIMEOUT}s."
-    sleep 10
-  done
-
-  ISSUE_STATE="$(gh issue view "$ACTIVE_ISSUE" --json state --jq .state)"
-  [[ "$ISSUE_STATE" == "CLOSED" ]] || die "Issue #$ACTIVE_ISSUE did not close after merge."
-
-  printf 'Merged issue #%s. Starting the next issue in a fresh OpenCode session.\n' "$ACTIVE_ISSUE"
   finish_pr "$PR_URL" "$ACTIVE_ISSUE" "$ACTIVE_BRANCH" "$HEAD_SHA"
 done
