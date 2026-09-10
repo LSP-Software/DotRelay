@@ -31,7 +31,9 @@ export type LoginOptions = Readonly<{
   readonly maxPolls?: number;
   readonly onAuthorization?: (
     authorization: DeviceAuthorization,
+    verificationUrl: string,
   ) => Promise<void> | void;
+  readonly onOpenFailed?: () => Promise<void> | void;
 }>;
 
 const sessionAccount = (profile: ServerProfilePin): string =>
@@ -262,8 +264,23 @@ export const loginWithDeviceAuthorization = async (
         verificationUri.searchParams.set("user_code", authorization.userCode);
         return verificationUri.toString();
       })();
-  if (options.onAuthorization) await options.onAuthorization(authorization);
-  if (!options.noOpen && options.open) await options.open(verificationUrl);
+  if (options.onAuthorization)
+    await options.onAuthorization(authorization, verificationUrl);
+  if (!options.noOpen && options.open) {
+    let launched = true;
+    try {
+      await options.open(verificationUrl);
+    } catch {
+      launched = false;
+    }
+    if (!launched) {
+      try {
+        if (options.onOpenFailed) await options.onOpenFailed();
+      } catch {
+        // Surfacing the manual path must never abort the login.
+      }
+    }
+  }
   const sleep =
     options.sleep ??
     ((milliseconds: number) =>
@@ -307,7 +324,7 @@ export const loginWithDeviceAuthorization = async (
       return Object.freeze({
         profile,
         userCode: authorization.userCode,
-        verificationUri: verificationUri.toString(),
+        verificationUri: verificationUrl,
       });
     }
     const error = typeof body.error === "string" ? body.error : "";
@@ -357,16 +374,54 @@ export const verificationPageCommand = (
       ? ["explorer.exe", url]
       : ["xdg-open", url];
 
-export const openVerificationPage = async (url: string): Promise<void> => {
+const browserOpenFailure = (): CliError =>
+  new CliError(
+    "local-io",
+    "could not open the verification page in a browser; open the URL shown above",
+    {},
+    "browser_open_failed",
+  );
+
+export type VerificationPageProcess = Readonly<{
+  readonly exited: Promise<number>;
+}>;
+
+export type VerificationPageSpawner = (
+  command: readonly string[],
+) => VerificationPageProcess;
+
+const OPEN_GRACE_PERIOD_MS = 5000;
+
+export const openVerificationPage = async (
+  url: string,
+  spawn: VerificationPageSpawner = (command) =>
+    Bun.spawn([...command], { stdout: "ignore", stderr: "ignore" }),
+  gracePeriodMs: number = OPEN_GRACE_PERIOD_MS,
+): Promise<void> => {
   const command = verificationPageCommand(process.platform, url);
+  let child: VerificationPageProcess;
   try {
-    Bun.spawn([...command], { stdout: "ignore", stderr: "ignore" });
+    child = spawn(command);
   } catch {
-    throw new CliError(
-      "local-io",
-      "could not open the verification page; retry with --no-open",
-      {},
-      "browser_open_failed",
-    );
+    throw browserOpenFailure();
+  }
+  let grace: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      child.exited.then((exitCode) => ({
+        kind: "exited" as const,
+        exitCode,
+      })),
+      new Promise<Readonly<{ readonly kind: "grace-expired" }>>((resolve) => {
+        grace = setTimeout(
+          () => resolve({ kind: "grace-expired" }),
+          gracePeriodMs,
+        );
+      }),
+    ]);
+    if (outcome.kind === "grace-expired") return;
+    if (outcome.exitCode !== 0) throw browserOpenFailure();
+  } finally {
+    if (grace !== undefined) clearTimeout(grace);
   }
 };

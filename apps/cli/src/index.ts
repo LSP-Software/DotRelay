@@ -350,6 +350,14 @@ const createAdminClient = async (
   });
 };
 
+const describeExpiry = (seconds: number): string => {
+  if (seconds % 60 === 0) {
+    const minutes = Math.round(seconds / 60);
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+};
+
 const loginAndEnroll = async (
   parsed: ParsedArguments,
   runtime: CliRuntime,
@@ -357,7 +365,31 @@ const loginAndEnroll = async (
 ): Promise<Record<string, unknown>> => {
   const credentials = runtime.credentials ?? createNativeCredentialStore();
   const output = runtime.terminal?.output ?? process.stderr;
+  const opensBrowser = !(parsed.noOpen || parsed.noInput);
+  let manualPath = !opensBrowser;
+  let openFailed = false;
+  let waitingBody: readonly string[] = [];
   let waitLines = 0;
+  const renderWaiting = (): void => {
+    const body = openFailed
+      ? [
+          ...waitingBody,
+          "",
+          "Could not open a browser automatically; open the URL above in any browser.",
+        ]
+      : waitingBody;
+    waitLines = rewriteRegion(
+      output,
+      waitLines,
+      renderStep(
+        "Allow this CLI?",
+        body,
+        manualPath
+          ? "Open the URL above to complete sign-in"
+          : "Waiting for the browser",
+      ),
+    );
+  };
   const login = await loginWithDeviceAuthorization(
     profile.pin,
     createSessionStore(credentials),
@@ -365,17 +397,46 @@ const loginAndEnroll = async (
       noOpen: parsed.noOpen || parsed.noInput,
       ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
       open: runtime.open ?? openVerificationPage,
-      onAuthorization: async (authorization) => {
-        if (parsed.json) return;
-        waitLines = rewriteRegion(
-          output,
-          0,
-          renderStep(
-            "Allow this CLI?",
-            [authorization.userCode],
-            "Waiting for the browser",
-          ),
-        );
+      onAuthorization: (authorization, verificationUrl) => {
+        if (parsed.json) {
+          output.write(
+            json({
+              ok: true,
+              event: "device_authorization",
+              userCode: authorization.userCode,
+              verificationUri: verificationUrl,
+              intervalSeconds: authorization.intervalSeconds,
+              expiresInSeconds: authorization.expiresInSeconds,
+            }),
+          );
+          return;
+        }
+        waitingBody = [
+          verificationUrl,
+          `Code: ${authorization.userCode}`,
+          `Expires in ${describeExpiry(authorization.expiresInSeconds)}`,
+        ];
+        renderWaiting();
+      },
+      onOpenFailed: () => {
+        if (parsed.json) {
+          output.write(
+            json(
+              diagnosticForError(
+                new CliError(
+                  "local-io",
+                  "could not open the verification page in a browser; open the URL from the authorization event",
+                  {},
+                  "browser_open_failed",
+                ),
+              ),
+            ),
+          );
+          return;
+        }
+        manualPath = true;
+        openFailed = true;
+        renderWaiting();
       },
     },
   );

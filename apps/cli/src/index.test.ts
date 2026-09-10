@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import {
+  createCapabilitiesDocument,
   createProblem,
   DEVICE_ID_HEADER,
   type ProblemCode,
@@ -11,6 +13,8 @@ import {
 import type { NativeCredentialStore } from "./credentials";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { main, renderHelp, run, version } from "./index";
+import type { FetchFunction } from "./profile";
+import type { TerminalIo } from "./terminal";
 
 describe("CLI foundation", () => {
   test("renders everyday help by default and power commands under help", async () => {
@@ -637,6 +641,313 @@ describe("command-to-HTTP administration", () => {
     } finally {
       fixture.stop();
       await state.cleanup();
+    }
+  });
+});
+
+const loginOrigin = "https://relay.example";
+const loginProfileId = "00000000-0000-4000-8000-000000000042";
+const loginUserId = "22222222-2222-4222-8222-222222222222";
+const loginDeviceId = "33333333-3333-4333-8333-333333333333";
+
+const createLoginFixture = async (
+  options: Readonly<{
+    readonly token?: (poll: number) => Response;
+    readonly emptyCatalog?: boolean;
+  }> = {},
+): Promise<
+  Readonly<{
+    readonly profilePath: string;
+    readonly credentials: NativeCredentialStore;
+    readonly fetch: FetchFunction;
+    readonly cleanup: () => Promise<void>;
+  }>
+> => {
+  const profilePath = `${import.meta.dir}/.tmp-login-profile-${crypto.randomUUID()}`;
+  const catalog = options.emptyCatalog
+    ? { version: 1, profiles: [] }
+    : {
+        version: 1,
+        selected: "relay",
+        profiles: [
+          {
+            name: "relay",
+            origin: loginOrigin,
+            pin: { origin: loginOrigin, serverProfileId: loginProfileId },
+          },
+        ],
+      };
+  await Bun.write(profilePath, JSON.stringify(catalog));
+  const secrets = new Map<string, Uint8Array>();
+  const credentials: NativeCredentialStore = Object.freeze({
+    get: async (_service, account) => secrets.get(account) ?? null,
+    set: async (_service, account, secret) => {
+      secrets.set(account, secret);
+    },
+    delete: async (_service, account) => {
+      secrets.delete(account);
+    },
+  });
+  let poll = 0;
+  const fetch: FetchFunction = async (input, init) => {
+    const request = new Request(input as never, init);
+    const url = new URL(request.url);
+    if (url.pathname === "/api/v1/capabilities")
+      return Response.json(
+        createCapabilitiesDocument({
+          serverProfileId: loginProfileId,
+          origin: loginOrigin,
+        }),
+      );
+    if (request.method === "POST" && url.pathname === "/api/auth/device/code")
+      return Response.json({
+        device_code: "device-code",
+        user_code: "KITE-MOSS",
+        verification_uri: `${loginOrigin}/device`,
+        interval: 1,
+        expires_in: 600,
+      });
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/auth/device/token"
+    ) {
+      poll += 1;
+      return options.token
+        ? options.token(poll)
+        : Response.json({ access_token: "session-token" });
+    }
+    if (url.pathname === "/api/v1/session")
+      return Response.json({ authenticated: true, user: { id: loginUserId } });
+    if (url.pathname === "/api/v1/workspace/boundary")
+      return Response.json({
+        environment: { headRevision: "empty-environment" },
+        session: { active: true, userId: loginUserId },
+        device: { active: true, id: loginDeviceId },
+      });
+    return Response.json({ detail: "unhandled" }, { status: 404 });
+  };
+  return {
+    profilePath,
+    credentials,
+    fetch,
+    cleanup: async () => {
+      await rm(profilePath).catch(() => undefined);
+    },
+  };
+};
+
+const captureTerminal = (): Readonly<{
+  readonly terminal: TerminalIo;
+  readonly text: () => string;
+}> => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = "";
+  output.on("data", (chunk) => {
+    text += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  });
+  return {
+    terminal: { input, output },
+    text: () => text,
+  };
+};
+
+const stderrEvents = (text: string): Array<Record<string, unknown>> =>
+  text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+describe("CLI sign-in display", () => {
+  test("no-open human login shows a copyable URL, code, and expiry before waiting", async () => {
+    const fixture = await createLoginFixture();
+    const captured = captureTerminal();
+    const opened: string[] = [];
+    try {
+      const result = await run(["login", "--profile", "relay", "--no-open"], {
+        profilePath: fixture.profilePath,
+        credentials: fixture.credentials,
+        fetch: fixture.fetch,
+        open: async (url) => {
+          opened.push(url);
+        },
+        terminal: captured.terminal,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(opened).toEqual([]);
+      const output = captured.text();
+      expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
+      expect(output).toContain("Code: KITE-MOSS");
+      expect(output).toContain("Expires in 10 minutes");
+      expect(output).toContain("Open the URL above to complete sign-in");
+      expect(result.stdout).toContain("Signed in. Device already enrolled.");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("JSON login emits the authorization event and a browser_open_failed diagnostic", async () => {
+    const fixture = await createLoginFixture();
+    const captured = captureTerminal();
+    try {
+      const result = await run(["login", "--profile", "relay", "--json"], {
+        profilePath: fixture.profilePath,
+        credentials: fixture.credentials,
+        fetch: fixture.fetch,
+        open: async () => {
+          throw new Error("no browser on this host");
+        },
+        terminal: captured.terminal,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        userCode: "KITE-MOSS",
+        verificationUri: `${loginOrigin}/device?user_code=KITE-MOSS`,
+        device: "enrolled",
+      });
+      const events = stderrEvents(captured.text());
+      expect(events[0]).toMatchObject({
+        ok: true,
+        event: "device_authorization",
+        userCode: "KITE-MOSS",
+        verificationUri: `${loginOrigin}/device?user_code=KITE-MOSS`,
+        intervalSeconds: 1,
+        expiresInSeconds: 600,
+      });
+      expect(events[1]).toMatchObject({
+        ok: false,
+        category: "local-io",
+        code: "browser_open_failed",
+        exitCode: 8,
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("human login falls back to the manual path when the launcher fails", async () => {
+    const fixture = await createLoginFixture();
+    const captured = captureTerminal();
+    try {
+      const result = await run(["login", "--profile", "relay"], {
+        profilePath: fixture.profilePath,
+        credentials: fixture.credentials,
+        fetch: fixture.fetch,
+        open: async () => {
+          throw new Error("launcher exited nonzero");
+        },
+        terminal: captured.terminal,
+      });
+      expect(result.exitCode).toBe(0);
+      const output = captured.text();
+      expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
+      expect(output).toContain("Code: KITE-MOSS");
+      expect(output).toContain(
+        "Could not open a browser automatically; open the URL above in any browser.",
+      );
+      expect(output).toContain("Open the URL above to complete sign-in");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("JSON login exposes the authorization event before an expired code ends the wait", async () => {
+    const fixture = await createLoginFixture({
+      token: () => Response.json({ error: "expired_token" }, { status: 400 }),
+    });
+    const captured = captureTerminal();
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--json", "--no-open"],
+        {
+          profilePath: fixture.profilePath,
+          credentials: fixture.credentials,
+          fetch: fixture.fetch,
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(6);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        ok: false,
+        category: "authentication",
+        code: "device_authorization_expired",
+        exitCode: 6,
+      });
+      const events = stderrEvents(captured.text());
+      expect(events[0]).toMatchObject({
+        ok: true,
+        event: "device_authorization",
+        userCode: "KITE-MOSS",
+        verificationUri: `${loginOrigin}/device?user_code=KITE-MOSS`,
+        expiresInSeconds: 600,
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("no-input login never launches a browser and shows the manual path", async () => {
+    const fixture = await createLoginFixture();
+    const captured = captureTerminal();
+    const opened: string[] = [];
+    try {
+      const result = await run(["login", "--profile", "relay", "--no-input"], {
+        profilePath: fixture.profilePath,
+        credentials: fixture.credentials,
+        fetch: fixture.fetch,
+        open: async (url) => {
+          opened.push(url);
+        },
+        terminal: captured.terminal,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(opened).toEqual([]);
+      const output = captured.text();
+      expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
+      expect(output).toContain("Code: KITE-MOSS");
+      expect(output).toContain("Open the URL above to complete sign-in");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("setup --no-open --no-input --json emits the authorization event before waiting", async () => {
+    const fixture = await createLoginFixture({ emptyCatalog: true });
+    const captured = captureTerminal();
+    try {
+      const result = await run(
+        [
+          "setup",
+          loginOrigin,
+          "--accept-profile",
+          loginProfileId,
+          "--no-open",
+          "--no-input",
+          "--json",
+        ],
+        {
+          profilePath: fixture.profilePath,
+          credentials: fixture.credentials,
+          fetch: fixture.fetch,
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        profile: "relay.example",
+        device: "enrolled",
+      });
+      const events = stderrEvents(captured.text());
+      expect(events[0]).toMatchObject({
+        ok: true,
+        event: "device_authorization",
+        userCode: "KITE-MOSS",
+        verificationUri: `${loginOrigin}/device?user_code=KITE-MOSS`,
+      });
+    } finally {
+      await fixture.cleanup();
     }
   });
 });
