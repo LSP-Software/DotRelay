@@ -57,6 +57,7 @@ import {
   type EnvironmentVariable,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
+  publicationMutationForHead,
   rollbackValueDiffs,
   type SetupAction,
   splitInlineValueDiff,
@@ -794,13 +795,17 @@ export const EnvironmentEditor = ({
         const context = protocolSession.context;
         const expectedHeadId = protocolHead?.id ?? context.expectedHeadId;
         const expectedHeadHash = protocolHead?.hash ?? context.expectedHeadHash;
+        const mutation = publicationMutationForHead({
+          expectedHeadId,
+          rollbackTargetId: rollbackMutationTarget,
+        });
         const artifacts = await createPublicationArtifacts(variables, {
           ...context,
           expectedHeadId,
           expectedHeadHash,
+          mutation,
           ...(rollbackMutationTarget
             ? {
-                mutation: "ROLLBACK" as const,
                 rollbackTargetId: rollbackMutationTarget,
                 rollbackSelectedVariableIds: [...rollbackLanes],
               }
@@ -810,10 +815,7 @@ export const EnvironmentEditor = ({
         await protocolSession.transport.begin({
           operationId,
           deviceId: context.actorDeviceId,
-          kind:
-            rollbackMutationTarget || context.mutation === "ROLLBACK"
-              ? "ROLLBACK"
-              : "REVISION_PUBLICATION",
+          kind: mutation === "ROLLBACK" ? "ROLLBACK" : "REVISION_PUBLICATION",
           commandBytes: artifacts.commandBytes,
           commandDigest: await sha384(artifacts.commandBytes),
         });
@@ -899,10 +901,14 @@ export const EnvironmentEditor = ({
             deviceId: context.actorDeviceId,
             request: {
               trustedRevisionId:
-                protocolHead?.id ?? context.expectedHeadId ?? "",
+                protocolHead?.id ??
+                context.expectedHeadId ??
+                context.trustedRevisionId ??
+                context.environmentId,
               trustedRevisionHash:
                 protocolHead?.hash ??
                 context.expectedHeadHash ??
+                context.trustedRevisionHash ??
                 new Uint8Array(48),
               pagination: {},
             },

@@ -1,6 +1,7 @@
 import {
   generateEncryptionKeyPair,
   generateSigningKeyPair,
+  type PublicationMutationKind,
   seal,
   sha384,
   sign,
@@ -47,6 +48,18 @@ export type PublicationPreparation = Readonly<{
   readonly tombstoneLaneCount: number;
   readonly tombstoneVariableIds: readonly string[];
 }>;
+
+export const publicationMutationForHead = (
+  input: Readonly<{
+    readonly expectedHeadId: string | null;
+    readonly rollbackTargetId?: string | null;
+  }>,
+): PublicationMutationKind =>
+  input.rollbackTargetId
+    ? "ROLLBACK"
+    : input.expectedHeadId
+      ? "MANIFEST_UPDATE"
+      : "GENESIS";
 
 const VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const VARIABLE_NAME_MAX_BYTES = 256;

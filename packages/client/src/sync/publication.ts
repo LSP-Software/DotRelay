@@ -91,6 +91,11 @@ export type PublicationVariable = Readonly<{
   readonly hasDraftChange: boolean;
 }>;
 
+export type PublicationMutationKind =
+  | "GENESIS"
+  | "MANIFEST_UPDATE"
+  | "ROLLBACK";
+
 export type PublicationContext = Readonly<{
   readonly serverProfileId: string;
   readonly teamId: string;
@@ -108,7 +113,7 @@ export type PublicationContext = Readonly<{
   readonly revisionSigningPublicKey?: Uint8Array;
   readonly trustedRevisionId?: string;
   readonly trustedRevisionHash?: Uint8Array;
-  readonly mutation?: "GENESIS" | "MANIFEST_UPDATE" | "ROLLBACK";
+  readonly mutation?: PublicationMutationKind;
   readonly rollbackTargetId?: string;
   readonly rollbackSelectedVariableIds?: readonly string[];
 }>;
@@ -427,6 +432,8 @@ export const createPublicationArtifacts = async (
     throw new Error("verified parent hash is required");
   if (context.expectedHeadId === null && context.expectedHeadHash !== null)
     throw new Error("an empty Environment cannot have a parent hash");
+  if (context.mutation === "GENESIS" && context.expectedHeadId !== null)
+    throw new Error("GENESIS requires an empty Environment head");
 
   const revisionId = uuid();
   const lanes: Array<FinalizePublicationRequest["lanes"][number]> = [];

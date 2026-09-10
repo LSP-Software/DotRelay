@@ -116,6 +116,7 @@ export {
   openLane,
   type PublicationArtifacts,
   type PublicationContext,
+  type PublicationMutationKind,
   type PublicationReview,
   type PublicationVariable,
   reviewPublication,
