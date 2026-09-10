@@ -9,12 +9,14 @@ set -Eeuo pipefail
 #   MERGE_METHOD=squash          # squash, merge, or rebase
 #   OPENCODE_MODEL=provider/model
 #   OPENCODE_AGENT=agent-name
+#   LOG_VIEW=pretty               # pretty or json
 #   CHECK_DISCOVERY_TIMEOUT=180
 #   MERGE_TIMEOUT=3600
 #   ALLOW_NO_CHECKS=0            # set to 1 only if this repo intentionally has no CI
 
 BASE_BRANCH="${BASE_BRANCH:-main}"
 MERGE_METHOD="${MERGE_METHOD:-squash}"
+LOG_VIEW="${LOG_VIEW:-pretty}"
 CHECK_DISCOVERY_TIMEOUT="${CHECK_DISCOVERY_TIMEOUT:-180}"
 MERGE_TIMEOUT="${MERGE_TIMEOUT:-3600}"
 ALLOW_NO_CHECKS="${ALLOW_NO_CHECKS:-0}"
@@ -22,6 +24,7 @@ ALLOW_NO_CHECKS="${ALLOW_NO_CHECKS:-0}"
 ACTIVE_ISSUE=""
 ACTIVE_BRANCH=""
 ACTIVE_LOG=""
+CONTROLLER_LOG=""
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -30,10 +33,14 @@ die() {
     printf 'Resume or inspect branch %s and log %s.\n' "${ACTIVE_BRANCH:-not-created}" "${ACTIVE_LOG:-not-created}" >&2
     printf 'To release it manually: gh issue edit %s --remove-assignee @me\n' "$ACTIVE_ISSUE" >&2
   fi
+  if [[ -n "$CONTROLLER_LOG" ]]; then
+    printf 'Full run transcript: %s\n' "$CONTROLLER_LOG" >&2
+  fi
   exit 1
 }
 
 for command_name in git gh jq opencode; do
+for command_name in git gh jq opencode tee; do
   command -v "$command_name" >/dev/null 2>&1 || die "Missing required command: $command_name"
 done
 
@@ -53,6 +60,7 @@ esac
 [[ "$CHECK_DISCOVERY_TIMEOUT" =~ ^[0-9]+$ ]] || die "CHECK_DISCOVERY_TIMEOUT must be an integer."
 [[ "$MERGE_TIMEOUT" =~ ^[0-9]+$ ]] || die "MERGE_TIMEOUT must be an integer."
 [[ "$ALLOW_NO_CHECKS" == "0" || "$ALLOW_NO_CHECKS" == "1" ]] || die "ALLOW_NO_CHECKS must be 0 or 1."
+[[ "$LOG_VIEW" == "pretty" || "$LOG_VIEW" == "json" ]] || die "LOG_VIEW must be pretty or json."
 
 if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
   die "The worktree is not clean. Commit, stash, or remove those changes first."
@@ -60,6 +68,17 @@ fi
 
 RUN_LOG_DIR="$(git rev-parse --git-path opencode-runs)"
 mkdir -p "$RUN_LOG_DIR"
+
+RUN_ID="$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+CONTROLLER_LOG="$RUN_LOG_DIR/run-$RUN_ID.log"
+
+# Keep one readable transcript for the entire loop. Individual OpenCode sessions
+# also retain their complete NDJSON event streams as issue-N.ndjson files.
+exec > >(tee -a "$CONTROLLER_LOG") 2>&1
+
+printf 'DotRelay issue run started at %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+printf 'Full run transcript: %s\n' "$CONTROLLER_LOG"
+printf 'Raw OpenCode event logs: %s/issue-N.ndjson\n\n' "$RUN_LOG_DIR"
 
 sync_main() {
   git fetch --prune origin "$BASE_BRANCH"
@@ -96,6 +115,46 @@ next_issue() {
       | sort_by(.priority, .number)
       | .[0] // empty
     '
+}
+
+format_opencode_events() {
+  jq --unbuffered -r '
+    def compact:
+      tostring
+      | gsub("[[:space:]]+"; " ")
+      | if length > 180 then .[0:177] + "..." else . end;
+
+    def tool_title:
+      .part.state.title
+      // (
+        if .part.tool == "bash" and .part.state.input.command? then
+          "bash: " + (.part.state.input.command | split("\n")[0])
+        else
+          .part.tool // "unknown tool"
+        end
+      );
+
+    if .type == "text" then
+      "\n" + (.part.text // "")
+    elif .type == "tool_use" and .part.state.status == "running" then
+      "[tool] " + (tool_title | compact)
+    elif .type == "tool_use" and .part.state.status == "completed" then
+      "[done] " + (tool_title | compact)
+    elif .type == "tool_use" and .part.state.status == "error" then
+      "[tool failed] " + (tool_title | compact) +
+      (if .part.state.error? then "\n  " + (.part.state.error | compact) else "" end)
+    elif .type == "error" then
+      "[session error] " + (
+        .error.message
+        // .error.data.message
+        // .part.message
+        // "Unknown OpenCode error"
+        | compact
+      )
+    else
+      empty
+    end
+  '
 }
 
 wait_for_checks() {
@@ -198,12 +257,28 @@ while true; do
     OPENCODE_ARGS+=(--agent "$OPENCODE_AGENT")
   fi
 
+  printf '\nOpenCode live output. Raw event log: %s\n\n' "$ACTIVE_LOG"
   set +e
   opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG"
   OPENCODE_STATUS=${PIPESTATUS[0]}
+  if [[ "$LOG_VIEW" == "pretty" ]]; then
+    opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG" | format_opencode_events
+    PIPELINE_STATUS=("${PIPESTATUS[@]}")
+    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
+    TEE_STATUS=${PIPELINE_STATUS[1]}
+    FORMATTER_STATUS=${PIPELINE_STATUS[2]}
+  else
+    opencode "${OPENCODE_ARGS[@]}" "$PROMPT" | tee "$ACTIVE_LOG"
+    PIPELINE_STATUS=("${PIPESTATUS[@]}")
+    OPENCODE_STATUS=${PIPELINE_STATUS[0]}
+    TEE_STATUS=${PIPELINE_STATUS[1]}
+    FORMATTER_STATUS=0
+  fi
   set -e
 
   [[ "$OPENCODE_STATUS" -eq 0 ]] || die "OpenCode exited with status $OPENCODE_STATUS."
+  [[ "$TEE_STATUS" -eq 0 ]] || die "Could not save the OpenCode event log."
+  [[ "$FORMATTER_STATUS" -eq 0 ]] || die "Could not format the OpenCode event stream."
   if jq -e 'select(.type == "error")' "$ACTIVE_LOG" >/dev/null 2>&1; then
     die "OpenCode emitted a session error."
   fi
@@ -274,4 +349,3 @@ while true; do
 
   printf 'Merged issue #%s. Starting the next issue in a fresh OpenCode session.\n' "$ACTIVE_ISSUE"
 done
-
