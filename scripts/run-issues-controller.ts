@@ -196,8 +196,13 @@ export const main = async (argv = process.argv.slice(2)) => {
       },
     );
     if (preflight.code) throw new Error(preflight.output);
-    const help = await command(["opencode", "run", "--help"], root);
-    if (!help.includes("--auto"))
+    // OpenCode prints help to stderr on some versions.
+    const help = await runProcess(["opencode", "run", "--help"], {
+      cwd: root,
+      timeout: commandTimeout,
+      signal: abort.signal,
+    });
+    if (help.code !== 0 || !help.output.includes("--auto"))
       throw new Error("OpenCode run --auto support is required");
   }
   const common = resolve(
