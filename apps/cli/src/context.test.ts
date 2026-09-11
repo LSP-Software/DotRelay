@@ -40,12 +40,38 @@ describe("repository and worktree context", () => {
     ]);
     await expect(
       resolveGitHubRepository(repository, {
+        environment: {},
         fetch: async (input, init) => {
           expect(input).toBe(
             "https://api.github.com/repos/LSP-Software/DotRelay",
           );
           expect(new Headers(init?.headers).get("User-Agent")).toBe(
             "dotrelay-cli",
+          );
+          expect(new Headers(init?.headers).get("Authorization")).toBeNull();
+          return Response.json({ id: 1311418611, name: "DotRelay" });
+        },
+      }),
+    ).resolves.toMatchObject({
+      owner: "LSP-Software",
+      name: "DotRelay",
+      githubRepositoryId: "1311418611",
+    });
+  });
+
+  test("authenticates GitHub lookups with a configured token", async () => {
+    const repository = detectGitHubRepository([
+      { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
+    ]);
+    await expect(
+      resolveGitHubRepository(repository, {
+        environment: { GITHUB_TOKEN: "live-test-token" },
+        fetch: async (input, init) => {
+          expect(input).toBe(
+            "https://api.github.com/repos/LSP-Software/DotRelay",
+          );
+          expect(new Headers(init?.headers).get("Authorization")).toBe(
+            "Bearer live-test-token",
           );
           return Response.json({ id: 1311418611, name: "DotRelay" });
         },

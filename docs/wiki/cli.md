@@ -40,7 +40,9 @@ id. Protected commands use that identity to automatically find the accessible Pr
 Project selection is not required when running from its repository. Missing or different repository
 remotes, or an unlinked repository, fail closed and require an explicit choice. Repository
 detection only finds a Project; it never grants Membership or secret access. The identity lookup
-uses GitHub's public repository metadata endpoint and never receives a GitHub token from the CLI.
+uses GitHub's public repository metadata endpoint. When the `GITHUB_TOKEN` environment variable is
+set, the CLI authenticates that lookup with the token; without one, GitHub's unauthenticated
+per-IP rate limits can make the lookup temporarily fail. The token is sent only to GitHub.
 
 Environment selection is by opaque id or operator-visible label, and is worktree local.
 `.git/dotrelay/config` may contain only the Server Profile, Project, and Environment opaque ids,

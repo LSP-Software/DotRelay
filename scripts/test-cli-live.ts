@@ -536,7 +536,9 @@ const handle = async (request: Request): Promise<Response> => {
   return problemResponse("resource_not_found");
 };
 
-const transientRepositoryDelaysMs = [1_000, 2_000, 4_000] as const;
+const transientRepositoryDelaysMs = [
+  1_000, 2_000, 4_000, 8_000, 16_000,
+] as const;
 
 const isTransientRepositoryResolution = (result: CliRunResult): boolean => {
   if (result.exitCode !== 7) return false;
