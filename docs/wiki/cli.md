@@ -126,6 +126,15 @@ and `--reveal` shows the unified Value diff.
 
 ## Output and automation
 
+Every command validates its complete argument contract before authentication or writes: unexpected
+positionals (such as `dotrelay pull production`), flags the command does not consume, missing flag
+values (including when the next token looks like another flag), and conflicting output choices are
+rejected with a correction and the command's usage. A single unexpected positional on a command that
+accepts `--environment` suggests passing it as `--environment <id>`; `pull --stdout`
+conflicts with both `--output <file>` and `--json` because Values never appear in JSON output, while
+`pull --output <file> --json` reports a safe summary. An invalid invocation performs no external
+mutation and writes no output file.
+
 Protected Values are never included in status, ordinary progress, JSON responses, or diagnostics.
 Human stderr is the next action. `--json` diagnostics contain category, code, sanitized detail,
 exit code, and non-secret counts only. `--debug` replaces opaque unexpected-error detail with the
