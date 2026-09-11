@@ -556,7 +556,8 @@ const isTransientRepositoryResolution = (result: CliRunResult): boolean => {
       output.includes('"code":"repository_resolution_failed"') ||
       output.includes("GitHub could not resolve the repository identity") ||
       output.includes("could not resolve the GitHub repository identity") ||
-      output.includes("GitHub returned an invalid repository identity")
+      output.includes("GitHub returned an invalid repository identity") ||
+      output.includes("GitHub repository identity was not resolved")
     );
   }
 };
