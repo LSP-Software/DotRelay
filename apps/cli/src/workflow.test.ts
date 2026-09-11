@@ -772,7 +772,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(initialized.exitCode).toBe(0);
-    await Bun.write(input, "DATABASE_URL=abc\nAPI_KEY=tok\n");
+    await Bun.write(input, "DATABASE_URL=abc123x\nAPI_KEY=tok\n");
     const questions: string[] = [];
     const pushed = await run(
       [
@@ -799,13 +799,13 @@ describe("protected CLI workflows", () => {
         "1 variable being updated",
         "  DATABASE_URL",
         "  -  postgres://secret",
-        "  +  abc",
+        "  +  abc123x",
         "",
         ...destinationLines,
         "Publish?",
       ].join("\n"),
     ]);
-    expect(pushed.stdout).not.toContain("abc");
+    expect(pushed.stdout).not.toContain("abc123x");
     expect(pushed.stdout).not.toContain("postgres://secret");
   });
 
