@@ -540,8 +540,9 @@ const transientRepositoryDelaysMs = [1_000, 2_000, 4_000] as const;
 
 const isTransientRepositoryResolution = (result: CliRunResult): boolean => {
   if (result.exitCode !== 7) return false;
+  const output = `${result.stdout}\n${result.stderr}`;
   try {
-    const diagnostic: unknown = JSON.parse(result.stderr);
+    const diagnostic: unknown = JSON.parse(output);
     return (
       typeof diagnostic === "object" &&
       diagnostic !== null &&
@@ -550,10 +551,10 @@ const isTransientRepositoryResolution = (result: CliRunResult): boolean => {
     );
   } catch {
     return (
-      result.stderr.includes(
-        "GitHub could not resolve the repository identity",
-      ) ||
-      result.stderr.includes("could not resolve the GitHub repository identity")
+      output.includes('"code":"repository_resolution_failed"') ||
+      output.includes("GitHub could not resolve the repository identity") ||
+      output.includes("could not resolve the GitHub repository identity") ||
+      output.includes("GitHub returned an invalid repository identity")
     );
   }
 };
