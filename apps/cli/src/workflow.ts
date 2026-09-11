@@ -1,5 +1,5 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import { access, constants, readFile, unlink } from "node:fs/promises";
+import { readFile, stat, unlink } from "node:fs/promises";
 import {
   assertPublicationAccepted,
   type CliDeviceStorage,
@@ -2505,14 +2505,13 @@ export const runProtectedWorkflow = async (
     }
     let replaceExisting = false;
     if (outputPath) {
-      let exists = false;
+      let existingFile = false;
       try {
-        await access(outputPath, constants.F_OK);
-        exists = true;
+        existingFile = (await stat(outputPath)).isFile();
       } catch {
-        exists = false;
+        existingFile = false;
       }
-      if (exists) {
+      if (existingFile) {
         const changes = await localPullChanges(outputPath, entries);
         if (changes !== null && changes.length === 0)
           return {
