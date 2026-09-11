@@ -879,12 +879,14 @@ const execute = async (
         parsed.environment ??
         (parsed.command === "init" ? parsed.positionals[0] : undefined);
       const savedEnvironmentId = localContext?.environmentId;
-      let savedEnvironmentIsActive = savedEnvironmentId === undefined;
+      // Usable means "present and still active"; a missing selection is
+      // trivially usable because nothing needs to be re-validated.
+      let savedSelectionUsable = savedEnvironmentId === undefined;
       if (
         explicitEnvironmentId === undefined &&
         savedEnvironmentId !== undefined
       ) {
-        savedEnvironmentIsActive = (
+        savedSelectionUsable = (
           await listEnvironments(admin, initializedProject.id)
         ).some(
           (environment) =>
@@ -895,7 +897,7 @@ const execute = async (
         // push may fall back to the Project's active Environments, the other
         // protected commands must not guess.
         if (
-          !savedEnvironmentIsActive &&
+          !savedSelectionUsable &&
           parsed.noInput &&
           parsed.command !== "init" &&
           parsed.command !== "push"
@@ -906,7 +908,7 @@ const execute = async (
       }
       const environmentId =
         explicitEnvironmentId ??
-        (savedEnvironmentIsActive ? savedEnvironmentId : undefined) ??
+        (savedSelectionUsable ? savedEnvironmentId : undefined) ??
         linkedEnvironmentId ??
         (
           await resolveEnvironmentForProject(admin, initializedProject.id, {
