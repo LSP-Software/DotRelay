@@ -140,10 +140,10 @@ export type PublicationDestination = Readonly<{
 export const renderDestinationLines = (
   destination: PublicationDestination,
 ): string[] => [
-  `Profile: ${destination.profile}`,
-  `Team: ${destination.team}`,
-  `Project: ${destination.project}`,
-  `Environment: ${destination.environment}`,
+  `Profile: ${sanitizeCliText(destination.profile)}`,
+  `Team: ${sanitizeCliText(destination.team)}`,
+  `Project: ${sanitizeCliText(destination.project)}`,
+  `Environment: ${sanitizeCliText(destination.environment)}`,
 ];
 
 const countLabel = (count: number, action: string): string =>

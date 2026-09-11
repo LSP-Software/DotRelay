@@ -4,6 +4,7 @@ import {
   createStrictJsonClient,
   findProjectByRepository,
   linkProject,
+  listEnvironments,
   resolveEnvironmentForProject,
   resolveTeamForProject,
   type StrictJsonClient,
@@ -869,10 +870,23 @@ const execute = async (
           ? (initializedProject as Awaited<ReturnType<typeof linkProject>>)
               .environment?.id
           : undefined;
+      // A saved selection may point at an Environment that was archived (or
+      // removed) since it was written; only an active saved Environment can
+      // steer the change automatically. Otherwise resolution continues so an
+      // eligible active Environment can be chosen or created.
+      const savedEnvironmentId = localContext?.environmentId;
+      const savedEnvironmentIsActive =
+        savedEnvironmentId === undefined
+          ? true
+          : (await listEnvironments(admin, initializedProject.id)).some(
+              (environment) =>
+                environment.id === savedEnvironmentId &&
+                environment.lifecycle === "active",
+            );
       const environmentId =
         parsed.environment ??
         (parsed.command === "init" ? parsed.positionals[0] : undefined) ??
-        localContext?.environmentId ??
+        (savedEnvironmentIsActive ? savedEnvironmentId : undefined) ??
         linkedEnvironmentId ??
         (
           await resolveEnvironmentForProject(admin, initializedProject.id, {

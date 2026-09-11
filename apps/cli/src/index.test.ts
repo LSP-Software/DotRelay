@@ -1004,6 +1004,58 @@ describe("protected command Environment selection", () => {
     }
   });
 
+  test("an archived saved Environment is skipped and an active one is resolved", async () => {
+    const fixture = createProtocolHttpFixture([
+      { id: archivedEnvironmentId, label: "legacy", lifecycle: "archived" },
+      {
+        id: productionEnvironmentId,
+        label: "production",
+        lifecycle: "active",
+      },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({
+          serverProfileId,
+          projectId,
+          environmentId: archivedEnvironmentId,
+        }),
+      );
+      const input = new PassThrough();
+      const output = new PassThrough();
+      input.end();
+      const result = await run(["pull", "--profile", "relay", "--stdout"], {
+        ...runtimeForProtocolState(state),
+        terminal: { input, output },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${productionEnvironmentId}`,
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${archivedEnvironmentId}`,
+        ),
+      ).toBe(false);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId: productionEnvironmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
   test("--no-input refuses to guess an Environment and keeps the saved context", async () => {
     const fixture = createProtocolHttpFixture([
       {

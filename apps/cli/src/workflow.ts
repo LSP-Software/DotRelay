@@ -142,6 +142,7 @@ type WorkflowSession = Readonly<{
   readonly transport: ProtocolTransport;
   readonly publicationContext: PublicationContext;
   readonly session: ReturnType<typeof createVerifiedEnvironmentSession>;
+  readonly createdEnvironmentId?: string;
 }>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -1830,12 +1831,14 @@ const loadWorkflowSession = async (
     );
   let selectedEnvironment =
     requestedEnvironment ?? boundary.environment.id ?? undefined;
+  let createdEnvironmentId: string | undefined;
   if (!selectedEnvironment) {
     if (parsed.command !== "init")
       throw new CliInvocationError("an Environment must be selected");
-    selectedEnvironment = (
+    createdEnvironmentId = (
       await createEnvironment(admin, boundary.environment.projectId)
     ).id;
+    selectedEnvironment = createdEnvironmentId;
   }
   const token = await createSessionStore(options.credentials).get(
     options.profile.pin,
@@ -1910,6 +1913,7 @@ const loadWorkflowSession = async (
     transport,
     publicationContext,
     session,
+    ...(createdEnvironmentId ? { createdEnvironmentId } : {}),
   };
 };
 
@@ -2547,12 +2551,24 @@ export const runProtectedWorkflow = async (
       existing,
     );
     const variables = variablesFromDotenv(entries, existing);
-    return publish(
+    const result = await publish(
       options,
       parsed,
       variables,
       parsed.command === "init" && empty ? "GENESIS" : "MANIFEST_UPDATE",
     );
+    // The worktree selection is persisted only after a successful
+    // publication, so the Environment created by init is reused by later
+    // invocations instead of a second one being created.
+    if (parsed.command === "init" && synced.workflow.createdEnvironmentId) {
+      const { writeWorktreeContext } = await import("./context");
+      await writeWorktreeContext(options.contextPath, {
+        serverProfileId: synced.workflow.publicationContext.serverProfileId,
+        projectId: synced.workflow.publicationContext.projectId,
+        environmentId: synced.workflow.createdEnvironmentId,
+      });
+    }
+    return result;
   }
   if (parsed.command === "rollback") {
     const target = parsed.positionals[0];
