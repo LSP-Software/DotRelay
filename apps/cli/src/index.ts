@@ -873,19 +873,39 @@ const execute = async (
       // A saved selection may point at an Environment that was archived (or
       // removed) since it was written; only an active saved Environment can
       // steer the change automatically. Otherwise resolution continues so an
-      // eligible active Environment can be chosen or created.
-      const savedEnvironmentId = localContext?.environmentId;
-      const savedEnvironmentIsActive =
-        savedEnvironmentId === undefined
-          ? true
-          : (await listEnvironments(admin, initializedProject.id)).some(
-              (environment) =>
-                environment.id === savedEnvironmentId &&
-                environment.lifecycle === "active",
-            );
-      const environmentId =
+      // eligible active Environment can be chosen or created. The check is
+      // skipped entirely when an explicit Environment was supplied.
+      const explicitEnvironmentId =
         parsed.environment ??
-        (parsed.command === "init" ? parsed.positionals[0] : undefined) ??
+        (parsed.command === "init" ? parsed.positionals[0] : undefined);
+      const savedEnvironmentId = localContext?.environmentId;
+      let savedEnvironmentIsActive = savedEnvironmentId === undefined;
+      if (
+        explicitEnvironmentId === undefined &&
+        savedEnvironmentId !== undefined
+      ) {
+        savedEnvironmentIsActive = (
+          await listEnvironments(admin, initializedProject.id)
+        ).some(
+          (environment) =>
+            environment.id === savedEnvironmentId &&
+            environment.lifecycle === "active",
+        );
+        // A stale saved selection is not an unambiguous context: init and
+        // push may fall back to the Project's active Environments, the other
+        // protected commands must not guess.
+        if (
+          !savedEnvironmentIsActive &&
+          parsed.noInput &&
+          parsed.command !== "init" &&
+          parsed.command !== "push"
+        )
+          throw new CliInvocationError(
+            "--no-input requires explicit --environment context",
+          );
+      }
+      const environmentId =
+        explicitEnvironmentId ??
         (savedEnvironmentIsActive ? savedEnvironmentId : undefined) ??
         linkedEnvironmentId ??
         (

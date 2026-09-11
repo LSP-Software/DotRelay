@@ -1056,6 +1056,43 @@ describe("protected command Environment selection", () => {
     }
   });
 
+  test("--no-input refuses a stale saved Environment instead of guessing", async () => {
+    const fixture = createProtocolHttpFixture([
+      { id: archivedEnvironmentId, label: "legacy", lifecycle: "archived" },
+      {
+        id: productionEnvironmentId,
+        label: "production",
+        lifecycle: "active",
+      },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const saved = JSON.stringify({
+        serverProfileId,
+        projectId,
+        environmentId: archivedEnvironmentId,
+      });
+      await Bun.write(state.contextPath, saved);
+      const result = await run(
+        ["pull", "--profile", "relay", "--stdout", "--no-input"],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(
+        "--no-input requires explicit --environment context",
+      );
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/workspace/boundary"),
+        ),
+      ).toBe(false);
+      expect(await Bun.file(state.contextPath).text()).toBe(saved);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
   test("--no-input refuses to guess an Environment and keeps the saved context", async () => {
     const fixture = createProtocolHttpFixture([
       {
