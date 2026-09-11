@@ -45,7 +45,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run --cwd apps/cli build
       - run: bun run package:cli
-      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: cli-${{ matrix.os }}
           path: packages/dotrelay/dist
