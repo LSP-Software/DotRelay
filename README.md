@@ -11,6 +11,9 @@ Run `bun install --frozen-lockfile`, then `bun run check` for the fast read-only
 boundary rules, CI checks, release policy, and the canonical Wiki source are documented in
 [`docs/wiki/`](docs/wiki/README.md).
 
+For unattended issue implementation and PR repair, see the
+[issue runner guide](docs/run-issues.md).
+
 The persisted [administration policy](docs/administration.md) defines Team roles, Membership
 lifecycle and invitations, Project/GitHub Repository identity, Environment lifecycle, and safe
 disclosure boundaries. The [web application guide](docs/web-application.md) records the dark-only
