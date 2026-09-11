@@ -81,7 +81,7 @@ export const renderHelp = (): string => {
     "  status           Show this machine's connection",
     "",
     "More commands: dotrelay help",
-    "Automation: --json  --no-input  --debug",
+    "Automation: --json  --no-input  --force  --debug",
   ].join("\n");
 };
 
@@ -116,10 +116,11 @@ export const renderPowerHelp = (): string => {
     "  rollback <revision>           Append a lane-scoped Rollback",
     "",
     "Global: --profile  --environment  --json  --debug  --no-input",
-    "Publish: --classify NAME=shared|user-defined  --from <file>  --team <id>",
-    "Pull: --output <file>  --stdout  --reveal",
+    "Publish: --classify NAME=shared|user-defined  --from <file>  --team <id>  --force",
+    "Pull: --output <file>  --stdout  --reveal  --force",
     "Diff: --from <file>",
     "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
+    "Destructive approval: --force is the only way to approve, under --no-input, replacing a differing pull output file or publishing removed Variables.",
     "Values are never diagnostic data. --insecure and credential flags are not supported.",
   ].join("\n");
 };
@@ -318,6 +319,7 @@ const deviceWorkflowOptions = (
     ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
     ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
     noInput: parsed.noInput,
+    force: parsed.force,
     stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
   };
 };
@@ -734,6 +736,7 @@ const execute = async (
       ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
       ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
       noInput: parsed.noInput,
+      force: parsed.force,
       stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
     };
     if (parsed.subcommand === "enroll")
@@ -940,6 +943,7 @@ const execute = async (
         ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
         ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
         noInput: parsed.noInput,
+        force: parsed.force,
         stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
         ...(contextToSave?.environmentId
           ? { environmentId: contextToSave.environmentId }

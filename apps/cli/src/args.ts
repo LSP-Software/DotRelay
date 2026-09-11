@@ -39,6 +39,7 @@ export type ParsedArguments = Readonly<{
   readonly variableIds: readonly string[];
   readonly noOpen: boolean;
   readonly noInput: boolean;
+  readonly force: boolean;
   readonly json: boolean;
   readonly debug: boolean;
   readonly stdout: boolean;
@@ -61,6 +62,7 @@ type MutableArguments = {
   variableIds: string[];
   noOpen: boolean;
   noInput: boolean;
+  force: boolean;
   json: boolean;
   debug: boolean;
   stdout: boolean;
@@ -178,6 +180,15 @@ const validateCommand = (parsed: MutableArguments) => {
         `${command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""} has an invalid number of arguments`,
       );
   }
+  if (
+    parsed.force &&
+    command !== "pull" &&
+    command !== "push" &&
+    command !== "init"
+  )
+    throw new CliInvocationError(
+      "--force is only valid with pull, push, or init",
+    );
   if (parsed.stdout && command !== "pull")
     throw new CliInvocationError("--stdout is only valid with pull");
   if (parsed.reveal && command !== "pull" && command !== "diff")
@@ -262,6 +273,7 @@ export const parseArguments = (
     positionals: [],
     noOpen: false,
     noInput: false,
+    force: false,
     json: false,
     debug: false,
     stdout: false,
@@ -293,6 +305,7 @@ export const parseArguments = (
         assignValue(parsed, flag, value);
       } else if (flag === "--no-open") parsed.noOpen = true;
       else if (flag === "--no-input") parsed.noInput = true;
+      else if (flag === "--force") parsed.force = true;
       else if (flag === "--json") parsed.json = true;
       else if (flag === "--debug") parsed.debug = true;
       else if (flag === "--stdout") parsed.stdout = true;

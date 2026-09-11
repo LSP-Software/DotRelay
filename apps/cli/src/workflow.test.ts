@@ -278,7 +278,12 @@ const setup = async (
 
 afterEach(async () => {
   const { readdir, rm, unlink } = await import("node:fs/promises");
-  for (const file of [".tmp-workflow-input", ".tmp-workflow-output"])
+  for (const file of [
+    ".tmp-workflow-input",
+    ".tmp-workflow-input.previous",
+    ".tmp-workflow-output",
+    ".tmp-workflow-output.previous",
+  ])
     await unlink(`${import.meta.dir}/${file}`).catch(() => undefined);
   for (const file of await readdir(import.meta.dir))
     if (
@@ -1321,6 +1326,362 @@ describe("protected CLI workflows", () => {
     expect(await Bun.file(input).text()).toBe(
       "DATABASE_URL=postgres://secret\n",
     );
+  });
+
+  test("pull --no-input retains a differing existing file without --force", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n");
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "output_conflict",
+      changedCount: 3,
+      exitCode: 4,
+    });
+    expect(String(diagnostic.detail)).toContain("retained");
+    expect(String(diagnostic.detail)).toContain("--force");
+    expect(String(diagnostic.detail)).not.toContain("postgres://local");
+    expect(await Bun.file(input).text()).toBe(
+      "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n",
+    );
+    expect(await Bun.file(`${input}.previous`).exists()).toBe(false);
+  });
+
+  test("pull --no-input --force replaces the file and retains the prior copy", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n");
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--no-input",
+        "--force",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(0);
+    const body = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      ok: true,
+      output: input,
+      previous: `${input}.previous`,
+    });
+    expect(await Bun.file(input).text()).toContain(
+      'DATABASE_URL="postgres://secret"',
+    );
+    expect(await Bun.file(input).text()).toContain('API_KEY="tok"');
+    expect(await Bun.file(`${input}.previous`).text()).toBe(
+      "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n",
+    );
+    const { stat } = await import("node:fs/promises");
+    expect((await stat(`${input}.previous`)).mode & 0o777).toBe(0o600);
+  });
+
+  test("pull --no-input stays smooth for new files and matching files", async () => {
+    const runtime = await setup();
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    const fresh = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(fresh.exitCode).toBe(0);
+    expect(JSON.parse(fresh.stdout)).toMatchObject({ ok: true, output });
+    const written = await Bun.file(output).text();
+    expect(written).toContain('DATABASE_URL="postgres://secret"');
+    expect(await Bun.file(`${output}.previous`).exists()).toBe(false);
+    const unchanged = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(unchanged.exitCode).toBe(0);
+    expect(unchanged.stdout).toBe("No changes found\n");
+    expect(await Bun.file(output).text()).toBe(written);
+  });
+
+  test("interactive pull replacement retains a recoverable prior file", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://local\n");
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--json",
+      ],
+      { ...runtime, confirm: async () => true },
+    );
+    expect(pulled.exitCode).toBe(0);
+    expect(await Bun.file(input).text()).toContain(
+      'DATABASE_URL="postgres://secret"',
+    );
+    expect(await Bun.file(`${input}.previous`).text()).toBe(
+      "DATABASE_URL=postgres://local\n",
+    );
+  });
+
+  test("push --no-input refuses to publish removed Variables without --force", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const result = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "invocation",
+      code: "deletion_requires_approval",
+      changedCount: 1,
+      exitCode: 2,
+    });
+    expect(String(diagnostic.detail)).toContain("--force");
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    expect(
+      (JSON.parse(history.stdout) as { revisions: unknown[] }).revisions,
+    ).toHaveLength(1);
+  });
+
+  test("push --no-input --force publishes the removal", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const result = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--force",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      message: "Published",
+      tombstones: 1,
+    });
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    const historyBody = JSON.parse(history.stdout) as {
+      revisions: Array<{ mutation: number }>;
+    };
+    expect(historyBody.revisions.map((revision) => revision.mutation)).toEqual([
+      1, 2,
+    ]);
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {
