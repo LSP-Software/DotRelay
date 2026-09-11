@@ -711,8 +711,6 @@ try {
       environmentId,
       "--profile",
       "live",
-      "--environment",
-      environmentId,
       "--from",
       dotenvPath,
       "--classify",

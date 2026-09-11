@@ -58,8 +58,6 @@ try {
       "66666666-6666-4666-8666-666666666666",
       "--profile",
       "missing",
-      "--environment",
-      "66666666-6666-4666-8666-666666666666",
       "--from",
       "postgres://black-box-secret",
       "--no-input",
