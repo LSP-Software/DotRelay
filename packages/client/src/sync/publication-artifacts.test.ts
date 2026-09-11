@@ -238,6 +238,22 @@ describe("publication artifacts", () => {
     ).rejects.toThrow("GENESIS requires an empty Environment head");
   });
 
+  test("rejects a MANIFEST_UPDATE into an empty Environment", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    await expect(
+      createPublicationArtifacts([variable()], {
+        ...ids,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: encryption.publicKey,
+        signingPrivateKey: signing.privateKey,
+        mutation: "MANIFEST_UPDATE",
+      }),
+    ).rejects.toThrow("MANIFEST_UPDATE requires a non-empty Environment head");
+  });
+
   test("accepts a peer Device signature when that Device is in the trust set", async () => {
     const encryption = await generateEncryptionKeyPair();
     const author = await generateSigningKeyPair();

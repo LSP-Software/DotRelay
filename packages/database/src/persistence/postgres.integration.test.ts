@@ -90,7 +90,16 @@ const createProtocolObjectInput = async (
   projectId: string,
   environmentId: string,
 ): Promise<ProtocolObjectInput> => {
-  const canonicalBytes = new Uint8Array([0xa1, 0x00, protocolSequence++]);
+  const sequence = protocolSequence++;
+  const canonicalBytes = new Uint8Array([
+    0xa1,
+    0x00,
+    ...(sequence < 24
+      ? [sequence]
+      : sequence < 256
+        ? [0x18, sequence]
+        : [0x19, sequence >> 8, sequence & 0xff]),
+  ]);
   return {
     id: crypto.randomUUID(),
     suite: "dotrelay-e2ee-v3-classical-webcrypto",
@@ -1046,6 +1055,64 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       parentId: genesis.revision.id,
       mutation: "MANIFEST_UPDATE",
     });
+  });
+
+  test("exercises revisions_parent_shape_check by rejecting an orphan MANIFEST_UPDATE", async () => {
+    const { device, projectId, user } =
+      await createProjectFixture("parent-shape-check");
+    const environments = new EnvironmentRepository();
+    const publications = new PublicationRepository();
+    const environmentId = crypto.randomUUID();
+    await environments.create(database, {
+      environmentId,
+      projectId,
+      createdByUserId: user.id,
+      label: "empty-environment",
+      operation: {
+        ...(await createOperationInput(user.id, "parent-shape-environment")),
+        actorDeviceId: device.id,
+      },
+    });
+
+    const orphan = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: null,
+      mutation: "MANIFEST_UPDATE",
+      label: "parent-shape-orphan-update",
+    });
+    await expect(
+      publications.publishRevision(database, orphan),
+    ).rejects.toThrow(/revisions_parent_shape_check|check constraint/i);
+    expect(
+      await database.environment.findUnique({ where: { id: environmentId } }),
+    ).toMatchObject({ currentHeadId: null });
+    expect(await database.revision.count({ where: { environmentId } })).toBe(0);
+
+    const genesis = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: null,
+      mutation: "GENESIS",
+      label: "parent-shape-genesis",
+    });
+    const published = await publications.publishRevision(database, genesis);
+    expect(published.revision.id).toBe(genesis.revision.id);
+    expect(
+      await database.revision.findUnique({
+        where: { id: genesis.revision.id },
+      }),
+    ).toMatchObject({
+      parentId: null,
+      mutation: "GENESIS",
+    });
+    expect(
+      await database.environment.findUnique({ where: { id: environmentId } }),
+    ).toMatchObject({ currentHeadId: genesis.revision.id });
   });
 
   test("returns authorization-scoped synchronization pages after a trusted revision", async () => {

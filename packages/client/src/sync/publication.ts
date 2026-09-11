@@ -434,6 +434,8 @@ export const createPublicationArtifacts = async (
     throw new Error("an empty Environment cannot have a parent hash");
   if (context.mutation === "GENESIS" && context.expectedHeadId !== null)
     throw new Error("GENESIS requires an empty Environment head");
+  if (context.mutation === "MANIFEST_UPDATE" && context.expectedHeadId === null)
+    throw new Error("MANIFEST_UPDATE requires a non-empty Environment head");
 
   const revisionId = uuid();
   const lanes: Array<FinalizePublicationRequest["lanes"][number]> = [];

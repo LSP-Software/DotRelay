@@ -353,6 +353,11 @@ const handle = async (request: Request): Promise<Response> => {
     )
       return problemResponse("stale_head");
     const revision = await stagedRevision(body);
+    const previous = state.revisions.at(-1);
+    if (revision.mutation === 1 && previous)
+      return problemResponse("genesis_exists");
+    if (revision.mutation !== 1 && !previous)
+      return problemResponse("invalid_request");
     state.revisions = Object.freeze([...state.revisions, revision]);
     state.stagedObjects.clear();
     return jsonResponse({ revisionId: revision.id, idempotent: false }, 201);
