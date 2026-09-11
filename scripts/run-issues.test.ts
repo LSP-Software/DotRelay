@@ -226,6 +226,9 @@ const fixture = async (mode: string, count = 2) => {
         timeout: 60_000,
         env: {
           PATH: `${bin}:${process.env.PATH}`,
+          // The tests always start the controller entry point. Pin the worker
+          // switch so a run from inside a live worker keeps its mode.
+          RUN_ISSUES_WORKER: "0",
           FAKE_STATE: state,
           FAKE_ORIGIN: join(path, "origin.git"),
           GIT_AUTHOR_NAME: "Runner",

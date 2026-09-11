@@ -1741,6 +1741,14 @@ const adminClient = (options: WorkflowOptions): StrictJsonClient =>
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });
 
+// A single invocation loads the workflow session once per phase. When init
+// creates an Environment in the first phase, the later phases must reuse that
+// id instead of creating another Environment to publish into. Each CLI process
+// builds a fresh options object per run, so object identity tracks the
+// invocation; in-process callers that reuse one options object across runs
+// (test harnesses) share the memo, which is the intended behaviour.
+const createdEnvironmentByInvocation = new WeakMap<object, string>();
+
 const loadWorkflowSession = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -1835,10 +1843,18 @@ const loadWorkflowSession = async (
   if (!selectedEnvironment) {
     if (parsed.command !== "init")
       throw new CliInvocationError("an Environment must be selected");
-    createdEnvironmentId = (
-      await createEnvironment(admin, boundary.environment.projectId)
-    ).id;
-    selectedEnvironment = createdEnvironmentId;
+    const earlier = createdEnvironmentByInvocation.get(options);
+    if (earlier !== undefined) {
+      // A previous phase of this invocation already created the Environment.
+      createdEnvironmentId = earlier;
+      selectedEnvironment = earlier;
+    } else {
+      createdEnvironmentId = (
+        await createEnvironment(admin, boundary.environment.projectId)
+      ).id;
+      createdEnvironmentByInvocation.set(options, createdEnvironmentId);
+      selectedEnvironment = createdEnvironmentId;
+    }
   }
   const token = await createSessionStore(options.credentials).get(
     options.profile.pin,

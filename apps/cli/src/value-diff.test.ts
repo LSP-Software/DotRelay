@@ -156,6 +156,41 @@ describe("CLI value diffs", () => {
     );
   });
 
+  test("sanitizes control characters in every destination line", () => {
+    const hostile = {
+      profile: "relay\u001b[31m",
+      team: "Platform\u001b]0;evil\u0007",
+      project: "55555555\u0000",
+      environment: "development\u001b[2J",
+    };
+    expect(
+      publicationConfirmQuestion(
+        [
+          {
+            kind: "updated",
+            name: "DATABASE_URL",
+            from: "postgres://secret",
+            to: "abc",
+          },
+        ],
+        hostile,
+      ),
+    ).toBe(
+      [
+        "1 variable being updated",
+        "  DATABASE_URL",
+        "  -  postgres://secret",
+        "  +  abc",
+        "",
+        "Profile: relay[31m",
+        "Team: Platform]0;evil",
+        "Project: 55555555",
+        "Environment: development[2J",
+        "Publish?",
+      ].join("\n"),
+    );
+  });
+
   test("confirmation without a diff still identifies the destination", () => {
     expect(pullConfirmQuestion(".env", null, destination)).toBe(
       [...destinationLines, "Replace .env with decrypted Values?"].join("\n"),

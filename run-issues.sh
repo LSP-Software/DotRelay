@@ -60,7 +60,6 @@ ACTIVE_BRANCH=""
 ACTIVE_LOG=""
 CONTROLLER_LOG=""
 CONTROLLER_LOCK_DIR=""
-LAST_CORE_CHECKS='[]'
 LAST_GATE_REASON=""
 ACKNOWLEDGED_CODERABBIT_SHA=""
 
@@ -243,6 +242,14 @@ if ! mkdir "$CONTROLLER_LOCK_DIR" 2>/dev/null; then
     || die "Could not acquire controller lock $CONTROLLER_LOCK_DIR."
 fi
 printf '%s\n' "$$" >"$CONTROLLER_LOCK_DIR/pid"
+# Revalidate ownership after the pid write: a concurrent controller that
+# started from the same stale lock may have removed and re-created the lock
+# directory after this process claimed it.
+LOCK_OWNER=""
+read -r LOCK_OWNER <"$CONTROLLER_LOCK_DIR/pid" || LOCK_OWNER=""
+if [[ ! -d "$CONTROLLER_LOCK_DIR" || "$LOCK_OWNER" != "$$" ]]; then
+  die "Lost the controller lock $CONTROLLER_LOCK_DIR to a concurrent controller."
+fi
 trap release_controller_lock EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -452,6 +459,10 @@ filter_core_checks() {
     '[.[] | select((.name | test($advisory)) | not)]'
 }
 
+core_pending_count() {
+  jq '[.[] | select(.bucket == "pending")] | length' <<<"$1"
+}
+
 wait_for_checks() {
   local pr_url="$1"
   local expected_head_sha="$2"
@@ -473,7 +484,6 @@ wait_for_checks() {
   local coderabbit_state=""
   local gate_meta=""
 
-  LAST_CORE_CHECKS='[]'
   LAST_GATE_REASON=""
 
   while true; do
@@ -487,7 +497,6 @@ wait_for_checks() {
     read_pr_checks "$pr_url" || die "Could not read CI checks for $pr_url."
     core_checks="$(filter_core_checks <<<"$CHECKS_JSON")" \
       || die "Could not filter CI checks."
-    LAST_CORE_CHECKS="$core_checks"
     core_check_count="$(jq 'length' <<<"$core_checks")"
 
     if [[ "$core_check_count" -eq 0 ]]; then
@@ -527,7 +536,7 @@ wait_for_checks() {
       return 1
     fi
 
-    pending_check_count="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$core_checks")"
+    pending_check_count="$(core_pending_count "$core_checks")"
     if [[ "$pending_check_count" -gt 0 ]]; then
       settled_since=-1
       last_terminal_signature=""
@@ -619,7 +628,7 @@ rerun_failed_workflows() {
 
   read_pr_checks "$pr_url" || return 1
   core_checks="$(filter_core_checks <<<"$CHECKS_JSON")" || return 1
-  pending_count="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$core_checks")"
+  pending_count="$(core_pending_count "$core_checks")"
   if [[ "$pending_count" -gt 0 ]]; then
     printf 'The repair session already restarted CI. Waiting for it.\n'
     return 0
@@ -647,16 +656,23 @@ rerun_failed_workflows() {
   )"
   while IFS= read -r run_id; do
     [[ -n "$run_id" ]] || continue
-    retry_command gh run rerun "$run_id" --failed \
-      || return 1
-    printf 'Requested a rerun of failed workflow run %s.\n' "$run_id"
+    # A rerun request is not idempotent: if the first attempt reached GitHub
+    # and only the response was lost, repeating it would restart jobs that
+    # are already running. Ask once; the registration loop below confirms
+    # the rerun from the checks it produces, so a late or lost response is
+    # settled by observation instead of a second request.
+    if gh run rerun "$run_id" --failed; then
+      printf 'Requested a rerun of failed workflow run %s.\n' "$run_id"
+    else
+      printf 'The rerun request for workflow run %s failed; waiting for it to register.\n' "$run_id" >&2
+    fi
   done <<<"$run_ids"
 
   while (( SECONDS < rerun_deadline )); do
     sleep "$CHECK_POLL_INTERVAL"
     read_pr_checks "$pr_url" || continue
     core_checks="$(filter_core_checks <<<"$CHECKS_JSON")" || continue
-    pending_count="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$core_checks")"
+    pending_count="$(core_pending_count "$core_checks")"
     [[ "$pending_count" -gt 0 ]] && return 0
 
     new_signature="$(
@@ -689,9 +705,9 @@ validate_pr() {
       --arg closing "$closing_line" \
       '.baseRefName == $base
        and .headRefName == $head
-       and (.isCrossRepository | not)
-       and (.isDraft | not)
-       and (((.body // "") | split("\n") | index($closing)) != null)' <<<"$pr_meta"
+        and (.isCrossRepository | not)
+        and (.isDraft | not)
+        and (((.body // "") | gsub("\r\n"; "\n") | gsub("\r"; "\n") | split("\n") | index($closing)) != null)' <<<"$pr_meta"
   )"
   [[ "$valid_pr" == "true" ]] || die "The PR does not have the expected base, head, or exact closing line."
 }
@@ -823,7 +839,10 @@ finish_pr() {
   # that have not registered yet. Administrator bypass is an explicit opt-in.
   MERGE_FLAGS=()
   [[ "${MERGE_ADMIN:-0}" != "1" ]] || MERGE_FLAGS+=(--admin)
-  if ! retry_command gh pr merge "$pr_url" \
+  # A merge is not idempotent: after it succeeds, --match-head-commit can no
+  # longer match, so repeating the request would fail for the wrong reason.
+  # Ask once; the state check below recovers a lost response.
+  if ! gh pr merge "$pr_url" \
     "--$MERGE_METHOD" \
     ${MERGE_FLAGS[@]+"${MERGE_FLAGS[@]}"} \
     --match-head-commit "$expected_head_sha"; then
