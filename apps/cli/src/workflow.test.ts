@@ -510,6 +510,59 @@ describe("protected CLI workflows", () => {
     });
   });
 
+  test("retrying push with changed content after a published genesis publishes an update against the verified head", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const publishArgs = [
+      "push",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--from",
+      input,
+      "--classify",
+      "DATABASE_URL=shared",
+      "--no-input",
+      "--json",
+    ];
+    const published = await run(publishArgs, runtime);
+    expect(published.exitCode).toBe(0);
+    expect(JSON.parse(published.stdout)).toMatchObject({
+      ok: true,
+      message: "Published",
+    });
+    await Bun.write(input, "DATABASE_URL=postgres://rotated\n");
+    const retried = await run(publishArgs, runtime);
+    expect(retried.exitCode).toBe(0);
+    expect(JSON.parse(retried.stdout)).toMatchObject({
+      ok: true,
+      message: "Published",
+    });
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    const historyBody = JSON.parse(history.stdout) as {
+      ok: boolean;
+      revisions: Array<{ mutation: number }>;
+    };
+    expect(historyBody.ok).toBe(true);
+    expect(historyBody.revisions.map((revision) => revision.mutation)).toEqual([
+      1, 2,
+    ]);
+  });
+
   test("init and push into a populated Environment publish manifest updates", async () => {
     const bootstrap = await createDeviceBootstrap({
       pin: profile.pin,
