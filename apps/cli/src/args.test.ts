@@ -150,6 +150,23 @@ describe("CLI argument contract", () => {
     expect(() => parseArguments(["diff", "extra"])).toThrow("invalid number");
   });
 
+  test("scopes --reveal to reviews that can show plaintext Values", () => {
+    expect(parseArguments(["pull", "--stdout", "--reveal"]).reveal).toBe(true);
+    expect(parseArguments(["init", "--reveal"]).reveal).toBe(true);
+    expect(parseArguments(["push", "--reveal"]).reveal).toBe(true);
+    expect(
+      parseArguments([
+        "rollback",
+        "11111111-1111-4111-8111-111111111111",
+        "--variable",
+        "22222222-2222-4222-8222-222222222222",
+        "--reveal",
+      ]).reveal,
+    ).toBe(true);
+    expect(() => parseArguments(["status", "--reveal"])).toThrow("--reveal");
+    expect(() => parseArguments(["history", "--reveal"])).toThrow("--reveal");
+  });
+
   test("accepts setup, help, and --team on push", () => {
     expect(parseArguments(["setup", "https://relay.example"])).toMatchObject({
       command: "setup",

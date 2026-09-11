@@ -78,16 +78,21 @@ or `--classify NAME=user-defined` skips the board when every new Variable is cov
 under `--no-input` for unclassified names. Existing Variable ids are retained, omitted Variables
 become signed tombstones, and empty Values remain Values rather than being dropped.
 
-Interactive `init` and `push` confirm only Variables that will change. Each change is a unified
-diff. The Variable name comes first, then a `-` line for the current Value and a `+` line for the
-next Value. Added Variables omit the `-` line. Removed Variables omit the `+` line. The shared
-prefix and suffix stay on both lines, and only the edited span is marked. Unchanged Variables are
-omitted. The review names the destination Server Profile, Team, Project, and Environment before
-asking, so a publication is never directed at an Environment the operator did not choose.
+Interactive `init` and `push` confirm only Variables that will change. The default review is
+masked: each change lists the Variable name, its ownership (shared or user-defined), and the
+change type, and no plaintext Value is printed. Passing `--reveal` makes that one confirmation
+show the full unified Value diff instead: the Variable name comes first, then a `-` line for the
+current Value and a `+` line for the next Value. Added Variables omit the `-` line. Removed
+Variables omit the `+` line. The shared prefix and suffix stay on both lines, and only the edited
+span is marked. Reveal is scoped to that single review: the next review is masked again, and
+JSON, progress, and diagnostics never contain Values regardless of `--reveal`. Unchanged
+Variables are omitted. The review names the destination Server Profile, Team, Project, and
+Environment before asking, so a publication is never directed at an Environment the operator did
+not choose.
 `--no-input` skips the prompt but never approves a destructive publication: when the change
 removes Variables, `--no-input` alone is refused and the operator must additionally pass
 `--force` to publish the removals. Publications that only add or update Variables proceed under
-`--no-input` without it. JSON, progress, and diagnostics still never contain Values.
+`--no-input` without it.
 
 Publication progress is Encrypting, Uploading, then Published. The CLI reviews the publication
 summary before beginning staging. It then uploads the signed command and encrypted protocol
@@ -95,9 +100,10 @@ objects, finalizes the operation with the expected head and epoch, and cancels a
 when the Server Profile permits cancellation.
 
 `pull` writes decrypted Values to `.env` by default. Interactive `pull` confirms before replacing
-an existing file, using the same unified Value diff as `push` but from the current file to the
-Environment, and names the same destination. Identical Values report that no changes were found
-and leave the file untouched.
+an existing file, using the same masked review as `push` but from the current file to the
+Environment, and names the same destination; `--reveal` shows the unified Value diff in that one
+confirmation instead. Identical Values report that no changes were found and leave the file
+untouched.
 `--no-input` skips the prompt and never approves replacing a file on its own: when the existing
 file differs from the Environment, `--no-input` alone retains the file and fails with an
 actionable diagnostic (`output_conflict`) that points at `--force`. With `--force` under
@@ -108,11 +114,13 @@ export before any output is written. Terminal stdout requires explicit `--reveal
 confirmation; ordinary diagnostics never contain Values.
 
 `diff` compares `.env` with the decrypted Environment and prints added, updated, and removed
-Variables as the same unified diff, including Values. Unchanged Variables are omitted. `--from
-<dotenv>` selects another file. JSON reports only names and counts. A missing Value fails the
-comparison before any output is written. `history` reports only revision metadata. `rollback
-<revision> --variable <id>` creates a new signed Rollback Revision for the selected lanes,
-preserving all other current Values. Rollback confirmation uses the same unified Value diff.
+Variables as names, ownership, and change types, with no Values. `--reveal` prints the unified
+Value diff for that one run instead. Unchanged Variables are omitted. `--from <dotenv>` selects
+another file. JSON reports only names and counts, with or without `--reveal`. A missing Value
+fails the comparison before any output is written. `history` reports only revision metadata.
+`rollback <revision> --variable <id>` creates a new signed Rollback Revision for the selected
+lanes, preserving all other current Values. Rollback confirmation uses the same masked review,
+and `--reveal` shows the unified Value diff.
 
 ## Output and automation
 

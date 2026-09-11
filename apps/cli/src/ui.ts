@@ -226,7 +226,9 @@ export const confirmAction = async (
 ): Promise<boolean> => {
   if (options.confirm) return options.confirm(question);
   if (options.noInput)
-    throw new CliInvocationError(`${question} requires interactive input`);
+    throw new CliInvocationError(
+      "this command requires interactive input; remove --no-input to answer the prompt",
+    );
   const terminal = options.terminal;
   const answer = options.prompt
     ? await options.prompt(`${question} [y/N]`)

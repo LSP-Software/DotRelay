@@ -191,8 +191,13 @@ const validateCommand = (parsed: MutableArguments) => {
     );
   if (parsed.stdout && command !== "pull")
     throw new CliInvocationError("--stdout is only valid with pull");
-  if (parsed.reveal && command !== "pull" && command !== "diff")
-    throw new CliInvocationError("--reveal is only valid with pull or diff");
+  if (
+    parsed.reveal &&
+    !["pull", "diff", "init", "push", "rollback"].includes(command)
+  )
+    throw new CliInvocationError(
+      "--reveal is only valid with pull, diff, init, push, or rollback",
+    );
   if (
     parsed.output &&
     command !== "pull" &&

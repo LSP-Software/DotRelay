@@ -3,6 +3,7 @@ import {
   publicationConfirmQuestion,
   pullConfirmQuestion,
   renderEnvDiff,
+  renderMaskedChange,
   renderValueDiff,
   valueDiffsForPull,
 } from "./value-diff";
@@ -21,7 +22,7 @@ const destinationLines = [
 ];
 
 describe("CLI value diffs", () => {
-  test("render a unified diff with the shared prefix and suffix intact", () => {
+  test("masks Values until the caller explicitly reveals them", () => {
     expect(
       renderValueDiff(
         {
@@ -31,6 +32,27 @@ describe("CLI value diffs", () => {
         },
         { indent: "" },
       ),
+    ).toEqual(["DATABASE_URL"]);
+    expect(
+      renderValueDiff(
+        {
+          name: "API_KEY",
+          from: "tok",
+          to: "new-tok",
+          ownership: "user-defined",
+        },
+        { indent: "" },
+      ),
+    ).toEqual(["API_KEY  user-defined"]);
+    expect(
+      renderValueDiff(
+        {
+          name: "DATABASE_URL",
+          from: "postgres://old@host/db",
+          to: "postgres://new@host/db",
+        },
+        { indent: "", reveal: true },
+      ),
     ).toEqual([
       "DATABASE_URL",
       "-  postgres://old@host/db",
@@ -39,27 +61,57 @@ describe("CLI value diffs", () => {
     expect(
       renderValueDiff(
         { name: "FLAG", from: "abc", to: "abcd" },
-        { indent: "" },
+        {
+          indent: "",
+          reveal: true,
+        },
       ),
     ).toEqual(["FLAG", "+  abcd"]);
   });
 
-  test("label empty and unset Values", () => {
+  test("masked changes list name, ownership, and change type", () => {
+    expect(
+      renderMaskedChange({ name: "NEW", kind: "added" }, { indent: "" }),
+    ).toBe("NEW  added");
+    expect(
+      renderMaskedChange(
+        { name: "CHANGED", kind: "updated", ownership: "shared" },
+        { indent: "" },
+      ),
+    ).toBe("CHANGED  shared  updated");
+    expect(
+      renderMaskedChange(
+        { name: "GONE", kind: "removed", ownership: "user-defined" },
+        { indent: "" },
+      ),
+    ).toBe("GONE  user-defined  removed");
+  });
+
+  test("labels empty and unset Values only when revealed", () => {
     expect(
       renderValueDiff(
         { name: "EMPTY", from: "", to: "filled" },
         { indent: "" },
       ),
+    ).toEqual(["EMPTY"]);
+    expect(
+      renderValueDiff(
+        { name: "EMPTY", from: "", to: "filled" },
+        {
+          indent: "",
+          reveal: true,
+        },
+      ),
     ).toEqual(["EMPTY", "+  filled"]);
     expect(
       renderValueDiff(
         { name: "OPTIONAL", from: "was", to: null },
-        { indent: "" },
+        { indent: "", reveal: true },
       ),
     ).toEqual(["OPTIONAL", "-  was", "+  not set"]);
   });
 
-  test("diff human output lists each Variable as a unified diff", () => {
+  test("diff human output masks Values but keeps names and change types", () => {
     expect(
       renderEnvDiff([
         {
@@ -67,6 +119,7 @@ describe("CLI value diffs", () => {
           name: "CHANGED",
           localValue: "next",
           remoteValue: "prev",
+          ownership: "shared",
         },
         {
           kind: "added",
@@ -79,43 +132,89 @@ describe("CLI value diffs", () => {
           name: "GONE",
           localValue: null,
           remoteValue: "old",
+          ownership: "user-defined",
         },
       ]),
     ).toBe(
       [
         "  ·  1 added, 1 updated, 1 removed",
         "",
-        "     CHANGED",
+        "     CHANGED  shared  updated",
+        "     NEW  added",
+        "     GONE  user-defined  removed",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("diff human output reveals the unified diff on request", () => {
+    expect(
+      renderEnvDiff(
+        [
+          {
+            kind: "updated",
+            name: "CHANGED",
+            localValue: "next",
+            remoteValue: "prev",
+            ownership: "shared",
+          },
+          {
+            kind: "added",
+            name: "NEW",
+            localValue: "fresh",
+            remoteValue: null,
+          },
+          {
+            kind: "removed",
+            name: "GONE",
+            localValue: null,
+            remoteValue: "old",
+            ownership: "user-defined",
+          },
+        ],
+        true,
+      ),
+    ).toBe(
+      [
+        "  ·  1 added, 1 updated, 1 removed",
+        "",
+        "     CHANGED  shared",
         "     -  prev",
         "     +  next",
         "",
         "     NEW",
         "     +  fresh",
         "",
-        "     GONE",
+        "     GONE  user-defined",
         "     -  old",
         "",
       ].join("\n"),
     );
   });
 
-  test("publication confirmation shows the diff and the destination", () => {
-    expect(
-      publicationConfirmQuestion(
-        [
-          {
-            kind: "updated",
-            name: "DATABASE_URL",
-            from: "postgres://secret",
-            to: "abc",
-          },
-        ],
-        destination,
-      ),
-    ).toBe(
+  test("publication confirmation masks Values until reveal is explicit", () => {
+    const changes = [
+      {
+        kind: "updated" as const,
+        name: "DATABASE_URL",
+        from: "postgres://secret",
+        to: "abc",
+        ownership: "shared" as const,
+      },
+    ];
+    expect(publicationConfirmQuestion(changes, destination)).toBe(
       [
         "1 variable being updated",
-        "  DATABASE_URL",
+        "  DATABASE_URL  shared  updated",
+        "",
+        ...destinationLines,
+        "Publish?",
+      ].join("\n"),
+    );
+    expect(publicationConfirmQuestion(changes, destination, true)).toBe(
+      [
+        "1 variable being updated",
+        "  DATABASE_URL  shared",
         "  -  postgres://secret",
         "  +  abc",
         "",
@@ -131,12 +230,14 @@ describe("CLI value diffs", () => {
             name: "NEW_TOKEN",
             from: undefined,
             to: "fresh",
+            ownership: "shared",
           },
           {
             kind: "removed",
             name: "API_KEY",
             from: "tok",
             to: undefined,
+            ownership: "user-defined",
           },
         ],
         destination,
@@ -144,11 +245,8 @@ describe("CLI value diffs", () => {
     ).toBe(
       [
         "1 variable being added, 1 variable being removed",
-        "  NEW_TOKEN",
-        "  +  fresh",
-        "",
-        "  API_KEY",
-        "  -  tok",
+        "  NEW_TOKEN  shared  added",
+        "  API_KEY  user-defined  removed",
         "",
         ...destinationLines,
         "Publish?",
@@ -171,14 +269,16 @@ describe("CLI value diffs", () => {
             name: "DATABASE_URL",
             from: "postgres://secret",
             to: "abc",
+            ownership: "shared",
           },
         ],
         hostile,
+        true,
       ),
     ).toBe(
       [
         "1 variable being updated",
-        "  DATABASE_URL",
+        "  DATABASE_URL  shared",
         "  -  postgres://secret",
         "  +  abc",
         "",
@@ -197,13 +297,14 @@ describe("CLI value diffs", () => {
     );
   });
 
-  test("pull confirmation inverts the dotenv diff onto the file being replaced", () => {
+  test("pull confirmation masks the replacement diff by default", () => {
     const changes = valueDiffsForPull([
       {
         kind: "updated",
         name: "DATABASE_URL",
         localValue: "postgres://local",
         remoteValue: "postgres://secret",
+        ownership: "shared",
       },
       {
         kind: "added",
@@ -216,6 +317,7 @@ describe("CLI value diffs", () => {
         name: "API_KEY",
         localValue: null,
         remoteValue: "tok",
+        ownership: "user-defined",
       },
     ]);
     expect(changes).toEqual([
@@ -224,21 +326,39 @@ describe("CLI value diffs", () => {
         name: "DATABASE_URL",
         from: "postgres://local",
         to: "postgres://secret",
+        ownership: "shared",
       },
       { kind: "removed", name: "GONE", from: "old", to: undefined },
-      { kind: "added", name: "API_KEY", from: undefined, to: "tok" },
+      {
+        kind: "added",
+        name: "API_KEY",
+        from: undefined,
+        to: "tok",
+        ownership: "user-defined",
+      },
     ]);
     expect(pullConfirmQuestion(".env", changes, destination)).toBe(
       [
         "1 variable being added, 1 variable being updated, 1 variable being removed",
-        "  DATABASE_URL",
+        "  DATABASE_URL  shared  updated",
+        "  GONE  removed",
+        "  API_KEY  user-defined  added",
+        "",
+        ...destinationLines,
+        "Replace .env with decrypted Values?",
+      ].join("\n"),
+    );
+    expect(pullConfirmQuestion(".env", changes, destination, true)).toBe(
+      [
+        "1 variable being added, 1 variable being updated, 1 variable being removed",
+        "  DATABASE_URL  shared",
         "  -  postgres://local",
         "  +  postgres://secret",
         "",
         "  GONE",
         "  -  old",
         "",
-        "  API_KEY",
+        "  API_KEY  user-defined",
         "  +  tok",
         "",
         ...destinationLines,
