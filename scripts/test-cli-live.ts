@@ -275,6 +275,21 @@ const handle = async (request: Request): Promise<Response> => {
     });
   }
   if (
+    url.pathname === `/api/v1/projects/${projectId}/environments` &&
+    request.method === "GET"
+  )
+    return jsonResponse({
+      environments: [
+        {
+          id: environmentId,
+          projectId,
+          label: "live",
+          lifecycle: "active",
+          currentHeadId: state.revisions.at(-1)?.id ?? null,
+        },
+      ],
+    });
+  if (
     url.pathname === "/api/v1/grants/bootstrap" &&
     request.method === "POST"
   ) {

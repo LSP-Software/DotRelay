@@ -58,6 +58,13 @@ const boundary = {
   crypto: { available: true },
 } as const;
 
+const destinationLines = [
+  `Profile: ${profile.name}`,
+  "Team: Platform",
+  `Project: ${ids.project}`,
+  "Environment: development",
+];
+
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -69,6 +76,7 @@ const setup = async (
     readonly signingTrustKeys?: readonly string[];
     readonly revisions?: SyncPageWire["revisions"];
     readonly bootstrap?: Awaited<ReturnType<typeof createDeviceBootstrap>>;
+    readonly withoutBoundaryEnvironment?: boolean;
   }> = {},
 ): Promise<{
   credentials: NativeCredentialStore;
@@ -77,6 +85,7 @@ const setup = async (
   fetch: FetchFunction;
   profilePath: string;
   bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>;
+  createdEnvironments: string[];
 }> => {
   const { mkdir } = await import("node:fs/promises");
   const stateDirectory = `${import.meta.dir}/.tmp-workflow-state-${crypto.randomUUID()}`;
@@ -101,17 +110,48 @@ const setup = async (
   await deviceStorage.save(bootstrap.bundle);
   const workspaceBoundary = {
     ...boundary,
+    environment: {
+      ...boundary.environment,
+      id: options.withoutBoundaryEnvironment ? null : boundary.environment.id,
+    },
     ...(options.signingTrustKeys
       ? { signingTrustKeys: options.signingTrustKeys }
       : {}),
   };
+  const createdEnvironments: string[] = [];
   const admin: StrictJsonClient = {
     get: async (path) => {
       if (path === "/api/v1/session")
         return { authenticated: true, user: { id: ids.user } };
+      if (path === `/api/v1/projects/${ids.project}/environments`)
+        return {
+          environments: [
+            {
+              id: ids.environment,
+              projectId: ids.project,
+              label: "development",
+              lifecycle: "active",
+              currentHeadId: null,
+            },
+          ],
+        };
+      if (path === "/api/v1/teams")
+        return { teams: [{ id: ids.team, name: "Platform" }] };
       return workspaceBoundary;
     },
-    post: async () => ({}),
+    post: async (path) => {
+      if (path === `/api/v1/projects/${ids.project}/environments`) {
+        createdEnvironments.push(ids.environment);
+        return {
+          id: ids.environment,
+          projectId: ids.project,
+          label: "development",
+          lifecycle: "active",
+          currentHeadId: null,
+        };
+      }
+      return {};
+    },
   };
   const stagedObjects = new Map<string, Uint8Array>();
   let revisions: SyncPageWire["revisions"] = options.revisions ?? [];
@@ -232,6 +272,7 @@ const setup = async (
     fetch: fetcher,
     profilePath,
     bootstrap,
+    createdEnvironments,
   };
 };
 
@@ -592,6 +633,41 @@ describe("protected CLI workflows", () => {
     expect(historyBody.revisions).toHaveLength(3);
     for (const revision of historyBody.revisions.slice(1))
       expect(revision.mutation).toBe(2);
+  });
+
+  test("init persists the Environment it created for later invocations", async () => {
+    const runtime = await setup({ withoutBoundaryEnvironment: true });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    const contextPath = `${import.meta.dir}/.tmp-workflow-state-context-${crypto.randomUUID()}`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const result = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, worktreeConfig: contextPath },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(runtime.createdEnvironments).toEqual([ids.environment]);
+    expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
+      serverProfileId: profile.pin.serverProfileId,
+      projectId: ids.project,
+      environmentId: ids.environment,
+    });
+    const reuse = await run(
+      ["pull", "--profile", "relay", "--stdout", "--no-input"],
+      { ...runtime, worktreeConfig: contextPath },
+    );
+    expect(reuse.exitCode).toBe(0);
+    expect(reuse.stdout).toContain('DATABASE_URL="postgres://secret"');
+    expect(runtime.createdEnvironments).toEqual([ids.environment]);
   });
 
   test("classifies and confirms genesis publication from the terminal", async () => {
@@ -976,7 +1052,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(initialized.exitCode).toBe(0);
-    await Bun.write(input, "DATABASE_URL=abc\nAPI_KEY=tok\n");
+    await Bun.write(input, "DATABASE_URL=abc123x\nAPI_KEY=tok\n");
     const questions: string[] = [];
     const pushed = await run(
       [
@@ -1003,11 +1079,13 @@ describe("protected CLI workflows", () => {
         "1 variable being updated",
         "  DATABASE_URL",
         "  -  postgres://secret",
-        "  +  abc",
+        "  +  abc123x",
+        "",
+        ...destinationLines,
         "Publish?",
       ].join("\n"),
     ]);
-    expect(pushed.stdout).not.toContain("abc");
+    expect(pushed.stdout).not.toContain("abc123x");
     expect(pushed.stdout).not.toContain("postgres://secret");
   });
 
@@ -1067,6 +1145,8 @@ describe("protected CLI workflows", () => {
         "",
         "  API_KEY",
         "  -  tok",
+        "",
+        ...destinationLines,
         "Publish?",
       ].join("\n"),
     ]);
@@ -1132,6 +1212,8 @@ describe("protected CLI workflows", () => {
         "",
         "  API_KEY",
         "  +  tok",
+        "",
+        ...destinationLines,
         `Replace ${input} with decrypted Values?`,
       ].join("\n"),
     ]);

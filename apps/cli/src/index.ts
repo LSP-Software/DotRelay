@@ -1,11 +1,11 @@
 import { dirname, isAbsolute, resolve } from "node:path";
 import type { CliDeviceStorage } from "@dotrelay/client";
 import {
-  createEnvironment,
   createStrictJsonClient,
   findProjectByRepository,
   linkProject,
   listEnvironments,
+  resolveEnvironmentForProject,
   resolveTeamForProject,
   type StrictJsonClient,
   selectEnvironment,
@@ -775,32 +775,40 @@ const execute = async (
     "rollback",
   ]);
   if (protectedCommands.has(parsed.command)) {
-    const hasExplicitEnvironment =
-      parsed.environment !== undefined ||
-      (parsed.command === "init" && parsed.positionals.length === 1);
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError("--no-input requires explicit --profile");
+    const profile = await resolveServerProfile(store, parsed.profile);
+    const contextPath =
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+    const localContext = await readWorktreeContext(contextPath);
+    const hasProvidedEnvironment =
+      parsed.environment !== undefined ||
+      (parsed.command === "init" && parsed.positionals.length === 1) ||
+      localContext?.environmentId !== undefined;
     if (
       parsed.noInput &&
       parsed.command !== "init" &&
       parsed.command !== "push" &&
-      !hasExplicitEnvironment
+      !hasProvidedEnvironment
     )
       throw new CliInvocationError(
         "--no-input requires explicit --environment context",
       );
-    const profile = await resolveServerProfile(store, parsed.profile);
-    const contextPath =
-      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const stateDirectory =
       runtime.stateDirectory ??
       dirname(runtime.profilePath ?? profileCatalogPath());
     const deviceId =
       runtime.deviceId ??
       (await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)));
+    let contextToSave:
+      | Readonly<{
+          readonly serverProfileId: string;
+          readonly projectId: string;
+          readonly environmentId?: string;
+        }>
+      | undefined;
     if (!runtime.admin) {
       requireEnrolledDevice(deviceId);
-      const localContext = await readWorktreeContext(contextPath);
       const repository = await resolveGitHubRepository(
         detectGitHubRepository(
           await (runtime.readGitRemotes ?? readGitRemotes)(),
@@ -862,25 +870,55 @@ const execute = async (
           ? (initializedProject as Awaited<ReturnType<typeof linkProject>>)
               .environment?.id
           : undefined;
-      let environmentId =
+      // A saved selection may point at an Environment that was archived (or
+      // removed) since it was written; only an active saved Environment can
+      // steer the change automatically. Otherwise resolution continues so an
+      // eligible active Environment can be chosen or created. The check is
+      // skipped entirely when an explicit Environment was supplied.
+      const explicitEnvironmentId =
         parsed.environment ??
-        (parsed.command === "init" ? parsed.positionals[0] : undefined) ??
-        localContext?.environmentId ??
-        linkedEnvironmentId;
-      if (!environmentId) {
-        const environments = await listEnvironments(
-          admin,
-          initializedProject.id,
-        );
-        environmentId = environments[0]?.id;
-      }
+        (parsed.command === "init" ? parsed.positionals[0] : undefined);
+      const savedEnvironmentId = localContext?.environmentId;
+      // Usable means "present and still active"; a missing selection is
+      // trivially usable because nothing needs to be re-validated.
+      let savedSelectionUsable = savedEnvironmentId === undefined;
       if (
-        !environmentId &&
-        (parsed.command === "init" || parsed.command === "push")
-      )
-        environmentId = (await createEnvironment(admin, initializedProject.id))
-          .id;
-      await writeWorktreeContext(contextPath, {
+        explicitEnvironmentId === undefined &&
+        savedEnvironmentId !== undefined
+      ) {
+        savedSelectionUsable = (
+          await listEnvironments(admin, initializedProject.id)
+        ).some(
+          (environment) =>
+            environment.id === savedEnvironmentId &&
+            environment.lifecycle === "active",
+        );
+        // A stale saved selection is not an unambiguous context: init and
+        // push may fall back to the Project's active Environments, the other
+        // protected commands must not guess.
+        if (
+          !savedSelectionUsable &&
+          parsed.noInput &&
+          parsed.command !== "init" &&
+          parsed.command !== "push"
+        )
+          throw new CliInvocationError(
+            "--no-input requires explicit --environment context",
+          );
+      }
+      const environmentId =
+        explicitEnvironmentId ??
+        (savedSelectionUsable ? savedEnvironmentId : undefined) ??
+        linkedEnvironmentId ??
+        (
+          await resolveEnvironmentForProject(admin, initializedProject.id, {
+            command: parsed.command,
+            noInput: parsed.noInput,
+            ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+            ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+          })
+        ).id;
+      contextToSave = Object.freeze({
         serverProfileId: profile.pin.serverProfileId,
         projectId: initializedProject.id,
         ...(environmentId ? { environmentId } : {}),
@@ -903,9 +941,16 @@ const execute = async (
         ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
         noInput: parsed.noInput,
         stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
+        ...(contextToSave?.environmentId
+          ? { environmentId: contextToSave.environmentId }
+          : {}),
       },
       parsed,
     );
+    // The worktree selection is persisted only after the workflow succeeds,
+    // so a failed or declined operation leaves the saved Environment
+    // untouched.
+    if (contextToSave) await writeWorktreeContext(contextPath, contextToSave);
     return { value: workflowResult };
   }
   throw new CliError(

@@ -44,7 +44,15 @@ uses GitHub's public repository metadata endpoint and never receives a GitHub to
 
 Environment selection is by opaque id or operator-visible label, and is worktree local.
 `.git/dotrelay/config` may contain only the Server Profile, Project, and Environment opaque ids,
-never Values. `--no-input` requires the profile to be supplied explicitly and does not guess a Team.
+never Values. When neither the command arguments nor the saved selection name an Environment,
+the CLI chooses automatically only when exactly one active Environment is available; otherwise
+it lists the Environment labels and asks. Archived Environments are never selected automatically
+and can only be addressed with an explicit `--environment`. The saved selection is written only
+after the command succeeds, so a failed or declined run leaves it untouched. `--no-input`
+requires the profile to be supplied explicitly and never guesses a Team or Environment: for
+`pull`, `diff`, `history`, and `rollback` the Environment must be explicit or already saved in
+the worktree, while `init` and `push` may additionally use the Project's single active
+Environment.
 
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. The Server Profile creates a default Environment in the same transaction when the
@@ -74,7 +82,9 @@ Interactive `init` and `push` confirm only Variables that will change. Each chan
 diff. The Variable name comes first, then a `-` line for the current Value and a `+` line for the
 next Value. Added Variables omit the `-` line. Removed Variables omit the `+` line. The shared
 prefix and suffix stay on both lines, and only the edited span is marked. Unchanged Variables are
-omitted. `--no-input` skips the prompt. JSON, progress, and diagnostics still never contain Values.
+omitted. The review names the destination Server Profile, Team, Project, and Environment before
+asking, so a publication is never directed at an Environment the operator did not choose.
+`--no-input` skips the prompt. JSON, progress, and diagnostics still never contain Values.
 
 Publication progress is Encrypting, Uploading, then Published. The CLI reviews the publication
 summary before beginning staging. It then uploads the signed command and encrypted protocol
@@ -83,7 +93,8 @@ when the Server Profile permits cancellation.
 
 `pull` writes decrypted Values to `.env` by default. Interactive `pull` confirms before replacing
 an existing file, using the same unified Value diff as `push` but from the current file to the
-Environment. Identical Values report that no changes were found and leave the file untouched.
+Environment, and names the same destination. Identical Values report that no changes were found
+and leave the file untouched.
 `--no-input` skips the prompt. `pull --output <path>` and `pull --stdout` first verify the complete
 v3 history from genesis. A missing Value fails the export before any output is written. Terminal
 stdout requires explicit `--reveal` and confirmation; ordinary diagnostics never contain Values.

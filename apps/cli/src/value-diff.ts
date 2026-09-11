@@ -130,25 +130,54 @@ export const renderEnvDiff = (changes: readonly DotenvDiffChange[]): string => {
   ].join("\n");
 };
 
+export type PublicationDestination = Readonly<{
+  readonly profile: string;
+  readonly team: string;
+  readonly project: string;
+  readonly environment: string;
+}>;
+
+export const renderDestinationLines = (
+  destination: PublicationDestination,
+): string[] => [
+  `Profile: ${sanitizeCliText(destination.profile)}`,
+  `Team: ${sanitizeCliText(destination.team)}`,
+  `Project: ${sanitizeCliText(destination.project)}`,
+  `Environment: ${sanitizeCliText(destination.environment)}`,
+];
+
 const countLabel = (count: number, action: string): string =>
   `${count} ${count === 1 ? "variable" : "variables"} being ${action}`;
 
 const confirmQuestionWithDiff = (
-  changes: readonly PublicationChange[],
+  changes: readonly PublicationChange[] | null,
+  destination: PublicationDestination,
   prompt: string,
 ): string => {
-  const added = changes.filter((change) => change.kind === "added").length;
-  const updated = changes.filter((change) => change.kind === "updated").length;
-  const removed = changes.filter((change) => change.kind === "removed").length;
-  const summary = [
-    ...(added > 0 ? [countLabel(added, "added")] : []),
-    ...(updated > 0 ? [countLabel(updated, "updated")] : []),
-    ...(removed > 0 ? [countLabel(removed, "removed")] : []),
-  ].join(", ");
-  const body = joinDiffBlocks(
-    changes.map((change) => renderValueDiff(change, { indent: "  " })),
-  ).join("\n");
-  return `${summary}\n${body}\n${prompt}`;
+  const lines: string[] = [];
+  if (changes !== null && changes.length > 0) {
+    const added = changes.filter((change) => change.kind === "added").length;
+    const updated = changes.filter(
+      (change) => change.kind === "updated",
+    ).length;
+    const removed = changes.filter(
+      (change) => change.kind === "removed",
+    ).length;
+    const summary = [
+      ...(added > 0 ? [countLabel(added, "added")] : []),
+      ...(updated > 0 ? [countLabel(updated, "updated")] : []),
+      ...(removed > 0 ? [countLabel(removed, "removed")] : []),
+    ].join(", ");
+    if (summary.length > 0) lines.push(summary);
+    const body = joinDiffBlocks(
+      changes.map((change) => renderValueDiff(change, { indent: "  " })),
+    ).join("\n");
+    if (body.length > 0) lines.push(body);
+  }
+  if (lines.length > 0) lines.push("");
+  lines.push(...renderDestinationLines(destination));
+  lines.push(prompt);
+  return lines.join("\n");
 };
 
 export const valueDiffsForPull = (
@@ -181,10 +210,16 @@ export const valueDiffsForPull = (
 
 export const publicationConfirmQuestion = (
   changes: readonly PublicationChange[],
-): string => confirmQuestionWithDiff(changes, "Publish?");
+  destination: PublicationDestination,
+): string => confirmQuestionWithDiff(changes, destination, "Publish?");
 
 export const pullConfirmQuestion = (
   path: string,
-  changes: readonly PublicationChange[],
+  changes: readonly PublicationChange[] | null,
+  destination: PublicationDestination,
 ): string =>
-  confirmQuestionWithDiff(changes, `Replace ${path} with decrypted Values?`);
+  confirmQuestionWithDiff(
+    changes,
+    destination,
+    `Replace ${path} with decrypted Values?`,
+  );
