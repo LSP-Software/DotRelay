@@ -84,7 +84,10 @@ next Value. Added Variables omit the `-` line. Removed Variables omit the `+` li
 prefix and suffix stay on both lines, and only the edited span is marked. Unchanged Variables are
 omitted. The review names the destination Server Profile, Team, Project, and Environment before
 asking, so a publication is never directed at an Environment the operator did not choose.
-`--no-input` skips the prompt. JSON, progress, and diagnostics still never contain Values.
+`--no-input` skips the prompt but never approves a destructive publication: when the change
+removes Variables, `--no-input` alone is refused and the operator must additionally pass
+`--force` to publish the removals. Publications that only add or update Variables proceed under
+`--no-input` without it. JSON, progress, and diagnostics still never contain Values.
 
 Publication progress is Encrypting, Uploading, then Published. The CLI reviews the publication
 summary before beginning staging. It then uploads the signed command and encrypted protocol
@@ -95,9 +98,14 @@ when the Server Profile permits cancellation.
 an existing file, using the same unified Value diff as `push` but from the current file to the
 Environment, and names the same destination. Identical Values report that no changes were found
 and leave the file untouched.
-`--no-input` skips the prompt. `pull --output <path>` and `pull --stdout` first verify the complete
-v3 history from genesis. A missing Value fails the export before any output is written. Terminal
-stdout requires explicit `--reveal` and confirmation; ordinary diagnostics never contain Values.
+`--no-input` skips the prompt and never approves replacing a file on its own: when the existing
+file differs from the Environment, `--no-input` alone retains the file and fails with an
+actionable diagnostic (`output_conflict`) that points at `--force`. With `--force` under
+`--no-input`, or with the interactive confirmation, the replacement is written and the prior file
+is retained at `<path>.previous` so it stays recoverable. `pull --output <path>` and
+`pull --stdout` first verify the complete v3 history from genesis. A missing Value fails the
+export before any output is written. Terminal stdout requires explicit `--reveal` and
+confirmation; ordinary diagnostics never contain Values.
 
 `diff` compares `.env` with the decrypted Environment and prints added, updated, and removed
 Variables as the same unified diff, including Values. Unchanged Variables are omitted. `--from
@@ -123,8 +131,10 @@ single JSON document and also carries `verificationUri` and `userCode`.
 
 `pull --output <path>` is the explicit file path and is written only after a complete export is
 ready, using an atomic replace and mode `0600`. `pull --stdout` is explicit and refuses terminal
-output unless `--reveal` is also supplied. `--no-input` never prompts or guesses. Automation is
-limited to a previously authenticated, enrolled persistent Device with explicit profile context.
+output unless `--reveal` is also supplied. `--no-input` never prompts, guesses, or approves:
+`--force` is the narrow, documented approval that lets automation replace a differing pull output
+file or publish removed Variables, and it is the only flag that does. Automation is limited to a
+previously authenticated, enrolled persistent Device with explicit profile context.
 Portable plaintext or environment-variable credential bundles and auto-approved ephemeral Devices
 are not supported.
 

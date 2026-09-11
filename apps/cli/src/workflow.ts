@@ -96,6 +96,7 @@ export type WorkflowOptions = Readonly<{
   readonly confirm?: (question: string) => Promise<boolean>;
   readonly terminal?: TerminalIo;
   readonly noInput: boolean;
+  readonly force: boolean;
   readonly stdoutIsTerminal: boolean;
   readonly admin?: StrictJsonClient;
   readonly environmentId?: string;
@@ -1483,17 +1484,9 @@ export const createRecoveryBackup = async (
     ),
     kit: base64(kit.bytes),
   };
-  const priorArtifactPath = `${output}.previous`;
-  try {
-    const priorArtifact = await readFile(output);
-    await atomicWriteProtectedFile(
-      priorArtifactPath,
-      new TextDecoder().decode(priorArtifact),
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  await atomicWriteProtectedFile(output, `${JSON.stringify(artifact)}\n`);
+  await atomicWriteProtectedFile(output, `${JSON.stringify(artifact)}\n`, {
+    retainPrevious: true,
+  });
   const operationId = crypto.randomUUID();
   await authorized.admin.post(
     "/api/v1/recovery/envelopes",
@@ -2206,6 +2199,16 @@ const publish = async (
   const changes = draftVariables
     .map((variable) => publicationChangeFor(variable, synced.variables))
     .filter((change): change is PublicationChange => change !== null);
+  const removedCount = changes.filter(
+    (change) => change.kind === "removed",
+  ).length;
+  if (options.noInput && removedCount > 0 && !options.force)
+    throw new CliError(
+      "invocation",
+      `publishing ${removedCount} removed ${removedCount === 1 ? "Variable" : "Variables"} requires explicit approval; re-run with --force`,
+      { changedCount: removedCount },
+      "deletion_requires_approval",
+    );
   if (!options.noInput) {
     const destination = await destinationFor(
       options,
@@ -2500,6 +2503,7 @@ export const runProtectedWorkflow = async (
       if (!(await confirm(options, question)))
         throw new CliInvocationError("Value reveal confirmation was declined");
     }
+    let replaceExisting = false;
     if (outputPath) {
       let exists = false;
       try {
@@ -2516,7 +2520,15 @@ export const runProtectedWorkflow = async (
             unchanged: true,
             message: "No changes found",
           };
-        if (!options.noInput) {
+        if (options.noInput) {
+          if (!options.force)
+            throw new CliError(
+              "conflict",
+              `${outputPath} differs from the Environment and was retained; re-run with --force to replace it`,
+              changes !== null ? { changedCount: changes.length } : {},
+              "output_conflict",
+            );
+        } else {
           const destination = await destinationFor(
             options,
             synced.workflow.publicationContext,
@@ -2529,6 +2541,7 @@ export const runProtectedWorkflow = async (
           )
             throw new CliInvocationError("pull confirmation was declined");
         }
+        replaceExisting = true;
       }
     }
     assertSafeStdout({
@@ -2536,12 +2549,18 @@ export const runProtectedWorkflow = async (
       terminal: options.stdoutIsTerminal,
       reveal: parsed.reveal,
     });
-    if (outputPath) await atomicWriteProtectedFile(outputPath, contents);
+    if (outputPath)
+      await atomicWriteProtectedFile(outputPath, contents, {
+        ...(replaceExisting ? { retainPrevious: true } : {}),
+      });
     return parsed.stdout
       ? { stdout: contents }
       : {
           output: outputPath ?? "",
-          message: `Wrote ${entries.length} values to ${outputPath}`,
+          ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
+          message: replaceExisting
+            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous`
+            : `Wrote ${entries.length} values to ${outputPath}`,
         };
   }
   if (parsed.command === "init" || parsed.command === "push") {

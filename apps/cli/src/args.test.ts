@@ -118,6 +118,28 @@ describe("CLI argument contract", () => {
     expect(parseArguments(["status", "--debug"]).debug).toBe(true);
   });
 
+  test("--force is a narrow approval limited to destructive workflows", () => {
+    expect(
+      parseArguments(["pull", "--output", ".env", "--no-input", "--force"])
+        .force,
+    ).toBe(true);
+    expect(parseArguments(["push", "--no-input", "--force"]).force).toBe(true);
+    expect(parseArguments(["pull", "--output", ".env"]).force).toBe(false);
+    expect(() => parseArguments(["diff", "--no-input", "--force"])).toThrow(
+      "--force",
+    );
+    expect(() => parseArguments(["status", "--force"])).toThrow("--force");
+    expect(() =>
+      parseArguments([
+        "rollback",
+        "11111111-1111-4111-8111-111111111111",
+        "--variable",
+        "22222222-2222-4222-8222-222222222222",
+        "--force",
+      ]),
+    ).toThrow("--force");
+  });
+
   test("accepts diff with --from and --reveal", () => {
     expect(parseArguments(["diff", "--from", ".env.local"])).toMatchObject({
       command: "diff",
