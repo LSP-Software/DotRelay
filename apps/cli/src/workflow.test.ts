@@ -9,6 +9,7 @@ import {
 } from "@dotrelay/client";
 import {
   bytesToUuid,
+  createProblem,
   encodeSyncPage,
   generateSigningKeyPair,
   parseProtocolObject,
@@ -214,6 +215,16 @@ const setup = async (
           { status: 400 },
         );
       const previous = revisions.at(-1);
+      // Mirror the database revisions_parent_shape_check and the API's
+      // genesis_exists guard so a permissive fake can never hide a mutation
+      // that the real Server Profile would reject.
+      if (mutation === 1 && previous)
+        return Response.json(
+          createProblem("genesis_exists", { headId: previous.id }),
+          { status: 409 },
+        );
+      if (mutation !== 1 && !previous)
+        return Response.json(createProblem("invalid_request"), { status: 400 });
       const objects = await Promise.all(
         [...stagedObjects.entries()].map(async ([objectId, bytes]) =>
           Object.freeze({
@@ -408,6 +419,273 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('"ok":true');
     expect(result.stdout).not.toContain("postgres://secret");
+  });
+
+  test("push into an empty Environment publishes exactly one genesis Revision", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout)).toMatchObject({
+      ok: true,
+      message: "Published",
+    });
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    expect(JSON.parse(history.stdout)).toMatchObject({
+      ok: true,
+      revisions: [expect.objectContaining({ mutation: 1 })],
+    });
+  });
+
+  test("retrying push after a published genesis resolves the head without a second Revision", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const publishArgs = [
+      "push",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--from",
+      input,
+      "--classify",
+      "DATABASE_URL=shared",
+      "--no-input",
+      "--json",
+    ];
+    const published = await run(publishArgs, runtime);
+    expect(published.exitCode).toBe(0);
+    const retried = await run(publishArgs, runtime);
+    expect(retried.exitCode).toBe(0);
+    expect(JSON.parse(retried.stdout)).toMatchObject({
+      ok: true,
+      lanes: 0,
+      message: "Already published",
+    });
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    expect(JSON.parse(history.stdout)).toMatchObject({
+      ok: true,
+      revisions: [expect.objectContaining({ mutation: 1 })],
+    });
+  });
+
+  test("retrying push with changed content after a published genesis publishes an update against the verified head", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const publishArgs = [
+      "push",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--from",
+      input,
+      "--classify",
+      "DATABASE_URL=shared",
+      "--no-input",
+      "--json",
+    ];
+    const published = await run(publishArgs, runtime);
+    expect(published.exitCode).toBe(0);
+    expect(JSON.parse(published.stdout)).toMatchObject({
+      ok: true,
+      message: "Published",
+    });
+    await Bun.write(input, "DATABASE_URL=postgres://rotated\n");
+    const retried = await run(publishArgs, runtime);
+    expect(retried.exitCode).toBe(0);
+    expect(JSON.parse(retried.stdout)).toMatchObject({
+      ok: true,
+      message: "Published",
+    });
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    const historyBody = JSON.parse(history.stdout) as {
+      ok: boolean;
+      revisions: Array<{ mutation: number }>;
+    };
+    expect(historyBody.ok).toBe(true);
+    expect(historyBody.revisions.map((revision) => revision.mutation)).toEqual([
+      1, 2,
+    ]);
+  });
+
+  test("init and push into a populated Environment publish manifest updates", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const seeded = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://seeded",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const seededRevisionObject = seeded.stagedObjects.find(
+      (object) => object.objectId === seeded.request.revision.protocolObjectId,
+    );
+    if (!seededRevisionObject) throw new Error("revision object is missing");
+    const runtime = await setup({
+      bootstrap,
+      revisions: [
+        {
+          id: seeded.request.revision.id,
+          digest: await sha384(seededRevisionObject.bytes),
+          parentId: ids.environment,
+          parentHash: new Uint8Array(48),
+          mutation: 1,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(seeded.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            seeded.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+      ],
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://seeded\nNEW_TOKEN=fresh\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "NEW_TOKEN=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(
+      input,
+      "DATABASE_URL=postgres://updated\nNEW_TOKEN=fresh\n",
+    );
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    const historyBody = JSON.parse(history.stdout) as {
+      ok: boolean;
+      revisions: Array<{ mutation: number }>;
+    };
+    expect(historyBody.ok).toBe(true);
+    expect(historyBody.revisions).toHaveLength(3);
+    for (const revision of historyBody.revisions.slice(1))
+      expect(revision.mutation).toBe(2);
   });
 
   test("init persists the Environment it created for later invocations", async () => {

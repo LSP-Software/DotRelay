@@ -2559,7 +2559,7 @@ export const runProtectedWorkflow = async (
     }
     const synced = await syncWorkflow(options, parsed);
     const empty = synced.page.currentHeadId === null;
-    const existing = parsed.command === "init" && empty ? [] : synced.variables;
+    const existing = synced.variables;
     const entries = await classify(
       options,
       parsed,
@@ -2571,7 +2571,7 @@ export const runProtectedWorkflow = async (
       options,
       parsed,
       variables,
-      parsed.command === "init" && empty ? "GENESIS" : "MANIFEST_UPDATE",
+      empty ? "GENESIS" : "MANIFEST_UPDATE",
     );
     // The worktree selection is persisted only after a successful
     // publication, so the Environment created by init is reused by later
