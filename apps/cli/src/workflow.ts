@@ -64,6 +64,7 @@ import {
 import {
   type ClassifiedDotenvEntry,
   classifyDotenv,
+  type DotenvDiffChange,
   type DotenvEntry,
   diffDotenvEntries,
   parseDotenv,
@@ -81,6 +82,7 @@ import {
   pullConfirmQuestion,
   renderDestinationLines,
   renderEnvDiff,
+  type ValueOwnership,
   valueDiffsForPull,
 } from "./value-diff";
 
@@ -384,11 +386,17 @@ const ask = async (
 ): Promise<string> => {
   if (options.prompt) return options.prompt(question);
   if (options.noInput)
-    throw new CliInvocationError(`${question} requires interactive input`);
+    throw new CliInvocationError(
+      "this command requires interactive input; remove --no-input to answer the prompt",
+    );
   try {
     return await readTerminalLine(question, options.terminal);
   } catch {
-    throw new CliInvocationError(`${question} requires interactive input`);
+    // The question may carry revealed Values; only a fixed message may
+    // surface through the diagnostic.
+    throw new CliInvocationError(
+      "the terminal could not be read, so the interactive prompt went unanswered",
+    );
   }
 };
 
@@ -2112,12 +2120,14 @@ const publicationChangeFor = (
 ): PublicationChange | null => {
   if (!variable.hasDraftChange) return null;
   const prior = existing.find((candidate) => candidate.id === variable.id);
+  const ownership = classificationFromOwnership(variable.ownership);
   if (variable.tombstone)
     return Object.freeze({
       kind: "removed",
       name: variable.name,
       from: prior?.value ?? null,
       to: undefined,
+      ownership,
     });
   if (!prior || prior.tombstone)
     return Object.freeze({
@@ -2125,12 +2135,14 @@ const publicationChangeFor = (
       name: variable.name,
       from: undefined,
       to: variable.value,
+      ownership,
     });
   return Object.freeze({
     kind: "updated",
     name: variable.name,
     from: prior.value,
     to: variable.value,
+    ownership,
   });
 };
 
@@ -2217,7 +2229,7 @@ const publish = async (
     if (
       !(await confirm(
         options,
-        publicationConfirmQuestion(changes, destination),
+        publicationConfirmQuestion(changes, destination, parsed.reveal),
       ))
     )
       throw new CliInvocationError("publication confirmation was declined");
@@ -2381,9 +2393,37 @@ const shareEnvironmentWithPeerDevices = async (
   }
 };
 
+const ownershipByName = (
+  variables: readonly DecodedVariable[],
+): ReadonlyMap<string, ValueOwnership> => {
+  const ownership = new Map<string, ValueOwnership>();
+  for (const variable of variables) {
+    if (variable.tombstone) continue;
+    ownership.set(
+      variable.name,
+      classificationFromOwnership(variable.ownership),
+    );
+  }
+  return ownership;
+};
+
+const withOwnership = (
+  changes: readonly DotenvDiffChange[],
+  variables: readonly DecodedVariable[],
+): readonly DotenvDiffChange[] => {
+  const known = ownershipByName(variables);
+  return Object.freeze(
+    changes.map((change) => {
+      const value = known.get(change.name);
+      return value ? Object.freeze({ ...change, ownership: value }) : change;
+    }),
+  );
+};
+
 const localPullChanges = async (
   outputPath: string,
   incoming: readonly DotenvEntry[],
+  variables: readonly DecodedVariable[],
 ): Promise<readonly PublicationChange[] | null> => {
   let source: string;
   try {
@@ -2392,7 +2432,12 @@ const localPullChanges = async (
     return null;
   }
   try {
-    return valueDiffsForPull(diffDotenvEntries(parseDotenv(source), incoming));
+    return valueDiffsForPull(
+      withOwnership(
+        diffDotenvEntries(parseDotenv(source), incoming),
+        variables,
+      ),
+    );
   } catch {
     return null;
   }
@@ -2444,7 +2489,10 @@ export const runProtectedWorkflow = async (
       .map((variable) =>
         Object.freeze({ name: variable.name, value: variable.value ?? "" }),
       );
-    const changes = diffDotenvEntries(local, remote);
+    const changes = withOwnership(
+      diffDotenvEntries(local, remote),
+      synced.variables,
+    );
     const added = Object.freeze(
       changes
         .filter((change) => change.kind === "added")
@@ -2466,7 +2514,7 @@ export const runProtectedWorkflow = async (
         (change) => change.kind === "added" || change.kind === "updated",
       ).length;
     if (parsed.json) return { added, updated, removed, unchangedCount };
-    return { stdout: renderEnvDiff(changes) };
+    return { stdout: renderEnvDiff(changes, parsed.reveal) };
   }
   if (parsed.command === "pull") {
     const outputPath = parsed.stdout ? undefined : (parsed.output ?? ".env");
@@ -2512,7 +2560,11 @@ export const runProtectedWorkflow = async (
         existingFile = false;
       }
       if (existingFile) {
-        const changes = await localPullChanges(outputPath, entries);
+        const changes = await localPullChanges(
+          outputPath,
+          entries,
+          synced.variables,
+        );
         if (changes !== null && changes.length === 0)
           return {
             output: outputPath,
@@ -2535,7 +2587,12 @@ export const runProtectedWorkflow = async (
           if (
             !(await confirm(
               options,
-              pullConfirmQuestion(outputPath, changes, destination),
+              pullConfirmQuestion(
+                outputPath,
+                changes,
+                destination,
+                parsed.reveal,
+              ),
             ))
           )
             throw new CliInvocationError("pull confirmation was declined");

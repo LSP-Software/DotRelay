@@ -144,10 +144,20 @@ const readRepositoryId = async (response: Response): Promise<string> => {
 
 export const resolveGitHubRepository = async (
   repository: GitHubRepository,
-  options: Readonly<{ readonly fetch?: FetchFunction }> = {},
+  options: Readonly<{
+    readonly fetch?: FetchFunction;
+    readonly environment?: NodeJS.ProcessEnv;
+  }> = {},
 ): Promise<GitHubRepository> => {
   if (repository.githubRepositoryId) return repository;
   const fetcher = options.fetch ?? fetch;
+  const environment = options.environment ?? process.env;
+  const githubToken = (environment.GITHUB_TOKEN ?? "").trim();
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "dotrelay-cli",
+  };
+  if (githubToken.length > 0) headers.Authorization = `Bearer ${githubToken}`;
   let response: Response;
   try {
     response = await fetcher(
@@ -155,10 +165,7 @@ export const resolveGitHubRepository = async (
       {
         method: "GET",
         redirect: "error",
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": "dotrelay-cli",
-        },
+        headers,
       },
     );
   } catch {

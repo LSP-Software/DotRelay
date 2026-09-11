@@ -1,5 +1,7 @@
 import { CliInvocationError } from "./errors";
 
+export type ValueOwnership = "shared" | "user-defined";
+
 export type DotenvEntry = Readonly<{
   readonly name: string;
   readonly value: string;
@@ -112,6 +114,7 @@ export type DotenvDiffChange = Readonly<{
   readonly name: string;
   readonly localValue: string | null;
   readonly remoteValue: string | null;
+  readonly ownership?: ValueOwnership | undefined;
 }>;
 
 export const diffDotenvEntries = (

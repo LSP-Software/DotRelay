@@ -1,12 +1,15 @@
 import { type InlineValueHunk, splitInlineValueDiff } from "@dotrelay/client";
-import type { DotenvDiffChange } from "./dotenv";
+import type { DotenvDiffChange, ValueOwnership } from "./dotenv";
 import { sanitizeCliText } from "./errors";
 import { type ColorRole, paint } from "./ui";
+
+export type { ValueOwnership } from "./dotenv";
 
 export type ValueDiff = Readonly<{
   readonly name: string;
   readonly from: string | null | undefined;
   readonly to: string | null | undefined;
+  readonly ownership?: ValueOwnership | undefined;
 }>;
 
 export type PublicationChange = ValueDiff &
@@ -46,14 +49,37 @@ const markerLine = (
   tone: ColorRole,
 ): string => `${indent}${paint(marker, tone)}  ${body}`;
 
+export type RenderDiffOptions = Readonly<{
+  readonly indent?: string;
+  /** Plaintext Values are shown only when the operator passes --reveal. */
+  readonly reveal?: boolean;
+}>;
+
+const ownershipSuffix = (ownership: ValueDiff["ownership"]): string =>
+  ownership ? `  ${paint(ownership, "dim")}` : "";
+
+const kindTone = (kind: PublicationChange["kind"]): ColorRole =>
+  kind === "added" ? "ok" : kind === "removed" ? "wax" : "paper";
+
+export const renderMaskedChange = (
+  change: Pick<PublicationChange, "name" | "kind" | "ownership">,
+  options: Readonly<{ readonly indent?: string }> = {},
+): string =>
+  `${options.indent ?? "     "}${paint(sanitizeCliText(change.name), "paper")}${ownershipSuffix(
+    change.ownership,
+  )}  ${paint(change.kind, kindTone(change.kind))}`;
+
 export const renderValueDiff = (
   diff: ValueDiff,
-  options: Readonly<{
-    readonly indent?: string;
-  }> = {},
+  options: RenderDiffOptions = {},
 ): readonly string[] => {
   const indent = options.indent ?? "     ";
-  const rows = [`${indent}${paint(sanitizeCliText(diff.name), "paper")}`];
+  const rows = [
+    `${indent}${paint(sanitizeCliText(diff.name), "paper")}${ownershipSuffix(
+      diff.ownership,
+    )}`,
+  ];
+  if (options.reveal !== true) return rows;
   if (typeof diff.from === "string" && typeof diff.to === "string") {
     const from = flattenDiffValue(diff.from);
     const to = flattenDiffValue(diff.to);
@@ -79,15 +105,12 @@ export const renderValueDiff = (
 export const valueDiffFromDotenvChange = (
   change: DotenvDiffChange,
 ): ValueDiff => {
+  const base = { name: change.name, ownership: change.ownership };
   if (change.kind === "added")
-    return { name: change.name, from: undefined, to: change.localValue };
+    return { ...base, from: undefined, to: change.localValue };
   if (change.kind === "removed")
-    return { name: change.name, from: change.remoteValue, to: undefined };
-  return {
-    name: change.name,
-    from: change.remoteValue,
-    to: change.localValue,
-  };
+    return { ...base, from: change.remoteValue, to: undefined };
+  return { ...base, from: change.remoteValue, to: change.localValue };
 };
 
 const joinDiffBlocks = (blocks: readonly (readonly string[])[]): string[] => {
@@ -112,20 +135,34 @@ const shortSummary = (
   ].join(", ");
 };
 
-export const renderEnvDiff = (changes: readonly DotenvDiffChange[]): string => {
+export const renderEnvDiff = (
+  changes: readonly DotenvDiffChange[],
+  reveal: boolean = false,
+): string => {
   if (changes.length === 0)
     return [
       `  ${paint("·", "wax")}  ${paint("Local .env matches the Environment", "paper")}`,
       "",
     ].join("\n");
+  const body = reveal
+    ? joinDiffBlocks(
+        changes.map((change) =>
+          renderValueDiff(valueDiffFromDotenvChange(change), {
+            reveal: true,
+          }),
+        ),
+      )
+    : changes.map((change) =>
+        renderMaskedChange({
+          name: change.name,
+          kind: change.kind,
+          ownership: change.ownership,
+        }),
+      );
   return [
     `  ${paint("·", "wax")}  ${paint(shortSummary(changes), "paper")}`,
     "",
-    ...joinDiffBlocks(
-      changes.map((change) =>
-        renderValueDiff(valueDiffFromDotenvChange(change)),
-      ),
-    ),
+    ...body,
     "",
   ].join("\n");
 };
@@ -153,6 +190,7 @@ const confirmQuestionWithDiff = (
   changes: readonly PublicationChange[] | null,
   destination: PublicationDestination,
   prompt: string,
+  reveal: boolean = false,
 ): string => {
   const lines: string[] = [];
   if (changes !== null && changes.length > 0) {
@@ -169,9 +207,15 @@ const confirmQuestionWithDiff = (
       ...(removed > 0 ? [countLabel(removed, "removed")] : []),
     ].join(", ");
     if (summary.length > 0) lines.push(summary);
-    const body = joinDiffBlocks(
-      changes.map((change) => renderValueDiff(change, { indent: "  " })),
-    ).join("\n");
+    const body = reveal
+      ? joinDiffBlocks(
+          changes.map((change) =>
+            renderValueDiff(change, { indent: "  ", reveal: true }),
+          ),
+        ).join("\n")
+      : changes
+          .map((change) => renderMaskedChange(change, { indent: "  " }))
+          .join("\n");
     if (body.length > 0) lines.push(body);
   }
   if (lines.length > 0) lines.push("");
@@ -191,6 +235,7 @@ export const valueDiffsForPull = (
           name: change.name,
           from: change.localValue,
           to: undefined,
+          ownership: change.ownership,
         });
       if (change.kind === "removed")
         return Object.freeze({
@@ -198,12 +243,14 @@ export const valueDiffsForPull = (
           name: change.name,
           from: undefined,
           to: change.remoteValue,
+          ownership: change.ownership,
         });
       return Object.freeze({
         kind: "updated" as const,
         name: change.name,
         from: change.localValue,
         to: change.remoteValue,
+        ownership: change.ownership,
       });
     }),
   );
@@ -211,15 +258,18 @@ export const valueDiffsForPull = (
 export const publicationConfirmQuestion = (
   changes: readonly PublicationChange[],
   destination: PublicationDestination,
-): string => confirmQuestionWithDiff(changes, destination, "Publish?");
+  reveal: boolean = false,
+): string => confirmQuestionWithDiff(changes, destination, "Publish?", reveal);
 
 export const pullConfirmQuestion = (
   path: string,
   changes: readonly PublicationChange[] | null,
   destination: PublicationDestination,
+  reveal: boolean = false,
 ): string =>
   confirmQuestionWithDiff(
     changes,
     destination,
     `Replace ${path} with decrypted Values?`,
+    reveal,
   );

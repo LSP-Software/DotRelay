@@ -999,7 +999,7 @@ describe("protected CLI workflows", () => {
     expect(result.stdout).not.toContain("prev");
   });
 
-  test("diff human output prints a unified Value diff", async () => {
+  test("diff human output masks Values until --reveal", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "KEEP=same\nCHANGED=prev\nGONE=old\n");
@@ -1041,15 +1041,37 @@ describe("protected CLI workflows", () => {
     );
     expect(namesOnly.exitCode).toBe(0);
     expect(namesOnly.stdout).toContain("1 added, 1 updated, 1 removed");
-    expect(namesOnly.stdout).toContain("NEW");
-    expect(namesOnly.stdout).toContain("+  fresh");
-    expect(namesOnly.stdout).toContain("CHANGED");
-    expect(namesOnly.stdout).toContain("-  prev");
-    expect(namesOnly.stdout).toContain("+  next");
-    expect(namesOnly.stdout).toContain("GONE");
-    expect(namesOnly.stdout).toContain("-  old");
+    expect(namesOnly.stdout).toContain("NEW  added");
+    expect(namesOnly.stdout).toContain("CHANGED  shared  updated");
+    expect(namesOnly.stdout).toContain("GONE  shared  removed");
     expect(namesOnly.stdout).not.toContain("KEEP");
+    expect(namesOnly.stdout).not.toContain("fresh");
+    expect(namesOnly.stdout).not.toContain("next");
+    expect(namesOnly.stdout).not.toContain("prev");
+    expect(namesOnly.stdout).not.toContain("old");
     expect(namesOnly.stdout).not.toContain("••••••••");
+    const revealed = await run(
+      [
+        "diff",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--reveal",
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(revealed.exitCode).toBe(0);
+    expect(revealed.stdout).toContain("NEW");
+    expect(revealed.stdout).toContain("+  fresh");
+    expect(revealed.stdout).toContain("CHANGED  shared");
+    expect(revealed.stdout).toContain("-  prev");
+    expect(revealed.stdout).toContain("+  next");
+    expect(revealed.stdout).toContain("GONE  shared");
+    expect(revealed.stdout).toContain("-  old");
     const matching = await run(
       [
         "diff",
@@ -1135,7 +1157,69 @@ describe("protected CLI workflows", () => {
     expect(questions).toEqual([
       [
         "1 variable being updated",
-        "  DATABASE_URL",
+        "  DATABASE_URL  shared  updated",
+        "",
+        ...destinationLines,
+        "Publish?",
+      ].join("\n"),
+    ]);
+    expect(questions[0]).not.toContain("abc123x");
+    expect(questions[0]).not.toContain("postgres://secret");
+    expect(pushed.stdout).not.toContain("abc123x");
+    expect(pushed.stdout).not.toContain("postgres://secret");
+  });
+
+  test("push --reveal shows plaintext Values only in that confirmation", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=abc123x\nAPI_KEY=tok\n");
+    const questions: string[] = [];
+    const revealed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--reveal",
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      },
+    );
+    expect(revealed.exitCode).toBe(0);
+    expect(questions).toEqual([
+      [
+        "1 variable being updated",
+        "  DATABASE_URL  shared",
         "  -  postgres://secret",
         "  +  abc123x",
         "",
@@ -1143,8 +1227,85 @@ describe("protected CLI workflows", () => {
         "Publish?",
       ].join("\n"),
     ]);
-    expect(pushed.stdout).not.toContain("abc123x");
-    expect(pushed.stdout).not.toContain("postgres://secret");
+    expect(revealed.stdout).not.toContain("abc123x");
+    expect(revealed.stdout).not.toContain("postgres://secret");
+    // The next review goes back to the masked default: reveal is scoped to
+    // the single review it was requested for.
+    await Bun.write(input, "DATABASE_URL=abc123x\nAPI_KEY=rotated\n");
+    const masked = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return false;
+        },
+      },
+    );
+    expect(masked.exitCode).toBe(2);
+    expect(questions[1]).not.toContain("rotated");
+    expect(questions[1]).not.toContain("abc123x");
+    expect(questions[1]).not.toContain("postgres://secret");
+    expect(masked.stderr).toContain("publication confirmation was declined");
+    expect(masked.stderr).not.toContain("rotated");
+    expect(masked.stderr).not.toContain("abc123x");
+    expect(masked.stderr).not.toContain("postgres://secret");
+  });
+
+  test("a declined or failed publication leaks no Values even with --debug", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    await Bun.write(input, "DATABASE_URL=abc123x\nAPI_KEY=tok\n");
+    const declined = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--debug",
+      ],
+      {
+        ...runtime,
+        confirm: async () => false,
+      },
+    );
+    expect(declined.exitCode).toBe(2);
+    expect(declined.stderr).toContain("publication confirmation was declined");
+    expect(declined.stderr).not.toContain("abc123x");
+    expect(declined.stderr).not.toContain("postgres://secret");
+    expect(declined.stdout).not.toContain("abc123x");
   });
 
   test("push confirmation lists added and removed Variables", async () => {
@@ -1198,21 +1359,20 @@ describe("protected CLI workflows", () => {
     expect(questions).toEqual([
       [
         "1 variable being added, 1 variable being removed",
-        "  NEW_TOKEN",
-        "  +  fresh",
-        "",
-        "  API_KEY",
-        "  -  tok",
+        "  NEW_TOKEN  shared  added",
+        "  API_KEY  user-defined  removed",
         "",
         ...destinationLines,
         "Publish?",
       ].join("\n"),
     ]);
+    expect(questions[0]).not.toContain("fresh");
+    expect(questions[0]).not.toContain("tok");
     expect(pushed.stdout).not.toContain("fresh");
     expect(pushed.stdout).not.toContain("tok");
   });
 
-  test("pull confirmation shows the Values that will replace the local file", async () => {
+  test("pull confirmation masks the Values that will replace the local file", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
@@ -1261,14 +1421,79 @@ describe("protected CLI workflows", () => {
     expect(questions).toEqual([
       [
         "1 variable being added, 1 variable being updated, 1 variable being removed",
-        "  DATABASE_URL",
+        "  DATABASE_URL  shared  updated",
+        "  GONE  removed",
+        "  API_KEY  user-defined  added",
+        "",
+        ...destinationLines,
+        `Replace ${input} with decrypted Values?`,
+      ].join("\n"),
+    ]);
+    expect(questions[0]).not.toContain("postgres://local");
+    expect(questions[0]).not.toContain("postgres://secret");
+    expect(questions[0]).not.toContain("tok");
+    expect(pulled.stdout).not.toContain("postgres://local");
+    expect(pulled.stdout).not.toContain("postgres://secret");
+  });
+
+  test("pull --reveal shows plaintext Values in the replacement confirmation", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://local\nGONE=old\n");
+    const questions: string[] = [];
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--reveal",
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      },
+    );
+    expect(pulled.exitCode).toBe(0);
+    expect(questions).toEqual([
+      [
+        "1 variable being added, 1 variable being updated, 1 variable being removed",
+        "  DATABASE_URL  shared",
         "  -  postgres://local",
         "  +  postgres://secret",
         "",
         "  GONE",
         "  -  old",
         "",
-        "  API_KEY",
+        "  API_KEY  user-defined",
         "  +  tok",
         "",
         ...destinationLines,
@@ -1277,6 +1502,53 @@ describe("protected CLI workflows", () => {
     ]);
     expect(pulled.stdout).not.toContain("postgres://local");
     expect(pulled.stdout).not.toContain("postgres://secret");
+  });
+
+  test("pull --stdout --reveal decline leaks no Values through the error", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        ids.environment,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    const declined = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+        "--reveal",
+        "--debug",
+      ],
+      {
+        ...runtime,
+        confirm: async () => false,
+      },
+    );
+    expect(declined.exitCode).toBe(2);
+    expect(declined.stderr).toContain("Value reveal confirmation was declined");
+    expect(declined.stderr).not.toContain("postgres://secret");
+    expect(declined.stderr).not.toContain("tok");
+    expect(declined.stdout).not.toContain("postgres://secret");
   });
 
   test("pull reports no changes when the local file already matches", async () => {
@@ -1682,6 +1954,180 @@ describe("protected CLI workflows", () => {
     expect(historyBody.revisions.map((revision) => revision.mutation)).toEqual([
       1, 2,
     ]);
+  });
+
+  test("rollback confirmation masks Values until --reveal", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const variableId = "99999999-9999-4999-8999-999999999999";
+    const seeded = await createPublicationArtifacts(
+      [
+        {
+          id: variableId,
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://secret",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const seededRevisionObject = seeded.stagedObjects.find(
+      (object) => object.objectId === seeded.request.revision.protocolObjectId,
+    );
+    if (!seededRevisionObject) throw new Error("revision object is missing");
+    const runtime = await setup({
+      bootstrap,
+      revisions: [
+        {
+          id: seeded.request.revision.id,
+          digest: await sha384(seededRevisionObject.bytes),
+          parentId: ids.environment,
+          parentHash: new Uint8Array(48),
+          mutation: 1,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(seeded.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            seeded.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+      ],
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=abc123x\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    const questions: string[] = [];
+    const revealedDeclined = await run(
+      [
+        "rollback",
+        seeded.request.revision.id,
+        "--variable",
+        variableId,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--reveal",
+        "--debug",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return false;
+        },
+      },
+    );
+    expect(revealedDeclined.exitCode).toBe(2);
+    expect(revealedDeclined.stderr).toContain(
+      "publication confirmation was declined",
+    );
+    expect(revealedDeclined.stderr).not.toContain("abc123x");
+    expect(revealedDeclined.stderr).not.toContain("postgres://secret");
+    expect(questions).toEqual([
+      [
+        "1 variable being updated",
+        "  DATABASE_URL  shared",
+        "  -  abc123x",
+        "  +  postgres://secret",
+        "",
+        ...destinationLines,
+        "Publish?",
+      ].join("\n"),
+    ]);
+    const rolled = await run(
+      [
+        "rollback",
+        seeded.request.revision.id,
+        "--variable",
+        variableId,
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+      },
+    );
+    expect(rolled.exitCode).toBe(0);
+    expect(questions[1]).toBe(
+      [
+        "1 variable being updated",
+        "  DATABASE_URL  shared  updated",
+        "",
+        ...destinationLines,
+        "Publish?",
+      ].join("\n"),
+    );
+    expect(questions[1]).not.toContain("abc123x");
+    expect(questions[1]).not.toContain("postgres://secret");
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    const historyBody = JSON.parse(history.stdout) as {
+      ok: boolean;
+      revisions: Array<{ mutation: number }>;
+    };
+    expect(historyBody.ok).toBe(true);
+    expect(historyBody.revisions).toHaveLength(3);
+    expect(historyBody.revisions[2]?.mutation).toBe(3);
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {

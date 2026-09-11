@@ -536,23 +536,62 @@ const handle = async (request: Request): Promise<Response> => {
   return problemResponse("resource_not_found");
 };
 
+const transientRepositoryDelaysMs = [
+  1_000, 2_000, 4_000, 8_000, 16_000,
+] as const;
+
+const isTransientRepositoryResolution = (result: CliRunResult): boolean => {
+  if (result.exitCode !== 7) return false;
+  const output = `${result.stdout}\n${result.stderr}`;
+  try {
+    const diagnostic: unknown = JSON.parse(output);
+    return (
+      typeof diagnostic === "object" &&
+      diagnostic !== null &&
+      (diagnostic as Record<string, unknown>).code ===
+        "repository_resolution_failed"
+    );
+  } catch {
+    return (
+      output.includes('"code":"repository_resolution_failed"') ||
+      output.includes("GitHub could not resolve the repository identity") ||
+      output.includes("could not resolve the GitHub repository identity") ||
+      output.includes("GitHub returned an invalid repository identity") ||
+      output.includes("GitHub repository identity was not resolved")
+    );
+  }
+};
+
+const withTransientRepositoryRetry = async (
+  run: () => Promise<CliRunResult>,
+): Promise<CliRunResult> => {
+  let result = await run();
+  for (const delay of transientRepositoryDelaysMs) {
+    if (!isTransientRepositoryResolution(result)) return result;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    result = await run();
+  }
+  return result;
+};
+
 const runBinary = async (
   args: readonly string[],
   environment: NodeJS.ProcessEnv,
-): Promise<CliRunResult> => {
-  const child = Bun.spawn([binary, ...args], {
-    cwd: root,
-    env: environment,
-    stdout: "pipe",
-    stderr: "pipe",
+): Promise<CliRunResult> =>
+  withTransientRepositoryRetry(async () => {
+    const child = Bun.spawn([binary, ...args], {
+      cwd: root,
+      env: environment,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return { stdout, stderr, exitCode };
   });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  return { stdout, stderr, exitCode };
-};
 
 const shellQuote = (value: string): string =>
   `'${value.replaceAll("'", "'\\''")}'`;
@@ -571,18 +610,20 @@ const runTerminal = async (
     process.platform === "darwin"
       ? ["-q", "/dev/null", "sh", "-c", commandWithInput]
       : ["-q", "-e", "-c", commandWithInput, "/dev/null"];
-  const child = Bun.spawn(["script", ...scriptArgs], {
-    cwd: root,
-    env: environment,
-    stdout: "pipe",
-    stderr: "pipe",
+  return withTransientRepositoryRetry(async () => {
+    const child = Bun.spawn(["script", ...scriptArgs], {
+      cwd: root,
+      env: environment,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return { stdout, stderr, exitCode };
   });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  return { stdout, stderr, exitCode };
 };
 
 const runJson = async (
