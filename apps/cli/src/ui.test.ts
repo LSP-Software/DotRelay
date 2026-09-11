@@ -5,6 +5,7 @@ import {
   renderClassificationBoard,
 } from "./classify-ui";
 import { CliInvocationError } from "./errors";
+import type { TerminalIo } from "./terminal";
 import { rewriteRegion, selectOption } from "./ui";
 
 describe("CLI region rewrite", () => {
@@ -68,5 +69,62 @@ describe("selectOption line input", () => {
         prompt: async () => "3",
       }),
     ).rejects.toThrow(new CliInvocationError("choose an option from the list"));
+  });
+});
+
+const rawSelectTerminal = () => {
+  const input = new PassThrough() as PassThrough & {
+    isTTY?: boolean;
+    setRawMode?: (enabled: boolean) => void;
+  };
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  return {
+    terminal: { input, output: new PassThrough() } as unknown as TerminalIo,
+    input,
+  };
+};
+
+const tick = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("selectOption raw TTY", () => {
+  const choices = [
+    { id: "a", label: "development" },
+    { id: "b", label: "production" },
+  ];
+
+  test("rejects a bare Enter when defaultToFirst is false", async () => {
+    const { terminal, input } = rawSelectTerminal();
+    const pending = selectOption("Environment", choices, {
+      terminal,
+      defaultToFirst: false,
+    });
+    input.write("\r");
+    input.end();
+    await expect(pending).rejects.toThrow(
+      new CliInvocationError("choose an option from the list"),
+    );
+  });
+
+  test("confirms the highlighted option after the cursor moves", async () => {
+    const { terminal, input } = rawSelectTerminal();
+    const pending = selectOption("Environment", choices, {
+      terminal,
+      defaultToFirst: false,
+    });
+    input.write("\u001b[B");
+    await tick();
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe("b");
+  });
+
+  test("still defaults to the first option when defaultToFirst is not disabled", async () => {
+    const { terminal, input } = rawSelectTerminal();
+    const pending = selectOption("Environment", choices, { terminal });
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe("a");
   });
 });

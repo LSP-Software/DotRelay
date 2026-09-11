@@ -152,6 +152,10 @@ export const selectOption = async (
     const input = terminal.input as ReadableRaw;
     const output = terminal.output;
     let cursor = 0;
+    // A bare Enter only confirms the highlighted option once the operator
+    // has moved the cursor; otherwise it is an empty answer and must not
+    // steer the choice to the first item in list order.
+    let moved = false;
     input.setEncoding?.("utf8");
     input.setRawMode?.(true);
     input.resume?.();
@@ -166,12 +170,18 @@ export const selectOption = async (
         const key = await readRawKey(input);
         if (key === "\u0003")
           throw new CliInvocationError("selection cancelled");
-        if (key === "\r" || key === "\n") return choices[cursor]!.id;
-        if (key === "\u001b[A" || key === "k")
+        if (key === "\r" || key === "\n") {
+          if (options.defaultToFirst === false && !moved)
+            throw new CliInvocationError("choose an option from the list");
+          return choices[cursor]!.id;
+        }
+        if (key === "\u001b[A" || key === "k") {
+          moved = true;
           cursor = (cursor - 1 + choices.length) % choices.length;
-        else if (key === "\u001b[B" || key === "j")
+        } else if (key === "\u001b[B" || key === "j") {
+          moved = true;
           cursor = (cursor + 1) % choices.length;
-        else continue;
+        } else continue;
         rendered = rewriteRegion(
           output,
           rendered,
