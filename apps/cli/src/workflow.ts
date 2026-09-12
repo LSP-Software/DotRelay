@@ -1884,7 +1884,7 @@ export const createRecoveryBackup = async (
   const pendingText = `${JSON.stringify(artifact)}\n`;
   await atomicWriteProtectedFile(pendingPath, pendingText);
   const operationId = crypto.randomUUID();
-  let publication: unknown = null;
+  let publicationError: unknown = null;
   try {
     await authorized.admin.post(
       "/api/v1/recovery/envelopes",
@@ -1908,16 +1908,17 @@ export const createRecoveryBackup = async (
       { idempotencyKey: operationId },
     );
   } catch (error) {
-    publication = error;
+    publicationError = error;
   }
-  if (publication !== null) {
+  if (publicationError !== null) {
     // A definitive rejection cannot have been accepted; an uncertain failure
     // must be reconciled against the service's current envelope first.
     const definitive =
-      publication instanceof CliError && publication.category !== "transient";
+      publicationError instanceof CliError &&
+      publicationError.category !== "transient";
     if (definitive) {
       await discardPendingKit(pendingPath);
-      throw publication;
+      throw publicationError;
     }
     const verified = await verifyRecoveryPublication(
       authorized.admin,
@@ -1926,7 +1927,7 @@ export const createRecoveryBackup = async (
     );
     if (verified === "not-accepted") {
       await discardPendingKit(pendingPath);
-      throw publication;
+      throw publicationError;
     }
     if (verified === "unverified") {
       throw new CliError(
