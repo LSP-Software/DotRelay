@@ -127,6 +127,31 @@ const hex = (value: unknown, length: number): value is string =>
   value.length === length &&
   /^[0-9a-f]+$/i.test(value);
 
+const toHex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
+
+const decodeBase64 = (value: string): Uint8Array =>
+  new Uint8Array(Buffer.from(value, "base64"));
+
+// A public key a client registers with the Server Profile, in the hex format
+// the boundary reports it in.
+const registeredKey = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const bytes = decodeBase64(value);
+  return bytes.length === 32 ? toHex(bytes) : null;
+};
+
+// The Server Profile resolves one Device at a time. The boundary reports that
+// Device's id alongside the public keys registered for it.
+const resolveDevice = (
+  deviceId: string,
+  encryptionPublicKey: string,
+  signingPublicKey: string,
+) => {
+  state.deviceId = deviceId;
+  state.encryptionPublicKey = encryptionPublicKey;
+  state.signingPublicKey = signingPublicKey;
+};
+
 const boundary = () => ({
   environment: {
     headRevision: state.revisions.at(-1)?.id ?? "empty-environment",
@@ -148,10 +173,12 @@ const boundary = () => ({
     pinned: true,
     serverProfileId,
   },
+  // Like the real Server Profile, the boundary names the Device's id and
+  // registered public keys only while that Device is active.
   device: {
     active: state.active,
     label: state.active ? "Active Device" : "No active Device",
-    ...(state.deviceId
+    ...(state.active && state.deviceId
       ? {
           id: state.deviceId,
           encryptionPublicKey: state.encryptionPublicKey,
@@ -392,9 +419,7 @@ const handle = async (request: Request): Promise<Response> => {
     )
       return problemResponse("invalid_request");
     state.active = true;
-    state.deviceId = body.deviceId;
-    state.encryptionPublicKey = body.x25519PublicKey;
-    state.signingPublicKey = body.ed25519PublicKey;
+    resolveDevice(body.deviceId, body.x25519PublicKey, body.ed25519PublicKey);
     state.bootstrapCount += 1;
     return jsonResponse(
       {
@@ -482,17 +507,23 @@ const handle = async (request: Request): Promise<Response> => {
     request.method === "POST"
   ) {
     const body = await readJson(request);
+    const x25519PublicKey = registeredKey(body.x25519PublicKey);
+    const ed25519PublicKey = registeredKey(body.ed25519PublicKey);
     if (
       request.headers.get("X-DotRelay-Device-Id") !== state.deviceId ||
       !state.enrollmentApproved ||
       body.deviceId !== state.pendingDeviceId ||
       typeof body.certificateObject !== "string" ||
       typeof body.enrollmentObject !== "string" ||
-      enrollmentMatch[1] !== state.enrollmentId
+      enrollmentMatch[1] !== state.enrollmentId ||
+      x25519PublicKey === null ||
+      ed25519PublicKey === null
     )
       return problemResponse("invalid_request");
+    // Completing an enrollment registers the new Device's public keys on the
+    // Server Profile, so its boundary must report them from now on.
     state.active = true;
-    state.deviceId = body.deviceId as string;
+    resolveDevice(body.deviceId as string, x25519PublicKey, ed25519PublicKey);
     delete state.enrollmentId;
     delete state.pendingDeviceId;
     state.enrollmentApproved = false;
@@ -510,18 +541,23 @@ const handle = async (request: Request): Promise<Response> => {
     request.method === "POST"
   ) {
     const body = await readJson(request);
+    const x25519PublicKey = registeredKey(body.x25519PublicKey);
+    const ed25519PublicKey = registeredKey(body.ed25519PublicKey);
     if (
       !uuid(body.deviceId) ||
       typeof body.proof !== "string" ||
       typeof body.certificate !== "string" ||
       typeof body.keyId !== "string" ||
-      body.keyId.length === 0
+      body.keyId.length === 0 ||
+      registeredKey(body.replacementSigningPublicKey) === null ||
+      x25519PublicKey === null ||
+      ed25519PublicKey === null
     )
       return problemResponse("invalid_request");
+    // Restoring a Recovery Kit registers the replacement Device's public keys
+    // on the Server Profile, so its boundary must report them from now on.
     state.active = true;
-    state.deviceId = body.deviceId;
-    state.encryptionPublicKey = body.replacementEncryptionPublicKey as string;
-    state.signingPublicKey = body.replacementSigningPublicKey as string;
+    resolveDevice(body.deviceId, x25519PublicKey, ed25519PublicKey);
     state.recoveryCount += 1;
     return jsonResponse(
       {
@@ -693,6 +729,11 @@ try {
   initialDeviceId = requireString(enrolled.deviceId, "initial Device id");
   if (enrolled.active !== true || state.bootstrapCount !== 1)
     throw new Error("packaged CLI Device bootstrap contract failed");
+  // Keys the Server Profile registered for the initial Device at bootstrap.
+  const initialEncryptionPublicKey = state.encryptionPublicKey;
+  const initialSigningPublicKey = state.signingPublicKey;
+  if (!initialEncryptionPublicKey || !initialSigningPublicKey)
+    throw new Error("packaged CLI bootstrap did not register Device keys");
   try {
     await deviceStorage.load({
       pin,
@@ -1047,6 +1088,10 @@ try {
   approverDeviceId = approver.deviceId;
   if (!initialDeviceId || !approverDeviceId)
     throw new Error("packaged CLI Device fixture setup failed");
+  // Keys the Server Profile registered for the approver Device when that
+  // installation enrolled, so the boundary can report them for it.
+  const approverEncryptionPublicKey = toHex(approver.x25519PublicKey);
+  const approverSigningPublicKey = toHex(approver.ed25519PublicKey);
 
   const enrollmentPath = join(isolatedDirectory, "enrollment.json");
   const begun = await runJson(
@@ -1068,7 +1113,13 @@ try {
     state.enrollmentCount !== 1
   )
     throw new Error("packaged CLI enrollment begin contract failed");
-  state.deviceId = approverDeviceId;
+  // The approver's installation is the one approving: the Server Profile
+  // resolves the approver Device, with the keys it registered for it.
+  resolveDevice(
+    approverDeviceId,
+    approverEncryptionPublicKey,
+    approverSigningPublicKey,
+  );
   await writeDeviceId(
     deviceMetadataPath(isolatedDirectory, pin),
     pin,
@@ -1089,7 +1140,13 @@ try {
   );
   if (approved.approved !== true || !state.enrollmentApproved)
     throw new Error("packaged CLI enrollment approval contract failed");
-  state.deviceId = initialDeviceId;
+  // The initiator's installation completes the handoff: the Server Profile
+  // resolves the initial Device again, with the keys it registered for it.
+  resolveDevice(
+    initialDeviceId,
+    initialEncryptionPublicKey,
+    initialSigningPublicKey,
+  );
   await writeDeviceId(
     deviceMetadataPath(isolatedDirectory, pin),
     pin,
@@ -1111,6 +1168,42 @@ try {
   enrolledDeviceId = requireString(completed.deviceId, "enrolled Device id");
   if (!completed.active || enrolledDeviceId === initialDeviceId)
     throw new Error("packaged CLI enrollment completion contract failed");
+
+  // An installation must verify that its saved bundle matches the keys the
+  // Server Profile registered for this Device. Corrupt the registration and
+  // the CLI must refuse to act on the stale bundle.
+  const enrolledEncryptionPublicKey = state.encryptionPublicKey;
+  const enrolledSigningPublicKey = state.signingPublicKey;
+  if (!enrolledEncryptionPublicKey || !enrolledSigningPublicKey)
+    throw new Error(
+      "packaged CLI enrollment completion did not register Device keys",
+    );
+  state.encryptionPublicKey = initialEncryptionPublicKey;
+  const mismatchPath = join(isolatedDirectory, "mismatch-recovery.kit");
+  const mismatchedBackup = await runBinary(
+    [
+      "device",
+      "backup",
+      "--profile",
+      "live",
+      "--output",
+      mismatchPath,
+      "--no-input",
+      "--json",
+    ],
+    environment,
+  );
+  state.encryptionPublicKey = enrolledEncryptionPublicKey;
+  state.signingPublicKey = enrolledSigningPublicKey;
+  if (
+    mismatchedBackup.exitCode !== 7 ||
+    !mismatchedBackup.stderr.includes(
+      "does not match the keys registered on this Server Profile",
+    )
+  )
+    throw new Error(
+      "packaged CLI bundle/registration mismatch contract failed",
+    );
 
   const recoveryPath = join(isolatedDirectory, "recovery.kit");
   const backup = await runJson(
