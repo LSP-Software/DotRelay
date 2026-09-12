@@ -172,7 +172,7 @@ const requiredString = (value: unknown, label: string): string => {
   return value;
 };
 
-const workspaceBoundaryFields = [
+export const workspaceBoundaryFields = [
   "environment",
   "session",
   "profile",

@@ -39,7 +39,7 @@ describe("CLI foundation", () => {
     expect(main(["--version"])).toBe(version);
   });
 
-  test("reports authentication from the selected profile session", async () => {
+  test("verifies the stored session with the Server Profile instead of trusting it", async () => {
     const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
     try {
       await Bun.write(
@@ -59,6 +59,7 @@ describe("CLI foundation", () => {
           ],
         }),
       );
+      const requested: string[] = [];
       const result = await run(["status", "--json"], {
         profilePath,
         credentials: {
@@ -66,12 +67,29 @@ describe("CLI foundation", () => {
           set: async () => undefined,
           delete: async () => undefined,
         },
+        fetch: async (input) => {
+          const url = String(input);
+          requested.push(url);
+          if (url.endsWith("/api/v1/session"))
+            return Response.json({
+              authenticated: true,
+              user: { id: "22222222-2222-4222-8222-222222222222" },
+            });
+          return Response.json(createProblem("resource_not_found"), {
+            status: 404,
+          });
+        },
       });
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
         profile: "relay",
-        authenticated: true,
+        origin: "https://relay.example",
+        service: "verified",
+        session: "verified",
+        device: "not-enrolled",
+        nextAction: "run dotrelay device enroll",
       });
+      expect(requested).toEqual(["https://relay.example/api/v1/session"]);
       expect(result.stdout).not.toContain("session-token");
     } finally {
       await (await import("node:fs/promises"))
@@ -108,6 +126,7 @@ describe("CLI foundation", () => {
           ],
         }),
       );
+      const requested: string[] = [];
       const result = await run(["status", "--profile", "other", "--json"], {
         profilePath,
         credentials: {
@@ -118,13 +137,28 @@ describe("CLI foundation", () => {
           set: async () => undefined,
           delete: async () => undefined,
         },
+        fetch: async (input) => {
+          const url = String(input);
+          requested.push(url);
+          if (url.endsWith("/api/v1/session"))
+            return Response.json({
+              authenticated: true,
+              user: { id: "22222222-2222-4222-8222-222222222222" },
+            });
+          return Response.json(createProblem("resource_not_found"), {
+            status: 404,
+          });
+        },
       });
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
         profile: "other",
         origin: "https://other.example",
-        authenticated: true,
+        service: "verified",
+        session: "verified",
+        device: "not-enrolled",
       });
+      expect(requested).toEqual(["https://other.example/api/v1/session"]);
     } finally {
       await (await import("node:fs/promises"))
         .unlink(profilePath)
@@ -2177,6 +2211,628 @@ describe("CLI sign-in display", () => {
       });
     } finally {
       await fixture.cleanup();
+    }
+  });
+});
+
+const toHexBytes = (bytes: Uint8Array): string =>
+  [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+// Serves the session probe and workspace boundary a status verification
+// contacts, with the session, Device, and Environment lifecycles scripted.
+const createStatusHttpFixture = (
+  options: Readonly<{
+    readonly session: "active" | "expired";
+    readonly device: "active" | "inactive";
+    readonly environments: readonly EnvironmentFixture[];
+    readonly deviceKeys?: () => Readonly<{
+      readonly encryption: string;
+      readonly signing: string;
+    }> | null;
+  }>,
+): Readonly<{
+  readonly origin: string;
+  readonly pin: ServerProfilePin;
+  readonly requests: Array<
+    Readonly<{
+      readonly method: string;
+      readonly path: string;
+      readonly deviceIdHeader: string | null;
+      readonly authorization: string | null;
+    }>
+  >;
+  readonly stop: () => void;
+}> => {
+  const requests: Array<{
+    method: string;
+    path: string;
+    deviceIdHeader: string | null;
+    authorization: string | null;
+  }> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async (request) => {
+      const url = new URL(request.url);
+      requests.push({
+        method: request.method,
+        path: `${url.pathname}${url.search}`,
+        deviceIdHeader: request.headers.get(DEVICE_ID_HEADER),
+        authorization: request.headers.get("Authorization"),
+      });
+      if (url.pathname === "/api/v1/session") {
+        if (
+          options.session === "expired" ||
+          request.headers.get("Authorization") !== `Bearer ${sessionToken}`
+        )
+          return problemResponse("authentication_required");
+        return jsonResponse({
+          authenticated: true,
+          user: { id: protocolUserId, name: "Sam" },
+        });
+      }
+      if (url.pathname === "/api/v1/workspace/boundary") {
+        const environmentId = url.searchParams.get("environment");
+        const environment = environmentId
+          ? options.environments.find(
+              (entry) =>
+                entry.id === environmentId && entry.lifecycle === "active",
+            )
+          : null;
+        const deviceKeys = options.deviceKeys?.() ?? null;
+        const device =
+          options.device === "active"
+            ? {
+                active: true,
+                id: deviceId,
+                ...(deviceKeys ? deviceKeys : {}),
+              }
+            : { active: false };
+        return jsonResponse({
+          environment: {
+            id: environment?.id ?? null,
+            label: environment?.label ?? null,
+            projectId,
+            teamId,
+            headRevision: "empty-environment",
+            headHash: null,
+            projectEpoch: null,
+          },
+          session: { active: true, userId: protocolUserId },
+          device,
+          grantsReady: false,
+          epochCurrent: false,
+          activeDeviceCount: options.device === "active" ? 1 : 0,
+          rotationRequired: false,
+          crypto: { available: true },
+          projectEpoch: null,
+          profile: {
+            name: "DotRelay Server Profile",
+            origin: "http://127.0.0.1",
+            pinned: true,
+            serverProfileId,
+          },
+          catalog: [],
+          signingTrustKeys: [],
+          peerDevices: [],
+        });
+      }
+      return problemResponse("resource_not_found");
+    },
+  });
+  const origin = `http://127.0.0.1:${server.port}`;
+  return {
+    origin,
+    pin: Object.freeze({ origin, serverProfileId }),
+    requests,
+    stop: () => server.stop(true),
+  };
+};
+
+const seedStatusState = async (
+  pin: ServerProfilePin,
+  options: Readonly<{
+    readonly session?: "stored" | "none";
+    readonly device?: "stored" | "stored-broken" | "none";
+    readonly onBootstrap?: (
+      bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
+    ) => void;
+  }> = {},
+): Promise<{
+  profilePath: string;
+  stateDirectory: string;
+  contextPath: string;
+  credentials: NativeCredentialStore;
+  deviceStorage: ReturnType<typeof createCliDeviceStorage> | null;
+  cleanup: () => Promise<void>;
+}> => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "dotrelay-status-"));
+  const profilePath = join(stateDirectory, "profiles.json");
+  const contextPath = join(stateDirectory, "context.json");
+  await Bun.write(
+    profilePath,
+    JSON.stringify({
+      version: 1,
+      selected: "relay",
+      profiles: [
+        {
+          name: "relay",
+          origin: pin.origin,
+          pin: {
+            origin: pin.origin,
+            serverProfileId: pin.serverProfileId,
+          },
+        },
+      ],
+    }),
+  );
+  const secrets = new Map<string, Uint8Array>();
+  const credentials: NativeCredentialStore = Object.freeze({
+    get: async (_service, account) => {
+      const value = secrets.get(account);
+      return value ? new Uint8Array(value) : null;
+    },
+    set: async (_service, account, secret) => {
+      secrets.set(account, new Uint8Array(secret));
+    },
+    delete: async (_service, account) => {
+      secrets.delete(account);
+    },
+  });
+  if (options.session !== "none")
+    await createSessionStore(credentials).save(pin, sessionToken);
+  let deviceStorage: ReturnType<typeof createCliDeviceStorage> | null = null;
+  if (options.device !== "none") {
+    await writeDeviceId(deviceMetadataPath(stateDirectory, pin), pin, deviceId);
+    const bootstrap = await createDeviceBootstrap({
+      pin,
+      userId: protocolUserId,
+      deviceId,
+    });
+    options.onBootstrap?.(bootstrap);
+    deviceStorage = createCliDeviceStorage(pin, credentials, {
+      recordStore: createMemoryDeviceRecordStore(),
+    });
+    if (options.device === "stored") await deviceStorage.save(bootstrap.bundle);
+    // "stored-broken" keeps the Device id but no loadable bundle: neither
+    // the wrapped record nor the wrapping secret exists locally.
+  }
+  return {
+    profilePath,
+    stateDirectory,
+    contextPath,
+    credentials,
+    deviceStorage,
+    cleanup: async () =>
+      rm(stateDirectory, { recursive: true, force: true }).catch(
+        () => undefined,
+      ),
+  };
+};
+
+const statusRuntime = (state: {
+  profilePath: string;
+  stateDirectory: string;
+  contextPath: string;
+  credentials: NativeCredentialStore;
+  deviceStorage: ReturnType<typeof createCliDeviceStorage> | null;
+}) => ({
+  profilePath: state.profilePath,
+  stateDirectory: state.stateDirectory,
+  worktreeConfig: state.contextPath,
+  credentials: state.credentials,
+  ...(state.deviceStorage ? { deviceStorage: state.deviceStorage } : {}),
+});
+
+describe("status verifies the session and this Device", () => {
+  test("reports a verified session, active Device, and selected Environment", async () => {
+    const keyHolder: { encryption?: string; signing?: string } = {};
+    const fixture = createStatusHttpFixture({
+      session: "active",
+      device: "active",
+      environments: [
+        { id: environmentId, label: "staging", lifecycle: "active" },
+      ],
+      deviceKeys: () =>
+        keyHolder.encryption && keyHolder.signing
+          ? { encryption: keyHolder.encryption, signing: keyHolder.signing }
+          : null,
+    });
+    const state = await seedStatusState(fixture.pin, {
+      device: "stored",
+      onBootstrap: (bootstrap) => {
+        keyHolder.encryption = toHexBytes(bootstrap.x25519PublicKey);
+        keyHolder.signing = toHexBytes(bootstrap.ed25519PublicKey);
+      },
+    });
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({ serverProfileId, projectId, environmentId }),
+      );
+      const result = await run(["status", "--json"], {
+        ...statusRuntime(state),
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        profile: "relay",
+        origin: fixture.origin,
+        service: "verified",
+        session: "verified",
+        device: "active",
+        nextAction: "none",
+        projectId,
+        environmentId,
+        environment: "staging",
+        environmentActive: true,
+      });
+      const sessionProbe = fixture.requests.find(
+        (request) => request.path === "/api/v1/session",
+      );
+      expect(sessionProbe?.authorization).toBe(`Bearer ${sessionToken}`);
+      const boundaryProbe = fixture.requests.find((request) =>
+        request.path.startsWith("/api/v1/workspace/boundary"),
+      );
+      expect(boundaryProbe?.deviceIdHeader).toBe(deviceId);
+      expect(boundaryProbe?.path).toBe(
+        `/api/v1/workspace/boundary?environment=${environmentId}`,
+      );
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("never reports an expired or revoked session as signed in", async () => {
+    const fixture = createStatusHttpFixture({
+      session: "expired",
+      device: "active",
+      environments: [],
+    });
+    const state = await seedStatusState(fixture.pin, { device: "stored" });
+    try {
+      const result = await run(["status"], statusRuntime(state));
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Session expired or revoked");
+      expect(result.stdout).not.toContain("Signed in");
+      expect(result.stdout).toContain("Next: run dotrelay login");
+      expect(fixture.requests).toHaveLength(1);
+      expect(fixture.requests[0]?.path).toBe("/api/v1/session");
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("classifies an unreachable service as offline and retains last-known state", async () => {
+    const pin: ServerProfilePin = Object.freeze({
+      origin: "https://relay.example",
+      serverProfileId,
+    });
+    const state = await seedStatusState(pin, { device: "stored" });
+    let attempts = 0;
+    try {
+      const result = await run(["status"], {
+        ...statusRuntime(state),
+        fetch: async () => {
+          attempts += 1;
+          throw new TypeError("fetch failed");
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(attempts).toBeGreaterThan(0);
+      expect(result.stdout).toContain(
+        "Offline: could not reach the Server Profile",
+      );
+      expect(result.stdout).toContain("Signed in (last known; not verified)");
+      expect(result.stdout).toContain("Device (last known; not verified)");
+      expect(result.stdout).toContain(
+        "Next: retry when the Server Profile is reachable",
+      );
+      const json = await run(["status", "--json"], {
+        ...statusRuntime(state),
+        fetch: async () => {
+          attempts += 1;
+          throw new TypeError("fetch failed");
+        },
+      });
+      expect(JSON.parse(json.stdout)).toMatchObject({
+        ok: true,
+        service: "offline",
+        session: "unverified",
+        device: "unverified",
+        nextAction: "retry when the Server Profile is reachable",
+      });
+    } finally {
+      await state.cleanup();
+    }
+  });
+
+  test("reports a stored Device whose keys no longer load locally", async () => {
+    const fixture = createStatusHttpFixture({
+      session: "active",
+      device: "active",
+      environments: [],
+    });
+    const state = await seedStatusState(fixture.pin, {
+      device: "stored-broken",
+    });
+    try {
+      const result = await run(["status", "--json"], statusRuntime(state));
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        service: "verified",
+        session: "verified",
+        device: "unusable",
+        nextAction: "run dotrelay device recover",
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("reports a Device the service no longer considers active", async () => {
+    const fixture = createStatusHttpFixture({
+      session: "active",
+      device: "inactive",
+      environments: [],
+    });
+    const state = await seedStatusState(fixture.pin, { device: "stored" });
+    try {
+      const result = await run(["status", "--json"], statusRuntime(state));
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        service: "rejected",
+        session: "verified",
+        device: "not-active",
+        nextAction: "run dotrelay device enroll",
+      });
+      const boundaryProbe = fixture.requests.find((request) =>
+        request.path.startsWith("/api/v1/workspace/boundary"),
+      );
+      expect(boundaryProbe?.deviceIdHeader).toBe(deviceId);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("flags a selected Environment the service no longer resolves", async () => {
+    const fixture = createStatusHttpFixture({
+      session: "active",
+      device: "active",
+      environments: [
+        { id: archivedEnvironmentId, label: "legacy", lifecycle: "archived" },
+      ],
+    });
+    const state = await seedStatusState(fixture.pin, { device: "stored" });
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({
+          serverProfileId,
+          projectId,
+          environmentId: archivedEnvironmentId,
+        }),
+      );
+      const result = await run(["status", "--json"], statusRuntime(state));
+      expect(result.exitCode).toBe(0);
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        ok: true,
+        service: "verified",
+        device: "active",
+        environmentId: archivedEnvironmentId,
+        environmentActive: false,
+        nextAction: "run dotrelay env use <environment-id>",
+      });
+      expect(body).not.toHaveProperty("environment");
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("without a stored session skips the service and offers login", async () => {
+    const pin: ServerProfilePin = Object.freeze({
+      origin: "https://relay.example",
+      serverProfileId,
+    });
+    const state = await seedStatusState(pin, {
+      session: "none",
+      device: "none",
+    });
+    try {
+      const result = await run(["status", "--json"], {
+        ...statusRuntime(state),
+        fetch: async () => {
+          throw new Error(
+            "status must not contact the service without a session",
+          );
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        service: "skipped",
+        session: "not-stored",
+        device: "not-enrolled",
+        nextAction: "run dotrelay login",
+      });
+    } finally {
+      await state.cleanup();
+    }
+  });
+
+  test("with no Server Profile offers setup", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-status-profile-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(
+        profilePath,
+        JSON.stringify({ version: 1, profiles: [] }),
+      );
+      const result = await run(["status", "--json"], {
+        profilePath,
+        credentials: {
+          get: async () => null,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+        fetch: async () => {
+          throw new Error(
+            "status must not contact the service without a profile",
+          );
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        profile: null,
+        origin: null,
+        service: "skipped",
+        session: "not-stored",
+        device: "not-enrolled",
+        nextAction: "run dotrelay setup <origin>",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("reports a service that answered but could not be read as unavailable", async () => {
+    const pin: ServerProfilePin = Object.freeze({
+      origin: "https://relay.example",
+      serverProfileId,
+    });
+    const state = await seedStatusState(pin, { device: "stored" });
+    const fetchUnreadableBoundary: FetchFunction = async (input) => {
+      if (String(input).endsWith("/api/v1/session"))
+        return Response.json({
+          authenticated: true,
+          user: { id: protocolUserId, name: "Sam" },
+        });
+      return new Response(JSON.stringify({ detail: "boom" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      const result = await run(["status"], {
+        ...statusRuntime(state),
+        fetch: fetchUnreadableBoundary,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Signed in (verified)");
+      expect(result.stdout).toContain(
+        "The Server Profile could not complete the Device check",
+      );
+      expect(result.stdout).toContain("Next: retry dotrelay status");
+      const json = await run(["status", "--json"], {
+        ...statusRuntime(state),
+        fetch: fetchUnreadableBoundary,
+      });
+      expect(JSON.parse(json.stdout)).toMatchObject({
+        ok: true,
+        service: "unavailable",
+        session: "verified",
+        device: "unverified",
+        nextAction: "retry dotrelay status",
+      });
+    } finally {
+      await state.cleanup();
+    }
+  });
+
+  test("keeps a verified session while the Device check stays offline", async () => {
+    const pin: ServerProfilePin = Object.freeze({
+      origin: "https://relay.example",
+      serverProfileId,
+    });
+    const state = await seedStatusState(pin, { device: "stored" });
+    const fetchBoundaryOffline: FetchFunction = async (input) => {
+      if (String(input).endsWith("/api/v1/session"))
+        return Response.json({
+          authenticated: true,
+          user: { id: protocolUserId, name: "Sam" },
+        });
+      throw new TypeError("fetch failed");
+    };
+    try {
+      const result = await run(["status"], {
+        ...statusRuntime(state),
+        fetch: fetchBoundaryOffline,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Signed in (verified)");
+      expect(result.stdout).toContain(
+        "Offline: the Device check could not be completed",
+      );
+      expect(result.stdout).toContain("Device (last known; not verified)");
+      expect(result.stdout).toContain(
+        "Next: retry when the Server Profile is reachable",
+      );
+      const json = await run(["status", "--json"], {
+        ...statusRuntime(state),
+        fetch: fetchBoundaryOffline,
+      });
+      expect(JSON.parse(json.stdout)).toMatchObject({
+        ok: true,
+        service: "offline",
+        session: "verified",
+        device: "unverified",
+        nextAction: "retry when the Server Profile is reachable",
+      });
+    } finally {
+      await state.cleanup();
+    }
+  });
+
+  test("marks a stored Environment the service cannot resolve as not verified", async () => {
+    const fixture = createStatusHttpFixture({
+      session: "active",
+      device: "active",
+      environments: [],
+    });
+    const state = await seedStatusState(fixture.pin, { device: "stored" });
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({
+          serverProfileId,
+          projectId,
+          environmentId: "legacy-env",
+        }),
+      );
+      const result = await run(["status", "--json"], statusRuntime(state));
+      expect(result.exitCode).toBe(0);
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        ok: true,
+        service: "verified",
+        session: "verified",
+        device: "active",
+        projectId,
+        environmentId: "legacy-env",
+        environmentUnverified: true,
+        nextAction: "none",
+      });
+      expect(body).not.toHaveProperty("environment");
+      expect(body).not.toHaveProperty("environmentActive");
+      const boundaryProbe = fixture.requests.find((request) =>
+        request.path.startsWith("/api/v1/workspace/boundary"),
+      );
+      expect(boundaryProbe?.path).toBe("/api/v1/workspace/boundary");
+      const card = await run(["status"], statusRuntime(state));
+      expect(card.stdout).toContain("Environment legacy-env (not verified)");
+    } finally {
+      fixture.stop();
+      await state.cleanup();
     }
   });
 });

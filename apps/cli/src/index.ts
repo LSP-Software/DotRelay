@@ -1,5 +1,11 @@
 import { dirname, isAbsolute, resolve } from "node:path";
-import type { CliDeviceStorage } from "@dotrelay/client";
+import {
+  type CliDeviceStorage,
+  createCliDeviceStorage,
+  type DeviceKeyMaterial,
+  loadDeviceKeyMaterial,
+} from "@dotrelay/client";
+import { uuidToBytes } from "@dotrelay/contracts";
 import {
   createStrictJsonClient,
   findProjectByRepository,
@@ -30,6 +36,7 @@ import {
   readWorktreeContext,
   resolveEnvironmentSelection,
   resolveGitHubRepository,
+  type WorktreeContext,
   worktreeConfigPath,
   writeWorktreeContext,
 } from "./context";
@@ -37,7 +44,11 @@ import {
   createNativeCredentialStore,
   type NativeCredentialStore,
 } from "./credentials";
-import { deviceMetadataPath, readDeviceId } from "./device-storage";
+import {
+  createFileDeviceRecordStore,
+  deviceMetadataPath,
+  readDeviceId,
+} from "./device-storage";
 import {
   CliError,
   CliInvocationError,
@@ -49,6 +60,7 @@ import {
 import { createGitTrackingProbe, type GitTrackingProbe } from "./git-tracking";
 import {
   addServerProfile,
+  type CliServerProfile,
   createFileProfileCatalog,
   type FetchFunction,
   profileCatalogPath,
@@ -72,6 +84,7 @@ import {
   enrollFirstDevice,
   restoreRecoveryKit,
   runProtectedWorkflow,
+  workspaceBoundaryFields,
 } from "./workflow";
 
 export type { TerminalIo };
@@ -226,22 +239,93 @@ const defaultWorktreeConfigPath = async (): Promise<string> => {
 
 const json = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
+// Stored-local state is labelled as such; only the service-verified lines
+// may claim a session or Device as current.
+const statusSessionLine = (session: string): string => {
+  if (session === "verified") return "Signed in (verified)";
+  if (session === "expired") return "Session expired or revoked";
+  if (session === "unverified") return "Signed in (last known; not verified)";
+  return "Not signed in";
+};
+
+const statusDeviceLine = (device: string): string => {
+  if (device === "active") return "Device active (verified)";
+  if (device === "not-active") return "Device not active on the Server Profile";
+  if (device === "unusable") return "Device keys are not usable locally";
+  if (device === "unverified") return "Device (last known; not verified)";
+  return "No Device";
+};
+
+// The note names the stage that could not complete; once the service has
+// answered one probe it must never be reported as unreachable.
+const statusServiceNote = (service: string, session: string): string | null => {
+  if (service === "offline")
+    return session === "verified"
+      ? "Offline: the Device check could not be completed"
+      : "Offline: could not reach the Server Profile";
+  if (service === "unavailable")
+    return session === "verified"
+      ? "The Server Profile could not complete the Device check"
+      : "The Server Profile could not be verified";
+  return null;
+};
+
 const renderStatusCard = (value: Record<string, unknown>): string => {
   const profile =
     typeof value.profile === "string" ? value.profile : "No Server Profile";
-  const origin =
-    typeof value.origin === "string"
-      ? value.origin
-      : "run dotrelay setup <origin>";
-  const signedIn = value.authenticated === true;
-  const enrolled = value.device === "enrolled";
-  return [
+  const session =
+    typeof value.session === "string" ? value.session : "not-stored";
+  const device =
+    typeof value.device === "string" ? value.device : "not-enrolled";
+  const service = typeof value.service === "string" ? value.service : "skipped";
+  const lines: string[] = [
     `  ${paint("·", "wax")}  ${paint(profile, "paper")}`,
-    `     ${paint(origin, "graphite")}`,
-    `     ${paint(signedIn ? "Signed in" : "Not signed in", signedIn ? "ok" : "dim")}`,
-    `     ${paint(enrolled ? "Device enrolled" : "No Device", enrolled ? "ok" : "dim")}`,
-    "",
-  ].join("\n");
+  ];
+  if (typeof value.origin === "string")
+    lines.push(`     ${paint(value.origin, "graphite")}`);
+  lines.push(
+    `     ${paint(
+      statusSessionLine(session),
+      session === "verified" ? "ok" : "dim",
+    )}`,
+  );
+  lines.push(
+    `     ${paint(
+      statusDeviceLine(device),
+      device === "active" ? "ok" : "dim",
+    )}`,
+  );
+  const note = statusServiceNote(service, session);
+  if (note) lines.push(`     ${paint(note, "wax")}`);
+  if (typeof value.projectId === "string")
+    lines.push(`     ${paint(`Project ${value.projectId}`, "graphite")}`);
+  const environment =
+    typeof value.environment === "string"
+      ? value.environment
+      : typeof value.environmentId === "string"
+        ? value.environmentId
+        : null;
+  if (environment) {
+    const marker =
+      value.environmentActive === false
+        ? " (not active)"
+        : value.environmentUnverified === true
+          ? " (not verified)"
+          : "";
+    lines.push(
+      `     ${paint(
+        `Environment ${environment}${marker}`,
+        value.environmentActive === false ||
+          value.environmentUnverified === true
+          ? "dim"
+          : "graphite",
+      )}`,
+    );
+  }
+  const next = typeof value.nextAction === "string" ? value.nextAction : "none";
+  lines.push(`     ${paint(`Next: ${next}`, "dim")}`);
+  lines.push("");
+  return lines.join("\n");
 };
 
 const renderSuccess = (
@@ -478,6 +562,250 @@ const loginAndEnroll = async (
   };
 };
 
+const isAuthenticationRequired = (error: unknown): boolean =>
+  error instanceof CliError && error.code === "authentication_required";
+
+const isServiceUnreachable = (error: unknown): boolean =>
+  error instanceof CliError && error.code === "service_unavailable";
+
+// Verifies what this installation claims: the stored session against the
+// service, the stored Device id against the service's active Device, and the
+// local key bundle against the keys the service registered. The result
+// separates stored-local truth from service-verified truth and names the
+// next repair; a failure to reach or hear back from the service never
+// upgrades a stored state into a verified one.
+const verifyStatus = async (
+  runtime: CliRuntime,
+  selected: CliServerProfile,
+): Promise<Record<string, unknown>> => {
+  const credentials = runtime.credentials ?? createNativeCredentialStore();
+  const stateDirectory =
+    runtime.stateDirectory ??
+    dirname(runtime.profilePath ?? profileCatalogPath());
+  const pin = selected.pin;
+  const sessionToken = await createSessionStore(credentials).get(pin);
+  const storedDeviceId =
+    runtime.deviceId ??
+    (await readDeviceId(deviceMetadataPath(stateDirectory, pin)));
+  // Local truth: can this installation load its Device keys? The bundle is
+  // wrapped by a per-Device secret, so a missing or damaged record or
+  // wrapping key surfaces here instead of mid-workflow.
+  let deviceKeys: DeviceKeyMaterial | null = null;
+  if (storedDeviceId) {
+    const deviceStorage =
+      runtime.deviceStorage ??
+      createCliDeviceStorage(pin, credentials, {
+        recordStore: createFileDeviceRecordStore(stateDirectory),
+      });
+    try {
+      deviceKeys = await loadDeviceKeyMaterial(
+        await deviceStorage.load({
+          pin,
+          deviceId: uuidToBytes(storedDeviceId),
+        }),
+      );
+    } catch {
+      deviceKeys = null;
+    }
+  }
+  const deviceKeysUsable =
+    deviceKeys !== null &&
+    deviceKeys.encryptionPublicKey !== undefined &&
+    deviceKeys.signingPublicKey !== undefined;
+  let worktreeContext: WorktreeContext | null = null;
+  try {
+    worktreeContext = await readWorktreeContext(
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
+    );
+  } catch {
+    worktreeContext = null;
+  }
+  // Only this profile's selection describes this machine.
+  const context =
+    worktreeContext && worktreeContext.serverProfileId === pin.serverProfileId
+      ? worktreeContext
+      : null;
+  // The boundary endpoint scopes to the selected Environment only when its
+  // stored id is a UUID it can resolve; anything else is reported as stored,
+  // without a service claim.
+  const contextEnvironmentId = context?.environmentId;
+  const queriedEnvironment =
+    contextEnvironmentId !== undefined &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      contextEnvironmentId,
+    );
+  const environmentQuery =
+    queriedEnvironment && contextEnvironmentId
+      ? `?environment=${encodeURIComponent(contextEnvironmentId)}`
+      : "";
+  let sessionState: "verified" | "expired" | "unverified" | "not-stored" =
+    sessionToken ? "unverified" : "not-stored";
+  let deviceState:
+    | "active"
+    | "not-active"
+    | "unusable"
+    | "unverified"
+    | "not-enrolled" = storedDeviceId
+    ? deviceKeysUsable
+      ? "unverified"
+      : "unusable"
+    : "not-enrolled";
+  let service: "verified" | "offline" | "rejected" | "unavailable" | "skipped" =
+    sessionToken ? "offline" : "skipped";
+  let environmentLabel: string | null = null;
+  let environmentActive: boolean | null = null;
+  let environmentUnverified = false;
+  if (sessionToken) {
+    const admin =
+      runtime.admin ??
+      createStrictJsonClient(pin, credentials, {
+        ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+        ...(storedDeviceId ? { deviceId: storedDeviceId } : {}),
+      });
+    try {
+      await admin.get("/api/v1/session", ["authenticated", "user"]);
+      sessionState = "verified";
+      service = "verified";
+    } catch (error) {
+      if (isAuthenticationRequired(error)) {
+        sessionState = "expired";
+        service = "rejected";
+      } else {
+        // An answered-but-unreadable service (a failed or malformed
+        // response) is reported separately from an unreachable one; both
+        // leave the session unverified.
+        sessionState = "unverified";
+        service = isServiceUnreachable(error) ? "offline" : "unavailable";
+      }
+    }
+    if (sessionState === "verified" && storedDeviceId) {
+      try {
+        const boundary = await admin.get(
+          `/api/v1/workspace/boundary${environmentQuery}`,
+          workspaceBoundaryFields,
+        );
+        const boundaryDevice = boundary.device;
+        const deviceRecord =
+          boundaryDevice !== null &&
+          typeof boundaryDevice === "object" &&
+          !Array.isArray(boundaryDevice)
+            ? (boundaryDevice as Record<string, unknown>)
+            : null;
+        const deviceActive =
+          deviceRecord !== null &&
+          deviceRecord.active === true &&
+          deviceRecord.id === storedDeviceId;
+        if (!deviceActive) {
+          deviceState = "not-active";
+          service = "rejected";
+        } else {
+          // The registered keys are the service's word on which keys this
+          // Device holds; a bundle that no longer matches cannot be
+          // trusted, even though it loads.
+          let keysMatch = deviceKeysUsable;
+          if (keysMatch && deviceKeys) {
+            const matches = async (
+              local: CryptoKey | undefined,
+              registered: unknown,
+            ): Promise<boolean> => {
+              if (local === undefined || typeof registered !== "string")
+                return true;
+              const raw = new Uint8Array(
+                await crypto.subtle.exportKey("raw", local),
+              );
+              const hex = [...raw]
+                .map((byte) => byte.toString(16).padStart(2, "0"))
+                .join("");
+              return hex === registered.toLowerCase();
+            };
+            keysMatch =
+              (await matches(
+                deviceKeys.encryptionPublicKey,
+                deviceRecord?.encryptionPublicKey,
+              )) &&
+              (await matches(
+                deviceKeys.signingPublicKey,
+                deviceRecord?.signingPublicKey,
+              ));
+          }
+          // A bundle that fails to load or match is a local fault: the
+          // service accepted this Device, so the service state stays
+          // verified while the Device line reports the local break.
+          deviceState = keysMatch ? "active" : "unusable";
+        }
+        if (queriedEnvironment && context) {
+          const boundaryEnvironment = boundary.environment;
+          const environmentRecord =
+            boundaryEnvironment !== null &&
+            typeof boundaryEnvironment === "object" &&
+            !Array.isArray(boundaryEnvironment)
+              ? (boundaryEnvironment as Record<string, unknown>)
+              : null;
+          if (
+            environmentRecord !== null &&
+            environmentRecord.id === context.environmentId
+          ) {
+            environmentActive = true;
+            environmentLabel =
+              typeof environmentRecord.label === "string" &&
+              environmentRecord.label.trim().length > 0
+                ? environmentRecord.label.trim()
+                : null;
+          } else {
+            environmentActive = false;
+          }
+        }
+      } catch (error) {
+        if (isAuthenticationRequired(error)) {
+          sessionState = "expired";
+          service = "rejected";
+        } else {
+          service = isServiceUnreachable(error) ? "offline" : "unavailable";
+        }
+        deviceState = deviceKeysUsable ? "unverified" : "unusable";
+      }
+    }
+    if (
+      sessionState === "verified" &&
+      contextEnvironmentId !== undefined &&
+      !queriedEnvironment
+    )
+      environmentUnverified = true;
+  }
+  const nextAction =
+    sessionState === "not-stored" || sessionState === "expired"
+      ? "run dotrelay login"
+      : deviceState === "unusable"
+        ? "run dotrelay device recover"
+        : deviceState === "not-active" ||
+            (deviceState === "not-enrolled" && sessionState === "verified")
+          ? "run dotrelay device enroll"
+          : environmentActive === false
+            ? "run dotrelay env use <environment-id>"
+            : service === "offline"
+              ? "retry when the Server Profile is reachable"
+              : service !== "verified"
+                ? "retry dotrelay status"
+                : "none";
+  return {
+    profile: selected.name,
+    origin: selected.origin,
+    service,
+    session: sessionState,
+    device: deviceState,
+    nextAction,
+    ...(context ? { projectId: context.projectId } : {}),
+    ...(contextEnvironmentId
+      ? {
+          environmentId: contextEnvironmentId,
+          ...(environmentLabel ? { environment: environmentLabel } : {}),
+        }
+      : {}),
+    ...(environmentActive !== null ? { environmentActive } : {}),
+    ...(environmentUnverified ? { environmentUnverified: true } : {}),
+  };
+};
+
 const execute = async (
   args: readonly string[],
   runtime: CliRuntime,
@@ -559,29 +887,18 @@ const execute = async (
         : undefined;
     if (parsed.profile && !selected)
       await resolveServerProfile(store, parsed.profile);
-    const authenticated = selected
-      ? Boolean(
-          await createSessionStore(
-            runtime.credentials ?? createNativeCredentialStore(),
-          ).get(selected.pin),
-        )
-      : false;
-    const stateDirectory =
-      runtime.stateDirectory ??
-      dirname(runtime.profilePath ?? profileCatalogPath());
-    const enrolled = selected
-      ? Boolean(
-          await readDeviceId(deviceMetadataPath(stateDirectory, selected.pin)),
-        )
-      : false;
-    return {
-      value: {
-        profile: selected?.name ?? null,
-        origin: selected?.origin ?? null,
-        authenticated,
-        device: enrolled ? "enrolled" : "not enrolled",
-      },
-    };
+    if (!selected)
+      return {
+        value: {
+          profile: null,
+          origin: null,
+          service: "skipped",
+          session: "not-stored",
+          device: "not-enrolled",
+          nextAction: "run dotrelay setup <origin>",
+        },
+      };
+    return { value: await verifyStatus(runtime, selected) };
   }
   if (parsed.command === "login") {
     const profile = await resolveServerProfile(store, parsed.profile);
