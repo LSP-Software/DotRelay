@@ -209,16 +209,15 @@ export const linkProject = async (
   });
 };
 
-export const findProjectByRepository = async (
-  client: Pick<StrictJsonClient, "get">,
-  githubRepositoryId: string,
-): Promise<ProjectSummary | null> => {
-  const response = await client.get(
-    `/api/v1/projects?githubRepositoryId=${encodeURIComponent(requireGitHubRepositoryId(githubRepositoryId))}`,
-    ["project"],
-  );
-  if (response.project === null) return null;
-  if (!isRecord(response.project))
+export type ProjectResolution = Readonly<{
+  /** The sole eligible Project, or null when none or several remain. */
+  readonly project: ProjectSummary | null;
+  /** Every eligible active Project in scope, for labelled choices. */
+  readonly candidates: readonly ProjectSummary[];
+}>;
+
+const parseProjectSummary = (value: unknown): ProjectSummary => {
+  if (!isRecord(value))
     throw new CliError(
       "transient",
       "the server returned an invalid Project",
@@ -226,16 +225,57 @@ export const findProjectByRepository = async (
       "response_invalid",
     );
   return Object.freeze({
-    id: requireOpaqueId(response.project.id, "Project id"),
-    teamId: requireOpaqueId(response.project.teamId, "Team id"),
-    githubRepositoryId: requireGitHubRepositoryId(
-      response.project.githubRepositoryId,
-    ),
-    lifecycle: requireLifecycle(
-      response.project.lifecycle,
-      "Project lifecycle",
-    ),
+    id: requireOpaqueId(value.id, "Project id"),
+    teamId: requireOpaqueId(value.teamId, "Team id"),
+    githubRepositoryId: requireGitHubRepositoryId(value.githubRepositoryId),
+    lifecycle: requireLifecycle(value.lifecycle, "Project lifecycle"),
   });
+};
+
+// Resolves the Project linked to a GitHub Repository within the Teams the
+// caller can reach. With a Team id the lookup is scoped to that Team (the
+// service verifies Membership); without one it spans every accessible Team
+// and only active Projects. Ambiguous lookups resolve to no single Project
+// and expose every candidate so the operator can be offered a choice.
+export const findProjectByRepository = async (
+  client: Pick<StrictJsonClient, "get">,
+  githubRepositoryId: string,
+  options: Readonly<{ readonly teamId?: string }> = {},
+): Promise<ProjectResolution> => {
+  const query = new URLSearchParams({
+    githubRepositoryId: requireGitHubRepositoryId(githubRepositoryId),
+  });
+  if (options.teamId !== undefined)
+    query.set("teamId", requireOpaqueId(options.teamId, "Team id"));
+  const response = await client.get(`/api/v1/projects?${query}`, [
+    "project",
+    "projects",
+  ]);
+  const project =
+    response.project === null ? null : parseProjectSummary(response.project);
+  // Services predating the candidate list answer with only `project`; derive
+  // the candidate set from it so a current client still resolves.
+  const candidates =
+    response.projects === undefined
+      ? project
+        ? [project]
+        : []
+      : parseCandidateList(response.projects);
+  return Object.freeze({
+    project,
+    candidates: Object.freeze(candidates),
+  });
+};
+
+const parseCandidateList = (value: unknown): ProjectSummary[] => {
+  if (!Array.isArray(value))
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Project list",
+      {},
+      "response_invalid",
+    );
+  return value.map((entry) => parseProjectSummary(entry));
 };
 
 export const listTeams = async (
@@ -332,7 +372,8 @@ export const resolveTeamForProject = async (
 ): Promise<TeamSummary> => {
   const teams = await listTeams(client);
   if (options.teamId) {
-    const selected = teams.find((team) => team.id === options.teamId);
+    const teamId = options.teamId.toLowerCase();
+    const selected = teams.find((team) => team.id === teamId);
     if (!selected)
       throw new CliInvocationError("the specified Team is not available");
     return selected;

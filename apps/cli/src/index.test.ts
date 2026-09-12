@@ -1210,6 +1210,506 @@ describe("protected command Environment selection", () => {
   });
 });
 
+const secondTeamId = "00000000-0000-4000-8000-000000000006";
+const archivedLinkedProjectId = "00000000-0000-4000-8000-0000000000a4";
+const secondTeamProjectId = "00000000-0000-4000-8000-0000000000a5";
+const secondTeamEnvironmentId = "00000000-0000-4000-8000-0000000000a6";
+
+type MultiProjectTeamFixture = Readonly<{
+  readonly id: string;
+  readonly name: string;
+}>;
+
+type MultiProjectProjectFixture = Readonly<{
+  readonly id: string;
+  readonly teamId: string;
+  readonly lifecycle: "active" | "archived";
+}>;
+
+type MultiProjectEnvironmentFixture = Readonly<{
+  readonly id: string;
+  readonly projectId: string;
+  readonly label: string;
+  readonly lifecycle: "active" | "archived";
+}>;
+
+type MultiProjectFixtureSpec = Readonly<{
+  readonly teams: readonly MultiProjectTeamFixture[];
+  readonly projects: readonly MultiProjectProjectFixture[];
+  readonly environments: readonly MultiProjectEnvironmentFixture[];
+}>;
+
+// Serves the administration surface for one GitHub Repository linked from
+// several Teams, mirroring the service: only active Projects in Teams the
+// User joins are eligible, a Team scope is Membership-checked, and every
+// remaining candidate is returned for a labelled choice.
+const createMultiProjectProtocolHttpFixture = (
+  spec: MultiProjectFixtureSpec,
+): Readonly<{
+  readonly origin: string;
+  readonly pin: ServerProfilePin;
+  readonly requests: Array<
+    Readonly<{ readonly method: string; readonly path: string }>
+  >;
+  readonly stop: () => void;
+}> => {
+  const requests: Array<Readonly<{ method: string; path: string }>> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async (request) => {
+      const url = new URL(request.url);
+      requests.push({
+        method: request.method,
+        path: `${url.pathname}${url.search}`,
+      });
+      if (request.method === "GET" && url.pathname === "/api/v1/projects") {
+        const teamId = url.searchParams.get("teamId");
+        const eligible = spec.projects.filter(
+          (entry) =>
+            entry.lifecycle === "active" &&
+            (teamId === null || entry.teamId === teamId),
+        );
+        const summarize = (entry: MultiProjectProjectFixture) => ({
+          id: entry.id,
+          teamId: entry.teamId,
+          githubRepositoryId: "1311418611",
+          lifecycle: entry.lifecycle,
+        });
+        const sole = eligible.length === 1 ? eligible[0] : undefined;
+        return jsonResponse({
+          project: sole ? summarize(sole) : null,
+          projects: eligible.map(summarize),
+        });
+      }
+      if (request.method === "GET" && url.pathname === "/api/v1/teams")
+        return jsonResponse({ teams: spec.teams });
+      const environments = /\/api\/v1\/projects\/([^/]+)\/environments$/u.exec(
+        url.pathname,
+      );
+      if (environments?.[1] && request.method === "GET")
+        return jsonResponse({
+          environments: spec.environments
+            .filter((entry) => entry.projectId === environments[1])
+            .map((entry) => ({
+              id: entry.id,
+              projectId: entry.projectId,
+              label: entry.label,
+              lifecycle: entry.lifecycle,
+              currentHeadId: null,
+            })),
+        });
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/v1/workspace/boundary"
+      ) {
+        const environmentId = url.searchParams.get("environment");
+        const environment = environmentId
+          ? spec.environments.find((entry) => entry.id === environmentId)
+          : undefined;
+        const project = environment
+          ? spec.projects.find((entry) => entry.id === environment.projectId)
+          : undefined;
+        return jsonResponse({
+          environment: {
+            id: environment?.id ?? null,
+            projectId: project?.id ?? null,
+            teamId: project?.teamId ?? null,
+            headRevision: environment?.id ?? "none",
+            headHash: null,
+            projectEpoch: "1",
+          },
+          session: { active: true, userId: protocolUserId },
+          device: { active: true, id: deviceId },
+          grantsReady: true,
+          epochCurrent: true,
+          rotationRequired: false,
+          crypto: { available: true },
+        });
+      }
+      const sync = /\/api\/v1\/environments\/([^/]+)\/sync$/u.exec(
+        url.pathname,
+      );
+      if (sync?.[1] && request.method === "POST") {
+        const environmentId = sync[1];
+        if (!spec.environments.some((entry) => entry.id === environmentId))
+          return problemResponse("resource_not_found");
+        return new Response(
+          encodeSyncPage({
+            environmentId,
+            trustedRevisionId: environmentId,
+            trustedRevisionHash: new Uint8Array(48),
+            currentHeadId: null,
+            currentHeadHash: null,
+            projectEpoch: 1n,
+            revisions: [],
+            nextCursor: null,
+          }),
+          {
+            status: 200,
+            headers: {
+              "Cache-Control": "no-store",
+              "Content-Type": PROTOCOL_MEDIA_TYPE,
+            },
+          },
+        );
+      }
+      return problemResponse("resource_not_found");
+    },
+  });
+  const origin = `http://127.0.0.1:${server.port}`;
+  return {
+    origin,
+    pin: Object.freeze({ origin, serverProfileId }),
+    requests,
+    stop: () => server.stop(true),
+  };
+};
+
+describe("Project resolution across Teams and lifecycles", () => {
+  const relinkedTeamSpec: MultiProjectFixtureSpec = {
+    teams: [{ id: teamId, name: "Platform" }],
+    projects: [
+      { id: archivedLinkedProjectId, teamId, lifecycle: "archived" },
+      { id: projectId, teamId, lifecycle: "active" },
+    ],
+    environments: [
+      {
+        id: archivedEnvironmentId,
+        projectId: archivedLinkedProjectId,
+        label: "legacy",
+        lifecycle: "active",
+      },
+      { id: environmentId, projectId, label: "default", lifecycle: "active" },
+    ],
+  };
+
+  const sharedRepositorySpec: MultiProjectFixtureSpec = {
+    teams: [
+      { id: teamId, name: "Platform" },
+      { id: secondTeamId, name: "Acme" },
+    ],
+    projects: [
+      { id: projectId, teamId, lifecycle: "active" },
+      { id: secondTeamProjectId, teamId: secondTeamId, lifecycle: "active" },
+    ],
+    environments: [
+      { id: environmentId, projectId, label: "default", lifecycle: "active" },
+      {
+        id: secondTeamEnvironmentId,
+        projectId: secondTeamProjectId,
+        label: "default",
+        lifecycle: "active",
+      },
+    ],
+  };
+
+  test("archive and relink in one Team keeps discovery working from a stale saved Project", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture(relinkedTeamSpec);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({
+          serverProfileId,
+          projectId: archivedLinkedProjectId,
+          environmentId: archivedEnvironmentId,
+        }),
+      );
+      const result = await run(
+        ["pull", "--profile", "relay", "--stdout"],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${environmentId}`,
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes(`/api/v1/workspace/boundary`),
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${archivedEnvironmentId}`,
+        ),
+      ).toBe(false);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("archive and relink in one Team resolves the active Project for a fresh worktree", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture(relinkedTeamSpec);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const result = await run(
+        ["pull", "--profile", "relay", "--stdout"],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${environmentId}`,
+        ),
+      ).toBe(true);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("--team steers a shared repository to that Team's Project", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture(sharedRepositorySpec);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const result = await run(
+        ["pull", "--profile", "relay", "--team", secondTeamId, "--stdout"],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${secondTeamEnvironmentId}`,
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${environmentId}`,
+        ),
+      ).toBe(false);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId: secondTeamProjectId,
+        environmentId: secondTeamEnvironmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("--team matches Team UUIDs case-insensitively", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture(sharedRepositorySpec);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--team",
+          secondTeamId.toUpperCase(),
+          "--stdout",
+        ],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/projects?githubRepositoryId=1311418611&teamId=${secondTeamId}`,
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${secondTeamEnvironmentId}`,
+        ),
+      ).toBe(true);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId: secondTeamProjectId,
+        environmentId: secondTeamEnvironmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("a saved Project choice wins over another eligible Team's Project", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture(sharedRepositorySpec);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({
+          serverProfileId,
+          projectId,
+          environmentId,
+        }),
+      );
+      const result = await run(
+        ["pull", "--profile", "relay", "--stdout"],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${environmentId}`,
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${secondTeamEnvironmentId}`,
+        ),
+      ).toBe(false);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("--team names a Team the User does not join before any Project lookup", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture({
+      teams: [{ id: teamId, name: "Platform" }],
+      projects: [{ id: projectId, teamId, lifecycle: "active" }],
+      environments: [
+        { id: environmentId, projectId, label: "default", lifecycle: "active" },
+      ],
+    });
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const result = await run(
+        ["pull", "--profile", "relay", "--team", secondTeamId, "--json"],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        ok: false,
+        category: "invocation",
+        exitCode: 2,
+      });
+      expect(result.stderr).toContain("the specified Team is not available");
+      expect(fixture.requests.map((request) => request.path)).toEqual([
+        "/api/v1/teams",
+      ]);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("--no-input reports labelled Projects instead of a bare conflict", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture(sharedRepositorySpec);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--environment",
+          environmentId,
+          "--json",
+        ],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(2);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "invocation",
+        code: "project_ambiguous",
+        exitCode: 2,
+      });
+      const detail = String(diagnostic.detail);
+      expect(detail).toContain(
+        "multiple Projects are linked to this GitHub Repository",
+      );
+      expect(detail).toContain("Platform");
+      expect(detail).toContain("Acme");
+      expect(detail).toContain("LSP-Software/DotRelay");
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/workspace/boundary"),
+        ),
+      ).toBe(false);
+      expect(await Bun.file(state.contextPath).exists()).toBe(false);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("an operator chooses among labelled Projects from other Teams", async () => {
+    const fixture = createMultiProjectProtocolHttpFixture(sharedRepositorySpec);
+    const state = await seedProtocolCommandState(fixture);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const renderedChunks: string[] = [];
+    output.on("data", (chunk) => {
+      renderedChunks.push(
+        typeof chunk === "string" ? chunk : chunk.toString("utf8"),
+      );
+    });
+    try {
+      input.write("2\n");
+      input.end();
+      const result = await run(["pull", "--profile", "relay", "--stdout"], {
+        ...runtimeForProtocolState(state),
+        terminal: { input, output },
+      });
+      const rendered = renderedChunks.join("");
+      expect(result.exitCode).toBe(0);
+      expect(rendered).toContain("Platform");
+      expect(rendered).toContain("Acme");
+      expect(rendered).toContain("LSP-Software/DotRelay");
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${secondTeamEnvironmentId}`,
+        ),
+      ).toBe(true);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId: secondTeamProjectId,
+        environmentId: secondTeamEnvironmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+});
+
 const loginOrigin = "https://relay.example";
 const loginProfileId = "00000000-0000-4000-8000-000000000042";
 const loginUserId = "22222222-2222-4222-8222-222222222222";

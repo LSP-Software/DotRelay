@@ -648,6 +648,213 @@ describe("API foundation", () => {
   });
 });
 
+describe("Project resolution against a GitHub Repository", () => {
+  const repositoryId = 1311418611n;
+  const teamA = "00000000-0000-4000-8000-000000000001";
+  const teamB = "00000000-0000-4000-8000-00000000000b";
+  const archivedProjectA = {
+    id: "00000000-0000-4000-8000-000000000003",
+    teamId: teamA,
+    githubRepositoryId: repositoryId,
+    lifecycle: "ARCHIVED" as const,
+  };
+  const projectA = {
+    id: "00000000-0000-4000-8000-000000000002",
+    teamId: teamA,
+    githubRepositoryId: repositoryId,
+    lifecycle: "ACTIVE" as const,
+  };
+  const projectB = {
+    id: "00000000-0000-4000-8000-00000000000a",
+    teamId: teamB,
+    githubRepositoryId: repositoryId,
+    lifecycle: "ACTIVE" as const,
+  };
+  const summary = (
+    project: Readonly<{
+      readonly id: string;
+      readonly teamId: string;
+      readonly githubRepositoryId: bigint;
+    }>,
+  ) => ({
+    id: project.id,
+    teamId: project.teamId,
+    githubRepositoryId: project.githubRepositoryId.toString(),
+    lifecycle: "active",
+  });
+
+  type ResolutionCall = Readonly<{
+    readonly method: "membership.findFirst" | "project.findMany";
+    readonly where: Record<string, unknown>;
+  }>;
+
+  type FixtureProject = Readonly<{
+    readonly id: string;
+    readonly teamId: string;
+    readonly githubRepositoryId: bigint;
+    readonly lifecycle: "ACTIVE" | "ARCHIVED";
+  }>;
+
+  // The mock applies the query the route sends, so a missing lifecycle or
+  // Team-scope filter surfaces as an incorrect response.
+  const createResolutionApp = (
+    projects: readonly FixtureProject[],
+    memberTeamIds: readonly string[],
+  ) => {
+    const calls: ResolutionCall[] = [];
+    const members = new Set(memberTeamIds);
+    const database = {
+      authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
+      user: { upsert: async () => ({ id: "user-id" }) },
+      device: { findFirst: async () => ({ id: "device-id" }) },
+      membership: {
+        findFirst: async (args: { where: Record<string, unknown> }) => {
+          calls.push({ method: "membership.findFirst", where: args.where });
+          return members.has(String(args.where.teamId))
+            ? { id: "membership-id" }
+            : null;
+        },
+      },
+      project: {
+        findMany: async (args: {
+          where: Record<string, unknown>;
+        }): Promise<FixtureProject[]> => {
+          calls.push({ method: "project.findMany", where: args.where });
+          return projects.filter((project) => {
+            if (project.githubRepositoryId !== args.where.githubRepositoryId)
+              return false;
+            if (
+              typeof args.where.lifecycle === "string" &&
+              project.lifecycle !== args.where.lifecycle
+            )
+              return false;
+            if (typeof args.where.teamId === "string")
+              return project.teamId === args.where.teamId;
+            return members.has(project.teamId);
+          });
+        },
+      },
+    } as never;
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+      },
+    } as never;
+    return {
+      calls,
+      profile,
+      testApp: createApi({ database, profile, auth }),
+    };
+  };
+
+  const resolveProject = (
+    testApp: ReturnType<typeof createApi>,
+    profile: ReturnType<typeof loadServerProfileConfig>,
+    query: string,
+  ) =>
+    testApp.request(`${profile.origin}/api/v1/projects?${query}`, {
+      headers: {
+        Origin: profile.origin,
+        Authorization: "Bearer session-token",
+        "X-DotRelay-Device-Id": "device-id",
+      },
+    });
+
+  test("spans accessible Teams, excludes archived Projects, and surfaces candidates instead of a conflict", async () => {
+    const { calls, profile, testApp } = createResolutionApp(
+      [archivedProjectA, projectA, projectB],
+      [teamA, teamB],
+    );
+    const response = await resolveProject(
+      testApp,
+      profile,
+      `githubRepositoryId=${repositoryId}`,
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.project).toBeNull();
+    expect(body.projects).toEqual([summary(projectA), summary(projectB)]);
+    const lookup = calls.find((call) => call.method === "project.findMany");
+    expect(lookup?.where).toEqual({
+      githubRepositoryId: repositoryId,
+      lifecycle: "ACTIVE",
+      team: {
+        memberships: { some: { userId: "user-id", lifecycle: "ACTIVE" } },
+      },
+    });
+  });
+
+  test("resolves the sole eligible Project of a relinked Team directly", async () => {
+    const { profile, testApp } = createResolutionApp(
+      [archivedProjectA, projectA],
+      [teamA],
+    );
+    const response = await resolveProject(
+      testApp,
+      profile,
+      `githubRepositoryId=${repositoryId}`,
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.project).toEqual(summary(projectA));
+    expect(body.projects).toEqual([summary(projectA)]);
+  });
+
+  test("scopes to a Team and verifies the actor's active Membership", async () => {
+    const { calls, profile, testApp } = createResolutionApp(
+      [projectA, projectB],
+      [teamA],
+    );
+    const scoped = await resolveProject(
+      testApp,
+      profile,
+      `githubRepositoryId=${repositoryId}&teamId=${teamA}`,
+    );
+    const scopedBody = (await scoped.json()) as Record<string, unknown>;
+
+    expect(scoped.status).toBe(200);
+    expect(scopedBody.project).toEqual(summary(projectA));
+    expect(scopedBody.projects).toEqual([summary(projectA)]);
+    expect(calls).toEqual([
+      {
+        method: "membership.findFirst",
+        where: { teamId: teamA, userId: "user-id", lifecycle: "ACTIVE" },
+      },
+      {
+        method: "project.findMany",
+        where: {
+          githubRepositoryId: repositoryId,
+          lifecycle: "ACTIVE",
+          teamId: teamA,
+        },
+      },
+    ]);
+  });
+
+  test("rejects a Team the actor does not join and a malformed Team id", async () => {
+    const { profile, testApp } = createResolutionApp([projectA], [teamA]);
+
+    const foreign = await resolveProject(
+      testApp,
+      profile,
+      `githubRepositoryId=${repositoryId}&teamId=${teamB}`,
+    );
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toMatchObject({ code: "resource_not_found" });
+
+    const malformed = await resolveProject(
+      testApp,
+      profile,
+      `githubRepositoryId=${repositoryId}&teamId=not-a-team`,
+    );
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ code: "invalid_request" });
+  });
+});
+
 describe("workspace boundary Device binding", () => {
   const userId = "22222222-2222-4222-8222-222222222222";
   const teamId = "44444444-4444-4444-8444-444444444444";

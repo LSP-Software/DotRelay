@@ -174,14 +174,33 @@ export const registerAdministrationRoutes = (
       const repositoryId = requireRepositoryId(
         context.req.query("githubRepositoryId"),
       );
+      // Archived Projects are never eligible for resolution: a Team that
+      // archived its Project and linked a replacement must not be blocked by
+      // the old linkage. A scoped query requires an active Membership in the
+      // requested Team; an unscoped query only spans Teams the actor joins.
+      const teamIdQuery = context.req.query("teamId");
+      let teamId: string | undefined;
+      if (teamIdQuery !== undefined) {
+        teamId = parseUuid(teamIdQuery, "teamId");
+        const membership = await database.membership.findFirst({
+          where: { teamId, userId: actor.userId, lifecycle: "ACTIVE" },
+          select: { id: true },
+        });
+        if (!membership) return responseProblem(context, "resource_not_found");
+      }
       const projects = await database.project.findMany({
         where: {
           githubRepositoryId: repositoryId,
-          team: {
-            memberships: {
-              some: { userId: actor.userId, lifecycle: "ACTIVE" },
-            },
-          },
+          lifecycle: "ACTIVE",
+          ...(teamId
+            ? { teamId }
+            : {
+                team: {
+                  memberships: {
+                    some: { userId: actor.userId, lifecycle: "ACTIVE" },
+                  },
+                },
+              }),
         },
         select: {
           id: true,
@@ -189,11 +208,17 @@ export const registerAdministrationRoutes = (
           githubRepositoryId: true,
           lifecycle: true,
         },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
-      if (projects.length > 1)
-        return responseProblem(context, "state_conflict");
+      // When more than one eligible destination remains, the response carries
+      // every candidate so the client can offer a labelled choice instead of
+      // failing with a generic conflict.
+      const candidates = projects.map(projectResponse);
       return context.json(
-        { project: projects[0] ? projectResponse(projects[0]) : null },
+        {
+          project: candidates.length === 1 ? candidates[0] : null,
+          projects: candidates,
+        },
         200,
         { "Cache-Control": "no-store" },
       );
