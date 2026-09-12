@@ -331,7 +331,10 @@ export const emptyWorkspaceBoundary = (
 
 export const e2eWorkspaceBoundary = (
   profileId: WorkspaceProfileId,
-  options?: Readonly<{ readonly environmentId?: string }>,
+  options?: Readonly<{
+    readonly environmentId?: string;
+    readonly deviceId?: string;
+  }>,
 ): WorkspaceBoundary => {
   const profile = profileCatalog[profileId];
   const requestedEnvironment = fixtureProjects
@@ -360,9 +363,25 @@ export const e2eWorkspaceBoundary = (
       ...(environmentProject ? { projectId: environmentProject.id } : {}),
       ...(environmentProject ? { teamId: environmentProject.teamId } : {}),
     },
-    session: { active: true, displayName: "Ari Stone" },
-    profile: { id: profileId, ...profile },
-    device: { active: false, label: "No active Device" },
+    session: {
+      active: true,
+      userId: "00000000-0000-4000-8000-000000000061",
+      displayName: "Ari Stone",
+    },
+    profile: {
+      id: profileId,
+      ...profile,
+      serverProfileId: "00000000-0000-4000-8000-000000000062",
+    },
+    device: options?.deviceId
+      ? {
+          active: true,
+          label: "This browser",
+          id: options.deviceId,
+          encryptionPublicKey: "55".repeat(32),
+          signingPublicKey: "22".repeat(32),
+        }
+      : { active: false, label: "No active Device" },
     peerDevices: [
       {
         id: "00000000-0000-4000-8000-000000000041",
@@ -377,7 +396,7 @@ export const e2eWorkspaceBoundary = (
         hasEpochGrant: false,
       },
     ],
-    grantsReady: false,
+    grantsReady: options?.deviceId !== undefined,
     epochCurrent: true,
     rotationRequired: false,
     crypto: { available: true },

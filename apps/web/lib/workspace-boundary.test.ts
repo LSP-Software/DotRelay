@@ -119,8 +119,25 @@ test("the e2e boundary stays an explicit dev fixture", () => {
   const boundary = e2eWorkspaceBoundary("hosted");
   expect(boundary.source).toBe("fixture");
   expect(boundary.connection).toBe("online");
-  expect(boundary.session).toEqual({ active: true, displayName: "Ari Stone" });
-  expect(boundary.environment.id).toBe("00000000-0000-4000-8000-000000000031");
+  expect(boundary.session).toEqual({
+    active: true,
+    userId: "00000000-0000-4000-8000-000000000061",
+    displayName: "Ari Stone",
+  });
+  expect(boundary.device.active).toBe(false);
+  expect(boundary.grantsReady).toBe(false);
+
+  const enrolled = e2eWorkspaceBoundary("hosted", {
+    deviceId: "00000000-0000-4000-8000-000000000063",
+  });
+  expect(enrolled.device).toEqual({
+    active: true,
+    label: "This browser",
+    id: "00000000-0000-4000-8000-000000000063",
+    encryptionPublicKey: "55".repeat(32),
+    signingPublicKey: "22".repeat(32),
+  });
+  expect(enrolled.grantsReady).toBe(true);
 });
 
 test("the e2e boundary describes the requested Environment", () => {

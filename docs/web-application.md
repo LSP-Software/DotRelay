@@ -50,6 +50,14 @@ and stable problem guidance.
 
 ## Environment editor workflow
 
+Until the current Environment's Manifest has been read and verified, the editor shows a loading
+state instead of an empty Manifest and blocks editing, adding Variables, rollback, and
+publication. A failed read is disclosed as a read failure with a retry action; it is never
+presented as an empty Manifest or as an editable state, so a populated but unreadable Environment
+cannot publish a replacement draft. A verified empty Environment supports genesis creation. Local
+edits made while a read is still pending are preserved and layered over the arriving verified
+page instead of discarding it.
+
 Once all protected gates pass, the Environment editor displays the verified head, current Project
 epoch, Variables, descriptions, and the ownership of each Value lane. Values use password inputs and
 remain masked until the active Device explicitly reveals one. A new Variable requires a valid name
@@ -120,6 +128,9 @@ covers unpublished draft protection: drafts survive subview navigation and retur
 warns only while a draft is dirty and keeps or discards it on the user's choice, discard
 prompts name the affected Environments and, within a Server Profile, the changed Variables, a
 Server Profile switch with a dirty draft requires an explicit discard, and draft Values never
-appear in browser storage.
+appear in browser storage. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
+read states with a live protocol session: a slow initial read shows the loading state instead of
+the empty-claim, and a failed read discloses the failure with a retry action while Add Variable,
+Save changes, and per-Variable edits stay blocked; retry re-enters the loading state.
 Tests observe browser-visible behavior and never
 reach into component state.

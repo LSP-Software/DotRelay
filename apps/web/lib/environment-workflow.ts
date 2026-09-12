@@ -230,6 +230,36 @@ export const variableHasDraftChange = (
   );
 };
 
+export const mergeDraftVariablesOverRemote = (
+  localVariables: readonly EnvironmentVariable[],
+  remoteVariables: readonly EnvironmentVariable[],
+): readonly EnvironmentVariable[] => {
+  const remoteById = new Map(
+    remoteVariables.map((variable) => [variable.id, variable]),
+  );
+  const remoteIds = new Set(remoteById.keys());
+  const localById = new Map(
+    localVariables.map((variable) => [variable.id, variable]),
+  );
+  const merged = remoteVariables.map((remoteVariable) => {
+    const localVariable = localById.get(remoteVariable.id);
+    const candidate = localVariable?.hasDraftChange
+      ? localVariable
+      : remoteVariable;
+    return {
+      ...candidate,
+      hasDraftChange: variableHasDraftChange(
+        candidate,
+        remoteById.get(candidate.id),
+      ),
+    };
+  });
+  const localOnly = localVariables
+    .filter((variable) => !remoteIds.has(variable.id))
+    .map((variable) => ({ ...variable, hasDraftChange: true }));
+  return Object.freeze([...merged, ...localOnly]);
+};
+
 export type VariableValueDiff = Readonly<{
   readonly id: string;
   readonly name: string;
