@@ -331,10 +331,21 @@ export const emptyWorkspaceBoundary = (
 
 export const e2eWorkspaceBoundary = (
   profileId: WorkspaceProfileId,
+  options?: Readonly<{ readonly environmentId?: string }>,
 ): WorkspaceBoundary => {
   const profile = profileCatalog[profileId];
-  const firstProject = fixtureProjects[0];
-  const firstEnvironment = firstProject?.environments[0];
+  const requestedEnvironment = fixtureProjects
+    .flatMap((project) => project.environments)
+    .find((environment) => environment.id === options?.environmentId);
+  const environmentProject = requestedEnvironment
+    ? fixtureProjects.find((project) =>
+        project.environments.some(
+          (candidate) => candidate.id === requestedEnvironment.id,
+        ),
+      )
+    : fixtureProjects[0];
+  const environment =
+    requestedEnvironment ?? environmentProject?.environments[0];
   return {
     source: "fixture",
     connection: "online",
@@ -343,11 +354,11 @@ export const e2eWorkspaceBoundary = (
       projects: fixtureProjects,
     },
     environment: {
-      headRevision: firstEnvironment?.currentHeadId ?? "rev_0185",
-      ...(firstEnvironment ? { id: firstEnvironment.id } : {}),
-      ...(firstEnvironment ? { label: firstEnvironment.label } : {}),
-      ...(firstProject ? { projectId: firstProject.id } : {}),
-      ...(firstProject ? { teamId: firstProject.teamId } : {}),
+      headRevision: environment?.currentHeadId ?? "rev_0185",
+      ...(environment ? { id: environment.id } : {}),
+      ...(environment ? { label: environment.label } : {}),
+      ...(environmentProject ? { projectId: environmentProject.id } : {}),
+      ...(environmentProject ? { teamId: environmentProject.teamId } : {}),
     },
     session: { active: true, displayName: "Ari Stone" },
     profile: { id: profileId, ...profile },

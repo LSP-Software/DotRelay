@@ -182,9 +182,13 @@ export const GET = async (request: Request) => {
   const profileParam = url.searchParams.get("profile");
   const profileId = isProfileId(profileParam) ? profileParam : "hosted";
   const apiOrigin = resolveLiveApiOrigin();
+  const environmentParam = url.searchParams.get("environment");
   const boundary =
     process.env.DOTRELAY_WORKSPACE_FIXTURE === "1"
-      ? e2eWorkspaceBoundary(profileId)
+      ? e2eWorkspaceBoundary(
+          profileId,
+          environmentParam ? { environmentId: environmentParam } : {},
+        )
       : await fetchLiveBoundary(profileId, request, apiOrigin);
   const localBoundary =
     boundary.source === "fixture" && apiOrigin

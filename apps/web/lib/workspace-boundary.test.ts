@@ -120,6 +120,26 @@ test("the e2e boundary stays an explicit dev fixture", () => {
   expect(boundary.source).toBe("fixture");
   expect(boundary.connection).toBe("online");
   expect(boundary.session).toEqual({ active: true, displayName: "Ari Stone" });
+  expect(boundary.environment.id).toBe("00000000-0000-4000-8000-000000000031");
+});
+
+test("the e2e boundary describes the requested Environment", () => {
+  const boundary = e2eWorkspaceBoundary("hosted", {
+    environmentId: "00000000-0000-4000-8000-000000000032",
+  });
+  expect(boundary.environment.id).toBe("00000000-0000-4000-8000-000000000032");
+  expect(boundary.environment.label).toBe("staging");
+  expect(boundary.environment.headRevision).toBe("rev_0102");
+  expect(boundary.environment.projectId).toBe(
+    "00000000-0000-4000-8000-000000000021",
+  );
+  expect(boundary.environment.teamId).toBe(
+    "00000000-0000-4000-8000-000000000011",
+  );
+  const unknown = e2eWorkspaceBoundary("hosted", {
+    environmentId: "00000000-0000-4000-8000-999999999999",
+  });
+  expect(unknown.environment.id).toBe("00000000-0000-4000-8000-000000000031");
 });
 
 const stubBoundaryResponse = (response: Response): (() => void) => {

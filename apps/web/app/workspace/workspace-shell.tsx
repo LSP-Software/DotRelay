@@ -66,12 +66,19 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  type EnvironmentContextIdentity,
+  environmentContextIdentity,
+  environmentContextKey,
+  planContextSwitch,
+} from "@/lib/environment-context";
+import {
   createEnvironmentProtocolSession,
   type EnvironmentProtocolSession,
 } from "@/lib/environment-protocol-session";
 import {
   displayedSetupAction,
   nextSetupAction,
+  type SetupAction,
 } from "@/lib/environment-workflow";
 import { cn } from "@/lib/utils";
 import {
@@ -91,6 +98,28 @@ import { EnvironmentEditor } from "./environment-editor";
 
 type ProfileId = WorkspaceProfileId;
 type ConnectionState = "loading" | "online" | "offline";
+
+type SelectionRequest = Readonly<{
+  readonly teamId: string | null;
+  readonly projectId: string | null;
+  readonly environmentId: string | null;
+  readonly view?: WorkspaceView;
+}>;
+
+type RetainedEditorContext = Readonly<{
+  readonly identity: EnvironmentContextIdentity;
+  readonly session: EnvironmentProtocolSession | null;
+  readonly available: boolean;
+  readonly setupAction: SetupAction | null;
+  readonly setupCommand?: string | undefined;
+  readonly setupMessage?: string | null;
+}>;
+
+type PendingSwitch = Readonly<{
+  readonly request: SelectionRequest;
+  readonly onCommit?: (() => void) | undefined;
+  readonly leavingLabel: string;
+}>;
 
 const WORKSPACE_REFRESH_MS = Math.max(
   Number(process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS ?? 0) || 30_000,
@@ -292,8 +321,17 @@ export const WorkspaceShell = ({
   const [githubSubject, setGithubSubject] = useState("");
   const [invitations, setInvitations] = useState<string[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [liveProtocolSession, setLiveProtocolSession] =
-    useState<EnvironmentProtocolSession | null>(null);
+  const [sessionsByKey, setSessionsByKey] = useState<
+    ReadonlyMap<string, EnvironmentProtocolSession>
+  >(() => new Map());
+  const [retainedEditors, setRetainedEditors] = useState<
+    ReadonlyMap<string, RetainedEditorContext>
+  >(() => new Map());
+  const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(
+    null,
+  );
+  const [contextStale, setContextStale] = useState(false);
+  const draftDirtyRef = useRef<Map<string, boolean>>(new Map());
   const [deviceSetupMessage, setDeviceSetupMessage] = useState<string | null>(
     null,
   );
@@ -357,8 +395,17 @@ export const WorkspaceShell = ({
       : (selectedTeam?.role ?? "MEMBER");
   const canAdminister = effectiveRole === "OWNER" || effectiveRole === "ADMIN";
   const cliCommand = `dotrelay setup ${displayBoundary.profile.origin}`;
+  const currentIdentity = environmentContextIdentity({
+    profileId,
+    serverProfileId: boundary.profile.serverProfileId,
+    teamId,
+    projectId,
+    environmentId,
+  });
+  const currentKey = environmentContextKey(currentIdentity);
+  const selectedSession = sessionsByKey.get(currentKey) ?? null;
   const thisBrowserEnrolled =
-    protectedPreview || Boolean(liveProtocolSession ?? protocolSession);
+    protectedPreview || Boolean(selectedSession ?? protocolSession);
   const enrolledDevices = enrolledDeviceRows(displayBoundary, {
     thisBrowserEnrolled,
   });
@@ -378,7 +425,7 @@ export const WorkspaceShell = ({
     displayBoundary.device.active &&
     !protectedPreview &&
     !protocolSession &&
-    !liveProtocolSession;
+    !selectedSession;
   const protectedWorkflowAvailable =
     setupAction === null && !localDeviceBlockers;
   const cliSetupCommand =
@@ -407,16 +454,109 @@ export const WorkspaceShell = ({
     [],
   );
 
+  const removeSessionByKey = (key: string) => {
+    setSessionsByKey((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+  };
+  const selectedEditorContext = (): RetainedEditorContext => ({
+    identity: currentIdentity,
+    session: selectedSession,
+    available: protectedWorkflowAvailable,
+    setupAction: editorSetupAction,
+    setupCommand: cliSetupCommand,
+    setupMessage: deviceSetupMessage,
+  });
+
+  const commitSelection = (
+    request: SelectionRequest,
+    onCommit: (() => void) | undefined,
+    discard: boolean,
+  ) => {
+    const incomingKey = environmentContextKey({
+      ...currentIdentity,
+      teamId: request.teamId,
+      projectId: request.projectId,
+      environmentId: request.environmentId,
+    });
+    if (currentIdentity.environmentId) {
+      setRetainedEditors((prev) => {
+        const next = new Map(prev);
+        if (discard) next.delete(currentKey);
+        else next.set(currentKey, selectedEditorContext());
+        return next;
+      });
+      if (discard) draftDirtyRef.current.delete(currentKey);
+    }
+    if (discard) removeSessionByKey(currentKey);
+    removeSessionByKey(incomingKey);
+    setPendingSwitch(null);
+    setContextStale(true);
+    syncSelection(request);
+    onCommit?.();
+  };
+
+  const requestSelection = (
+    request: SelectionRequest,
+    onCommit?: () => void,
+  ) => {
+    if (pendingSwitch) return;
+    const next = environmentContextIdentity({
+      ...currentIdentity,
+      teamId: request.teamId,
+      projectId: request.projectId,
+      environmentId: request.environmentId,
+    });
+    const decision = planContextSwitch({
+      current: currentIdentity,
+      next,
+      dirtyDraft: draftDirtyRef.current.get(currentKey) === true,
+    });
+    if (decision.type === "noop") {
+      syncSelection(request);
+      onCommit?.();
+      return;
+    }
+    if (decision.type === "prompt") {
+      setPendingSwitch({
+        request,
+        onCommit,
+        leavingLabel: selectedEnvironment
+          ? `${selectedEnvironment.label}${selectedProject ? ` · ${projectDisplayName(selectedProject)}` : ""}`
+          : (selectedTeam?.name ?? "this Team"),
+      });
+      return;
+    }
+    if (decision.type === "rebind") {
+      // requestSelection cannot cross Server Profiles; defensive fallback.
+      handleProfileChange(
+        next.profileId === "self-hosted" ? "self-hosted" : "hosted",
+      );
+      onCommit?.();
+      return;
+    }
+    commitSelection(request, onCommit, false);
+  };
+  const requestSelectionRef = useRef(requestSelection);
+  requestSelectionRef.current = requestSelection;
+
   const openProject = (project: WorkspaceProject) => {
     const firstEnvironment = project.environments[0];
-    syncSelection({
-      teamId: project.teamId,
-      projectId: project.id,
-      environmentId: firstEnvironment?.id ?? null,
-      view: "environment",
-    });
-    setProjectLifecycle(project.lifecycle);
-    setEnvironmentLifecycle(firstEnvironment?.lifecycle ?? "ACTIVE");
+    requestSelection(
+      {
+        teamId: project.teamId,
+        projectId: project.id,
+        environmentId: firstEnvironment?.id ?? null,
+        view: "environment",
+      },
+      () => {
+        setProjectLifecycle(project.lifecycle);
+        setEnvironmentLifecycle(firstEnvironment?.lifecycle ?? "ACTIVE");
+      },
+    );
   };
 
   useEffect(() => {
@@ -442,7 +582,7 @@ export const WorkspaceShell = ({
     );
     const firstEnvironment = firstProject?.environments[0];
     if (preview === "protected" && !projectId && firstProject) {
-      syncSelection({
+      requestSelectionRef.current({
         teamId: firstTeam.id,
         projectId: firstProject.id,
         environmentId: firstEnvironment?.id ?? null,
@@ -451,14 +591,7 @@ export const WorkspaceShell = ({
       return;
     }
     if (!teamId) setTeamId(firstTeam.id);
-  }, [
-    displayBoundary.catalog.projects,
-    preview,
-    projectId,
-    syncSelection,
-    teamId,
-    teams,
-  ]);
+  }, [displayBoundary.catalog.projects, preview, projectId, teamId, teams]);
 
   const commitBoundary = (next: WorkspaceBoundary) => {
     boundaryJsonRef.current = JSON.stringify(next);
@@ -508,7 +641,19 @@ export const WorkspaceShell = ({
           boundaryJsonRef.current = resolvedJson;
           setBoundary(resolved);
         }
-        if (!storedId) setLiveProtocolSession(null);
+        if (!storedId) {
+          removeSessionByKey(
+            environmentContextKey(
+              environmentContextIdentity({
+                profileId,
+                serverProfileId: resolved.profile.serverProfileId,
+                teamId,
+                projectId,
+                environmentId,
+              }),
+            ),
+          );
+        }
         return true;
       } catch {
         if (!stale(run)) setConnection("offline");
@@ -546,6 +691,27 @@ export const WorkspaceShell = ({
 
   useEffect(() => {
     let cancelled = false;
+    const targetKey = environmentContextKey(
+      environmentContextIdentity({
+        profileId,
+        serverProfileId: boundary.profile.serverProfileId,
+        teamId,
+        projectId,
+        environmentId,
+      }),
+    );
+    const boundaryMatchesSelection =
+      environmentId === null ||
+      (boundary.environment.id === environmentId &&
+        boundary.environment.projectId === projectId &&
+        boundary.environment.teamId === teamId);
+    const clearSelectedSession = () => {
+      if (cancelled) return;
+      removeSessionByKey(targetKey);
+    };
+    const settleContext = () => {
+      if (!cancelled) setContextStale(false);
+    };
     const loadSession = async () => {
       const environment = boundary.environment;
       const device = boundary.device;
@@ -561,7 +727,8 @@ export const WorkspaceShell = ({
         !environment.projectId ||
         !environment.teamId
       ) {
-        if (!cancelled) setLiveProtocolSession(null);
+        clearSelectedSession();
+        if (boundaryMatchesSelection) settleContext();
         return;
       }
       try {
@@ -632,16 +799,27 @@ export const WorkspaceShell = ({
               : [hexToBytes(device.signingPublicKey)],
           ...(sharedValueSecret ? { sharedValueSecret } : {}),
         });
-        if (!cancelled) setLiveProtocolSession(session);
+        if (cancelled) return;
+        if (
+          environment.id !== environmentId ||
+          environment.projectId !== projectId ||
+          environment.teamId !== teamId
+        ) {
+          clearSelectedSession();
+          return;
+        }
+        setSessionsByKey((prev) => new Map(prev).set(targetKey, session));
+        settleContext();
       } catch {
-        if (!cancelled) setLiveProtocolSession(null);
+        clearSelectedSession();
+        if (boundaryMatchesSelection) settleContext();
       }
     };
     void loadSession();
     return () => {
       cancelled = true;
     };
-  }, [boundary]);
+  }, [boundary, profileId, teamId, projectId, environmentId]);
 
   const provisionBrowserDevice = async () => {
     const apiOrigin = resolveApiOrigin() ?? boundary.profile.origin;
@@ -849,6 +1027,11 @@ export const WorkspaceShell = ({
 
   const handleProfileChange = (nextProfileId: ProfileId) => {
     resetWorkspaceContext();
+    setRetainedEditors(new Map());
+    setSessionsByKey(new Map());
+    draftDirtyRef.current.clear();
+    setPendingSwitch(null);
+    setContextStale(true);
     setProfileId(nextProfileId);
     const placeholder = emptyWorkspaceBoundary(nextProfileId);
     setBoundary(placeholder);
@@ -858,14 +1041,18 @@ export const WorkspaceShell = ({
   };
 
   const handleTeamChange = (nextTeamId: string) => {
-    syncSelection({
-      teamId: nextTeamId,
-      projectId: null,
-      environmentId: null,
-      view: "projects",
-    });
-    setProjectLifecycle("ACTIVE");
-    setEnvironmentLifecycle("ACTIVE");
+    requestSelection(
+      {
+        teamId: nextTeamId,
+        projectId: null,
+        environmentId: null,
+        view: "projects",
+      },
+      () => {
+        setProjectLifecycle("ACTIVE");
+        setEnvironmentLifecycle("ACTIVE");
+      },
+    );
   };
 
   const createInvitation = () => {
@@ -964,6 +1151,21 @@ export const WorkspaceShell = ({
       </button>
     </nav>
   );
+
+  const envVisible =
+    view === "environment" &&
+    selectedProject !== null &&
+    selectedEnvironment !== null;
+  const selectedEntry: RetainedEditorContext | null =
+    currentIdentity.environmentId ? selectedEditorContext() : null;
+  const editorEntries: readonly RetainedEditorContext[] = selectedEntry
+    ? [
+        selectedEntry,
+        ...[...retainedEditors.values()].filter(
+          (entry) => environmentContextKey(entry.identity) !== currentKey,
+        ),
+      ]
+    : [...retainedEditors.values()];
 
   return (
     <div className="min-h-screen bg-background">
@@ -1203,6 +1405,7 @@ export const WorkspaceShell = ({
                     <div className="mb-6">
                       <EnvironmentEditor
                         available={false}
+                        contextIdentity={currentIdentity}
                         onSetupAction={handleSetupAction}
                         setupAction={setupAction}
                         setupBusy={deviceSetupInProgress}
@@ -1276,7 +1479,7 @@ export const WorkspaceShell = ({
                     className="mb-6"
                     onValueChange={(nextId) => {
                       if (typeof nextId !== "string") return;
-                      syncSelection({
+                      requestSelection({
                         teamId: selectedTeam?.id ?? null,
                         projectId: selectedProject.id,
                         environmentId: nextId,
@@ -1296,20 +1499,6 @@ export const WorkspaceShell = ({
                       ))}
                     </TabsList>
                   </Tabs>
-                  <EnvironmentEditor
-                    available={protectedWorkflowAvailable}
-                    onSetupAction={handleSetupAction}
-                    setupAction={editorSetupAction}
-                    setupBusy={deviceSetupInProgress}
-                    setupCommand={cliSetupCommand}
-                    setupMessage={deviceSetupMessage}
-                    {...((liveProtocolSession ?? protocolSession)
-                      ? {
-                          protocolSession:
-                            liveProtocolSession ?? protocolSession,
-                        }
-                      : {})}
-                  />
                 </section>
               ) : null}
 
@@ -1590,6 +1779,48 @@ export const WorkspaceShell = ({
                   </Card>
                 </section>
               ) : null}
+
+              <section
+                aria-hidden={envVisible ? undefined : true}
+                className={envVisible ? undefined : "hidden"}
+              >
+                {editorEntries.map((entry) => {
+                  const entryKey = environmentContextKey(entry.identity);
+                  const isCurrent =
+                    selectedEntry !== null && entryKey === currentKey;
+                  return (
+                    <div
+                      className={isCurrent ? undefined : "hidden"}
+                      data-testid={
+                        isCurrent
+                          ? "editor-context-active"
+                          : "editor-context-retained"
+                      }
+                      key={entryKey}
+                    >
+                      <EnvironmentEditor
+                        active={envVisible && isCurrent}
+                        available={
+                          isCurrent
+                            ? entry.available && !contextStale
+                            : entry.available
+                        }
+                        contextIdentity={entry.identity}
+                        loading={isCurrent && contextStale}
+                        onDraftDirtyChange={(dirty) => {
+                          draftDirtyRef.current.set(entryKey, dirty);
+                        }}
+                        onSetupAction={handleSetupAction}
+                        protocolSession={entry.session ?? protocolSession}
+                        setupAction={entry.setupAction}
+                        setupBusy={isCurrent ? deviceSetupInProgress : false}
+                        setupCommand={entry.setupCommand}
+                        setupMessage={entry.setupMessage}
+                      />
+                    </div>
+                  );
+                })}
+              </section>
             </>
           )}
         </main>
@@ -1627,6 +1858,64 @@ export const WorkspaceShell = ({
             <Button disabled={!githubSubject.trim()} onClick={createInvitation}>
               Create invitation
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) setPendingSwitch(null);
+        }}
+        open={pendingSwitch !== null}
+      >
+        <DialogContent data-testid="switch-draft-prompt">
+          <DialogHeader>
+            <DialogTitle>Keep unsaved changes?</DialogTitle>
+            <DialogDescription>
+              {pendingSwitch
+                ? `You have unsaved changes in ${pendingSwitch.leavingLabel}. Keep them to find the draft again when you return, or discard them. Discarding also cancels any in-flight operations for this Environment.`
+                : "You have unsaved changes in the current Environment."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              Cancel
+            </DialogClose>
+            <DialogClose
+              render={
+                <Button
+                  data-testid="switch-keep-draft"
+                  onClick={() => {
+                    if (pendingSwitch)
+                      commitSelection(
+                        pendingSwitch.request,
+                        pendingSwitch.onCommit,
+                        false,
+                      );
+                  }}
+                />
+              }
+            >
+              Keep draft
+            </DialogClose>
+            <DialogClose
+              render={
+                <Button
+                  data-testid="switch-discard-draft"
+                  onClick={() => {
+                    if (pendingSwitch)
+                      commitSelection(
+                        pendingSwitch.request,
+                        pendingSwitch.onCommit,
+                        true,
+                      );
+                  }}
+                  variant="destructive"
+                />
+              }
+            >
+              Discard changes
+            </DialogClose>
           </DialogFooter>
         </DialogContent>
       </Dialog>
