@@ -1,3 +1,4 @@
+import { createWriteStream } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -77,13 +78,15 @@ export const selectIssues = (issues: Issue[]) =>
     )
     .sort((a, b) => priority(a) - priority(b) || a.number - b.number);
 
-export const saveState = async (path: string, state: State) => {
+const saveJson = async (path: string, value: unknown) => {
   const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
     mode: 0o600,
   });
   await rename(temporary, path);
 };
+
+export const saveState = (path: string, state: State) => saveJson(path, state);
 
 export const acquireLock = async (
   path: string,
@@ -243,6 +246,50 @@ export const main = async (argv = process.argv.slice(2)) => {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const release = await acquireLock(join(directory, "controller.lock"));
+  const runId = `${new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z")}-${process.pid}`;
+  const startedAt = new Date().toISOString();
+  const statusPath = join(directory, "status.json");
+  const logFile = `run-${runId}.log`;
+  const logStream = createWriteStream(join(directory, logFile), {
+    flags: "a",
+    mode: 0o600,
+  });
+  const report = (message: string, error = false) => {
+    (error ? process.stderr : process.stdout).write(`${message}\n`);
+    logStream.write(`${message}\n`);
+  };
+  const writeStatus = (
+    status: "running" | "completed" | "failed" | "attention" | "stopped",
+    stage: string,
+    message: string,
+    job?: Job,
+  ) =>
+    saveJson(statusPath, {
+      version: 1,
+      runId,
+      status,
+      stage,
+      message,
+      startedAt,
+      updatedAt: new Date().toISOString(),
+      finishedAt: status === "running" ? null : new Date().toISOString(),
+      pid: process.pid,
+      controllerPid: process.pid,
+      baseBranch: baseBranch ?? "main",
+      issue: job?.issue ?? null,
+      issueTitle: job?.title ?? null,
+      issueUrl: job
+        ? `https://github.com/LSP-Software/DotRelay/issues/${job.issue}`
+        : null,
+      priority: null,
+      branch: job ? `agent/issue-${job.issue}` : null,
+      prUrl: null,
+      logFile,
+      activeLogFile: null,
+    });
   const stop = () =>
     abort.abort(
       new Error("Controller interrupted; saved work will resume on restart"),
@@ -250,6 +297,9 @@ export const main = async (argv = process.argv.slice(2)) => {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
+    report(`DotRelay issue controller started at ${startedAt}`);
+    report(`Controller transcript: ${join(directory, logFile)}`);
+    await writeStatus("running", "starting", "Issue controller started.");
     let state: State;
     try {
       state = JSON.parse(await readFile(statePath, "utf8"));
@@ -315,6 +365,11 @@ export const main = async (argv = process.argv.slice(2)) => {
     while (true) {
       let login: string;
       let issues: Issue[];
+      await writeStatus(
+        "running",
+        "discovering_queue",
+        "Discovering ready issues and resumable work.",
+      );
       try {
         if (
           (await command(
@@ -392,7 +447,12 @@ export const main = async (argv = process.argv.slice(2)) => {
       } catch (error) {
         if (!(error as { infrastructure?: boolean }).infrastructure)
           throw error;
-        console.error(`Queue discovery unavailable: ${String(error)}`);
+        report(`Queue discovery unavailable: ${String(error)}`, true);
+        await writeStatus(
+          "running",
+          "queue_unavailable",
+          "GitHub queue discovery is unavailable; waiting to retry.",
+        );
         await pause(
           backoff(
             ++discoveryFailures,
@@ -412,13 +472,22 @@ export const main = async (argv = process.argv.slice(2)) => {
           const blocked = state.jobs.filter(
             (item) => item.status === "blocked",
           );
-          console.log(
-            `Queue drained. ${blocked.length} issue(s) need intervention. State: ${statePath}`,
-          );
+          const message = `Queue drained. ${blocked.length} issue(s) need intervention. State: ${statePath}`;
+          report(message);
           for (const item of blocked)
-            console.error(`#${item.issue}: ${item.reason}`);
+            report(`#${item.issue}: ${item.reason}`, true);
+          await writeStatus(
+            blocked.length ? "attention" : "completed",
+            blocked.length ? "needs_attention" : "completed",
+            message,
+          );
           return blocked.length ? 2 : 0;
         }
+        await writeStatus(
+          "running",
+          "waiting_to_retry",
+          "Waiting for the next deferred issue retry.",
+        );
         await pause(
           Math.min(
             60_000,
@@ -521,9 +590,13 @@ export const main = async (argv = process.argv.slice(2)) => {
         await unlink(marker).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "ENOENT") throw error;
         });
-        console.log(
-          `Processing #${job.issue}: ${job.title}. Checkout: ${checkout}`,
+        await writeStatus(
+          "running",
+          "preparing_issue",
+          `Preparing issue #${job.issue}.`,
+          job,
         );
+        report(`Processing #${job.issue}: ${job.title}. Checkout: ${checkout}`);
         const result = await runProcess(
           ["bash", join(import.meta.dir, "..", "run-issues.sh")],
           {
@@ -538,8 +611,20 @@ export const main = async (argv = process.argv.slice(2)) => {
               WORKER_STATE: join(jobDirectory, "worker.json"),
               RUN_INFRA_MARKER: marker,
               RUN_UNSAFE_MARKER: unsafe,
+              RUN_STATUS_PATH: statusPath,
+              RUN_CONTROLLER_PID: String(process.pid),
+              RUN_CONTROLLER_LOG_FILE: logFile,
+              RUN_ID: runId,
+              RUN_STARTED_AT: startedAt,
             },
+            onOutput: (data) => logStream.write(data),
           },
+        );
+        await writeStatus(
+          "running",
+          "recording_result",
+          `Recording the result for issue #${job.issue}.`,
+          job,
         );
         if (result.code === 70 || (await Bun.file(unsafe).exists())) {
           await writeFile(unsafe, result.output);
@@ -580,13 +665,22 @@ export const main = async (argv = process.argv.slice(2)) => {
         );
       }
       await save();
-      console.log(
+      report(
         `#${job.issue}: ${job.status}${job.status === "pending" ? `; retry after ${new Date(job.nextAttempt).toISOString()}` : ""}`,
       );
     }
+  } catch (error) {
+    const stopped = abort.signal.aborted;
+    await writeStatus(
+      stopped ? "stopped" : "failed",
+      stopped ? "stopped" : "controller_failed",
+      error instanceof Error ? error.message : String(error),
+    ).catch(() => undefined);
+    throw error;
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
+    await new Promise<void>((accept) => logStream.end(accept));
     await release();
   }
 };

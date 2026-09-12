@@ -3,7 +3,10 @@
   "globalPassThroughEnv": [
     "DOTRELAY_TARGET_PLATFORM",
     "DOTRELAY_TARGET_ARCH",
-    "DOTRELAY_BINARY_SOURCE"
+    "DOTRELAY_BINARY_SOURCE",
+    "ISSUES_PANEL_HOST",
+    "ISSUES_PANEL_PORT",
+    "ISSUES_PANEL_RUNS_DIR"
   ],
   "tasks": {
     "dev": {

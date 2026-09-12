@@ -12,7 +12,8 @@ boundary rules, CI checks, release policy, and the canonical Wiki source are doc
 [`docs/wiki/`](docs/wiki/README.md).
 
 For unattended issue implementation and PR repair, see the
-[issue runner guide](docs/run-issues.md).
+[issue runner guide](docs/run-issues.md). Its private browser dashboard is covered by the
+[issue runner panel guide](docs/run-issues-panel.md).
 
 The persisted [administration policy](docs/administration.md) defines Team roles, Membership
 lifecycle and invitations, Project/GitHub Repository identity, Environment lifecycle, and safe
