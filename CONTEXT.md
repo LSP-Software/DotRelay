@@ -19,6 +19,22 @@ A user-held recovery secret that can authorize a replacement Device when no exis
 available.
 _Avoid_: Backup password, master password
 
+**Active Recovery Kit**:
+The client artifact holding the last service-accepted Recovery Kit; it is replaced only after the
+service accepts a newer generation, so it always names a kit the service would honor.
+_Avoid_: Current backup, latest file
+
+**Pending Recovery Kit**:
+A staged Recovery Kit attempt that is kept separate from the Active Recovery Kit until the service
+accepts its envelope; a failed attempt is discarded and never becomes the active kit.
+_Avoid_: Draft kit, temporary backup
+
+**Recovery Kit Rotation**:
+Publishing a new service-accepted Recovery Kit generation that replaces the Active Recovery Kit and
+retires prior kits so they can no longer authorize a replacement Device; it requires approval and
+states which prior kits become obsolete.
+_Avoid_: Kit refresh, backup update
+
 **Team**:
 The collaboration and authorization boundary whose active Members share access to all of its
 Projects.

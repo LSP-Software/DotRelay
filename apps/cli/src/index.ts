@@ -124,7 +124,7 @@ export const renderPowerHelp = (): string => {
     "Pull checks the output's Git tracking state before writing: untracked outputs get a repository-local exclusion (.git/info/exclude), and a Git-tracked output is refused — untrack it (git rm --cached <path>) or choose another --output path.",
     "Change previews show names, ownership, and change type only; --reveal shows plaintext Values for that one review, never in JSON or diagnostics.",
     "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
-    "Destructive approval: --force is the only way to approve, under --no-input, replacing a differing pull output file or publishing removed Variables.",
+    "Destructive approval: --force is the only way to approve, under --no-input, replacing a differing pull output file, publishing removed Variables, or rotating an existing Recovery Kit.",
     "Values are never diagnostic data. --insecure and credential flags are not supported.",
   ].join("\n");
 };

@@ -273,7 +273,7 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "device begin": ["profile", "noInput", "json", "output"],
   "device approve": ["profile", "noInput", "json", "from"],
   "device complete": ["profile", "noInput", "json", "from"],
-  "device backup": ["profile", "noInput", "json", "output"],
+  "device backup": ["profile", "noInput", "force", "json", "output"],
   "device recover": ["profile", "noInput", "json", "from"],
   "project link": ["profile", "team", "json"],
   "env use": ["profile", "environment", "json"],

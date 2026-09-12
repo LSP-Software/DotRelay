@@ -1539,9 +1539,17 @@ const protocolNumber = (
   return value;
 };
 
-const nextRecoveryGeneration = async (
+type CurrentRecoveryEnvelope = Readonly<{
+  readonly envelopeId: string;
+  readonly recoveryGeneration: number;
+}>;
+
+// The service's current envelope is the only authority on which Recovery Kit
+// generation it accepted; both the next-generation probe and the uncertain
+// publication verification read it.
+const readCurrentRecoveryEnvelope = async (
   admin: StrictJsonClient,
-): Promise<number> => {
+): Promise<CurrentRecoveryEnvelope | null> => {
   let current: Record<string, unknown>;
   try {
     current = await admin.get("/api/v1/recovery/envelopes/current", [
@@ -1554,7 +1562,7 @@ const nextRecoveryGeneration = async (
     ]);
   } catch (error) {
     if (error instanceof CliError && error.code === "resource_not_found")
-      return 2;
+      return null;
     throw error;
   }
   const generation = current.recoveryGeneration;
@@ -1569,17 +1577,275 @@ const nextRecoveryGeneration = async (
       {},
       "recovery_generation_invalid",
     );
-  return Number(parsed + 1n);
+  const envelopeId = current.envelopeId;
+  if (typeof envelopeId !== "string" || envelopeId.length === 0)
+    throw new CliError(
+      "transient",
+      "the Server Profile returned an invalid current Recovery Kit envelope",
+      {},
+      "response_invalid",
+    );
+  return { envelopeId, recoveryGeneration: Number(parsed) };
+};
+
+const nextRecoveryGeneration = async (
+  admin: StrictJsonClient,
+): Promise<
+  Readonly<{
+    readonly next: number;
+    readonly current: CurrentRecoveryEnvelope | null;
+  }>
+> => {
+  const current = await readCurrentRecoveryEnvelope(admin);
+  if (current === null) return { next: 2, current: null };
+  return { next: current.recoveryGeneration + 1, current };
+};
+
+type PriorRecoveryKit = Readonly<{
+  readonly path: string;
+  readonly role: "active" | "previous";
+  readonly envelopeId?: string;
+  readonly recoveryGeneration?: number;
+}>;
+
+// The artifact layout keeps the last service-accepted kit (the active file)
+// and its retired predecessor (the .previous file) separate from any in-flight
+// attempt (the .pending file), so a failed publication can never clobber a
+// known-good kit.
+const priorRecoveryKits = async (
+  output: string,
+): Promise<readonly PriorRecoveryKit[]> => {
+  const candidates: Array<
+    readonly [path: string, role: "active" | "previous"]
+  > = [
+    [output, "active"],
+    [`${output}.previous`, "previous"],
+  ];
+  const kits: PriorRecoveryKit[] = [];
+  for (const [path, role] of candidates) {
+    try {
+      await readFile(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new CliError(
+        "local-io",
+        "could not read the prior Recovery Kit file",
+        {},
+        "artifact_read_failed",
+      );
+    }
+    let artifact: RecoveryArtifact | null = null;
+    try {
+      artifact = await readRecoveryArtifact(path);
+    } catch {
+      artifact = null;
+    }
+    kits.push(
+      artifact === null
+        ? { path, role }
+        : {
+            path,
+            role,
+            envelopeId: artifact.envelopeId,
+            recoveryGeneration: artifact.recoveryGeneration,
+          },
+    );
+  }
+  return kits;
+};
+
+const priorRecoveryKitDescription = (kit: PriorRecoveryKit): string =>
+  kit.envelopeId === undefined
+    ? `${kit.path} (${kit.role} file that is not a recognizable Recovery Kit)`
+    : `${kit.path} (${kit.role} kit, envelope ${kit.envelopeId}, generation ${kit.recoveryGeneration})`;
+
+const rotationConfirmQuestion = (
+  output: string,
+  nextGeneration: number,
+  kits: readonly PriorRecoveryKit[],
+): string =>
+  [
+    `Rotate the Recovery Kit at ${output}?`,
+    `The new generation ${nextGeneration} kit becomes the active kit.`,
+    "These prior kits become obsolete and can no longer restore a Device:",
+    ...kits.map((kit) => `  - ${priorRecoveryKitDescription(kit)}`),
+  ].join("\n");
+
+// A rotation retires kits that may be the only path to restoring a Device, so
+// it never proceeds without approval: --force under --no-input, or an explicit
+// interactive confirmation naming the kits that become obsolete.
+const approveRecoveryKitRotation = async (
+  options: WorkflowOptions,
+  output: string,
+  nextGeneration: number,
+  kits: readonly PriorRecoveryKit[],
+): Promise<void> => {
+  if (kits.length === 0) return;
+  if (options.noInput) {
+    if (options.force) return;
+    throw new CliError(
+      "invocation",
+      `rotating the Recovery Kit at ${output} retires ${kits.length === 1 ? "a prior kit" : `${kits.length} prior kits`}; re-run with --force to approve the rotation`,
+      {},
+      "deletion_requires_approval",
+    );
+  }
+  if (
+    !(await confirm(
+      options,
+      rotationConfirmQuestion(output, nextGeneration, kits),
+    ))
+  )
+    throw new CliInvocationError("recovery kit rotation was declined");
+};
+
+// After an uncertain publication the only authority on which generation the
+// service accepted is its current envelope, so the active artifact is
+// replaced only when the service reports exactly the envelope this attempt
+// published.
+const verifyRecoveryPublication = async (
+  admin: StrictJsonClient,
+  envelopeId: string,
+  recoveryGeneration: number,
+): Promise<"accepted" | "not-accepted" | "unverified"> => {
+  let current: CurrentRecoveryEnvelope | null;
+  try {
+    current = await readCurrentRecoveryEnvelope(admin);
+  } catch {
+    return "unverified";
+  }
+  if (current === null) return "not-accepted";
+  return current.envelopeId.toLowerCase() === envelopeId.toLowerCase() &&
+    current.recoveryGeneration === recoveryGeneration
+    ? "accepted"
+    : "not-accepted";
+};
+
+// A pending attempt left by an earlier interrupted run is either the kit the
+// service accepted (and must be promoted) or an attempt it never accepted
+// (and must not shadow the next one).
+const pendingRecoveryKit = async (
+  path: string,
+): Promise<RecoveryArtifact | null> => {
+  try {
+    await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new CliError(
+      "local-io",
+      "could not read the pending Recovery Kit file",
+      {},
+      "artifact_read_failed",
+    );
+  }
+  try {
+    return await readRecoveryArtifact(path);
+  } catch {
+    return null;
+  }
+};
+
+const discardPendingKit = async (path: string): Promise<void> => {
+  await unlink(path).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  });
+};
+
+const rotationReport = (
+  output: string,
+  envelopeId: string,
+  recoveryGeneration: number,
+  priorKits: readonly PriorRecoveryKit[],
+  verb: string,
+): Readonly<{
+  output: string;
+  envelopeId: string;
+  recoveryGeneration: number;
+  rotated: boolean;
+  retiredEnvelopeIds: readonly string[];
+  previous?: string;
+  message: string;
+}> => {
+  const rotated = priorKits.length > 0;
+  const retiredEnvelopeIds = priorKits
+    .filter((kit) => kit.envelopeId !== undefined)
+    .map((kit) => kit.envelopeId as string);
+  return {
+    output,
+    envelopeId,
+    recoveryGeneration,
+    rotated,
+    retiredEnvelopeIds,
+    ...(rotated ? { previous: `${output}.previous` } : {}),
+    message: rotated
+      ? `${verb} ${output} (generation ${recoveryGeneration}); prior kits are now obsolete: ${priorKits
+          .map(priorRecoveryKitDescription)
+          .join("; ")}`
+      : `${verb} ${output} (generation ${recoveryGeneration})`,
+  };
 };
 
 export const createRecoveryBackup = async (
   options: WorkflowOptions,
   output: string,
 ): Promise<
-  Readonly<{ output: string; envelopeId: string; recoveryGeneration: number }>
+  Readonly<{
+    output: string;
+    envelopeId: string;
+    recoveryGeneration: number;
+    rotated: boolean;
+    retiredEnvelopeIds: readonly string[];
+    previous?: string;
+    message: string;
+  }>
 > => {
   const authorized = await loadAuthorizedDevice(options);
-  const recoveryGeneration = await nextRecoveryGeneration(authorized.admin);
+  const { next: recoveryGeneration, current } = await nextRecoveryGeneration(
+    authorized.admin,
+  );
+  const pendingPath = `${output}.pending`;
+  // Locate the prior artifacts before staging anything: a rotation must name
+  // the kits it retires, and a failed attempt must never reach them.
+  const priorKits = await priorRecoveryKits(output);
+  const pendingKit = await pendingRecoveryKit(pendingPath);
+  const pendingAccepted =
+    pendingKit !== null &&
+    current !== null &&
+    pendingKit.envelopeId.toLowerCase() === current.envelopeId.toLowerCase() &&
+    pendingKit.recoveryGeneration === current.recoveryGeneration;
+  if (pendingAccepted) {
+    // An earlier, interrupted run staged the kit the service now accepts.
+    // Promote it instead of overwriting it with a new attempt, so the last
+    // service-accepted kit is never lost to a retry.
+    await approveRecoveryKitRotation(
+      options,
+      output,
+      current.recoveryGeneration,
+      priorKits,
+    );
+    const pendingText = await readFile(pendingPath, "utf8");
+    await atomicWriteProtectedFile(output, pendingText, {
+      retainPrevious: true,
+    });
+    await discardPendingKit(pendingPath);
+    return rotationReport(
+      output,
+      pendingKit.envelopeId,
+      current.recoveryGeneration,
+      priorKits,
+      "Promoted the service-accepted Recovery Kit",
+    );
+  }
+  if (pendingKit !== null)
+    // A pending attempt the service never accepted must not shadow the next
+    // one.
+    await discardPendingKit(pendingPath);
+  await approveRecoveryKitRotation(
+    options,
+    output,
+    recoveryGeneration,
+    priorKits,
+  );
   const kit = await createRecoveryKit({
     serverProfileId: options.profile.pin.serverProfileId,
     userId: authorized.userId,
@@ -1612,32 +1878,76 @@ export const createRecoveryBackup = async (
     ),
     kit: base64(kit.bytes),
   };
-  await atomicWriteProtectedFile(output, `${JSON.stringify(artifact)}\n`, {
-    retainPrevious: true,
-  });
+  // Stage the attempt in a file that no failure mode can mistake for the
+  // active kit; the active artifact is replaced only after the service has
+  // accepted the new generation.
+  const pendingText = `${JSON.stringify(artifact)}\n`;
+  await atomicWriteProtectedFile(pendingPath, pendingText);
   const operationId = crypto.randomUUID();
-  await authorized.admin.post(
-    "/api/v1/recovery/envelopes",
-    {
-      operationId,
-      objectId: envelopeId,
-      object: base64(kit.envelopeBytes),
+  let publicationError: unknown = null;
+  try {
+    await authorized.admin.post(
+      "/api/v1/recovery/envelopes",
+      {
+        operationId,
+        objectId: envelopeId,
+        object: base64(kit.envelopeBytes),
+        envelopeId,
+        identityGeneration: String(kit.identityGeneration),
+        recoveryGeneration: String(kit.recoveryGeneration),
+        ciphertextHash: sha384ToHex(
+          protocolBytes(envelope, 48, "Recovery Kit ciphertext hash", 48),
+        ),
+        ciphertextLength: protocolNumber(
+          envelope,
+          72,
+          "Recovery Kit ciphertext length",
+        ),
+      },
+      ["envelopeId", "recoveryGeneration", "idempotent"],
+      { idempotencyKey: operationId },
+    );
+  } catch (error) {
+    publicationError = error;
+  }
+  if (publicationError !== null) {
+    // A definitive rejection cannot have been accepted; an uncertain failure
+    // must be reconciled against the service's current envelope first.
+    const definitive =
+      publicationError instanceof CliError &&
+      publicationError.category !== "transient";
+    if (definitive) {
+      await discardPendingKit(pendingPath);
+      throw publicationError;
+    }
+    const verified = await verifyRecoveryPublication(
+      authorized.admin,
       envelopeId,
-      identityGeneration: String(kit.identityGeneration),
-      recoveryGeneration: String(kit.recoveryGeneration),
-      ciphertextHash: sha384ToHex(
-        protocolBytes(envelope, 48, "Recovery Kit ciphertext hash", 48),
-      ),
-      ciphertextLength: protocolNumber(
-        envelope,
-        72,
-        "Recovery Kit ciphertext length",
-      ),
-    },
-    ["envelopeId", "recoveryGeneration", "idempotent"],
-    { idempotencyKey: operationId },
+      recoveryGeneration,
+    );
+    if (verified === "not-accepted") {
+      await discardPendingKit(pendingPath);
+      throw publicationError;
+    }
+    if (verified === "unverified") {
+      throw new CliError(
+        "transient",
+        `the Recovery Kit publication outcome is unverified; the pending kit is retained at ${pendingPath} and the last service-accepted kit at ${output} is unchanged; re-run device backup to verify which generation the service accepted`,
+        {},
+        "service_unavailable",
+      );
+    }
+    // The service accepted this attempt even though the response was lost.
+  }
+  await atomicWriteProtectedFile(output, pendingText, { retainPrevious: true });
+  await discardPendingKit(pendingPath);
+  return rotationReport(
+    output,
+    envelopeId,
+    recoveryGeneration,
+    priorKits,
+    "Wrote Recovery Kit",
   );
-  return { output, envelopeId, recoveryGeneration };
 };
 
 const publicSpkiFromPrivate = async (
