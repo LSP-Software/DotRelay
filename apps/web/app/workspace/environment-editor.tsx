@@ -64,8 +64,10 @@ import {
   mergeVerifiedHistory,
   prepareEncryptedPublication,
   publicationMutationForHead,
+  publishedBaseline,
   rollbackValueDiffs,
   type SetupAction,
+  settlePublishedDraft,
   splitInlineValueDiff,
   updateVariableValue,
   type VariableDraft,
@@ -985,16 +987,9 @@ export const EnvironmentEditor = ({
             mergeVerifiedHistory(current, [artifacts.request.revision.id]),
           );
         }
-        setVariables((current) =>
-          current.map((variable) => ({ ...variable, hasDraftChange: false })),
-        );
+        setVariables((current) => settlePublishedDraft(current, variables));
         setDeletedVariableSnapshots(new Map());
-        setRemoteVariables(
-          variables.map((variable) => ({
-            ...variable,
-            hasDraftChange: false,
-          })),
-        );
+        setRemoteVariables(publishedBaseline(variables));
         setRollbackMutationTarget(null);
         setConflictingLaneIds(new Set());
         setStaleHeadRevision(null);
@@ -1006,10 +1001,9 @@ export const EnvironmentEditor = ({
       await prepareEncryptedPublication(variables);
       const nextRevision = revisionNumber(headRevision) + 1;
       setHeadRevision(`rev_${String(nextRevision).padStart(4, "0")}`);
-      setVariables((current) =>
-        current.map((variable) => ({ ...variable, hasDraftChange: false })),
-      );
+      setVariables((current) => settlePublishedDraft(current, variables));
       setDeletedVariableSnapshots(new Map());
+      setRemoteVariables(publishedBaseline(variables));
       setConflictingLaneIds(new Set());
       setStaleHeadRevision(null);
       setRetryReady(false);

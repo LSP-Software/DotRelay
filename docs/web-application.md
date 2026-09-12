@@ -135,5 +135,10 @@ Save changes, and per-Variable edits stay blocked; retry re-enters the loading s
 `apps/web/e2e/workspace-protocol-reread.spec.ts` extends this to a verified read that later
 fails: the Variables it loaded stay visible but locked, with each Variable's Value input,
 reveal, Set absent, delete, and Undo delete controls disabled until the read recovers.
+`apps/web/e2e/workspace-protocol-publish.spec.ts` covers a delayed publication over a live
+protocol session: closing the review dialog while the publication is in flight neither cancels
+nor misrepresents it, and a Value edited after the submitted snapshot is published stays visibly
+marked as an unpublished draft while the published lane clears and the remote baseline becomes
+the published snapshot.
 Tests observe browser-visible behavior and never
 reach into component state.
