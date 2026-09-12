@@ -623,11 +623,13 @@ export const EnvironmentEditor = ({
     setProtocolHead(headFromContext(session.context));
     setLoadPhase("loading");
   }, [session]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt is a retry trigger whose value is intentionally not read inside the effect
   useEffect(() => {
     if (!session || !available) return;
     let cancelled = false;
     const load = async () => {
       setLoadPhase("loading");
+      setAddOpen(false);
       try {
         const context = session.context;
         if (!context.trustedRevisionId || !context.trustedRevisionHash) {
@@ -836,6 +838,7 @@ export const EnvironmentEditor = ({
   };
 
   const createVariable = () => {
+    if (loadPhase !== "ready") return;
     const error = validateVariableDraft(addDraft, variables);
     if (error) {
       setAddError(error);

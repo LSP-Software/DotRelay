@@ -255,7 +255,9 @@ export const mergeDraftVariablesOverRemote = (
     };
   });
   const localOnly = localVariables
-    .filter((variable) => !remoteIds.has(variable.id))
+    .filter(
+      (variable) => variable.hasDraftChange && !remoteIds.has(variable.id),
+    )
     .map((variable) => ({ ...variable, hasDraftChange: true }));
   return Object.freeze([...merged, ...localOnly]);
 };

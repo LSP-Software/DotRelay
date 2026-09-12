@@ -329,6 +329,11 @@ export const emptyWorkspaceBoundary = (
   };
 };
 
+// Test-only revision signing trust key for the e2e fixture; the paired
+// private key signs the synthetic sync pages served by the e2e specs.
+export const E2E_REVISION_SIGNING_TRUST_KEY =
+  "302a300506032b65700321003106030b2495aaa5b5cdf8c65c723e8f81717a8eeebd45db288714034c80a978";
+
 export const e2eWorkspaceBoundary = (
   profileId: WorkspaceProfileId,
   options?: Readonly<{
@@ -399,6 +404,7 @@ export const e2eWorkspaceBoundary = (
     grantsReady: options?.deviceId !== undefined,
     epochCurrent: true,
     rotationRequired: false,
+    signingTrustKeys: [E2E_REVISION_SIGNING_TRUST_KEY],
     crypto: { available: true },
   };
 };

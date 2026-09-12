@@ -339,6 +339,52 @@ test("typing before a delayed initial response keeps the edit over the arriving 
   expect(changedLaneCount(merged)).toBe(3);
 });
 
+test("an unchanged local Variable deleted remotely is not republished on merge", () => {
+  const remoteOrigin = {
+    ...createEnvironmentVariable({ ...sharedDraft, value: "remote" }, "lane-1"),
+    hasDraftChange: false,
+  };
+  const editedOrigin = {
+    ...remoteOrigin,
+    value: "edited-locally",
+    hasDraftChange: true,
+  };
+  const remotelyDeleted = {
+    ...createEnvironmentVariable(
+      {
+        ...sharedDraft,
+        name: "OPTIONAL_FLAG",
+        value: "",
+        valuePresent: false,
+        required: false,
+      },
+      "lane-2",
+    ),
+    hasDraftChange: false,
+  };
+  const createdEarly = createEnvironmentVariable(
+    { ...sharedDraft, name: "LATE_ADDITION", value: "added" },
+    "lane-3",
+  );
+
+  const merged = mergeDraftVariablesOverRemote(
+    [editedOrigin, remotelyDeleted, createdEarly],
+    [remoteOrigin],
+  );
+
+  expect(merged.map((variable) => variable.id)).toEqual(["lane-1", "lane-3"]);
+  expect(merged[0]).toMatchObject({
+    id: "lane-1",
+    value: "edited-locally",
+    hasDraftChange: true,
+  });
+  expect(merged[1]).toMatchObject({
+    id: "lane-3",
+    name: "LATE_ADDITION",
+    hasDraftChange: true,
+  });
+});
+
 test("an edit that matches the verified remote page is not a pending change", () => {
   const remoteOrigin = {
     ...createEnvironmentVariable({ ...sharedDraft, value: "remote" }, "lane-1"),
