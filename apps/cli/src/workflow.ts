@@ -155,6 +155,7 @@ type WorkflowSession = Readonly<{
   readonly publicationContext: PublicationContext;
   readonly session: ReturnType<typeof createVerifiedEnvironmentSession>;
   readonly createdEnvironmentId?: string;
+  readonly pendingActions: readonly string[];
 }>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -487,6 +488,10 @@ const bootstrapProjectGrant = async (
   return grant.plaintextKey;
 };
 
+// Peer provisioning is optional: it must never abort a read this Device can
+// already verify, and a peer that holds the current epoch grant is reused
+// rather than re-provisioned. Grants are only written when the service
+// confirms the actor holds the project-administration authority.
 const wrapEpochKeyToPeers = async (
   options: WorkflowOptions,
   token: string,
@@ -494,38 +499,47 @@ const wrapEpochKeyToPeers = async (
   deviceId: string,
   keys: DeviceKeyMaterial,
   epochKey: Uint8Array,
-): Promise<void> => {
+): Promise<readonly string[]> => {
   if (
     !keys.encryptionPublicKey ||
     !boundary.environment.projectId ||
     !boundary.environment.teamId
   )
-    return;
+    return [];
+  const pending: string[] = [];
   for (const peer of boundary.peerDevices) {
     if (peer.id === deviceId) continue;
-    const recipientX25519PublicKey = hexToBytes(peer.encryptionPublicKey);
-    if (recipientX25519PublicKey.length !== 32) continue;
-    const recipientEncryptionPublicKey = await crypto.subtle.importKey(
-      "raw",
-      new Uint8Array(recipientX25519PublicKey),
-      { name: "X25519" },
-      true,
-      [],
-    );
-    const grant = await createProjectEpochGrantBootstrap({
-      serverProfileId: options.profile.pin.serverProfileId,
-      teamId: boundary.environment.teamId ?? "",
-      projectId: boundary.environment.projectId ?? "",
-      projectEpoch: safeProjectEpoch(boundary.environment.projectEpoch),
-      senderDeviceId: deviceId,
-      recipientDeviceId: peer.id,
-      recipientX25519PublicKey,
-      recipientEncryptionPublicKey,
-      signingPrivateKey: keys.signingPrivateKey,
-      plaintextKey: epochKey,
-    });
-    await submitEpochGrant(options, token, boundary, deviceId, grant);
+    if (peer.hasEpochGrant) continue;
+    try {
+      const recipientX25519PublicKey = hexToBytes(peer.encryptionPublicKey);
+      if (recipientX25519PublicKey.length !== 32) continue;
+      const recipientEncryptionPublicKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(recipientX25519PublicKey),
+        { name: "X25519" },
+        true,
+        [],
+      );
+      const grant = await createProjectEpochGrantBootstrap({
+        serverProfileId: options.profile.pin.serverProfileId,
+        teamId: boundary.environment.teamId ?? "",
+        projectId: boundary.environment.projectId ?? "",
+        projectEpoch: safeProjectEpoch(boundary.environment.projectEpoch),
+        senderDeviceId: deviceId,
+        recipientDeviceId: peer.id,
+        recipientX25519PublicKey,
+        recipientEncryptionPublicKey,
+        signingPrivateKey: keys.signingPrivateKey,
+        plaintextKey: epochKey,
+      });
+      await submitEpochGrant(options, token, boundary, deviceId, grant);
+    } catch {
+      pending.push(
+        `Device ${peer.id} is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device`,
+      );
+    }
   }
+  return Object.freeze(pending);
 };
 
 const submitEpochGrant = async (
@@ -2550,15 +2564,24 @@ const loadWorkflowSession = async (
       keys.encryptionPrivateKey,
     );
   }
-  if (epochKey)
-    await wrapEpochKeyToPeers(
-      options,
-      token,
-      boundary,
-      deviceId,
-      keys,
-      epochKey,
-    );
+  // The verified read must survive peer provisioning: a rejected or
+  // unreachable grant write degrades to a truthful pending action instead
+  // of aborting the otherwise authorized read.
+  const pendingActions = epochKey
+    ? await wrapEpochKeyToPeers(
+        options,
+        token,
+        boundary,
+        deviceId,
+        keys,
+        epochKey,
+      )
+    : [];
+  if (pendingActions.length > 0 && !parsed.json) {
+    const output = options.terminal?.output ?? process.stderr;
+    for (const action of pendingActions)
+      writeNotice(output, action, undefined, "wax");
+  }
   const transport = createProtocolTransport({
     origin: options.profile.origin,
     authorization: `Bearer ${token}`,
@@ -2598,6 +2621,7 @@ const loadWorkflowSession = async (
     transport,
     publicationContext,
     session,
+    pendingActions,
     ...(createdEnvironmentId ? { createdEnvironmentId } : {}),
   };
 };
@@ -2875,6 +2899,7 @@ const publish = async (
       lanes: 0,
       tombstones: 0,
       message: "Already published",
+      ...pendingActionsField(synced.workflow.pendingActions),
     };
   const changes = draftVariables
     .map((variable) => publicationChangeFor(variable, synced.variables))
@@ -2983,6 +3008,7 @@ const publish = async (
     lanes: artifacts.encryptedLaneCount,
     tombstones: artifacts.tombstoneLaneCount,
     message: "Published",
+    ...pendingActionsField(synced.workflow.pendingActions),
   };
 };
 
@@ -3138,6 +3164,11 @@ const localPullChanges = async (
   }
 };
 
+const pendingActionsField = (
+  actions: readonly string[],
+): Readonly<Record<string, unknown>> =>
+  actions.length > 0 ? { pendingActions: actions } : {};
+
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -3152,6 +3183,7 @@ export const runProtectedWorkflow = async (
         authoredAtMs: revision.authoredAtMs.toString(),
         rollbackTargetId: revision.rollbackTargetId,
       })),
+      ...pendingActionsField(synced.workflow.pendingActions),
     };
   }
   if (parsed.command === "diff") {
@@ -3208,7 +3240,14 @@ export const runProtectedWorkflow = async (
       changes.filter(
         (change) => change.kind === "added" || change.kind === "updated",
       ).length;
-    if (parsed.json) return { added, updated, removed, unchangedCount };
+    if (parsed.json)
+      return {
+        added,
+        updated,
+        removed,
+        unchangedCount,
+        ...pendingActionsField(synced.workflow.pendingActions),
+      };
     return { stdout: renderEnvDiff(changes, parsed.reveal) };
   }
   if (parsed.command === "pull") {
@@ -3321,6 +3360,7 @@ export const runProtectedWorkflow = async (
           output: outputPath ?? "",
           ...(gitExclusion ? { gitExclusion } : {}),
           ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
+          ...pendingActionsField(synced.workflow.pendingActions),
           message: replaceExisting
             ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous${exclusionNote}`
             : `Wrote ${entries.length} values to ${outputPath}${exclusionNote}`,
