@@ -1219,16 +1219,30 @@ const createLoginFixture = async (
   options: Readonly<{
     readonly token?: (poll: number) => Response;
     readonly emptyCatalog?: boolean;
+    readonly remoteDeviceId?: string;
   }> = {},
 ): Promise<
   Readonly<{
     readonly profilePath: string;
+    readonly stateDirectory: string;
     readonly credentials: NativeCredentialStore;
+    readonly deviceStorage: ReturnType<typeof createCliDeviceStorage>;
     readonly fetch: FetchFunction;
+    readonly runtime: Readonly<{
+      readonly profilePath: string;
+      readonly stateDirectory: string;
+      readonly credentials: NativeCredentialStore;
+      readonly deviceStorage: ReturnType<typeof createCliDeviceStorage>;
+      readonly fetch: FetchFunction;
+    }>;
+    readonly bootstrapCount: () => number;
+    readonly enrolledDeviceId: () => string | null;
+    readonly revokeLocalDevice: () => void;
     readonly cleanup: () => Promise<void>;
   }>
 > => {
-  const profilePath = `${import.meta.dir}/.tmp-login-profile-${crypto.randomUUID()}`;
+  const stateDirectory = await mkdtemp(join(tmpdir(), "dotrelay-login-"));
+  const profilePath = join(stateDirectory, "profiles.json");
   const catalog = options.emptyCatalog
     ? { version: 1, profiles: [] }
     : {
@@ -1245,14 +1259,32 @@ const createLoginFixture = async (
   await Bun.write(profilePath, JSON.stringify(catalog));
   const secrets = new Map<string, Uint8Array>();
   const credentials: NativeCredentialStore = Object.freeze({
-    get: async (_service, account) => secrets.get(account) ?? null,
+    get: async (_service, account) => {
+      const value = secrets.get(account);
+      return value ? new Uint8Array(value) : null;
+    },
     set: async (_service, account, secret) => {
-      secrets.set(account, secret);
+      secrets.set(account, new Uint8Array(secret));
     },
     delete: async (_service, account) => {
       secrets.delete(account);
     },
   });
+  const pin = Object.freeze({
+    origin: loginOrigin,
+    serverProfileId: loginProfileId,
+  });
+  const deviceStorage = createCliDeviceStorage(pin, credentials, {
+    recordStore: createMemoryDeviceRecordStore(),
+  });
+  // The Server Profile's fleet: a pre-existing Device on another installation
+  // plus any Device this client bootstraps.
+  const remoteDevices = new Set<string>([
+    ...(options.remoteDeviceId ? [options.remoteDeviceId] : []),
+  ]);
+  const revokedDevices = new Set<string>();
+  let localDeviceId: string | null = null;
+  let bootstrapCalls = 0;
   let poll = 0;
   const fetch: FetchFunction = async (input, init) => {
     const request = new Request(input as never, init);
@@ -1283,20 +1315,67 @@ const createLoginFixture = async (
     }
     if (url.pathname === "/api/v1/session")
       return Response.json({ authenticated: true, user: { id: loginUserId } });
-    if (url.pathname === "/api/v1/workspace/boundary")
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/v1/devices/bootstrap"
+    ) {
+      const body = (await request.json()) as Record<string, unknown>;
+      if (
+        typeof body.deviceId !== "string" ||
+        body.deviceId.length === 0 ||
+        typeof body.certificate !== "string" ||
+        body.certificate.length === 0
+      )
+        return Response.json({ detail: "invalid bootstrap" }, { status: 400 });
+      bootstrapCalls += 1;
+      localDeviceId = body.deviceId;
+      return Response.json(
+        { deviceId: body.deviceId, identityGeneration: 1, active: true },
+        { status: 201 },
+      );
+    }
+    if (url.pathname === "/api/v1/workspace/boundary") {
+      const presented = request.headers.get("X-DotRelay-Device-Id");
+      const fleet = [
+        ...remoteDevices,
+        ...(localDeviceId && !revokedDevices.has(localDeviceId)
+          ? [localDeviceId]
+          : []),
+      ];
+      const active = presented && fleet.includes(presented) ? presented : null;
       return Response.json({
         environment: { headRevision: "empty-environment" },
         session: { active: true, userId: loginUserId },
-        device: { active: true, id: loginDeviceId },
+        device: active
+          ? { active: true, label: "Active Device", id: active }
+          : { active: false, label: "No active Device" },
+        activeDeviceCount: fleet.length,
       });
+    }
     return Response.json({ detail: "unhandled" }, { status: 404 });
   };
   return {
     profilePath,
+    stateDirectory,
     credentials,
+    deviceStorage,
     fetch,
+    runtime: Object.freeze({
+      profilePath,
+      stateDirectory,
+      credentials,
+      deviceStorage,
+      fetch,
+    }),
+    bootstrapCount: () => bootstrapCalls,
+    enrolledDeviceId: () => localDeviceId,
+    revokeLocalDevice: () => {
+      if (localDeviceId) revokedDevices.add(localDeviceId);
+    },
     cleanup: async () => {
-      await rm(profilePath).catch(() => undefined);
+      await rm(stateDirectory, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
     },
   };
 };
@@ -1330,9 +1409,7 @@ describe("CLI sign-in display", () => {
     const opened: string[] = [];
     try {
       const result = await run(["login", "--profile", "relay", "--no-open"], {
-        profilePath: fixture.profilePath,
-        credentials: fixture.credentials,
-        fetch: fixture.fetch,
+        ...fixture.runtime,
         open: async (url) => {
           opened.push(url);
         },
@@ -1345,7 +1422,104 @@ describe("CLI sign-in display", () => {
       expect(output).toContain("Code: KITE-MOSS");
       expect(output).toContain("Expires in 10 minutes");
       expect(output).toContain("Open the URL above to complete sign-in");
-      expect(result.stdout).toContain("Signed in. Device already enrolled.");
+      expect(result.stdout).toContain("Signed in. Device enrolled.");
+      expect(fixture.bootstrapCount()).toBe(1);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("a fresh install enrolls itself instead of claiming the remote Device", async () => {
+    const fixture = await createLoginFixture({
+      remoteDeviceId: loginDeviceId,
+    });
+    const captured = captureTerminal();
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        {
+          ...fixture.runtime,
+          open: async (url) => {
+            throw new Error(`unexpected browser open: ${url}`);
+          },
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Signed in. Device enrolled.");
+      expect(fixture.bootstrapCount()).toBe(1);
+      const enrolled = fixture.enrolledDeviceId();
+      expect(enrolled).not.toBe(loginDeviceId);
+      expect(enrolled).not.toBe(null);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("a repeat login verifies the saved Device without re-enrolling", async () => {
+    const fixture = await createLoginFixture({
+      remoteDeviceId: loginDeviceId,
+    });
+    const captured = captureTerminal();
+    const runtime = {
+      ...fixture.runtime,
+      open: async (url: string) => {
+        throw new Error(`unexpected browser open: ${url}`);
+      },
+      terminal: captured.terminal,
+    };
+    try {
+      const first = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        runtime,
+      );
+      expect(first.exitCode).toBe(0);
+      const firstDeviceId = fixture.enrolledDeviceId();
+      expect(firstDeviceId).not.toBe(loginDeviceId);
+      const second = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        runtime,
+      );
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain("Signed in. Device already enrolled.");
+      expect(fixture.bootstrapCount()).toBe(1);
+      expect(fixture.enrolledDeviceId()).toBe(firstDeviceId);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("an installation whose Device was deactivated enrolls a replacement", async () => {
+    const fixture = await createLoginFixture({
+      remoteDeviceId: loginDeviceId,
+    });
+    const captured = captureTerminal();
+    const runtime = {
+      ...fixture.runtime,
+      open: async (url: string) => {
+        throw new Error(`unexpected browser open: ${url}`);
+      },
+      terminal: captured.terminal,
+    };
+    try {
+      const first = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        runtime,
+      );
+      expect(first.exitCode).toBe(0);
+      const firstDeviceId = fixture.enrolledDeviceId();
+      expect(firstDeviceId).not.toBe(loginDeviceId);
+      fixture.revokeLocalDevice();
+      const second = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        runtime,
+      );
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain("Signed in. Device enrolled.");
+      expect(fixture.bootstrapCount()).toBe(2);
+      const replacementDeviceId = fixture.enrolledDeviceId();
+      expect(replacementDeviceId).not.toBe(firstDeviceId);
+      expect(replacementDeviceId).not.toBe(loginDeviceId);
     } finally {
       await fixture.cleanup();
     }
@@ -1356,9 +1530,7 @@ describe("CLI sign-in display", () => {
     const captured = captureTerminal();
     try {
       const result = await run(["login", "--profile", "relay", "--json"], {
-        profilePath: fixture.profilePath,
-        credentials: fixture.credentials,
-        fetch: fixture.fetch,
+        ...fixture.runtime,
         open: async () => {
           throw new Error("no browser on this host");
         },
@@ -1396,9 +1568,7 @@ describe("CLI sign-in display", () => {
     const captured = captureTerminal();
     try {
       const result = await run(["login", "--profile", "relay"], {
-        profilePath: fixture.profilePath,
-        credentials: fixture.credentials,
-        fetch: fixture.fetch,
+        ...fixture.runtime,
         open: async () => {
           throw new Error("launcher exited nonzero");
         },
@@ -1426,9 +1596,7 @@ describe("CLI sign-in display", () => {
       const result = await run(
         ["login", "--profile", "relay", "--json", "--no-open"],
         {
-          profilePath: fixture.profilePath,
-          credentials: fixture.credentials,
-          fetch: fixture.fetch,
+          ...fixture.runtime,
           terminal: captured.terminal,
         },
       );
@@ -1458,9 +1626,7 @@ describe("CLI sign-in display", () => {
     const opened: string[] = [];
     try {
       const result = await run(["login", "--profile", "relay", "--no-input"], {
-        profilePath: fixture.profilePath,
-        credentials: fixture.credentials,
-        fetch: fixture.fetch,
+        ...fixture.runtime,
         open: async (url) => {
           opened.push(url);
         },
@@ -1492,9 +1658,7 @@ describe("CLI sign-in display", () => {
           "--json",
         ],
         {
-          profilePath: fixture.profilePath,
-          credentials: fixture.credentials,
-          fetch: fixture.fetch,
+          ...fixture.runtime,
           terminal: captured.terminal,
         },
       );

@@ -115,6 +115,15 @@ const setup = async (
       deviceId: ids.device,
     }));
   await deviceStorage.save(bootstrap.bundle);
+  // A completed enrollment always records its Device id next to the bundle.
+  const { writeDeviceId, deviceMetadataPath } = await import(
+    "./device-storage"
+  );
+  await writeDeviceId(
+    deviceMetadataPath(stateDirectory, profile.pin),
+    profile.pin,
+    bootstrap.deviceId,
+  );
   const workspaceBoundary = {
     ...boundary,
     environment: {
@@ -2624,6 +2633,102 @@ describe("protected CLI workflows", () => {
     expect(recoveryPosts[0]?.path).toBe("/api/v1/recovery/restore");
     expect(recoveryPosts[0]?.body.envelope).toBeString();
     expect(recoveryPosts[0]?.body.proof).toBeString();
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("recovery is blocked while another of the User's Devices is active", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-blocked`;
+    const backupAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        if (path === "/api/v1/recovery/envelopes/current")
+          throw new CliError(
+            "invocation",
+            "not found",
+            {},
+            "resource_not_found",
+          );
+        return boundary;
+      },
+      post: async () => ({
+        envelopeId: crypto.randomUUID(),
+        recoveryGeneration: "1",
+        idempotent: false,
+      }),
+    };
+    const backup = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: backupAdmin },
+    );
+    expect(backup.exitCode).toBe(0);
+    const recoveryPosts: Array<{
+      path: string;
+      body: Record<string, unknown>;
+    }> = [];
+    // The recorded Device is gone, but another of this User's Devices is
+    // still active, so a replacement Device must wait until the User has
+    // resolved the surviving Device.
+    const recoverAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        return {
+          ...boundary,
+          device: { active: false },
+          activeDeviceCount: 2,
+        };
+      },
+      post: async (path, body) => {
+        recoveryPosts.push({ path, body });
+        return {
+          deviceId: body.deviceId,
+          active: true,
+          recoveryGeneration: body.recoveryGeneration,
+        };
+      },
+    };
+    const recover = await run(
+      [
+        "device",
+        "recover",
+        "--profile",
+        "relay",
+        "--from",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: recoverAdmin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(recover.exitCode).toBe(4);
+    const diagnostic = JSON.parse(recover.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      detail: "Recovery Kit restore requires no active Device",
+      exitCode: 4,
+    });
+    expect(recoveryPosts).toHaveLength(0);
     await (await import("node:fs/promises"))
       .unlink(kitPath)
       .catch(() => undefined);
