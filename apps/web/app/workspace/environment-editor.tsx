@@ -22,7 +22,7 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -718,13 +718,16 @@ export const EnvironmentEditor = ({
   const reportDraftDirtyRef = useRef(onDraftDirtyChange);
   reportDraftDirtyRef.current = onDraftDirtyChange;
   const hasDirtyDraft = changedCount > 0;
-  const changedVariableNames = variables
-    .filter((variable) => variable.hasDraftChange)
-    .map((variable) => variable.name);
-  const changedVariableSignature = changedVariableNames.join("|");
+  const changedVariableNames = useMemo(
+    () =>
+      variables
+        .filter((variable) => variable.hasDraftChange)
+        .map((variable) => variable.name),
+    [variables],
+  );
   useEffect(() => {
     reportDraftDirtyRef.current?.(hasDirtyDraft, changedVariableNames);
-  }, [hasDirtyDraft, changedVariableSignature]);
+  }, [hasDirtyDraft, changedVariableNames]);
   const pendingDiffs = draftValueDiffs(variables, remoteVariables);
   const pendingRollbackDiffs = rollbackValueDiffs(
     variables,
