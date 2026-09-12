@@ -158,7 +158,7 @@ const sessionTrustKeys = (
 const headFromContext = (
   context: PublicationContext | undefined,
 ): Readonly<{ readonly id: string; readonly hash: Uint8Array }> | null =>
-  context && context.expectedHeadId && context.expectedHeadHash
+  context?.expectedHeadId && context.expectedHeadHash
     ? {
         id: context.expectedHeadId,
         hash: context.expectedHeadHash,

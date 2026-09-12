@@ -454,14 +454,14 @@ export const WorkspaceShell = ({
     [],
   );
 
-  const removeSessionByKey = (key: string) => {
+  const removeSessionByKey = useCallback((key: string) => {
     setSessionsByKey((prev) => {
       if (!prev.has(key)) return prev;
       const next = new Map(prev);
       next.delete(key);
       return next;
     });
-  };
+  }, []);
   const selectedEditorContext = (): RetainedEditorContext => ({
     identity: currentIdentity,
     session: selectedSession,
@@ -687,7 +687,7 @@ export const WorkspaceShell = ({
       reconnectNowRef.current = null;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [profileId, environmentId]);
+  }, [profileId, teamId, projectId, environmentId, removeSessionByKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -819,7 +819,14 @@ export const WorkspaceShell = ({
     return () => {
       cancelled = true;
     };
-  }, [boundary, profileId, teamId, projectId, environmentId]);
+  }, [
+    boundary,
+    profileId,
+    teamId,
+    projectId,
+    environmentId,
+    removeSessionByKey,
+  ]);
 
   const provisionBrowserDevice = async () => {
     const apiOrigin = resolveApiOrigin() ?? boundary.profile.origin;
