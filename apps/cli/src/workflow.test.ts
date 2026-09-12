@@ -92,8 +92,12 @@ const scriptedRecoveryService = (
   const verification = { unreachable: false };
   const admin: StrictJsonClient = {
     get: async (path) => {
-      if (path === "/api/v1/session")
+      if (path === "/api/v1/session") {
+        // Each invocation starts with its session check; a verification read
+        // only exists after a publication within the same invocation.
+        sawPublicationSinceCurrentRead = false;
         return { authenticated: true, user: { id: ids.user } };
+      }
       if (path === "/api/v1/recovery/envelopes/current") {
         const verifying = sawPublicationSinceCurrentRead;
         sawPublicationSinceCurrentRead = false;
@@ -3189,6 +3193,114 @@ describe("protected CLI workflows", () => {
       .catch(() => undefined);
     await (await import("node:fs/promises"))
       .unlink(`${kitPath}.pending`)
+      .catch(() => undefined);
+  });
+
+  test("an interrupted backup is reconciled on re-run without losing an accepted kit", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-reconciled`;
+    const service = scriptedRecoveryService([
+      "failed",
+      "accepted",
+      "lost-response",
+    ]);
+    const backupArgs = [
+      "device",
+      "backup",
+      "--profile",
+      "relay",
+      "--output",
+      kitPath,
+      "--no-input",
+      "--force",
+      "--json",
+    ];
+
+    // The first attempt is neither accepted nor verifiable: the pending kit
+    // is retained and nothing is written to the active path.
+    service.verification.unreachable = true;
+    const stuck = await run(backupArgs, { ...runtime, admin: service.admin });
+    expect(stuck.exitCode).toBe(7);
+    expect(
+      String((JSON.parse(stuck.stderr) as Record<string, unknown>).detail),
+    ).toContain("unverified");
+    expect(await Bun.file(kitPath).exists()).toBe(false);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(true);
+    expect(service.current()).toBeNull();
+
+    // With no current envelope on the service, the stale pending attempt
+    // cannot be the accepted kit: it is discarded and a fresh attempt is
+    // published and accepted.
+    service.verification.unreachable = false;
+    const recovered = await run(backupArgs, {
+      ...runtime,
+      admin: service.admin,
+    });
+    expect(recovered.exitCode).toBe(0);
+    const recoveredReport = JSON.parse(recovered.stdout) as Record<
+      string,
+      unknown
+    >;
+    const recoveredEnvelopeId = String(recoveredReport.envelopeId);
+    expect(recoveredReport).toMatchObject({ ok: true, rotated: false });
+    expect(service.current()?.envelopeId).toBe(recoveredEnvelopeId);
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(recoveredEnvelopeId);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+    expect(service.publications()).toBe(2);
+
+    // A later attempt is accepted by the service but the verification read is
+    // lost: the pending kit now holds the last service-accepted kit.
+    service.verification.unreachable = true;
+    const unverified = await run(backupArgs, {
+      ...runtime,
+      admin: service.admin,
+    });
+    expect(unverified.exitCode).toBe(7);
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(recoveredEnvelopeId);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(true);
+    expect(service.current()?.envelopeId).not.toBe(recoveredEnvelopeId);
+
+    // The re-run promotes the retained accepted pending kit instead of
+    // overwriting it with a new attempt.
+    service.verification.unreachable = false;
+    const promoted = await run(backupArgs, {
+      ...runtime,
+      admin: service.admin,
+    });
+    expect(promoted.exitCode).toBe(0);
+    const promotedReport = JSON.parse(promoted.stdout) as Record<
+      string,
+      unknown
+    >;
+    const promotedEnvelopeId = String(promotedReport.envelopeId);
+    expect(promotedReport).toMatchObject({
+      ok: true,
+      rotated: true,
+      previous: `${kitPath}.previous`,
+      retiredEnvelopeIds: [recoveredEnvelopeId],
+    });
+    expect(service.publications()).toBe(3);
+    expect(service.current()?.envelopeId).toBe(promotedEnvelopeId);
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(promotedEnvelopeId);
+    expect(
+      (
+        (await Bun.file(`${kitPath}.previous`).json()) as {
+          envelopeId: string;
+        }
+      ).envelopeId,
+    ).toBe(recoveredEnvelopeId);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
       .catch(() => undefined);
   });
 
