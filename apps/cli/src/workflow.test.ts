@@ -410,8 +410,6 @@ describe("protected CLI workflows", () => {
         ids.environment,
         "--profile",
         "relay",
-        "--environment",
-        ids.environment,
         "--from",
         input,
         "--classify",
@@ -636,7 +634,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -743,7 +740,6 @@ describe("protected CLI workflows", () => {
     const result = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -781,7 +777,6 @@ describe("protected CLI workflows", () => {
     const result = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -808,7 +803,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -867,7 +861,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -908,7 +901,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -949,7 +941,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1006,7 +997,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1115,7 +1105,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1176,7 +1165,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1268,7 +1256,6 @@ describe("protected CLI workflows", () => {
     await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1315,7 +1302,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1379,7 +1365,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1443,7 +1428,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1511,7 +1495,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1558,7 +1541,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1607,7 +1589,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1664,7 +1645,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1723,7 +1703,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1782,7 +1761,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1829,7 +1807,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",
@@ -1896,7 +1873,6 @@ describe("protected CLI workflows", () => {
     const initialized = await run(
       [
         "init",
-        ids.environment,
         "--profile",
         "relay",
         "--environment",

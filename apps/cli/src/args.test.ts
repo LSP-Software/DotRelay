@@ -147,7 +147,126 @@ describe("CLI argument contract", () => {
     });
     expect(parseArguments(["diff", "--reveal"]).reveal).toBe(true);
     expect(() => parseArguments(["status", "--reveal"])).toThrow("--reveal");
-    expect(() => parseArguments(["diff", "extra"])).toThrow("invalid number");
+    expect(() => parseArguments(["diff", "extra"])).toThrow(
+      "diff takes no positional arguments but received 1; use --environment extra instead; usage: dotrelay diff",
+    );
+  });
+
+  test("rejects unexpected positionals with a correction and usage", () => {
+    expect(() => parseArguments(["pull", "production"])).toThrow(
+      "pull takes no positional arguments but received 1; use --environment production instead; usage: dotrelay pull",
+    );
+    expect(() => parseArguments(["pull", "a", "b"])).toThrow(
+      "pull takes no positional arguments but received 2; usage: dotrelay pull",
+    );
+    expect(() => parseArguments(["push", "extra"])).toThrow(
+      "usage: dotrelay push",
+    );
+    expect(() => parseArguments(["login", "extra"])).toThrow(
+      "usage: dotrelay login",
+    );
+    expect(() => parseArguments(["logout", "extra"])).toThrow(
+      "usage: dotrelay logout",
+    );
+    expect(() => parseArguments(["status", "extra"])).toThrow(
+      "usage: dotrelay status",
+    );
+    expect(() => parseArguments(["context", "extra"])).toThrow(
+      "usage: dotrelay context",
+    );
+    expect(() => parseArguments(["history", "extra"])).toThrow(
+      "usage: dotrelay history",
+    );
+    expect(() =>
+      parseArguments(["setup", "https://a.example", "https://b.example"]),
+    ).toThrow("usage: dotrelay setup <origin>");
+    expect(() =>
+      parseArguments([
+        "rollback",
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "--variable",
+        "33333333-3333-4333-8333-333333333333",
+      ]),
+    ).toThrow("usage: dotrelay rollback");
+  });
+
+  test("rejects mutually exclusive pull output combinations", () => {
+    expect(() =>
+      parseArguments(["pull", "--stdout", "--output", ".env"]),
+    ).toThrow(
+      "pull --stdout and --output are mutually exclusive; use either `dotrelay pull --stdout` or `dotrelay pull --output <file>`",
+    );
+    expect(() => parseArguments(["pull", "--stdout", "--json"])).toThrow(
+      "pull --stdout and --json are mutually exclusive",
+    );
+    expect(parseArguments(["pull", "--output", ".env", "--json"]).json).toBe(
+      true,
+    );
+    expect(
+      parseArguments(["pull", "--stdout", "--reveal", "--no-input"]).stdout,
+    ).toBe(true);
+  });
+
+  test("rejects flags the command does not consume", () => {
+    expect(() => parseArguments(["pull", "--name", "app"])).toThrow("--name");
+    expect(() => parseArguments(["status", "--name", "app"])).toThrow("--name");
+    expect(() => parseArguments(["status", "--limit", "5"])).toThrow(
+      "--limit is not supported by status",
+    );
+    expect(() => parseArguments(["status", "--no-open"])).toThrow("--no-open");
+    expect(() => parseArguments(["login", "--environment", "prod"])).toThrow(
+      "--environment is not supported by login",
+    );
+    expect(() => parseArguments(["logout", "--no-input"])).toThrow(
+      "--no-input",
+    );
+    expect(() =>
+      parseArguments(["setup", "https://relay.example", "--profile", "relay"]),
+    ).toThrow("--profile is not supported by setup");
+    expect(() => parseArguments(["help", "--json"])).toThrow("--json");
+    expect(() => parseArguments(["device", "backup", "--from", "kit"])).toThrow(
+      "--from is not supported by device backup",
+    );
+    expect(parseArguments(["history", "--limit", "25"]).limit).toBe(25);
+    expect(parseArguments(["pull", "--limit", "25"]).limit).toBe(25);
+    expect(() => parseArguments(["status", "--limit", "999"])).toThrow(
+      "--limit is not supported by status",
+    );
+    expect(() => parseArguments(["history", "--limit", "0"])).toThrow(
+      "--limit must be an integer from 1 to 256",
+    );
+    expect(() => parseArguments(["history", "--limit", "257"])).toThrow(
+      "--limit must be an integer from 1 to 256",
+    );
+  });
+
+  test("rejects a missing flag value even when the next token looks like a flag", () => {
+    expect(() => parseArguments(["pull", "--profile", "--reveal"])).toThrow(
+      "--profile needs a value",
+    );
+    expect(() => parseArguments(["pull", "--environment", "--stdout"])).toThrow(
+      "--environment needs a value",
+    );
+    expect(() => parseArguments(["pull", "--output"])).toThrow(
+      "--output needs a value",
+    );
+    expect(() => parseArguments(["pull", "--profile", "--reveal"])).toThrow(
+      "usage: dotrelay pull",
+    );
+    expect(() => parseArguments(["pull", "--profile="])).toThrow(
+      "--profile needs a value",
+    );
+    expect(parseArguments(["pull", "--profile=work"]).profile).toBe("work");
+  });
+
+  test("rejects an Environment id supplied both as an argument and with --environment", () => {
+    expect(() =>
+      parseArguments(["env", "use", "abc", "--environment", "abc"]),
+    ).toThrow("either as an argument or with --environment");
+    expect(() =>
+      parseArguments(["init", "abc", "--environment", "abc"]),
+    ).toThrow("either as an argument or with --environment");
   });
 
   test("scopes --reveal to reviews that can show plaintext Values", () => {

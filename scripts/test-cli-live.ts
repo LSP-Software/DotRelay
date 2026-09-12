@@ -711,8 +711,6 @@ try {
       environmentId,
       "--profile",
       "live",
-      "--environment",
-      environmentId,
       "--from",
       dotenvPath,
       "--classify",
@@ -822,14 +820,13 @@ try {
         environmentId,
         "--stdout",
         "--no-input",
-        "--json",
       ],
       environment,
     );
     const terminalOutput = terminal.stdout + terminal.stderr;
     if (
       terminal.exitCode !== 2 ||
-      !terminalOutput.includes('"code":"invocation"') ||
+      !terminalOutput.includes("refusing to write Values to terminal stdout") ||
       terminalOutput.includes('USER_VALUE="secret"') ||
       terminalOutput.includes('SHARED_VALUE="two"')
     )
@@ -845,7 +842,6 @@ try {
         environmentId,
         "--stdout",
         "--reveal",
-        "--json",
       ],
       environment,
       "y\n",
@@ -1004,7 +1000,6 @@ try {
       environmentId,
       "--stdout",
       "--no-input",
-      "--json",
     ],
     environment,
   );
