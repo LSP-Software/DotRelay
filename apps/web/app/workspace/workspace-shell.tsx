@@ -100,6 +100,7 @@ type ProfileId = WorkspaceProfileId;
 type ConnectionState = "loading" | "online" | "offline";
 
 type SelectionRequest = Readonly<{
+  readonly profileId?: ProfileId | undefined;
   readonly teamId: string | null;
   readonly projectId: string | null;
   readonly environmentId: string | null;
@@ -115,11 +116,27 @@ type RetainedEditorContext = Readonly<{
   readonly setupMessage?: string | null;
 }>;
 
+type DraftState = Readonly<{
+  readonly dirty: boolean;
+  readonly changedVariableNames: readonly string[];
+}>;
+
 type PendingSwitch = Readonly<{
   readonly request: SelectionRequest;
   readonly onCommit?: (() => void) | undefined;
+  readonly rebinding: boolean;
   readonly leavingLabel: string;
+  readonly targetLabel?: string | undefined;
+  readonly details: readonly string[];
 }>;
+
+const environmentDisplayLabel = (
+  environment: WorkspaceProject["environments"][number] | null | undefined,
+  project: WorkspaceProject | null | undefined,
+): string =>
+  environment && project
+    ? `${environment.label} · ${projectDisplayName(project)}`
+    : (environment?.label ?? "an Environment");
 
 const WORKSPACE_REFRESH_MS = Math.max(
   Number(process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS ?? 0) || 30_000,
@@ -331,7 +348,7 @@ export const WorkspaceShell = ({
     null,
   );
   const [contextStale, setContextStale] = useState(false);
-  const draftDirtyRef = useRef<Map<string, boolean>>(new Map());
+  const draftStateRef = useRef<Map<string, DraftState>>(new Map());
   const [deviceSetupMessage, setDeviceSetupMessage] = useState<string | null>(
     null,
   );
@@ -476,27 +493,72 @@ export const WorkspaceShell = ({
     onCommit: (() => void) | undefined,
     discard: boolean,
   ) => {
-    const incomingKey = environmentContextKey({
-      ...currentIdentity,
-      teamId: request.teamId,
-      projectId: request.projectId,
-      environmentId: request.environmentId,
-    });
-    if (currentIdentity.environmentId) {
-      setRetainedEditors((prev) => {
-        const next = new Map(prev);
-        if (discard) next.delete(currentKey);
-        else next.set(currentKey, selectedEditorContext());
-        return next;
+    const rebinding =
+      request.profileId !== undefined && request.profileId !== profileId;
+    if (rebinding) {
+      setRetainedEditors(new Map());
+      setSessionsByKey(new Map());
+      draftStateRef.current.clear();
+    } else {
+      const incomingKey = environmentContextKey({
+        ...currentIdentity,
+        teamId: request.teamId,
+        projectId: request.projectId,
+        environmentId: request.environmentId,
       });
-      if (discard) draftDirtyRef.current.delete(currentKey);
+      if (currentIdentity.environmentId) {
+        setRetainedEditors((prev) => {
+          const next = new Map(prev);
+          if (discard) next.delete(currentKey);
+          else next.set(currentKey, selectedEditorContext());
+          return next;
+        });
+        if (discard) draftStateRef.current.delete(currentKey);
+      }
+      if (discard) removeSessionByKey(currentKey);
+      removeSessionByKey(incomingKey);
     }
-    if (discard) removeSessionByKey(currentKey);
-    removeSessionByKey(incomingKey);
     setPendingSwitch(null);
     setContextStale(true);
+    if (rebinding) {
+      resetWorkspaceContext();
+      const nextProfileId = request.profileId as ProfileId;
+      setProfileId(nextProfileId);
+      const placeholder = emptyWorkspaceBoundary(nextProfileId);
+      setBoundary(placeholder);
+      boundaryJsonRef.current = JSON.stringify(placeholder);
+      setVerifiedAt(null);
+      setConnection("loading");
+    }
     syncSelection(request);
     onCommit?.();
+  };
+
+  const affectedEnvironmentLabels = (): string[] => {
+    const labels: string[] = [];
+    const seen = new Set<string>();
+    const identities = [
+      currentIdentity,
+      ...[...retainedEditors.values()].map((entry) => entry.identity),
+    ];
+    for (const identity of identities) {
+      if (identity.profileId !== profileId || !identity.environmentId) continue;
+      if (seen.has(identity.environmentId)) continue;
+      if (
+        draftStateRef.current.get(environmentContextKey(identity))?.dirty !==
+        true
+      )
+        continue;
+      seen.add(identity.environmentId);
+      const project = displayBoundary.catalog.projects.find(
+        (candidate) => candidate.id === identity.projectId,
+      );
+      const environment = project?.environments.find(
+        (candidate) => candidate.id === identity.environmentId,
+      );
+      labels.push(environmentDisplayLabel(environment, project));
+    }
+    return labels;
   };
 
   const requestSelection = (
@@ -506,36 +568,51 @@ export const WorkspaceShell = ({
     if (pendingSwitch) return;
     const next = environmentContextIdentity({
       ...currentIdentity,
+      profileId: request.profileId ?? currentIdentity.profileId,
       teamId: request.teamId,
       projectId: request.projectId,
       environmentId: request.environmentId,
     });
+    const dirtyDraft = draftStateRef.current.get(currentKey)?.dirty === true;
+    const anyDraftDirty =
+      dirtyDraft ||
+      [...draftStateRef.current.values()].some((state) => state.dirty);
     const decision = planContextSwitch({
       current: currentIdentity,
       next,
-      dirtyDraft: draftDirtyRef.current.get(currentKey) === true,
+      dirtyDraft,
     });
+    const promptSwitch = (rebinding: boolean) => {
+      setPendingSwitch({
+        request,
+        onCommit,
+        rebinding,
+        leavingLabel: rebinding
+          ? workspaceProfileCatalog[profileId].name
+          : selectedEnvironment
+            ? environmentDisplayLabel(selectedEnvironment, selectedProject)
+            : (selectedTeam?.name ?? "this Team"),
+        targetLabel:
+          rebinding && request.profileId
+            ? workspaceProfileCatalog[request.profileId].name
+            : undefined,
+        details: rebinding
+          ? affectedEnvironmentLabels()
+          : (draftStateRef.current.get(currentKey)?.changedVariableNames ?? []),
+      });
+    };
     if (decision.type === "noop") {
       syncSelection(request);
       onCommit?.();
       return;
     }
-    if (decision.type === "prompt") {
-      setPendingSwitch({
-        request,
-        onCommit,
-        leavingLabel: selectedEnvironment
-          ? `${selectedEnvironment.label}${selectedProject ? ` · ${projectDisplayName(selectedProject)}` : ""}`
-          : (selectedTeam?.name ?? "this Team"),
-      });
+    if (decision.type === "rebind") {
+      if (anyDraftDirty) promptSwitch(true);
+      else commitSelection(request, onCommit, false);
       return;
     }
-    if (decision.type === "rebind") {
-      // requestSelection cannot cross Server Profiles; defensive fallback.
-      handleProfileChange(
-        next.profileId === "self-hosted" ? "self-hosted" : "hosted",
-      );
-      onCommit?.();
+    if (decision.type === "prompt") {
+      promptSwitch(false);
       return;
     }
     commitSelection(request, onCommit, false);
@@ -571,6 +648,19 @@ export const WorkspaceShell = ({
     setEnvironmentId(params.get("environment"));
     if (nextPreview === "protected" || params.get("project"))
       setView("environment");
+  }, []);
+
+  useEffect(() => {
+    const guardUnload = (event: BeforeUnloadEvent) => {
+      for (const state of draftStateRef.current.values()) {
+        if (!state.dirty) continue;
+        event.preventDefault();
+        event.returnValue = "";
+        return "";
+      }
+    };
+    window.addEventListener("beforeunload", guardUnload);
+    return () => window.removeEventListener("beforeunload", guardUnload);
   }, []);
 
   useEffect(() => {
@@ -1032,19 +1122,15 @@ export const WorkspaceShell = ({
     setView("projects");
   };
 
-  const handleProfileChange = (nextProfileId: ProfileId) => {
-    resetWorkspaceContext();
-    setRetainedEditors(new Map());
-    setSessionsByKey(new Map());
-    draftDirtyRef.current.clear();
-    setPendingSwitch(null);
-    setContextStale(true);
-    setProfileId(nextProfileId);
-    const placeholder = emptyWorkspaceBoundary(nextProfileId);
-    setBoundary(placeholder);
-    boundaryJsonRef.current = JSON.stringify(placeholder);
-    setVerifiedAt(null);
-    setConnection("loading");
+  const requestProfileChange = (nextProfileId: ProfileId) => {
+    if (nextProfileId === profileId) return;
+    requestSelection({
+      profileId: nextProfileId,
+      teamId: null,
+      projectId: null,
+      environmentId: null,
+      view: "projects",
+    });
   };
 
   const handleTeamChange = (nextTeamId: string) => {
@@ -1159,6 +1245,7 @@ export const WorkspaceShell = ({
     </nav>
   );
 
+  const switchRebinding = pendingSwitch?.rebinding === true;
   const envVisible =
     view === "environment" &&
     selectedProject !== null &&
@@ -1316,7 +1403,7 @@ export const WorkspaceShell = ({
                 className="h-9 max-w-44 rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 id="server-profile"
                 onChange={(event) =>
-                  handleProfileChange(event.target.value as ProfileId)
+                  requestProfileChange(event.target.value as ProfileId)
                 }
                 value={profileId}
               >
@@ -1814,8 +1901,11 @@ export const WorkspaceShell = ({
                         }
                         contextIdentity={entry.identity}
                         loading={isCurrent && contextStale}
-                        onDraftDirtyChange={(dirty) => {
-                          draftDirtyRef.current.set(entryKey, dirty);
+                        onDraftDirtyChange={(dirty, changedVariableNames) => {
+                          draftStateRef.current.set(entryKey, {
+                            dirty,
+                            changedVariableNames,
+                          });
                         }}
                         onSetupAction={handleSetupAction}
                         protocolSession={entry.session ?? protocolSession}
@@ -1877,34 +1967,46 @@ export const WorkspaceShell = ({
       >
         <DialogContent data-testid="switch-draft-prompt">
           <DialogHeader>
-            <DialogTitle>Keep unsaved changes?</DialogTitle>
+            <DialogTitle>
+              {switchRebinding
+                ? "Switch Server Profile?"
+                : "Keep unsaved changes?"}
+            </DialogTitle>
             <DialogDescription>
               {pendingSwitch
-                ? `You have unsaved changes in ${pendingSwitch.leavingLabel}. Keep them to find the draft again when you return, or discard them. Discarding also cancels any in-flight operations for this Environment.`
+                ? switchRebinding
+                  ? `You have unsaved changes in ${
+                      pendingSwitch.details.length === 1
+                        ? pendingSwitch.details[0]
+                        : `${pendingSwitch.details.length} Environments in ${pendingSwitch.leavingLabel}`
+                    }. Switching to ${pendingSwitch.targetLabel ?? "another Server Profile"} discards them and cancels any in-flight operations.`
+                  : `You have unsaved changes in ${pendingSwitch.leavingLabel}${pendingSwitch.details.length > 0 ? ` (${pendingSwitch.details.join(", ")})` : ""}. Keep them to find the draft again when you return, or discard them. Discarding throws away those changes and cancels any in-flight operations for this Environment.`
                 : "You have unsaved changes in the current Environment."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>
-              Cancel
+              {switchRebinding ? "Stay" : "Cancel"}
             </DialogClose>
-            <DialogClose
-              render={
-                <Button
-                  data-testid="switch-keep-draft"
-                  onClick={() => {
-                    if (pendingSwitch)
-                      commitSelection(
-                        pendingSwitch.request,
-                        pendingSwitch.onCommit,
-                        false,
-                      );
-                  }}
-                />
-              }
-            >
-              Keep draft
-            </DialogClose>
+            {!switchRebinding ? (
+              <DialogClose
+                render={
+                  <Button
+                    data-testid="switch-keep-draft"
+                    onClick={() => {
+                      if (pendingSwitch)
+                        commitSelection(
+                          pendingSwitch.request,
+                          pendingSwitch.onCommit,
+                          false,
+                        );
+                    }}
+                  />
+                }
+              >
+                Keep draft
+              </DialogClose>
+            ) : null}
             <DialogClose
               render={
                 <Button
@@ -1921,7 +2023,7 @@ export const WorkspaceShell = ({
                 />
               }
             >
-              Discard changes
+              {switchRebinding ? "Discard and switch" : "Discard changes"}
             </DialogClose>
           </DialogFooter>
         </DialogContent>

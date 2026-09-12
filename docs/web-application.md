@@ -69,6 +69,13 @@ cryptographic artifact builder but is explicitly local and never reports a servi
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
 
+Unpublished drafts are retained per Environment while moving among workspace views and across
+Projects and Environments within a Server Profile. Any action that would discard unpublished
+work — including a Server Profile switch — warns first and offers an explicit discard choice
+that names the affected Environment and Variable changes. Reloading or closing the page with a
+dirty draft raises a `beforeunload` warning; the draft is discarded only if the user confirms.
+Draft content stays in memory and is never written to unprotected browser storage in plaintext.
+
 ## Role and lifecycle disclosure
 
 The UI derives controls from the persisted Membership role. Owners can manage roles and all
@@ -107,5 +114,10 @@ Server Profile switching, keyboard and responsive navigation, Revision history, 
 listing, and the blocked secret-access state. `apps/web/e2e/workspace-offline.spec.ts` adds the
 offline and stale connection states: an unreachable, malformed, or non-200 boundary response on
 a fresh visit, and a failed refresh that keeps last verified data stale until automatic
-reconnection or an explicit retry succeeds. Tests observe browser-visible behavior and never
+reconnection or an explicit retry succeeds. `apps/web/e2e/workspace-draft-protection.spec.ts`
+covers unpublished draft protection: drafts survive subview navigation and return, reload/close
+warns only while a draft is dirty and keeps or discards it on the user's choice, discard
+prompts name the affected Environment and Variable changes, a Server Profile switch with a
+dirty draft requires an explicit discard, and draft Values never appear in browser storage.
+Tests observe browser-visible behavior and never
 reach into component state.

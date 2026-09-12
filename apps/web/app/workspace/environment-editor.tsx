@@ -78,7 +78,10 @@ type EnvironmentEditorProps = Readonly<{
   readonly active?: boolean | undefined;
   readonly loading?: boolean | undefined;
   readonly contextIdentity: EnvironmentContextIdentity;
-  readonly onDraftDirtyChange?: (dirty: boolean) => void;
+  readonly onDraftDirtyChange?: (
+    dirty: boolean,
+    changedVariableNames: readonly string[],
+  ) => void;
   readonly setupAction?: SetupAction | null | undefined;
   readonly setupCommand?: string | undefined;
   readonly setupMessage?: string | null | undefined;
@@ -715,9 +718,13 @@ export const EnvironmentEditor = ({
   const reportDraftDirtyRef = useRef(onDraftDirtyChange);
   reportDraftDirtyRef.current = onDraftDirtyChange;
   const hasDirtyDraft = changedCount > 0;
+  const changedVariableNames = variables
+    .filter((variable) => variable.hasDraftChange)
+    .map((variable) => variable.name);
+  const changedVariableSignature = changedVariableNames.join("|");
   useEffect(() => {
-    reportDraftDirtyRef.current?.(hasDirtyDraft);
-  }, [hasDirtyDraft]);
+    reportDraftDirtyRef.current?.(hasDirtyDraft, changedVariableNames);
+  }, [hasDirtyDraft, changedVariableSignature]);
   const pendingDiffs = draftValueDiffs(variables, remoteVariables);
   const pendingRollbackDiffs = rollbackValueDiffs(
     variables,
