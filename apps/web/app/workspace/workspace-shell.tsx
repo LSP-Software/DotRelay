@@ -5,8 +5,10 @@ import {
   createDeviceBootstrap,
   createProjectEpochGrantBootstrap,
   createProtocolTransport,
+  type DeviceBootstrap,
   loadDeviceKeyMaterial,
   openProjectEpochGrant,
+  probeBrowserDeviceStorage,
   uuidToBytes,
 } from "@dotrelay/client";
 import {
@@ -65,6 +67,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  probeBrowserLocalStorage,
+  readStoredBrowserDeviceId,
+  writeStoredBrowserDeviceId,
+} from "@/lib/browser-storage";
 import {
   type EnvironmentContextIdentity,
   environmentContextIdentity,
@@ -130,6 +137,11 @@ type PendingSwitch = Readonly<{
   readonly details: readonly string[];
 }>;
 
+type PendingEnrollment = Readonly<{
+  readonly bootstrap: DeviceBootstrap;
+  readonly operationId: string;
+}>;
+
 const environmentDisplayLabel = (
   environment: WorkspaceProject["environments"][number] | null | undefined,
   project: WorkspaceProject | null | undefined,
@@ -172,39 +184,6 @@ const toBase64 = (value: Uint8Array): string => {
 const fromBase64 = (value: string): Uint8Array => {
   const binary = atob(value);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-};
-
-const browserDeviceIdKey = (origin: string, serverProfileId: string): string =>
-  `dotrelay.browser-device:${origin}:${serverProfileId}`;
-
-const readStoredBrowserDeviceId = (
-  origin: string,
-  serverProfileId: string,
-): string | null => {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(
-      browserDeviceIdKey(origin, serverProfileId),
-    );
-  } catch {
-    return null;
-  }
-};
-
-const writeStoredBrowserDeviceId = (
-  origin: string,
-  serverProfileId: string,
-  deviceId: string,
-) => {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      browserDeviceIdKey(origin, serverProfileId),
-      deviceId,
-    );
-  } catch {
-    return;
-  }
 };
 
 const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
@@ -356,6 +335,17 @@ export const WorkspaceShell = ({
   const [trustedOverride, setTrustedOverride] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [browserCrypto, setBrowserCrypto] = useState(true);
+  // Pending enrollment identity (keys + operation id) retained across retries
+  // so a storage failure after the Server Profile created the Device cannot
+  // be retried as a fresh, duplicate enrollment.
+  const pendingEnrollmentRef = useRef<Map<string, PendingEnrollment>>(
+    new Map(),
+  );
+  // Server Profile pins for which durable browser enrollment holds in this
+  // page load: enrollment completed with verified persistent storage, or the
+  // stored Device bundle was loaded from durable storage. A memory-only
+  // fallback is never added, so it is never claimed as enrolled.
+  const durableBrowserDeviceRef = useRef<Set<string>>(new Set());
 
   const protectedPreview = preview === "protected";
   const noCryptoPreview = preview === "no-crypto";
@@ -421,8 +411,14 @@ export const WorkspaceShell = ({
   });
   const currentKey = environmentContextKey(currentIdentity);
   const selectedSession = sessionsByKey.get(currentKey) ?? null;
+  const currentPinKey = boundary.profile.serverProfileId
+    ? `${boundary.profile.origin}\u0000${boundary.profile.serverProfileId}`
+    : null;
   const thisBrowserEnrolled =
-    protectedPreview || Boolean(selectedSession ?? protocolSession);
+    protectedPreview ||
+    Boolean(protocolSession) ||
+    (currentPinKey !== null &&
+      durableBrowserDeviceRef.current.has(currentPinKey));
   const enrolledDevices = enrolledDeviceRows(displayBoundary, {
     thisBrowserEnrolled,
   });
@@ -499,6 +495,8 @@ export const WorkspaceShell = ({
       setRetainedEditors(new Map());
       setSessionsByKey(new Map());
       draftStateRef.current.clear();
+      pendingEnrollmentRef.current.clear();
+      durableBrowserDeviceRef.current.clear();
     } else {
       const incomingKey = environmentContextKey({
         ...currentIdentity,
@@ -827,6 +825,7 @@ export const WorkspaceShell = ({
           origin: profile.origin,
         };
         const storage = createBrowserDeviceStorage(pin);
+        const durable = storage.durable;
         const bundle = await storage.load({
           pin,
           deviceId: uuidToBytes(device.id),
@@ -898,6 +897,10 @@ export const WorkspaceShell = ({
           clearSelectedSession();
           return;
         }
+        if (durable)
+          durableBrowserDeviceRef.current.add(
+            `${pin.origin}\u0000${pin.serverProfileId}`,
+          );
         setSessionsByKey((prev) => new Map(prev).set(targetKey, session));
         settleContext();
       } catch {
@@ -924,23 +927,53 @@ export const WorkspaceShell = ({
       setDeviceSetupMessage("Sign in before enrolling a Device.");
       return;
     }
+    const pin = {
+      serverProfileId: boundary.profile.serverProfileId,
+      origin: boundary.profile.origin,
+    };
+    const pinKey = `${pin.origin}\u0000${pin.serverProfileId}`;
     setDeviceSetupInProgress(true);
     setDeviceSetupMessage(null);
     try {
-      const pin = {
-        serverProfileId: boundary.profile.serverProfileId,
-        origin: boundary.profile.origin,
-      };
-      const bootstrap = await createDeviceBootstrap({
-        pin,
-        userId: boundary.session.userId,
-      });
+      // Preflight durable storage before creating a Device on the Server
+      // Profile: with only a memory fallback or blocked local storage the
+      // keys could not survive a reload, so no Device is created at all.
+      const recordsProbe = await probeBrowserDeviceStorage();
+      if (!recordsProbe.durable) {
+        setDeviceSetupMessage(
+          "This browser can't use persistent storage (IndexedDB), so Device keys would not survive a reload. No Device was created.",
+        );
+        return;
+      }
+      if (!probeBrowserLocalStorage()) {
+        setDeviceSetupMessage(
+          "This browser blocks local storage, so the Device id would not survive a reload. No Device was created.",
+        );
+        return;
+      }
+      // Reuse the pending keys and operation identity from an earlier
+      // attempt so a retry replays the same bootstrap instead of creating a
+      // duplicate remote Device.
+      const pending = pendingEnrollmentRef.current.get(pinKey);
+      const bootstrap =
+        pending?.bootstrap ??
+        (await createDeviceBootstrap({
+          pin,
+          userId: boundary.session.userId,
+        }));
+      const operationId =
+        pending?.operationId ?? globalThis.crypto.randomUUID();
+      if (!pending)
+        pendingEnrollmentRef.current.set(
+          pinKey,
+          Object.freeze({ bootstrap, operationId }),
+        );
       const response = await fetch(`${apiOrigin}/api/v1/devices/bootstrap`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          operationId: globalThis.crypto.randomUUID(),
+          operationId,
           deviceId: bootstrap.deviceId,
           identityGeneration: bootstrap.identityGeneration,
           keyId: bytesToHex(bootstrap.keyId),
@@ -957,67 +990,97 @@ export const WorkspaceShell = ({
         if (body?.code === "authentication_required")
           throw new Error("Sign in before enrolling a Device.");
         if (body?.code === "state_conflict")
-          throw new Error(
-            "This Device could not be enrolled. Refresh and try again.",
-          );
+          throw new Error("This Device could not be enrolled. Try again.");
         throw new Error("the Server Profile rejected this Device");
       }
-      await createBrowserDeviceStorage(pin).save(bootstrap.bundle);
-      writeStoredBrowserDeviceId(
-        pin.origin,
-        pin.serverProfileId,
-        bootstrap.deviceId,
-      );
-      const environment = {
-        projectId: selectedProject?.id ?? boundary.environment.projectId,
-        teamId: selectedTeam?.id ?? boundary.environment.teamId,
-        projectEpoch: boundary.environment.projectEpoch,
-      };
-      const otherDeviceExists =
-        Boolean(boundary.device.active) &&
-        boundary.device.id !== bootstrap.deviceId;
-      if (
-        !otherDeviceExists &&
-        environment.projectId &&
-        environment.teamId &&
-        environment.projectEpoch &&
-        bootstrap.keyMaterial.encryptionPublicKey
-      ) {
-        const grant = await createProjectEpochGrantBootstrap({
-          serverProfileId: boundary.profile.serverProfileId,
-          teamId: environment.teamId,
-          projectId: environment.projectId,
-          projectEpoch: Number(environment.projectEpoch),
-          senderDeviceId: bootstrap.deviceId,
-          recipientDeviceId: bootstrap.deviceId,
-          recipientX25519PublicKey: bootstrap.x25519PublicKey,
-          recipientEncryptionPublicKey:
-            bootstrap.keyMaterial.encryptionPublicKey,
-          signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
-        });
-        const grantResponse = await fetch(
-          `${apiOrigin}/api/v1/grants/bootstrap`,
-          {
-            method: "POST",
-            credentials: "include",
-            headers: {
-              "Content-Type": "application/json",
-              "X-DotRelay-Device-Id": bootstrap.deviceId,
-            },
-            body: JSON.stringify({
-              operationId: globalThis.crypto.randomUUID(),
-              objectId: grant.objectId,
-              projectId: environment.projectId,
-              teamId: environment.teamId,
-              digest: toBase64(grant.digest),
-              grant: toBase64(grant.canonicalBytes),
-            }),
-          },
-        );
-        if (!grantResponse.ok)
-          setDeviceSetupMessage(
-            "This browser is enrolled. Project access is still pending.",
+      const persistDeviceLocally = async (): Promise<
+        "complete" | "records" | "device-id"
+      > => {
+        try {
+          await createBrowserDeviceStorage(pin).save(bootstrap.bundle);
+        } catch {
+          return "records";
+        }
+        try {
+          writeStoredBrowserDeviceId(
+            pin.origin,
+            pin.serverProfileId,
+            bootstrap.deviceId,
           );
+        } catch {
+          return "device-id";
+        }
+        // Verify from a fresh storage instance that a reload could recover
+        // the bundle before durable enrollment is claimed.
+        try {
+          const verifyStorage = createBrowserDeviceStorage(pin);
+          await verifyStorage.load({
+            pin,
+            deviceId: uuidToBytes(bootstrap.deviceId),
+          });
+        } catch {
+          return "records";
+        }
+        return readStoredBrowserDeviceId(pin.origin, pin.serverProfileId) ===
+          bootstrap.deviceId
+          ? "complete"
+          : "device-id";
+      };
+      const persistence = await persistDeviceLocally();
+      if (persistence === "complete") {
+        pendingEnrollmentRef.current.delete(pinKey);
+        durableBrowserDeviceRef.current.add(pinKey);
+        const environment = {
+          projectId: selectedProject?.id ?? boundary.environment.projectId,
+          teamId: selectedTeam?.id ?? boundary.environment.teamId,
+          projectEpoch: boundary.environment.projectEpoch,
+        };
+        const otherDeviceExists =
+          Boolean(boundary.device.active) &&
+          boundary.device.id !== bootstrap.deviceId;
+        if (
+          !otherDeviceExists &&
+          environment.projectId &&
+          environment.teamId &&
+          environment.projectEpoch &&
+          bootstrap.keyMaterial.encryptionPublicKey
+        ) {
+          const grant = await createProjectEpochGrantBootstrap({
+            serverProfileId: boundary.profile.serverProfileId,
+            teamId: environment.teamId,
+            projectId: environment.projectId,
+            projectEpoch: Number(environment.projectEpoch),
+            senderDeviceId: bootstrap.deviceId,
+            recipientDeviceId: bootstrap.deviceId,
+            recipientX25519PublicKey: bootstrap.x25519PublicKey,
+            recipientEncryptionPublicKey:
+              bootstrap.keyMaterial.encryptionPublicKey,
+            signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+          });
+          const grantResponse = await fetch(
+            `${apiOrigin}/api/v1/grants/bootstrap`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                "Content-Type": "application/json",
+                "X-DotRelay-Device-Id": bootstrap.deviceId,
+              },
+              body: JSON.stringify({
+                operationId: globalThis.crypto.randomUUID(),
+                objectId: grant.objectId,
+                projectId: environment.projectId,
+                teamId: environment.teamId,
+                digest: toBase64(grant.digest),
+                grant: toBase64(grant.canonicalBytes),
+              }),
+            },
+          );
+          if (!grantResponse.ok)
+            setDeviceSetupMessage(
+              "This browser is enrolled. Project access is still pending.",
+            );
+        }
       }
       const nextBoundary = await fetchWorkspaceBoundary(profileId, {
         deviceId: bootstrap.deviceId,
@@ -1032,11 +1095,21 @@ export const WorkspaceShell = ({
       } else {
         setConnection("offline");
       }
-      setDeviceSetupMessage((current) =>
-        current?.includes("pending")
-          ? current
-          : "This browser is enrolled. Keys stay on this machine.",
-      );
+      if (persistence === "complete") {
+        setDeviceSetupMessage((current) =>
+          current?.includes("pending")
+            ? current
+            : "This browser is enrolled. Keys stay on this machine.",
+        );
+      } else if (persistence === "records") {
+        setDeviceSetupMessage(
+          "This Device was created, but this browser could not keep its keys durably, so it will not survive a reload. Retry enrollment to save them again.",
+        );
+      } else {
+        setDeviceSetupMessage(
+          "This Device was created, but this browser cannot remember its Device id, so it will not survive a reload. Retry enrollment to store it again.",
+        );
+      }
     } catch (error) {
       setDeviceSetupMessage(
         error instanceof Error

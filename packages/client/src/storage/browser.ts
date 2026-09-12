@@ -24,6 +24,12 @@ import {
 } from "./wrapping";
 
 export type BrowserDeviceStorage = Readonly<{
+  /**
+   * True only when records are held by IndexedDB and therefore survive a
+   * page reload. A memory-only fallback can serve this page load but cannot
+   * be claimed as durable enrollment.
+   */
+  readonly durable: boolean;
   save(bundle: DevicePrivateBundle): Promise<void>;
   load(scope: DeviceStorageScope): Promise<DevicePrivateBundle>;
   remove(scope: DeviceStorageScope): Promise<void>;
@@ -47,13 +53,20 @@ type IndexedStore = {
   put(value: unknown): IndexedRequest<unknown>;
   delete(key: string): IndexedRequest<unknown>;
 };
+type IndexedTransaction = {
+  readonly error: unknown;
+  oncomplete: (() => void) | null;
+  onerror: (() => void) | null;
+  onabort: (() => void) | null;
+  objectStore(name: string): IndexedStore;
+};
 type IndexedDatabase = {
   close(): void;
   createObjectStore(name: string, options: { keyPath: string }): void;
   transaction(
     store: string,
     mode: "readonly" | "readwrite",
-  ): { objectStore(name: string): IndexedStore };
+  ): IndexedTransaction;
 };
 type IndexedFactory = {
   open(
@@ -109,17 +122,53 @@ export const createIndexedDbDeviceRecordStore = (
     callback: (store: IndexedStore) => IndexedRequest<T>,
   ): Promise<T> => {
     const database = await openDatabase();
-    return new Promise((resolve, reject) => {
-      const request = callback(
-        database.transaction("records", mode).objectStore("records"),
-      );
-      request.onsuccess = () => {
+    return new Promise<T>((resolve, reject) => {
+      const transaction = database.transaction("records", mode);
+      const request = callback(transaction.objectStore("records"));
+      let result: T | undefined;
+      let hasResult = false;
+      let settled = false;
+      // A request succeeding only means the operation ran inside the
+      // transaction; the data is durable only once the transaction commits.
+      const settle = (settleWith: () => void) => {
+        if (settled) return;
+        settled = true;
         database.close();
-        resolve(request.result);
+        settleWith();
+      };
+      request.onsuccess = () => {
+        result = request.result;
+        hasResult = true;
       };
       request.onerror = () => {
-        database.close();
-        reject(request.error);
+        settle(() =>
+          reject(
+            request.error instanceof Error
+              ? request.error
+              : new Error("IndexedDB request failed"),
+          ),
+        );
+      };
+      transaction.oncomplete = () => {
+        settle(() => resolve(hasResult ? (result as T) : (undefined as T)));
+      };
+      transaction.onerror = () => {
+        settle(() =>
+          reject(
+            transaction.error instanceof Error
+              ? transaction.error
+              : new Error("IndexedDB transaction failed"),
+          ),
+        );
+      };
+      transaction.onabort = () => {
+        settle(() =>
+          reject(
+            transaction.error instanceof Error
+              ? transaction.error
+              : new Error("IndexedDB transaction aborted"),
+          ),
+        );
       };
     });
   };
@@ -155,6 +204,52 @@ export const createIndexedDbDeviceRecordStore = (
   });
 };
 
+const PROBE_PIN = Object.freeze({
+  serverProfileId: "00000000-0000-0000-0000-000000000000",
+  origin: "dotrelay.storage-probe",
+});
+
+export type BrowserDeviceStorageProbe = Readonly<{
+  readonly durable: boolean;
+}>;
+
+/**
+ * Preflights the default record store by writing a minimal probe record,
+ * waiting for the transaction to commit, reading it back, and removing it.
+ * Reports false when IndexedDB is unavailable, the write does not commit, or
+ * the record cannot be read back, so callers can preflight durable storage
+ * before creating a remote Device.
+ */
+export const probeBrowserDeviceStorage = async (
+  options?: Readonly<{ readonly recordStore?: DeviceRecordStore }>,
+): Promise<BrowserDeviceStorageProbe> => {
+  const recordStore =
+    options?.recordStore ??
+    (indexedFactory() === undefined
+      ? undefined
+      : createIndexedDbDeviceRecordStore());
+  if (!recordStore) return { durable: false };
+  try {
+    const scope = Object.freeze({
+      pin: PROBE_PIN,
+      deviceId: globalThis.crypto.getRandomValues(new Uint8Array(16)),
+    });
+    const probeRecord: EncryptedDeviceRecord = Object.freeze({
+      version: 1,
+      scope,
+      iv: new Uint8Array(0),
+      ciphertext: new Uint8Array(0),
+    });
+    await recordStore.write(probeRecord);
+    const readBack = await recordStore.read(scope);
+    if (!readBack) return { durable: false };
+    await recordStore.remove(scope);
+    return { durable: true };
+  } catch {
+    return { durable: false };
+  }
+};
+
 export const createBrowserDeviceStorage = (
   pin: ServerProfilePin,
   options?: Readonly<{
@@ -164,11 +259,12 @@ export const createBrowserDeviceStorage = (
   }>,
 ): BrowserDeviceStorage => {
   const runtime = options?.runtime ?? globalThis.crypto;
+  const defaultIndexedDb = indexedFactory() !== undefined;
   const recordStore =
     options?.recordStore ??
-    (indexedFactory() === undefined
-      ? createMemoryDeviceRecordStore()
-      : createIndexedDbDeviceRecordStore());
+    (defaultIndexedDb
+      ? createIndexedDbDeviceRecordStore()
+      : createMemoryDeviceRecordStore());
   const emitDiagnostic = (
     eventName: "client.storage.load" | "client.storage.save",
     outcome: "success" | "failure",
@@ -197,6 +293,7 @@ export const createBrowserDeviceStorage = (
   };
 
   return Object.freeze({
+    durable: options?.recordStore === undefined && defaultIndexedDb,
     save: async (bundle) => {
       let plaintext: Uint8Array | undefined;
       try {

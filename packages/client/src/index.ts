@@ -70,9 +70,11 @@ export {
 } from "./diagnostics/event";
 export {
   type BrowserDeviceStorage,
+  type BrowserDeviceStorageProbe,
   createBrowserDeviceStorage,
   createIndexedDbDeviceRecordStore,
   createMemoryDeviceRecordStore,
+  probeBrowserDeviceStorage,
   resetMemoryDeviceRecordStore,
 } from "./storage/browser";
 export {

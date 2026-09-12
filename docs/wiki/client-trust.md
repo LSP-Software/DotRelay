@@ -29,6 +29,13 @@ active Device and the signed protocol checks implemented in this package.
   never appear in plaintext config, tracked files, logs, or diagnostic events.
 - Storage reads fail closed when the requested origin or Server Profile id does not match the
   wrapping scope.
+- Browser enrollment is **preflighted for durable storage before any remote Device is created**:
+  a probe record must be written, commit-observed, and read back from IndexedDB, and the Device id
+  must be writable to local storage. When only the in-memory fallback is available, or the browser
+  blocks storage, enrollment stops and creates no Device.
+- A successful enrollment is claimed only after the record and Device id are re-verified from a
+  fresh storage instance; interrupted enrollments keep their pending keys and operation identity so
+  a retry replays the same Device instead of creating a duplicate.
 
 ### CLI
 
