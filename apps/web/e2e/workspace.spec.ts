@@ -258,7 +258,18 @@ test("protected Environment editor keeps Values masked and previews a local draf
 
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByRole("dialog")).toContainText("DATABASE_URL");
+  await expect(page.getByRole("dialog")).not.toContainText("local-only-value");
+  await expect(page.getByRole("dialog")).toContainText("••••••••");
+  await expect(page.getByRole("button", { name: "Show values" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Show values" }).click();
   await expect(page.getByRole("dialog")).toContainText("local-only-value");
+  await expect(page.getByRole("button", { name: "Hide values" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("dialog")).not.toContainText("local-only-value");
+  await expect(page.getByRole("button", { name: "Show values" })).toBeVisible();
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByText(/Local preview saved as rev_0185/)).toBeVisible();
 });
@@ -272,6 +283,18 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   );
   await expect(page.getByRole("dialog")).toContainText("API_ORIGIN");
   await expect(page.getByRole("dialog")).not.toContainText("SIGNING_KEY");
+  await expect(page.getByRole("dialog")).not.toContainText(
+    "https://api.acme.example",
+  );
+  await expect(page.getByRole("dialog")).toContainText("••••••••");
+  await expect(page.getByRole("button", { name: "Show values" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Show values" }).click();
+  await expect(page.getByRole("dialog")).toContainText(
+    "https://api.acme.example",
+  );
+  await expect(page.getByRole("button", { name: "Hide values" })).toBeVisible();
+
   await page.getByRole("button", { name: "Stage rollback" }).click();
   await expect(
     page.getByText(/Rollback from rev_0183 is staged as a new revision/),
