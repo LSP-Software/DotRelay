@@ -433,39 +433,77 @@ export const listEnvironments = async (
   return Object.freeze(response.environments.map(parseEnvironment));
 };
 
-export const selectEnvironment = async (
+export type EnvironmentReferenceOptions = Readonly<{
+  readonly noInput: boolean;
+  readonly prompt?: (question: string) => Promise<string>;
+  readonly terminal?: TerminalIo;
+}>;
+
+// Resolves the operator's Environment reference — an opaque id or the
+// operator-visible label — to exactly one Environment within the Project, so
+// callers only ever carry the stable id. An id always wins over a label that
+// happens to equal it. Duplicate labels offer a labelled choice interactively
+// and explicit id guidance under --no-input.
+export const resolveEnvironmentReference = async (
   client: Pick<StrictJsonClient, "get">,
   projectId: string,
-  environmentId: string,
+  reference: string,
+  options: EnvironmentReferenceOptions,
 ): Promise<EnvironmentSummary> => {
   const environments = await listEnvironments(client, projectId);
-  const selected = environments.filter(
-    (candidate) =>
-      candidate.id === environmentId && candidate.projectId === projectId,
-  );
-  if (selected.length === 0)
+  const byId = environments.filter((candidate) => candidate.id === reference);
+  const matches =
+    byId.length > 0
+      ? byId
+      : environments.filter((candidate) => candidate.label === reference);
+  if (matches.length === 0)
     throw new CliError(
       "invocation",
       "the requested Environment was not found",
       {},
       "environment_not_found",
     );
-  if (selected.length !== 1)
+  if (matches.length === 1) {
+    const selected = matches[0];
+    if (!selected)
+      throw new CliError(
+        "transient",
+        "the server returned an invalid Environment list",
+        {},
+        "response_invalid",
+      );
+    return selected;
+  }
+  if (options.noInput)
     throw new CliError(
       "invocation",
-      "the requested Environment id is ambiguous",
+      `the Environment reference matches multiple Environments; pass --environment <environment-id> with one of:\n${matches
+        .map(
+          (candidate, index) =>
+            `${index + 1}. ${candidate.label} (${candidate.lifecycle}) — ${candidate.id}`,
+        )
+        .join("\n")}`,
       {},
       "environment_ambiguous",
     );
-  const environment = selected[0];
-  if (!environment)
-    throw new CliError(
-      "transient",
-      "the server returned an invalid Environment list",
-      {},
-      "response_invalid",
-    );
-  return environment;
+  const selectedId = await selectOption(
+    "Environment",
+    matches.map((candidate) => ({
+      id: candidate.id,
+      label: `${candidate.label} — ${candidate.id}`,
+    })),
+    {
+      ...(options.terminal ? { terminal: options.terminal } : {}),
+      ...(options.prompt ? { prompt: options.prompt } : {}),
+      // An empty answer must not steer the change to the first
+      // Environment in list order.
+      defaultToFirst: false,
+    },
+  );
+  const selected = matches.find((candidate) => candidate.id === selectedId);
+  if (!selected)
+    throw new CliInvocationError("choose an Environment from the list");
+  return selected;
 };
 
 export const createEnvironment = async (
@@ -482,15 +520,14 @@ export const createEnvironment = async (
   return parseEnvironment(response);
 };
 
-export type ResolveEnvironmentOptions = Readonly<{
-  readonly command: CommandName;
-  readonly noInput: boolean;
-  readonly prompt?: (question: string) => Promise<string>;
-  readonly terminal?: TerminalIo;
-}>;
+export type ResolveEnvironmentOptions = Readonly<
+  {
+    readonly command: CommandName;
+  } & EnvironmentReferenceOptions
+>;
 
 // Archived Environments are never eligible for automatic selection; an
-// operator can still address one explicitly with --environment.
+// operator can still address one explicitly with --environment <id-or-label>.
 export const resolveEnvironmentForProject = async (
   client: Pick<StrictJsonClient, "get" | "post">,
   projectId: string,
@@ -513,7 +550,7 @@ export const resolveEnvironmentForProject = async (
   if (eligible.length > 1) {
     if (options.noInput)
       throw new CliInvocationError(
-        "multiple Environments are available; pass --environment <environment-id>",
+        "multiple Environments are available; pass --environment <environment-id-or-label>",
       );
     const selectedId = await selectOption(
       "Environment",
@@ -539,7 +576,7 @@ export const resolveEnvironmentForProject = async (
   if (options.command === "init" || options.command === "push")
     return createEnvironment(client, projectId);
   throw new CliInvocationError(
-    "no active Environment is available for this Project; pass --environment <environment-id>",
+    "no active Environment is available for this Project; pass --environment <environment-id-or-label>",
   );
 };
 

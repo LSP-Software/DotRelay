@@ -51,6 +51,7 @@ import {
   createStrictJsonClient,
   listEnvironments,
   listTeams,
+  resolveEnvironmentReference,
   type StrictJsonClient,
 } from "./admin";
 import type { ParsedArguments } from "./args";
@@ -2394,19 +2395,16 @@ export const restoreRecoveryKit = async (
 const opaqueEnvironmentId =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const resolveRequestedEnvironmentId = (
+// The reference is an opaque Environment id or the operator-visible label;
+// a label is resolved to the stable id before the workspace boundary is
+// requested, because the service only resolves opaque ids.
+const resolveRequestedEnvironmentReference = (
   parsed: ParsedArguments,
   localContext: Readonly<{ readonly environmentId?: string }> | null,
 ): string | undefined => {
   const positional =
     parsed.command === "init" ? parsed.positionals[0] : undefined;
-  if (positional) {
-    if (!opaqueEnvironmentId.test(positional))
-      throw new CliInvocationError(
-        "init environment must be an opaque Environment id",
-      );
-    return positional.toLowerCase();
-  }
+  if (positional) return positional;
   if (parsed.environment) return parsed.environment;
   return localContext?.environmentId;
 };
@@ -2439,9 +2437,31 @@ const loadWorkflowSession = async (
     : adminClient(options);
   const { readWorktreeContext } = await import("./context");
   const localContext = await readWorktreeContext(options.contextPath);
-  const requestedEnvironment =
+  let requestedEnvironment =
     options.environmentId ??
-    resolveRequestedEnvironmentId(parsed, localContext);
+    resolveRequestedEnvironmentReference(parsed, localContext);
+  if (
+    requestedEnvironment !== undefined &&
+    !opaqueEnvironmentId.test(requestedEnvironment)
+  ) {
+    const projectId = localContext?.projectId;
+    if (projectId === undefined)
+      throw new CliInvocationError(
+        "the Environment reference could not be resolved to a stable id; run dotrelay project link to record the Project",
+      );
+    requestedEnvironment = (
+      await resolveEnvironmentReference(
+        admin,
+        projectId,
+        requestedEnvironment,
+        {
+          noInput: options.noInput,
+          ...(options.prompt ? { prompt: options.prompt } : {}),
+          ...(options.terminal ? { terminal: options.terminal } : {}),
+        },
+      )
+    ).id;
+  }
   const boundary = parseBoundary(
     await admin.get(
       `/api/v1/workspace/boundary${requestedEnvironment ? `?environment=${encodeURIComponent(requestedEnvironment)}` : ""}`,

@@ -346,6 +346,149 @@ describe("CLI foundation", () => {
         .catch(() => undefined);
     }
   });
+
+  test("env use resolves an Environment label to its stable id before saving", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-context-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(
+        profilePath,
+        JSON.stringify({
+          version: 1,
+          selected: "relay",
+          profiles: [
+            {
+              name: "relay",
+              origin: "https://relay.example",
+              pin: {
+                origin: "https://relay.example",
+                serverProfileId: "00000000-0000-4000-8000-000000000042",
+              },
+            },
+          ],
+        }),
+      );
+      await Bun.write(
+        contextPath,
+        JSON.stringify({
+          serverProfileId: "00000000-0000-4000-8000-000000000042",
+          projectId: "00000000-0000-4000-8000-000000000002",
+        }),
+      );
+      const result = await run(
+        ["env", "use", "development", "--profile", "relay", "--json"],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          admin: {
+            get: async () => ({
+              environments: [
+                {
+                  id: "00000000-0000-4000-8000-000000000003",
+                  projectId: "00000000-0000-4000-8000-000000000002",
+                  label: "development",
+                  lifecycle: "active",
+                  currentHeadId: null,
+                },
+                {
+                  id: "00000000-0000-4000-8000-000000000004",
+                  projectId: "00000000-0000-4000-8000-000000000002",
+                  label: "production",
+                  lifecycle: "active",
+                  currentHeadId: null,
+                },
+              ],
+            }),
+            post: async () => ({}) as never,
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        environmentId: "00000000-0000-4000-8000-000000000003",
+      });
+      expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
+        serverProfileId: "00000000-0000-4000-8000-000000000042",
+        projectId: "00000000-0000-4000-8000-000000000002",
+        environmentId: "00000000-0000-4000-8000-000000000003",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("env use leaves the saved selection untouched when the label matches nothing", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-context-${crypto.randomUUID()}`;
+    const saved = JSON.stringify({
+      serverProfileId: "00000000-0000-4000-8000-000000000042",
+      projectId: "00000000-0000-4000-8000-000000000002",
+      environmentId: "00000000-0000-4000-8000-000000000003",
+    });
+    try {
+      await Bun.write(
+        profilePath,
+        JSON.stringify({
+          version: 1,
+          selected: "relay",
+          profiles: [
+            {
+              name: "relay",
+              origin: "https://relay.example",
+              pin: {
+                origin: "https://relay.example",
+                serverProfileId: "00000000-0000-4000-8000-000000000042",
+              },
+            },
+          ],
+        }),
+      );
+      await Bun.write(contextPath, saved);
+      const result = await run(
+        ["env", "use", "staging", "--profile", "relay", "--json"],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          admin: {
+            get: async () => ({
+              environments: [
+                {
+                  id: "00000000-0000-4000-8000-000000000003",
+                  projectId: "00000000-0000-4000-8000-000000000002",
+                  label: "development",
+                  lifecycle: "active",
+                  currentHeadId: null,
+                },
+              ],
+            }),
+            post: async () => ({}) as never,
+          },
+        },
+      );
+      expect(result.exitCode).toBe(2);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "invocation",
+        code: "environment_not_found",
+        exitCode: 2,
+      });
+      expect(await Bun.file(contextPath).text()).toBe(saved);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
 });
 
 const serverProfileId = "00000000-0000-4000-8000-000000000042";
@@ -1242,6 +1385,218 @@ describe("protected command Environment selection", () => {
         environmentId: developmentEnvironmentId,
       });
       expect(await Bun.file(outputPath).text()).toBe("DATABASE_URL=old\n");
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("an explicit Environment label is resolved to its id before the boundary or context", async () => {
+    const fixture = createProtocolHttpFixture([
+      {
+        id: developmentEnvironmentId,
+        label: "dev environment",
+        lifecycle: "active",
+      },
+      {
+        id: productionEnvironmentId,
+        label: "production",
+        lifecycle: "active",
+      },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({ serverProfileId, projectId }),
+      );
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          "dev environment",
+          "--stdout",
+        ],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("\n");
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${developmentEnvironmentId}`,
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/workspace/boundary?environment=dev"),
+        ),
+      ).toBe(false);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId: developmentEnvironmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("an explicit Environment label that matches nothing fails before the boundary", async () => {
+    const fixture = createProtocolHttpFixture([
+      {
+        id: developmentEnvironmentId,
+        label: "development",
+        lifecycle: "active",
+      },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const saved = JSON.stringify({
+        serverProfileId,
+        projectId,
+        environmentId: developmentEnvironmentId,
+      });
+      await Bun.write(state.contextPath, saved);
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          "staging",
+          "--no-input",
+          "--json",
+        ],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(2);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "invocation",
+        code: "environment_not_found",
+        exitCode: 2,
+      });
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/workspace/boundary"),
+        ),
+      ).toBe(false);
+      expect(await Bun.file(state.contextPath).text()).toBe(saved);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("--no-input reports a duplicate Environment label with explicit id guidance", async () => {
+    const fixture = createProtocolHttpFixture([
+      {
+        id: developmentEnvironmentId,
+        label: "staging",
+        lifecycle: "active",
+      },
+      {
+        id: productionEnvironmentId,
+        label: "staging",
+        lifecycle: "active",
+      },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const saved = JSON.stringify({ serverProfileId, projectId });
+      await Bun.write(state.contextPath, saved);
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          "staging",
+          "--no-input",
+          "--json",
+        ],
+        runtimeForProtocolState(state),
+      );
+      expect(result.exitCode).toBe(2);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "invocation",
+        code: "environment_ambiguous",
+        exitCode: 2,
+      });
+      const detail = String(diagnostic.detail);
+      expect(detail).toContain(developmentEnvironmentId);
+      expect(detail).toContain(productionEnvironmentId);
+      expect(detail).toContain("--environment <environment-id>");
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/workspace/boundary"),
+        ),
+      ).toBe(false);
+      expect(await Bun.file(state.contextPath).text()).toBe(saved);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("an operator chooses among Environments that share a label", async () => {
+    const fixture = createProtocolHttpFixture([
+      {
+        id: developmentEnvironmentId,
+        label: "staging",
+        lifecycle: "active",
+      },
+      {
+        id: productionEnvironmentId,
+        label: "staging",
+        lifecycle: "active",
+      },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({ serverProfileId, projectId }),
+      );
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const renderedChunks: string[] = [];
+      output.on("data", (chunk) => {
+        renderedChunks.push(
+          typeof chunk === "string" ? chunk : chunk.toString("utf8"),
+        );
+      });
+      input.write("2\n");
+      input.end();
+      const result = await run(
+        ["pull", "--profile", "relay", "--environment", "staging", "--stdout"],
+        { ...runtimeForProtocolState(state), terminal: { input, output } },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("\n");
+      const rendered = renderedChunks.join("");
+      expect(rendered).toContain(developmentEnvironmentId);
+      expect(rendered).toContain(productionEnvironmentId);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${productionEnvironmentId}`,
+        ),
+      ).toBe(true);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId: productionEnvironmentId,
+      });
     } finally {
       fixture.stop();
       await state.cleanup();
@@ -3102,7 +3457,7 @@ describe("status verifies the session and this Device", () => {
         device: "active",
         environmentId: archivedEnvironmentId,
         environmentActive: false,
-        nextAction: "run dotrelay env use <environment-id>",
+        nextAction: "run dotrelay env use <environment-id-or-label>",
       });
       expect(body).not.toHaveProperty("environment");
     } finally {

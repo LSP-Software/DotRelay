@@ -14,9 +14,9 @@ import {
   listTeams,
   type ProjectSummary,
   resolveEnvironmentForProject,
+  resolveEnvironmentReference,
   resolveTeamForProject,
   type StrictJsonClient,
-  selectEnvironment,
   type TeamSummary,
 } from "./admin";
 import {
@@ -139,7 +139,7 @@ export const renderPowerHelp = (): string => {
     "  device recover --from <file>  Restore a Device from a Recovery Kit",
     "  context                       Detect the GitHub Repository",
     "  project link --team <team>    Link a Project explicitly",
-    "  env use <environment-id>      Select an Environment by opaque id",
+    "  env use <environment>         Select an Environment by id or label",
     "  history                       List verified Revision metadata",
     "  rollback <revision>           Append a lane-scoped Rollback",
     "",
@@ -803,7 +803,7 @@ const verifyStatus = async (
             (deviceState === "not-enrolled" && sessionState === "verified")
           ? "run dotrelay device enroll"
           : environmentActive === false
-            ? "run dotrelay env use <environment-id>"
+            ? "run dotrelay env use <environment-id-or-label>"
             : service === "offline"
               ? "retry when the Server Profile is reachable"
               : service !== "verified"
@@ -1049,14 +1049,20 @@ const execute = async (
       throw new CliInvocationError(
         "worktree Project belongs to a different Server Profile",
       );
-    const environmentId = parsed.environment ?? parsed.positionals[0];
-    if (!environmentId) throw new Error("env use requires an Environment id");
+    const environmentReference = parsed.environment ?? parsed.positionals[0];
+    if (!environmentReference)
+      throw new Error("env use requires an Environment id or label");
     const credentials = runtime.credentials ?? createNativeCredentialStore();
     const admin = await createAdminClient(runtime, profile, credentials);
-    const environment = await selectEnvironment(
+    const environment = await resolveEnvironmentReference(
       admin,
       context.projectId,
-      environmentId,
+      environmentReference,
+      {
+        noInput: parsed.noInput,
+        ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+        ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+      },
     );
     await writeWorktreeContext(contextPath, {
       ...context,
@@ -1314,15 +1320,32 @@ const execute = async (
       // steer the change automatically. Otherwise resolution continues so an
       // eligible active Environment can be chosen or created. The check is
       // skipped entirely when an explicit Environment was supplied.
-      const explicitEnvironmentId =
+      const explicitEnvironmentReference =
         parsed.environment ??
         (parsed.command === "init" ? parsed.positionals[0] : undefined);
+      // An explicit reference may be the operator-visible label; resolve it
+      // against the Project now so only the stable id reaches the service and
+      // the worktree context. A miss fails before any workflow work, leaving
+      // the saved selection untouched.
+      const explicitEnvironment =
+        explicitEnvironmentReference === undefined
+          ? undefined
+          : await resolveEnvironmentReference(
+              admin,
+              initializedProject.id,
+              explicitEnvironmentReference,
+              {
+                noInput: parsed.noInput,
+                ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+                ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+              },
+            );
       const savedEnvironmentId = localContext?.environmentId;
       // Usable means "present and still active"; a missing selection is
       // trivially usable because nothing needs to be re-validated.
       let savedSelectionUsable = savedEnvironmentId === undefined;
       if (
-        explicitEnvironmentId === undefined &&
+        explicitEnvironmentReference === undefined &&
         savedEnvironmentId !== undefined
       ) {
         savedSelectionUsable = (
@@ -1346,7 +1369,7 @@ const execute = async (
           );
       }
       const environmentId =
-        explicitEnvironmentId ??
+        explicitEnvironment?.id ??
         (savedSelectionUsable ? savedEnvironmentId : undefined) ??
         linkedEnvironmentId ??
         (

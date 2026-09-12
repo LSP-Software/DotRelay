@@ -438,6 +438,89 @@ describe("protected CLI workflows", () => {
     expect(result.stderr).toBe("");
   });
 
+  test("pulls with an Environment label resolved to the stable id before the boundary", async () => {
+    const runtime = await setup();
+    const contextPath = `${runtime.stateDirectory}/context.json`;
+    await Bun.write(
+      contextPath,
+      JSON.stringify({
+        serverProfileId: profile.pin.serverProfileId,
+        projectId: ids.project,
+      }),
+    );
+    const boundaryRequests: string[] = [];
+    const admin = {
+      get: async (path: string, fields: readonly string[]) => {
+        if (path.startsWith("/api/v1/workspace/boundary"))
+          boundaryRequests.push(path);
+        return runtime.admin.get(path, fields);
+      },
+      post: runtime.admin.post,
+    };
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        "development",
+        "--stdout",
+      ],
+      { ...runtime, admin, worktreeConfig: contextPath },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("\n");
+    expect(boundaryRequests).toEqual([
+      `/api/v1/workspace/boundary?environment=${ids.environment}`,
+    ]);
+  });
+
+  test("init accepts an Environment label as its positional argument", async () => {
+    const runtime = await setup();
+    const contextPath = `${runtime.stateDirectory}/context.json`;
+    await Bun.write(
+      contextPath,
+      JSON.stringify({
+        serverProfileId: profile.pin.serverProfileId,
+        projectId: ids.project,
+      }),
+    );
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const boundaryRequests: string[] = [];
+    const admin = {
+      get: async (path: string, fields: readonly string[]) => {
+        if (path.startsWith("/api/v1/workspace/boundary"))
+          boundaryRequests.push(path);
+        return runtime.admin.get(path, fields);
+      },
+      post: runtime.admin.post,
+    };
+    const result = await run(
+      [
+        "init",
+        "development",
+        "--profile",
+        "relay",
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin, worktreeConfig: contextPath },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"ok":true');
+    expect(result.stdout).not.toContain("postgres://secret");
+    expect(boundaryRequests.length).toBeGreaterThan(0);
+    for (const request of boundaryRequests)
+      expect(request).toBe(
+        `/api/v1/workspace/boundary?environment=${ids.environment}`,
+      );
+  });
+
   test("pulls Values signed by a peer Device using workspace signing trust keys", async () => {
     const bootstrap = await createDeviceBootstrap({
       pin: profile.pin,

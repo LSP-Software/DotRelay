@@ -7,8 +7,8 @@ import {
   linkProject,
   listTeams,
   type ProjectSummary,
+  resolveEnvironmentReference,
   resolveTeamForProject,
-  selectEnvironment,
 } from "./admin";
 
 const profile: ServerProfilePin = {
@@ -161,13 +161,21 @@ describe("strict administration client", () => {
     expect(JSON.stringify(calls)).not.toContain("value");
   });
 
-  test("selects one Environment by opaque id and rejects ambiguity", async () => {
+  test("resolves a unique Environment label to its stable id", async () => {
     const client = {
       get: async () => ({
         environments: [
           {
             id: "00000000-0000-4000-8000-000000000003",
             projectId: "project-id",
+            label: "development",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
+          {
+            id: "00000000-0000-4000-8000-000000000004",
+            projectId: "project-id",
+            label: "production",
             lifecycle: "active",
             currentHeadId: null,
           },
@@ -175,17 +183,149 @@ describe("strict administration client", () => {
       }),
     };
     await expect(
-      selectEnvironment(
-        client,
-        "project-id",
-        "00000000-0000-4000-8000-000000000003",
-      ),
+      resolveEnvironmentReference(client, "project-id", "development", {
+        noInput: true,
+      }),
     ).resolves.toEqual({
       id: "00000000-0000-4000-8000-000000000003",
       projectId: "project-id",
-      label: "default",
+      label: "development",
       lifecycle: "active",
       currentHeadId: null,
+    });
+  });
+
+  test("prefers an opaque id over a same-named label", async () => {
+    const client = {
+      get: async () => ({
+        environments: [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "project-id",
+            label: "staging",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
+          {
+            id: "00000000-0000-4000-8000-000000000004",
+            projectId: "project-id",
+            label: "staging",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
+        ],
+      }),
+    };
+    await expect(
+      resolveEnvironmentReference(
+        client,
+        "project-id",
+        "00000000-0000-4000-8000-000000000004",
+        { noInput: true },
+      ),
+    ).resolves.toMatchObject({
+      id: "00000000-0000-4000-8000-000000000004",
+      label: "staging",
+    });
+  });
+
+  test("reports an Environment reference that matches nothing in the Project", async () => {
+    const client = {
+      get: async () => ({
+        environments: [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "project-id",
+            label: "development",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
+        ],
+      }),
+    };
+    await expect(
+      resolveEnvironmentReference(client, "project-id", "staging", {
+        noInput: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "environment_not_found",
+      message: "the requested Environment was not found",
+    });
+  });
+
+  test("duplicate labels offer explicit id guidance under --no-input", async () => {
+    const client = {
+      get: async () => ({
+        environments: [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "project-id",
+            label: "staging",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
+          {
+            id: "00000000-0000-4000-8000-000000000004",
+            projectId: "project-id",
+            label: "staging",
+            lifecycle: "archived",
+            currentHeadId: null,
+          },
+        ],
+      }),
+    };
+    await expect(
+      resolveEnvironmentReference(client, "project-id", "staging", {
+        noInput: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "environment_ambiguous",
+    });
+    const error = await resolveEnvironmentReference(
+      client,
+      "project-id",
+      "staging",
+      { noInput: true },
+    ).catch((value) => value);
+    expect(String((error as Error).message)).toContain(
+      "00000000-0000-4000-8000-000000000003",
+    );
+    expect(String((error as Error).message)).toContain(
+      "00000000-0000-4000-8000-000000000004",
+    );
+    expect(String((error as Error).message)).toContain(
+      "--environment <environment-id>",
+    );
+  });
+
+  test("duplicate labels offer a labelled choice interactively", async () => {
+    const client = {
+      get: async () => ({
+        environments: [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "project-id",
+            label: "staging",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
+          {
+            id: "00000000-0000-4000-8000-000000000004",
+            projectId: "project-id",
+            label: "staging",
+            lifecycle: "active",
+            currentHeadId: null,
+          },
+        ],
+      }),
+    };
+    await expect(
+      resolveEnvironmentReference(client, "project-id", "staging", {
+        noInput: false,
+        prompt: async () => "2",
+      }),
+    ).resolves.toMatchObject({
+      id: "00000000-0000-4000-8000-000000000004",
     });
   });
 
