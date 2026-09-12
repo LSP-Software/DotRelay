@@ -3,8 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  createPanelServer,
+  isControlRequest,
   isProcessRunning,
   isSafeRunLogName,
+  panelHtml,
   readLogChunk,
   summarizeQueue,
 } from "./run-issues-panel";
@@ -44,6 +47,69 @@ describe("run issues panel", () => {
         ],
       }),
     ).toEqual({ total: 3, pending: 1, blocked: 1, done: 1 });
+  });
+
+  test("renders Unicode characters instead of escape sequences", () => {
+    expect(panelHtml).toContain("{·}");
+    expect(panelHtml).toContain("Waiting for the first run…");
+    expect(panelHtml).not.toContain("\\u00b7");
+    expect(panelHtml).not.toContain("\\u2026");
+    expect(panelHtml).toContain('replace(/\\.log$/, "")');
+  });
+
+  test("accepts only same-origin-style POST control requests", () => {
+    expect(
+      isControlRequest(
+        new Request("http://localhost/api/runner/start", {
+          method: "POST",
+          headers: { "X-DotRelay-Panel": "1", "Sec-Fetch-Site": "same-origin" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isControlRequest(
+        new Request("http://localhost/api/runner/start", { method: "POST" }),
+      ),
+    ).toBe(false);
+    expect(
+      isControlRequest(
+        new Request("http://localhost/api/runner/start", {
+          method: "POST",
+          headers: { "X-DotRelay-Panel": "1", "Sec-Fetch-Site": "cross-site" },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("starts once and requests a graceful stop through the control API", async () => {
+    let starts = 0;
+    let stoppedPid: number | null = null;
+    const { server } = createPanelServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      startRunner: async () => {
+        starts++;
+        return process.pid;
+      },
+      signalRunner: (pid) => {
+        stoppedPid = pid;
+      },
+    });
+    const request = (action: string) =>
+      fetch(`http://127.0.0.1:${server.port}/api/runner/${action}`, {
+        method: "POST",
+        headers: { "X-DotRelay-Panel": "1" },
+      });
+
+    try {
+      expect((await request("start")).status).toBe(202);
+      expect((await request("start")).status).toBe(409);
+      expect((await request("stop")).status).toBe(202);
+      expect(starts).toBe(1);
+      expect(Number(stoppedPid)).toBe(process.pid);
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("reads a run log incrementally", async () => {

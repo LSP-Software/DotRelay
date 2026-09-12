@@ -1,8 +1,8 @@
 # Issue runner panel
 
-The issue runner panel is a read-only local dashboard for `run-issues.sh`. It shows the current
-runner stage, active issue and pull request, process health, elapsed time, recent runs, and a live
-controller transcript.
+The issue runner panel is a private local dashboard for `run-issues.sh`. It shows the current runner
+stage, active issue and pull request, process health, elapsed time, recent runs, and a live controller
+transcript. It can also start the runner or request a graceful stop.
 
 The controller writes an atomic status document and one combined transcript per invocation in
 `.git/issue-runner/`. The panel reads that controller directory and its queue journal directly; it
@@ -43,7 +43,7 @@ Port `8443` keeps the panel separate from anything already served on the machine
 port. Tailscale prints the private HTTPS URL, which normally uses the machine's MagicDNS name:
 
 ```text
-https://llmrex.tail0de2f.ts.net:8443
+https://<machine-name>.<tailnet-name>.ts.net:8443
 ```
 
 Only devices allowed by the tailnet policy can reach a Tailscale Serve endpoint. Do not use
@@ -62,5 +62,8 @@ GitHub URLs. They should still be treated as private operational data even thoug
 not expose raw per-session NDJSON. Keep the panel bound to localhost and rely on Tailscale Serve for
 remote access.
 
-The panel has no start, stop, retry, merge, or shell endpoints. Runner control remains in the
-terminal so opening the dashboard cannot mutate the repository or GitHub state.
+Anyone who can reach the panel can start or stop the issue runner, so tailnet access to this endpoint
+is operational access. The control API accepts only POST requests carrying a panel-only header and
+rejects cross-site browser requests. It exposes no arbitrary command, retry, merge, or shell endpoint.
+A stop sends `SIGTERM` to the saved controller process so it can stop its worker and preserve its
+journal for the next start.

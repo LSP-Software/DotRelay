@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
@@ -93,6 +94,43 @@ const readControllerState = async (): Promise<ControllerState | null> => {
   }
 };
 
+const readControllerPid = async () => {
+  try {
+    const pid = Number(
+      await readFile(join(runsDirectory, "controller.lock", "pid"), "utf8"),
+    );
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+};
+
+const startRunner = async () =>
+  new Promise<number>((accept, reject) => {
+    const child = spawn("bash", [join(repoRoot, "run-issues.sh")], {
+      cwd: repoRoot,
+      detached: true,
+      env: { ...process.env, RUN_ISSUES_WORKER: "0" },
+      stdio: "ignore",
+    });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      if (!child.pid) {
+        reject(new Error("Runner started without a process ID."));
+        return;
+      }
+      child.unref();
+      accept(child.pid);
+    });
+  });
+
+export const isControlRequest = (request: Request) =>
+  request.method === "POST" &&
+  request.headers.get("x-dotrelay-panel") === "1" &&
+  !["cross-site", "same-site"].includes(
+    request.headers.get("sec-fetch-site") ?? "",
+  );
+
 const listRunLogs = async (): Promise<RunLog[]> => {
   try {
     const entries = await readdir(runsDirectory, { withFileTypes: true });
@@ -153,7 +191,7 @@ const jsonResponse = (body: unknown, init?: ResponseInit) =>
     },
   });
 
-const html = String.raw`<!doctype html>
+export const panelHtml = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -234,6 +272,7 @@ const html = String.raw`<!doctype html>
         color: var(--muted);
         font-size: 0.82rem;
       }
+      .header-actions { display: flex; align-items: center; gap: 0.65rem; }
       .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--muted); }
       .dot.live { background: var(--green); box-shadow: 0 0 0 0.3rem rgba(98, 246, 181, 0.09); }
       .dot.error { background: var(--red); }
@@ -317,6 +356,8 @@ const html = String.raw`<!doctype html>
         font-size: 0.78rem;
       }
       .button:hover, .button.active { border-color: rgba(98, 246, 181, 0.55); background: var(--green-soft); color: var(--green); }
+      .button.stop:hover:not(:disabled) { border-color: rgba(255, 129, 122, 0.55); background: rgba(255, 129, 122, 0.1); color: var(--red); }
+      .button:disabled { cursor: not-allowed; opacity: 0.4; }
       pre {
         min-height: 0;
         margin: 0;
@@ -369,6 +410,7 @@ const html = String.raw`<!doctype html>
         .shell { padding: 0.75rem; }
         header { align-items: flex-start; }
         .brand p { display: none; }
+        .header-actions { align-items: flex-end; flex-direction: column-reverse; }
         .summary { grid-template-columns: 1fr 1fr; }
         .summary > div:first-child { grid-column: 1 / -1; }
         .summary > div + div { border-left: 0; }
@@ -388,7 +430,11 @@ const html = String.raw`<!doctype html>
           <div class="mark" aria-hidden="true">{·}</div>
           <div><h1>Issue runner</h1><p>DotRelay automation monitor</p></div>
         </div>
-        <div class="connection"><span class="dot" id="connection-dot"></span><span id="connection-label">Connecting</span></div>
+        <div class="header-actions">
+          <button class="button" id="start-runner" type="button">Start runner</button>
+          <button class="button stop" id="stop-runner" type="button" disabled>Stop runner</button>
+          <div class="connection"><span class="dot" id="connection-dot"></span><span id="connection-label">Connecting</span></div>
+        </div>
       </header>
 
       <div class="layout">
@@ -445,6 +491,8 @@ const html = String.raw`<!doctype html>
         runs: document.querySelector("#runs"),
         follow: document.querySelector("#follow"),
         copy: document.querySelector("#copy"),
+        startRunner: document.querySelector("#start-runner"),
+        stopRunner: document.querySelector("#stop-runner"),
       };
 
       let selectedRun = null;
@@ -530,7 +578,7 @@ const html = String.raw`<!doctype html>
           button.type = "button";
           button.className = "run" + (run.name === selectedRun ? " selected" : "");
           const title = document.createElement("strong");
-          title.textContent = run.name.replace(/^run-/, "").replace(/\.log$/, "");
+          title.textContent = run.name.replace(/^run-/, "").replace(/\\.log$/, "");
           const meta = document.createElement("span");
           meta.textContent = new Date(run.modifiedAt).toLocaleString() + " · " + formatBytes(run.size);
           button.append(title, meta);
@@ -561,6 +609,8 @@ const html = String.raw`<!doctype html>
 
           elements.connectionDot.className = "dot live";
           elements.connectionLabel.textContent = "Panel connected";
+          elements.startRunner.disabled = data.processRunning;
+          elements.stopRunner.disabled = !data.processRunning;
           currentRun = status?.logFile ?? data.runs[0]?.name ?? null;
           startedAt = status?.startedAt ?? null;
           finishedAt = status?.finishedAt ?? null;
@@ -606,6 +656,29 @@ const html = String.raw`<!doctype html>
         } catch {
           elements.connectionDot.className = "dot error";
           elements.connectionLabel.textContent = "Panel disconnected";
+          elements.startRunner.disabled = true;
+          elements.stopRunner.disabled = true;
+        }
+      };
+
+      const controlRunner = async (action) => {
+        const button = action === "start" ? elements.startRunner : elements.stopRunner;
+        const originalLabel = button.textContent;
+        button.disabled = true;
+        button.textContent = action === "start" ? "Starting…" : "Stopping…";
+        try {
+          const response = await fetch("/api/runner/" + action, {
+            method: "POST",
+            headers: { "X-DotRelay-Panel": "1" },
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error ?? "Runner control failed.");
+          elements.message.textContent = result.message;
+        } catch (error) {
+          elements.message.textContent = error instanceof Error ? error.message : String(error);
+        } finally {
+          button.textContent = originalLabel;
+          await refreshStatus();
         }
       };
 
@@ -640,6 +713,8 @@ const html = String.raw`<!doctype html>
         elements.copy.textContent = "Copied";
         window.setTimeout(() => { elements.copy.textContent = "Copy visible log"; }, 1200);
       });
+      elements.startRunner.addEventListener("click", () => void controlRunner("start"));
+      elements.stopRunner.addEventListener("click", () => void controlRunner("stop"));
 
       statusTimer = window.setInterval(() => void refreshStatus(), 2000);
       logTimer = window.setInterval(() => void refreshLog(), 1000);
@@ -664,11 +739,19 @@ const contentSecurityPolicy = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-export const createPanelServer = () => {
-  const configuredPort = Number(process.env.ISSUES_PANEL_PORT ?? DEFAULT_PORT);
+export const createPanelServer = (
+  options: {
+    hostname?: string;
+    port?: number;
+    startRunner?: () => Promise<number>;
+    signalRunner?: (pid: number) => void;
+  } = {},
+) => {
+  const configuredPort =
+    options.port ?? Number(process.env.ISSUES_PANEL_PORT ?? DEFAULT_PORT);
   if (
     !Number.isSafeInteger(configuredPort) ||
-    configuredPort < 1 ||
+    configuredPort < (options.port === 0 ? 0 : 1) ||
     configuredPort > 65_535
   ) {
     throw new Error(
@@ -676,12 +759,102 @@ export const createPanelServer = () => {
     );
   }
 
-  const hostname = process.env.ISSUES_PANEL_HOST ?? "127.0.0.1";
+  const hostname =
+    options.hostname ?? process.env.ISSUES_PANEL_HOST ?? "127.0.0.1";
+  const launchRunner = options.startRunner ?? startRunner;
+  const signalRunner =
+    options.signalRunner ?? ((pid) => process.kill(pid, "SIGTERM"));
+  let launchedPid: number | null = null;
+  const activeRunnerPid = async (status?: RunnerStatus | null) => {
+    const lockedPid = await readControllerPid();
+    if (lockedPid && isProcessRunning(lockedPid)) launchedPid = null;
+    const candidates = [
+      lockedPid,
+      launchedPid,
+      status?.status === "running" ? status.controllerPid : undefined,
+      status?.status === "running" ? status.pid : undefined,
+    ];
+    const active = candidates.find(
+      (pid): pid is number =>
+        pid !== undefined && pid !== null && isProcessRunning(pid),
+    );
+    if (!active) launchedPid = null;
+    return active ?? null;
+  };
   const server = Bun.serve({
     hostname,
     port: configuredPort,
     async fetch(request) {
       const url = new URL(request.url);
+
+      if (url.pathname === "/api/runner/start") {
+        if (!isControlRequest(request)) {
+          return jsonResponse(
+            { error: "Runner control requires a same-origin panel request." },
+            { status: request.method === "POST" ? 403 : 405 },
+          );
+        }
+        if (await activeRunnerPid()) {
+          return jsonResponse(
+            { error: "The issue runner is already running." },
+            { status: 409 },
+          );
+        }
+        try {
+          launchedPid = await launchRunner();
+          return jsonResponse(
+            {
+              ok: true,
+              message: "Runner start requested.",
+              pid: launchedPid,
+            },
+            { status: 202 },
+          );
+        } catch (error) {
+          return jsonResponse(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not start the issue runner.",
+            },
+            { status: 500 },
+          );
+        }
+      }
+
+      if (url.pathname === "/api/runner/stop") {
+        if (!isControlRequest(request)) {
+          return jsonResponse(
+            { error: "Runner control requires a same-origin panel request." },
+            { status: request.method === "POST" ? 403 : 405 },
+          );
+        }
+        const pid = await activeRunnerPid();
+        if (!pid) {
+          return jsonResponse(
+            { error: "The issue runner is not running." },
+            { status: 409 },
+          );
+        }
+        try {
+          signalRunner(pid);
+          return jsonResponse(
+            { ok: true, message: "Graceful runner stop requested.", pid },
+            { status: 202 },
+          );
+        } catch (error) {
+          return jsonResponse(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not stop the issue runner.",
+            },
+            { status: 500 },
+          );
+        }
+      }
 
       if (request.method !== "GET") {
         return jsonResponse(
@@ -691,7 +864,7 @@ export const createPanelServer = () => {
       }
 
       if (url.pathname === "/") {
-        return new Response(html, {
+        return new Response(panelHtml, {
           headers: {
             "Cache-Control": "no-store",
             "Content-Security-Policy": contentSecurityPolicy,
@@ -709,12 +882,10 @@ export const createPanelServer = () => {
           listRunLogs(),
           readControllerState(),
         ]);
+        const runnerPid = await activeRunnerPid(status);
         return jsonResponse({
           status,
-          processRunning:
-            status?.status === "running"
-              ? isProcessRunning(status.controllerPid ?? status.pid)
-              : false,
+          processRunning: runnerPid !== null,
           queue: summarizeQueue(state),
           runs,
           serverTime: new Date().toISOString(),
