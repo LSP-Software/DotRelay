@@ -262,6 +262,33 @@ export const mergeDraftVariablesOverRemote = (
   return Object.freeze([...merged, ...localOnly]);
 };
 
+export const settlePublishedDraft = (
+  currentVariables: readonly EnvironmentVariable[],
+  publishedSnapshot: readonly EnvironmentVariable[],
+): EnvironmentVariable[] => {
+  const snapshotById = new Map(
+    publishedSnapshot.map((variable) => [variable.id, variable]),
+  );
+  return currentVariables.map((variable) =>
+    Object.freeze({
+      ...variable,
+      hasDraftChange: variableHasDraftChange(
+        variable,
+        snapshotById.get(variable.id),
+      ),
+    }),
+  );
+};
+
+export const publishedBaseline = (
+  publishedSnapshot: readonly EnvironmentVariable[],
+): readonly EnvironmentVariable[] =>
+  Object.freeze(
+    publishedSnapshot.map((variable) =>
+      Object.freeze({ ...variable, hasDraftChange: false }),
+    ),
+  );
+
 export type VariableValueDiff = Readonly<{
   readonly id: string;
   readonly name: string;

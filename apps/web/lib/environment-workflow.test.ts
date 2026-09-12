@@ -12,7 +12,9 @@ import {
   nextSetupAction,
   prepareEncryptedPublication,
   publicationMutationForHead,
+  publishedBaseline,
   rollbackValueDiffs,
+  settlePublishedDraft,
   splitInlineValueDiff,
   updateVariableValue,
   validateEnvironmentVariables,
@@ -397,6 +399,121 @@ test("an edit that matches the verified remote page is not a pending change", ()
   expect(merged[0]).toMatchObject({
     id: "lane-1",
     value: "remote",
+    hasDraftChange: false,
+  });
+});
+
+test("a publish clears only confirmed lanes and keeps mid-flight edits unpublished", () => {
+  const publishedOrigin = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, value: "published" },
+      "lane-1",
+    ),
+    hasDraftChange: true,
+  };
+  const publishedOptional = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, name: "OPTIONAL_FLAG", value: "baseline" },
+      "lane-2",
+    ),
+    hasDraftChange: false,
+  };
+  const snapshot = [publishedOrigin, publishedOptional];
+
+  // After the snapshot was submitted, the user edited OPTIONAL_FLAG again and
+  // left API_ORIGIN untouched.
+  const current = [
+    { ...publishedOrigin, hasDraftChange: true },
+    { ...publishedOptional, value: "mid-flight-edit", hasDraftChange: true },
+  ];
+
+  const settled = settlePublishedDraft(current, snapshot);
+
+  expect(settled[0]).toMatchObject({ id: "lane-1", hasDraftChange: false });
+  expect(settled[1]).toMatchObject({
+    id: "lane-2",
+    value: "mid-flight-edit",
+    hasDraftChange: true,
+  });
+});
+
+test("Variables added after the published snapshot stay an unpublished draft", () => {
+  const publishedOrigin = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, value: "published" },
+      "lane-1",
+    ),
+    hasDraftChange: true,
+  };
+  const snapshot = [publishedOrigin];
+  const addedLate = createEnvironmentVariable(
+    { ...sharedDraft, name: "LATE_ADDITION", value: "added" },
+    "lane-2",
+  );
+  const current = [publishedOrigin, addedLate];
+
+  const settled = settlePublishedDraft(current, snapshot);
+
+  expect(settled[0]).toMatchObject({ id: "lane-1", hasDraftChange: false });
+  expect(settled[1]).toMatchObject({
+    id: "lane-2",
+    name: "LATE_ADDITION",
+    hasDraftChange: true,
+  });
+});
+
+test("a Variable deleted after the published snapshot stays an unpublished draft", () => {
+  const publishedOptional = {
+    ...createEnvironmentVariable(
+      {
+        ...sharedDraft,
+        name: "OPTIONAL_FLAG",
+        value: "kept",
+        valuePresent: true,
+        required: false,
+      },
+      "lane-1",
+    ),
+    hasDraftChange: false,
+  };
+  const snapshot = [publishedOptional];
+  const current = [deleteEnvironmentVariable(publishedOptional)];
+
+  const settled = settlePublishedDraft(current, snapshot);
+
+  expect(settled[0]).toMatchObject({
+    id: "lane-1",
+    tombstone: true,
+    hasDraftChange: true,
+  });
+});
+
+test("the remote baseline resets to the published snapshot, not newer local Values", () => {
+  const changed = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, value: "published" },
+      "lane-1",
+    ),
+    hasDraftChange: true,
+  };
+  const unchanged = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, name: "SAME", value: "same" },
+      "lane-2",
+    ),
+    hasDraftChange: false,
+  };
+
+  const baseline = publishedBaseline([changed, unchanged]);
+
+  expect(baseline[0]).toMatchObject({
+    id: "lane-1",
+    value: "published",
+    hasDraftChange: false,
+  });
+  expect(baseline[1]).toMatchObject({
+    id: "lane-2",
+    value: "same",
     hasDraftChange: false,
   });
 });
