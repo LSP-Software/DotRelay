@@ -8,6 +8,9 @@ merges the expected commit. Bun, Bash, Git, GitHub CLI, jq, OpenCode, and `ps` a
 required. Authenticate GitHub CLI and configure OpenCode before starting. Keep
 Tailscale connected if your model provider uses a Tailscale endpoint.
 
+`ready-for-human` issues are handled separately by the panel's persistent grill-with-docs lane. See
+[`docs/run-issues-panel.md`](run-issues-panel.md) for the interview and promotion workflow.
+
 The controller runs the checked-out scripts. Commit these script changes before
 starting a long run, and avoid editing the controller files while it runs.
 OpenCode uses `--auto` in each issue checkout, as in the previous runner.
