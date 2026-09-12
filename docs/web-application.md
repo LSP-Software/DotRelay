@@ -85,10 +85,27 @@ Project and Environment archive/restore actions require confirmation. The Enviro
 states that archiving retains immutable Revision history while preventing Manifest disclosure.
 Project restoration states that a conflicting active stable GitHub Repository linkage fails closed.
 
+## Workspace availability and offline state
+
+The workspace shell loads its context from the Server Profile through the workspace boundary
+request. Outside an explicit development fixture (`DOTRELAY_WORKSPACE_FIXTURE=1`), the shell must
+never substitute development fixture identity, Teams, Projects, or a signed-in session for a
+failed request. A fresh visit that cannot verify the boundary renders a loading state first and
+then a recoverable connection error; it shows no identity, Membership, Team, Project, or Device
+data until a live or explicitly selected fixture boundary is verified.
+
+When a previously verified boundary can no longer be refreshed, the shell keeps the last verified
+metadata visibly stale, offers a retry action, and reconnects automatically with capped
+exponential backoff. A malformed or non-200 boundary response is treated as a failed request:
+it can only degrade to the offline or stale state, never to fixture data.
+
 ## Browser quality boundary
 
 Playwright coverage in `apps/web/e2e/workspace.spec.ts` exercises the public landing/sign-in flow,
 role-aware invitation controls, pending key grants, Environment archive/restore confirmation,
 Server Profile switching, keyboard and responsive navigation, Revision history, enrolled Device
-listing, and the blocked secret-access state. Tests observe browser-visible behavior and never
+listing, and the blocked secret-access state. `apps/web/e2e/workspace-offline.spec.ts` adds the
+offline and stale connection states: an unreachable, malformed, or non-200 boundary response on
+a fresh visit, and a failed refresh that keeps last verified data stale until automatic
+reconnection or an explicit retry succeeds. Tests observe browser-visible behavior and never
 reach into component state.

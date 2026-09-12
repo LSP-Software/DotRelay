@@ -1,6 +1,7 @@
 import {
   BROWSER_DEVICE_ID_HEADER,
   e2eWorkspaceBoundary,
+  emptyWorkspaceBoundary,
   parsePeerDevices,
   parseWorkspaceCatalog,
   resolveLiveApiOrigin,
@@ -12,32 +13,12 @@ import {
 const isProfileId = (value: string | null): value is WorkspaceProfileId =>
   value === "hosted" || value === "self-hosted";
 
-const emptyLiveBoundary = (
-  profileId: WorkspaceProfileId,
-  origin: string,
-): WorkspaceBoundary => {
-  const profile = workspaceProfileCatalog[profileId];
-  return {
-    source: "live",
-    catalog: { teams: [], projects: [] },
-    environment: { headRevision: "empty-environment" },
-    session: { active: false },
-    profile: { id: profileId, ...profile, origin },
-    device: { active: false, label: "No active Device" },
-    grantsReady: false,
-    epochCurrent: false,
-    rotationRequired: false,
-    crypto: { available: true },
-  };
-};
-
 const fetchLiveBoundary = async (
   profileId: WorkspaceProfileId,
   request: Request,
-): Promise<WorkspaceBoundary | undefined> => {
-  if (process.env.DOTRELAY_WORKSPACE_FIXTURE === "1") return undefined;
-  const apiOrigin = resolveLiveApiOrigin();
-  if (!apiOrigin) return undefined;
+  apiOrigin: string | undefined,
+): Promise<WorkspaceBoundary> => {
+  if (!apiOrigin) return emptyWorkspaceBoundary(profileId);
   const profile = workspaceProfileCatalog[profileId];
   const cookie = request.headers.get("cookie");
   const deviceId = request.headers.get(BROWSER_DEVICE_ID_HEADER);
@@ -49,19 +30,39 @@ const fetchLiveBoundary = async (
     headers: apiHeaders,
     cache: "no-store",
   }).catch(() => undefined);
-  if (!sessionResponse) return undefined;
+  if (!sessionResponse)
+    return emptyWorkspaceBoundary(profileId, { origin: apiOrigin });
   const sessionActive = sessionResponse.ok;
   const sessionBody = sessionActive
-    ? ((await sessionResponse.json()) as {
-        user?: { id?: string; name?: string };
-      })
+    ? ((await sessionResponse.json().catch(() => undefined)) as
+        | {
+            user?: { id?: string; name?: string };
+          }
+        | undefined)
     : undefined;
+  const session: WorkspaceBoundary["session"] = {
+    active: sessionActive,
+    ...(sessionBody?.user?.name ? { displayName: sessionBody.user.name } : {}),
+    ...(sessionBody?.user?.id ? { userId: sessionBody.user.id } : {}),
+  };
   const capabilitiesResponse = await fetch(`${apiOrigin}/api/v1/capabilities`, {
     cache: "no-store",
   }).catch(() => undefined);
   const capabilities = capabilitiesResponse?.ok
-    ? ((await capabilitiesResponse.json()) as { serverProfileId?: unknown })
+    ? ((await capabilitiesResponse.json().catch(() => undefined)) as
+        | {
+            serverProfileId?: unknown;
+          }
+        | undefined)
     : undefined;
+  const profileWithServerProfile: WorkspaceBoundary["profile"] = {
+    id: profileId,
+    ...profile,
+    origin: apiOrigin,
+    ...(typeof capabilities?.serverProfileId === "string"
+      ? { serverProfileId: capabilities.serverProfileId }
+      : {}),
+  };
   const environmentId = new URL(request.url).searchParams.get("environment");
   const workspaceUrl = new URL(`${apiOrigin}/api/v1/workspace/boundary`);
   if (environmentId)
@@ -70,50 +71,45 @@ const fetchLiveBoundary = async (
     headers: apiHeaders,
     cache: "no-store",
   }).catch(() => undefined);
-  if (!workspaceResponse?.ok)
+  const workspaceBody = workspaceResponse?.ok
+    ? ((await workspaceResponse.json().catch(() => undefined)) as
+        | {
+            environment?: {
+              headRevision?: unknown;
+              id?: unknown;
+              label?: unknown;
+              projectId?: unknown;
+              teamId?: unknown;
+              headHash?: unknown;
+              projectEpoch?: unknown;
+            };
+            device?: {
+              id?: unknown;
+              active?: unknown;
+              label?: unknown;
+              encryptionPublicKey?: unknown;
+              signingPublicKey?: unknown;
+            };
+            grantsReady?: unknown;
+            epochCurrent?: unknown;
+            rotationRequired?: unknown;
+            catalog?: unknown;
+            signingTrustKeys?: unknown;
+            epochGrant?: unknown;
+            peerDevices?: unknown;
+          }
+        | undefined)
+    : undefined;
+  if (!workspaceBody) {
     return {
-      ...emptyLiveBoundary(profileId, apiOrigin),
-      session: {
-        active: sessionActive,
-        ...(sessionBody?.user?.name
-          ? { displayName: sessionBody.user.name }
-          : {}),
-        ...(sessionBody?.user?.id ? { userId: sessionBody.user.id } : {}),
-      },
-      profile: {
-        id: profileId,
-        ...profile,
+      ...emptyWorkspaceBoundary(profileId, {
         origin: apiOrigin,
-        ...(typeof capabilities?.serverProfileId === "string"
-          ? { serverProfileId: capabilities.serverProfileId }
-          : {}),
-      },
+        session,
+        connection: "online",
+      }),
+      profile: profileWithServerProfile,
     };
-  const workspaceBody = (await workspaceResponse.json()) as {
-    environment?: {
-      headRevision?: unknown;
-      id?: unknown;
-      label?: unknown;
-      projectId?: unknown;
-      teamId?: unknown;
-      headHash?: unknown;
-      projectEpoch?: unknown;
-    };
-    device?: {
-      id?: unknown;
-      active?: unknown;
-      label?: unknown;
-      encryptionPublicKey?: unknown;
-      signingPublicKey?: unknown;
-    };
-    grantsReady?: unknown;
-    epochCurrent?: unknown;
-    rotationRequired?: unknown;
-    catalog?: unknown;
-    signingTrustKeys?: unknown;
-    epochGrant?: unknown;
-    peerDevices?: unknown;
-  };
+  }
   const headRevision =
     typeof workspaceBody.environment?.headRevision === "string"
       ? workspaceBody.environment.headRevision
@@ -121,6 +117,7 @@ const fetchLiveBoundary = async (
   const deviceActive = workspaceBody.device?.active === true;
   return {
     source: "live",
+    connection: "online",
     catalog: parseWorkspaceCatalog(workspaceBody.catalog),
     environment: {
       headRevision,
@@ -144,21 +141,8 @@ const fetchLiveBoundary = async (
         ? { projectEpoch: workspaceBody.environment.projectEpoch }
         : {}),
     },
-    session: {
-      active: sessionActive,
-      ...(sessionBody?.user?.name
-        ? { displayName: sessionBody.user.name }
-        : {}),
-      ...(sessionBody?.user?.id ? { userId: sessionBody.user.id } : {}),
-    },
-    profile: {
-      id: profileId,
-      ...profile,
-      ...(typeof capabilities?.serverProfileId === "string"
-        ? { serverProfileId: capabilities.serverProfileId }
-        : {}),
-      origin: apiOrigin,
-    },
+    session,
+    profile: profileWithServerProfile,
     device: {
       active: deviceActive,
       label:
@@ -197,13 +181,13 @@ export const GET = async (request: Request) => {
   const url = new URL(request.url);
   const profileParam = url.searchParams.get("profile");
   const profileId = isProfileId(profileParam) ? profileParam : "hosted";
-  const liveBoundary = await fetchLiveBoundary(profileId, request);
-  const boundary = liveBoundary ?? e2eWorkspaceBoundary(profileId);
   const apiOrigin = resolveLiveApiOrigin();
+  const boundary =
+    process.env.DOTRELAY_WORKSPACE_FIXTURE === "1"
+      ? e2eWorkspaceBoundary(profileId)
+      : await fetchLiveBoundary(profileId, request, apiOrigin);
   const localBoundary =
-    apiOrigin &&
-    process.env.DOTRELAY_WORKSPACE_FIXTURE !== "1" &&
-    boundary.source === "fixture"
+    boundary.source === "fixture" && apiOrigin
       ? {
           ...boundary,
           profile: { ...boundary.profile, origin: apiOrigin },

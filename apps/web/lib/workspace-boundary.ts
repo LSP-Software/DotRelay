@@ -34,6 +34,7 @@ export type WorkspaceCatalog = Readonly<{
 
 export type WorkspaceBoundary = Readonly<{
   readonly source: "fixture" | "live";
+  readonly connection: "online" | "offline";
   readonly catalog: WorkspaceCatalog;
   readonly environment: Readonly<{
     readonly headRevision: string;
@@ -300,6 +301,34 @@ export const parseWorkspaceCatalog = (value: unknown): WorkspaceCatalog => {
   return { teams, projects };
 };
 
+export const emptyWorkspaceBoundary = (
+  profileId: WorkspaceProfileId,
+  options?: Readonly<{
+    readonly origin?: string;
+    readonly session?: WorkspaceBoundary["session"];
+    readonly connection?: "online" | "offline";
+  }>,
+): WorkspaceBoundary => {
+  const profile = profileCatalog[profileId];
+  return {
+    source: "live",
+    connection: options?.connection ?? "offline",
+    catalog: { teams: [], projects: [] },
+    environment: { headRevision: "empty-environment" },
+    session: options?.session ?? { active: false },
+    profile: {
+      id: profileId,
+      ...profile,
+      ...(options?.origin ? { origin: options.origin } : {}),
+    },
+    device: { active: false, label: "No active Device" },
+    grantsReady: false,
+    epochCurrent: false,
+    rotationRequired: false,
+    crypto: { available: true },
+  };
+};
+
 export const e2eWorkspaceBoundary = (
   profileId: WorkspaceProfileId,
 ): WorkspaceBoundary => {
@@ -308,6 +337,7 @@ export const e2eWorkspaceBoundary = (
   const firstEnvironment = firstProject?.environments[0];
   return {
     source: "fixture",
+    connection: "online",
     catalog: {
       teams: fixtureTeams,
       projects: fixtureProjects,
@@ -345,6 +375,51 @@ export const e2eWorkspaceBoundary = (
 
 export const BROWSER_DEVICE_ID_HEADER = "X-DotRelay-Device-Id";
 
+const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const candidate = value as Record<string, unknown>;
+  const catalog = candidate.catalog;
+  const environment = candidate.environment;
+  const session = candidate.session;
+  const profile = candidate.profile;
+  const device = candidate.device;
+  const crypto = candidate.crypto;
+  return (
+    (candidate.source === "live" || candidate.source === "fixture") &&
+    (candidate.connection === "online" || candidate.connection === "offline") &&
+    typeof candidate.grantsReady === "boolean" &&
+    typeof candidate.epochCurrent === "boolean" &&
+    typeof candidate.rotationRequired === "boolean" &&
+    catalog !== null &&
+    typeof catalog === "object" &&
+    !Array.isArray(catalog) &&
+    Array.isArray((catalog as { readonly teams?: unknown }).teams) &&
+    Array.isArray((catalog as { readonly projects?: unknown }).projects) &&
+    environment !== null &&
+    typeof environment === "object" &&
+    !Array.isArray(environment) &&
+    typeof (environment as { readonly headRevision?: unknown }).headRevision ===
+      "string" &&
+    session !== null &&
+    typeof session === "object" &&
+    !Array.isArray(session) &&
+    typeof (session as { readonly active?: unknown }).active === "boolean" &&
+    profile !== null &&
+    typeof profile === "object" &&
+    !Array.isArray(profile) &&
+    typeof (profile as { readonly origin?: unknown }).origin === "string" &&
+    device !== null &&
+    typeof device === "object" &&
+    !Array.isArray(device) &&
+    typeof (device as { readonly active?: unknown }).active === "boolean" &&
+    crypto !== null &&
+    typeof crypto === "object" &&
+    !Array.isArray(crypto) &&
+    typeof (crypto as { readonly available?: unknown }).available === "boolean"
+  );
+};
+
 export const fetchWorkspaceBoundary = async (
   profileId: WorkspaceProfileId,
   options?: Readonly<{
@@ -361,7 +436,15 @@ export const fetchWorkspaceBoundary = async (
       : {}),
   });
   if (!response.ok) throw new Error("workspace boundary request failed");
-  return response.json() as Promise<WorkspaceBoundary>;
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error("workspace boundary response is malformed");
+  }
+  if (!isWorkspaceBoundary(body))
+    throw new Error("workspace boundary response is malformed");
+  return body;
 };
 
 export const resolveWebOrigin = (): string =>
