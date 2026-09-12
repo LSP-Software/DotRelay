@@ -1961,8 +1961,7 @@ export const restoreRecoveryKit = async (
     operation = pending;
   } else {
     const challenge = crypto.getRandomValues(new Uint8Array(32));
-    const createdAtMs = Date.now();
-    const challengeExpiresAtMs = createdAtMs + 10 * 60 * 1000;
+    const challengeExpiresAtMs = Date.now() + 10 * 60 * 1000;
     const proof = await createRecoveryChallengeProof({
       serverProfileId: options.profile.pin.serverProfileId,
       userId: identity.userId,
