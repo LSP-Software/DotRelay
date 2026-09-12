@@ -6,7 +6,9 @@
     "DOTRELAY_BINARY_SOURCE",
     "ISSUES_PANEL_HOST",
     "ISSUES_PANEL_PORT",
-    "ISSUES_PANEL_RUNS_DIR"
+    "ISSUES_PANEL_RUNS_DIR",
+    "OPENCODE_AGENT",
+    "OPENCODE_MODEL"
   ],
   "tasks": {
     "dev": {

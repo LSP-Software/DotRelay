@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseOpenCodeTurn, selectGrillIssue } from "./run-issues-grill";
 import {
   createPanelServer,
   isControlRequest,
@@ -23,6 +24,64 @@ afterEach(async () => {
 });
 
 describe("run issues panel", () => {
+  test("selects the highest-priority unassigned human issue", () => {
+    const issue = selectGrillIssue([
+      {
+        number: 9,
+        title: "P2",
+        body: "Priority: P2",
+        url: "u9",
+        assignees: [],
+      },
+      {
+        number: 4,
+        title: "Claimed",
+        body: "Priority: P0",
+        url: "u4",
+        assignees: [{ login: "sam" }],
+      },
+      {
+        number: 7,
+        title: "P1",
+        body: "Priority: P1",
+        url: "u7",
+        assignees: [],
+      },
+      {
+        number: 3,
+        title: "No priority",
+        body: "Idea",
+        url: "u3",
+        assignees: [],
+      },
+    ]);
+    expect(issue?.number).toBe(7);
+  });
+
+  test("extracts the session and exact assistant text from OpenCode events", () => {
+    const output = [
+      JSON.stringify({
+        type: "text",
+        sessionID: "ses_123",
+        part: { text: "Question one?" },
+      }),
+      JSON.stringify({
+        type: "tool_use",
+        sessionID: "ses_123",
+        part: { tool: "read" },
+      }),
+      JSON.stringify({
+        type: "text",
+        sessionID: "ses_123",
+        part: { text: "\nQuestion two?" },
+      }),
+    ].join("\n");
+    expect(parseOpenCodeTurn(output)).toEqual({
+      sessionId: "ses_123",
+      text: "Question one?\nQuestion two?",
+    });
+  });
+
   test("accepts only controller log file names", () => {
     expect(isSafeRunLogName("run-20260911T193012Z-1234.log")).toBe(true);
     expect(isSafeRunLogName("issue-12.ndjson")).toBe(false);
