@@ -58,6 +58,11 @@ lane enter the local draft together. Empty Values and absent optional Values rem
 Live Variable names are unique within the Manifest. Deletion creates a tombstone in the draft so
 the definition is not silently reused or removed from immutable history.
 
+Owners and admins can create another Environment from the current Project. The create flow asks
+for a unique operator-visible label, a base Environment (or none), and a per-Variable choice to
+copy the Value, leave it blank, or omit the Variable. Copied Values stay in the browser; the
+service still stores only encrypted lanes after publication.
+
 Save changes shows the draft Variable diffs and publishes a new Revision. A live protocol session
 then encrypts each changed definition and Value lane, signs the v3 mutation with the active Device
 key, begins an idempotent operation, stages immutable objects, and finalizes with compare-and-swap
@@ -88,7 +93,8 @@ Project restoration states that a conflicting active stable GitHub Repository li
 ## Browser quality boundary
 
 Playwright coverage in `apps/web/e2e/workspace.spec.ts` exercises the public landing/sign-in flow,
-role-aware invitation controls, pending key grants, Environment archive/restore confirmation,
+role-aware invitation controls, pending key grants, Environment create from an existing
+Environment, Environment archive/restore confirmation,
 Server Profile switching, keyboard and responsive navigation, Revision history, enrolled Device
 listing, and the blocked secret-access state. Tests observe browser-visible behavior and never
 reach into component state.

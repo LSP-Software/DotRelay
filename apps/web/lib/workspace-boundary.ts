@@ -364,6 +364,57 @@ export const fetchWorkspaceBoundary = async (
   return response.json() as Promise<WorkspaceBoundary>;
 };
 
+export const createRemoteEnvironment = async (input: {
+  readonly origin: string;
+  readonly projectId: string;
+  readonly label: string;
+  readonly deviceId: string;
+}): Promise<WorkspaceEnvironmentSummary> => {
+  const response = await fetch(
+    `${input.origin}/api/v1/projects/${encodeURIComponent(input.projectId)}/environments`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        [BROWSER_DEVICE_ID_HEADER]: input.deviceId,
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+      },
+      body: JSON.stringify({ label: input.label }),
+    },
+  );
+  const body = (await response.json().catch(() => null)) as {
+    readonly id?: unknown;
+    readonly label?: unknown;
+    readonly lifecycle?: unknown;
+    readonly currentHeadId?: unknown;
+    readonly code?: unknown;
+  } | null;
+  if (!response.ok) {
+    if (body?.code === "authentication_required")
+      throw new Error("Sign in before creating an Environment.");
+    if (body?.code === "device_not_active")
+      throw new Error("Enroll this browser before creating an Environment.");
+    if (body?.code === "forbidden")
+      throw new Error("Your Membership cannot create Environments.");
+    if (body?.code === "invalid_request")
+      throw new Error("That Environment label is invalid.");
+    throw new Error("the Server Profile could not create this Environment");
+  }
+  const id = asString(body?.id);
+  const label = asString(body?.label);
+  if (!id || !label)
+    throw new Error("the Server Profile returned an invalid Environment");
+  return {
+    id,
+    label,
+    lifecycle: asLifecycle(body?.lifecycle),
+    currentHeadId:
+      typeof body?.currentHeadId === "string" ? body.currentHeadId : null,
+  };
+};
+
 export const resolveWebOrigin = (): string =>
   process.env.NEXT_PUBLIC_WEB_ORIGIN ??
   process.env.WEB_ORIGIN ??

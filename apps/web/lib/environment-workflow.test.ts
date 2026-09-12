@@ -12,8 +12,10 @@ import {
   prepareEncryptedPublication,
   publicationMutationForHead,
   rollbackValueDiffs,
+  seedEnvironmentVariables,
   splitInlineValueDiff,
   updateVariableValue,
+  validateEnvironmentLabel,
   validateEnvironmentVariables,
   validateVariableDraft,
   variableHasDraftChange,
@@ -394,4 +396,84 @@ test("setup reports only the next action the person can take", () => {
   expect(displayedSetupAction(null, { localDeviceBlockers: true })?.id).toBe(
     "enroll-device",
   );
+});
+
+test("new Environment labels must be valid and unique among active Environments", () => {
+  expect(validateEnvironmentLabel("")).toContain("required");
+  expect(validateEnvironmentLabel("staging env")).toContain("letters");
+  expect(validateEnvironmentLabel("1staging")).toContain("letters");
+  expect(
+    validateEnvironmentLabel("staging", ["staging", "production"]),
+  ).toContain("already exists");
+  expect(validateEnvironmentLabel("staging", ["production"])).toBeNull();
+  expect(validateEnvironmentLabel("staging")).toBeNull();
+});
+
+test("a new Environment can copy, blank, or omit each source Variable", () => {
+  const origin = createEnvironmentVariable(
+    { ...sharedDraft, value: "https://api.example" },
+    "lane-1",
+  );
+  const signing = createEnvironmentVariable(
+    {
+      ...sharedDraft,
+      name: "SIGNING_KEY",
+      ownership: "USER_DEFINED_VALUE",
+      value: "secret-material",
+    },
+    "lane-2",
+  );
+  const flag = createEnvironmentVariable(
+    {
+      ...sharedDraft,
+      name: "FEATURE_GATE",
+      value: "on",
+      required: false,
+    },
+    "lane-3",
+  );
+  const removed = deleteEnvironmentVariable(
+    createEnvironmentVariable({ ...sharedDraft, name: "OLD_TOKEN" }, "lane-4"),
+  );
+  const ids = ["env-1", "env-2"];
+
+  const seeded = seedEnvironmentVariables(
+    [origin, signing, flag, removed],
+    {
+      "lane-1": "copy",
+      "lane-2": "blank",
+      "lane-3": "omit",
+    },
+    () => ids.shift() ?? "overflow",
+  );
+
+  expect(seeded).toHaveLength(2);
+  expect(seeded[0]).toMatchObject({
+    id: "env-1",
+    name: "API_ORIGIN",
+    description: origin.description,
+    ownership: "SHARED_VALUE",
+    value: "https://api.example",
+    required: true,
+    hasDraftChange: true,
+    tombstone: false,
+  });
+  expect(seeded[1]).toMatchObject({
+    id: "env-2",
+    name: "SIGNING_KEY",
+    ownership: "USER_DEFINED_VALUE",
+    value: "",
+    required: true,
+    hasDraftChange: true,
+    tombstone: false,
+  });
+});
+
+test("an empty Environment seed includes no Variables", () => {
+  const origin = createEnvironmentVariable(sharedDraft, "lane-1");
+
+  expect(seedEnvironmentVariables([], {}, () => "env-1")).toEqual([]);
+  expect(
+    seedEnvironmentVariables([origin], { "lane-1": "omit" }, () => "env-1"),
+  ).toEqual([]);
 });

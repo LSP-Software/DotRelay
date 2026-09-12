@@ -278,6 +278,49 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("owners can create an Environment from an existing one", async ({
+  page,
+}) => {
+  await page.goto("/workspace?preview=protected");
+
+  await page.getByRole("button", { name: "New Environment" }).click();
+  await page.getByLabel("Label").fill("development");
+  await expect(page.getByLabel("Base Environment")).toHaveValue(
+    "00000000-0000-4000-8000-000000000031",
+  );
+  await page
+    .getByRole("radio", { name: "Leave blank for SIGNING_KEY" })
+    .check();
+  await page
+    .getByRole("radio", { name: "Don't include for FEATURE_GATE" })
+    .check();
+  await page.getByRole("button", { name: "Create Environment" }).click();
+
+  await expect(page.getByRole("tab", { name: "development" })).toBeVisible();
+  await expect(
+    page.getByTestId("environment-variable-API_ORIGIN"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("environment-variable-SIGNING_KEY"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("environment-variable-FEATURE_GATE"),
+  ).toHaveCount(0);
+});
+
+test("Members cannot create Environments", async ({ page }) => {
+  await page.goto("/workspace");
+  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page
+    .getByRole("combobox", { name: "Preview Membership role" })
+    .selectOption("MEMBER");
+  await page.locator("aside").getByRole("button", { name: "Projects" }).click();
+  await openFirstProject(page);
+  await expect(
+    page.getByRole("button", { name: "New Environment" }),
+  ).toBeDisabled();
+});
+
 test("Environment drafts enforce unique names and preserve tombstones", async ({
   page,
 }) => {
