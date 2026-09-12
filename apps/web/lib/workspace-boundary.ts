@@ -329,9 +329,17 @@ export const emptyWorkspaceBoundary = (
   };
 };
 
+// Test-only revision signing trust key for the e2e fixture; the paired
+// private key signs the synthetic sync pages served by the e2e specs.
+export const E2E_REVISION_SIGNING_TRUST_KEY =
+  "302a300506032b65700321003106030b2495aaa5b5cdf8c65c723e8f81717a8eeebd45db288714034c80a978";
+
 export const e2eWorkspaceBoundary = (
   profileId: WorkspaceProfileId,
-  options?: Readonly<{ readonly environmentId?: string }>,
+  options?: Readonly<{
+    readonly environmentId?: string;
+    readonly deviceId?: string;
+  }>,
 ): WorkspaceBoundary => {
   const profile = profileCatalog[profileId];
   const requestedEnvironment = fixtureProjects
@@ -360,9 +368,25 @@ export const e2eWorkspaceBoundary = (
       ...(environmentProject ? { projectId: environmentProject.id } : {}),
       ...(environmentProject ? { teamId: environmentProject.teamId } : {}),
     },
-    session: { active: true, displayName: "Ari Stone" },
-    profile: { id: profileId, ...profile },
-    device: { active: false, label: "No active Device" },
+    session: {
+      active: true,
+      userId: "00000000-0000-4000-8000-000000000061",
+      displayName: "Ari Stone",
+    },
+    profile: {
+      id: profileId,
+      ...profile,
+      serverProfileId: "00000000-0000-4000-8000-000000000062",
+    },
+    device: options?.deviceId
+      ? {
+          active: true,
+          label: "This browser",
+          id: options.deviceId,
+          encryptionPublicKey: "55".repeat(32),
+          signingPublicKey: "22".repeat(32),
+        }
+      : { active: false, label: "No active Device" },
     peerDevices: [
       {
         id: "00000000-0000-4000-8000-000000000041",
@@ -377,9 +401,10 @@ export const e2eWorkspaceBoundary = (
         hasEpochGrant: false,
       },
     ],
-    grantsReady: false,
+    grantsReady: options?.deviceId !== undefined,
     epochCurrent: true,
     rotationRequired: false,
+    signingTrustKeys: [E2E_REVISION_SIGNING_TRUST_KEY],
     crypto: { available: true },
   };
 };

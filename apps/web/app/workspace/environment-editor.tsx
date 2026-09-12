@@ -60,6 +60,7 @@ import {
   deleteEnvironmentVariable,
   draftValueDiffs,
   type EnvironmentVariable,
+  mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
   publicationMutationForHead,
@@ -276,6 +277,7 @@ const ValueDiffLines = ({
 const VariableRow = ({
   variable,
   revealed,
+  editingDisabled,
   canUndoDelete,
   onDelete,
   onSetAbsent,
@@ -285,6 +287,7 @@ const VariableRow = ({
 }: {
   readonly variable: EnvironmentVariable;
   readonly revealed: boolean;
+  readonly editingDisabled: boolean;
   readonly canUndoDelete: boolean;
   readonly onDelete: () => void;
   readonly onSetAbsent: () => void;
@@ -334,7 +337,12 @@ const VariableRow = ({
               This Variable is marked for deletion.
             </span>
             {variable.hasDraftChange && canUndoDelete ? (
-              <Button onClick={onUndoDelete} size="xs" variant="outline">
+              <Button
+                disabled={editingDisabled}
+                onClick={onUndoDelete}
+                size="xs"
+                variant="outline"
+              >
                 Undo delete
               </Button>
             ) : null}
@@ -347,6 +355,7 @@ const VariableRow = ({
             <Input
               autoComplete="off"
               className="h-7 font-mono text-[13px]"
+              disabled={editingDisabled}
               id={`value-${variable.id}`}
               onChange={(event) => onValueChange(event.target.value)}
               placeholder={variable.value === null ? "Absent" : "Empty Value"}
@@ -360,6 +369,7 @@ const VariableRow = ({
             ) : null}
             <Button
               aria-label={`${revealed ? "Hide" : "Reveal"} ${variable.name}`}
+              disabled={editingDisabled}
               onClick={onToggleReveal}
               size="icon-sm"
               variant="ghost"
@@ -371,13 +381,19 @@ const VariableRow = ({
               )}
             </Button>
             {!variable.required && variable.value !== null ? (
-              <Button onClick={onSetAbsent} size="xs" variant="ghost">
+              <Button
+                disabled={editingDisabled}
+                onClick={onSetAbsent}
+                size="xs"
+                variant="ghost"
+              >
                 Set absent
               </Button>
             ) : null}
             <Button
               aria-label={`Delete ${variable.name}`}
               className="text-muted-foreground hover:text-destructive"
+              disabled={editingDisabled}
               onClick={onDelete}
               size="icon-sm"
               variant="ghost"
@@ -589,6 +605,7 @@ export const EnvironmentEditor = ({
     null,
   );
   const [retryReady, setRetryReady] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [protocolHead, setProtocolHead] = useState<Readonly<{
     readonly id: string;
     readonly hash: Uint8Array;
@@ -607,10 +624,13 @@ export const EnvironmentEditor = ({
     setProtocolHead(headFromContext(session.context));
     setLoadPhase("loading");
   }, [session]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt is a retry trigger whose value is intentionally not read inside the effect
   useEffect(() => {
     if (!session || !available) return;
     let cancelled = false;
     const load = async () => {
+      setLoadPhase("loading");
+      setAddOpen(false);
       try {
         const context = session.context;
         if (!context.trustedRevisionId || !context.trustedRevisionHash) {
@@ -633,11 +653,18 @@ export const EnvironmentEditor = ({
         const decoded = session.decodeVariables
           ? await session.decodeVariables(page, [])
           : undefined;
-        if (cancelled || !decoded) return;
+        if (cancelled) return;
+        if (!decoded) {
+          setPublishMessage(
+            "This Device could not read the current Environment.",
+          );
+          setLoadPhase("failed");
+          return;
+        }
         setRemoteVariables(decoded);
         setVariables((current) =>
           current.some((variable) => variable.hasDraftChange)
-            ? current
+            ? [...mergeDraftVariablesOverRemote(current, decoded)]
             : [...decoded],
         );
         setVerifiedHistory((current) =>
@@ -667,7 +694,13 @@ export const EnvironmentEditor = ({
     return () => {
       cancelled = true;
     };
-  }, [session, available]);
+  }, [session, available, loadAttempt]);
+  const retryRead = () => {
+    if (loadPhase !== "failed") return;
+    setPublishMessage(null);
+    setLoadPhase("loading");
+    setLoadAttempt((attempt) => attempt + 1);
+  };
   const currentScopeKeyRef = useRef(environmentContextKey(contextIdentity));
   useEffect(() => {
     currentScopeKeyRef.current = environmentContextKey(contextIdentity);
@@ -739,7 +772,7 @@ export const EnvironmentEditor = ({
     changedCount > 0 &&
     conflictingLaneIds.size === 0 &&
     staleHeadRevision === null &&
-    loadPhase !== "loading" &&
+    loadPhase === "ready" &&
     !publishing;
   const historicalValues = new Map<string, string | null>([
     ["00000000-0000-4000-8000-000000000001", "https://api.acme.example"],
@@ -806,6 +839,7 @@ export const EnvironmentEditor = ({
   };
 
   const createVariable = () => {
+    if (loadPhase !== "ready") return;
     const error = validateVariableDraft(addDraft, variables);
     if (error) {
       setAddError(error);
@@ -1309,7 +1343,7 @@ export const EnvironmentEditor = ({
           </CardTitle>
           <CardAction className="flex flex-wrap justify-end gap-2">
             <Button
-              disabled={loadPhase === "loading"}
+              disabled={loadPhase !== "ready"}
               onClick={() => {
                 setAddError(null);
                 setAddOpen(true);
@@ -1329,23 +1363,47 @@ export const EnvironmentEditor = ({
             >
               <Save aria-hidden="true" /> Save changes
             </Button>
+            {loadPhase === "failed" ? (
+              <Button
+                data-testid="environment-retry-read"
+                onClick={retryRead}
+                size="sm"
+                variant="outline"
+              >
+                <RotateCcw aria-hidden="true" /> Retry reading
+              </Button>
+            ) : null}
           </CardAction>
         </CardHeader>
         <CardContent className="px-0">
           {variables.length === 0 ? (
-            <p
-              className="px-4 py-6 text-sm text-muted-foreground"
-              role={loadPhase === "loading" ? "status" : undefined}
-            >
-              {loadPhase === "loading"
-                ? "Loading Environment…"
-                : "Add a Variable to start this Manifest."}
-            </p>
+            loadPhase === "loading" ? (
+              <p
+                className="px-4 py-6 text-sm text-muted-foreground"
+                role="status"
+              >
+                Loading Environment…
+              </p>
+            ) : loadPhase === "failed" ? (
+              <p
+                className="px-4 py-6 text-sm text-muted-foreground"
+                data-testid="environment-read-failed"
+                role="status"
+              >
+                This Environment could not be read, so its Variables are hidden.
+                Use Retry reading to try again.
+              </p>
+            ) : (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                Add a Variable to start this Manifest.
+              </p>
+            )
           ) : (
             <ul className="divide-y divide-border">
               {variables.map((variable) => (
                 <VariableRow
                   canUndoDelete={deletedVariableSnapshots.has(variable.id)}
+                  editingDisabled={loadPhase !== "ready"}
                   key={variable.id}
                   onDelete={() => deleteVariable(variable.id)}
                   onSetAbsent={() =>
@@ -1394,6 +1452,7 @@ export const EnvironmentEditor = ({
                 <Badge>Current</Badge>
               ) : (
                 <Button
+                  disabled={loadPhase !== "ready"}
                   onClick={() => {
                     void openRollback(revision);
                   }}
