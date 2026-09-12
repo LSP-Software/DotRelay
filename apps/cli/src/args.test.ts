@@ -124,6 +124,16 @@ describe("CLI argument contract", () => {
         .force,
     ).toBe(true);
     expect(parseArguments(["push", "--no-input", "--force"]).force).toBe(true);
+    expect(
+      parseArguments([
+        "device",
+        "backup",
+        "--output",
+        "recovery.kit",
+        "--no-input",
+        "--force",
+      ]).force,
+    ).toBe(true);
     expect(parseArguments(["pull", "--output", ".env"]).force).toBe(false);
     expect(() => parseArguments(["diff", "--no-input", "--force"])).toThrow(
       "--force",

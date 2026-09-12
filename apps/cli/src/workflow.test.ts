@@ -75,6 +75,93 @@ const destinationLines = [
 const gitOutside: GitTrackingProbe = async () => ({ state: "outside" });
 const gitTracked: GitTrackingProbe = async () => ({ state: "tracked" });
 
+// A Recovery Kit service that plays back a scripted publication outcome per
+// attempt, so a test can reproduce accepted, lost, and rejected publications
+// against the same rotation flow.
+const scriptedRecoveryService = (
+  behaviors: readonly ("accepted" | "lost-response" | "failed" | "rejected")[],
+) => {
+  let current: Readonly<{
+    readonly envelopeId: string;
+    readonly recoveryGeneration: number;
+  }> | null = null;
+  let publications = 0;
+  // The current-envelope read that follows a publication is the uncertain
+  // publication's verification read; only it may be made unreachable.
+  let sawPublicationSinceCurrentRead = false;
+  const verification = { unreachable: false };
+  const admin: StrictJsonClient = {
+    get: async (path) => {
+      if (path === "/api/v1/session")
+        return { authenticated: true, user: { id: ids.user } };
+      if (path === "/api/v1/recovery/envelopes/current") {
+        const verifying = sawPublicationSinceCurrentRead;
+        sawPublicationSinceCurrentRead = false;
+        if (verifying && verification.unreachable)
+          throw new CliError(
+            "transient",
+            "could not reach the Server Profile",
+            {},
+            "service_unavailable",
+          );
+        if (!current)
+          throw new CliError(
+            "invocation",
+            "not found",
+            {},
+            "resource_not_found",
+          );
+        return {
+          envelopeId: current.envelopeId,
+          identityGeneration: "1",
+          recoveryGeneration: String(current.recoveryGeneration),
+          ciphertextHash: "0".repeat(96),
+          ciphertextLength: 0,
+          object: "opaque-current-envelope",
+        };
+      }
+      return boundary;
+    },
+    post: async (path, body) => {
+      if (path !== "/api/v1/recovery/envelopes") return {};
+      sawPublicationSinceCurrentRead = true;
+      const behavior =
+        behaviors[Math.min(publications, behaviors.length - 1)] ?? "accepted";
+      publications += 1;
+      if (behavior !== "failed" && behavior !== "rejected")
+        current = {
+          envelopeId: String(body.envelopeId),
+          recoveryGeneration: Number(body.recoveryGeneration),
+        };
+      if (behavior === "accepted")
+        return {
+          envelopeId: String(body.envelopeId),
+          recoveryGeneration: String(body.recoveryGeneration),
+          idempotent: false,
+        };
+      if (behavior === "rejected")
+        throw new CliError(
+          "conflict",
+          "the Server Profile rejected the Recovery Kit",
+          {},
+          "state_conflict",
+        );
+      throw new CliError(
+        "transient",
+        "could not reach the Server Profile",
+        {},
+        "service_unavailable",
+      );
+    },
+  };
+  return {
+    admin,
+    verification,
+    current: () => current,
+    publications: () => publications,
+  };
+};
+
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -2581,6 +2668,7 @@ describe("protected CLI workflows", () => {
         "--output",
         kitPath,
         "--no-input",
+        "--force",
         "--json",
       ],
       { ...runtime, admin: backupAdmin },
@@ -2592,6 +2680,14 @@ describe("protected CLI workflows", () => {
     expect(await Bun.file(`${kitPath}.previous`).text()).toBe(
       "previous-recovery-kit\n",
     );
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+    const backupReport = JSON.parse(backup.stdout) as Record<string, unknown>;
+    expect(backupReport).toMatchObject({
+      ok: true,
+      rotated: true,
+      previous: `${kitPath}.previous`,
+      retiredEnvelopeIds: [],
+    });
 
     const recoveryPosts: Array<{
       path: string;
@@ -2643,6 +2739,456 @@ describe("protected CLI workflows", () => {
       .catch(() => undefined);
     await (await import("node:fs/promises"))
       .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("repeated failed backup retries preserve the last service-accepted Recovery Kit", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-preserved`;
+    const service = scriptedRecoveryService(["accepted", "failed", "rejected"]);
+    const backupArgs = (force: boolean): string[] => [
+      "device",
+      "backup",
+      "--profile",
+      "relay",
+      "--output",
+      kitPath,
+      "--no-input",
+      ...(force ? ["--force"] : []),
+      "--json",
+    ];
+    const first = await run(backupArgs(false), {
+      ...runtime,
+      admin: service.admin,
+    });
+    expect(first.exitCode).toBe(0);
+    const firstReport = JSON.parse(first.stdout) as Record<string, unknown>;
+    const firstEnvelopeId = String(firstReport.envelopeId);
+    expect(firstReport.rotated).toBe(false);
+    expect(service.current()?.envelopeId).toBe(firstEnvelopeId);
+
+    // Two further retries while the publication keeps failing: each attempt
+    // stages a pending kit and discards it, so the last service-accepted kit
+    // is never clobbered by an unpublished one.
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const failed = await run(backupArgs(true), {
+        ...runtime,
+        admin: service.admin,
+      });
+      const diagnostic = JSON.parse(failed.stderr) as Record<string, unknown>;
+      if (attempt === 1) {
+        // The uncertain failure is verified against the service, which never
+        // accepted the attempt.
+        expect(failed.exitCode).toBe(7);
+        expect(diagnostic).toMatchObject({
+          ok: false,
+          category: "transient",
+          code: "service_unavailable",
+        });
+      } else {
+        // The definitive rejection needs no verification.
+        expect(failed.exitCode).toBe(4);
+        expect(diagnostic).toMatchObject({
+          ok: false,
+          category: "conflict",
+          code: "state_conflict",
+        });
+      }
+      expect(
+        ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+      ).toBe(firstEnvelopeId);
+      expect(await Bun.file(`${kitPath}.previous`).exists()).toBe(false);
+      expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+    }
+    expect(service.publications()).toBe(3);
+    expect(service.current()?.envelopeId).toBe(firstEnvelopeId);
+
+    // A fresh Device (no recorded Device on the installation) restores from
+    // the retained known-good artifact: its envelope is still the one the
+    // service accepted.
+    const { deviceMetadataPath, readDeviceId } = await import(
+      "./device-storage"
+    );
+    await (await import("node:fs/promises"))
+      .unlink(deviceMetadataPath(runtime.stateDirectory, profile.pin))
+      .catch(() => undefined);
+    const restorePosts: Array<Record<string, unknown>> = [];
+    const recoverAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        return { ...boundary, device: { active: false } };
+      },
+      post: async (path, body) => {
+        if (path !== "/api/v1/recovery/restore") return {};
+        restorePosts.push(body as Record<string, unknown>);
+        return {
+          deviceId: body.deviceId,
+          active: true,
+          recoveryGeneration: body.recoveryGeneration,
+        };
+      },
+    };
+    const recover = await run(
+      [
+        "device",
+        "recover",
+        "--profile",
+        "relay",
+        "--from",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: recoverAdmin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(recover.exitCode).toBe(0);
+    expect(recover.stdout).toContain('"active":true');
+    expect(restorePosts).toHaveLength(1);
+    expect(restorePosts[0]?.objectId).toBe(firstEnvelopeId);
+    const replacementDeviceId = String(restorePosts[0]?.deviceId);
+    expect(
+      await readDeviceId(
+        deviceMetadataPath(runtime.stateDirectory, profile.pin),
+      ),
+    ).toBe(replacementDeviceId);
+    expect(service.current()?.envelopeId).toBe(firstEnvelopeId);
+    const committed = await runtime.deviceStorage.load({
+      pin: profile.pin,
+      deviceId: uuidToBytes(replacementDeviceId),
+    });
+    const committedKeys = await loadDeviceKeyMaterial(committed);
+    expect(committedKeys.encryptionPublicKey).toBeDefined();
+    expect(committedKeys.signingPublicKey).toBeDefined();
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+  });
+
+  test("a declined Recovery Kit rotation publishes nothing and keeps the active kit", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-declined`;
+    const service = scriptedRecoveryService(["accepted"]);
+    const first = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: service.admin },
+    );
+    expect(first.exitCode).toBe(0);
+    const firstReport = JSON.parse(first.stdout) as Record<string, unknown>;
+    const firstEnvelopeId = String(firstReport.envelopeId);
+
+    let question: string | undefined;
+    const declined = await run(
+      ["device", "backup", "--profile", "relay", "--output", kitPath, "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        confirm: async (prompt) => {
+          question = prompt;
+          return false;
+        },
+      },
+    );
+    expect(declined.exitCode).toBe(2);
+    expect(JSON.parse(declined.stderr)).toMatchObject({
+      ok: false,
+      category: "invocation",
+      code: "invocation",
+      detail: "recovery kit rotation was declined",
+    });
+    // The approval names the prior kit that would become obsolete.
+    expect(question).toContain(kitPath);
+    expect(question).toContain(firstEnvelopeId);
+    expect(question).toContain("obsolete");
+    // Nothing was published and no artifact changed.
+    expect(service.publications()).toBe(1);
+    expect(service.current()?.envelopeId).toBe(firstEnvelopeId);
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(firstEnvelopeId);
+    expect(await Bun.file(`${kitPath}.previous`).exists()).toBe(false);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+  });
+
+  test("rotating a Recovery Kit under --no-input requires --force", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-no-force`;
+    const service = scriptedRecoveryService(["accepted"]);
+    const first = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: service.admin },
+    );
+    expect(first.exitCode).toBe(0);
+    const blocked = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: service.admin },
+    );
+    expect(blocked.exitCode).toBe(2);
+    expect(JSON.parse(blocked.stderr)).toMatchObject({
+      ok: false,
+      category: "invocation",
+      code: "deletion_requires_approval",
+    });
+    expect(blocked.stderr).toContain("--force");
+    // The rotation was never started: no publication, no staged attempt.
+    expect(service.publications()).toBe(1);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+    expect(await Bun.file(`${kitPath}.previous`).exists()).toBe(false);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+  });
+
+  test("an approved Recovery Kit rotation retires the prior kits and names them", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-rotation`;
+    const service = scriptedRecoveryService([
+      "accepted",
+      "accepted",
+      "accepted",
+    ]);
+    const first = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: service.admin },
+    );
+    expect(first.exitCode).toBe(0);
+    const firstEnvelopeId = String(
+      (JSON.parse(first.stdout) as Record<string, unknown>).envelopeId,
+    );
+
+    const second = await run(
+      ["device", "backup", "--profile", "relay", "--output", kitPath, "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        confirm: async (prompt) => {
+          expect(prompt).toContain(kitPath);
+          expect(prompt).toContain(firstEnvelopeId);
+          expect(prompt).toContain("obsolete");
+          return true;
+        },
+      },
+    );
+    expect(second.exitCode).toBe(0);
+    const secondReport = JSON.parse(second.stdout) as Record<string, unknown>;
+    const secondEnvelopeId = String(secondReport.envelopeId);
+    expect(secondReport).toMatchObject({
+      ok: true,
+      rotated: true,
+      previous: `${kitPath}.previous`,
+      retiredEnvelopeIds: [firstEnvelopeId],
+    });
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(secondEnvelopeId);
+    expect(
+      (
+        (await Bun.file(`${kitPath}.previous`).json()) as {
+          envelopeId: string;
+        }
+      ).envelopeId,
+    ).toBe(firstEnvelopeId);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+
+    const third = await run(
+      ["device", "backup", "--profile", "relay", "--output", kitPath, "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        confirm: async (prompt) => {
+          // The approval names every kit that becomes obsolete: the active
+          // kit and the retired one it replaces.
+          expect(prompt).toContain(secondEnvelopeId);
+          expect(prompt).toContain(firstEnvelopeId);
+          expect(prompt).toContain("obsolete");
+          return true;
+        },
+      },
+    );
+    expect(third.exitCode).toBe(0);
+    const thirdReport = JSON.parse(third.stdout) as Record<string, unknown>;
+    const thirdEnvelopeId = String(thirdReport.envelopeId);
+    expect(thirdReport).toMatchObject({
+      ok: true,
+      rotated: true,
+      previous: `${kitPath}.previous`,
+      retiredEnvelopeIds: [secondEnvelopeId, firstEnvelopeId],
+    });
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(thirdEnvelopeId);
+    expect(
+      (
+        (await Bun.file(`${kitPath}.previous`).json()) as {
+          envelopeId: string;
+        }
+      ).envelopeId,
+    ).toBe(secondEnvelopeId);
+    expect(service.publications()).toBe(3);
+    expect(service.current()?.envelopeId).toBe(thirdEnvelopeId);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("an uncertain backup publication is verified before the active kit is replaced", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-unverified`;
+    const service = scriptedRecoveryService([
+      "accepted",
+      "failed",
+      "lost-response",
+      "failed",
+    ]);
+    const first = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: service.admin },
+    );
+    expect(first.exitCode).toBe(0);
+    const firstEnvelopeId = String(
+      (JSON.parse(first.stdout) as Record<string, unknown>).envelopeId,
+    );
+    const rotationArgs = [
+      "device",
+      "backup",
+      "--profile",
+      "relay",
+      "--output",
+      kitPath,
+      "--no-input",
+      "--force",
+      "--json",
+    ];
+
+    // The publication fails and the service never accepted it: the active kit
+    // stands and the pending attempt is discarded.
+    const failed = await run(rotationArgs, {
+      ...runtime,
+      admin: service.admin,
+    });
+    expect(failed.exitCode).toBe(7);
+    expect(service.current()?.envelopeId).toBe(firstEnvelopeId);
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(firstEnvelopeId);
+    expect(await Bun.file(`${kitPath}.previous`).exists()).toBe(false);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+
+    // The publication response is lost but the service did accept the new
+    // generation: the run verifies that before replacing the active kit, and
+    // then commits the rotation.
+    const reconciled = await run(rotationArgs, {
+      ...runtime,
+      admin: service.admin,
+    });
+    expect(reconciled.exitCode).toBe(0);
+    const reconciledReport = JSON.parse(reconciled.stdout) as Record<
+      string,
+      unknown
+    >;
+    const reconciledEnvelopeId = String(reconciledReport.envelopeId);
+    expect(reconciledReport).toMatchObject({
+      ok: true,
+      rotated: true,
+      previous: `${kitPath}.previous`,
+      retiredEnvelopeIds: [firstEnvelopeId],
+    });
+    expect(service.current()?.envelopeId).toBe(reconciledEnvelopeId);
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(reconciledEnvelopeId);
+    expect(
+      (
+        (await Bun.file(`${kitPath}.previous`).json()) as {
+          envelopeId: string;
+        }
+      ).envelopeId,
+    ).toBe(firstEnvelopeId);
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(false);
+
+    // When the verification itself cannot reach the service, the outcome is
+    // declared unverified: the pending attempt survives for the next
+    // reconciliation and the active kit is untouched.
+    service.verification.unreachable = true;
+    const stuck = await run(rotationArgs, {
+      ...runtime,
+      admin: service.admin,
+    });
+    expect(stuck.exitCode).toBe(7);
+    const stuckDiagnostic = JSON.parse(stuck.stderr) as Record<string, unknown>;
+    expect(stuckDiagnostic).toMatchObject({
+      ok: false,
+      category: "transient",
+      code: "service_unavailable",
+    });
+    expect(String(stuckDiagnostic.detail)).toContain("unverified");
+    expect(await Bun.file(`${kitPath}.pending`).exists()).toBe(true);
+    expect(
+      ((await Bun.file(kitPath).json()) as { envelopeId: string }).envelopeId,
+    ).toBe(reconciledEnvelopeId);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.pending`)
       .catch(() => undefined);
   });
 
