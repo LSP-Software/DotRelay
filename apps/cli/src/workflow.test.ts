@@ -7,6 +7,8 @@ import {
   createMemoryCredentialStore,
   createMemoryDeviceRecordStore,
   createPublicationArtifacts,
+  loadDeviceKeyMaterial,
+  openRecoveryKit,
 } from "@dotrelay/client";
 import {
   bytesToUuid,
@@ -16,6 +18,7 @@ import {
   parseProtocolObject,
   type SyncPageWire,
   sha384,
+  uuidToBytes,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
@@ -91,6 +94,7 @@ const setup = async (
   admin: StrictJsonClient;
   fetch: FetchFunction;
   profilePath: string;
+  stateDirectory: string;
   bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>;
   createdEnvironments: string[];
 }> => {
@@ -287,6 +291,7 @@ const setup = async (
     admin,
     fetch: fetcher,
     profilePath,
+    stateDirectory,
     bootstrap,
     createdEnvironments,
   };
@@ -2729,6 +2734,680 @@ describe("protected CLI workflows", () => {
       exitCode: 4,
     });
     expect(recoveryPosts).toHaveLength(0);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("a rejected recovery keeps the previous Device selection and usable keys", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-rejected`;
+    const backupAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        if (path === "/api/v1/recovery/envelopes/current")
+          throw new CliError(
+            "invocation",
+            "not found",
+            {},
+            "resource_not_found",
+          );
+        return boundary;
+      },
+      post: async () => ({
+        envelopeId: crypto.randomUUID(),
+        recoveryGeneration: "1",
+        idempotent: false,
+      }),
+    };
+    const backup = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: backupAdmin },
+    );
+    expect(backup.exitCode).toBe(0);
+    const stateDirectory = runtime.stateDirectory;
+    const pendingPath = `${stateDirectory}/device-${profile.pin.serverProfileId}.recovery.json`;
+    const { deviceMetadataPath, readDeviceId } = await import(
+      "./device-storage"
+    );
+    const recoveryPosts: Array<{
+      path: string;
+      body: Record<string, unknown>;
+    }> = [];
+    // The Server Profile definitively rejects the restore, so the pending
+    // operation is discarded and the prior Device selection must survive.
+    const rejectAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        return { ...boundary, device: { active: false } };
+      },
+      post: async (path, body) => {
+        if (path === "/api/v1/recovery/restore") {
+          recoveryPosts.push({ path, body });
+          throw new CliError(
+            "conflict",
+            "the requested change conflicts with current Server Profile state",
+            {},
+            "stale_generation",
+          );
+        }
+        return {};
+      },
+    };
+    const reject = await run(
+      [
+        "device",
+        "recover",
+        "--profile",
+        "relay",
+        "--from",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: rejectAdmin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(reject.exitCode).toBe(4);
+    const diagnostic = JSON.parse(reject.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      exitCode: 4,
+    });
+    expect(recoveryPosts).toHaveLength(1);
+    // The prior selection and its usable keys are untouched by the rejection.
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(ids.device);
+    await runtime.deviceStorage.load({
+      pin: profile.pin,
+      deviceId: uuidToBytes(ids.device),
+    });
+    // A definitive rejection discards the pending operation.
+    expect(await Bun.file(pendingPath).exists()).toBe(false);
+
+    // A later attempt starts a fresh operation and may still recover.
+    const acceptAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        return { ...boundary, device: { active: false } };
+      },
+      post: async (path, body) => {
+        if (path === "/api/v1/recovery/restore")
+          recoveryPosts.push({ path, body });
+        return {
+          deviceId: body.deviceId,
+          active: true,
+          recoveryGeneration: body.recoveryGeneration,
+          idempotent: false,
+        };
+      },
+    };
+    const accept = await run(
+      [
+        "device",
+        "recover",
+        "--profile",
+        "relay",
+        "--from",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: acceptAdmin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(accept.exitCode).toBe(0);
+    expect(recoveryPosts).toHaveLength(2);
+    expect(recoveryPosts[1]?.body.operationId).not.toBe(
+      recoveryPosts[0]?.body.operationId,
+    );
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(recoveryPosts[1]?.body.deviceId as string);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("an uncertain recovery response resumes the same logical operation", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-uncertain`;
+    const backupAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        if (path === "/api/v1/recovery/envelopes/current")
+          throw new CliError(
+            "invocation",
+            "not found",
+            {},
+            "resource_not_found",
+          );
+        return boundary;
+      },
+      post: async () => ({
+        envelopeId: crypto.randomUUID(),
+        recoveryGeneration: "1",
+        idempotent: false,
+      }),
+    };
+    const backup = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: backupAdmin },
+    );
+    expect(backup.exitCode).toBe(0);
+    const stateDirectory = runtime.stateDirectory;
+    const { deviceMetadataPath, readDeviceId } = await import(
+      "./device-storage"
+    );
+    const pendingPath = `${stateDirectory}/device-${profile.pin.serverProfileId}.recovery.json`;
+    const recoveryPosts: Array<{
+      path: string;
+      body: Record<string, unknown>;
+    }> = [];
+    let restoreAttempts = 0;
+    let replacementDeviceId: string | undefined;
+    const recoverAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        // Once the restore may have been accepted, the replacement Device is
+        // the User's only active Device, so a resume must not be blocked by
+        // the no-active-Device check.
+        return replacementDeviceId
+          ? {
+              ...boundary,
+              device: { active: true, id: replacementDeviceId },
+              activeDeviceCount: 1,
+            }
+          : { ...boundary, device: { active: false } };
+      },
+      post: async (path, body) => {
+        if (path === "/api/v1/recovery/restore") {
+          restoreAttempts += 1;
+          recoveryPosts.push({ path, body });
+          if (restoreAttempts === 1) {
+            replacementDeviceId = body.deviceId as string;
+            throw new CliError(
+              "transient",
+              "could not reach the Server Profile",
+              {},
+              "service_unavailable",
+            );
+          }
+          return {
+            deviceId: body.deviceId,
+            active: true,
+            recoveryGeneration: body.recoveryGeneration,
+            idempotent: true,
+          };
+        }
+        return {};
+      },
+    };
+    const recoverArgs = [
+      "device",
+      "recover",
+      "--profile",
+      "relay",
+      "--from",
+      kitPath,
+      "--no-input",
+      "--json",
+    ];
+    const first = await run(recoverArgs, {
+      ...runtime,
+      admin: recoverAdmin,
+      fetch: async () => Response.json({}),
+    });
+    expect(first.exitCode).toBe(7);
+    expect(restoreAttempts).toBe(1);
+    // The prior selection stands while the outcome is uncertain, and the
+    // pending operation survives for resumption.
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(ids.device);
+    expect(await Bun.file(pendingPath).exists()).toBe(true);
+
+    const second = await run(recoverArgs, {
+      ...runtime,
+      admin: recoverAdmin,
+      fetch: async () => Response.json({}),
+    });
+    expect(second.exitCode).toBe(0);
+    expect(restoreAttempts).toBe(2);
+    expect(recoveryPosts).toHaveLength(2);
+    // The retry re-posted the identical request: the same operation, the same
+    // pending key material, and no second replacement Device.
+    expect(recoveryPosts[1]?.body).toEqual(recoveryPosts[0]?.body);
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(recoveryPosts[0]?.body.deviceId as string);
+    expect(await Bun.file(pendingPath).exists()).toBe(false);
+    // The committed selection holds the pending replacement's key material.
+    const committed = await runtime.deviceStorage.load({
+      pin: profile.pin,
+      deviceId: uuidToBytes(recoveryPosts[0]?.body.deviceId as string),
+    });
+    const keys = await loadDeviceKeyMaterial(committed);
+    const raw = async (key: CryptoKey | undefined): Promise<string> =>
+      key
+        ? Buffer.from(
+            new Uint8Array(await crypto.subtle.exportKey("raw", key)),
+          ).toString("base64")
+        : "";
+    expect(await raw(keys.encryptionPublicKey)).toBe(
+      recoveryPosts[0]?.body.x25519PublicKey as string,
+    );
+    expect(await raw(keys.signingPublicKey)).toBe(
+      recoveryPosts[0]?.body.ed25519PublicKey as string,
+    );
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("an approval naming another Device leaves the local selection unchanged", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-mismatch`;
+    const backupAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        if (path === "/api/v1/recovery/envelopes/current")
+          throw new CliError(
+            "invocation",
+            "not found",
+            {},
+            "resource_not_found",
+          );
+        return boundary;
+      },
+      post: async () => ({
+        envelopeId: crypto.randomUUID(),
+        recoveryGeneration: "1",
+        idempotent: false,
+      }),
+    };
+    const backup = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: backupAdmin },
+    );
+    expect(backup.exitCode).toBe(0);
+    const stateDirectory = runtime.stateDirectory;
+    const { deviceMetadataPath, readDeviceId } = await import(
+      "./device-storage"
+    );
+    const pendingPath = `${stateDirectory}/device-${profile.pin.serverProfileId}.recovery.json`;
+    const recoveryPosts: Array<{
+      path: string;
+      body: Record<string, unknown>;
+    }> = [];
+    // The approval identifies a Device that is not the pending replacement,
+    // so the local selection must not switch to it.
+    const mismatchAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        return { ...boundary, device: { active: false } };
+      },
+      post: async (path, body) => {
+        if (path === "/api/v1/recovery/restore")
+          recoveryPosts.push({ path, body });
+        return {
+          deviceId: ids.approver,
+          active: true,
+          recoveryGeneration: body.recoveryGeneration,
+          idempotent: false,
+        };
+      },
+    };
+    const recover = await run(
+      [
+        "device",
+        "recover",
+        "--profile",
+        "relay",
+        "--from",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: mismatchAdmin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(recover.exitCode).toBe(7);
+    const diagnostic = JSON.parse(recover.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "transient",
+      code: "response_invalid",
+      exitCode: 7,
+    });
+    expect(recoveryPosts).toHaveLength(1);
+    // The prior selection stands and the pending operation survives so the
+    // same logical operation can be reconciled again.
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(ids.device);
+    expect(await Bun.file(pendingPath).exists()).toBe(true);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("an interrupted local commit after an accepted restore completes without a second replacement", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-crashed`;
+    const backupAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        if (path === "/api/v1/recovery/envelopes/current")
+          throw new CliError(
+            "invocation",
+            "not found",
+            {},
+            "resource_not_found",
+          );
+        return boundary;
+      },
+      post: async () => ({
+        envelopeId: crypto.randomUUID(),
+        recoveryGeneration: "1",
+        idempotent: false,
+      }),
+    };
+    const backup = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: backupAdmin },
+    );
+    expect(backup.exitCode).toBe(0);
+    const stateDirectory = runtime.stateDirectory;
+    const pendingPath = `${stateDirectory}/device-${profile.pin.serverProfileId}.recovery.json`;
+    const { deviceMetadataPath, readDeviceId } = await import(
+      "./device-storage"
+    );
+    const recoveryPosts: Array<{
+      path: string;
+      body: Record<string, unknown>;
+    }> = [];
+    let acceptedDeviceId: string | undefined;
+    let crashAfterAccept = true;
+    const recoverAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        // Once the service has accepted the restore, the replacement Device
+        // is active even though the local selection never switched.
+        return acceptedDeviceId
+          ? {
+              ...boundary,
+              device: { active: true, id: acceptedDeviceId },
+              activeDeviceCount: 1,
+            }
+          : { ...boundary, device: { active: false } };
+      },
+      post: async (path, body) => {
+        if (path === "/api/v1/recovery/restore") {
+          recoveryPosts.push({ path, body });
+          acceptedDeviceId = body.deviceId as string;
+          if (crashAfterAccept) {
+            // The service accepted the restore, but the process died before
+            // the local commit completed.
+            crashAfterAccept = false;
+            throw new Error(
+              "interrupted after the service accepted the restore",
+            );
+          }
+          return {
+            deviceId: body.deviceId,
+            active: true,
+            recoveryGeneration: body.recoveryGeneration,
+            idempotent: true,
+          };
+        }
+        return {};
+      },
+    };
+    const recoverArgs = [
+      "device",
+      "recover",
+      "--profile",
+      "relay",
+      "--from",
+      kitPath,
+      "--no-input",
+      "--json",
+    ];
+    const crashed = await run(recoverArgs, {
+      ...runtime,
+      admin: recoverAdmin,
+      fetch: async () => Response.json({}),
+    });
+    expect(crashed.exitCode).toBe(8);
+    // The prior selection stands and the pending operation survives the crash.
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(ids.device);
+    expect(await Bun.file(pendingPath).exists()).toBe(true);
+
+    const completed = await run(recoverArgs, {
+      ...runtime,
+      admin: recoverAdmin,
+      fetch: async () => Response.json({}),
+    });
+    expect(completed.exitCode).toBe(0);
+    expect(completed.stdout).toContain('"active":true');
+    expect(recoveryPosts).toHaveLength(2);
+    // No second replacement: the completion re-posted the same logical
+    // operation the accepted restore already started.
+    expect(recoveryPosts[1]?.body).toEqual(recoveryPosts[0]?.body);
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(acceptedDeviceId as string);
+    expect(await Bun.file(pendingPath).exists()).toBe(false);
+    await (await import("node:fs/promises"))
+      .unlink(kitPath)
+      .catch(() => undefined);
+    await (await import("node:fs/promises"))
+      .unlink(`${kitPath}.previous`)
+      .catch(() => undefined);
+  });
+
+  test("an expired pending recovery is discarded so a new Recovery Kit can be used", async () => {
+    const runtime = await setup();
+    const kitPath = `${import.meta.dir}/.tmp-recovery-kit-expired`;
+    const backupAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        if (path === "/api/v1/recovery/envelopes/current")
+          throw new CliError(
+            "invocation",
+            "not found",
+            {},
+            "resource_not_found",
+          );
+        return boundary;
+      },
+      post: async () => ({
+        envelopeId: crypto.randomUUID(),
+        recoveryGeneration: "1",
+        idempotent: false,
+      }),
+    };
+    const backup = await run(
+      [
+        "device",
+        "backup",
+        "--profile",
+        "relay",
+        "--output",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: backupAdmin },
+    );
+    expect(backup.exitCode).toBe(0);
+    const stateDirectory = runtime.stateDirectory;
+    const pendingPath = `${stateDirectory}/device-${profile.pin.serverProfileId}.recovery.json`;
+    const { deviceMetadataPath, readDeviceId } = await import(
+      "./device-storage"
+    );
+    // Seed the state a restore would have left if its challenge window passed
+    // before the restore completed.
+    const kitArtifact = JSON.parse(await Bun.file(kitPath).text()) as Record<
+      string,
+      unknown
+    >;
+    const opened = await openRecoveryKit(
+      new Uint8Array(Buffer.from(kitArtifact.kit as string, "base64")),
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        userId: ids.user,
+        activeDeviceSigningPublicKey: new Uint8Array(
+          Buffer.from(
+            kitArtifact.activeDeviceSigningPublicKey as string,
+            "base64",
+          ),
+        ),
+      },
+    );
+    await Bun.write(
+      pendingPath,
+      `${JSON.stringify({
+        version: 1,
+        kind: "dotrelay-pending-recovery-restore",
+        serverProfileId: profile.pin.serverProfileId,
+        userId: ids.user,
+        envelopeId: opened.envelopeId,
+        identityGeneration: opened.identityGeneration,
+        recoveryGeneration: opened.recoveryGeneration,
+        replacementDeviceId: opened.replacementDeviceId,
+        operationId: crypto.randomUUID(),
+        challenge: Buffer.from(new Uint8Array(32)).toString("base64"),
+        expiresAt: "2020-01-01T00:00:00.000Z",
+        proof: Buffer.from([1, 2, 3]).toString("base64"),
+        certificateId: crypto.randomUUID(),
+        certificate: Buffer.from([4, 5, 6]).toString("base64"),
+      })}\n`,
+    );
+    const recoveryPosts: Array<{
+      path: string;
+      body: Record<string, unknown>;
+    }> = [];
+    const recoverAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        return { ...boundary, device: { active: false } };
+      },
+      post: async (path, body) => {
+        recoveryPosts.push({ path, body });
+        return {
+          deviceId: body.deviceId,
+          active: true,
+          recoveryGeneration: body.recoveryGeneration,
+          idempotent: false,
+        };
+      },
+    };
+    const recover = await run(
+      [
+        "device",
+        "recover",
+        "--profile",
+        "relay",
+        "--from",
+        kitPath,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: recoverAdmin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(recover.exitCode).toBe(4);
+    const diagnostic = JSON.parse(recover.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "device_authorization_expired",
+      exitCode: 4,
+    });
+    // The expired operation is not re-submitted, is discarded, and the prior
+    // selection stands.
+    expect(recoveryPosts).toHaveLength(0);
+    expect(
+      await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin)),
+    ).toBe(ids.device);
+    expect(await Bun.file(pendingPath).exists()).toBe(false);
     await (await import("node:fs/promises"))
       .unlink(kitPath)
       .catch(() => undefined);
