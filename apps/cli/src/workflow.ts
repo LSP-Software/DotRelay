@@ -132,6 +132,7 @@ type Boundary = Readonly<{
   }>;
   readonly grantsReady: boolean;
   readonly epochCurrent: boolean;
+  readonly activeDeviceCount: number;
   readonly rotationRequired: boolean;
   readonly cryptoAvailable: boolean;
   readonly epochGrant?: string;
@@ -176,6 +177,7 @@ const workspaceBoundaryFields = [
   "device",
   "grantsReady",
   "epochCurrent",
+  "activeDeviceCount",
   "rotationRequired",
   "crypto",
   "projectEpoch",
@@ -228,6 +230,12 @@ const parseBoundary = (value: Record<string, unknown>): Boundary => {
     }),
     grantsReady: value.grantsReady === true,
     epochCurrent: value.epochCurrent === true,
+    activeDeviceCount:
+      typeof value.activeDeviceCount === "number" &&
+      Number.isSafeInteger(value.activeDeviceCount) &&
+      value.activeDeviceCount >= 0
+        ? value.activeDeviceCount
+        : 0,
     rotationRequired: value.rotationRequired === true,
     cryptoAvailable: isRecord(value.crypto) && value.crypto.available === true,
     ...(typeof value.epochGrant === "string"
@@ -838,46 +846,32 @@ const createDeviceAdmin = (
     ...(deviceId ? { deviceId } : {}),
   });
 
-const loadAuthorizedDevice = async (
+// Confirms that the boundary names this Device, loads the matching local
+// bundle, and checks the bundle's keys against the keys the Server Profile
+// has registered for the Device. A bundle that no longer matches the
+// registered keys (for example after a recovery on another installation)
+// must be treated as unusable rather than trusted.
+const verifyDeviceBundle = async (
   options: WorkflowOptions,
-): Promise<AuthorizedDevice> => {
-  const knownDeviceId =
-    options.deviceId ??
-    (await readDeviceId(
-      deviceMetadataPath(options.stateDirectory, options.profile.pin),
-    ));
-  const firstAdmin = createDeviceAdmin(options, knownDeviceId ?? undefined);
-  const session = await firstAdmin.get("/api/v1/session", [
-    "authenticated",
-    "user",
-  ]);
-  if (!isRecord(session.user))
-    throw new CliError(
-      "authentication",
-      "the Server Profile returned no User identity",
-      {},
-      "session_invalid",
-    );
-  const userId = requiredString(session.user.id, "User id");
-  const boundary = parseBoundary(
-    await firstAdmin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
-  );
+  boundary: Boundary,
+  deviceId: string,
+  notActiveMessage: string,
+): Promise<
+  Readonly<{
+    bundle: DevicePrivateBundle;
+    keys: DeviceKeyMaterial;
+    encryptionPublicKey: CryptoKey;
+    signingPublicKey: CryptoKey;
+  }>
+> => {
   if (!boundary.device.active)
     throw new CliError(
       "authentication",
-      "an active Device is required",
+      notActiveMessage,
       {},
       "device_not_active",
     );
-  const deviceId = options.deviceId ?? boundary.device.id ?? knownDeviceId;
-  if (!deviceId)
-    throw new CliError(
-      "authentication",
-      "the active Device is not available locally",
-      {},
-      "device_bundle_missing",
-    );
-  if (boundary.device.id && boundary.device.id !== deviceId)
+  if (boundary.device.id !== deviceId)
     throw new CliError(
       "authentication",
       "the requested Device is not active",
@@ -910,11 +904,93 @@ const loadAuthorizedDevice = async (
       "device_bundle_invalid",
     );
   }
+  const encryptionPublicKey = keys.encryptionPublicKey;
+  const signingPublicKey = keys.signingPublicKey;
+  if (!encryptionPublicKey || !signingPublicKey)
+    throw new CliError(
+      "crypto",
+      "the Device bundle has no public key material",
+      {},
+      "device_bundle_invalid",
+    );
+  const registeredKeys: Array<readonly [registered: string, local: CryptoKey]> =
+    [];
+  if (boundary.device.encryptionPublicKey !== undefined)
+    registeredKeys.push([
+      boundary.device.encryptionPublicKey,
+      encryptionPublicKey,
+    ]);
+  if (boundary.device.signingPublicKey !== undefined)
+    registeredKeys.push([boundary.device.signingPublicKey, signingPublicKey]);
+  for (const [registered, localKey] of registeredKeys) {
+    let local: string;
+    try {
+      local = bytesToHex(
+        new Uint8Array(await crypto.subtle.exportKey("raw", localKey)),
+      );
+    } catch {
+      throw new CliError(
+        "crypto",
+        "the active Device bundle is invalid",
+        {},
+        "device_bundle_invalid",
+      );
+    }
+    if (local !== registered.toLowerCase())
+      throw new CliError(
+        "crypto",
+        "the saved Device bundle does not match the keys registered on this Server Profile; run dotrelay device recover",
+        {},
+        "device_bundle_invalid",
+      );
+  }
   return Object.freeze({
-    admin: createDeviceAdmin(options, deviceId),
+    bundle,
+    keys,
+    encryptionPublicKey,
+    signingPublicKey,
+  });
+};
+
+const loadAuthorizedDevice = async (
+  options: WorkflowOptions,
+): Promise<AuthorizedDevice> => {
+  const knownDeviceId =
+    options.deviceId ??
+    (await readDeviceId(
+      deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    ));
+  if (!knownDeviceId)
+    throw new CliError(
+      "authentication",
+      "no Device is enrolled on this installation; run dotrelay login or dotrelay device enroll",
+      {},
+      "device_bundle_missing",
+    );
+  const admin = createDeviceAdmin(options, knownDeviceId);
+  const session = await admin.get("/api/v1/session", ["authenticated", "user"]);
+  if (!isRecord(session.user))
+    throw new CliError(
+      "authentication",
+      "the Server Profile returned no User identity",
+      {},
+      "session_invalid",
+    );
+  const userId = requiredString(session.user.id, "User id");
+  const boundary = parseBoundary(
+    await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
+  );
+  const { bundle, keys } = await verifyDeviceBundle(
+    options,
+    boundary,
+    knownDeviceId,
+    "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+  );
+  return Object.freeze({
+    admin,
     boundary,
     userId,
-    deviceId,
+    deviceId: knownDeviceId,
     bundle,
     keys,
   });
@@ -938,6 +1014,47 @@ export const enrollFirstDevice = async (
       {},
       "authentication_required",
     );
+  const localDeviceId =
+    options.deviceId ??
+    (await readDeviceId(
+      deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    ));
+  if (localDeviceId) {
+    // This installation already holds a Device. Claim it only after the
+    // Server Profile confirms it is this session's active Device and the
+    // matching bundle loads from local storage.
+    const admin = createDeviceAdmin(options, localDeviceId);
+    const session = await admin.get("/api/v1/session", [
+      "authenticated",
+      "user",
+    ]);
+    if (!isRecord(session.user))
+      throw new CliError(
+        "authentication",
+        "the Server Profile returned no User identity",
+        {},
+        "session_invalid",
+      );
+    const boundary = parseBoundary(
+      await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
+    );
+    try {
+      await verifyDeviceBundle(
+        options,
+        boundary,
+        localDeviceId,
+        "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+      );
+      return { deviceId: localDeviceId, active: true, existing: true };
+    } catch (error) {
+      // The recorded Device is not usable for this session: it was revoked
+      // or replaced, or the Server Profile reports a different Device.
+      // Never claim a remote Device; fall through and enroll this
+      // installation's own replacement Device.
+      if (!(error instanceof CliError && error.code === "device_not_active"))
+        throw error;
+    }
+  }
   const admin =
     options.admin ??
     createStrictJsonClient(options.profile.pin, options.credentials, {
@@ -952,11 +1069,6 @@ export const enrollFirstDevice = async (
       "session_invalid",
     );
   const userId = requiredString(session.user.id, "User id");
-  const boundary = parseBoundary(
-    await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
-  );
-  if (boundary.device.active && boundary.device.id)
-    return { deviceId: boundary.device.id, active: true, existing: true };
   const bootstrap = await createDeviceBootstrap({
     pin: options.profile.pin,
     userId,
@@ -1557,7 +1669,10 @@ const loadRecoveryIdentity = async (
 ): Promise<
   Readonly<{ admin: StrictJsonClient; boundary: Boundary; userId: string }>
 > => {
-  const admin = createDeviceAdmin(options);
+  const localDeviceId = await readDeviceId(
+    deviceMetadataPath(options.stateDirectory, options.profile.pin),
+  );
+  const admin = createDeviceAdmin(options, localDeviceId ?? undefined);
   const session = await admin.get("/api/v1/session", ["authenticated", "user"]);
   if (!isRecord(session.user))
     throw new CliError(
@@ -1570,7 +1685,9 @@ const loadRecoveryIdentity = async (
   const boundary = parseBoundary(
     await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
   );
-  if (boundary.device.active)
+  // Recovery restores a replacement Device for the whole User, so it is
+  // blocked while any of the User's Devices is active on the Server Profile.
+  if (boundary.device.active || boundary.activeDeviceCount > 0)
     throw new CliError(
       "conflict",
       "Recovery Kit restore requires no active Device",
@@ -1761,7 +1878,14 @@ const loadWorkflowSession = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
 ): Promise<WorkflowSession> => {
-  const admin = adminClient(options);
+  const knownDeviceId =
+    options.deviceId ??
+    (await readDeviceId(
+      deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    ));
+  const admin = knownDeviceId
+    ? createDeviceAdmin(options, knownDeviceId)
+    : adminClient(options);
   const { readWorktreeContext } = await import("./context");
   const localContext = await readWorktreeContext(options.contextPath);
   const requestedEnvironment =
@@ -1781,38 +1905,38 @@ const loadWorkflowSession = async (
       "authentication_required",
     );
   if (!boundary.device.active)
+    throw knownDeviceId
+      ? new CliError(
+          "authentication",
+          "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+          {},
+          "device_not_active",
+        )
+      : new CliError(
+          "authentication",
+          "no Device is enrolled on this installation; run dotrelay login or dotrelay device enroll",
+          {},
+          "device_bundle_missing",
+        );
+  if (!knownDeviceId)
     throw new CliError(
       "authentication",
-      "an active Device is required",
-      {},
-      "device_not_active",
-    );
-  const deviceId =
-    options.deviceId ??
-    boundary.device.id ??
-    (await readDeviceId(
-      deviceMetadataPath(options.stateDirectory, options.profile.pin),
-    ));
-  if (!deviceId)
-    throw new CliError(
-      "authentication",
-      "the active Device is not available locally",
+      "no Device is enrolled on this installation; run dotrelay login or dotrelay device enroll",
       {},
       "device_bundle_missing",
     );
-  const storage = resolveDeviceStorage(options);
-  const bundle = await storage.load({
-    pin: options.profile.pin,
-    deviceId: uuidToBytes(deviceId),
-  });
-  const keys = await loadDeviceKeyMaterial(bundle);
-  if (!keys.encryptionPublicKey || !keys.signingPublicKey)
-    throw new CliError(
-      "crypto",
-      "the Device bundle has no public key material",
-      {},
-      "device_bundle_invalid",
-    );
+  const deviceId = knownDeviceId;
+  const {
+    bundle,
+    keys,
+    encryptionPublicKey: deviceEncryptionPublicKey,
+    signingPublicKey: deviceSigningPublicKey,
+  } = await verifyDeviceBundle(
+    options,
+    boundary,
+    deviceId,
+    "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
+  );
   if (!boundary.cryptoAvailable)
     throw new CliError(
       "crypto",
@@ -1903,7 +2027,7 @@ const loadWorkflowSession = async (
     authorization: `Bearer ${token}`,
     ...(options.fetch ? { fetch: options.fetch as never } : {}),
   });
-  const signingPublicKey = await exportSigningPublicKey(keys.signingPublicKey);
+  const signingPublicKey = await exportSigningPublicKey(deviceSigningPublicKey);
   const signingTrustKeys = collectSigningTrustKeys(boundary, signingPublicKey);
   const publicationContext: PublicationContext = {
     serverProfileId: options.profile.pin.serverProfileId,
@@ -1915,8 +2039,8 @@ const loadWorkflowSession = async (
     projectEpoch: safeProjectEpoch(boundary.environment.projectEpoch),
     expectedHeadId: null,
     expectedHeadHash: null,
-    valueRecipientPublicKey: keys.encryptionPublicKey,
-    userDefinedValueRecipientPublicKey: keys.encryptionPublicKey,
+    valueRecipientPublicKey: deviceEncryptionPublicKey,
+    userDefinedValueRecipientPublicKey: deviceEncryptionPublicKey,
     signingPrivateKey: keys.signingPrivateKey,
     revisionSigningPublicKey: signingPublicKey,
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),

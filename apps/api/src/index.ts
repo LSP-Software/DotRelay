@@ -869,12 +869,13 @@ const createApi = ({
       orderBy: { createdAt: "asc" },
       select: { id: true, x25519PublicKey: true, ed25519PublicKey: true },
     });
+    // Resolve only the Device this client presents. A fallback to the first
+    // active Device would let a new installation claim a Device it does not
+    // possess and receive another Device's epoch grant.
     const device =
       (requestedDeviceId
         ? devices.find((candidate) => candidate.id === requestedDeviceId)
-        : undefined) ??
-      devices[0] ??
-      null;
+        : undefined) ?? null;
     const deviceActive = device !== null;
     const currentEpochGrantCount =
       device && project
@@ -981,6 +982,7 @@ const createApi = ({
           membership !== null &&
           project !== null &&
           currentEpochGrantCount > 0,
+        activeDeviceCount: devices.length,
         epochCurrent: project !== null,
         rotationRequired: false,
         projectEpoch: project?.currentEpoch.toString() ?? null,

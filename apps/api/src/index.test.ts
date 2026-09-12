@@ -647,3 +647,237 @@ describe("API foundation", () => {
     expect(created.status).toBe(400);
   });
 });
+
+describe("workspace boundary Device binding", () => {
+  const userId = "22222222-2222-4222-8222-222222222222";
+  const teamId = "44444444-4444-4444-8444-444444444444";
+  const projectId = "55555555-5555-4555-8555-555555555555";
+  const environmentId = "66666666-6666-4666-8666-666666666666";
+  // The first-created Device holds the epoch grant; the later Device does not.
+  const olderDeviceId = "33333333-3333-4333-8333-333333333333";
+  const newerDeviceId = "77777777-7777-4777-8777-777777777777";
+
+  const matchGrant = (
+    where: Record<string, unknown>,
+    grant: {
+      readonly projectId: string;
+      readonly recipientDeviceId: string;
+      readonly projectEpoch: bigint;
+      readonly grantKind: string;
+    },
+  ) => {
+    if (
+      grant.projectId !== where.projectId ||
+      grant.projectEpoch !== where.projectEpoch ||
+      grant.grantKind !== where.grantKind
+    )
+      return false;
+    const recipient = where.recipientDeviceId;
+    if (recipient === undefined) return true;
+    if (
+      typeof recipient === "object" &&
+      recipient !== null &&
+      "in" in recipient
+    )
+      return (recipient.in as readonly string[]).includes(
+        grant.recipientDeviceId,
+      );
+    return grant.recipientDeviceId === recipient;
+  };
+
+  const createTestApp = () => {
+    const olderGrantBytes = new TextEncoder().encode(
+      "older-device-epoch-grant",
+    );
+    const grants = [
+      {
+        projectId,
+        recipientDeviceId: olderDeviceId,
+        projectEpoch: 1n,
+        grantKind: "CURRENT_PROJECT_EPOCH",
+        protocolObject: {
+          canonicalBytes: olderGrantBytes,
+          acceptedAt: new Date("2026-01-02T00:00:00Z"),
+        },
+      },
+    ];
+    const devices = [
+      {
+        id: olderDeviceId,
+        userId,
+        lifecycle: "ACTIVE",
+        x25519PublicKey: new Uint8Array(32).fill(0x55),
+        ed25519PublicKey: new Uint8Array(32).fill(0x22),
+      },
+      {
+        id: newerDeviceId,
+        userId,
+        lifecycle: "ACTIVE",
+        x25519PublicKey: new Uint8Array(32).fill(0x66),
+        ed25519PublicKey: new Uint8Array(32).fill(0x77),
+      },
+    ];
+    const database = {
+      authAccount: {
+        findFirst: async () => ({ accountId: "github-user" }),
+      },
+      user: { upsert: async () => ({ id: userId }) },
+      device: {
+        findMany: async ({
+          where,
+        }: {
+          where: { userId?: string; id?: string };
+        }) =>
+          devices.filter(
+            (candidate) =>
+              candidate.userId === (where.userId ?? userId) &&
+              (where.id ? candidate.id === where.id : true),
+          ),
+      },
+      membership: {
+        findFirst: async () => ({ teamId }),
+        findMany: async () => [],
+      },
+      project: {
+        findFirst: async () => ({
+          id: projectId,
+          teamId,
+          currentEpoch: 1n,
+        }),
+      },
+      environment: {
+        findFirst: async () => ({
+          id: environmentId,
+          label: "default",
+          currentHeadId: null,
+          currentHead: null,
+        }),
+      },
+      grantObject: {
+        count: async (args: { where: Record<string, unknown> }) =>
+          grants.filter((grant) => matchGrant(args.where, grant)).length,
+        findFirst: async (args: { where: Record<string, unknown> }) =>
+          grants.find((grant) => matchGrant(args.where, grant)) ?? null,
+        findMany: async (args: { where: Record<string, unknown> }) =>
+          grants.filter((grant) => matchGrant(args.where, grant)),
+      },
+    };
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+      },
+    } as never;
+    return createApi({ database: database as never, profile, auth });
+  };
+
+  const boundaryRequest = async (
+    testApp: ReturnType<typeof createTestApp>,
+    profile: ReturnType<typeof loadServerProfileConfig>,
+    deviceId?: string,
+  ) => {
+    const headers: Record<string, string> = {
+      Origin: profile.origin,
+      Authorization: "Bearer session-token",
+    };
+    if (deviceId) headers["X-DotRelay-Device-Id"] = deviceId;
+    return testApp.request(`${profile.origin}/api/v1/workspace/boundary`, {
+      headers,
+    });
+  };
+
+  test("resolves the presented Device's grants, not the first-created Device's", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createTestApp();
+    const response = await boundaryRequest(testApp, profile, newerDeviceId);
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.device).toEqual({
+      active: true,
+      label: "Active Device",
+      id: newerDeviceId,
+      encryptionPublicKey: "66".repeat(32),
+      signingPublicKey: "77".repeat(32),
+    });
+    expect(body.grantsReady).toBe(false);
+    expect(body).not.toHaveProperty("epochGrant");
+    expect(body.activeDeviceCount).toBe(2);
+    expect(body.peerDevices).toEqual([
+      {
+        id: olderDeviceId,
+        encryptionPublicKey: "55".repeat(32),
+        signingPublicKey: "22".repeat(32),
+        hasEpochGrant: true,
+      },
+    ]);
+  });
+
+  test("resolves the first-created Device's own epoch grant when it is presented", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createTestApp();
+    const response = await boundaryRequest(testApp, profile, olderDeviceId);
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.device).toMatchObject({
+      active: true,
+      id: olderDeviceId,
+    });
+    expect(body.grantsReady).toBe(true);
+    expect(body.epochGrant).toBe(
+      Buffer.from("older-device-epoch-grant").toString("base64"),
+    );
+  });
+
+  test("a missing Device header reports no Device instead of falling back", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createTestApp();
+    const response = await boundaryRequest(testApp, profile);
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.device).toEqual({
+      active: false,
+      label: "No active Device",
+    });
+    expect(body.grantsReady).toBe(false);
+    expect(body).not.toHaveProperty("epochGrant");
+    expect(body.activeDeviceCount).toBe(2);
+    expect(body.peerDevices).toEqual([
+      {
+        id: olderDeviceId,
+        encryptionPublicKey: "55".repeat(32),
+        signingPublicKey: "22".repeat(32),
+        hasEpochGrant: true,
+      },
+      {
+        id: newerDeviceId,
+        encryptionPublicKey: "66".repeat(32),
+        signingPublicKey: "77".repeat(32),
+        hasEpochGrant: false,
+      },
+    ]);
+  });
+
+  test("an unknown or malformed Device header reports no Device", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createTestApp();
+    for (const header of [
+      "00000000-0000-4000-8000-0000000000ff",
+      "not-a-device-uuid",
+    ]) {
+      const response = await boundaryRequest(testApp, profile, header);
+      const body = (await response.json()) as Record<string, unknown>;
+
+      expect(response.status).toBe(200);
+      expect(body.device).toEqual({
+        active: false,
+        label: "No active Device",
+      });
+      expect(body.grantsReady).toBe(false);
+      expect(body).not.toHaveProperty("epochGrant");
+      expect(body.activeDeviceCount).toBe(2);
+    }
+  });
+});
