@@ -22,7 +22,7 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -78,7 +78,10 @@ type EnvironmentEditorProps = Readonly<{
   readonly active?: boolean | undefined;
   readonly loading?: boolean | undefined;
   readonly contextIdentity: EnvironmentContextIdentity;
-  readonly onDraftDirtyChange?: (dirty: boolean) => void;
+  readonly onDraftDirtyChange?: (
+    dirty: boolean,
+    changedVariableNames: readonly string[],
+  ) => void;
   readonly setupAction?: SetupAction | null | undefined;
   readonly setupCommand?: string | undefined;
   readonly setupMessage?: string | null | undefined;
@@ -715,9 +718,16 @@ export const EnvironmentEditor = ({
   const reportDraftDirtyRef = useRef(onDraftDirtyChange);
   reportDraftDirtyRef.current = onDraftDirtyChange;
   const hasDirtyDraft = changedCount > 0;
+  const changedVariableNames = useMemo(
+    () =>
+      variables
+        .filter((variable) => variable.hasDraftChange)
+        .map((variable) => variable.name),
+    [variables],
+  );
   useEffect(() => {
-    reportDraftDirtyRef.current?.(hasDirtyDraft);
-  }, [hasDirtyDraft]);
+    reportDraftDirtyRef.current?.(hasDirtyDraft, changedVariableNames);
+  }, [hasDirtyDraft, changedVariableNames]);
   const pendingDiffs = draftValueDiffs(variables, remoteVariables);
   const pendingRollbackDiffs = rollbackValueDiffs(
     variables,
