@@ -15,6 +15,7 @@ export default defineConfig({
     env: {
       ...process.env,
       DOTRELAY_WORKSPACE_FIXTURE: "1",
+      NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS: "1500",
     },
   },
   use: {

@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import {
+  e2eWorkspaceBoundary,
+  emptyWorkspaceBoundary,
   enrolledDeviceRows,
+  fetchWorkspaceBoundary,
   parsePeerDevices,
   parseWorkspaceCatalog,
   projectDisplayName,
@@ -88,6 +91,90 @@ test("workspace boundary keeps enrolled peer Devices", () => {
       hasEpochGrant: true,
     },
   ]);
+});
+
+test("the empty boundary is a live offline state without fixture data", () => {
+  const boundary = emptyWorkspaceBoundary("hosted", {
+    origin: "http://localhost:3001",
+    session: { active: true, displayName: "Real Person" },
+    connection: "online",
+  });
+  expect(boundary.source).toBe("live");
+  expect(boundary.connection).toBe("online");
+  expect(boundary.catalog).toEqual({ teams: [], projects: [] });
+  expect(boundary.session).toEqual({
+    active: true,
+    displayName: "Real Person",
+  });
+  expect(boundary.profile.origin).toBe("http://localhost:3001");
+  expect(boundary.device.active).toBe(false);
+
+  const offline = emptyWorkspaceBoundary("self-hosted");
+  expect(offline.connection).toBe("offline");
+  expect(offline.session).toEqual({ active: false });
+  expect(offline.session.displayName).toBeUndefined();
+});
+
+test("the e2e boundary stays an explicit dev fixture", () => {
+  const boundary = e2eWorkspaceBoundary("hosted");
+  expect(boundary.source).toBe("fixture");
+  expect(boundary.connection).toBe("online");
+  expect(boundary.session).toEqual({ active: true, displayName: "Ari Stone" });
+});
+
+const stubBoundaryResponse = (response: Response): (() => void) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => response) as unknown as typeof fetch;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+};
+
+test("fetchWorkspaceBoundary rejects a non-200 boundary response", async () => {
+  const restore = stubBoundaryResponse(
+    new Response("unavailable", { status: 503 }),
+  );
+  try {
+    await expect(fetchWorkspaceBoundary("hosted")).rejects.toThrow(
+      "workspace boundary request failed",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("fetchWorkspaceBoundary rejects a malformed boundary response", async () => {
+  const restore = stubBoundaryResponse(
+    new Response("not-json", {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    }),
+  );
+  try {
+    await expect(fetchWorkspaceBoundary("hosted")).rejects.toThrow(
+      "workspace boundary response is malformed",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("fetchWorkspaceBoundary accepts a well-formed boundary response", async () => {
+  const boundary = emptyWorkspaceBoundary("hosted", {
+    origin: "http://localhost:3001",
+    connection: "online",
+  });
+  const restore = stubBoundaryResponse(
+    new Response(JSON.stringify(boundary), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    }),
+  );
+  try {
+    await expect(fetchWorkspaceBoundary("hosted")).resolves.toEqual(boundary);
+  } finally {
+    restore();
+  }
 });
 
 test("enrolled Device rows include this browser and peer Devices", () => {

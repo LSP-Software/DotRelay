@@ -19,8 +19,9 @@ import {
   MonitorSmartphone,
   RotateCcw,
   Users,
+  WifiOff,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -74,7 +75,7 @@ import {
 } from "@/lib/environment-workflow";
 import { cn } from "@/lib/utils";
 import {
-  e2eWorkspaceBoundary,
+  emptyWorkspaceBoundary,
   enrolledDeviceRows,
   fetchWorkspaceBoundary,
   type MembershipRole,
@@ -89,6 +90,14 @@ import {
 import { EnvironmentEditor } from "./environment-editor";
 
 type ProfileId = WorkspaceProfileId;
+type ConnectionState = "loading" | "online" | "offline";
+
+const WORKSPACE_REFRESH_MS = Math.max(
+  Number(process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS ?? 0) || 30_000,
+  1_000,
+);
+const RECONNECT_BASE_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
 type WorkspaceView =
   | "projects"
   | "environment"
@@ -263,7 +272,13 @@ export const WorkspaceShell = ({
   const [role, setRole] = useState<MembershipRole>("OWNER");
   const [profileId, setProfileId] = useState<ProfileId>("hosted");
   const [boundary, setBoundary] = useState<WorkspaceBoundary>(() =>
-    e2eWorkspaceBoundary("hosted"),
+    emptyWorkspaceBoundary("hosted"),
+  );
+  const [connection, setConnection] = useState<ConnectionState>("loading");
+  const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
+  const reconnectNowRef = useRef<(() => void) | null>(null);
+  const boundaryJsonRef = useRef(
+    JSON.stringify(emptyWorkspaceBoundary("hosted")),
   );
   const [teamId, setTeamId] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -445,38 +460,87 @@ export const WorkspaceShell = ({
     teams,
   ]);
 
+  const commitBoundary = (next: WorkspaceBoundary) => {
+    boundaryJsonRef.current = JSON.stringify(next);
+    setBoundary(next);
+    setVerifiedAt(Date.now());
+    setConnection("online");
+  };
+
+  const requestRetry = () => reconnectNowRef.current?.();
+
   useEffect(() => {
     let cancelled = false;
-    const loadBoundary = async () => {
+    let generation = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let reconnectDelay = RECONNECT_BASE_MS;
+    const stale = (run: number) => cancelled || run !== generation;
+    const loadOnce = async (run: number): Promise<boolean> => {
       try {
-        const nextBoundary = await fetchWorkspaceBoundary(profileId, {
+        const fetched = await fetchWorkspaceBoundary(profileId, {
           ...(environmentId ? { environmentId } : {}),
         });
-        const serverProfileId = nextBoundary.profile.serverProfileId;
+        if (stale(run)) return false;
+        if (fetched.connection !== "online") {
+          setConnection("offline");
+          return false;
+        }
+        const serverProfileId = fetched.profile.serverProfileId;
         const storedId = serverProfileId
-          ? readStoredBrowserDeviceId(
-              nextBoundary.profile.origin,
-              serverProfileId,
-            )
+          ? readStoredBrowserDeviceId(fetched.profile.origin, serverProfileId)
           : null;
         const resolved =
-          storedId && storedId !== nextBoundary.device.id
+          storedId && storedId !== fetched.device.id
             ? await fetchWorkspaceBoundary(profileId, {
                 deviceId: storedId,
                 ...(environmentId ? { environmentId } : {}),
               })
-            : nextBoundary;
-        if (!cancelled) {
-          setBoundary(resolved);
-          if (!storedId) setLiveProtocolSession(null);
+            : fetched;
+        if (stale(run)) return false;
+        if (resolved.connection !== "online") {
+          setConnection("offline");
+          return false;
         }
+        setVerifiedAt(Date.now());
+        setConnection("online");
+        const resolvedJson = JSON.stringify(resolved);
+        if (resolvedJson !== boundaryJsonRef.current) {
+          boundaryJsonRef.current = resolvedJson;
+          setBoundary(resolved);
+        }
+        if (!storedId) setLiveProtocolSession(null);
+        return true;
       } catch {
-        if (!cancelled) setBoundary(e2eWorkspaceBoundary(profileId));
+        if (!stale(run)) setConnection("offline");
+        return false;
       }
     };
-    void loadBoundary();
+    const tick = async () => {
+      const run = ++generation;
+      const online = await loadOnce(run);
+      if (stale(run)) return;
+      if (online) {
+        reconnectDelay = RECONNECT_BASE_MS;
+        timer = setTimeout(() => void tick(), WORKSPACE_REFRESH_MS);
+      } else {
+        timer = setTimeout(() => void tick(), reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+      }
+    };
+    const reconnectNow = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      reconnectDelay = RECONNECT_BASE_MS;
+      void tick();
+    };
+    reconnectNowRef.current = reconnectNow;
+    void tick();
     return () => {
       cancelled = true;
+      reconnectNowRef.current = null;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [profileId, environmentId]);
 
@@ -688,7 +752,11 @@ export const WorkspaceShell = ({
             ? { environmentId }
             : {}),
       });
-      setBoundary(nextBoundary);
+      if (nextBoundary.connection === "online") {
+        commitBoundary(nextBoundary);
+      } else {
+        setConnection("offline");
+      }
       setDeviceSetupMessage((current) =>
         current?.includes("pending")
           ? current
@@ -733,12 +801,17 @@ export const WorkspaceShell = ({
                 ? { environmentId }
                 : {}),
           });
-          setBoundary(nextBoundary);
-          setDeviceSetupMessage(
-            nextBoundary.grantsReady
-              ? null
-              : "Project keys are not on this browser yet. Run bun apps/cli/src/index.ts pull, then retry.",
-          );
+          if (nextBoundary.connection !== "online") {
+            setConnection("offline");
+            setDeviceSetupMessage("Could not refresh Project access.");
+          } else {
+            commitBoundary(nextBoundary);
+            setDeviceSetupMessage(
+              nextBoundary.grantsReady
+                ? null
+                : "Project keys are not on this browser yet. Run bun apps/cli/src/index.ts pull, then retry.",
+            );
+          }
         } catch {
           setDeviceSetupMessage("Could not refresh Project access.");
         } finally {
@@ -758,7 +831,7 @@ export const WorkspaceShell = ({
       return;
     }
     if (editorSetupAction.id === "rotation") {
-      void fetchWorkspaceBoundary(profileId).then(setBoundary);
+      requestRetry();
     }
   };
 
@@ -777,7 +850,11 @@ export const WorkspaceShell = ({
   const handleProfileChange = (nextProfileId: ProfileId) => {
     resetWorkspaceContext();
     setProfileId(nextProfileId);
-    setBoundary(e2eWorkspaceBoundary(nextProfileId));
+    const placeholder = emptyWorkspaceBoundary(nextProfileId);
+    setBoundary(placeholder);
+    boundaryJsonRef.current = JSON.stringify(placeholder);
+    setVerifiedAt(null);
+    setConnection("loading");
   };
 
   const handleTeamChange = (nextTeamId: string) => {
@@ -1051,383 +1128,470 @@ export const WorkspaceShell = ({
           id="workspace-content"
           tabIndex={-1}
         >
-          {view === "projects" ? (
-            <section>
-              <div className="mb-6">
-                <p className="text-sm text-muted-foreground">Team</p>
-                <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                  {selectedTeam?.name ?? "Choose a Team"}
-                </h1>
-                <p className="mt-2 max-w-2xl text-muted-foreground">
-                  Pick a Project to view its Environments and Variables. Use the
-                  Team menu to switch.
-                </p>
-              </div>
-              {setupAction &&
-              (setupAction.id === "sign-in" ||
-                setupAction.id === "trust-profile" ||
-                setupAction.id === "crypto-unavailable") ? (
-                <div className="mb-6">
-                  <EnvironmentEditor
-                    available={false}
-                    onSetupAction={handleSetupAction}
-                    setupAction={setupAction}
-                    setupBusy={deviceSetupInProgress}
-                    setupCommand={cliSetupCommand}
-                    setupMessage={deviceSetupMessage}
-                  />
-                </div>
-              ) : null}
-              {teamProjects.length === 0 ? (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>No Projects yet</CardTitle>
-                    <CardDescription>
-                      Link a GitHub repository from the CLI with{" "}
-                      <code>dotrelay init</code>.
-                    </CardDescription>
-                  </CardHeader>
-                </Card>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2">
-                  {teamProjects.map((project) => (
-                    <button
-                      className="rounded-xl border bg-card p-5 text-left ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
-                      key={project.id}
-                      onClick={() => openProject(project)}
-                      type="button"
-                    >
-                      <p className="text-xs text-muted-foreground">Project</p>
-                      <h2 className="mt-1 font-heading text-xl font-medium">
-                        {projectDisplayName(project)}
-                      </h2>
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        {project.environments
-                          .map((environment) => environment.label)
-                          .join(", ") || "No Environments"}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              )}
+          {connection === "loading" ? (
+            <section
+              aria-live="polite"
+              className="py-24 text-center text-sm text-muted-foreground"
+              data-testid="workspace-loading"
+            >
+              Loading workspace…
             </section>
-          ) : null}
-
-          {view === "environment" && selectedProject && selectedEnvironment ? (
-            <section>
-              <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">
-                    {selectedTeam?.name}
-                  </p>
-                  <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                    {projectDisplayName(selectedProject)}
-                  </h1>
-                </div>
-                <LifecycleDialog
-                  disabled={!canAdminister}
-                  lifecycle={environmentLifecycle}
-                  onConfirm={() =>
-                    setEnvironmentLifecycle((value) =>
-                      value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
-                    )
-                  }
-                  resource="Environment"
-                />
-              </div>
-              <Tabs
-                className="mb-6"
-                onValueChange={(nextId) => {
-                  if (typeof nextId !== "string") return;
-                  syncSelection({
-                    teamId: selectedTeam?.id ?? null,
-                    projectId: selectedProject.id,
-                    environmentId: nextId,
-                    view: "environment",
-                  });
-                }}
-                value={selectedEnvironment.id}
-              >
-                <TabsList aria-label="Environments">
-                  {selectedProject.environments.map((environment) => (
-                    <TabsTrigger key={environment.id} value={environment.id}>
-                      {environment.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-              <EnvironmentEditor
-                available={protectedWorkflowAvailable}
-                onSetupAction={handleSetupAction}
-                setupAction={editorSetupAction}
-                setupBusy={deviceSetupInProgress}
-                setupCommand={cliSetupCommand}
-                setupMessage={deviceSetupMessage}
-                {...((liveProtocolSession ?? protocolSession)
-                  ? { protocolSession: liveProtocolSession ?? protocolSession }
-                  : {})}
-              />
-            </section>
-          ) : null}
-
-          {view === "team" ? (
-            <section id="administration">
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <h1 className="font-heading text-3xl font-semibold">
-                    {selectedTeam?.name ?? "Team"}
-                  </h1>
-                  <p className="mt-2 text-muted-foreground">
-                    {roleDisclosure[effectiveRole]}
-                  </p>
-                </div>
-                {displayBoundary.source === "fixture" || preview === "admin" ? (
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="preview-role">Preview role</Label>
-                    <select
-                      aria-label="Preview Membership role"
-                      className="h-9 rounded-lg border border-input bg-input/30 px-3 text-sm"
-                      id="preview-role"
-                      onChange={(event) =>
-                        setRole(event.target.value as MembershipRole)
-                      }
-                      value={role}
-                    >
-                      <option value="OWNER">Owner</option>
-                      <option value="ADMIN">Admin</option>
-                      <option value="MEMBER">Member</option>
-                    </select>
-                  </div>
-                ) : null}
-              </div>
-              <Alert className="mb-4 bg-card/60">
-                <Users aria-hidden="true" className="text-primary" />
-                <AlertTitle>{effectiveRole} Membership</AlertTitle>
+          ) : connection === "offline" && verifiedAt === null ? (
+            <section
+              className="mx-auto max-w-xl py-24"
+              data-testid="workspace-offline"
+            >
+              <Alert className="border-destructive/40">
+                <WifiOff aria-hidden="true" />
+                <AlertTitle>Couldn't reach your Server Profile</AlertTitle>
                 <AlertDescription>
-                  {roleDisclosure[effectiveRole]}
+                  The workspace request failed, so this page shows no identity,
+                  Teams, or Projects until the connection is verified. We keep
+                  trying automatically, or try again now.
                 </AlertDescription>
               </Alert>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Members</CardTitle>
-                  <CardDescription>
-                    Invitations go to a GitHub user id and expire after seven
-                    days.
-                  </CardDescription>
-                  <CardAction>
-                    <Button
-                      disabled={!canAdminister}
-                      onClick={() => setInvitationOpen(true)}
-                    >
-                      <Users aria-hidden="true" /> Invite member
-                    </Button>
-                  </CardAction>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>User</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      <TableRow>
-                        <TableCell>
-                          <div className="font-medium">
-                            {displayBoundary.session.displayName ?? "You"}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {effectiveRole === "OWNER"
-                            ? "Owner"
-                            : effectiveRole === "ADMIN"
-                              ? "Admin"
-                              : "Member"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">Active</Badge>
-                        </TableCell>
-                      </TableRow>
-                      {invitations.map((subject) => (
-                        <TableRow key={subject}>
-                          <TableCell>
-                            <div className="font-medium">Invitation sent</div>
-                            <div className="font-mono text-[10px] text-muted-foreground">
-                              {subject}
-                            </div>
-                          </TableCell>
-                          <TableCell>Member</TableCell>
-                          <TableCell>
-                            <Badge
-                              className="border-amber-300/25 text-amber-200"
-                              variant="outline"
-                            >
-                              Pending key grant
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
+              <div className="mt-4">
+                <Button data-testid="workspace-retry" onClick={requestRetry}>
+                  Try again
+                </Button>
+              </div>
+            </section>
+          ) : (
+            <>
+              {connection === "offline" && verifiedAt !== null ? (
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <Alert
+                    className="flex-1 border-amber-300/30 bg-amber-300/5"
+                    data-testid="workspace-connection-error"
+                  >
+                    <WifiOff aria-hidden="true" className="text-amber-300" />
+                    <AlertTitle>
+                      Connection lost — showing stale data
+                    </AlertTitle>
+                    <AlertDescription>
+                      Last verified at{" "}
+                      {new Date(verifiedAt).toLocaleTimeString()}. We keep
+                      trying to reconnect, or try again now.
+                    </AlertDescription>
+                  </Alert>
+                  <Button
+                    className="shrink-0"
+                    data-testid="workspace-retry"
+                    onClick={requestRetry}
+                    variant="outline"
+                  >
+                    Try again
+                  </Button>
+                </div>
+              ) : null}
+              {view === "projects" ? (
+                <section>
+                  <div className="mb-6">
+                    <p className="text-sm text-muted-foreground">Team</p>
+                    <h1 className="font-heading text-3xl font-semibold tracking-tight">
+                      {selectedTeam?.name ?? "Choose a Team"}
+                    </h1>
+                    <p className="mt-2 max-w-2xl text-muted-foreground">
+                      Pick a Project to view its Environments and Variables. Use
+                      the Team menu to switch.
+                    </p>
+                  </div>
+                  {setupAction &&
+                  (setupAction.id === "sign-in" ||
+                    setupAction.id === "trust-profile" ||
+                    setupAction.id === "crypto-unavailable") ? (
+                    <div className="mb-6">
+                      <EnvironmentEditor
+                        available={false}
+                        onSetupAction={handleSetupAction}
+                        setupAction={setupAction}
+                        setupBusy={deviceSetupInProgress}
+                        setupCommand={cliSetupCommand}
+                        setupMessage={deviceSetupMessage}
+                      />
+                    </div>
+                  ) : null}
+                  {teamProjects.length === 0 ? (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>No Projects yet</CardTitle>
+                        <CardDescription>
+                          Link a GitHub repository from the CLI with{" "}
+                          <code>dotrelay init</code>.
+                        </CardDescription>
+                      </CardHeader>
+                    </Card>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {teamProjects.map((project) => (
+                        <button
+                          className="rounded-xl border bg-card p-5 text-left ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
+                          key={project.id}
+                          onClick={() => openProject(project)}
+                          type="button"
+                        >
+                          <p className="text-xs text-muted-foreground">
+                            Project
+                          </p>
+                          <h2 className="mt-1 font-heading text-xl font-medium">
+                            {projectDisplayName(project)}
+                          </h2>
+                          <p className="mt-2 text-sm text-muted-foreground">
+                            {project.environments
+                              .map((environment) => environment.label)
+                              .join(", ") || "No Environments"}
+                          </p>
+                        </button>
                       ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-              {selectedProject ? (
-                <Card className="mt-4">
-                  <CardHeader>
-                    <CardTitle>{projectDisplayName(selectedProject)}</CardTitle>
-                    <CardDescription>
-                      Archive the Project if this repository should be free for
-                      another active Project.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex items-center justify-between gap-4">
-                    <Badge
-                      data-testid="project-lifecycle"
-                      variant={
-                        projectLifecycle === "ACTIVE" ? "default" : "secondary"
-                      }
-                    >
-                      {projectLifecycle === "ACTIVE" ? "Active" : "Archived"}
-                    </Badge>
+                    </div>
+                  )}
+                </section>
+              ) : null}
+
+              {view === "environment" &&
+              selectedProject &&
+              selectedEnvironment ? (
+                <section>
+                  <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">
+                        {selectedTeam?.name}
+                      </p>
+                      <h1 className="font-heading text-3xl font-semibold tracking-tight">
+                        {projectDisplayName(selectedProject)}
+                      </h1>
+                    </div>
                     <LifecycleDialog
                       disabled={!canAdminister}
-                      lifecycle={projectLifecycle}
+                      lifecycle={environmentLifecycle}
                       onConfirm={() =>
-                        setProjectLifecycle((value) =>
+                        setEnvironmentLifecycle((value) =>
                           value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
                         )
                       }
-                      resource="Project"
+                      resource="Environment"
                     />
-                  </CardContent>
-                </Card>
+                  </div>
+                  <Tabs
+                    className="mb-6"
+                    onValueChange={(nextId) => {
+                      if (typeof nextId !== "string") return;
+                      syncSelection({
+                        teamId: selectedTeam?.id ?? null,
+                        projectId: selectedProject.id,
+                        environmentId: nextId,
+                        view: "environment",
+                      });
+                    }}
+                    value={selectedEnvironment.id}
+                  >
+                    <TabsList aria-label="Environments">
+                      {selectedProject.environments.map((environment) => (
+                        <TabsTrigger
+                          key={environment.id}
+                          value={environment.id}
+                        >
+                          {environment.label}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </Tabs>
+                  <EnvironmentEditor
+                    available={protectedWorkflowAvailable}
+                    onSetupAction={handleSetupAction}
+                    setupAction={editorSetupAction}
+                    setupBusy={deviceSetupInProgress}
+                    setupCommand={cliSetupCommand}
+                    setupMessage={deviceSetupMessage}
+                    {...((liveProtocolSession ?? protocolSession)
+                      ? {
+                          protocolSession:
+                            liveProtocolSession ?? protocolSession,
+                        }
+                      : {})}
+                  />
+                </section>
               ) : null}
-            </section>
-          ) : null}
 
-          {view === "devices" ? (
-            <section id="devices">
-              <h1 className="font-heading text-3xl font-semibold">Devices</h1>
-              <p className="mt-2 max-w-2xl text-muted-foreground">
-                A Device is this browser, or the CLI on a machine. Signing in is
-                not enough to read variables.
-              </p>
-              {enrolledDevices.length > 0 ? (
-                <Card className="mt-6">
-                  <CardHeader>
-                    <CardTitle>Enrolled Devices</CardTitle>
-                    <CardDescription>
-                      Active Devices that can decrypt variables for your User.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <Table aria-label="Enrolled Devices">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Device</TableHead>
-                          <TableHead>Project access</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {enrolledDevices.map((device) => (
-                          <TableRow
-                            data-testid={`enrolled-device-${device.id}`}
-                            key={device.id}
-                          >
+              {view === "team" ? (
+                <section id="administration">
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h1 className="font-heading text-3xl font-semibold">
+                        {selectedTeam?.name ?? "Team"}
+                      </h1>
+                      <p className="mt-2 text-muted-foreground">
+                        {roleDisclosure[effectiveRole]}
+                      </p>
+                    </div>
+                    {displayBoundary.source === "fixture" ||
+                    preview === "admin" ? (
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="preview-role">Preview role</Label>
+                        <select
+                          aria-label="Preview Membership role"
+                          className="h-9 rounded-lg border border-input bg-input/30 px-3 text-sm"
+                          id="preview-role"
+                          onChange={(event) =>
+                            setRole(event.target.value as MembershipRole)
+                          }
+                          value={role}
+                        >
+                          <option value="OWNER">Owner</option>
+                          <option value="ADMIN">Admin</option>
+                          <option value="MEMBER">Member</option>
+                        </select>
+                      </div>
+                    ) : null}
+                  </div>
+                  <Alert className="mb-4 bg-card/60">
+                    <Users aria-hidden="true" className="text-primary" />
+                    <AlertTitle>{effectiveRole} Membership</AlertTitle>
+                    <AlertDescription>
+                      {roleDisclosure[effectiveRole]}
+                    </AlertDescription>
+                  </Alert>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Members</CardTitle>
+                      <CardDescription>
+                        Invitations go to a GitHub user id and expire after
+                        seven days.
+                      </CardDescription>
+                      <CardAction>
+                        <Button
+                          disabled={!canAdminister}
+                          onClick={() => setInvitationOpen(true)}
+                        >
+                          <Users aria-hidden="true" /> Invite member
+                        </Button>
+                      </CardAction>
+                    </CardHeader>
+                    <CardContent>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>User</TableHead>
+                            <TableHead>Role</TableHead>
+                            <TableHead>Status</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          <TableRow>
                             <TableCell>
                               <div className="font-medium">
-                                {device.current
-                                  ? "This browser"
-                                  : "Enrolled Device"}
-                              </div>
-                              <div className="font-mono text-[10px] text-muted-foreground">
-                                {device.id}
+                                {displayBoundary.session.displayName ?? "You"}
                               </div>
                             </TableCell>
                             <TableCell>
-                              <Badge
-                                className={
-                                  device.hasEpochGrant
-                                    ? undefined
-                                    : "border-amber-300/25 text-amber-200"
-                                }
-                                variant="outline"
-                              >
-                                {device.hasEpochGrant
-                                  ? "Has Project access"
-                                  : "Pending Project access"}
-                              </Badge>
+                              {effectiveRole === "OWNER"
+                                ? "Owner"
+                                : effectiveRole === "ADMIN"
+                                  ? "Admin"
+                                  : "Member"}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">Active</Badge>
                             </TableCell>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
-              ) : null}
-              <Card className={enrolledDevices.length > 0 ? "mt-4" : "mt-6"}>
-                <CardHeader>
-                  <CardTitle>
-                    {thisBrowserEnrolled
-                      ? "This browser is enrolled"
-                      : "Enroll this browser"}
-                  </CardTitle>
-                  <CardDescription>
-                    {thisBrowserEnrolled
-                      ? "This Device can decrypt variables for your User."
-                      : "Create a key pair in this browser. The CLI on this machine is a separate Device."}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <p className="text-sm text-muted-foreground">
-                    Prefer the CLI? That enrolls the CLI, not this browser.
-                  </p>
-                  <CopyableCommand
-                    data-testid="cli-setup-command"
-                    value={cliCommand}
-                  />
-                  {deviceSetupMessage ? (
-                    <p className="mt-3 text-sm text-muted-foreground">
-                      {deviceSetupMessage}
-                    </p>
+                          {invitations.map((subject) => (
+                            <TableRow key={subject}>
+                              <TableCell>
+                                <div className="font-medium">
+                                  Invitation sent
+                                </div>
+                                <div className="font-mono text-[10px] text-muted-foreground">
+                                  {subject}
+                                </div>
+                              </TableCell>
+                              <TableCell>Member</TableCell>
+                              <TableCell>
+                                <Badge
+                                  className="border-amber-300/25 text-amber-200"
+                                  variant="outline"
+                                >
+                                  Pending key grant
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+                  {selectedProject ? (
+                    <Card className="mt-4">
+                      <CardHeader>
+                        <CardTitle>
+                          {projectDisplayName(selectedProject)}
+                        </CardTitle>
+                        <CardDescription>
+                          Archive the Project if this repository should be free
+                          for another active Project.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex items-center justify-between gap-4">
+                        <Badge
+                          data-testid="project-lifecycle"
+                          variant={
+                            projectLifecycle === "ACTIVE"
+                              ? "default"
+                              : "secondary"
+                          }
+                        >
+                          {projectLifecycle === "ACTIVE"
+                            ? "Active"
+                            : "Archived"}
+                        </Badge>
+                        <LifecycleDialog
+                          disabled={!canAdminister}
+                          lifecycle={projectLifecycle}
+                          onConfirm={() =>
+                            setProjectLifecycle((value) =>
+                              value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
+                            )
+                          }
+                          resource="Project"
+                        />
+                      </CardContent>
+                    </Card>
                   ) : null}
-                </CardContent>
-                {!thisBrowserEnrolled ? (
-                  <CardFooter>
-                    <Button
-                      disabled={deviceSetupInProgress}
-                      onClick={() => void provisionBrowserDevice()}
-                    >
-                      {deviceSetupInProgress ? "Enrolling…" : "Enroll browser"}
-                    </Button>
-                  </CardFooter>
-                ) : null}
-              </Card>
-            </section>
-          ) : null}
+                </section>
+              ) : null}
 
-          {view === "recovery" ? (
-            <section id="recovery">
-              <h1 className="font-heading text-3xl font-semibold">Recovery</h1>
-              <p className="mt-2 max-w-2xl text-muted-foreground">
-                A Recovery Kit can authorize a replacement Device when none of
-                yours are available.
-              </p>
-              <Card className="mt-6">
-                <CardHeader>
-                  <CardTitle>Use the CLI</CardTitle>
-                  <CardDescription>
-                    Recovery runs locally after you trust this Server Profile.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <CopyableCommand value="dotrelay recover" />
-                </CardContent>
-              </Card>
-            </section>
-          ) : null}
+              {view === "devices" ? (
+                <section id="devices">
+                  <h1 className="font-heading text-3xl font-semibold">
+                    Devices
+                  </h1>
+                  <p className="mt-2 max-w-2xl text-muted-foreground">
+                    A Device is this browser, or the CLI on a machine. Signing
+                    in is not enough to read variables.
+                  </p>
+                  {enrolledDevices.length > 0 ? (
+                    <Card className="mt-6">
+                      <CardHeader>
+                        <CardTitle>Enrolled Devices</CardTitle>
+                        <CardDescription>
+                          Active Devices that can decrypt variables for your
+                          User.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <Table aria-label="Enrolled Devices">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Device</TableHead>
+                              <TableHead>Project access</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {enrolledDevices.map((device) => (
+                              <TableRow
+                                data-testid={`enrolled-device-${device.id}`}
+                                key={device.id}
+                              >
+                                <TableCell>
+                                  <div className="font-medium">
+                                    {device.current
+                                      ? "This browser"
+                                      : "Enrolled Device"}
+                                  </div>
+                                  <div className="font-mono text-[10px] text-muted-foreground">
+                                    {device.id}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    className={
+                                      device.hasEpochGrant
+                                        ? undefined
+                                        : "border-amber-300/25 text-amber-200"
+                                    }
+                                    variant="outline"
+                                  >
+                                    {device.hasEpochGrant
+                                      ? "Has Project access"
+                                      : "Pending Project access"}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </CardContent>
+                    </Card>
+                  ) : null}
+                  <Card
+                    className={enrolledDevices.length > 0 ? "mt-4" : "mt-6"}
+                  >
+                    <CardHeader>
+                      <CardTitle>
+                        {thisBrowserEnrolled
+                          ? "This browser is enrolled"
+                          : "Enroll this browser"}
+                      </CardTitle>
+                      <CardDescription>
+                        {thisBrowserEnrolled
+                          ? "This Device can decrypt variables for your User."
+                          : "Create a key pair in this browser. The CLI on this machine is a separate Device."}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <p className="text-sm text-muted-foreground">
+                        Prefer the CLI? That enrolls the CLI, not this browser.
+                      </p>
+                      <CopyableCommand
+                        data-testid="cli-setup-command"
+                        value={cliCommand}
+                      />
+                      {deviceSetupMessage ? (
+                        <p className="mt-3 text-sm text-muted-foreground">
+                          {deviceSetupMessage}
+                        </p>
+                      ) : null}
+                    </CardContent>
+                    {!thisBrowserEnrolled ? (
+                      <CardFooter>
+                        <Button
+                          disabled={deviceSetupInProgress}
+                          onClick={() => void provisionBrowserDevice()}
+                        >
+                          {deviceSetupInProgress
+                            ? "Enrolling…"
+                            : "Enroll browser"}
+                        </Button>
+                      </CardFooter>
+                    ) : null}
+                  </Card>
+                </section>
+              ) : null}
+
+              {view === "recovery" ? (
+                <section id="recovery">
+                  <h1 className="font-heading text-3xl font-semibold">
+                    Recovery
+                  </h1>
+                  <p className="mt-2 max-w-2xl text-muted-foreground">
+                    A Recovery Kit can authorize a replacement Device when none
+                    of yours are available.
+                  </p>
+                  <Card className="mt-6">
+                    <CardHeader>
+                      <CardTitle>Use the CLI</CardTitle>
+                      <CardDescription>
+                        Recovery runs locally after you trust this Server
+                        Profile.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <CopyableCommand value="dotrelay recover" />
+                    </CardContent>
+                  </Card>
+                </section>
+              ) : null}
+            </>
+          )}
         </main>
       </div>
 
