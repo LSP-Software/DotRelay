@@ -72,9 +72,10 @@ untrusted profiles keep the live workflow locked and disclose only actionable ga
 Unpublished drafts are retained per Environment while moving among workspace views and across
 Projects and Environments within a Server Profile. Any action that would discard unpublished
 work — including a Server Profile switch — warns first and offers an explicit discard choice
-that names the affected Environment and Variable changes. Reloading or closing the page with a
-dirty draft raises a `beforeunload` warning; the draft is discarded only if the user confirms.
-Draft content stays in memory and is never written to unprotected browser storage in plaintext.
+that names the affected Environments and, for a switch that stays within a Server Profile, the
+changed Variables. Reloading or closing the page with a dirty draft raises a `beforeunload`
+warning; the draft is discarded only if the user confirms. Draft content stays in memory and is
+never written to unprotected browser storage in plaintext.
 
 ## Role and lifecycle disclosure
 
@@ -117,7 +118,8 @@ a fresh visit, and a failed refresh that keeps last verified data stale until au
 reconnection or an explicit retry succeeds. `apps/web/e2e/workspace-draft-protection.spec.ts`
 covers unpublished draft protection: drafts survive subview navigation and return, reload/close
 warns only while a draft is dirty and keeps or discards it on the user's choice, discard
-prompts name the affected Environment and Variable changes, a Server Profile switch with a
-dirty draft requires an explicit discard, and draft Values never appear in browser storage.
+prompts name the affected Environments and, within a Server Profile, the changed Variables, a
+Server Profile switch with a dirty draft requires an explicit discard, and draft Values never
+appear in browser storage.
 Tests observe browser-visible behavior and never
 reach into component state.
