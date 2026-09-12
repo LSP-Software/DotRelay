@@ -56,6 +56,7 @@ import {
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
 import { classifyVariablesInteractively } from "./classify-ui";
+import type { WorktreeContext } from "./context";
 import type { NativeCredentialStore } from "./credentials";
 import {
   createFileDeviceRecordStore,
@@ -3399,8 +3400,20 @@ export const runProtectedWorkflow = async (
     // publication, so the Environment created by init is reused by later
     // invocations instead of a second one being created.
     if (parsed.command === "init" && synced.workflow.createdEnvironmentId) {
-      const { writeWorktreeContext } = await import("./context");
+      const { readWorktreeContext, writeWorktreeContext } = await import(
+        "./context"
+      );
+      // Preserve the explicit repository choice recorded for this worktree;
+      // the selection was made against the current Git remotes before the
+      // workflow started.
+      let recorded: WorktreeContext | null = null;
+      try {
+        recorded = await readWorktreeContext(options.contextPath);
+      } catch {
+        recorded = null;
+      }
       await writeWorktreeContext(options.contextPath, {
+        ...(recorded ?? {}),
         serverProfileId: synced.workflow.publicationContext.serverProfileId,
         projectId: synced.workflow.publicationContext.projectId,
         environmentId: synced.workflow.createdEnvironmentId,

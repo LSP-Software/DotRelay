@@ -703,6 +703,7 @@ type EnvironmentFixture = Readonly<{
 // offers an empty verified history, so a pull completes end to end.
 const createProtocolHttpFixture = (
   environments: readonly EnvironmentFixture[],
+  options: Readonly<{ readonly githubRepositoryId?: string }> = {},
 ): Readonly<{
   readonly origin: string;
   readonly pin: ServerProfilePin;
@@ -711,6 +712,7 @@ const createProtocolHttpFixture = (
   >;
   readonly stop: () => void;
 }> => {
+  const repositoryId = options.githubRepositoryId ?? "1311418611";
   const requests: Array<Readonly<{ method: string; path: string }>> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -721,15 +723,18 @@ const createProtocolHttpFixture = (
         method: request.method,
         path: `${url.pathname}${url.search}`,
       });
-      if (request.method === "GET" && url.pathname === "/api/v1/projects")
-        return jsonResponse({
-          project: {
-            id: projectId,
-            teamId,
-            githubRepositoryId: "1311418611",
-            lifecycle: "active",
-          },
-        });
+      if (request.method === "GET" && url.pathname === "/api/v1/projects") {
+        const project =
+          url.searchParams.get("githubRepositoryId") === repositoryId
+            ? {
+                id: projectId,
+                teamId,
+                githubRepositoryId: repositoryId,
+                lifecycle: "active",
+              }
+            : null;
+        return jsonResponse({ project });
+      }
       if (
         request.method === "GET" &&
         url.pathname === `/api/v1/projects/${projectId}/environments`
@@ -1736,6 +1741,425 @@ describe("Project resolution across Teams and lifecycles", () => {
         serverProfileId,
         projectId: secondTeamProjectId,
         environmentId: secondTeamEnvironmentId,
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+});
+
+describe("explicit GitHub repository choice", () => {
+  const forkRemote = {
+    name: "origin",
+    url: "git@github.com:my-user/DotRelay.git",
+  };
+  const sourceRemote = {
+    name: "upstream",
+    url: "git@github.com:LSP-Software/DotRelay.git",
+  };
+  // The source repository and the fork resolve to different GitHub
+  // identities, as does a normal fork checkout with origin and upstream.
+  const githubFetch = async (
+    input: string | URL | Request,
+  ): Promise<Response> =>
+    String(input).includes("my-user")
+      ? Response.json({ id: 1311418612 })
+      : Response.json({ id: 1311418611 });
+
+  const seedProfile = async (profilePath: string): Promise<void> => {
+    await Bun.write(
+      profilePath,
+      JSON.stringify({
+        version: 1,
+        selected: "relay",
+        profiles: [
+          {
+            name: "relay",
+            origin: "https://relay.example",
+            pin: {
+              origin: "https://relay.example",
+              serverProfileId: "00000000-0000-4000-8000-000000000042",
+            },
+          },
+        ],
+      }),
+    );
+  };
+
+  test("context lists the ambiguous remotes and records the interactive choice", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const rendered: string[] = [];
+    output.on("data", (chunk) => {
+      rendered.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+    });
+    try {
+      await seedProfile(profilePath);
+      input.write("1\n");
+      input.end();
+      const result = await run(["context", "--profile", "relay", "--json"], {
+        profilePath,
+        worktreeConfig: contextPath,
+        readGitRemotes: async () => [forkRemote, sourceRemote],
+        githubFetch,
+        terminal: { input, output },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        repository: "github.com/my-user/DotRelay",
+        remoteNames: ["origin"],
+        githubRepositoryId: "1311418612",
+      });
+      const renderedText = rendered.join("");
+      expect(renderedText).toContain("origin — my-user/DotRelay");
+      expect(renderedText).toContain("upstream — LSP-Software/DotRelay");
+      expect(renderedText).not.toContain("git@github.com");
+      expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
+        repositoryRemote: "origin",
+        repositoryOwner: "my-user",
+        repositoryName: "DotRelay",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("context reuses the recorded choice without asking again", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
+    try {
+      await seedProfile(profilePath);
+      await Bun.write(
+        contextPath,
+        JSON.stringify({
+          repositoryRemote: "upstream",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+        }),
+      );
+      const result = await run(["context", "--profile", "relay", "--json"], {
+        profilePath,
+        worktreeConfig: contextPath,
+        readGitRemotes: async () => [forkRemote, sourceRemote],
+        githubFetch,
+        prompt: async () => {
+          throw new Error("selection must not prompt");
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        repository: "github.com/LSP-Software/DotRelay",
+        remoteNames: ["upstream"],
+        githubRepositoryId: "1311418611",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("context --no-input names the exact --remote override when ambiguous", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
+    try {
+      await seedProfile(profilePath);
+      const result = await run(
+        ["context", "--profile", "relay", "--no-input", "--json"],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          readGitRemotes: async () => [forkRemote, sourceRemote],
+          githubFetch,
+        },
+      );
+      expect(result.exitCode).toBe(2);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "invocation",
+        code: "repository_ambiguous",
+        exitCode: 2,
+      });
+      const detail = String(diagnostic.detail);
+      expect(detail).toContain("--remote <remote-name>");
+      expect(detail).toContain("origin");
+      expect(detail).toContain("upstream");
+      expect(detail).not.toContain("git@");
+      expect(await Bun.file(contextPath).exists()).toBe(false);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("context --remote is the documented noninteractive override", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
+    try {
+      await seedProfile(profilePath);
+      const result = await run(
+        [
+          "context",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--remote",
+          "upstream",
+          "--json",
+        ],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          readGitRemotes: async () => [forkRemote, sourceRemote],
+          githubFetch,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        repository: "github.com/LSP-Software/DotRelay",
+        githubRepositoryId: "1311418611",
+      });
+      expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
+        repositoryRemote: "upstream",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("project link honors --remote and records the choice", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
+    let linkedBody: unknown = null;
+    try {
+      await seedProfile(profilePath);
+      const result = await run(
+        [
+          "project",
+          "link",
+          "--team",
+          teamId,
+          "--no-input",
+          "--remote",
+          "origin",
+          "--json",
+        ],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          readGitRemotes: async () => [forkRemote, sourceRemote],
+          githubFetch,
+          admin: {
+            post: async (_path, body) => {
+              linkedBody = body;
+              return {
+                id: projectId,
+                teamId,
+                githubRepositoryId: "1311418612",
+                lifecycle: "active",
+              };
+            },
+            get: async () => ({}) as never,
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(linkedBody).toEqual({
+        teamId,
+        repositoryHost: "github.com",
+        repositoryOwner: "my-user",
+        repositoryName: "DotRelay",
+        githubRepositoryId: "1311418612",
+      });
+      expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
+        serverProfileId: "00000000-0000-4000-8000-000000000042",
+        projectId,
+        repositoryRemote: "origin",
+        repositoryOwner: "my-user",
+        repositoryName: "DotRelay",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
+  test("a recorded choice steers a protected command without asking", async () => {
+    const fixture = createProtocolHttpFixture([
+      { id: environmentId, label: "default", lifecycle: "active" },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({
+          repositoryRemote: "upstream",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+        }),
+      );
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--environment",
+          environmentId,
+          "--stdout",
+        ],
+        {
+          ...runtimeForProtocolState(state),
+          readGitRemotes: async () => [forkRemote, sourceRemote],
+          githubFetch,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${environmentId}`,
+        ),
+      ).toBe(true);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId,
+        repositoryRemote: "upstream",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("selecting the fork remote grants no access to the source Project", async () => {
+    const fixture = createProtocolHttpFixture([
+      { id: environmentId, label: "default", lifecycle: "active" },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--environment",
+          environmentId,
+          "--remote",
+          "origin",
+          "--json",
+        ],
+        {
+          ...runtimeForProtocolState(state),
+          readGitRemotes: async () => [forkRemote, sourceRemote],
+          githubFetch,
+        },
+      );
+      expect(result.exitCode).toBe(2);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "invocation",
+        exitCode: 2,
+      });
+      expect(String(diagnostic.detail)).toContain("not linked");
+      // The fork's identity was looked up; the source Project never was, and
+      // no workspace boundary (the access boundary) was ever queried.
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("githubRepositoryId=1311418612"),
+        ),
+      ).toBe(true);
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("githubRepositoryId=1311418611"),
+        ),
+      ).toBe(false);
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/workspace/boundary"),
+        ),
+      ).toBe(false);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("--remote upstream lets a fork checkout reach the source Project", async () => {
+    const fixture = createProtocolHttpFixture([
+      { id: environmentId, label: "default", lifecycle: "active" },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    try {
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--environment",
+          environmentId,
+          "--remote",
+          "upstream",
+          "--stdout",
+        ],
+        {
+          ...runtimeForProtocolState(state),
+          readGitRemotes: async () => [forkRemote, sourceRemote],
+          githubFetch,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some(
+          (request) =>
+            request.path ===
+            `/api/v1/workspace/boundary?environment=${environmentId}`,
+        ),
+      ).toBe(true);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId,
+        repositoryRemote: "upstream",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
       });
     } finally {
       fixture.stop();

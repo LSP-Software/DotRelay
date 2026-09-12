@@ -64,6 +64,13 @@ The external source repository, identified by its stable GitHub identity, that i
 to clients but does not grant DotRelay access.
 _Avoid_: Project
 
+**Repository Choice**:
+The explicit selection of which Git remote identifies a worktree's GitHub Repository when remotes
+name different repositories, such as a fork `origin` and a source `upstream`; it is stored in the
+worktree context as opaque identifiers and re-used until that remote stops pointing at the same
+repository, and it never grants access beyond the Project that identity identifies.
+_Avoid_: Remote switch, repository toggle
+
 **Environment**:
 A revisioned, named configuration scope within a Project, such as development, staging, or
 production.
