@@ -276,7 +276,7 @@ export const WorkspaceShell = ({
   );
   const [connection, setConnection] = useState<ConnectionState>("loading");
   const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
-  const [retryToken, setRetryToken] = useState(0);
+  const reconnectNowRef = useRef<(() => void) | null>(null);
   const boundaryJsonRef = useRef(
     JSON.stringify(emptyWorkspaceBoundary("hosted")),
   );
@@ -467,18 +467,20 @@ export const WorkspaceShell = ({
     setConnection("online");
   };
 
-  const requestRetry = () => setRetryToken((token) => token + 1);
+  const requestRetry = () => reconnectNowRef.current?.();
 
   useEffect(() => {
     let cancelled = false;
+    let generation = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let reconnectDelay = RECONNECT_BASE_MS;
-    const loadOnce = async (): Promise<boolean> => {
+    const stale = (run: number) => cancelled || run !== generation;
+    const loadOnce = async (run: number): Promise<boolean> => {
       try {
         const fetched = await fetchWorkspaceBoundary(profileId, {
           ...(environmentId ? { environmentId } : {}),
         });
-        if (cancelled) return false;
+        if (stale(run)) return false;
         if (fetched.connection !== "online") {
           setConnection("offline");
           return false;
@@ -494,7 +496,7 @@ export const WorkspaceShell = ({
                 ...(environmentId ? { environmentId } : {}),
               })
             : fetched;
-        if (cancelled) return false;
+        if (stale(run)) return false;
         if (resolved.connection !== "online") {
           setConnection("offline");
           return false;
@@ -509,13 +511,14 @@ export const WorkspaceShell = ({
         if (!storedId) setLiveProtocolSession(null);
         return true;
       } catch {
-        if (!cancelled) setConnection("offline");
+        if (!stale(run)) setConnection("offline");
         return false;
       }
     };
     const tick = async () => {
-      const online = await loadOnce();
-      if (cancelled) return;
+      const run = ++generation;
+      const online = await loadOnce(run);
+      if (stale(run)) return;
       if (online) {
         reconnectDelay = RECONNECT_BASE_MS;
         timer = setTimeout(() => void tick(), WORKSPACE_REFRESH_MS);
@@ -524,12 +527,22 @@ export const WorkspaceShell = ({
         reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
       }
     };
+    const reconnectNow = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      reconnectDelay = RECONNECT_BASE_MS;
+      void tick();
+    };
+    reconnectNowRef.current = reconnectNow;
     void tick();
     return () => {
       cancelled = true;
+      reconnectNowRef.current = null;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [profileId, environmentId, retryToken]);
+  }, [profileId, environmentId]);
 
   useEffect(() => {
     let cancelled = false;
