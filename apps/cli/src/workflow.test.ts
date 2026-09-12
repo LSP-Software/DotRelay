@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, rm } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
   createCliDeviceStorage,
@@ -20,6 +21,7 @@ import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
 import { CliError } from "./errors";
+import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
 
@@ -64,6 +66,11 @@ const destinationLines = [
   `Project: ${ids.project}`,
   "Environment: development",
 ];
+
+// The test checkout's own Git state must never steer a pull; these probes pin
+// the repository state each scenario asserts on.
+const gitOutside: GitTrackingProbe = async () => ({ state: "outside" });
+const gitTracked: GitTrackingProbe = async () => ({ state: "tracked" });
 
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -287,6 +294,7 @@ afterEach(async () => {
     await unlink(`${import.meta.dir}/${file}`).catch(() => undefined);
   for (const file of await readdir(import.meta.dir))
     if (
+      file.startsWith(".tmp-workflow-git-") ||
       file.startsWith(".tmp-workflow-profile-") ||
       file.startsWith(".tmp-workflow-state-") ||
       file.startsWith("head-") ||
@@ -1400,6 +1408,7 @@ describe("protected CLI workflows", () => {
           questions.push(question);
           return true;
         },
+        gitTrackingProbe: gitOutside,
       },
     );
     expect(pulled.exitCode).toBe(0);
@@ -1464,6 +1473,7 @@ describe("protected CLI workflows", () => {
           questions.push(question);
           return true;
         },
+        gitTrackingProbe: gitOutside,
       },
     );
     expect(pulled.exitCode).toBe(0);
@@ -1572,6 +1582,7 @@ describe("protected CLI workflows", () => {
           questions.push(question);
           return false;
         },
+        gitTrackingProbe: gitOutside,
       },
     );
     expect(pulled.exitCode).toBe(0);
@@ -1618,7 +1629,7 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      runtime,
+      { ...runtime, gitTrackingProbe: gitOutside },
     );
     expect(result.exitCode).toBe(4);
     const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
@@ -1675,7 +1686,7 @@ describe("protected CLI workflows", () => {
         "--force",
         "--json",
       ],
-      runtime,
+      { ...runtime, gitTrackingProbe: gitOutside },
     );
     expect(result.exitCode).toBe(0);
     const body = JSON.parse(result.stdout) as Record<string, unknown>;
@@ -1729,7 +1740,7 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      runtime,
+      { ...runtime, gitTrackingProbe: gitOutside },
     );
     expect(fresh.exitCode).toBe(0);
     expect(JSON.parse(fresh.stdout)).toMatchObject({ ok: true, output });
@@ -1747,7 +1758,7 @@ describe("protected CLI workflows", () => {
         output,
         "--no-input",
       ],
-      runtime,
+      { ...runtime, gitTrackingProbe: gitOutside },
     );
     expect(unchanged.exitCode).toBe(0);
     expect(unchanged.stdout).toBe("No changes found\n");
@@ -1789,7 +1800,7 @@ describe("protected CLI workflows", () => {
         input,
         "--json",
       ],
-      { ...runtime, confirm: async () => true },
+      { ...runtime, confirm: async () => true, gitTrackingProbe: gitOutside },
     );
     expect(pulled.exitCode).toBe(0);
     expect(await Bun.file(input).text()).toContain(
@@ -1798,6 +1809,320 @@ describe("protected CLI workflows", () => {
     expect(await Bun.file(`${input}.previous`).text()).toBe(
       "DATABASE_URL=postgres://local\n",
     );
+  });
+
+  const seededEnvironment = async (
+    runtime: Awaited<ReturnType<typeof setup>>,
+    input: string,
+  ): Promise<void> => {
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(initialized.exitCode).toBe(0);
+  };
+
+  test("pull establishes a repository-local Git exclusion for an untracked output", async () => {
+    const runtime = await setup();
+    const gitRoot = `${import.meta.dir}/.tmp-workflow-git-${crypto.randomUUID()}`;
+    try {
+      await seededEnvironment(
+        runtime,
+        `${import.meta.dir}/.tmp-workflow-input`,
+      );
+      const gitDirectory = `${gitRoot}/.git`;
+      const output = `${gitRoot}/.env`;
+      const probe: GitTrackingProbe = async () =>
+        Object.freeze({
+          state: "untracked",
+          gitDirectory,
+          topLevel: gitRoot,
+          relativePath: ".env",
+        });
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--output",
+          output,
+          "--no-input",
+          "--json",
+        ],
+        { ...runtime, gitTrackingProbe: probe },
+      );
+      expect(result.exitCode).toBe(0);
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        ok: true,
+        output,
+        gitExclusion: "established",
+      });
+      expect(String(body.message)).toContain(".git/info/exclude");
+      expect(String(body.message)).toContain("excluded from Git");
+      expect(await Bun.file(`${gitDirectory}/info/exclude`).text()).toBe(
+        "/.env\n",
+      );
+    } finally {
+      await rm(gitRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  });
+
+  test("pull reports an already-established local Git exclusion as present", async () => {
+    const runtime = await setup();
+    const gitRoot = `${import.meta.dir}/.tmp-workflow-git-${crypto.randomUUID()}`;
+    try {
+      await mkdir(`${gitRoot}/.git/info`, { recursive: true });
+      await Bun.write(`${gitRoot}/.git/info/exclude`, "/.env\n");
+      await seededEnvironment(
+        runtime,
+        `${import.meta.dir}/.tmp-workflow-input`,
+      );
+      const output = `${gitRoot}/.env`;
+      const probe: GitTrackingProbe = async () =>
+        Object.freeze({
+          state: "untracked",
+          gitDirectory: `${gitRoot}/.git`,
+          topLevel: gitRoot,
+          relativePath: ".env",
+        });
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--output",
+          output,
+          "--no-input",
+          "--json",
+        ],
+        { ...runtime, gitTrackingProbe: probe },
+      );
+      expect(result.exitCode).toBe(0);
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
+      expect(String(body.message)).not.toContain(".git/info/exclude");
+      expect(await Bun.file(`${gitRoot}/.git/info/exclude`).text()).toBe(
+        "/.env\n",
+      );
+    } finally {
+      await rm(gitRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  });
+
+  test("pull refuses a Git-tracked output and offers untrack or an alternate path", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "API_KEY=user-defined",
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://local\nGONE=old\n");
+    const questions: string[] = [];
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--json",
+      ],
+      {
+        ...runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return true;
+        },
+        gitTrackingProbe: gitTracked,
+      },
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "output_tracked",
+      exitCode: 4,
+    });
+    expect(String(diagnostic.detail)).toContain(`${input} is tracked by Git`);
+    expect(String(diagnostic.detail)).toContain(`git rm --cached ${input}`);
+    expect(String(diagnostic.detail)).toContain(
+      "dotrelay pull --output <path>",
+    );
+    expect(questions).toEqual([]);
+    expect(await Bun.file(input).text()).toBe(
+      "DATABASE_URL=postgres://local\nGONE=old\n",
+    );
+    expect(await Bun.file(`${input}.previous`).exists()).toBe(false);
+    expect(result.stderr).not.toContain("postgres://local");
+    expect(result.stderr).not.toContain("postgres://secret");
+    expect(result.stderr).not.toContain("tok");
+  });
+
+  test("pull --no-input --force still refuses a Git-tracked output", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(input, "DATABASE_URL=postgres://local\n");
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--no-input",
+        "--force",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitTracked },
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "output_tracked",
+      exitCode: 4,
+    });
+    expect(await Bun.file(input).text()).toBe(
+      "DATABASE_URL=postgres://local\n",
+    );
+    expect(await Bun.file(`${input}.previous`).exists()).toBe(false);
+  });
+
+  test("pull writes to a Git-ignored output and reports it as present", async () => {
+    const runtime = await setup();
+    const gitRoot = `${import.meta.dir}/.tmp-workflow-git-${crypto.randomUUID()}`;
+    try {
+      await seededEnvironment(
+        runtime,
+        `${import.meta.dir}/.tmp-workflow-input`,
+      );
+      const output = `${gitRoot}/.env`;
+      const probe: GitTrackingProbe = async () =>
+        Object.freeze({ state: "ignored" });
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--output",
+          output,
+          "--no-input",
+          "--json",
+        ],
+        { ...runtime, gitTrackingProbe: probe },
+      );
+      expect(result.exitCode).toBe(0);
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
+      expect(await Bun.file(output).text()).toContain(
+        'DATABASE_URL="postgres://secret"',
+      );
+    } finally {
+      await rm(gitRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  });
+
+  test("pull skips the Git exposure check for output outside a repository", async () => {
+    const runtime = await setup();
+    const gitRoot = `${import.meta.dir}/.tmp-workflow-git-${crypto.randomUUID()}`;
+    try {
+      await seededEnvironment(
+        runtime,
+        `${import.meta.dir}/.tmp-workflow-input`,
+      );
+      const output = `${gitRoot}/.env`;
+      const result = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--output",
+          output,
+          "--no-input",
+          "--json",
+        ],
+        { ...runtime, gitTrackingProbe: gitOutside },
+      );
+      expect(result.exitCode).toBe(0);
+      const body = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(body).toMatchObject({ ok: true, output });
+      expect("gitExclusion" in body).toBe(false);
+      expect(await Bun.file(output).text()).toContain(
+        'DATABASE_URL="postgres://secret"',
+      );
+    } finally {
+      await rm(gitRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
   });
 
   test("push --no-input refuses to publish removed Variables without --force", async () => {

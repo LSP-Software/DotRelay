@@ -101,7 +101,16 @@ summary before beginning staging. It then uploads the signed command and encrypt
 objects, finalizes the operation with the expected head and epoch, and cancels a failed operation
 when the Server Profile permits cancellation.
 
-`pull` writes decrypted Values to `.env` by default. Interactive `pull` confirms before replacing
+`pull` writes decrypted Values to `.env` by default. Before any Value is decrypted or moved, `pull`
+checks the output path's Git tracking state in the repository it resolves against (including linked
+worktrees and custom `--output` paths). A Git-tracked output is refused with the two safe choices:
+untrack it (`git rm --cached <path>`, which the operator runs — the CLI never changes Git history
+or removes tracked content on the operator's behalf) or pull to a different `--output` path.
+`--force` does not override this refusal. An untracked output is added to the repository-local
+exclusion list (`.git/info/exclude`, which is never committed) so a later `git add` cannot pick the
+plaintext file up, and the run reports that it established the exclusion; an already-ignored output
+is left as-is and reported as such.
+Interactive `pull` confirms before replacing
 an existing file, using the same masked review as `push` but from the current file to the
 Environment, and names the same destination; `--reveal` shows the unified Value diff in that one
 confirmation instead. Identical Values report that no changes were found and leave the file
@@ -152,7 +161,8 @@ single JSON document and also carries `verificationUri` and `userCode`.
 ready, using an atomic replace and mode `0600`. `pull --stdout` is explicit and refuses terminal
 output unless `--reveal` is also supplied. `--no-input` never prompts, guesses, or approves:
 `--force` is the narrow, documented approval that lets automation replace a differing pull output
-file or publish removed Variables, and it is the only flag that does. Automation is limited to a
+file or publish removed Variables, and it is the only flag that does; it never overrides the
+refusal of a Git-tracked pull output. Automation is limited to a
 previously authenticated, enrolled persistent Device with explicit profile context.
 Portable plaintext or environment-variable credential bundles and auto-approved ephemeral Devices
 are not supported.

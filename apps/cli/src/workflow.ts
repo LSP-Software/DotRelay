@@ -1,5 +1,6 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import { readFile, stat, unlink } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   assertPublicationAccepted,
   type CliDeviceStorage,
@@ -71,6 +72,11 @@ import {
   serializeDotenv,
 } from "./dotenv";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
+import {
+  createGitTrackingProbe,
+  ensureLocalGitExclusion,
+  type GitTrackingProbe,
+} from "./git-tracking";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
 import { readTerminalLine, type TerminalIo } from "./terminal";
@@ -102,6 +108,7 @@ export type WorkflowOptions = Readonly<{
   readonly stdoutIsTerminal: boolean;
   readonly admin?: StrictJsonClient;
   readonly environmentId?: string;
+  readonly gitTracking?: GitTrackingProbe;
 }>;
 
 type Boundary = Readonly<{
@@ -2420,6 +2427,33 @@ const withOwnership = (
   );
 };
 
+const trackedPullOutputDetail = (outputPath: string): string =>
+  [
+    `${outputPath} is tracked by Git; the next git add/commit could publish the decrypted Values written to it.`,
+    "Choose one before re-running pull:",
+    `  1. Untrack it (keeps your local file): git rm --cached ${outputPath}`,
+    "  2. Pull to a different path: dotrelay pull --output <path>",
+    "DotRelay never changes Git history or removes tracked content on your behalf.",
+  ].join("\n");
+
+const guardPullOutputAgainstGit = async (
+  options: WorkflowOptions,
+  outputPath: string,
+): Promise<"established" | "present" | undefined> => {
+  const probe = options.gitTracking ?? createGitTrackingProbe();
+  const tracking = await probe(resolve(outputPath));
+  if (tracking.state === "tracked")
+    throw new CliError(
+      "conflict",
+      trackedPullOutputDetail(outputPath),
+      {},
+      "output_tracked",
+    );
+  if (tracking.state === "untracked") return ensureLocalGitExclusion(tracking);
+  if (tracking.state === "ignored") return "present";
+  return undefined;
+};
+
 const localPullChanges = async (
   outputPath: string,
   incoming: readonly DotenvEntry[],
@@ -2520,6 +2554,12 @@ export const runProtectedWorkflow = async (
     const outputPath = parsed.stdout ? undefined : (parsed.output ?? ".env");
     if (!outputPath && !parsed.stdout)
       throw new CliInvocationError("pull requires --output <file> or --stdout");
+    // Check Git exposure before any Value is decrypted or moved: a tracked
+    // output is refused up front and an untracked one gets a repository-local
+    // exclusion so a later git add cannot pick the plaintext file up.
+    let gitExclusion: "established" | "present" | undefined;
+    if (outputPath)
+      gitExclusion = await guardPullOutputAgainstGit(options, outputPath);
     const synced = await syncWorkflow(options, parsed);
     const missing = synced.variables.filter(
       (variable) => !variable.tombstone && variable.value === null,
@@ -2569,6 +2609,7 @@ export const runProtectedWorkflow = async (
           return {
             output: outputPath,
             unchanged: true,
+            ...(gitExclusion ? { gitExclusion } : {}),
             message: "No changes found",
           };
         if (options.noInput) {
@@ -2609,14 +2650,19 @@ export const runProtectedWorkflow = async (
       await atomicWriteProtectedFile(outputPath, contents, {
         ...(replaceExisting ? { retainPrevious: true } : {}),
       });
+    const exclusionNote =
+      gitExclusion === "established"
+        ? `; ${outputPath} is excluded from Git via .git/info/exclude so it will not be tracked`
+        : "";
     return parsed.stdout
       ? { stdout: contents }
       : {
           output: outputPath ?? "",
+          ...(gitExclusion ? { gitExclusion } : {}),
           ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
           message: replaceExisting
-            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous`
-            : `Wrote ${entries.length} values to ${outputPath}`,
+            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous${exclusionNote}`
+            : `Wrote ${entries.length} values to ${outputPath}${exclusionNote}`,
         };
   }
   if (parsed.command === "init" || parsed.command === "push") {
