@@ -1,6 +1,6 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import { readFile, stat, unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   assertPublicationAccepted,
   type CliDeviceStorage,
@@ -40,6 +40,7 @@ import {
   importEncryptionPublicKey,
   importSigningPublicKey,
   parseProtocolObject,
+  type ServerProfilePin,
   sha384,
   sha384ToHex,
   uuidToBytes,
@@ -1664,8 +1665,147 @@ const publicSpkiFromPrivate = async (
   }
 };
 
+type PendingRecovery = Readonly<{
+  readonly serverProfileId: string;
+  readonly userId: string;
+  readonly envelopeId: string;
+  readonly identityGeneration: number;
+  readonly recoveryGeneration: number;
+  readonly replacementDeviceId: string;
+  readonly operationId: string;
+  readonly challenge: Uint8Array;
+  readonly expiresAtMs: number;
+  readonly proof: Uint8Array;
+  readonly certificateId: string;
+  readonly certificate: Uint8Array;
+}>;
+
+const recoveryStatePath = (
+  directory: string,
+  profile: ServerProfilePin,
+): string => join(directory, `device-${profile.serverProfileId}.recovery.json`);
+
+// The pending record pins every value the restore request is built from, so
+// an uncertain response can be re-posted as the same logical operation
+// instead of starting a fresh one.
+const readPendingRecovery = async (
+  path: string,
+): Promise<PendingRecovery | null> => {
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new CliError(
+      "local-io",
+      "could not read the pending Recovery Kit restore",
+      {},
+      "context_read_failed",
+    );
+  }
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    value.kind !== "dotrelay-pending-recovery-restore"
+  )
+    throw new CliError(
+      "local-io",
+      "the pending Recovery Kit restore is invalid",
+      {},
+      "context_read_failed",
+    );
+  const identityGeneration = value.identityGeneration;
+  const recoveryGeneration = value.recoveryGeneration;
+  if (
+    typeof identityGeneration !== "number" ||
+    !Number.isSafeInteger(identityGeneration) ||
+    identityGeneration < 0 ||
+    typeof recoveryGeneration !== "number" ||
+    !Number.isSafeInteger(recoveryGeneration) ||
+    recoveryGeneration < 1
+  )
+    throw new CliError(
+      "local-io",
+      "the pending Recovery Kit restore is invalid",
+      {},
+      "context_read_failed",
+    );
+  const expiresAt =
+    typeof value.expiresAt === "string" ? Date.parse(value.expiresAt) : NaN;
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0)
+    throw new CliError(
+      "local-io",
+      "the pending Recovery Kit restore is invalid",
+      {},
+      "context_read_failed",
+    );
+  const challenge = fromBase64(value.challenge, "pending recovery challenge");
+  if (challenge.length !== 32)
+    throw new CliError(
+      "local-io",
+      "the pending Recovery Kit restore is invalid",
+      {},
+      "context_read_failed",
+    );
+  return Object.freeze({
+    serverProfileId: requiredString(
+      value.serverProfileId,
+      "pending recovery field",
+    ),
+    userId: requiredString(value.userId, "pending recovery field"),
+    envelopeId: requiredString(value.envelopeId, "pending recovery field"),
+    identityGeneration,
+    recoveryGeneration,
+    replacementDeviceId: requiredString(
+      value.replacementDeviceId,
+      "pending recovery field",
+    ),
+    operationId: requiredString(value.operationId, "pending recovery field"),
+    challenge,
+    expiresAtMs: expiresAt,
+    proof: fromBase64(value.proof, "pending recovery proof"),
+    certificateId: requiredString(
+      value.certificateId,
+      "pending recovery field",
+    ),
+    certificate: fromBase64(value.certificate, "pending recovery certificate"),
+  });
+};
+
+const writePendingRecovery = async (
+  path: string,
+  pending: PendingRecovery,
+): Promise<void> => {
+  await atomicWriteProtectedFile(
+    path,
+    `${JSON.stringify({
+      version: 1,
+      kind: "dotrelay-pending-recovery-restore",
+      serverProfileId: pending.serverProfileId,
+      userId: pending.userId,
+      envelopeId: pending.envelopeId,
+      identityGeneration: pending.identityGeneration,
+      recoveryGeneration: pending.recoveryGeneration,
+      replacementDeviceId: pending.replacementDeviceId,
+      operationId: pending.operationId,
+      challenge: base64(pending.challenge),
+      expiresAt: new Date(pending.expiresAtMs).toISOString(),
+      proof: base64(pending.proof),
+      certificateId: pending.certificateId,
+      certificate: base64(pending.certificate),
+    })}\n`,
+  );
+};
+
+const clearPendingRecovery = async (path: string): Promise<void> => {
+  await unlink(path).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  });
+};
+
 const loadRecoveryIdentity = async (
   options: WorkflowOptions,
+  allowActiveDevices = false,
 ): Promise<
   Readonly<{ admin: StrictJsonClient; boundary: Boundary; userId: string }>
 > => {
@@ -1687,7 +1827,13 @@ const loadRecoveryIdentity = async (
   );
   // Recovery restores a replacement Device for the whole User, so it is
   // blocked while any of the User's Devices is active on the Server Profile.
-  if (boundary.device.active || boundary.activeDeviceCount > 0)
+  // Resuming an in-flight restore skips the check: the in-flight replacement
+  // is the only Device that restore may activate, and the idempotent restore
+  // request reconciles the service-side outcome before any local commit.
+  if (
+    !allowActiveDevices &&
+    (boundary.device.active || boundary.activeDeviceCount > 0)
+  )
     throw new CliError(
       "conflict",
       "Recovery Kit restore requires no active Device",
@@ -1714,7 +1860,24 @@ export const restoreRecoveryKit = async (
       {},
       "profile_mismatch",
     );
-  const identity = await loadRecoveryIdentity(options);
+  // A pending restore that matches this Kit's operation is resumed instead of
+  // re-created, so the pending record is located before the no-active-Device
+  // check: its in-flight replacement Device is the only active Device the
+  // resume may observe.
+  const statePath = recoveryStatePath(
+    options.stateDirectory,
+    options.profile.pin,
+  );
+  const pending = await readPendingRecovery(statePath);
+  const resuming =
+    pending !== null &&
+    pending.serverProfileId.toLowerCase() ===
+      options.profile.pin.serverProfileId.toLowerCase() &&
+    pending.userId.toLowerCase() === artifact.userId.toLowerCase() &&
+    pending.envelopeId.toLowerCase() === artifact.envelopeId.toLowerCase() &&
+    pending.identityGeneration === artifact.identityGeneration &&
+    pending.recoveryGeneration === artifact.recoveryGeneration;
+  const identity = await loadRecoveryIdentity(options, resuming);
   if (artifact.userId.toLowerCase() !== identity.userId.toLowerCase())
     throw new CliError(
       "authentication",
@@ -1744,11 +1907,16 @@ export const restoreRecoveryKit = async (
   if (
     opened.envelopeId !== artifact.envelopeId.toLowerCase() ||
     opened.identityGeneration !== artifact.identityGeneration ||
-    opened.recoveryGeneration !== artifact.recoveryGeneration
+    opened.recoveryGeneration !== artifact.recoveryGeneration ||
+    (resuming &&
+      pending.replacementDeviceId.toLowerCase() !==
+        opened.replacementDeviceId.toLowerCase())
   )
     throw new CliError(
       "crypto",
-      "the Recovery Kit metadata does not match its envelope",
+      resuming
+        ? "the pending Recovery Kit restore does not match its Kit"
+        : "the Recovery Kit metadata does not match its envelope",
       {},
       "recovery_kit_invalid",
     );
@@ -1779,60 +1947,120 @@ export const restoreRecoveryKit = async (
   const rawEncryptionPublicKey = await rawPublicKey(encryptionPublicKey);
   const rawSigningPublicKey = await rawPublicKey(signingPublicKey);
   const storage = resolveDeviceStorage(options);
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
-  const challengeExpiresAtMs = Date.now() + 10 * 60 * 1000;
-  const proof = await createRecoveryChallengeProof({
-    serverProfileId: options.profile.pin.serverProfileId,
-    userId: identity.userId,
-    replacementDeviceId: opened.replacementDeviceId,
-    correlationId: opened.envelopeId,
-    identityGeneration: opened.identityGeneration,
-    recoveryGeneration: opened.recoveryGeneration,
-    challenge,
-    expiresAtMs: challengeExpiresAtMs,
-    signingPrivateKey: opened.replacementSigningPrivateKey,
-  });
-  const certificate = await createDeviceCertificate({
-    serverProfileId: options.profile.pin.serverProfileId,
-    userId: identity.userId,
-    deviceId: opened.replacementDeviceId,
-    identityGeneration: opened.identityGeneration,
-    encryptionPublicKey: rawEncryptionPublicKey,
-    signingPublicKey: rawSigningPublicKey,
-    signingPrivateKey: opened.replacementSigningPrivateKey,
-  });
-  const operationId = crypto.randomUUID();
+  let operation: PendingRecovery;
+  if (resuming) {
+    if (pending.expiresAtMs <= Date.now()) {
+      await clearPendingRecovery(statePath);
+      throw new CliError(
+        "conflict",
+        "the pending Recovery Kit restore has expired; create a new Recovery Kit",
+        {},
+        "device_authorization_expired",
+      );
+    }
+    operation = pending;
+  } else {
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const createdAtMs = Date.now();
+    const challengeExpiresAtMs = createdAtMs + 10 * 60 * 1000;
+    const proof = await createRecoveryChallengeProof({
+      serverProfileId: options.profile.pin.serverProfileId,
+      userId: identity.userId,
+      replacementDeviceId: opened.replacementDeviceId,
+      correlationId: opened.envelopeId,
+      identityGeneration: opened.identityGeneration,
+      recoveryGeneration: opened.recoveryGeneration,
+      challenge,
+      expiresAtMs: challengeExpiresAtMs,
+      signingPrivateKey: opened.replacementSigningPrivateKey,
+    });
+    const certificate = await createDeviceCertificate({
+      serverProfileId: options.profile.pin.serverProfileId,
+      userId: identity.userId,
+      deviceId: opened.replacementDeviceId,
+      identityGeneration: opened.identityGeneration,
+      encryptionPublicKey: rawEncryptionPublicKey,
+      signingPublicKey: rawSigningPublicKey,
+      signingPrivateKey: opened.replacementSigningPrivateKey,
+    });
+    operation = Object.freeze({
+      serverProfileId: options.profile.pin.serverProfileId,
+      userId: identity.userId,
+      envelopeId: opened.envelopeId,
+      identityGeneration: opened.identityGeneration,
+      recoveryGeneration: opened.recoveryGeneration,
+      replacementDeviceId: opened.replacementDeviceId,
+      operationId: crypto.randomUUID(),
+      challenge,
+      expiresAtMs: challengeExpiresAtMs,
+      proof: proof.canonicalBytes,
+      certificateId: crypto.randomUUID(),
+      certificate,
+    });
+    // Persist the operation before it is submitted so an uncertain response
+    // can be reconciled as the same logical operation, with the same
+    // operation id and pending key material.
+    await writePendingRecovery(statePath, operation);
+  }
+  // The replacement bundle is stored under its own Device scope as the
+  // pending key material; it does not change the active Device selection.
   await storage.save(bundle);
+  let response: Record<string, unknown>;
+  try {
+    response = await identity.admin.post(
+      "/api/v1/recovery/restore",
+      {
+        operationId: operation.operationId,
+        objectId: opened.envelopeId,
+        envelope: base64(encodeProtocolObject(opened.envelope)),
+        object: base64(encodeProtocolObject(opened.envelope)),
+        envelopeId: opened.envelopeId,
+        identityGeneration: String(opened.identityGeneration),
+        recoveryGeneration: String(opened.recoveryGeneration),
+        deviceId: opened.replacementDeviceId,
+        challenge: base64(operation.challenge),
+        expiresAt: new Date(operation.expiresAtMs).toISOString(),
+        proof: base64(operation.proof),
+        replacementEncryptionPublicKey: base64(rawEncryptionPublicKey),
+        replacementSigningPublicKey: base64(rawSigningPublicKey),
+        x25519PublicKey: base64(rawEncryptionPublicKey),
+        ed25519PublicKey: base64(rawSigningPublicKey),
+        keyId: base64(await sha384(rawEncryptionPublicKey)),
+        certificateId: operation.certificateId,
+        certificate: base64(operation.certificate),
+      },
+      ["deviceId", "active", "recoveryGeneration", "idempotent"],
+      { idempotencyKey: operation.operationId },
+    );
+  } catch (error) {
+    // A definitive rejection leaves nothing in flight, so the pending record
+    // is discarded and the prior Device selection stands. A transient failure
+    // may still have reached the service, so the pending operation must
+    // survive for the next reconciliation attempt.
+    if (error instanceof CliError && error.category !== "transient")
+      await clearPendingRecovery(statePath);
+    throw error;
+  }
+  // The approval identifies the Device selection that becomes active. The
+  // local selection switches only for the exact replacement Device this
+  // operation prepared.
+  if (
+    response.active !== true ||
+    typeof response.deviceId !== "string" ||
+    response.deviceId.toLowerCase() !== opened.replacementDeviceId.toLowerCase()
+  )
+    throw new CliError(
+      "transient",
+      "the Server Profile did not confirm this replacement Device",
+      {},
+      "response_invalid",
+    );
   await writeDeviceId(
     deviceMetadataPath(options.stateDirectory, options.profile.pin),
     options.profile.pin,
     opened.replacementDeviceId,
   );
-  await identity.admin.post(
-    "/api/v1/recovery/restore",
-    {
-      operationId,
-      objectId: opened.envelopeId,
-      envelope: base64(encodeProtocolObject(opened.envelope)),
-      object: base64(encodeProtocolObject(opened.envelope)),
-      envelopeId: opened.envelopeId,
-      identityGeneration: String(opened.identityGeneration),
-      recoveryGeneration: String(opened.recoveryGeneration),
-      deviceId: opened.replacementDeviceId,
-      challenge: base64(challenge),
-      expiresAt: new Date(challengeExpiresAtMs).toISOString(),
-      proof: base64(proof.canonicalBytes),
-      replacementEncryptionPublicKey: base64(rawEncryptionPublicKey),
-      replacementSigningPublicKey: base64(rawSigningPublicKey),
-      x25519PublicKey: base64(rawEncryptionPublicKey),
-      ed25519PublicKey: base64(rawSigningPublicKey),
-      keyId: base64(await sha384(rawEncryptionPublicKey)),
-      certificateId: crypto.randomUUID(),
-      certificate: base64(certificate),
-    },
-    ["deviceId", "active", "recoveryGeneration", "idempotent"],
-    { idempotencyKey: operationId },
-  );
+  await clearPendingRecovery(statePath);
   return {
     deviceId: opened.replacementDeviceId,
     active: true,
