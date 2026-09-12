@@ -6,6 +6,7 @@ import {
   findProjectByRepository,
   linkProject,
   listTeams,
+  type ProjectSummary,
   resolveTeamForProject,
   selectEnvironment,
 } from "./admin";
@@ -34,10 +35,64 @@ describe("strict administration client", () => {
         },
         "1311418611",
       ),
-    ).resolves.toMatchObject({
-      id: "00000000-0000-4000-8000-000000000002",
-      githubRepositoryId: "1311418611",
+    ).resolves.toEqual({
+      project: {
+        id: "00000000-0000-4000-8000-000000000002",
+        teamId: "00000000-0000-4000-8000-000000000001",
+        githubRepositoryId: "1311418611",
+        lifecycle: "active",
+      },
+      candidates: [
+        {
+          id: "00000000-0000-4000-8000-000000000002",
+          teamId: "00000000-0000-4000-8000-000000000001",
+          githubRepositoryId: "1311418611",
+          lifecycle: "active",
+        },
+      ],
     });
+  });
+
+  test("scopes the Project lookup to a Team for the service to Membership-check", async () => {
+    await expect(
+      findProjectByRepository(
+        {
+          get: async (path) => {
+            expect(path).toBe(
+              "/api/v1/projects?githubRepositoryId=1311418611&teamId=00000000-0000-4000-8000-000000000001",
+            );
+            return { project: null, projects: [] };
+          },
+        },
+        "1311418611",
+        { teamId: "00000000-0000-4000-8000-000000000001" },
+      ),
+    ).resolves.toEqual({ project: null, candidates: [] });
+  });
+
+  test("keeps every eligible candidate visible when a repository spans Teams", async () => {
+    const candidates: readonly ProjectSummary[] = [
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        teamId: "00000000-0000-4000-8000-000000000001",
+        githubRepositoryId: "1311418611",
+        lifecycle: "active",
+      },
+      {
+        id: "00000000-0000-4000-8000-00000000000a",
+        teamId: "00000000-0000-4000-8000-00000000000b",
+        githubRepositoryId: "1311418611",
+        lifecycle: "active",
+      },
+    ];
+    await expect(
+      findProjectByRepository(
+        {
+          get: async () => ({ project: null, projects: candidates }),
+        },
+        "1311418611",
+      ),
+    ).resolves.toEqual({ project: null, candidates });
   });
 
   test("uses the profile-scoped bearer session and rejects extra response fields", async () => {

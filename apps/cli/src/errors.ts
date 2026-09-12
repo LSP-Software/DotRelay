@@ -86,6 +86,7 @@ const safeDiagnosticCodes = new Set([
   "profile_catalog_read_failed",
   "profile_catalog_write_failed",
   "profile_selection_invalid",
+  "project_ambiguous",
   "repository_ambiguous",
   "repository_detection_failed",
   "repository_missing",

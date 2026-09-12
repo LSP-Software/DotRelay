@@ -236,6 +236,7 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   pull: [
     "profile",
     "environment",
+    "team",
     "output",
     "stdout",
     "noInput",
@@ -247,6 +248,7 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   diff: [
     "profile",
     "environment",
+    "team",
     "from",
     "noInput",
     "json",
@@ -255,10 +257,11 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   ],
   status: ["profile", "json"],
   context: ["profile", "environment", "json"],
-  history: ["profile", "environment", "noInput", "json", "limit"],
+  history: ["profile", "environment", "team", "noInput", "json", "limit"],
   rollback: [
     "profile",
     "environment",
+    "team",
     "variable",
     "noInput",
     "json",

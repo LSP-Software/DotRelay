@@ -5,10 +5,13 @@ import {
   findProjectByRepository,
   linkProject,
   listEnvironments,
+  listTeams,
+  type ProjectSummary,
   resolveEnvironmentForProject,
   resolveTeamForProject,
   type StrictJsonClient,
   selectEnvironment,
+  type TeamSummary,
 } from "./admin";
 import {
   type ParsedArguments,
@@ -53,7 +56,13 @@ import {
   useServerProfile,
 } from "./profile";
 import type { TerminalIo } from "./terminal";
-import { paint, renderStep, rewriteRegion, writeNotice } from "./ui";
+import {
+  paint,
+  renderStep,
+  rewriteRegion,
+  selectOption,
+  writeNotice,
+} from "./ui";
 import {
   approveDeviceEnrollment,
   beginDeviceEnrollment,
@@ -116,9 +125,9 @@ export const renderPowerHelp = (): string => {
     "  history                       List verified Revision metadata",
     "  rollback <revision>           Append a lane-scoped Rollback",
     "",
-    "Shared: --profile  --environment  --json  --debug  --no-input",
+    "Shared: --profile  --environment  --team <id>  --json  --debug  --no-input",
     "(each is scoped to the commands that consume it; unsupported options, unexpected positionals, and conflicting output flags are rejected before work starts)",
-    "Publish: --classify NAME=shared|user-defined  --from <file>  --team <id>  --force",
+    "Publish: --classify NAME=shared|user-defined  --from <file>  --force",
     "Pull: --output <file>  --stdout  --reveal  --force",
     "Diff: --from <file>  --reveal",
     "Pull checks the output's Git tracking state before writing: untracked outputs get a repository-local exclusion (.git/info/exclude), and a Git-tracked output is refused — untrack it (git rm --cached <path>) or choose another --output path.",
@@ -622,7 +631,7 @@ const execute = async (
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {
     const profile = await resolveServerProfile(store, parsed.profile);
-    const team = parsed.team;
+    const team = parsed.team?.toLowerCase();
     if (!team)
       throw new CliInvocationError("project link requires --team <team-id>");
     const repository = await resolveGitHubRepository(
@@ -830,10 +839,71 @@ const execute = async (
           ...(deviceId ? { deviceId } : {}),
           ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
         });
-      const existingProject = await findProjectByRepository(
+      // An explicit --team must name a Team the User still belongs to; the
+      // service re-checks the Membership when it scopes the lookup. UUIDs are
+      // case-insensitive, so the value is normalized before any comparison.
+      const explicitTeamId = parsed.team?.toLowerCase();
+      let teams: readonly TeamSummary[] | undefined;
+      if (explicitTeamId) {
+        teams = await listTeams(admin);
+        if (!teams.some((team) => team.id === explicitTeamId))
+          throw new CliInvocationError("the specified Team is not available");
+      }
+      const resolution = await findProjectByRepository(
         admin,
         repository.githubRepositoryId ?? "",
+        {
+          ...(explicitTeamId ? { teamId: explicitTeamId } : {}),
+        },
       );
+      // The explicit Team, a saved Project that is still an eligible
+      // destination, then the sole active Project decide the outcome; any
+      // remaining ambiguity is offered as labelled choices.
+      let existingProject = resolution.project;
+      if (!existingProject && !explicitTeamId) {
+        const savedProjectId = localContext?.projectId;
+        if (savedProjectId)
+          existingProject =
+            resolution.candidates.find(
+              (candidate) => candidate.id === savedProjectId,
+            ) ?? null;
+      }
+      if (!existingProject && resolution.candidates.length > 1) {
+        if (!teams) teams = await listTeams(admin);
+        const teamName = (teamId: string): string =>
+          teams?.find((team) => team.id === teamId)?.name ?? teamId;
+        const label = (candidate: ProjectSummary): string =>
+          `${teamName(candidate.teamId)} (${candidate.teamId}) — ${repository.owner}/${repository.name}`;
+        if (parsed.noInput)
+          throw new CliError(
+            "invocation",
+            `multiple Projects are linked to this GitHub Repository; pass --team <team-id>:\n${resolution.candidates
+              .map((candidate, index) => `${index + 1}. ${label(candidate)}`)
+              .join("\n")}`,
+            {},
+            "project_ambiguous",
+          );
+        const selectedId = await selectOption(
+          "Project",
+          resolution.candidates.map((candidate) => ({
+            id: candidate.id,
+            label: label(candidate),
+          })),
+          {
+            ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+            ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+            // An empty answer must not steer the change to the first
+            // candidate in list order.
+            defaultToFirst: false,
+          },
+        );
+        const selected = resolution.candidates.find(
+          (candidate) => candidate.id === selectedId,
+        );
+        if (!selected)
+          throw new CliInvocationError("choose a Project from the list");
+        existingProject = selected;
+      }
       if (
         !existingProject &&
         parsed.command !== "init" &&
@@ -856,7 +926,7 @@ const execute = async (
         (await linkProject(admin, {
           teamId: (
             await resolveTeamForProject(admin, {
-              ...(parsed.team ? { teamId: parsed.team } : {}),
+              ...(explicitTeamId ? { teamId: explicitTeamId } : {}),
               suggestedName: repository.owner,
               noInput: parsed.noInput,
               prompt: ask,
@@ -869,10 +939,11 @@ const execute = async (
             githubRepositoryId: repository.githubRepositoryId ?? "",
           },
         }));
-      if (localContext && localContext.projectId !== initializedProject.id)
-        throw new CliInvocationError(
-          "the saved Project does not match this GitHub Repository",
-        );
+      // A saved Project that is no longer an eligible destination (archived,
+      // relinked, or Membership lost) stops steering the change: its
+      // saved Environment is validated against the resolved Project below,
+      // where it fails the active check and resolution falls back to the
+      // Project's active Environments or an explicit --environment.
       const linkedEnvironmentId =
         existingProject === null
           ? (initializedProject as Awaited<ReturnType<typeof linkProject>>)
