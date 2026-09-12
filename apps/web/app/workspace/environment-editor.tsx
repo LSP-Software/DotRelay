@@ -692,8 +692,10 @@ export const EnvironmentEditor = ({
     if (active !== false) return;
     setAddOpen(false);
     setReviewOpen(false);
+    setReviewValuesRevealed(false);
     setRollbackTarget(null);
     setRollbackLanes(new Set());
+    setRollbackValuesRevealed(false);
   }, [active]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
@@ -1424,6 +1426,7 @@ export const EnvironmentEditor = ({
           </DialogHeader>
           <div className="flex justify-end">
             <Button
+              aria-pressed={reviewValuesRevealed}
               onClick={() => setReviewValuesRevealed((current) => !current)}
               size="xs"
               variant="ghost"
@@ -1480,6 +1483,7 @@ export const EnvironmentEditor = ({
             <>
               <div className="flex justify-end">
                 <Button
+                  aria-pressed={rollbackValuesRevealed}
                   onClick={() =>
                     setRollbackValuesRevealed((current) => !current)
                   }
