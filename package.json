@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
+    "issues:panel": "bun scripts/run-issues-panel.ts",
+    "issues:panel:test": "bun test scripts/run-issues-panel.test.ts",
+    "issues:run": "./run-issues.sh",
     "package:cli": "bun scripts/stage-cli-package.ts",
     "package:cli:version": "bun scripts/set-cli-version.ts",
     "smoke": "turbo run smoke",
@@ -21,7 +24,7 @@
     "boundaries": "bun scripts/verify-boundaries.ts",
     "vectors:verify-sources": "bun scripts/verify-vector-sources.ts",
     "vectors:generate": "bun scripts/generate-v3-vectors.ts",
-    "test:unit": "bun test scripts/run-issues.test.ts scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts scripts/client-browser.test.ts && turbo run test:unit",
+    "test:unit": "bun test scripts/run-issues.test.ts scripts/run-issues-panel.test.ts scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts scripts/client-browser.test.ts && turbo run test:unit",
     "test:runner": "bun test scripts/run-issues.test.ts",
     "openapi:check": "bun scripts/check-openapi.ts",
     "test:integration": "bun scripts/test-services.ts && turbo run test:integration",

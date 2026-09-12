@@ -62,6 +62,93 @@ CONTROLLER_LOG=""
 CONTROLLER_LOCK_DIR=""
 LAST_GATE_REASON=""
 ACKNOWLEDGED_CODERABBIT_SHA=""
+RUN_ID="${RUN_ID:-}"
+RUN_STARTED_AT="${RUN_STARTED_AT:-}"
+RUN_STAGE="starting"
+RUN_MESSAGE="Preparing the issue worker."
+STATUS_FILE="${RUN_STATUS_PATH:-}"
+STATUS_FINALIZED=0
+PR_URL=""
+
+write_status() {
+  [[ -n "$STATUS_FILE" ]] || return 0
+
+  local status="$1"
+  local stage="$2"
+  local message="$3"
+  local updated_at
+  local status_tmp="$STATUS_FILE.tmp.$$"
+  updated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+  jq -n \
+    --argjson version 1 \
+    --arg runId "$RUN_ID" \
+    --arg status "$status" \
+    --arg stage "$stage" \
+    --arg message "$message" \
+    --arg startedAt "$RUN_STARTED_AT" \
+    --arg updatedAt "$updated_at" \
+    --arg finishedAt "$([[ "$status" == "running" ]] && printf '' || printf '%s' "$updated_at")" \
+    --argjson pid "$$" \
+    --argjson controllerPid "${RUN_CONTROLLER_PID:-$$}" \
+    --arg baseBranch "$BASE_BRANCH" \
+    --arg issue "$ACTIVE_ISSUE" \
+    --arg issueTitle "${ISSUE_TITLE:-}" \
+    --arg issueUrl "${ISSUE_URL:-}" \
+    --arg priority "${ISSUE_PRIORITY:-}" \
+    --arg branch "$ACTIVE_BRANCH" \
+    --arg prUrl "${PR_URL:-}" \
+    --arg logFile "${RUN_CONTROLLER_LOG_FILE:-$(basename "$CONTROLLER_LOG")}" \
+    --arg activeLogFile "$([[ -n "$ACTIVE_LOG" ]] && basename "$ACTIVE_LOG" || true)" \
+    '{
+      version: $version,
+      runId: $runId,
+      status: $status,
+      stage: $stage,
+      message: $message,
+      startedAt: $startedAt,
+      updatedAt: $updatedAt,
+      finishedAt: (if $finishedAt == "" then null else $finishedAt end),
+      pid: $pid,
+      controllerPid: $controllerPid,
+      baseBranch: $baseBranch,
+      issue: (try ($issue | tonumber) catch null),
+      issueTitle: (if $issueTitle == "" then null else $issueTitle end),
+      issueUrl: (if $issueUrl == "" then null else $issueUrl end),
+      priority: (try ($priority | tonumber) catch null),
+      branch: (if $branch == "" then null else $branch end),
+      prUrl: (if $prUrl == "" then null else $prUrl end),
+      logFile: $logFile,
+      activeLogFile: (if $activeLogFile == "" then null else $activeLogFile end)
+    }' >"$status_tmp"
+  chmod 600 "$status_tmp"
+  mv "$status_tmp" "$STATUS_FILE"
+}
+
+set_stage() {
+  RUN_STAGE="$1"
+  RUN_MESSAGE="$2"
+  write_status "running" "$RUN_STAGE" "$RUN_MESSAGE"
+}
+
+finalize_status() {
+  local final_status="$1"
+  RUN_STAGE="$2"
+  RUN_MESSAGE="$3"
+  write_status "$final_status" "$RUN_STAGE" "$RUN_MESSAGE"
+  STATUS_FINALIZED=1
+}
+
+handle_exit() {
+  local exit_status="$1"
+  if [[ -n "$STATUS_FILE" && "$STATUS_FINALIZED" -eq 0 ]]; then
+    if [[ "$exit_status" -eq 0 ]]; then
+      finalize_status "completed" "worker_complete" "Worker completed issue #${ACTIVE_ISSUE:-unknown}." || true
+    else
+      finalize_status "failed" "$RUN_STAGE" "Worker exited unexpectedly with status $exit_status." || true
+    fi
+  fi
+}
 
 save_checkpoint() {
   local temporary="$WORKER_STATE.tmp"
@@ -72,6 +159,9 @@ save_checkpoint() {
 }
 
 die() {
+  if [[ -n "$STATUS_FILE" ]]; then
+    finalize_status "failed" "$RUN_STAGE" "$*" || true
+  fi
   printf 'ERROR: %s\n' "$*" >&2
   if [[ -n "$ACTIVE_ISSUE" ]]; then
     printf 'Issue #%s is preserved in the controller journal for retry or inspection.\n' "$ACTIVE_ISSUE" >&2
@@ -250,11 +340,12 @@ read -r LOCK_OWNER <"$CONTROLLER_LOCK_DIR/pid" || LOCK_OWNER=""
 if [[ ! -d "$CONTROLLER_LOCK_DIR" || "$LOCK_OWNER" != "$$" ]]; then
   die "Lost the controller lock $CONTROLLER_LOCK_DIR to a concurrent controller."
 fi
-trap release_controller_lock EXIT
+trap 'handle_exit $?; release_controller_lock' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-RUN_ID="$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+RUN_ID="${RUN_ID:-$(date -u +'%Y%m%dT%H%M%SZ')-$$}"
+RUN_STARTED_AT="${RUN_STARTED_AT:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}"
 CONTROLLER_LOG="$RUN_LOG_DIR/run-$RUN_ID.log"
 
 # Keep one readable transcript for the entire loop. Individual OpenCode sessions
@@ -264,6 +355,7 @@ exec > >(tee -a "$CONTROLLER_LOG") 2>&1
 printf 'DotRelay issue run started at %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 printf 'Full run transcript: %s\n' "$CONTROLLER_LOG"
 printf 'Raw OpenCode event logs: %s/issue-N.ndjson\n\n' "$RUN_LOG_DIR"
+set_stage "starting_worker" "Issue worker started."
 
 format_opencode_events() {
   jq --unbuffered -r '
@@ -485,6 +577,7 @@ wait_for_checks() {
   local gate_meta=""
 
   LAST_GATE_REASON=""
+  set_stage "waiting_for_ci" "Waiting for required checks on the pull request for issue #$ACTIVE_ISSUE."
 
   while true; do
     capture_with_retry gate_meta gh pr view "$pr_url" --json headRefOid,mergeable,mergeStateStatus \
@@ -721,6 +814,7 @@ repair_pr() {
   local gate_reason="${6:-PR gate failure}"
 
   printf '\nPR gates failed. Starting repair attempt %s of %s.\n' "$repair_attempt" "$MAX_REPAIR_ATTEMPTS"
+  set_stage "repairing_pr" "Repairing issue #$issue_number (attempt $repair_attempt of $MAX_REPAIR_ATTEMPTS)."
 
   # A killed session may leave useful uncommitted work. The repair prompt tells
   # the next agent to inspect and finish it before any push or merge.
@@ -762,6 +856,7 @@ repair_pr() {
   REPAIR_COUNT="$repair_attempt"
   save_checkpoint
 
+  set_stage "validating_repair" "Validating the repair for issue #$issue_number."
   [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "OpenCode left uncommitted repair changes."
   [[ "$(git branch --show-current)" == "$expected_branch" ]] || die "OpenCode changed the repair branch."
   REPAIRED_HEAD_SHA="$(git rev-parse HEAD)"
@@ -779,6 +874,7 @@ repair_pr() {
   fi
   git merge-base --is-ancestor "$REPAIR_BASE_SHA" "$REPAIRED_HEAD_SHA" || die "The repair commit does not descend from the PR head."
 
+  set_stage "pushing_repair" "Pushing the repair for issue #$issue_number."
   retry_command git push origin "$expected_branch" || die "Could not push the repair commit."
 
   PUSH_DEADLINE=$((SECONDS + 60))
@@ -805,6 +901,7 @@ finish_pr() {
   local merge_deadline=0
   local issue_close_deadline=0
 
+  set_stage "validating_pr" "Validating the pull request for issue #$issue_number."
   validate_pr "$pr_url" "$issue_number" "$expected_branch"
   if [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
     git merge --ff-only "origin/$expected_branch"
@@ -834,6 +931,7 @@ finish_pr() {
     exit 78
   fi
 
+  set_stage "merging" "Merging the completed pull request for issue #$issue_number."
   git switch "$BASE_BRANCH"
   # Respect server-side branch protection by default, including required checks
   # that have not registered yet. Administrator bypass is an explicit opt-in.
@@ -872,6 +970,7 @@ finish_pr() {
   done
 
   printf 'Merged issue #%s. Starting the next issue in a fresh OpenCode session.\n' "$issue_number"
+  finalize_status "completed" "worker_complete" "Merged issue #$issue_number."
 }
 
 REPAIR_COUNT=0
@@ -886,6 +985,7 @@ while true; do
   ACTIVE_ISSUE="$RUN_ISSUE_NUMBER"
   ACTIVE_BRANCH="agent/issue-$ACTIVE_ISSUE"
   ACTIVE_LOG="$RUN_LOG_DIR/issue-$ACTIVE_ISSUE-$RUN_ID.ndjson"
+  set_stage "loading_issue" "Loading issue #$ACTIVE_ISSUE."
 
   if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" && \
         "$(git branch --show-current)" != "$ACTIVE_BRANCH" ]]; then
@@ -896,6 +996,9 @@ while true; do
   retry_command git fetch --prune origin || die "Could not fetch origin."
   capture_with_retry ISSUE_DETAILS gh api "repos/$REPO/issues/$ACTIVE_ISSUE" || die "Could not check selected issue."
   [[ "$(jq -r .state <<<"$ISSUE_DETAILS")" != "closed" ]] || exit 0
+  ISSUE_TITLE="$(jq -r .title <<<"$ISSUE_DETAILS")"
+  ISSUE_URL="$(jq -r .html_url <<<"$ISSUE_DETAILS")"
+  ISSUE_PRIORITY="$(jq -r '(.body // "") | try capture("Priority:[[:space:]]*P(?<n>[0-9]+)"; "i").n catch "?"' <<<"$ISSUE_DETAILS")"
   if ! jq -e --arg login "$RUN_ISSUE_LOGIN" 'all(.assignees[]?; .login == $login)
     and any(.labels[]?; .name == "ready-for-agent") and .issue_dependencies_summary.blocked_by == 0' <<<"$ISSUE_DETAILS" >/dev/null; then
     printf 'Issue ownership or readiness changed before resuming.\n' >&2
@@ -943,6 +1046,7 @@ while true; do
     fi
 
     printf '\nResuming open PR for issue #%s: %s\n' "$ACTIVE_ISSUE" "$PR_URL"
+    set_stage "resuming_pr" "Resuming the open pull request for issue #$ACTIVE_ISSUE."
     finish_pr "$PR_URL" "$ACTIVE_ISSUE" "$ACTIVE_BRANCH" "$HEAD_SHA"
     exit 0
   fi
@@ -958,6 +1062,7 @@ while true; do
 
   printf '\nSelected P%s issue #%s: %s\n%s\n' \
     "$ISSUE_PRIORITY" "$ACTIVE_ISSUE" "$ISSUE_TITLE" "$ISSUE_URL"
+  set_stage "claiming_issue" "Claiming P$ISSUE_PRIORITY issue #$ACTIVE_ISSUE."
 
   # Re-read immediately before claiming. This narrows the race with another worker.
   ISSUE_DETAILS=""
@@ -1003,14 +1108,17 @@ while true; do
 
   PROMPT+=$'\nInspect and finish any existing commits or uncommitted work left by a previous session. Preserve valid completed work. Do not send comments or messages.'
 
+  set_stage "implementing" "OpenCode is implementing issue #$ACTIVE_ISSUE."
   run_opencode_resilient "dotrelay-issue-$ACTIVE_ISSUE" "$PROMPT" "$ACTIVE_LOG"
 
+  set_stage "validating_implementation" "Validating the implementation for issue #$ACTIVE_ISSUE."
   [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || die "OpenCode left uncommitted changes."
   [[ "$(git branch --show-current)" == "$ACTIVE_BRANCH" ]] || die "OpenCode changed the issue branch."
   HEAD_SHA="$(git rev-parse HEAD)"
   [[ "$HEAD_SHA" != "$BASE_SHA" ]] || die "OpenCode produced no commit."
   git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA" || die "The result is not based on the selected main commit."
 
+  set_stage "pushing_branch" "Pushing the implementation for issue #$ACTIVE_ISSUE."
   retry_command git push --set-upstream origin "$ACTIVE_BRANCH" \
     || die "Could not push $ACTIVE_BRANCH."
 
@@ -1020,6 +1128,7 @@ while true; do
   if [[ -n "$EXISTING_PR" ]]; then
     PR_URL="$EXISTING_PR"
   else
+    set_stage "opening_pr" "Opening a pull request for issue #$ACTIVE_ISSUE."
     printf -v PR_BODY 'Closes #%s\n\nImplemented from the agent-ready ticket in a fresh OpenCode session.' "$ACTIVE_ISSUE"
     PR_BODY_FILE="$RUN_LOG_DIR/issue-$ACTIVE_ISSUE-$RUN_ID-pr.md"
     printf '%s\n' "$PR_BODY" >"$PR_BODY_FILE"
@@ -1046,6 +1155,7 @@ while true; do
   fi
 
   printf 'Opened %s\n' "$PR_URL"
+  set_stage "pr_open" "Opened the pull request for issue #$ACTIVE_ISSUE."
   finish_pr "$PR_URL" "$ACTIVE_ISSUE" "$ACTIVE_BRANCH" "$HEAD_SHA"
   exit 0
 done

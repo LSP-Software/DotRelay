@@ -15,6 +15,7 @@ export const runProcess = async (
     timeout?: number;
     signal?: AbortSignal;
     live?: boolean;
+    onOutput?: (data: string, stderr: boolean) => void;
   } = {},
 ): Promise<{
   code: number;
@@ -104,6 +105,7 @@ export const runProcess = async (
     if (options.live) output = output.slice(-2_000_000);
     if (options.live) stdout = stdout.slice(-2_000_000);
     infrastructure ||= isInfrastructureError(output);
+    options.onOutput?.(data, stderr);
     if (options.live) (stderr ? process.stderr : process.stdout).write(data);
   };
   child.stdout

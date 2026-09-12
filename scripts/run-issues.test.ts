@@ -264,6 +264,15 @@ test("full controller recovers on session four and drains both issues", async ()
     cwd: item.root,
   });
   expect(rootStatus.output).toBe("");
+  const controllerDirectory = join(item.root, ".git", "issue-runner");
+  const panelStatus = JSON.parse(
+    await readFile(join(controllerDirectory, "status.json"), "utf8"),
+  );
+  expect(panelStatus.status).toBe("completed");
+  expect(panelStatus.stage).toBe("completed");
+  expect(
+    await readFile(join(controllerDirectory, panelStatus.logFile), "utf8"),
+  ).toContain("Processing #");
 }, 60_000);
 
 test("a failed issue does not prevent the next issue from merging", async () => {
