@@ -296,6 +296,52 @@ describe("CLI argument contract", () => {
     expect(() => parseArguments(["history", "--reveal"])).toThrow("--reveal");
   });
 
+  test("accepts --remote on the commands that resolve a GitHub Repository", () => {
+    expect(parseArguments(["context", "--remote", "upstream"]).remote).toBe(
+      "upstream",
+    );
+    expect(
+      parseArguments(["context", "--remote=upstream", "--no-input"]).remote,
+    ).toBe("upstream");
+    expect(
+      parseArguments([
+        "project",
+        "link",
+        "--team",
+        "team-1",
+        "--remote",
+        "origin",
+      ]).remote,
+    ).toBe("origin");
+    expect(parseArguments(["push", "--remote", "upstream"]).remote).toBe(
+      "upstream",
+    );
+    expect(parseArguments(["pull", "--remote", "origin"]).remote).toBe(
+      "origin",
+    );
+    expect(parseArguments(["diff", "--remote", "origin"]).remote).toBe(
+      "origin",
+    );
+    expect(parseArguments(["history", "--remote", "origin"]).remote).toBe(
+      "origin",
+    );
+  });
+
+  test("rejects --remote on commands that do not resolve a repository", () => {
+    expect(() => parseArguments(["login", "--remote", "origin"])).toThrow(
+      "--remote",
+    );
+    expect(() => parseArguments(["status", "--remote", "origin"])).toThrow(
+      "--remote",
+    );
+    expect(() =>
+      parseArguments(["env", "use", "abc", "--remote", "origin"]),
+    ).toThrow("--remote");
+    expect(() =>
+      parseArguments(["device", "enroll", "--remote", "origin"]),
+    ).toThrow("--remote");
+  });
+
   test("accepts setup, help, and --team on push", () => {
     expect(parseArguments(["setup", "https://relay.example"])).toMatchObject({
       command: "setup",

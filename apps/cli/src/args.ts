@@ -34,6 +34,7 @@ export type ParsedArguments = Readonly<{
   readonly from?: string;
   readonly team?: string;
   readonly name?: string;
+  readonly remote?: string;
   readonly limit?: number;
   readonly classifications: Readonly<Record<string, "shared" | "user-defined">>;
   readonly variableIds: readonly string[];
@@ -57,6 +58,7 @@ type MutableArguments = {
   from?: string;
   team?: string;
   name?: string;
+  remote?: string;
   limit?: string | number;
   classifications: Record<string, "shared" | "user-defined">;
   variableIds: string[];
@@ -77,6 +79,7 @@ const valueFlags = new Set([
   "--from",
   "--team",
   "--name",
+  "--remote",
   "--limit",
   "--classify",
   "--variable",
@@ -108,6 +111,7 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   else if (flag === "--from") parsed.from = value;
   else if (flag === "--team") parsed.team = value;
   else if (flag === "--name") parsed.name = value;
+  else if (flag === "--remote") parsed.remote = value;
   else if (flag === "--limit") {
     parsed.limit = value;
   } else if (flag === "--classify") {
@@ -144,6 +148,7 @@ const FLAG_KEYS = [
   "from",
   "team",
   "name",
+  "remote",
   "limit",
   "classify",
   "variable",
@@ -165,6 +170,7 @@ const FLAG_TOKENS: Record<FlagKey, string> = {
   from: "--from",
   team: "--team",
   name: "--name",
+  remote: "--remote",
   limit: "--limit",
   classify: "--classify",
   variable: "--variable",
@@ -214,6 +220,7 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "environment",
     "from",
     "team",
+    "remote",
     "noInput",
     "force",
     "json",
@@ -226,6 +233,7 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "environment",
     "from",
     "team",
+    "remote",
     "noInput",
     "force",
     "json",
@@ -237,6 +245,7 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "profile",
     "environment",
     "team",
+    "remote",
     "output",
     "stdout",
     "noInput",
@@ -250,18 +259,28 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "environment",
     "team",
     "from",
+    "remote",
     "noInput",
     "json",
     "limit",
     "reveal",
   ],
   status: ["profile", "json"],
-  context: ["profile", "environment", "json"],
-  history: ["profile", "environment", "team", "noInput", "json", "limit"],
+  context: ["profile", "environment", "remote", "noInput", "json"],
+  history: [
+    "profile",
+    "environment",
+    "team",
+    "remote",
+    "noInput",
+    "json",
+    "limit",
+  ],
   rollback: [
     "profile",
     "environment",
     "team",
+    "remote",
     "variable",
     "noInput",
     "json",
@@ -278,7 +297,7 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "device complete": ["profile", "noInput", "json", "from"],
   "device backup": ["profile", "noInput", "force", "json", "output"],
   "device recover": ["profile", "noInput", "json", "from"],
-  "project link": ["profile", "team", "json"],
+  "project link": ["profile", "team", "remote", "noInput", "json"],
   "env use": ["profile", "environment", "json"],
 };
 

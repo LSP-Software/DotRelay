@@ -31,11 +31,15 @@ import {
   openVerificationPage,
 } from "./auth";
 import {
-  detectGitHubRepository,
+  type GitHubRepositorySelection,
   type GitRemote,
+  readStoredWorktreeContext,
   readWorktreeContext,
+  repositoryChoiceFields,
+  repositoryChoiceFrom,
   resolveEnvironmentSelection,
   resolveGitHubRepository,
+  selectGitHubRepository,
   type WorktreeContext,
   worktreeConfigPath,
   writeWorktreeContext,
@@ -104,6 +108,7 @@ export const renderHelp = (): string => {
     "  status           Show this machine's connection",
     "",
     "More commands: dotrelay help",
+    "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous",
     "Automation: --json  --no-input  --force  --debug",
   ].join("\n");
 };
@@ -140,6 +145,7 @@ export const renderPowerHelp = (): string => {
     "",
     "Shared: --profile  --environment  --team <id>  --json  --debug  --no-input",
     "(each is scoped to the commands that consume it; unsupported options, unexpected positionals, and conflicting output flags are rejected before work starts)",
+    "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous, such as a fork origin and a source upstream; the choice is saved in the worktree context and re-used until that remote stops pointing at the same repository",
     "Publish: --classify NAME=shared|user-defined  --from <file>  --force",
     "Pull: --output <file>  --stdout  --reveal  --force",
     "Diff: --from <file>  --reveal",
@@ -236,6 +242,22 @@ const defaultWorktreeConfigPath = async (): Promise<string> => {
     throw new CliInvocationError("could not locate the Git worktree context");
   }
 };
+
+// The same explicit-choice inputs steer every command that resolves a
+// GitHub Repository: the choice recorded in the worktree context, the
+// documented noninteractive --remote override, and the interaction
+// primitives.
+const repositorySelectionOptions = (
+  parsed: ParsedArguments,
+  runtime: CliRuntime,
+  context: WorktreeContext | null,
+) => ({
+  saved: repositoryChoiceFrom(context),
+  noInput: parsed.noInput,
+  ...(parsed.remote !== undefined ? { remoteName: parsed.remote } : {}),
+  ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+  ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+});
 
 const json = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
@@ -912,26 +934,41 @@ const execute = async (
   }
   if (parsed.command === "context") {
     const profile = await resolveServerProfile(store, parsed.profile);
-    const repository = detectGitHubRepository(
-      await (runtime.readGitRemotes ?? readGitRemotes)(),
-    );
-    const resolvedRepository = await resolveGitHubRepository(repository, {
-      ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
-    });
-    const context = await readWorktreeContext(
-      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
-    );
-    if (context && context.serverProfileId !== profile.pin.serverProfileId)
+    const contextPath =
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+    const context = await readWorktreeContext(contextPath);
+    // A context holding only the repository choice belongs to no Server
+    // Profile; ownership is only a constraint once a profile is recorded.
+    if (
+      context?.serverProfileId !== undefined &&
+      context.serverProfileId !== profile.pin.serverProfileId
+    )
       throw new CliInvocationError(
         "worktree context belongs to a different Server Profile",
       );
+    const selection = await selectGitHubRepository(
+      await (runtime.readGitRemotes ?? readGitRemotes)(),
+      repositorySelectionOptions(parsed, runtime, context),
+    );
+    const resolvedRepository = await resolveGitHubRepository(
+      selection.repository,
+      { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
+    );
+    // The explicit choice is recorded only after the whole command succeeds;
+    // an unambiguous detection is never recorded, so the worktree context
+    // holds only choices the operator made.
+    if (selection.source !== "detected")
+      await writeWorktreeContext(contextPath, {
+        ...(context ?? {}),
+        ...repositoryChoiceFields(selection.choice),
+      });
     return {
       value: {
         profile: profile.name,
         repository: `${resolvedRepository.host}/${resolvedRepository.owner}/${resolvedRepository.name}`,
         remoteNames: resolvedRepository.remoteNames,
         githubRepositoryId: resolvedRepository.githubRepositoryId,
-        ...(context ? { projectId: context.projectId } : {}),
+        ...(context?.projectId ? { projectId: context.projectId } : {}),
         ...(context?.environmentId
           ? { environmentId: context.environmentId }
           : {}),
@@ -951,12 +988,16 @@ const execute = async (
     const team = parsed.team?.toLowerCase();
     if (!team)
       throw new CliInvocationError("project link requires --team <team-id>");
-    const repository = await resolveGitHubRepository(
-      detectGitHubRepository(
-        await (runtime.readGitRemotes ?? readGitRemotes)(),
-      ),
-      { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
+    const contextPath =
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+    const context = await readStoredWorktreeContext(contextPath);
+    const selection = await selectGitHubRepository(
+      await (runtime.readGitRemotes ?? readGitRemotes)(),
+      repositorySelectionOptions(parsed, runtime, context),
     );
+    const repository = await resolveGitHubRepository(selection.repository, {
+      ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
+    });
     const credentials = runtime.credentials ?? createNativeCredentialStore();
     const admin = await createAdminClient(runtime, profile, credentials);
     const project = await linkProject(admin, {
@@ -975,16 +1016,14 @@ const execute = async (
           })(),
       },
     });
-    await writeWorktreeContext(
-      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
-      {
-        serverProfileId: profile.pin.serverProfileId,
-        projectId: project.id,
-        ...(project.environment
-          ? { environmentId: project.environment.id }
-          : {}),
-      },
-    );
+    await writeWorktreeContext(contextPath, {
+      serverProfileId: profile.pin.serverProfileId,
+      projectId: project.id,
+      ...(project.environment ? { environmentId: project.environment.id } : {}),
+      ...(selection.source !== "detected"
+        ? repositoryChoiceFields(selection.choice)
+        : {}),
+    });
     return {
       value: {
         profile: profile.name,
@@ -1002,7 +1041,7 @@ const execute = async (
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readWorktreeContext(contextPath);
-    if (!context)
+    if (!context || context.projectId === undefined)
       throw new CliInvocationError(
         "No Project selected; use project link before selecting an Environment",
       );
@@ -1139,16 +1178,20 @@ const execute = async (
           readonly serverProfileId: string;
           readonly projectId: string;
           readonly environmentId?: string;
+          readonly repositoryRemote?: string;
+          readonly repositoryOwner?: string;
+          readonly repositoryName?: string;
         }>
       | undefined;
     if (!runtime.admin) {
       requireEnrolledDevice(deviceId);
-      const repository = await resolveGitHubRepository(
-        detectGitHubRepository(
-          await (runtime.readGitRemotes ?? readGitRemotes)(),
-        ),
-        { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
+      const selection: GitHubRepositorySelection = await selectGitHubRepository(
+        await (runtime.readGitRemotes ?? readGitRemotes)(),
+        repositorySelectionOptions(parsed, runtime, localContext),
       );
+      const repository = await resolveGitHubRepository(selection.repository, {
+        ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
+      });
       const credentials = runtime.credentials ?? createNativeCredentialStore();
       const admin =
         runtime.admin ??
@@ -1318,6 +1361,11 @@ const execute = async (
         serverProfileId: profile.pin.serverProfileId,
         projectId: initializedProject.id,
         ...(environmentId ? { environmentId } : {}),
+        // Only explicit choices are persisted; a detected single repository
+        // is re-read from the Git configuration on every run.
+        ...(selection.source !== "detected"
+          ? repositoryChoiceFields(selection.choice)
+          : {}),
       });
     }
     const workflowResult = await runProtectedWorkflow(

@@ -37,16 +37,28 @@ are rejected.
 
 `context` normalizes GitHub SSH and HTTPS remotes, then resolves GitHub's stable numeric Repository
 id. Protected commands use that identity to automatically find the accessible Project, so a saved
-Project selection is not required when running from its repository. Missing or different repository
-remotes, or an unlinked repository, fail closed and require an explicit choice. Repository
-detection only finds a Project; it never grants Membership or secret access. The identity lookup
-uses GitHub's public repository metadata endpoint. When the `GITHUB_TOKEN` environment variable is
-set, the CLI authenticates that lookup with the token; without one, GitHub's unauthenticated
-per-IP rate limits can make the lookup temporarily fail. The token is sent only to GitHub.
+Project selection is not required when running from its repository. Missing repository remotes, or
+an unlinked repository, fail closed. When several remotes name different GitHub Repositories — the
+normal fork checkout, with `origin` on the fork and `upstream` on the source — the CLI lists the
+remote names with their repository names, never the remote URLs or credentials, and asks which
+remote identifies this worktree. `--remote <remote-name>` is the documented noninteractive
+override for the commands that resolve a repository; under `--no-input`, an ambiguous worktree
+fails naming the exact `--remote` choices instead of guessing. The choice is recorded in the
+worktree context as opaque identifiers and is re-used while that remote still points at the same
+GitHub Repository. When the remote is removed or repointed, the recorded choice is discarded and
+the choice is made again from the current remotes: the CLI asks again when more than one
+Repository remains, and under `--no-input` fails naming the exact `--remote` choices; a stale
+choice is never followed to a different Repository. Choosing a remote only selects which
+Repository identity to resolve: like detection, it never grants Membership or
+secret access, and the Server Profile still scopes every request to the Projects the User's
+Teams can reach. The identity lookup uses GitHub's public repository metadata endpoint. When the
+`GITHUB_TOKEN` environment variable is set, the CLI authenticates that lookup with the token;
+without one, GitHub's unauthenticated per-IP rate limits can make the lookup temporarily fail.
+The token is sent only to GitHub.
 
 Environment selection is by opaque id or operator-visible label, and is worktree local.
-`.git/dotrelay/config` may contain only the Server Profile, Project, and Environment opaque ids,
-never Values. When neither the command arguments nor the saved selection name an Environment,
+`.git/dotrelay/config` may contain only the Server Profile, Project, Environment, and chosen
+repository remote opaque ids, never Values or remote URLs. When neither the command arguments nor the saved selection name an Environment,
 the CLI chooses automatically only when exactly one active Environment is available; otherwise
 it lists the Environment labels and asks. Archived Environments are never selected automatically
 and can only be addressed with an explicit `--environment`. The saved selection is written only
