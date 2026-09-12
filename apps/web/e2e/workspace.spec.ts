@@ -257,8 +257,24 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(value).toHaveValue("local-only-value");
 
   await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByRole("dialog")).toContainText("DATABASE_URL");
-  await expect(page.getByRole("dialog")).toContainText("local-only-value");
+  const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
+  await expect(reviewDialog).toContainText("DATABASE_URL");
+  await expect(reviewDialog).not.toContainText("local-only-value");
+  await expect(reviewDialog).toContainText("••••••••");
+  const showReviewValues = page.getByRole("button", { name: "Show values" });
+  await expect(showReviewValues).toBeVisible();
+  await expect(showReviewValues).toHaveAttribute("aria-pressed", "false");
+
+  await showReviewValues.click();
+  await expect(reviewDialog).toContainText("local-only-value");
+  await expect(
+    page.getByRole("button", { name: "Hide values" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(reviewDialog).not.toContainText("local-only-value");
+  await expect(showReviewValues).toHaveAttribute("aria-pressed", "false");
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByText(/Local preview saved as rev_0185/)).toBeVisible();
 });
@@ -267,11 +283,30 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   await page.goto("/workspace?preview=protected");
 
   await page.getByRole("button", { name: "Rollback" }).first().click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "This writes a new revision",
-  );
-  await expect(page.getByRole("dialog")).toContainText("API_ORIGIN");
-  await expect(page.getByRole("dialog")).not.toContainText("SIGNING_KEY");
+  const rollbackDialog = page.getByRole("dialog", { name: "Rollback" });
+  await expect(rollbackDialog).toContainText("This writes a new revision");
+  await expect(rollbackDialog).toContainText("API_ORIGIN");
+  await expect(rollbackDialog).not.toContainText("SIGNING_KEY");
+  await expect(rollbackDialog).not.toContainText("https://api.acme.example");
+  await expect(rollbackDialog).toContainText("••••••••");
+  const showRollbackValues = page.getByRole("button", {
+    name: "Show values",
+  });
+  await expect(showRollbackValues).toBeVisible();
+  await expect(showRollbackValues).toHaveAttribute("aria-pressed", "false");
+
+  await showRollbackValues.click();
+  await expect(rollbackDialog).toContainText("https://api.acme.example");
+  await expect(
+    page.getByRole("button", { name: "Hide values" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Rollback" }).first().click();
+  await expect(rollbackDialog).not.toContainText("https://api.acme.example");
+  await expect(rollbackDialog).toContainText("••••••••");
+  await expect(showRollbackValues).toHaveAttribute("aria-pressed", "false");
+
   await page.getByRole("button", { name: "Stage rollback" }).click();
   await expect(
     page.getByText(/Rollback from rev_0183 is staged as a new revision/),

@@ -695,8 +695,10 @@ export const EnvironmentEditor = ({
     if (active !== false) return;
     setAddOpen(false);
     setReviewOpen(false);
+    setReviewValuesRevealed(false);
     setRollbackTarget(null);
     setRollbackLanes(new Set());
+    setRollbackValuesRevealed(false);
   }, [active]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
@@ -704,8 +706,8 @@ export const EnvironmentEditor = ({
   const [rollbackHistoricalValues, setRollbackHistoricalValues] = useState<
     ReadonlyMap<string, string | null>
   >(() => new Map());
-  const [reviewValuesRevealed, setReviewValuesRevealed] = useState(true);
-  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(true);
+  const [reviewValuesRevealed, setReviewValuesRevealed] = useState(false);
+  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(false);
   const baselineFor = (id: string): EnvironmentVariable | undefined =>
     remoteVariables.find((variable) => variable.id === id);
   const withDraftFlag = (
@@ -853,7 +855,7 @@ export const EnvironmentEditor = ({
     const diffs = rollbackValueDiffs(variables, values);
     setRollbackHistoricalValues(values);
     setRollbackLanes(new Set(diffs.map((diff) => diff.id)));
-    setRollbackValuesRevealed(true);
+    setRollbackValuesRevealed(false);
     setRollbackTarget(revision);
   };
 
@@ -1320,7 +1322,7 @@ export const EnvironmentEditor = ({
             <Button
               disabled={!canPublish}
               onClick={() => {
-                setReviewValuesRevealed(true);
+                setReviewValuesRevealed(false);
                 setReviewOpen(true);
               }}
               size="sm"
@@ -1421,7 +1423,7 @@ export const EnvironmentEditor = ({
       <Dialog
         onOpenChange={(open) => {
           setReviewOpen(open);
-          if (open) setReviewValuesRevealed(true);
+          if (!open) setReviewValuesRevealed(false);
         }}
         open={reviewOpen}
       >
@@ -1434,6 +1436,7 @@ export const EnvironmentEditor = ({
           </DialogHeader>
           <div className="flex justify-end">
             <Button
+              aria-pressed={reviewValuesRevealed}
               onClick={() => setReviewValuesRevealed((current) => !current)}
               size="xs"
               variant="ghost"
@@ -1469,6 +1472,7 @@ export const EnvironmentEditor = ({
           if (!open) {
             setRollbackTarget(null);
             setRollbackHistoricalValues(new Map());
+            setRollbackValuesRevealed(false);
           }
         }}
         open={rollbackTarget !== null}
@@ -1489,6 +1493,7 @@ export const EnvironmentEditor = ({
             <>
               <div className="flex justify-end">
                 <Button
+                  aria-pressed={rollbackValuesRevealed}
                   onClick={() =>
                     setRollbackValuesRevealed((current) => !current)
                   }
