@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { createGrillManager } from "./run-issues-grill";
 
 const DEFAULT_PORT = 4173;
 const MAX_LOG_CHUNK_BYTES = 128 * 1024;
@@ -285,6 +286,45 @@ export const panelHtml = `<!doctype html>
       }
 
       .main { display: grid; min-width: 0; gap: 1rem; }
+      .grill {
+        display: grid;
+        gap: 1rem;
+        padding: 1.15rem 1.25rem;
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        background: rgba(11, 23, 21, 0.88);
+        box-shadow: var(--shadow);
+      }
+      .grill-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+      .grill h2 { margin: 0; font-size: 1rem; }
+      .grill-status { color: var(--amber); font-size: 0.78rem; }
+      .grill-question {
+        max-height: 24rem;
+        margin: 0;
+        padding: 1rem;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 0.75rem;
+        background: rgba(5, 12, 11, 0.82);
+        color: #c7ddd6;
+        white-space: pre-wrap;
+      }
+      textarea {
+        width: 100%;
+        min-height: 8rem;
+        resize: vertical;
+        padding: 0.85rem;
+        border: 1px solid var(--line-strong);
+        border-radius: 0.7rem;
+        outline: none;
+        background: #07100f;
+        color: var(--text);
+        font: inherit;
+        line-height: 1.5;
+      }
+      textarea:focus { border-color: var(--green); box-shadow: 0 0 0 0.2rem var(--green-soft); }
+      .grill-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
+      .button.primary { border-color: rgba(98, 246, 181, 0.55); background: var(--green-soft); color: var(--green); }
       .summary {
         display: grid;
         grid-template-columns: minmax(18rem, 1.5fr) repeat(4, minmax(8rem, 0.55fr));
@@ -451,6 +491,20 @@ export const panelHtml = `<!doctype html>
             <div><p class="eyebrow">Pull request</p><p class="metric" id="pull-request">—</p></div>
           </section>
 
+          <section class="grill" aria-labelledby="grill-title">
+            <div class="grill-head">
+              <div><p class="eyebrow">Human lane</p><h2 id="grill-title">Preparing the next grill-with-docs ticket</h2></div>
+              <span class="grill-status" id="grill-status">Connecting</span>
+            </div>
+            <div class="grill-question" id="grill-question">The panel is looking for a ready-for-human issue…</div>
+            <textarea id="grill-answer" aria-label="Answer the agent's questions" placeholder="Answer the questions above. Exact constraints and examples are especially useful." disabled></textarea>
+            <div class="grill-actions">
+              <button class="button" id="grill-retry" type="button" hidden>Retry</button>
+              <button class="button primary" id="grill-answer-button" type="button" disabled>Send answer</button>
+              <button class="button" id="grill-finish" type="button" disabled>Finish &amp; prepare ticket</button>
+            </div>
+          </section>
+
           <section class="terminal">
             <div class="terminal-bar">
               <div class="terminal-title">
@@ -493,6 +547,13 @@ export const panelHtml = `<!doctype html>
         copy: document.querySelector("#copy"),
         startRunner: document.querySelector("#start-runner"),
         stopRunner: document.querySelector("#stop-runner"),
+        grillTitle: document.querySelector("#grill-title"),
+        grillStatus: document.querySelector("#grill-status"),
+        grillQuestion: document.querySelector("#grill-question"),
+        grillAnswer: document.querySelector("#grill-answer"),
+        grillAnswerButton: document.querySelector("#grill-answer-button"),
+        grillFinish: document.querySelector("#grill-finish"),
+        grillRetry: document.querySelector("#grill-retry"),
       };
 
       let selectedRun = null;
@@ -606,6 +667,7 @@ export const panelHtml = `<!doctype html>
           const data = await response.json();
           const status = data.status;
           const queue = data.queue;
+          const grill = data.grill;
 
           elements.connectionDot.className = "dot live";
           elements.connectionLabel.textContent = "Panel connected";
@@ -653,6 +715,16 @@ export const panelHtml = `<!doctype html>
 
           elements.elapsed.textContent = formatDuration(startedAt, finishedAt);
           renderRuns(data.runs);
+          const waiting = grill.status === "awaiting-human";
+          elements.grillTitle.textContent = grill.issue
+            ? "P" + (grill.priority ?? "?") + " · #" + grill.issue + " · " + grill.issueTitle
+            : "No ready-for-human issue waiting";
+          elements.grillStatus.textContent = grill.status.replaceAll("-", " ");
+          elements.grillQuestion.textContent = grill.question ?? grill.message;
+          elements.grillAnswer.disabled = !waiting;
+          elements.grillAnswerButton.disabled = !waiting;
+          elements.grillFinish.disabled = !waiting;
+          elements.grillRetry.hidden = grill.status !== "failed";
         } catch {
           elements.connectionDot.className = "dot error";
           elements.connectionLabel.textContent = "Panel disconnected";
@@ -678,6 +750,27 @@ export const panelHtml = `<!doctype html>
           elements.message.textContent = error instanceof Error ? error.message : String(error);
         } finally {
           button.textContent = originalLabel;
+          await refreshStatus();
+        }
+      };
+
+      const controlGrill = async (action) => {
+        const answer = elements.grillAnswer.value;
+        elements.grillAnswerButton.disabled = true;
+        elements.grillFinish.disabled = true;
+        try {
+          const response = await fetch("/api/grill/" + action, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-DotRelay-Panel": "1" },
+            body: JSON.stringify({ answer }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error ?? "Grill action failed.");
+          elements.grillAnswer.value = "";
+          elements.grillQuestion.textContent = result.message;
+        } catch (error) {
+          elements.grillQuestion.textContent = error instanceof Error ? error.message : String(error);
+        } finally {
           await refreshStatus();
         }
       };
@@ -715,6 +808,9 @@ export const panelHtml = `<!doctype html>
       });
       elements.startRunner.addEventListener("click", () => void controlRunner("start"));
       elements.stopRunner.addEventListener("click", () => void controlRunner("stop"));
+      elements.grillAnswerButton.addEventListener("click", () => void controlGrill("respond"));
+      elements.grillFinish.addEventListener("click", () => void controlGrill("complete"));
+      elements.grillRetry.addEventListener("click", () => void controlGrill("retry"));
 
       statusTimer = window.setInterval(() => void refreshStatus(), 2000);
       logTimer = window.setInterval(() => void refreshLog(), 1000);
@@ -745,6 +841,7 @@ export const createPanelServer = (
     port?: number;
     startRunner?: () => Promise<number>;
     signalRunner?: (pid: number) => void;
+    grillManager?: ReturnType<typeof createGrillManager>;
   } = {},
 ) => {
   const configuredPort =
@@ -764,6 +861,8 @@ export const createPanelServer = (
   const launchRunner = options.startRunner ?? startRunner;
   const signalRunner =
     options.signalRunner ?? ((pid) => process.kill(pid, "SIGTERM"));
+  const grillManager =
+    options.grillManager ?? createGrillManager({ repoRoot, runsDirectory });
   let launchedPid: number | null = null;
   const activeRunnerPid = async (status?: RunnerStatus | null) => {
     const lockedPid = await readControllerPid();
@@ -856,6 +955,55 @@ export const createPanelServer = (
         }
       }
 
+      if (url.pathname.startsWith("/api/grill/")) {
+        if (!isControlRequest(request)) {
+          return jsonResponse(
+            { error: "Grill control requires a same-origin panel request." },
+            { status: request.method === "POST" ? 403 : 405 },
+          );
+        }
+        try {
+          const contentLength = Number(
+            request.headers.get("content-length") ?? "0",
+          );
+          if (!Number.isSafeInteger(contentLength) || contentLength > 40_000)
+            return jsonResponse(
+              { error: "Grill request is too large." },
+              { status: 413 },
+            );
+          const body = (await request.json().catch(() => ({}))) as {
+            answer?: unknown;
+          };
+          const answer = typeof body.answer === "string" ? body.answer : "";
+          if (url.pathname === "/api/grill/respond") {
+            await grillManager.respond(answer);
+          } else if (url.pathname === "/api/grill/complete") {
+            await grillManager.complete(answer);
+          } else if (url.pathname === "/api/grill/retry") {
+            await grillManager.retry();
+          } else {
+            return jsonResponse(
+              { error: "Unknown grill action." },
+              { status: 404 },
+            );
+          }
+          return jsonResponse(
+            { ok: true, message: "The grill turn was started." },
+            { status: 202 },
+          );
+        } catch (error) {
+          return jsonResponse(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not control the grill.",
+            },
+            { status: 409 },
+          );
+        }
+      }
+
       if (request.method !== "GET") {
         return jsonResponse(
           { error: "Method not allowed." },
@@ -877,16 +1025,18 @@ export const createPanelServer = (
       }
 
       if (url.pathname === "/api/status") {
-        const [status, runs, state] = await Promise.all([
+        const [status, runs, state, grill] = await Promise.all([
           readRunnerStatus(),
           listRunLogs(),
           readControllerState(),
+          grillManager.ensure(),
         ]);
         const runnerPid = await activeRunnerPid(status);
         return jsonResponse({
           status,
           processRunning: runnerPid !== null,
           queue: summarizeQueue(state),
+          grill,
           runs,
           serverTime: new Date().toISOString(),
         });
