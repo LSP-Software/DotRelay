@@ -184,22 +184,25 @@ export const selectGitHubRepository = async (
     );
   }
   const saved = options.saved;
+  let choiceDiscarded = false;
   if (saved) {
     const match = matches.find(
       (entry) =>
         entry.remote.name === saved.remote && sameGitHubIdentity(entry, saved),
     );
     // The choice is pinned to a remote that still points at the same
-    // repository; a removed or repointed remote is a change that reopens
-    // the choice instead of following the remote somewhere new.
+    // repository; a removed or repointed remote discards it, so neither the
+    // unambiguous-detection shortcut nor a silent re-resolution may follow
+    // the remotes somewhere the operator did not choose.
     if (match) return choose(match, "saved");
+    choiceDiscarded = true;
   }
   const identities = new Set(
     matches.map(
       ({ owner, name }) => `${owner.toLowerCase()}/${name.toLowerCase()}`,
     ),
   );
-  if (identities.size === 1) {
+  if (identities.size === 1 && !choiceDiscarded) {
     const first = matches[0];
     if (!first) throw repositoryMissing();
     return choose(first, "detected");
@@ -207,7 +210,11 @@ export const selectGitHubRepository = async (
   if (options.noInput)
     throw new CliError(
       "invocation",
-      `GitHub repository remotes are ambiguous; pass --remote <remote-name> with one of:\n${matches
+      `${
+        identities.size === 1 && choiceDiscarded
+          ? "the recorded repository choice no longer matches the Git remotes; "
+          : "GitHub repository remotes are ambiguous; "
+      }pass --remote <remote-name> with one of:\n${matches
         .map(
           ({ remote, owner, name }, index) =>
             `${index + 1}. ${remote.name} — ${owner}/${name}`,
@@ -288,20 +295,18 @@ export const repositoryChoiceFields = (
     repositoryName: choice.name,
   });
 
-export const stripRepositoryChoice = (
-  context: WorktreeContext,
-): WorktreeContext =>
-  Object.freeze({
-    ...(context.serverProfileId !== undefined
-      ? { serverProfileId: context.serverProfileId }
-      : {}),
-    ...(context.projectId !== undefined
-      ? { projectId: context.projectId }
-      : {}),
-    ...(context.environmentId !== undefined
-      ? { environmentId: context.environmentId }
-      : {}),
-  });
+export const readStoredWorktreeContext = async (
+  path: string,
+): Promise<WorktreeContext | null> => {
+  try {
+    return await readWorktreeContext(path);
+  } catch {
+    // A damaged context is treated as absent: commands that only need the
+    // recorded repository choice re-detect it and rewrite the file when they
+    // succeed.
+    return null;
+  }
+};
 
 const readRepositoryId = async (response: Response): Promise<string> => {
   if (!response.ok)

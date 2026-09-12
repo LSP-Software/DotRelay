@@ -45,8 +45,11 @@ remote identifies this worktree. `--remote <remote-name>` is the documented noni
 override for the commands that resolve a repository; under `--no-input`, an ambiguous worktree
 fails naming the exact `--remote` choices instead of guessing. The choice is recorded in the
 worktree context as opaque identifiers and is re-used while that remote still points at the same
-GitHub Repository; when the remote is removed or repointed, the CLI asks again. Choosing a remote
-only selects which Repository identity to resolve: like detection, it never grants Membership or
+GitHub Repository. When the remote is removed or repointed, the recorded choice is discarded and
+the choice is made again from the current remotes: the CLI asks again when more than one
+Repository remains, and under `--no-input` fails naming the exact `--remote` choices; a stale
+choice is never followed to a different Repository. Choosing a remote only selects which
+Repository identity to resolve: like detection, it never grants Membership or
 secret access, and the Server Profile still scopes every request to the Projects the User's
 Teams can reach. The identity lookup uses GitHub's public repository metadata endpoint. When the
 `GITHUB_TOKEN` environment variable is set, the CLI authenticates that lookup with the token;

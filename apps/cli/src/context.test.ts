@@ -267,13 +267,30 @@ describe("explicit GitHub repository choice", () => {
     expect((error as CliError).code).toBe("repository_ambiguous");
   });
 
-  test("falls back to detection when the recorded remote is removed", async () => {
+  test("re-resolves the remaining remote instead of following a removed one", async () => {
     const selection = await selectGitHubRepository([forkRemote], {
       saved: { remote: "upstream", owner: "LSP-Software", name: "DotRelay" },
       prompt: noPrompt,
     });
-    expect(selection.source).toBe("detected");
+    // The recorded choice is discarded, so the single remaining remote is
+    // re-selected as a fresh explicit choice instead of being detected
+    // silently.
+    expect(selection.source).toBe("interactive");
     expect(selection.repository.owner).toBe("my-user");
+  });
+
+  test("names the exact --remote choices when a stale choice blocks --no-input", async () => {
+    const error = await selectGitHubRepository([forkRemote], {
+      saved: { remote: "upstream", owner: "LSP-Software", name: "DotRelay" },
+      noInput: true,
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).code).toBe("repository_ambiguous");
+    expect((error as CliError).message).toContain(
+      "the recorded repository choice no longer matches the Git remotes",
+    );
+    expect((error as CliError).message).toContain("--remote");
+    expect((error as CliError).message).toContain("origin — my-user/DotRelay");
   });
 
   test("records only opaque identifiers, never the remote URL", async () => {

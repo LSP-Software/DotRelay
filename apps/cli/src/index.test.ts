@@ -1910,6 +1910,56 @@ describe("explicit GitHub repository choice", () => {
     }
   });
 
+  test("context --no-input rejects a stale recorded choice instead of re-detecting", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
+    try {
+      await seedProfile(profilePath);
+      await Bun.write(
+        contextPath,
+        JSON.stringify({
+          repositoryRemote: "upstream",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+        }),
+      );
+      const result = await run(
+        ["context", "--profile", "relay", "--no-input", "--json"],
+        {
+          profilePath,
+          worktreeConfig: contextPath,
+          readGitRemotes: async () => [forkRemote],
+          githubFetch,
+        },
+      );
+      expect(result.exitCode).toBe(2);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "invocation",
+        code: "repository_ambiguous",
+        exitCode: 2,
+      });
+      const detail = String(diagnostic.detail);
+      expect(detail).toContain("no longer matches the Git remotes");
+      expect(detail).toContain("--remote <remote-name>");
+      // The stale choice is left in place for the operator to resolve; it is
+      // never silently re-detected as a different Repository.
+      expect(JSON.parse(await Bun.file(contextPath).text())).toEqual({
+        repositoryRemote: "upstream",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+      });
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
   test("context --remote is the documented noninteractive override", async () => {
     const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
     const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;

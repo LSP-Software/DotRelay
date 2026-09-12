@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import {
   type CliDeviceStorage,
@@ -34,13 +33,13 @@ import {
 import {
   type GitHubRepositorySelection,
   type GitRemote,
+  readStoredWorktreeContext,
   readWorktreeContext,
   repositoryChoiceFields,
   repositoryChoiceFrom,
   resolveEnvironmentSelection,
   resolveGitHubRepository,
   selectGitHubRepository,
-  stripRepositoryChoice,
   type WorktreeContext,
   worktreeConfigPath,
   writeWorktreeContext,
@@ -109,6 +108,7 @@ export const renderHelp = (): string => {
     "  status           Show this machine's connection",
     "",
     "More commands: dotrelay help",
+    "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous",
     "Automation: --json  --no-input  --force  --debug",
   ].join("\n");
 };
@@ -243,18 +243,21 @@ const defaultWorktreeConfigPath = async (): Promise<string> => {
   }
 };
 
-// A damaged context must not block commands that only need the explicit
-// repository choice: they fall back to fresh detection and rewrite the file
-// when they succeed.
-const readStoredContext = async (
-  path: string,
-): Promise<WorktreeContext | null> => {
-  try {
-    return await readWorktreeContext(path);
-  } catch {
-    return null;
-  }
-};
+// The same explicit-choice inputs steer every command that resolves a
+// GitHub Repository: the choice recorded in the worktree context, the
+// documented noninteractive --remote override, and the interaction
+// primitives.
+const repositorySelectionOptions = (
+  parsed: ParsedArguments,
+  runtime: CliRuntime,
+  context: WorktreeContext | null,
+) => ({
+  saved: repositoryChoiceFrom(context),
+  noInput: parsed.noInput,
+  ...(parsed.remote !== undefined ? { remoteName: parsed.remote } : {}),
+  ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+  ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+});
 
 const json = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
@@ -945,34 +948,20 @@ const execute = async (
       );
     const selection = await selectGitHubRepository(
       await (runtime.readGitRemotes ?? readGitRemotes)(),
-      {
-        saved: repositoryChoiceFrom(context),
-        noInput: parsed.noInput,
-        ...(parsed.remote !== undefined ? { remoteName: parsed.remote } : {}),
-        ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
-        ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
-      },
+      repositorySelectionOptions(parsed, runtime, context),
     );
     const resolvedRepository = await resolveGitHubRepository(
       selection.repository,
       { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
     );
     // The explicit choice is recorded only after the whole command succeeds;
-    // an unambiguous detection is never recorded, and stale recorded choices
-    // are cleared when detection no longer needs one.
+    // an unambiguous detection is never recorded, so the worktree context
+    // holds only choices the operator made.
     if (selection.source !== "detected")
       await writeWorktreeContext(contextPath, {
         ...(context ?? {}),
         ...repositoryChoiceFields(selection.choice),
       });
-    else if (context && repositoryChoiceFrom(context)) {
-      const remaining = stripRepositoryChoice(context);
-      if (Object.keys(remaining).length === 0)
-        // A choice was the only recorded state; drop the empty file instead
-        // of leaving one the validator cannot express.
-        await rm(contextPath, { force: true }).catch(() => undefined);
-      else await writeWorktreeContext(contextPath, remaining);
-    }
     return {
       value: {
         profile: profile.name,
@@ -1001,16 +990,10 @@ const execute = async (
       throw new CliInvocationError("project link requires --team <team-id>");
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
-    const stored = await readStoredContext(contextPath);
+    const context = await readStoredWorktreeContext(contextPath);
     const selection = await selectGitHubRepository(
       await (runtime.readGitRemotes ?? readGitRemotes)(),
-      {
-        saved: repositoryChoiceFrom(stored),
-        noInput: parsed.noInput,
-        ...(parsed.remote !== undefined ? { remoteName: parsed.remote } : {}),
-        ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
-        ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
-      },
+      repositorySelectionOptions(parsed, runtime, context),
     );
     const repository = await resolveGitHubRepository(selection.repository, {
       ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
@@ -1204,13 +1187,7 @@ const execute = async (
       requireEnrolledDevice(deviceId);
       const selection: GitHubRepositorySelection = await selectGitHubRepository(
         await (runtime.readGitRemotes ?? readGitRemotes)(),
-        {
-          saved: repositoryChoiceFrom(localContext),
-          noInput: parsed.noInput,
-          ...(parsed.remote !== undefined ? { remoteName: parsed.remote } : {}),
-          ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
-          ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
-        },
+        repositorySelectionOptions(parsed, runtime, localContext),
       );
       const repository = await resolveGitHubRepository(selection.repository, {
         ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
