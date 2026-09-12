@@ -6,6 +6,7 @@ import {
   createDeviceBootstrap,
   createMemoryCredentialStore,
   createMemoryDeviceRecordStore,
+  createProjectEpochGrantBootstrap,
   createPublicationArtifacts,
   loadDeviceKeyMaterial,
   openRecoveryKit,
@@ -14,6 +15,7 @@ import {
   bytesToUuid,
   createProblem,
   encodeSyncPage,
+  generateEncryptionKeyPair,
   generateSigningKeyPair,
   parseProtocolObject,
   type SyncPageWire,
@@ -178,6 +180,12 @@ const setup = async (
     readonly revisions?: SyncPageWire["revisions"];
     readonly bootstrap?: Awaited<ReturnType<typeof createDeviceBootstrap>>;
     readonly withoutBoundaryEnvironment?: boolean;
+    readonly epochGrant?: string;
+    readonly peerDevices?: readonly Readonly<{
+      readonly id: string;
+      readonly encryptionPublicKey: string;
+      readonly hasEpochGrant: boolean;
+    }>[];
   }> = {},
 ): Promise<{
   credentials: NativeCredentialStore;
@@ -228,6 +236,8 @@ const setup = async (
     ...(options.signingTrustKeys
       ? { signingTrustKeys: options.signingTrustKeys }
       : {}),
+    ...(options.epochGrant ? { epochGrant: options.epochGrant } : {}),
+    ...(options.peerDevices ? { peerDevices: options.peerDevices } : {}),
   };
   const createdEnvironments: string[] = [];
   const admin: StrictJsonClient = {
@@ -4072,5 +4082,314 @@ describe("protected CLI workflows", () => {
     await (await import("node:fs/promises"))
       .unlink(`${kitPath}.previous`)
       .catch(() => undefined);
+  });
+});
+
+describe("peer grant provisioning during ordinary reads", () => {
+  const peerDeviceId = "88888888-8888-4888-8888-888888888888";
+
+  type TestPeer = Readonly<{
+    readonly id: string;
+    readonly encryptionPublicKey: string;
+    readonly hasEpochGrant: boolean;
+  }>;
+
+  // Seals a known Project epoch key into the grant the service returns for
+  // the presented Device, so the CLI exercises the reuse-and-wrap path.
+  const sealEpochGrant = async (
+    bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
+    plaintextKey: Uint8Array,
+  ): Promise<string> => {
+    const publicKey = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!publicKey) throw new Error("Device encryption public key is missing");
+    const grant = await createProjectEpochGrantBootstrap({
+      serverProfileId: profile.pin.serverProfileId,
+      teamId: ids.team,
+      projectId: ids.project,
+      projectEpoch: 1,
+      senderDeviceId: ids.device,
+      recipientDeviceId: ids.device,
+      recipientX25519PublicKey: new Uint8Array(
+        await crypto.subtle.exportKey("raw", publicKey),
+      ),
+      recipientEncryptionPublicKey: publicKey,
+      signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+      plaintextKey,
+    });
+    return Buffer.from(grant.canonicalBytes).toString("base64");
+  };
+
+  const makePeer = async (hasEpochGrant: boolean): Promise<TestPeer> => {
+    const peer = await generateEncryptionKeyPair();
+    return {
+      id: peerDeviceId,
+      encryptionPublicKey: bytesToHex(
+        new Uint8Array(await crypto.subtle.exportKey("raw", peer.publicKey)),
+      ),
+      hasEpochGrant,
+    };
+  };
+
+  // Records and scripts the Project grant bootstrap endpoint the CLI posts
+  // to while provisioning peer Devices.
+  const scriptGrantBootstrap = (
+    runtime: Awaited<ReturnType<typeof setup>>,
+    respond: () => Response,
+  ) => {
+    const calls: unknown[] = [];
+    const fetcher: FetchFunction = async (input, init) => {
+      const request = new Request(input as never, init);
+      if (new URL(request.url).pathname.endsWith("/grants/bootstrap")) {
+        calls.push(
+          await request
+            .clone()
+            .json()
+            .catch(() => null),
+        );
+        return respond();
+      }
+      return runtime.fetch(input, init);
+    };
+    return { fetch: fetcher, calls };
+  };
+
+  test("repeated reads never re-provision a peer that holds the epoch grant", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await makePeer(true);
+    const runtime = await setup({
+      bootstrap,
+      epochGrant: await sealEpochGrant(
+        bootstrap,
+        crypto.getRandomValues(new Uint8Array(32)),
+      ),
+      peerDevices: [peer],
+    });
+    const scripted = scriptGrantBootstrap(runtime, () => Response.json({}));
+    for (let read = 0; read < 2; read += 1) {
+      const history = await run(
+        [
+          "history",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--no-input",
+          "--json",
+        ],
+        { ...runtime, fetch: scripted.fetch },
+      );
+      expect(history.exitCode).toBe(0);
+      const body = JSON.parse(history.stdout) as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.revisions).toEqual([]);
+      expect(body).not.toHaveProperty("pendingActions");
+    }
+    const pull = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+        "--no-input",
+      ],
+      { ...runtime, fetch: scripted.fetch },
+    );
+    expect(pull.exitCode).toBe(0);
+    expect(pull.stdout).toBe("\n");
+    // Three verified reads, zero grant writes: the confirmed peer grant is
+    // reused instead of being re-published on every invocation.
+    expect(scripted.calls).toHaveLength(0);
+  });
+
+  test("a rejected peer provisioning leaves the verified read intact", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await makePeer(false);
+    const runtime = await setup({
+      bootstrap,
+      epochGrant: await sealEpochGrant(
+        bootstrap,
+        crypto.getRandomValues(new Uint8Array(32)),
+      ),
+      peerDevices: [peer],
+    });
+    // The service enforces the project-administration authority, so an
+    // ordinary Member's repair attempt is rejected; on a live deployment the
+    // read must still complete.
+    const respond = () =>
+      Response.json(createProblem("forbidden"), { status: 403 });
+    const scripted = scriptGrantBootstrap(runtime, respond);
+    const terminalInput = new PassThrough();
+    terminalInput.end();
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => rendered.push(chunk.toString("utf8")));
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+      ],
+      {
+        ...runtime,
+        fetch: scripted.fetch,
+        terminal: { input: terminalInput, output: terminalOutput },
+      },
+    );
+    expect(history.exitCode).toBe(0);
+    // The original read result stands and the pending action is surfaced
+    // truthfully instead of aborting or hiding it.
+    expect(history.stdout).toContain("revisions: []");
+    expect(history.stdout).toContain(
+      `Device ${peerDeviceId} is missing the Project epoch grant`,
+    );
+    expect(rendered.join("")).toContain(
+      `Device ${peerDeviceId} is missing the Project epoch grant`,
+    );
+    const scriptedJson = scriptGrantBootstrap(runtime, respond);
+    const jsonHistory = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, fetch: scriptedJson.fetch },
+    );
+    expect(jsonHistory.exitCode).toBe(0);
+    const body = JSON.parse(jsonHistory.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.revisions).toEqual([]);
+    expect(body.pendingActions).toEqual([
+      `Device ${peerDeviceId} is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device`,
+    ]);
+    expect(scripted.calls).toHaveLength(1);
+    expect(scriptedJson.calls).toHaveLength(1);
+  });
+
+  test("an authorized actor provisions a missing peer grant", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await makePeer(false);
+    const runtime = await setup({
+      bootstrap,
+      epochGrant: await sealEpochGrant(
+        bootstrap,
+        crypto.getRandomValues(new Uint8Array(32)),
+      ),
+      peerDevices: [peer],
+    });
+    const scripted = scriptGrantBootstrap(runtime, () =>
+      Response.json(
+        {
+          grantObjectId: "99999999-9999-4999-8999-999999999999",
+          idempotent: false,
+        },
+        { status: 201 },
+      ),
+    );
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, fetch: scripted.fetch },
+    );
+    expect(history.exitCode).toBe(0);
+    const body = JSON.parse(history.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body).not.toHaveProperty("pendingActions");
+    expect(scripted.calls).toHaveLength(1);
+    const call = scripted.calls[0] as Record<string, unknown>;
+    expect(call.teamId).toBe(ids.team);
+    expect(call.projectId).toBe(ids.project);
+  });
+
+  test("repeated reads after the peer is provisioned perform no grant writes", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await makePeer(false);
+    const epochKey = crypto.getRandomValues(new Uint8Array(32));
+    const first = await setup({
+      bootstrap,
+      epochGrant: await sealEpochGrant(bootstrap, epochKey),
+      peerDevices: [{ ...peer, hasEpochGrant: false }],
+    });
+    const firstScripted = scriptGrantBootstrap(first, () =>
+      Response.json(
+        {
+          grantObjectId: "99999999-9999-4999-8999-999999999999",
+          idempotent: false,
+        },
+        { status: 201 },
+      ),
+    );
+    const initial = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      { ...first, fetch: firstScripted.fetch },
+    );
+    expect(initial.exitCode).toBe(0);
+    expect(firstScripted.calls).toHaveLength(1);
+    // The service now reports the peer as holding the epoch grant; the next
+    // read must reuse it and write nothing.
+    const second = await setup({
+      bootstrap,
+      epochGrant: await sealEpochGrant(bootstrap, epochKey),
+      peerDevices: [{ ...peer, hasEpochGrant: true }],
+    });
+    const secondScripted = scriptGrantBootstrap(second, () =>
+      Response.json({}),
+    );
+    const repeat = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      { ...second, fetch: secondScripted.fetch },
+    );
+    expect(repeat.exitCode).toBe(0);
+    const body = JSON.parse(repeat.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body).not.toHaveProperty("pendingActions");
+    expect(secondScripted.calls).toHaveLength(0);
   });
 });
