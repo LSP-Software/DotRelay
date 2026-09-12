@@ -4,7 +4,6 @@ import {
 } from "@dotrelay/client";
 import {
   encodeSyncPage,
-  generateEncryptionKeyPair,
   importSigningPrivateKey,
   parseProtocolObject,
   sha384,
@@ -12,8 +11,10 @@ import {
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
 // Private key paired with E2E_REVISION_SIGNING_TRUST_KEY in
-// apps/web/lib/workspace-boundary.ts. It signs the synthetic sync pages
-// below so the browser session can verify the initial read.
+// apps/web/lib/workspace-boundary.ts. It signs the synthetic sync page below
+// so the browser session can verify the initial read, while the lanes are
+// sealed to the enrolled browser Device's key (captured from its bootstrap
+// request) so that same session can decrypt the Variables.
 const REVISION_SIGNING_PRIVATE_KEY =
   "302e020100300506032b657004220420f324c9e7c9d895e589d126c472bc8d36c5b0ca19313c3821ca37fc4f8aa94fae";
 
@@ -54,17 +55,32 @@ const hexToBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
-const buildVerifiedFixturePage = async (): Promise<Uint8Array> => {
+const asBufferSource = (input: Uint8Array): ArrayBuffer => {
+  const copy = new Uint8Array(input.byteLength);
+  copy.set(input);
+  return copy.buffer;
+};
+
+const buildVerifiedFixturePage = async (
+  devicePublicKey: Uint8Array,
+): Promise<Uint8Array> => {
   const signer = await importSigningPrivateKey(
     hexToBytes(REVISION_SIGNING_PRIVATE_KEY),
   );
-  const recipient = await generateEncryptionKeyPair();
+  const valueRecipientPublicKey = await globalThis.crypto.subtle.importKey(
+    "raw",
+    asBufferSource(devicePublicKey),
+    { name: "X25519" },
+    false,
+    [],
+  );
   const artifacts = await createPublicationArtifacts(fixtureVariables, {
     ...fixtureIds,
     projectEpoch: 1,
     expectedHeadId: null,
     expectedHeadHash: null,
-    valueRecipientPublicKey: recipient.publicKey,
+    valueRecipientPublicKey,
+    userDefinedValueRecipientPublicKey: valueRecipientPublicKey,
     signingPrivateKey: signer,
     mutation: "GENESIS",
   });
@@ -117,6 +133,9 @@ const expectLockedEditor = async (editor: Locator) => {
   ).toBeDisabled();
   await expect(editor.getByLabel("OPTIONAL_FLAG Value")).toBeDisabled();
   await expect(
+    editor.getByRole("button", { name: "Reveal OPTIONAL_FLAG" }),
+  ).toBeDisabled();
+  await expect(
     editor.getByRole("button", { name: "Set absent" }),
   ).toBeDisabled();
   await expect(
@@ -137,16 +156,27 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
   page,
 }) => {
   test.setTimeout(90_000);
-  const syncPage = await buildVerifiedFixturePage();
+  let devicePublicKey: Uint8Array | null = null;
+  let syncPage: Uint8Array | null = null;
   let blockSync = false;
-  await page.route("**/api/v1/devices/bootstrap**", (route) =>
-    route.fulfill({ json: {} }),
-  );
+  await page.route("**/api/v1/devices/bootstrap**", (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postData();
+      if (body) {
+        const { x25519PublicKey } = JSON.parse(body) as {
+          readonly x25519PublicKey?: string;
+        };
+        if (x25519PublicKey) devicePublicKey = hexToBytes(x25519PublicKey);
+      }
+    }
+    return route.fulfill({ json: {} });
+  });
   await page.route(/\/api\/v1\/environments\/.*\/sync/, async (route) => {
-    if (blockSync) {
+    if (blockSync || !devicePublicKey) {
       await route.abort();
       return;
     }
+    if (!syncPage) syncPage = await buildVerifiedFixturePage(devicePublicKey);
     await route.fulfill({
       body: Buffer.from(syncPage),
       status: 200,

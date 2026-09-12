@@ -134,6 +134,6 @@ the empty-claim, and a failed read discloses the failure with a retry action whi
 Save changes, and per-Variable edits stay blocked; retry re-enters the loading state.
 `apps/web/e2e/workspace-protocol-reread.spec.ts` extends this to a verified read that later
 fails: the Variables it loaded stay visible but locked, with each Variable's Value input,
-Set absent, delete, and Undo delete controls disabled until the read recovers.
+reveal, Set absent, delete, and Undo delete controls disabled until the read recovers.
 Tests observe browser-visible behavior and never
 reach into component state.

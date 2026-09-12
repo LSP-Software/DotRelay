@@ -369,6 +369,7 @@ const VariableRow = ({
             ) : null}
             <Button
               aria-label={`${revealed ? "Hide" : "Reveal"} ${variable.name}`}
+              disabled={editingDisabled}
               onClick={onToggleReveal}
               size="icon-sm"
               variant="ghost"
