@@ -186,7 +186,7 @@ const USAGE: Record<string, string> = {
   setup: "dotrelay setup <origin>",
   login: "dotrelay login",
   logout: "dotrelay logout",
-  init: "dotrelay init [<environment-id>]",
+  init: "dotrelay init [<environment-id-or-label>]",
   push: "dotrelay push",
   pull: "dotrelay pull",
   diff: "dotrelay diff",
@@ -205,7 +205,8 @@ const USAGE: Record<string, string> = {
   "device backup": "dotrelay device backup --output <file>",
   "device recover": "dotrelay device recover --from <file>",
   "project link": "dotrelay project link --team <team-id>",
-  "env use": "dotrelay env use <environment-id> | --environment <id>",
+  "env use":
+    "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
 };
 
 // The flags each command consumes; anything parsed but not listed here is
@@ -350,7 +351,7 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.positionals.length > 0
   )
     throw new CliInvocationError(
-      `env use accepts an Environment id either as an argument or with --environment, not both; usage: ${usage}`,
+      `env use accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
     );
   if (
     command === "init" &&
@@ -358,7 +359,7 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.positionals.length === 1
   )
     throw new CliInvocationError(
-      `init accepts an Environment id either as an argument or with --environment, not both; usage: ${usage}`,
+      `init accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
     );
   const allowedFlags = FLAG_PERMISSIONS[label] ?? [];
   for (const key of FLAG_KEYS) {

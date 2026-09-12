@@ -72,15 +72,15 @@ Environment.
 Server Profile. The Server Profile creates a default Environment in the same transaction when the
 Project is new, and returns the existing Project and Environment on retry. It requires an
 authenticated session and an active enrolled Device; a session from `login` alone is insufficient
-until this machine has a Device. `env use <environment-id>` reads opaque Environment metadata and
-the operator-visible label.
+until this machine has a Device. `env use <environment-id-or-label>` resolves the reference within
+the worktree's Project and reads opaque Environment metadata and the operator-visible label.
 
 ## Encrypted workflows
 
 `init` and `push` use `.env` by default. When the GitHub Repository is not yet linked, both commands
 create the missing Team, Project, and Environment: the only Team is used automatically, multiple
 Teams are chosen from a terminal list, and zero Teams prompts to create one (defaulting the name to
-the repository owner). Use `--team <team-id>`, an opaque Environment id, or `--from <dotenv>` only
+the repository owner). Use `--team <team-id>`, an Environment id or label, or `--from <dotenv>` only
 to override those defaults. If the Environment already has a genesis Revision, `init` continues as
 `push` instead of failing.
 
@@ -151,7 +151,7 @@ Every command validates its complete argument contract before authentication or 
 positionals (such as `dotrelay pull production`), flags the command does not consume, missing flag
 values (including when the next token looks like another flag), and conflicting output choices are
 rejected with a correction and the command's usage. A single unexpected positional on a command that
-accepts `--environment` suggests passing it as `--environment <id>`; `pull --stdout`
+accepts `--environment` suggests passing it as `--environment <environment-id-or-label>`; `pull --stdout`
 conflicts with both `--output <file>` and `--json` because Values never appear in JSON output, while
 `pull --output <file> --json` reports a safe summary. An invalid invocation performs no external
 mutation and writes no output file.
