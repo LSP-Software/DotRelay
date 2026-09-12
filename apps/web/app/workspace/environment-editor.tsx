@@ -22,7 +22,7 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +48,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  type EnvironmentContextIdentity,
+  environmentContextKey,
+  sessionMatchesContext,
+} from "@/lib/environment-context";
+import {
   applyRollbackToVariables,
   changedLaneCount,
   createEnvironmentVariable,
@@ -70,24 +75,30 @@ import {
 
 type EnvironmentEditorProps = Readonly<{
   readonly available: boolean;
+  readonly active?: boolean | undefined;
+  readonly loading?: boolean | undefined;
+  readonly contextIdentity: EnvironmentContextIdentity;
+  readonly onDraftDirtyChange?: (dirty: boolean) => void;
   readonly setupAction?: SetupAction | null | undefined;
   readonly setupCommand?: string | undefined;
   readonly setupMessage?: string | null | undefined;
   readonly setupBusy?: boolean | undefined;
   readonly onSetupAction?: (() => void) | undefined;
-  readonly protocolSession?: Readonly<{
-    readonly context: PublicationContext;
-    readonly transport: ProtocolTransport;
-    readonly signingTrustKeys?: readonly Uint8Array[];
-    readonly decodeVariables?: (
-      page: SyncPageWire,
-      previousVariables: readonly EnvironmentVariable[],
-    ) => Promise<readonly EnvironmentVariable[]>;
-    readonly resolveRollbackValues?: (input: {
-      readonly targetRevision: string;
-      readonly selectedVariableIds: readonly string[];
-    }) => Promise<ReadonlyMap<string, string | null>>;
-  }>;
+  readonly protocolSession?:
+    | Readonly<{
+        readonly context: PublicationContext;
+        readonly transport: ProtocolTransport;
+        readonly signingTrustKeys?: readonly Uint8Array[];
+        readonly decodeVariables?: (
+          page: SyncPageWire,
+          previousVariables: readonly EnvironmentVariable[],
+        ) => Promise<readonly EnvironmentVariable[]>;
+        readonly resolveRollbackValues?: (input: {
+          readonly targetRevision: string;
+          readonly selectedVariableIds: readonly string[];
+        }) => Promise<ReadonlyMap<string, string | null>>;
+      }>
+    | undefined;
 }>;
 
 type AddVariableState = VariableDraft;
@@ -143,6 +154,16 @@ const sessionTrustKeys = (
     throw new Error("revision signing trust key is unavailable");
   return session.context.revisionSigningPublicKey;
 };
+
+const headFromContext = (
+  context: PublicationContext | undefined,
+): Readonly<{ readonly id: string; readonly hash: Uint8Array }> | null =>
+  context?.expectedHeadId && context.expectedHeadHash
+    ? {
+        id: context.expectedHeadId,
+        hash: context.expectedHeadHash,
+      }
+    : null;
 
 const nextVariableId = (): string => globalThis.crypto.randomUUID();
 
@@ -515,6 +536,10 @@ const AddVariableDialog = ({
 
 export const EnvironmentEditor = ({
   available,
+  active,
+  loading,
+  contextIdentity,
+  onDraftDirtyChange,
   setupAction,
   setupCommand,
   setupMessage,
@@ -522,14 +547,22 @@ export const EnvironmentEditor = ({
   onSetupAction,
   protocolSession,
 }: EnvironmentEditorProps) => {
+  const session =
+    protocolSession &&
+    sessionMatchesContext(protocolSession.context, contextIdentity)
+      ? protocolSession
+      : null;
   const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
-    protocolSession ? [] : [...initialVariables],
+    session ? [] : [...initialVariables],
   );
   const [remoteVariables, setRemoteVariables] = useState<
     readonly EnvironmentVariable[]
-  >(() => (protocolSession ? [] : initialVariables));
+  >(() => (session ? [] : initialVariables));
   const [headRevision, setHeadRevision] = useState(
-    protocolSession?.context.expectedHeadId ?? "rev_0184",
+    session?.context.expectedHeadId ?? "rev_0184",
+  );
+  const [loadPhase, setLoadPhase] = useState<"loading" | "ready" | "failed">(
+    () => (session ? "loading" : "ready"),
   );
   const [verifiedHistory, setVerifiedHistory] = useState<readonly string[]>([]);
   const [addOpen, setAddOpen] = useState(false);
@@ -556,46 +589,32 @@ export const EnvironmentEditor = ({
   const [protocolHead, setProtocolHead] = useState<Readonly<{
     readonly id: string;
     readonly hash: Uint8Array;
-  }> | null>(() =>
-    protocolSession?.context.expectedHeadId &&
-    protocolSession.context.expectedHeadHash
-      ? {
-          id: protocolSession.context.expectedHeadId,
-          hash: protocolSession.context.expectedHeadHash,
-        }
-      : null,
-  );
+  }> | null>(() => headFromContext(session?.context));
   const [rollbackMutationTarget, setRollbackMutationTarget] = useState<
     string | null
   >(null);
   useEffect(() => {
-    if (!protocolSession) return;
+    if (!session) return;
     setVariables((current) =>
       current.some((variable) => variable.hasDraftChange) ? current : [],
     );
     setRemoteVariables([]);
-    setHeadRevision(
-      protocolSession.context.expectedHeadId ?? "empty-environment",
-    );
+    setHeadRevision(session.context.expectedHeadId ?? "empty-environment");
     setVerifiedHistory([]);
-    setProtocolHead(
-      protocolSession.context.expectedHeadId &&
-        protocolSession.context.expectedHeadHash
-        ? {
-            id: protocolSession.context.expectedHeadId,
-            hash: protocolSession.context.expectedHeadHash,
-          }
-        : null,
-    );
-  }, [protocolSession]);
+    setProtocolHead(headFromContext(session.context));
+    setLoadPhase("loading");
+  }, [session]);
   useEffect(() => {
-    if (!protocolSession || !available) return;
+    if (!session || !available) return;
     let cancelled = false;
     const load = async () => {
       try {
-        const context = protocolSession.context;
-        if (!context.trustedRevisionId || !context.trustedRevisionHash) return;
-        const page = await protocolSession.transport.syncAll({
+        const context = session.context;
+        if (!context.trustedRevisionId || !context.trustedRevisionHash) {
+          if (!cancelled) setLoadPhase("ready");
+          return;
+        }
+        const page = await session.transport.syncAll({
           environmentId: context.environmentId,
           deviceId: context.actorDeviceId,
           request: {
@@ -604,12 +623,12 @@ export const EnvironmentEditor = ({
             pagination: {},
           },
         });
-        await verifySyncPage(page, sessionTrustKeys(protocolSession), {
+        await verifySyncPage(page, sessionTrustKeys(session), {
           actorUserId: context.actorUserId,
         });
         if (cancelled) return;
-        const decoded = protocolSession.decodeVariables
-          ? await protocolSession.decodeVariables(page, [])
+        const decoded = session.decodeVariables
+          ? await session.decodeVariables(page, [])
           : undefined;
         if (cancelled || !decoded) return;
         setRemoteVariables(decoded);
@@ -631,18 +650,51 @@ export const EnvironmentEditor = ({
           });
           setHeadRevision(page.currentHeadId);
         }
+        if (!cancelled) setLoadPhase("ready");
       } catch {
-        if (!cancelled)
+        if (!cancelled) {
           setPublishMessage(
             "This Device could not read the current Environment.",
           );
+          setLoadPhase("failed");
+        }
       }
     };
     void load();
     return () => {
       cancelled = true;
     };
-  }, [protocolSession, available]);
+  }, [session, available]);
+  const currentScopeKeyRef = useRef(environmentContextKey(contextIdentity));
+  useEffect(() => {
+    currentScopeKeyRef.current = environmentContextKey(contextIdentity);
+  }, [contextIdentity]);
+  const inFlightOperationRef = useRef<Readonly<{
+    readonly transport: ProtocolTransport;
+    readonly operationId: string;
+    readonly deviceId: string;
+  }> | null>(null);
+  const operationFinalizedRef = useRef(false);
+  useEffect(
+    () => () => {
+      const inFlight = inFlightOperationRef.current;
+      if (inFlight && !operationFinalizedRef.current)
+        void inFlight.transport
+          .cancel({
+            operationId: inFlight.operationId,
+            deviceId: inFlight.deviceId,
+          })
+          .catch(() => undefined);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (active !== false) return;
+    setAddOpen(false);
+    setReviewOpen(false);
+    setRollbackTarget(null);
+    setRollbackLanes(new Set());
+  }, [active]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
   >(() => new Map());
@@ -660,6 +712,12 @@ export const EnvironmentEditor = ({
     hasDraftChange: variableHasDraftChange(variable, baselineFor(variable.id)),
   });
   const changedCount = changedLaneCount(variables);
+  const reportDraftDirtyRef = useRef(onDraftDirtyChange);
+  reportDraftDirtyRef.current = onDraftDirtyChange;
+  const hasDirtyDraft = changedCount > 0;
+  useEffect(() => {
+    reportDraftDirtyRef.current?.(hasDirtyDraft);
+  }, [hasDirtyDraft]);
   const pendingDiffs = draftValueDiffs(variables, remoteVariables);
   const pendingRollbackDiffs = rollbackValueDiffs(
     variables,
@@ -669,6 +727,7 @@ export const EnvironmentEditor = ({
     changedCount > 0 &&
     conflictingLaneIds.size === 0 &&
     staleHeadRevision === null &&
+    loadPhase !== "loading" &&
     !publishing;
   const historicalValues = new Map<string, string | null>([
     ["00000000-0000-4000-8000-000000000001", "https://api.acme.example"],
@@ -751,9 +810,10 @@ export const EnvironmentEditor = ({
     revision: string,
     variableIds: readonly string[],
   ): Promise<ReadonlyMap<string, string | null>> => {
-    if (!protocolSession?.resolveRollbackValues) return historicalValues;
+    const rollbackSession = session;
+    if (!rollbackSession?.resolveRollbackValues) return historicalValues;
     try {
-      return await protocolSession.resolveRollbackValues({
+      return await rollbackSession.resolveRollbackValues({
         targetRevision: revision,
         selectedVariableIds: variableIds,
       });
@@ -761,7 +821,7 @@ export const EnvironmentEditor = ({
       const values = new Map<string, string | null>();
       for (const variableId of variableIds) {
         try {
-          const one = await protocolSession.resolveRollbackValues({
+          const one = await rollbackSession.resolveRollbackValues({
             targetRevision: revision,
             selectedVariableIds: [variableId],
           });
@@ -789,10 +849,13 @@ export const EnvironmentEditor = ({
 
   const publish = async () => {
     if (changedCount === 0) return;
+    const publishSession = session;
+    const scopeAtStart = currentScopeKeyRef.current;
+    const scopeLost = () => currentScopeKeyRef.current !== scopeAtStart;
     setPublishing(true);
     try {
-      if (protocolSession) {
-        const context = protocolSession.context;
+      if (publishSession) {
+        const context = publishSession.context;
         const expectedHeadId = protocolHead?.id ?? context.expectedHeadId;
         const expectedHeadHash = protocolHead?.hash ?? context.expectedHeadHash;
         const mutation = publicationMutationForHead({
@@ -811,29 +874,46 @@ export const EnvironmentEditor = ({
               }
             : {}),
         });
+        if (scopeLost()) return;
         const operationId = globalThis.crypto.randomUUID();
-        await protocolSession.transport.begin({
+        operationFinalizedRef.current = false;
+        inFlightOperationRef.current = {
+          transport: publishSession.transport,
+          operationId,
+          deviceId: context.actorDeviceId,
+        };
+        await publishSession.transport.begin({
           operationId,
           deviceId: context.actorDeviceId,
           kind: mutation === "ROLLBACK" ? "ROLLBACK" : "REVISION_PUBLICATION",
           commandBytes: artifacts.commandBytes,
           commandDigest: await sha384(artifacts.commandBytes),
         });
+        if (scopeLost()) {
+          inFlightOperationRef.current = null;
+          await publishSession.transport
+            .cancel({
+              operationId,
+              deviceId: context.actorDeviceId,
+            })
+            .catch(() => undefined);
+          return;
+        }
         try {
           for (const staged of artifacts.stagedObjects)
-            await protocolSession.transport.stage({
+            await publishSession.transport.stage({
               operationId,
               deviceId: context.actorDeviceId,
               objectId: staged.objectId,
               bytes: staged.bytes,
             });
-          await protocolSession.transport.finalize({
+          await publishSession.transport.finalize({
             operationId,
             deviceId: context.actorDeviceId,
             request: artifacts.request,
           });
         } catch (error) {
-          await protocolSession.transport
+          await publishSession.transport
             .cancel({
               operationId,
               deviceId: context.actorDeviceId,
@@ -841,6 +921,9 @@ export const EnvironmentEditor = ({
             .catch(() => undefined);
           throw error;
         }
+        inFlightOperationRef.current = null;
+        operationFinalizedRef.current = true;
+        if (scopeLost()) return;
         const revisionObject = artifacts.stagedObjects.find(
           (staged) =>
             staged.objectId === artifacts.request.revision.protocolObjectId,
@@ -890,13 +973,17 @@ export const EnvironmentEditor = ({
       );
     } catch (error) {
       if (
-        protocolSession &&
+        publishSession &&
         error instanceof ProtocolTransportError &&
         error.problem.code === "stale_head"
       ) {
+        if (scopeLost()) {
+          setPublishMessage("Publish was rejected. Refresh and try again.");
+          return;
+        }
         try {
-          const context = protocolSession.context;
-          const page = await protocolSession.transport.syncAll({
+          const context = publishSession.context;
+          const page = await publishSession.transport.syncAll({
             environmentId: context.environmentId,
             deviceId: context.actorDeviceId,
             request: {
@@ -913,7 +1000,7 @@ export const EnvironmentEditor = ({
               pagination: {},
             },
           });
-          await verifySyncPage(page, sessionTrustKeys(protocolSession), {
+          await verifySyncPage(page, sessionTrustKeys(publishSession), {
             actorUserId: context.actorUserId,
           });
           setVerifiedHistory((current) =>
@@ -923,8 +1010,8 @@ export const EnvironmentEditor = ({
             ),
           );
           const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
-          const decodedVariables = protocolSession.decodeVariables
-            ? await protocolSession.decodeVariables(page, remoteVariables)
+          const decodedVariables = publishSession.decodeVariables
+            ? await publishSession.decodeVariables(page, remoteVariables)
             : undefined;
           if (decodedVariables) setRemoteVariables(decodedVariables);
           if (!page.currentHeadId || !page.currentHeadHash)
@@ -1058,7 +1145,7 @@ export const EnvironmentEditor = ({
     setStaleHeadRevision(null);
     setRetryReady(false);
     setPublishMessage(
-      `${protocolSession ? "Retrying" : "Local preview retry"} against ${staleHeadRevision}. Your choices are still in the draft.`,
+      `${session ? "Retrying" : "Local preview retry"} against ${staleHeadRevision}. Your choices are still in the draft.`,
     );
   };
 
@@ -1070,11 +1157,17 @@ export const EnvironmentEditor = ({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <LockKeyhole className="size-5 text-amber-300" />
-              <h2>{action?.title ?? "Variables are hidden"}</h2>
+              <h2>
+                {loading
+                  ? "Loading Environment…"
+                  : (action?.title ?? "Variables are hidden")}
+              </h2>
             </CardTitle>
             <CardDescription>
-              {action?.body ??
-                "Enroll this browser to view and edit variables."}
+              {loading
+                ? "Fetching the latest verified state for this Environment."
+                : (action?.body ??
+                  "Enroll this browser to view and edit variables.")}
             </CardDescription>
           </CardHeader>
           {setupCommand || setupMessage ? (
@@ -1204,6 +1297,7 @@ export const EnvironmentEditor = ({
           </CardTitle>
           <CardAction className="flex flex-wrap justify-end gap-2">
             <Button
+              disabled={loadPhase === "loading"}
               onClick={() => {
                 setAddError(null);
                 setAddOpen(true);
@@ -1227,8 +1321,13 @@ export const EnvironmentEditor = ({
         </CardHeader>
         <CardContent className="px-0">
           {variables.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              Add a Variable to start this Manifest.
+            <p
+              className="px-4 py-6 text-sm text-muted-foreground"
+              role={loadPhase === "loading" ? "status" : undefined}
+            >
+              {loadPhase === "loading"
+                ? "Loading Environment…"
+                : "Add a Variable to start this Manifest."}
             </p>
           ) : (
             <ul className="divide-y divide-border">
@@ -1265,7 +1364,7 @@ export const EnvironmentEditor = ({
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-2">
-          {(protocolSession
+          {(session
             ? verifiedHistory
             : [headRevision, "rev_0183", "rev_0182"]
           ).map((revision) => (
