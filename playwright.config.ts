@@ -15,6 +15,9 @@ export default defineConfig({
     env: {
       ...process.env,
       DOTRELAY_WORKSPACE_FIXTURE: "1",
+      // The device approval page targets this same origin in tests so specs
+      // can intercept its auth requests without cross-origin handling.
+      NEXT_PUBLIC_DOTRELAY_API_ORIGIN: origin,
       NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS: "1500",
     },
   },
