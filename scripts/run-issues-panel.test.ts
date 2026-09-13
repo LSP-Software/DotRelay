@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildOpenCodeRunArguments,
+  createGrillManager,
   parseOpenCodeTurn,
   selectGrillIssue,
 } from "./run-issues-grill";
@@ -309,5 +310,124 @@ describe("run issues panel", () => {
     await expect(
       readLogChunk(directory, "../status.json", null),
     ).rejects.toThrow("Invalid run log name.");
+  });
+
+  test("fails a grill turn orphaned by a panel restart", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const calls: string[][] = [];
+    const command = async (args: string[]) => {
+      calls.push(args);
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const stateDirectory = join(runsDirectory, "grill");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(
+      join(stateDirectory, "state.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        issue: 79,
+        issueTitle: "Turn CLI failures into guided recovery",
+        issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+        priority: 1,
+        sessionId: "ses_test",
+        question: null,
+        message: "The agent is working through this answer.",
+        startedAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        turn: 4,
+        checkout: join(stateDirectory, "issue-79", "checkout"),
+        transcript: join(stateDirectory, "issue-79-turn-4.ndjson"),
+        lastPrompt: "I've just installed the skill for you now.",
+        lastCommand: null,
+        lastTurnCompleting: false,
+      })}\n`,
+      "utf8",
+    );
+
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+    const state = await manager.ensure();
+
+    expect(state.status).toBe("failed");
+    expect(state.message).toMatch(/panel restarted/);
+    expect(calls).toEqual([]);
+  });
+
+  test("keeps a live grill preparation in flight between status polls", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    let releaseClone: () => void = () => {};
+    const cloneGate = new Promise<void>((resolve) => {
+      releaseClone = resolve;
+    });
+    const command = async (args: string[]) => {
+      if (args[0] === "gh") {
+        return {
+          code: 0,
+          output: "",
+          stdout: JSON.stringify([
+            {
+              number: 79,
+              title: "Turn CLI failures into guided recovery",
+              body: "Priority: P1",
+              url: "https://github.com/LSP-Software/DotRelay/issues/79",
+              assignees: [],
+            },
+          ]),
+          infrastructure: false,
+        };
+      }
+      if (args[0] === "git" && args[1] === "clone") {
+        await cloneGate;
+      }
+      if (args[0] === "opencode") {
+        return {
+          code: 0,
+          output: "",
+          stdout:
+            `${JSON.stringify({ type: "step:started", sessionID: "ses_test" })}\n` +
+            `${JSON.stringify({ type: "text", part: { text: "Which failure should repair first?" } })}\n`,
+          infrastructure: false,
+        };
+      }
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+
+    await manager.ensure();
+    let state = await manager.read();
+    const deadline = Date.now() + 2_000;
+    while (state.status !== "preparing" && Date.now() < deadline) {
+      await Bun.sleep(10);
+      state = await manager.read();
+    }
+    expect(state.status).toBe("preparing");
+
+    const polled = await manager.ensure();
+    expect(polled.status).toBe("preparing");
+
+    releaseClone();
+    state = await manager.read();
+    const finished = Date.now() + 2_000;
+    while (state.status !== "awaiting-human" && Date.now() < finished) {
+      await Bun.sleep(10);
+      state = await manager.read();
+    }
+    expect(state.status).toBe("awaiting-human");
+    expect(state.question).toBe("Which failure should repair first?");
+    expect(state.sessionId).toBe("ses_test");
   });
 });

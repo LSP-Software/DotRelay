@@ -391,6 +391,18 @@ export const createGrillManager = (options: {
             "This grill was started before workflow commands were invoked correctly. Retry it to continue with the repaired command runner.",
         });
       }
+      if (
+        task === null &&
+        state.issue &&
+        ["preparing", "running", "completing"].includes(state.status)
+      ) {
+        state = await save({
+          ...state,
+          status: "failed",
+          message:
+            "The panel restarted while this grill turn was in flight, so its result was lost. Retry it to continue.",
+        });
+      }
       if (["idle", "completed"].includes(state.status)) launch(startNext);
       const current = await read();
       const {
