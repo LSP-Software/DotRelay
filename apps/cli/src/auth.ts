@@ -1,6 +1,19 @@
 import type { ServerProfilePin } from "@dotrelay/contracts";
 import type { NativeCredentialStore } from "./credentials";
 import { CliError } from "./errors";
+import {
+  defaultNetworkPolicy,
+  fetchWithDeadline,
+  fetchWithinBudget,
+  NetworkAttemptError,
+  type NetworkPolicy,
+  networkFailureCliError,
+  type RetryListener,
+  type RetryReason,
+  retryAfterMsFromResponse,
+  retryDelay,
+  transientResponseVerdict,
+} from "./network";
 import type { FetchFunction } from "./profile";
 
 export const AUTH_CLIENT_ID = "dotrelay-cli" as const;
@@ -23,17 +36,31 @@ export type DeviceLoginResult = Readonly<{
   readonly verificationUri: string;
 }>;
 
+export type LoginProgress =
+  | Readonly<{
+      readonly kind: "retry";
+      /** One-based attempt or poll that could not complete. */
+      readonly attempt: number;
+      /** Present when the retry itself is bounded (a code-fetch budget). */
+      readonly maxAttempts?: number;
+      readonly reason: RetryReason;
+      readonly nextDelayMs: number;
+    }>
+  | Readonly<{ readonly kind: "resumed" }>;
+
 export type LoginOptions = Readonly<{
   readonly fetch?: FetchFunction;
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly open?: (url: string) => Promise<void>;
   readonly noOpen?: boolean;
   readonly maxPolls?: number;
+  readonly networkPolicy?: NetworkPolicy;
   readonly onAuthorization?: (
     authorization: DeviceAuthorization,
     verificationUrl: string,
   ) => Promise<void> | void;
   readonly onOpenFailed?: () => Promise<void> | void;
+  readonly onProgress?: (progress: LoginProgress) => Promise<void> | void;
 }>;
 
 const sessionAccount = (profile: ServerProfilePin): string =>
@@ -211,26 +238,47 @@ const parseResponseBody = async (response: Response): Promise<unknown> => {
   }
 };
 
+const DEVICE_AUTH_SUBJECT = "the device authorization endpoint";
+
+// Obtaining the code is safe to repeat: a retry that the service answers
+// starts a fresh authorization, and nothing is shown to the operator until
+// one succeeds.
 const requestDeviceCode = async (
   origin: string,
   fetcher: FetchFunction,
+  policy: NetworkPolicy,
+  onRetry: RetryListener,
 ): Promise<DeviceAuthorization> => {
   let response: Response;
   try {
-    response = await fetcher(`${origin}/api/auth/device/code`, {
-      method: "POST",
-      redirect: "error",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ client_id: AUTH_CLIENT_ID }),
-    });
-  } catch {
-    throw new CliError(
-      "transient",
-      "could not reach the device authorization endpoint",
-      {},
+    response = (
+      await fetchWithinBudget(
+        fetcher,
+        `${origin}/api/auth/device/code`,
+        {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ client_id: AUTH_CLIENT_ID }),
+        },
+        {
+          policy,
+          retry: {
+            verdict: (candidate) =>
+              transientResponseVerdict(candidate, policy.now),
+            onRetry,
+          },
+        },
+      )
+    ).response;
+  } catch (error) {
+    if (!(error instanceof NetworkAttemptError)) throw error;
+    throw networkFailureCliError(
+      error,
+      DEVICE_AUTH_SUBJECT,
       "device_authorization_unavailable",
     );
   }
@@ -250,7 +298,24 @@ export const loginWithDeviceAuthorization = async (
   options: LoginOptions = {},
 ): Promise<DeviceLoginResult> => {
   const fetcher = options.fetch ?? fetch;
-  const authorization = await requestDeviceCode(profile.origin, fetcher);
+  const policy = options.networkPolicy ?? defaultNetworkPolicy;
+  const emitProgress = async (progress: LoginProgress): Promise<void> => {
+    if (options.onProgress) await options.onProgress(progress);
+  };
+  const reportRetry: RetryListener = (event) =>
+    void emitProgress({
+      kind: "retry",
+      attempt: event.attempt,
+      maxAttempts: policy.maxAttempts,
+      reason: event.reason,
+      nextDelayMs: event.nextDelayMs,
+    });
+  const authorization = await requestDeviceCode(
+    profile.origin,
+    fetcher,
+    policy,
+    reportRetry,
+  );
   const verificationUri = requireProfileUrl(
     authorization.verificationUri,
     profile,
@@ -291,31 +356,99 @@ export const loginWithDeviceAuthorization = async (
       1,
       Math.ceil(authorization.expiresInSeconds / authorization.intervalSeconds),
     );
+  // The code stays valid until its expiry; the loop is bounded in both poll
+  // count and wall-clock time so it always ends.
+  const expiresAtMs = policy.now() + authorization.expiresInSeconds * 1000;
+  const deviceAuthorizationTimeout = (): CliError =>
+    new CliError(
+      "authentication",
+      "device authorization timed out",
+      {},
+      "device_authorization_timeout",
+    );
   let intervalSeconds = authorization.intervalSeconds;
-  for (let poll = 0; poll < maxPolls; poll += 1) {
+  let poll = 0;
+  let outage = false;
+  for (;;) {
+    if (poll >= maxPolls || policy.now() >= expiresAtMs)
+      throw deviceAuthorizationTimeout();
     await sleep(intervalSeconds * 1000);
+    poll += 1;
+    if (policy.now() >= expiresAtMs) throw deviceAuthorizationTimeout();
     let response: Response;
     try {
-      response = await fetcher(`${profile.origin}/api/auth/device/token`, {
-        method: "POST",
-        redirect: "error",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
+      // A single deadline-bounded attempt: the loop itself carries the
+      // retry guidance (slow-down, retry-after, outage backoff) while the
+      // current code stays valid.
+      const remainingMs = Math.max(1, expiresAtMs - policy.now());
+      response = await fetchWithDeadline(
+        fetcher,
+        `${profile.origin}/api/auth/device/token`,
+        {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            client_id: AUTH_CLIENT_ID,
+            device_code: authorization.deviceCode,
+            grant_type: DEVICE_GRANT_TYPE,
+          }),
         },
-        body: JSON.stringify({
-          client_id: AUTH_CLIENT_ID,
-          device_code: authorization.deviceCode,
-          grant_type: DEVICE_GRANT_TYPE,
-        }),
-      });
-    } catch {
-      throw new CliError(
-        "transient",
-        "could not reach the device authorization endpoint",
-        {},
-        "device_authorization_unavailable",
+        {
+          ...policy,
+          requestDeadlineMs: Math.min(policy.requestDeadlineMs, remainingMs),
+        },
       );
+    } catch (error) {
+      if (!(error instanceof NetworkAttemptError)) throw error;
+      // A transient failure (offline or stalled) must not force a new code
+      // while the current one is still valid: report it and keep polling.
+      if (policy.now() >= expiresAtMs) throw deviceAuthorizationTimeout();
+      outage = true;
+      const nextDelayMs = Math.min(
+        retryDelay(poll, policy),
+        Math.max(0, expiresAtMs - policy.now()),
+      );
+      await emitProgress({
+        kind: "retry",
+        attempt: poll,
+        reason: error.failure.kind,
+        nextDelayMs,
+      });
+      if (nextDelayMs > 0) await sleep(nextDelayMs);
+      continue;
+    }
+    // A rate limit or a 5xx answer asks to be retried; it does not reject
+    // the code. The status checks run before body parsing so a proxy's
+    // non-JSON 429 or an HTML 504 is still treated as transient.
+    const waitTransientResponse = async (
+      fallbackDelayMs: number,
+    ): Promise<void> => {
+      if (policy.now() >= expiresAtMs) throw deviceAuthorizationTimeout();
+      const retryAfterMs = retryAfterMsFromResponse(response, policy.now);
+      const nextDelayMs = Math.min(
+        retryAfterMs ?? fallbackDelayMs,
+        Math.max(0, expiresAtMs - policy.now()),
+      );
+      outage = true;
+      await emitProgress({
+        kind: "retry",
+        attempt: poll,
+        reason: "server",
+        nextDelayMs,
+      });
+      if (nextDelayMs > 0) await sleep(nextDelayMs);
+    };
+    if (response.status === 429) {
+      await waitTransientResponse((intervalSeconds + 5) * 1000);
+      continue;
+    }
+    if (response.status >= 500) {
+      await waitTransientResponse(retryDelay(poll, policy));
+      continue;
     }
     const body = readObject(await parseResponseBody(response));
     if (response.ok) {
@@ -329,10 +462,18 @@ export const loginWithDeviceAuthorization = async (
     }
     const error = typeof body.error === "string" ? body.error : "";
     if (error === "authorization_pending") {
+      if (outage) {
+        outage = false;
+        await emitProgress({ kind: "resumed" });
+      }
       continue;
     }
     if (error === "slow_down") {
       intervalSeconds += 5;
+      if (outage) {
+        outage = false;
+        await emitProgress({ kind: "resumed" });
+      }
       continue;
     }
     if (error === "expired_token")
@@ -349,6 +490,10 @@ export const loginWithDeviceAuthorization = async (
         {},
         "device_authorization_denied",
       );
+    if (typeof body.code === "string" && body.code === "rate_limited") {
+      await waitTransientResponse((intervalSeconds + 5) * 1000);
+      continue;
+    }
     throw new CliError(
       "authentication",
       "device authorization failed",
@@ -356,12 +501,6 @@ export const loginWithDeviceAuthorization = async (
       "device_authorization_failed",
     );
   }
-  throw new CliError(
-    "authentication",
-    "device authorization timed out",
-    {},
-    "device_authorization_timeout",
-  );
 };
 
 export const verificationPageCommand = (

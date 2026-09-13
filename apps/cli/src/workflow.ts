@@ -81,6 +81,13 @@ import {
   ensureLocalGitExclusion,
   type GitTrackingProbe,
 } from "./git-tracking";
+import {
+  defaultNetworkPolicy,
+  fetchWithDeadline,
+  NetworkAttemptError,
+  type NetworkPolicy,
+  networkFailureCliError,
+} from "./network";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
 import { readTerminalLine, type TerminalIo } from "./terminal";
@@ -101,6 +108,7 @@ export type WorkflowOptions = Readonly<{
   readonly profile: CliServerProfile;
   readonly credentials: NativeCredentialStore;
   readonly fetch?: FetchFunction;
+  readonly networkPolicy?: NetworkPolicy;
   readonly deviceStorage?: CliDeviceStorage;
   readonly deviceId?: string;
   readonly stateDirectory: string;
@@ -555,7 +563,10 @@ const submitEpochGrant = async (
 ): Promise<void> => {
   let response: Response;
   try {
-    response = await (options.fetch ?? fetch)(
+    // Deadline only: this mutation carries a fresh operation id, so it must
+    // never be repeated automatically.
+    response = await fetchWithDeadline(
+      options.fetch ?? fetch,
       `${options.profile.origin}/api/v1/grants/bootstrap`,
       {
         method: "POST",
@@ -577,14 +588,16 @@ const submitEpochGrant = async (
           grant: Buffer.from(grant.canonicalBytes).toString("base64"),
         }),
       },
+      options.networkPolicy ?? defaultNetworkPolicy,
     );
-  } catch {
-    throw new CliError(
-      "transient",
-      "could not reach the Project grant endpoint",
-      {},
-      "grant_bootstrap_unavailable",
-    );
+  } catch (error) {
+    if (error instanceof NetworkAttemptError)
+      throw networkFailureCliError(
+        error,
+        "the Project grant endpoint",
+        "grant_bootstrap_unavailable",
+      );
+    throw error;
   }
   if (!response.ok) {
     const body = await responseJson(response).catch(() => undefined);
@@ -619,7 +632,10 @@ const postBootstrap = async (
 ): Promise<void> => {
   let response: Response;
   try {
-    response = await (options.fetch ?? fetch)(
+    // Deadline only: an enrollment attempt names a pending operation, so a
+    // stalled request is surfaced instead of being repeated.
+    response = await fetchWithDeadline(
+      options.fetch ?? fetch,
       `${options.profile.origin}/api/v1/devices/bootstrap`,
       {
         method: "POST",
@@ -642,14 +658,16 @@ const postBootstrap = async (
           certificate: Buffer.from(input.certificate).toString("base64"),
         }),
       },
+      options.networkPolicy ?? defaultNetworkPolicy,
     );
-  } catch {
-    throw new CliError(
-      "transient",
-      "could not reach the Device enrollment endpoint",
-      {},
-      "device_enrollment_unavailable",
-    );
+  } catch (error) {
+    if (error instanceof NetworkAttemptError)
+      throw networkFailureCliError(
+        error,
+        "the Device enrollment endpoint",
+        "device_enrollment_unavailable",
+      );
+    throw error;
   }
   if (!response.ok) {
     const body = await responseJson(response).catch(() => undefined);
@@ -862,6 +880,7 @@ const createDeviceAdmin = (
   options.admin ??
   createStrictJsonClient(options.profile.pin, options.credentials, {
     ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.networkPolicy ? { networkPolicy: options.networkPolicy } : {}),
     ...(deviceId ? { deviceId } : {}),
   });
 
@@ -1078,6 +1097,9 @@ export const enrollFirstDevice = async (
     options.admin ??
     createStrictJsonClient(options.profile.pin, options.credentials, {
       ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.networkPolicy
+        ? { networkPolicy: options.networkPolicy }
+        : {}),
     });
   const session = await admin.get("/api/v1/session", ["authenticated", "user"]);
   if (!isRecord(session.user))
@@ -2416,6 +2438,7 @@ const adminClient = (options: WorkflowOptions): StrictJsonClient =>
   options.admin ??
   createStrictJsonClient(options.profile.pin, options.credentials, {
     ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.networkPolicy ? { networkPolicy: options.networkPolicy } : {}),
   });
 
 // A single invocation loads the workflow session once per phase. When init

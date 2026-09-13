@@ -1,6 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CliError, CliInvocationError } from "./errors";
+import {
+  defaultNetworkPolicy,
+  fetchWithinBudget,
+  NetworkAttemptError,
+  type NetworkPolicy,
+  networkFailureCliError,
+  transientResponseVerdict,
+} from "./network";
 import { atomicWriteProtectedFile } from "./output";
 import type { FetchFunction } from "./profile";
 import type { TerminalIo } from "./terminal";
@@ -349,11 +357,13 @@ export const resolveGitHubRepository = async (
   options: Readonly<{
     readonly fetch?: FetchFunction;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly networkPolicy?: NetworkPolicy;
   }> = {},
 ): Promise<GitHubRepository> => {
   if (repository.githubRepositoryId) return repository;
   const fetcher = options.fetch ?? fetch;
   const environment = options.environment ?? process.env;
+  const policy = options.networkPolicy ?? defaultNetworkPolicy;
   const githubToken = (environment.GITHUB_TOKEN ?? "").trim();
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
@@ -362,19 +372,29 @@ export const resolveGitHubRepository = async (
   if (githubToken.length > 0) headers.Authorization = `Bearer ${githubToken}`;
   let response: Response;
   try {
-    response = await fetcher(
-      `https://api.github.com/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`,
-      {
-        method: "GET",
-        redirect: "error",
-        headers,
-      },
-    );
-  } catch {
-    throw new CliError(
-      "transient",
-      "could not resolve the GitHub repository identity",
-      {},
+    response = (
+      await fetchWithinBudget(
+        fetcher,
+        `https://api.github.com/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`,
+        {
+          method: "GET",
+          redirect: "error",
+          headers,
+        },
+        {
+          policy,
+          retry: {
+            verdict: (candidate) =>
+              transientResponseVerdict(candidate, policy.now),
+          },
+        },
+      )
+    ).response;
+  } catch (error) {
+    if (!(error instanceof NetworkAttemptError)) throw error;
+    throw networkFailureCliError(
+      error,
+      "the GitHub API",
       "repository_resolution_failed",
     );
   }

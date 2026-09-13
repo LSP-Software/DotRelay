@@ -5,6 +5,14 @@ import {
   type ServerProfilePin,
 } from "@dotrelay/contracts";
 import { CliError, CliInvocationError } from "./errors";
+import {
+  defaultNetworkPolicy,
+  fetchWithinBudget,
+  NetworkAttemptError,
+  type NetworkPolicy,
+  networkFailureCliError,
+  transientResponseVerdict,
+} from "./network";
 import { atomicWriteProtectedFile } from "./output";
 
 export type FetchFunction = (
@@ -218,6 +226,7 @@ export const addServerProfile = async (
     readonly fetch?: FetchFunction;
     readonly runtime?: Crypto;
     readonly confirm?: (candidate: ProfileTrustCandidate) => Promise<boolean>;
+    readonly networkPolicy?: NetworkPolicy;
   }> = {},
 ): Promise<CliServerProfile> => {
   if (!profileName.test(name))
@@ -227,18 +236,32 @@ export const addServerProfile = async (
   const origin = validateOrigin(requestedOrigin);
   const catalog = await store.read();
   const existing = catalog.profiles.find((profile) => profile.name === name);
+  const policy = options.networkPolicy ?? defaultNetworkPolicy;
   let response: Response;
   try {
-    response = await (options.fetch ?? fetch)(`${origin}/api/v1/capabilities`, {
-      method: "GET",
-      redirect: "error",
-      headers: { Accept: "application/json" },
-    });
-  } catch {
-    throw new CliError(
-      "transient",
-      "could not reach the Server Profile capabilities endpoint",
-      {},
+    response = (
+      await fetchWithinBudget(
+        options.fetch ?? fetch,
+        `${origin}/api/v1/capabilities`,
+        {
+          method: "GET",
+          redirect: "error",
+          headers: { Accept: "application/json" },
+        },
+        {
+          policy,
+          retry: {
+            verdict: (candidate) =>
+              transientResponseVerdict(candidate, policy.now),
+          },
+        },
+      )
+    ).response;
+  } catch (error) {
+    if (!(error instanceof NetworkAttemptError)) throw error;
+    throw networkFailureCliError(
+      error,
+      "the Server Profile capabilities endpoint",
       "capabilities_unavailable",
     );
   }
