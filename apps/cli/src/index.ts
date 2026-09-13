@@ -941,11 +941,15 @@ const execute = async (
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {
     const profile = await resolveServerProfile(store, parsed.profile);
-    const team = parsed.team?.toLowerCase();
-    if (!team)
-      throw new CliInvocationError(
-        "project link requires --team <team-id>; usage: dotrelay project link --team <team-id>",
-      );
+    // parseArguments already rejects project link without --team; this only
+    // narrows the parsed type, keeping the parser the single source of truth.
+    const team =
+      parsed.team?.toLowerCase() ??
+      (() => {
+        throw new CliInvocationError(
+          "project link requires --team <team-id>; usage: dotrelay project link --team <team-id>",
+        );
+      })();
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readStoredWorktreeContext(contextPath);

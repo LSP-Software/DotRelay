@@ -119,13 +119,15 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     const separator = value.indexOf("=");
     const name = separator < 1 ? "" : value.slice(0, separator);
     const classification = separator < 1 ? "" : value.slice(separator + 1);
+    const usage = usageFor(parsed.command, parsed.subcommand);
+    const usageSuffix = usage ? `; usage: ${usage}` : "";
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
       throw new CliInvocationError(
-        "--classify requires NAME=shared or NAME=user-defined",
+        `--classify requires NAME=shared or NAME=user-defined${usageSuffix}`,
       );
     if (classification !== "shared" && classification !== "user-defined")
       throw new CliInvocationError(
-        "--classify requires NAME=shared or NAME=user-defined",
+        `--classify requires NAME=shared or NAME=user-defined${usageSuffix}`,
       );
     parsed.classifications[name] = classification;
   } else if (flag === "--variable") {
@@ -310,13 +312,17 @@ export const SUBCOMMANDS: Readonly<
   env: ["use"],
 };
 
+// The usage line for a complete "command [subcommand]" label; the help
+// renderers and the error messages below share this one source of truth.
+export const usageForLabel = (label: string): string =>
+  USAGE[label] ?? `dotrelay ${label}`;
+
 const usageFor = (
   command: CommandName | undefined,
   subcommand?: string,
 ): string | undefined => {
   if (!command) return undefined;
-  const label = `${command}${subcommand ? ` ${subcommand}` : ""}`;
-  return USAGE[label] ?? `dotrelay ${label}`;
+  return usageForLabel(`${command}${subcommand ? ` ${subcommand}` : ""}`);
 };
 
 const flagPresent = (parsed: MutableArguments, key: FlagKey): boolean => {
@@ -347,7 +353,7 @@ const validateCommand = (parsed: MutableArguments) => {
   const command = parsed.command;
   if (!command) throw new CliInvocationError("a command is required");
   const label = `${command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""}`;
-  const usage = USAGE[label] ?? `dotrelay ${label}`;
+  const usage = usageForLabel(label);
   const allowed = SUBCOMMANDS[command];
   if (allowed && (!parsed.subcommand || !allowed.includes(parsed.subcommand)))
     throw new CliInvocationError(

@@ -6,7 +6,7 @@ import {
   FLAG_TOKENS,
   type FlagKey,
   SUBCOMMANDS,
-  USAGE,
+  usageForLabel,
 } from "./args";
 import { CliInvocationError } from "./errors";
 
@@ -75,6 +75,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     examples: [
       "dotrelay init",
       "dotrelay init production --classify API_URL=shared",
+      "dotrelay init <environment-id>",
     ],
   },
   push: {
@@ -94,6 +95,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     examples: [
       "dotrelay push",
       "dotrelay push --from .env --classify NEW_VARIABLE=user-defined",
+      "dotrelay push --environment <environment-id>",
     ],
   },
   pull: {
@@ -382,11 +384,7 @@ const renderLeafHelp = (label: string): string => {
     throw new CliInvocationError(
       `no help is available for ${label}; usage: dotrelay help [<command>]`,
     );
-  const lines = [
-    `Usage: ${USAGE[label] ?? `dotrelay ${label}`}`,
-    "",
-    entry.about,
-  ];
+  const lines = [`Usage: ${usageForLabel(label)}`, "", entry.about];
   if (entry.positional?.length) {
     lines.push("", "Arguments:");
     for (const line of entry.positional) lines.push(`  ${line}`);
@@ -470,10 +468,7 @@ const commandDirectory = (
   items: ReadonlyArray<readonly [string, string]>,
 ): string[] =>
   items.map(([label, summary]) => {
-    const usage = (USAGE[label] ?? `dotrelay ${label}`).replace(
-      /^dotrelay /,
-      "",
-    );
+    const usage = usageForLabel(label).replace(/^dotrelay /, "");
     return `  ${usage.split(" | ")[0]}  ${summary}`;
   });
 

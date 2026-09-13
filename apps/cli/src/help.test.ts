@@ -7,7 +7,7 @@ import {
   type FlagKey,
   parseArguments,
   SUBCOMMANDS,
-  USAGE,
+  usageForLabel,
 } from "./args";
 import {
   COMMAND_HELP,
@@ -18,7 +18,7 @@ import {
 import { renderHelp, renderPowerHelp, run } from "./index";
 
 const usagePrefix = (label: string): string =>
-  (USAGE[label] ?? `dotrelay ${label}`).replace(/^dotrelay /, "");
+  usageForLabel(label).replace(/^dotrelay /, "");
 
 // The Options section runs from its header until the first line that is not
 // an indented flag line, so prose in Notes can never be read as an option.
@@ -68,7 +68,39 @@ describe("command help contract", () => {
   test("help usage lines match the parser usage table", () => {
     for (const [label] of Object.entries(COMMAND_HELP)) {
       const rendered = renderCommandHelp(label);
-      expect(rendered.startsWith(`Usage: ${USAGE[label]}`), label).toBe(true);
+      expect(rendered.startsWith(`Usage: ${usageForLabel(label)}`), label).toBe(
+        true,
+      );
+    }
+  });
+
+  // The primary form of each rendered usage line (before any " | "
+  // alternative) must be an invocation the parser accepts, so a help line
+  // can never advertise syntax the parser would reject.
+  test("the usage line of every help entry is an invocation the parser accepts", () => {
+    for (const [label] of Object.entries(COMMAND_HELP)) {
+      const primary = (usagePrefix(label).split(" | ")[0] ?? "").split(" ");
+      expect(() => parseArguments(primary), label).not.toThrow();
+    }
+  });
+
+  // The parser-enforced required flags must stay labelled as required in the
+  // option list of the command that needs them.
+  test("help marks parser-required options as required", () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ["device approve", "--from"],
+      ["device complete", "--from"],
+      ["device recover", "--from"],
+      ["device backup", "--output"],
+      ["project link", "--team"],
+    ];
+    for (const [label, flag] of cases) {
+      const rendered = renderCommandHelp(label);
+      const line = rendered
+        .split("\n")
+        .find((candidate) => candidate.trimStart().startsWith(flag));
+      expect(line, `${label} ${flag}`).toBeDefined();
+      expect(line, `${label} ${flag}`).toContain("required");
     }
   });
 
