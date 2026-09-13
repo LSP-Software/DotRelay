@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromium } from "@playwright/test";
 import {
   buildOpenCodeRunArguments,
   createGrillManager,
@@ -903,4 +904,114 @@ describe("run issues panel", () => {
     );
     expect(panelHtml).toContain("Yes, start over");
   });
+
+  test("replaces a stale option pick and holds Send answer until every question is answered", async () => {
+    const sent: string[] = [];
+    const questionReply = [
+      "Two product decisions are open.",
+      "```dotrelay-grill-questions",
+      JSON.stringify({
+        questions: [
+          {
+            question: "Keep the recovery flow explicit?",
+            header: "Recovery flow",
+            options: [{ label: "Keep it explicit" }, { label: "Collapse it" }],
+            recommended: 0,
+          },
+          {
+            question: "Should the retry budget survive restarts?",
+            header: "Retry budget",
+            options: [],
+          },
+        ],
+      }),
+      "```",
+    ].join("\n");
+    const { server } = createPanelServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      startRunner: async () => process.pid,
+      signalRunner: () => {},
+      grillManager: {
+        read: async () => ({}),
+        ensure: async () => ({
+          version: 1,
+          status: "awaiting-human",
+          issue: 79,
+          issueTitle: "Turn CLI failures into guided recovery",
+          issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+          priority: 1,
+          sessionId: "ses_test",
+          question: questionReply,
+          message: "The grill is waiting for your answer.",
+          startedAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          turn: 2,
+          lastTurnCompleting: false,
+        }),
+        respond: async (answer: string) => {
+          sent.push(answer);
+        },
+        complete: async () => {},
+        retry: async () => {},
+        reset: async () => {},
+      } as unknown as ReturnType<typeof createGrillManager>,
+    });
+
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://127.0.0.1:${server.port}/`);
+      const send = page.locator("#grill-answer-button");
+      await page.waitForSelector("#grill-questions:not([hidden])", {
+        timeout: 15_000,
+      });
+      expect(await send.isDisabled()).toBe(true);
+
+      const optionInputs = page.locator("#question-options input[type=radio]");
+      await optionInputs.nth(1).click();
+      await optionInputs.nth(0).click();
+      await page.waitForFunction(
+        "() => {\n" +
+          "  const rows = document.querySelectorAll('#question-options .option');\n" +
+          "  return (\n" +
+          "    rows.length === 2 &&\n" +
+          "    rows[0].classList.contains('selected') &&\n" +
+          "    !rows[1].classList.contains('selected')\n" +
+          "  );\n" +
+          "}",
+        undefined,
+        { timeout: 5_000 },
+      );
+      const checked = await page.evaluate(
+        "Array.from(document.querySelectorAll('#question-options input[type=radio]')).filter((input) => input.checked).length",
+      );
+      expect(checked).toBe(1);
+      expect(await send.isDisabled()).toBe(true);
+
+      await page.locator("#grill-next").click();
+      await page.locator("#question-note").fill("Persist it across restarts.");
+      await page.waitForFunction(
+        "() => {\n" +
+          "  const button = document.querySelector('#grill-answer-button');\n" +
+          "  return button instanceof HTMLButtonElement && !button.disabled;\n" +
+          "}",
+        undefined,
+        { timeout: 5_000 },
+      );
+
+      await send.click();
+      const deadline = Date.now() + 5_000;
+      while (sent.length === 0 && Date.now() < deadline) {
+        await Bun.sleep(20);
+      }
+      expect(sent).toEqual([
+        "Recovery flow: Keep it explicit\nRetry budget: Persist it across restarts.",
+      ]);
+    } finally {
+      await page.close();
+      await browser.close();
+      await server.stop(true);
+    }
+  }, 120_000);
 });

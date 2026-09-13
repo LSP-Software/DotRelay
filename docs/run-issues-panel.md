@@ -29,7 +29,9 @@ When the agent's round ends with its machine-readable question block, the panel 
 questions one at a time. Each card shows the question, the agent's suggested answers with its
 preferred one flagged as **Recommended**, and a field for your own suggestion or a comment on the
 options. Pick an answer, write your own, or add a note to either; progress dots mark what you have
-already answered. If the reply carries no usable question block, the panel falls back to the free-form
+already answered, and the panel keeps **Send answer** disabled until every question has a picked
+option or a note. Picking a different option for a single-choice question replaces the previous
+pick. If the reply carries no usable question block, the panel falls back to the free-form
 answer field. Your selections are sent back to the same session as the next prompt.
 
 When the interview goes off the rails — the agent keeps asking questions the codebase could answer,

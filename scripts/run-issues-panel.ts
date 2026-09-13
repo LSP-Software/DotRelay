@@ -892,8 +892,9 @@ export const panelHtml = `<!doctype html>
           )
           .join("␝");
 
-      const hasAnyGrillAnswer = () =>
-        grillQuestions.some(
+      const allGrillQuestionsAnswered = () =>
+        grillQuestions.length > 0 &&
+        grillQuestions.every(
           (_question, index) =>
             (grillChoices.get(index)?.size ?? 0) > 0 ||
             (grillNotes.get(index) ?? "").trim().length > 0,
@@ -942,7 +943,7 @@ export const panelHtml = `<!doctype html>
         elements.grillNext.hidden = !grillViewIsQuestions || onLastQuestion;
         elements.grillAnswerButton.disabled =
           !grillAwaiting ||
-          (grillViewIsQuestions && !hasAnyGrillAnswer());
+          (grillViewIsQuestions && !allGrillQuestionsAnswered());
         elements.grillFinish.disabled = !grillAwaiting;
         elements.grillRetry.hidden = !grillFailed;
         elements.grillReset.hidden = !grillResettable;
@@ -967,6 +968,16 @@ export const panelHtml = `<!doctype html>
           empty.textContent = "The agent did not suggest an answer for this one.";
           optionsHost.append(empty);
         }
+        const optionRows = [];
+        const optionInputs = [];
+        const syncOptionSelection = () => {
+          const chosen = grillChoices.get(grillQuestionIndex) ?? new Set();
+          optionRows.forEach((row, index) =>
+            row.classList.toggle("selected", chosen.has(index)),
+          );
+          renderGrillQuestionDots();
+          updateGrillControls();
+        };
         question.options.forEach((option, optionIndex) => {
           const row = document.createElement("label");
           row.className =
@@ -978,15 +989,26 @@ export const panelHtml = `<!doctype html>
           input.name = "grill-question-option";
           input.checked = selected?.has(optionIndex) ?? false;
           input.addEventListener("change", () => {
-            const next = question.multiple
-              ? new Set(grillChoices.get(grillQuestionIndex) ?? [])
-              : new Set();
-            if (input.checked) next.add(optionIndex);
-            else next.delete(optionIndex);
-            grillChoices.set(grillQuestionIndex, next);
-            row.classList.toggle("selected", next.size > 0);
-            renderGrillQuestionDots();
-            updateGrillControls();
+            if (question.multiple) {
+              const next = new Set(grillChoices.get(grillQuestionIndex) ?? []);
+              if (input.checked) next.add(optionIndex);
+              else next.delete(optionIndex);
+              grillChoices.set(grillQuestionIndex, next);
+            } else if (input.checked) {
+              optionInputs.forEach((candidate, index) => {
+                if (index !== optionIndex) candidate.checked = false;
+              });
+              grillChoices.set(grillQuestionIndex, new Set([optionIndex]));
+            } else {
+              const checked = optionInputs.findIndex(
+                (candidate) => candidate.checked,
+              );
+              grillChoices.set(
+                grillQuestionIndex,
+                checked >= 0 ? new Set([checked]) : new Set(),
+              );
+            }
+            syncOptionSelection();
           });
           const text = document.createElement("span");
           const label = document.createElement("span");
@@ -1005,6 +1027,8 @@ export const panelHtml = `<!doctype html>
             description.textContent = option.description;
             text.append(description);
           }
+          optionRows.push(row);
+          optionInputs.push(input);
           row.append(input, text);
           optionsHost.append(row);
         });
@@ -1153,6 +1177,8 @@ export const panelHtml = `<!doctype html>
               ? composeGrillAnswer()
               : elements.grillAnswer.value;
         if (action !== "reset" && structured && !answer) return;
+        if (action === "respond" && structured && !allGrillQuestionsAnswered())
+          return;
         if (action === "reset") elements.grillConfirmOk.disabled = true;
         else {
           elements.grillAnswerButton.disabled = true;
