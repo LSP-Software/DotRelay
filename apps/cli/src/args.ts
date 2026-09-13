@@ -119,13 +119,15 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     const separator = value.indexOf("=");
     const name = separator < 1 ? "" : value.slice(0, separator);
     const classification = separator < 1 ? "" : value.slice(separator + 1);
+    const usage = usageFor(parsed.command, parsed.subcommand);
+    const usageSuffix = usage ? `; usage: ${usage}` : "";
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
       throw new CliInvocationError(
-        "--classify requires NAME=shared or NAME=user-defined",
+        `--classify requires NAME=shared or NAME=user-defined${usageSuffix}`,
       );
     if (classification !== "shared" && classification !== "user-defined")
       throw new CliInvocationError(
-        "--classify requires NAME=shared or NAME=user-defined",
+        `--classify requires NAME=shared or NAME=user-defined${usageSuffix}`,
       );
     parsed.classifications[name] = classification;
   } else if (flag === "--variable") {
@@ -136,7 +138,7 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   }
 };
 
-const FLAG_KEYS = [
+export const FLAG_KEYS = [
   "profile",
   "acceptProfile",
   "environment",
@@ -156,9 +158,9 @@ const FLAG_KEYS = [
   "stdout",
 ] as const;
 
-type FlagKey = (typeof FLAG_KEYS)[number];
+export type FlagKey = (typeof FLAG_KEYS)[number];
 
-const FLAG_TOKENS: Record<FlagKey, string> = {
+export const FLAG_TOKENS: Record<FlagKey, string> = {
   profile: "--profile",
   acceptProfile: "--accept-profile",
   environment: "--environment",
@@ -178,7 +180,7 @@ const FLAG_TOKENS: Record<FlagKey, string> = {
   stdout: "--stdout",
 };
 
-const USAGE: Record<string, string> = {
+export const USAGE: Record<string, string> = {
   setup: "dotrelay setup <origin>",
   login: "dotrelay login",
   logout: "dotrelay logout",
@@ -209,7 +211,7 @@ const USAGE: Record<string, string> = {
 // The flags each command consumes; anything parsed but not listed here is
 // rejected so an invocation can never act on a flag it silently ignored.
 // --debug is the one exception: it shapes diagnostics for every command.
-const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
+export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   setup: ["acceptProfile", "noOpen", "noInput", "json"],
   login: ["profile", "noOpen", "noInput", "json"],
   logout: ["profile", "json"],
@@ -299,13 +301,28 @@ const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "env use": ["profile", "environment", "json"],
 };
 
+// Subcommands the parser accepts under each grouped command; the help
+// views and the parser share this table so the two cannot drift.
+export const SUBCOMMANDS: Readonly<
+  Partial<Record<CommandName, readonly string[]>>
+> = {
+  profile: ["add", "use", "list"],
+  device: ["enroll", "begin", "approve", "complete", "backup", "recover"],
+  project: ["link"],
+  env: ["use"],
+};
+
+// The usage line for a complete "command [subcommand]" label; the help
+// renderers and the error messages below share this one source of truth.
+export const usageForLabel = (label: string): string =>
+  USAGE[label] ?? `dotrelay ${label}`;
+
 const usageFor = (
   command: CommandName | undefined,
   subcommand?: string,
 ): string | undefined => {
   if (!command) return undefined;
-  const label = `${command}${subcommand ? ` ${subcommand}` : ""}`;
-  return USAGE[label] ?? `dotrelay ${label}`;
+  return usageForLabel(`${command}${subcommand ? ` ${subcommand}` : ""}`);
 };
 
 const flagPresent = (parsed: MutableArguments, key: FlagKey): boolean => {
@@ -314,33 +331,38 @@ const flagPresent = (parsed: MutableArguments, key: FlagKey): boolean => {
   return Boolean(parsed[key]);
 };
 
-const describePositionals = (expected: number | readonly number[]): string =>
-  Array.isArray(expected)
-    ? "zero or one positional arguments"
-    : expected === 0
-      ? "no positional arguments"
-      : expected === 1
-        ? "exactly one positional argument"
-        : `${expected} positional arguments`;
+const describeCount = (count: number): string =>
+  count === 0 ? "zero" : count === 1 ? "one" : String(count);
+
+const describePositionals = (expected: number | readonly number[]): string => {
+  if (Array.isArray(expected)) {
+    const words = expected.map(describeCount);
+    if (words.length === 2)
+      return `${words[0]} or ${words[1]} positional arguments`;
+    const head = words.slice(0, -1).join(", ");
+    return `${head}, or ${words[words.length - 1]} positional arguments`;
+  }
+  return expected === 0
+    ? "no positional arguments"
+    : expected === 1
+      ? "exactly one positional argument"
+      : `${expected} positional arguments`;
+};
 
 const validateCommand = (parsed: MutableArguments) => {
   const command = parsed.command;
   if (!command) throw new CliInvocationError("a command is required");
   const label = `${command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""}`;
-  const usage = USAGE[label] ?? `dotrelay ${label}`;
-  const expectedSubcommands: Partial<Record<CommandName, readonly string[]>> = {
-    profile: ["add", "use", "list"],
-    device: ["enroll", "begin", "approve", "complete", "backup", "recover"],
-    project: ["link"],
-    env: ["use"],
-  };
-  const allowed = expectedSubcommands[command];
+  const usage = usageForLabel(label);
+  const allowed = SUBCOMMANDS[command];
   if (allowed && (!parsed.subcommand || !allowed.includes(parsed.subcommand)))
     throw new CliInvocationError(
-      `${command} requires one of: ${allowed.join(", ")}`,
+      `${command} requires one of: ${allowed.join(", ")}; usage: ${usage}`,
     );
   if (!allowed && parsed.subcommand)
-    throw new CliInvocationError(`${command} does not accept a subcommand`);
+    throw new CliInvocationError(
+      `${command} does not accept a subcommand; usage: ${usage}`,
+    );
   if (
     command === "env" &&
     parsed.subcommand === "use" &&
@@ -373,19 +395,25 @@ const validateCommand = (parsed: MutableArguments) => {
   if (parsed.limit !== undefined) {
     const limit = Number(parsed.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)
-      throw new CliInvocationError("--limit must be an integer from 1 to 256");
+      throw new CliInvocationError(
+        `--limit must be an integer from 1 to 256; usage: ${usage}`,
+      );
     parsed.limit = limit;
   }
   if (command === "pull") {
     if (parsed.stdout && parsed.output)
       throw new CliInvocationError(
-        "pull --stdout and --output are mutually exclusive; use either `dotrelay pull --stdout` or `dotrelay pull --output <file>`",
+        `pull --stdout and --output are mutually exclusive; use either \`dotrelay pull --stdout\` or \`dotrelay pull --output <file>\`; usage: ${usage}`,
       );
     if (parsed.stdout && parsed.json)
       throw new CliInvocationError(
-        "pull --stdout and --json are mutually exclusive because Values never appear in JSON output; use `dotrelay pull --output <file> --json` instead",
+        `pull --stdout and --json are mutually exclusive because Values never appear in JSON output; use \`dotrelay pull --output <file> --json\` instead; usage: ${usage}`,
       );
   }
+  if (command === "project" && parsed.subcommand === "link" && !parsed.team)
+    throw new CliInvocationError(
+      `project link requires --team <team-id>; usage: ${usage}`,
+    );
   const positionalCounts: Partial<
     Record<CommandName, number | readonly number[]>
   > = {
@@ -403,7 +431,9 @@ const validateCommand = (parsed: MutableArguments) => {
     status: 0,
     context: 0,
     history: 0,
-    help: 0,
+    // help takes the command it documents: `help rollback`, or a nested
+    // command such as `help device recover`.
+    help: [0, 1, 2],
     diff: 0,
     // Interactively the target Revision can be chosen from the rendered
     // history instead of named on the command line; automation must name it.
@@ -505,7 +535,12 @@ export const parseArguments = (
       else if (flag === "--debug") parsed.debug = true;
       else if (flag === "--stdout") parsed.stdout = true;
       else if (flag === "--reveal") parsed.reveal = true;
-      else throw new CliInvocationError(`unknown option: ${flag}`);
+      else {
+        const usage = usageFor(parsed.command, parsed.subcommand);
+        throw new CliInvocationError(
+          `unknown option: ${flag}${usage ? `; usage: ${usage}` : ""}`,
+        );
+      }
     } else if (!parsed.command) {
       if (!COMMANDS.includes(token as CommandName))
         throw new CliInvocationError(`unknown command: ${token}`);
@@ -524,7 +559,7 @@ export const parseArguments = (
   validateCommand(parsed);
   if (parsed.stdout && (options.stdoutIsTerminal ?? false) && !parsed.reveal)
     throw new CliInvocationError(
-      "refusing to write Values to terminal stdout; add --reveal explicitly",
+      `refusing to write Values to terminal stdout; add --reveal explicitly; usage: ${usageFor(parsed.command, parsed.subcommand) ?? "dotrelay pull"}`,
     );
   return Object.freeze({
     ...parsed,

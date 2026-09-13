@@ -4,7 +4,11 @@ The `dotrelay` binary exposes the command contract. The `dotrelay` npm package s
 binary staged for the current platform and forwards the same arguments to it.
 
 Everyday commands are `setup`, `login`, `init`, `push`, `pull`, `diff`, and `status`. Power commands stay
-available and are listed by `dotrelay help`.
+available and are listed by `dotrelay help`. `dotrelay help <command>` — or `dotrelay <command> --help`,
+including nested commands such as `dotrelay device recover --help` — renders the usage line, required
+arguments, options, defaults, noninteractive requirements, and safe examples for that one command. The
+help is generated from the same command registry the parser uses, so it cannot drift from the accepted
+syntax, and validation errors carry the relevant usage line.
 
 ## First machine and sign-in
 

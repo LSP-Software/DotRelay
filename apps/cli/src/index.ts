@@ -63,6 +63,13 @@ import {
 } from "./errors";
 import { createGitTrackingProbe, type GitTrackingProbe } from "./git-tracking";
 import {
+  helpLabelFor,
+  helpTopicFor,
+  renderCommandHelp,
+  renderHelp,
+  renderPowerHelp,
+} from "./help";
+import {
   addServerProfile,
   type CliServerProfile,
   createFileProfileCatalog,
@@ -95,68 +102,7 @@ export type { TerminalIo };
 
 export const version = "0.0.0-foundation";
 
-export const renderHelp = (): string => {
-  return [
-    "Usage: dotrelay <command>",
-    "",
-    "  setup <origin>   Trust this Server Profile, sign in, enroll this machine",
-    "  login            Sign in and enroll this machine",
-    "  init             Publish this repo's .env for the first time",
-    "  push             Publish changes from .env",
-    "  pull             Write decrypted Values to .env",
-    "  diff             Compare .env with the Environment",
-    "  status           Show this machine's connection",
-    "",
-    "More commands: dotrelay help",
-    "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous",
-    "Automation: --json  --no-input  --force  --debug",
-  ].join("\n");
-};
-
-export const renderPowerHelp = (): string => {
-  return [
-    "Usage: dotrelay <command>",
-    "",
-    "Everyday:",
-    "  setup <origin>   Trust this Server Profile, sign in, enroll this machine",
-    "  login            Sign in and enroll this machine",
-    "  init             Publish this repo's .env for the first time",
-    "  push             Publish changes from .env",
-    "  pull             Write decrypted Values to .env",
-    "  diff             Compare .env with the Environment",
-    "  status           Show this machine's connection",
-    "",
-    "Power:",
-    "  profile add <name> <origin>   Trust and save a Server Profile",
-    "  profile use <name>            Select the global Server Profile",
-    "  profile list                  List saved Server Profiles",
-    "  logout                        Remove the local session",
-    "  device enroll                 Bootstrap or begin Device enrollment",
-    "  device begin --output <file>  Begin dual-control enrollment",
-    "  device approve --from <file>  Approve an enrollment handoff",
-    "  device complete --from <file> Complete an approved enrollment",
-    "  device backup --output <file> Create a Recovery Kit",
-    "  device recover --from <file>  Restore a Device from a Recovery Kit",
-    "  context                       Detect the GitHub Repository",
-    "  project link --team <team>    Link a Project explicitly",
-    "  env use <environment>         Select an Environment by id or label",
-    "  history                       List verified Revisions with readable context",
-    "  rollback <revision>           Append a lane-scoped Rollback",
-    "",
-    "Shared: --profile  --environment  --team <id>  --json  --debug  --no-input",
-    "(each is scoped to the commands that consume it; unsupported options, unexpected positionals, and conflicting output flags are rejected before work starts)",
-    "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous, such as a fork origin and a source upstream; the choice is saved in the worktree context and re-used until that remote stops pointing at the same repository",
-    "Publish: --classify NAME=shared|user-defined  --from <file>  --force",
-    "Pull: --output <file>  --stdout  --reveal  --force",
-    "Diff: --from <file>  --reveal",
-    "History and rollback: history renders readable dates, per-Revision change context, and a #ordinal per Revision; `rollback <revision>` takes that ordinal or a Revision id, and --variable <name-or-id> names the Variables to roll back (ids keep working for automation). Run rollback bare to choose the target Revision and Variables from the rendered history, then review the masked changes. A rollback never rewrites or removes earlier history: it appends a new signed Rollback Revision for the selected Variables only. history --json keeps the documented revision metadata for automation.",
-    "Pull checks the output's Git tracking state before writing: untracked outputs get a repository-local exclusion (.git/info/exclude), and a Git-tracked output is refused — untrack it (git rm --cached <path>) or choose another --output path.",
-    "Change previews show names, ownership, and change type only; --reveal shows plaintext Values for that one review, never in JSON or diagnostics.",
-    "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
-    "Destructive approval: --force is the only way to approve, under --no-input, replacing a differing pull output file, publishing removed Variables, or rotating an existing Recovery Kit.",
-    "Values are never diagnostic data. --insecure and credential flags are not supported.",
-  ].join("\n");
-};
+export { renderHelp, renderPowerHelp } from "./help";
 
 export const main = (args: string[]): string => {
   rejectForbiddenFlags(args);
@@ -844,8 +790,17 @@ const execute = async (
   const store = createFileProfileCatalog(
     runtime.profilePath ?? profileCatalogPath(),
   );
-  if (parsed.command === "help")
-    return { value: { stdout: `${renderPowerHelp()}\n` } };
+  if (parsed.command === "help") {
+    if (parsed.positionals.length === 0)
+      return { value: { stdout: `${renderPowerHelp()}\n` } };
+    const topic = parsed.positionals;
+    const label = helpLabelFor(topic);
+    if (!label)
+      throw new CliInvocationError(
+        `${topic.join(" ")} is not a command; usage: dotrelay help [<command>]`,
+      );
+    return { value: { stdout: `${renderCommandHelp(label)}\n` } };
+  }
   if (parsed.command === "setup") {
     const origin = parsed.positionals[0];
     if (!origin) throw new CliInvocationError("setup requires an origin");
@@ -986,9 +941,15 @@ const execute = async (
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {
     const profile = await resolveServerProfile(store, parsed.profile);
-    const team = parsed.team?.toLowerCase();
-    if (!team)
-      throw new CliInvocationError("project link requires --team <team-id>");
+    // parseArguments already rejects project link without --team; this only
+    // narrows the parsed type, keeping the parser the single source of truth.
+    const team =
+      parsed.team?.toLowerCase() ??
+      (() => {
+        throw new CliInvocationError(
+          "project link requires --team <team-id>; usage: dotrelay project link --team <team-id>",
+        );
+      })();
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readStoredWorktreeContext(contextPath);
@@ -1437,12 +1398,17 @@ export const run = async (
 ): Promise<CliRunResult> => {
   try {
     rejectForbiddenFlags(args);
-    if (args.includes("--help") || args.length === 0)
+    if (args.includes("--help") || args.length === 0) {
+      // Route --help to the selected command's help when a command is named,
+      // so `dotrelay rollback --help` never answers with the everyday list.
+      const label = helpLabelFor(helpTopicFor(args));
+      const help = label ? renderCommandHelp(label) : renderHelp();
       return {
         exitCode: EXIT_CODES.success,
-        stdout: `${renderHelp()}\n`,
+        stdout: `${help}\n`,
         stderr: "",
       };
+    }
     if (args.includes("--version"))
       return {
         exitCode: EXIT_CODES.success,
