@@ -22,7 +22,7 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +55,7 @@ import {
 import {
   applyConflictResolution,
   applyRollbackToVariables,
+  bareVerifiedRevision,
   type ConflictChangeKind,
   type ConflictResolution,
   type ConflictSummary,
@@ -64,11 +65,13 @@ import {
   deleteEnvironmentVariable,
   draftValueDiffs,
   type EnvironmentVariable,
+  locallyPublishedRevision,
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
   publicationMutationForHead,
   publishedBaseline,
+  revisionMutationLabel,
   rollbackValueDiffs,
   type SetupAction,
   settlePublishedDraft,
@@ -77,8 +80,10 @@ import {
   updateVariableValue,
   type VariableDraft,
   type VariableValueDiff,
+  type VerifiedRevision,
   validateVariableDraft,
   variableHasDraftChange,
+  verifiedRevisionFromWire,
 } from "@/lib/environment-workflow";
 
 type EnvironmentEditorProps = Readonly<{
@@ -195,6 +200,66 @@ const formatDiffValue = (
   if (value === null) return "not set";
   if (value === "") return "empty";
   return revealed ? value : "••••••••";
+};
+
+const displayRevisionId = (id: string): string =>
+  id.startsWith("rev_") ? id : id.slice(-8);
+
+const revisionTimeLabel = (authoredAtMs: number | null): string =>
+  authoredAtMs === null
+    ? "Time unavailable"
+    : new Date(authoredAtMs).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+
+const revisionAuthorLabel = (
+  revision: VerifiedRevision,
+  actorUserId: string | undefined,
+): string =>
+  revision.authorUserId !== null &&
+  actorUserId !== undefined &&
+  revision.authorUserId === actorUserId
+    ? "You"
+    : "Author unavailable";
+
+const verifiedRevisionsFromPage = (
+  page: SyncPageWire,
+): readonly VerifiedRevision[] =>
+  page.revisions.map((revision) => verifiedRevisionFromWire(revision));
+
+const RevisionIdentity = ({
+  revision,
+  actorUserId,
+  idClassName = "font-mono text-sm",
+  lineSuffix = null,
+}: Readonly<{
+  readonly revision: VerifiedRevision;
+  readonly actorUserId: string | undefined;
+  readonly idClassName?: string;
+  readonly lineSuffix?: ReactNode;
+}>) => {
+  const mutationLabel = revisionMutationLabel(revision.mutation);
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className={idClassName}>{displayRevisionId(revision.id)}</span>
+        {mutationLabel ? (
+          <Badge
+            className="h-4 text-[10px] font-medium uppercase tracking-wide"
+            variant="secondary"
+          >
+            {mutationLabel}
+          </Badge>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        <span>{revisionTimeLabel(revision.authoredAtMs)}</span> ·{" "}
+        <span>{revisionAuthorLabel(revision, actorUserId)}</span>
+        {lineSuffix}
+      </p>
+    </>
+  );
 };
 
 const InlineHunk = ({
@@ -822,7 +887,9 @@ export const EnvironmentEditor = ({
   const [loadPhase, setLoadPhase] = useState<"loading" | "ready" | "failed">(
     () => (session ? "loading" : "ready"),
   );
-  const [verifiedHistory, setVerifiedHistory] = useState<readonly string[]>([]);
+  const [verifiedHistory, setVerifiedHistory] = useState<
+    readonly VerifiedRevision[]
+  >([]);
   const [addOpen, setAddOpen] = useState(false);
   const [addDraft, setAddDraft] =
     useState<AddVariableState>(emptyVariableDraft);
@@ -914,10 +981,7 @@ export const EnvironmentEditor = ({
             : [...decoded],
         );
         setVerifiedHistory((current) =>
-          mergeVerifiedHistory(
-            current,
-            page.revisions.map((revision) => revision.id),
-          ),
+          mergeVerifiedHistory(current, verifiedRevisionsFromPage(page)),
         );
         if (page.currentHeadId && page.currentHeadHash) {
           setProtocolHead({
@@ -1024,6 +1088,14 @@ export const EnvironmentEditor = ({
     conflictLaneIds.size > 0 &&
     [...conflictLaneIds].every((id) => conflictChoices.has(id));
   const retryReady = staleHeadRevision !== null && allConflictsResolved;
+  const historyRows: readonly VerifiedRevision[] = session
+    ? verifiedHistory
+    : [headRevision, "rev_0183", "rev_0182"].map((id) =>
+        bareVerifiedRevision(id),
+      );
+  const rollbackTargetEntry = rollbackTarget
+    ? (historyRows.find((entry) => entry.id === rollbackTarget) ?? null)
+    : null;
   const historicalValues = new Map<string, string | null>([
     ["00000000-0000-4000-8000-000000000001", "https://api.acme.example"],
     ["00000000-0000-4000-8000-000000000002", ""],
@@ -1241,7 +1313,18 @@ export const EnvironmentEditor = ({
           });
           setHeadRevision(artifacts.request.revision.id);
           setVerifiedHistory((current) =>
-            mergeVerifiedHistory(current, [artifacts.request.revision.id]),
+            mergeVerifiedHistory(current, [
+              locallyPublishedRevision({
+                id: artifacts.request.revision.id,
+                parentId: expectedHeadId ?? context.environmentId,
+                mutation,
+                projectEpoch: context.projectEpoch,
+                authoredAtMs: artifacts.request.revision.authoredAtMs,
+                rollbackTargetId:
+                  artifacts.request.revision.rollbackTargetId ?? null,
+                authorUserId: context.actorUserId,
+              }),
+            ]),
           );
         }
         setVariables((current) =>
@@ -1301,10 +1384,7 @@ export const EnvironmentEditor = ({
             actorUserId: context.actorUserId,
           });
           setVerifiedHistory((current) =>
-            mergeVerifiedHistory(
-              current,
-              page.revisions.map((revision) => revision.id),
-            ),
+            mergeVerifiedHistory(current, verifiedRevisionsFromPage(page)),
           );
           const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
           const decodedVariables = publishSession.decodeVariables
@@ -1671,38 +1751,56 @@ export const EnvironmentEditor = ({
           <CardTitle className="flex items-center gap-2 text-lg">
             <GitBranch className="size-4" /> History
           </CardTitle>
+          <CardDescription>
+            Verified Revisions of this Environment. Rollback restores the
+            selected Variables from an earlier Revision as a new Revision; it
+            does not delete the current one.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2">
-          {(session
-            ? verifiedHistory
-            : [headRevision, "rev_0183", "rev_0182"]
-          ).map((revision) => (
-            <div
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
-              key={revision}
-            >
-              <div>
-                <p className="font-mono text-sm">{revision}</p>
-                <p className="text-xs text-muted-foreground">
-                  {revision === headRevision ? "Current" : "Earlier revision"}
-                </p>
+          {historyRows.map((revision) => {
+            const isCurrent = revision.id === headRevision;
+            const rollbackTargetId = revision.rollbackTargetId;
+            const rollbackTargetKnown =
+              rollbackTargetId !== null &&
+              historyRows.some((entry) => entry.id === rollbackTargetId);
+            return (
+              <div
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+                data-testid={`history-revision-${revision.id}`}
+                key={revision.id}
+              >
+                <div className="min-w-0">
+                  <RevisionIdentity
+                    actorUserId={session?.context.actorUserId}
+                    lineSuffix={
+                      <>
+                        {rollbackTargetId !== null
+                          ? ` · Rollback of ${rollbackTargetKnown ? displayRevisionId(rollbackTargetId) : "an earlier Revision"}`
+                          : null}
+                        {!isCurrent ? " · Earlier revision" : null}
+                      </>
+                    }
+                    revision={revision}
+                  />
+                </div>
+                {isCurrent ? (
+                  <Badge>Current</Badge>
+                ) : (
+                  <Button
+                    disabled={loadPhase !== "ready"}
+                    onClick={() => {
+                      void openRollback(revision.id);
+                    }}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <RotateCcw aria-hidden="true" /> Rollback
+                  </Button>
+                )}
               </div>
-              {revision === headRevision ? (
-                <Badge>Current</Badge>
-              ) : (
-                <Button
-                  disabled={loadPhase !== "ready"}
-                  onClick={() => {
-                    void openRollback(revision);
-                  }}
-                  size="sm"
-                  variant="outline"
-                >
-                  <RotateCcw aria-hidden="true" /> Rollback
-                </Button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
 
@@ -1783,13 +1881,31 @@ export const EnvironmentEditor = ({
               new revision. It does not delete the current one.
             </DialogDescription>
           </DialogHeader>
+          {rollbackTargetEntry ? (
+            <div className="grid gap-1 rounded-lg border bg-muted/20 p-3">
+              <RevisionIdentity
+                actorUserId={session?.context.actorUserId}
+                idClassName="font-mono text-sm font-medium"
+                revision={rollbackTargetEntry}
+              />
+              <p className="text-xs text-muted-foreground">
+                Staging publishes a new Rollback revision that becomes the new
+                head: the selected Variables take this Revision&apos;s Values,
+                earlier history is kept, and unselected Variables are untouched.
+              </p>
+            </div>
+          ) : null}
           {pendingRollbackDiffs.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing is different from this revision.
             </p>
           ) : (
             <>
-              <div className="flex justify-end">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  {rollbackLanes.size} of {pendingRollbackDiffs.length}{" "}
+                  Variables selected
+                </p>
                 <Button
                   aria-pressed={rollbackValuesRevealed}
                   onClick={() =>

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   applyConflictResolution,
   applyRollbackToVariables,
+  bareVerifiedRevision,
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
@@ -9,20 +10,24 @@ import {
   displayedSetupAction,
   draftValueDiffs,
   type EnvironmentVariable,
+  locallyPublishedRevision,
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   nextSetupAction,
   prepareEncryptedPublication,
   publicationMutationForHead,
   publishedBaseline,
+  revisionMutationLabel,
   rollbackValueDiffs,
   settlePublishedDraft,
   splitInlineValueDiff,
   summarizeConflict,
   updateVariableValue,
+  type VerifiedRevision,
   validateEnvironmentVariables,
   validateVariableDraft,
   variableHasDraftChange,
+  verifiedRevisionFromWire,
 } from "./environment-workflow";
 
 const sharedDraft = {
@@ -725,19 +730,110 @@ test("inline value diffs keep the shared characters and mark only the edit", () 
   });
 });
 
+const revision = (
+  id: string,
+  overrides: Partial<Omit<VerifiedRevision, "id">> = {},
+): VerifiedRevision => ({
+  id,
+  parentId: null,
+  mutation: null,
+  projectEpoch: null,
+  authoredAtMs: null,
+  rollbackTargetId: null,
+  authorUserId: null,
+  ...overrides,
+});
+
 test("verified history keeps existing revisions when a sync page is empty", () => {
-  expect(mergeVerifiedHistory(["rev_1", "rev_2"], [])).toEqual([
-    "rev_1",
-    "rev_2",
-  ]);
+  expect(
+    mergeVerifiedHistory([revision("rev_1"), revision("rev_2")], []),
+  ).toEqual([revision("rev_1"), revision("rev_2")]);
 });
 
 test("verified history appends new revisions without duplicating", () => {
-  expect(mergeVerifiedHistory(["rev_1", "rev_2"], ["rev_2", "rev_3"])).toEqual([
-    "rev_1",
-    "rev_2",
-    "rev_3",
-  ]);
+  expect(
+    mergeVerifiedHistory(
+      [revision("rev_1"), revision("rev_2")],
+      [revision("rev_2"), revision("rev_3")],
+    ),
+  ).toEqual([revision("rev_1"), revision("rev_2"), revision("rev_3")]);
+});
+
+test("a wire Revision keeps its verified context and an unavailable author", () => {
+  expect(
+    verifiedRevisionFromWire({
+      id: "rev_0183",
+      parentId: "rev_0182",
+      mutation: 2,
+      projectEpoch: 1n,
+      authoredAtMs: 1750000000000n,
+      rollbackTargetId: null,
+    }),
+  ).toEqual(
+    revision("rev_0183", {
+      parentId: "rev_0182",
+      mutation: 2,
+      projectEpoch: 1,
+      authoredAtMs: 1750000000000,
+    }),
+  );
+  expect(
+    verifiedRevisionFromWire({
+      id: "rev_0184",
+      parentId: "rev_0183",
+      mutation: 3,
+      projectEpoch: 1n,
+      authoredAtMs: 1750000000001n,
+      rollbackTargetId: "rev_0181",
+    }).authorUserId,
+  ).toBeNull();
+});
+
+test("a locally published Revision is authored by the acting User", () => {
+  expect(
+    locallyPublishedRevision({
+      id: "rev_0185",
+      parentId: "rev_0184",
+      mutation: "ROLLBACK",
+      projectEpoch: 2,
+      authoredAtMs: 1750000000000,
+      rollbackTargetId: "rev_0183",
+      authorUserId: "00000000-0000-4000-8000-000000000061",
+    }),
+  ).toEqual(
+    revision("rev_0185", {
+      parentId: "rev_0184",
+      mutation: 3,
+      projectEpoch: 2,
+      authoredAtMs: 1750000000000,
+      rollbackTargetId: "rev_0183",
+      authorUserId: "00000000-0000-4000-8000-000000000061",
+    }),
+  );
+  expect(
+    locallyPublishedRevision({
+      id: "rev_0186",
+      parentId: null,
+      mutation: "GENESIS",
+      projectEpoch: 1,
+      authoredAtMs: 1750000000000,
+      authorUserId: "user",
+    }).mutation,
+  ).toBe(1);
+});
+
+test("revision mutation kinds map to readable labels", () => {
+  expect(revisionMutationLabel(1)).toBe("Genesis");
+  expect(revisionMutationLabel(2)).toBe("Manifest update");
+  expect(revisionMutationLabel(3)).toBe("Rollback");
+  expect(revisionMutationLabel(4)).toBe("Epoch transition");
+  expect(revisionMutationLabel(5)).toBe("User-key rotation");
+  expect(revisionMutationLabel(null)).toBeNull();
+  expect(revisionMutationLabel(99)).toBeNull();
+});
+
+test("a bare Revision reports every piece of context as unavailable", () => {
+  expect(bareVerifiedRevision("rev_0183")).toEqual(revision("rev_0183"));
 });
 
 test("rollback diffs omit Variables whose Values already match history", () => {

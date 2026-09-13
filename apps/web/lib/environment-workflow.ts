@@ -2,6 +2,7 @@ import {
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   type PublicationMutationKind,
+  type SyncRevisionWire,
   seal,
   sha384,
   sign,
@@ -420,17 +421,102 @@ export const changedLaneCount = (
   variables: readonly EnvironmentVariable[],
 ): number => variables.filter((variable) => variable.hasDraftChange).length;
 
+export type VerifiedRevision = Readonly<{
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly mutation: number | null;
+  readonly projectEpoch: number | null;
+  readonly authoredAtMs: number | null;
+  readonly rollbackTargetId: string | null;
+  readonly authorUserId: string | null;
+}>;
+
+const REVISION_MUTATION_LABELS: Readonly<Record<number, string>> =
+  Object.freeze({
+    1: "Genesis",
+    2: "Manifest update",
+    3: "Rollback",
+    4: "Epoch transition",
+    5: "User-key rotation",
+  });
+
+const PUBLICATION_MUTATION_KINDS: Readonly<
+  Record<PublicationMutationKind, number>
+> = Object.freeze({
+  GENESIS: 1,
+  MANIFEST_UPDATE: 2,
+  ROLLBACK: 3,
+});
+
+export const revisionMutationLabel = (
+  mutation: number | null,
+): string | null =>
+  mutation === null ? null : (REVISION_MUTATION_LABELS[mutation] ?? null);
+
+export const bareVerifiedRevision = (id: string): VerifiedRevision =>
+  Object.freeze({
+    id,
+    parentId: null,
+    mutation: null,
+    projectEpoch: null,
+    authoredAtMs: null,
+    rollbackTargetId: null,
+    authorUserId: null,
+  });
+
+export const verifiedRevisionFromWire = (
+  revision: Pick<
+    SyncRevisionWire,
+    | "id"
+    | "parentId"
+    | "mutation"
+    | "projectEpoch"
+    | "authoredAtMs"
+    | "rollbackTargetId"
+  >,
+): VerifiedRevision =>
+  Object.freeze({
+    id: revision.id,
+    parentId: revision.parentId,
+    mutation: revision.mutation,
+    projectEpoch: Number(revision.projectEpoch),
+    authoredAtMs: Number(revision.authoredAtMs),
+    rollbackTargetId: revision.rollbackTargetId,
+    // The sync wire record carries no author field, so Revisions received
+    // over sync report an unavailable author rather than guessing one.
+    authorUserId: null,
+  });
+
+export const locallyPublishedRevision = (input: {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly mutation: PublicationMutationKind;
+  readonly projectEpoch: number;
+  readonly authoredAtMs: number;
+  readonly rollbackTargetId?: string | null;
+  readonly authorUserId: string;
+}): VerifiedRevision =>
+  Object.freeze({
+    id: input.id,
+    parentId: input.parentId,
+    mutation: PUBLICATION_MUTATION_KINDS[input.mutation],
+    projectEpoch: input.projectEpoch,
+    authoredAtMs: input.authoredAtMs,
+    rollbackTargetId: input.rollbackTargetId ?? null,
+    authorUserId: input.authorUserId,
+  });
+
 export const mergeVerifiedHistory = (
-  current: readonly string[],
-  incoming: readonly string[],
-): readonly string[] => {
+  current: readonly VerifiedRevision[],
+  incoming: readonly VerifiedRevision[],
+): readonly VerifiedRevision[] => {
   if (incoming.length === 0) return current;
-  const seen = new Set(current);
+  const seen = new Set(current.map((revision) => revision.id));
   const next = [...current];
-  for (const id of incoming) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    next.push(id);
+  for (const revision of incoming) {
+    if (seen.has(revision.id)) continue;
+    seen.add(revision.id);
+    next.push(revision);
   }
   return Object.freeze(next);
 };

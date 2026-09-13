@@ -197,6 +197,13 @@ test("edits made while a publication is in flight stay unpublished after it succ
   await expect(featureRow()).toBeVisible();
   await expect(editor.getByLabel("OPTIONAL_FLAG Value")).toBeEnabled();
 
+  // The verified history identifies the synced Revision by its change kind
+  // and reports the author the wire record does not provide as unavailable.
+  await expect(
+    editor.getByText("Author unavailable", { exact: true }),
+  ).toBeVisible();
+  await expect(editor.getByText("Genesis", { exact: true })).toBeVisible();
+
   await editor.getByLabel("OPTIONAL_FLAG Value").fill("submitted-value");
   await expect(optionalRow()).toContainText("Draft change");
 
@@ -218,6 +225,25 @@ test("edits made while a publication is in flight stay unpublished after it succ
   await expect(page.getByText(/Published as /)).toBeVisible({
     timeout: 15_000,
   });
+
+  // The published Revision joins the history with its verified context and
+  // the acting User as its author.
+  const publishedMessage =
+    (await page
+      .getByText(/Published as /)
+      .first()
+      .textContent()) ?? "";
+  const publishedRevisionId = publishedMessage
+    .replace("Published as ", "")
+    .replace(".", "");
+  const publishedRow = editor.getByTestId(
+    `history-revision-${publishedRevisionId}`,
+  );
+  await expect(publishedRow).toBeVisible();
+  await expect(publishedRow.getByText("You", { exact: true })).toBeVisible();
+  await expect(
+    publishedRow.getByText("Manifest update", { exact: true }),
+  ).toBeVisible();
 
   // The submitted lane is published and no longer a draft; the newer edit made
   // while the publication was in flight remains visibly unpublished.

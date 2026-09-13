@@ -57,5 +57,8 @@ readable only by that User's authorized Devices. Live Variable names remain uniq
 a tombstone until publication.
 
 Save changes encrypts changed Values in the browser, then publishes a new Revision. Sync verifies
-history before remote state is accepted. Stale heads require a local choice. Rollback chooses
-Variables and appends a new Revision rather than rewinding the head.
+history before remote state is accepted. Stale heads require a local choice. History lists each
+verified Revision with its authored time, change kind, and author where the protocol provides
+them, or an unavailable label where it does not, plus a short id suffix. Rollback previews the
+target Revision and the masked Variables it would restore, then appends a new Revision rather than
+rewinding the head.

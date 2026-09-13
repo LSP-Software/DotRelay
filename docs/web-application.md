@@ -76,9 +76,14 @@ explicit reveal, labels whether the difference is a Value, a definition (ownersh
 a deletion, and explains the Value and definition consequence of each Keep mine / Use theirs /
 Keep my value choice. A choice can be revisited before publication, and retrying the publish
 re-runs the approved publication against the re-anchored head rather than only re-arming the
-publish gate. Rollback is lane-scoped and always publishes a new Revision, so the current head
-remains in immutable history. The development protected preview uses the same
-cryptographic artifact builder but is explicitly local and never reports a service publication.
+ publish gate. Rollback is lane-scoped and always publishes a new Revision, so the current head
+ remains in immutable history. The History card lists the verified Revisions with their authored
+ time, change kind (naming the target of a Rollback), and author where the protocol provides
+ them, an honest unavailable label where it does not, and a short id suffix so a Revision can be
+ referenced without memorizing its full id. The rollback dialog identifies the target Revision and
+ previews the masked consequence of the selected lanes — a new Rollback revision that restores
+ only the chosen Variables — before it is staged. The development protected preview uses the same
+ cryptographic artifact builder but is explicitly local and never reports a service publication.
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
 
