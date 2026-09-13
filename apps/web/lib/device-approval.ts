@@ -89,7 +89,10 @@ export const parseDeviceApprovalAttempt = (
   const error = readError(body);
   if (response.status === 400 && error === "expired_token")
     return { kind: "expired" };
-  if (response.status === 400 && error === "invalid_request")
+  if (
+    response.status === 400 &&
+    (error === "invalid_request" || error === "device_code_already_processed")
+  )
     return { kind: "stale" };
   if (response.status === 401 && error === "unauthorized")
     return { kind: "signed-out" };

@@ -84,6 +84,9 @@ test("parses approval outcomes into retryable and terminal states", () => {
   expect(attemptResponse({ error: "invalid_request" }, 400)).toEqual({
     kind: "stale",
   });
+  expect(
+    attemptResponse({ error: "device_code_already_processed" }, 400),
+  ).toEqual({ kind: "stale" });
   expect(attemptResponse({ error: "unauthorized" }, 401)).toEqual({
     kind: "signed-out",
   });
