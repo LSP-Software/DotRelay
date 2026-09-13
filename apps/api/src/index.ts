@@ -119,6 +119,22 @@ const safeAuthErrorCodes = new Set([
   "slow_down",
 ]);
 
+// The browser device-approval surface (the /device verification page) renders
+// distinct code, session, and connection states from these additional stable
+// device authorization codes. Only the `error` code is exposed, so no Better
+// Auth detail leaks on any endpoint.
+const safeDeviceApprovalErrorCodes = new Set([
+  ...safeAuthErrorCodes,
+  "device_code_already_processed",
+  "invalid_request",
+  "unauthorized",
+]);
+
+const isDeviceApprovalPath = (path: string) =>
+  path === "/api/auth/device" ||
+  path === "/api/auth/device/approve" ||
+  path === "/api/auth/device/deny";
+
 const sanitizeAuthResponse = async (
   context: Context,
   response: Response,
@@ -129,12 +145,15 @@ const sanitizeAuthResponse = async (
     if (retryAfter) context.header("X-Retry-After", retryAfter);
     return jsonProblem(context, "rate_limited");
   }
+  const allowedErrorCodes = isDeviceApprovalPath(context.req.path)
+    ? safeDeviceApprovalErrorCodes
+    : safeAuthErrorCodes;
   if (response.headers.get("content-type")?.includes("application/json")) {
     try {
       const body = (await response.clone().json()) as {
         readonly error?: unknown;
       };
-      if (typeof body.error === "string" && safeAuthErrorCodes.has(body.error))
+      if (typeof body.error === "string" && allowedErrorCodes.has(body.error))
         return Response.json(
           { error: body.error },
           {

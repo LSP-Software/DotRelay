@@ -12,7 +12,7 @@ import { DeviceApproveCard } from "./device-approve-card";
 
 export const metadata: Metadata = {
   title: "Allow this CLI",
-  description: "Allow a DotRelay CLI on this machine",
+  description: "Allow a DotRelay CLI with the code it shows",
 };
 
 const DevicePage = async ({
@@ -40,8 +40,8 @@ const DevicePage = async ({
               <h1>Allow this CLI?</h1>
             </CardTitle>
             <CardDescription>
-              The CLI on this machine is waiting for you to allow it. Values
-              stay on the Device. This only creates a session.
+              Check the code your CLI is showing, then allow it. Values stay on
+              the Device. This only creates a session.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">

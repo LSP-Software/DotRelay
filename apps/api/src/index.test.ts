@@ -458,6 +458,92 @@ describe("API foundation", () => {
     expect(JSON.stringify(problem)).not.toContain("PROVIDER_NOT_FOUND");
   });
 
+  test("passes stable device authorization codes through on the device approval surface", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    // Seed the code directly so this test never touches the shared
+    // /api/auth/device/code rate-limit budget that other tests consume.
+    const context = await auth.$context;
+    await context.adapter.create({
+      model: "deviceCode",
+      data: {
+        deviceCode: "test-device-code",
+        userCode: "TESTCODE",
+        userId: null,
+        expiresAt: new Date(0),
+        status: "pending",
+        lastPolledAt: null,
+        pollingInterval: 5000,
+        clientId: "dotrelay-cli",
+        scope: "",
+      },
+    });
+
+    const unknown = await testApp.request(
+      `${profile.origin}/api/auth/device?user_code=NOTACODE`,
+      { headers: { Origin: profile.webOrigin } },
+    );
+    expect(unknown.status).toBe(400);
+    expect(await unknown.json()).toEqual({ error: "invalid_request" });
+
+    const expired = await testApp.request(
+      `${profile.origin}/api/auth/device?user_code=TESTCODE`,
+      { headers: { Origin: profile.webOrigin } },
+    );
+    expect(expired.status).toBe(400);
+    expect(await expired.json()).toEqual({ error: "expired_token" });
+
+    const anonymous = await testApp.request(
+      `${profile.origin}/api/auth/device/approve`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.webOrigin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ userCode: "TESTCODE" }),
+      },
+    );
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.json()).toEqual({ error: "unauthorized" });
+
+    const user = await context.internalAdapter.createUser(
+      {
+        email: "device-approval-test@example.com",
+        emailVerified: true,
+        name: "Device Approval",
+      },
+      { method: "oauth", oauth: { providerId: "github" } },
+    );
+    const session = await context.internalAdapter.createSession(user.id, false);
+    if (!session) throw new Error("test session was not created");
+    const signedIn = await testApp.request(
+      `${profile.origin}/api/auth/device/approve`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.webOrigin,
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.token}`,
+        },
+        body: JSON.stringify({ userCode: "NOTACODE" }),
+      },
+    );
+    expect(signedIn.status).toBe(400);
+    expect(await signedIn.json()).toEqual({ error: "invalid_request" });
+
+    const missing = await deviceTokenRequest(
+      testApp,
+      profile,
+      "missing-device-code",
+    );
+    expect(missing.status).toBe(503);
+    expect(await missing.json()).toMatchObject({
+      code: "service_unavailable",
+    });
+  });
+
   test("applies logout, remote revocation, and expiry on the next bearer request", async () => {
     const profile = loadServerProfileConfig({});
     const auth = createInMemoryAuth(profile);

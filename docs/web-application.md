@@ -115,6 +115,23 @@ metadata visibly stale, offers a retry action, and reconnects automatically with
 exponential backoff. A malformed or non-200 boundary response is treated as a failed request:
 it can only degrade to the offline or stale state, never to fixture data.
 
+## Device approval
+
+The `/device` page approves the device authorization code a CLI shows. It checks the code's
+status and the browser session together, and renders each outcome as its own state instead of
+collapsing them. The GitHub sign-in control appears only when the code is pending and the browser
+session is genuinely absent; that sign-in returns to the same code. A pending code offers the
+allow action to a signed-in session. Approved and denied codes finish as completed outcomes.
+Expired and invalid codes finish with the return-to-CLI instruction to get a new code, and never
+send the user back into sign-in. A connection or server failure while checking or approving
+preserves the code, reports its state as unknown rather than guessing it, and offers an explicit
+retry; an approval that reports a lapsed session or a processed code re-derives the state from a
+fresh check. The page asks the user to verify the code their CLI shows instead of asserting where
+the CLI is running. The API passes only the stable device authorization error codes (plus
+`invalid_request`, `unauthorized`, and `device_code_already_processed`) through its auth
+sanitization on the device verify/approve/deny routes; other auth endpoints keep the generic
+problem response, and no Better Auth detail text is ever exposed.
+
 ## Browser quality boundary
 
 Playwright coverage in `apps/web/e2e/workspace.spec.ts` exercises the public landing/sign-in flow,
@@ -139,6 +156,11 @@ reveal, Set absent, delete, and Undo delete controls disabled until the read rec
 protocol session: closing the review dialog while the publication is in flight neither cancels
 nor misrepresents it, and a Value edited after the submitted snapshot is published stays visibly
 marked as an unpublished draft while the published lane clears and the remote baseline becomes
-the published snapshot.
+the published snapshot. `apps/web/e2e/device-authorization.spec.ts` covers the device approval
+states: a pending code offers the allow action only to a signed-in session and the sign-in
+control only when the session is genuinely absent, an expired or invalid code finishes with the
+return-to-CLI instruction without re-offering sign-in, an already-approved code finishes as
+completed, and a transient check or approval failure preserves the code and recovers through an
+explicit retry, including a lapsed session that returns to the sign-in control.
 Tests observe browser-visible behavior and never
 reach into component state.
