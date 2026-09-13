@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  applyConflictResolution,
   applyRollbackToVariables,
   changedLaneCount,
   createEnvironmentVariable,
@@ -7,6 +8,7 @@ import {
   deleteEnvironmentVariable,
   displayedSetupAction,
   draftValueDiffs,
+  type EnvironmentVariable,
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   nextSetupAction,
@@ -16,6 +18,7 @@ import {
   rollbackValueDiffs,
   settlePublishedDraft,
   splitInlineValueDiff,
+  summarizeConflict,
   updateVariableValue,
   validateEnvironmentVariables,
   validateVariableDraft,
@@ -535,6 +538,174 @@ test("draft diffs describe added, changed, and deleted Variables", () => {
     { id: "lane-2", name: "NEW_TOKEN", from: undefined, to: "secret" },
     { id: "lane-1", name: "API_ORIGIN", from: "live", to: undefined },
   ]);
+});
+
+test("conflicts are classified by Value, definition, and deletion changes", () => {
+  const local = {
+    ...createEnvironmentVariable({ ...sharedDraft, value: "mine" }, "lane-1"),
+    hasDraftChange: true,
+  };
+  const valueOnly: EnvironmentVariable = {
+    ...local,
+    value: "theirs",
+    hasDraftChange: false,
+  };
+  const definitionOnly: EnvironmentVariable = {
+    ...local,
+    value: "mine",
+    description: "Their description.",
+    hasDraftChange: false,
+  };
+  const ownershipChange: EnvironmentVariable = {
+    ...local,
+    ownership: "USER_DEFINED_VALUE",
+    hasDraftChange: false,
+  };
+  const deletedLocally: EnvironmentVariable = {
+    ...local,
+    value: null,
+    tombstone: true,
+    hasDraftChange: true,
+  };
+  const deletedRemotely: EnvironmentVariable = {
+    ...local,
+    value: null,
+    tombstone: true,
+    hasDraftChange: false,
+  };
+
+  expect(summarizeConflict(local, valueOnly).kinds).toEqual(["value"]);
+  expect(summarizeConflict(local, definitionOnly).kinds).toEqual([
+    "definition",
+  ]);
+  expect(summarizeConflict(local, ownershipChange).kinds).toEqual([
+    "definition",
+  ]);
+  // Local deleted a Variable the remote still keeps.
+  expect(summarizeConflict(deletedLocally, local).kinds).toEqual(["deletion"]);
+  // Remote deleted a Variable the local still keeps.
+  expect(summarizeConflict(local, deletedRemotely).kinds).toEqual(["deletion"]);
+  // A deletion also changes the Value lane, but the deletion is the headline.
+  expect(
+    summarizeConflict({ ...deletedLocally, value: "stale" }, local).kinds,
+  ).toEqual(["deletion"]);
+  // No verified remote side: nothing can be classified.
+  expect(summarizeConflict(local, null).kinds).toEqual([]);
+});
+
+test("keeping mine preserves the local definition and Value", () => {
+  const local = {
+    ...createEnvironmentVariable({ ...sharedDraft, value: "mine" }, "lane-1"),
+    hasDraftChange: true,
+  };
+  const remote: EnvironmentVariable = {
+    ...local,
+    value: "theirs",
+    hasDraftChange: false,
+  };
+
+  const resolved = applyConflictResolution(local, remote, "local");
+  expect(resolved).toMatchObject({
+    id: "lane-1",
+    value: "mine",
+    description: local.description,
+    ownership: local.ownership,
+    tombstone: local.tombstone,
+    hasDraftChange: true,
+  });
+});
+
+test("using theirs adopts the remote definition and Value", () => {
+  const local = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, value: "mine", description: "Mine." },
+      "lane-1",
+    ),
+    hasDraftChange: true,
+  };
+  const remote: EnvironmentVariable = {
+    ...local,
+    value: "theirs",
+    description: "Theirs.",
+    hasDraftChange: false,
+  };
+
+  const resolved = applyConflictResolution(local, remote, "remote");
+  expect(resolved).toMatchObject({
+    id: "lane-1",
+    value: "theirs",
+    description: "Theirs.",
+    hasDraftChange: true,
+  });
+});
+
+test("keeping my value merges the remote definition with the local Value", () => {
+  const local = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, value: "mine", description: "Mine." },
+      "lane-1",
+    ),
+    hasDraftChange: true,
+  };
+  const remote: EnvironmentVariable = {
+    ...local,
+    value: "theirs",
+    description: "Theirs.",
+    ownership: "USER_DEFINED_VALUE",
+    hasDraftChange: false,
+  };
+
+  const resolved = applyConflictResolution(local, remote, "merge");
+  expect(resolved).toMatchObject({
+    id: "lane-1",
+    value: "mine",
+    description: "Theirs.",
+    ownership: "USER_DEFINED_VALUE",
+    hasDraftChange: true,
+  });
+});
+
+test("a resolution without a verified remote side keeps the local Variable", () => {
+  const local = {
+    ...createEnvironmentVariable({ ...sharedDraft, value: "mine" }, "lane-1"),
+    hasDraftChange: true,
+  };
+
+  for (const choice of ["local", "remote", "merge"] as const) {
+    const resolved = applyConflictResolution(local, null, choice);
+    expect(resolved).toMatchObject({
+      id: "lane-1",
+      value: "mine",
+      hasDraftChange: true,
+    });
+  }
+});
+
+test("keeping my value on a deleted Variable keeps the deletion", () => {
+  const local = {
+    ...createEnvironmentVariable({ ...sharedDraft, value: "mine" }, "lane-1"),
+    hasDraftChange: true,
+  };
+  const deleted = {
+    ...local,
+    value: null,
+    tombstone: true,
+    hasDraftChange: true,
+  };
+  const remote: EnvironmentVariable = {
+    ...local,
+    value: "theirs",
+    description: "Theirs.",
+    hasDraftChange: false,
+  };
+
+  const resolved = applyConflictResolution(deleted, remote, "merge");
+  expect(resolved).toMatchObject({
+    id: "lane-1",
+    value: null,
+    tombstone: true,
+    description: "Theirs.",
+  });
 });
 
 test("inline value diffs keep the shared characters and mark only the edit", () => {

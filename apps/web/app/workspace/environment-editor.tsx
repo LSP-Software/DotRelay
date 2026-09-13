@@ -53,7 +53,11 @@ import {
   sessionMatchesContext,
 } from "@/lib/environment-context";
 import {
+  applyConflictResolution,
   applyRollbackToVariables,
+  type ConflictChangeKind,
+  type ConflictResolution,
+  type ConflictSummary,
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
@@ -69,6 +73,7 @@ import {
   type SetupAction,
   settlePublishedDraft,
   splitInlineValueDiff,
+  summarizeConflict,
   updateVariableValue,
   type VariableDraft,
   type VariableValueDiff,
@@ -272,6 +277,238 @@ const ValueDiffLines = ({
       ) : (
         <p className="text-[11px] text-muted-foreground">Will be deleted</p>
       )}
+    </div>
+  );
+};
+
+const conflictKindLabel = (kind: ConflictChangeKind): string =>
+  kind === "value"
+    ? "Value"
+    : kind === "definition"
+      ? "Definition"
+      : "Deletion";
+
+const resolutionLabel = (choice: ConflictResolution): string =>
+  choice === "local"
+    ? "Keep mine"
+    : choice === "remote"
+      ? "Use theirs"
+      : "Keep my value";
+
+const resolutionConsequence = (choice: ConflictResolution | null): string => {
+  if (choice === null)
+    return "Review both sides, then choose which to keep for this Variable.";
+  if (choice === "local")
+    return "Your definition and Value are kept; their change is discarded.";
+  if (choice === "remote")
+    return "Their definition and Value are adopted; your change is discarded.";
+  return "Your Value is kept; their definition (ownership and description) is adopted.";
+};
+
+const MaskedValue = ({
+  value,
+  revealed,
+}: {
+  readonly value: string | null;
+  readonly revealed: boolean;
+}) => (
+  <span className="break-all font-mono text-[13px]">
+    {formatDiffValue(value, revealed) ?? "—"}
+  </span>
+);
+
+const ConflictSides = ({
+  local,
+  remote,
+  revealed,
+}: {
+  readonly local: EnvironmentVariable;
+  readonly remote: EnvironmentVariable | null;
+  readonly revealed: boolean;
+}) => {
+  if (local.tombstone || remote?.tombstone) {
+    return (
+      <div className="grid gap-1 text-xs">
+        <p className="text-muted-foreground">
+          <span className="font-medium text-foreground">Yours</span>{" "}
+          {local.tombstone ? "is deleted" : "keeps the Variable"}
+        </p>
+        <p className="text-muted-foreground">
+          <span className="font-medium text-foreground">Theirs</span>{" "}
+          {remote
+            ? remote.tombstone
+              ? "deletes it"
+              : "keeps it"
+            : "could not be read"}
+        </p>
+      </div>
+    );
+  }
+  const localValue = local.value;
+  const remoteValue = remote?.value ?? null;
+  const bothStrings =
+    typeof localValue === "string" && typeof remoteValue === "string";
+  if (bothStrings && revealed && localValue !== remoteValue) {
+    const hunk = splitInlineValueDiff(remoteValue, localValue);
+    const showFrom = hunk.removed.length > 0;
+    const showTo = hunk.added.length > 0 || !showFrom;
+    return (
+      <div className="min-w-0 font-mono text-[13px] leading-5">
+        <div className="flex gap-2">
+          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+            Theirs
+          </span>
+          <span className={showFrom ? "text-red-300/90" : undefined}>
+            {showFrom ? <InlineHunk hunk={hunk} side="from" /> : remoteValue}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+            Yours
+          </span>
+          <span className={showTo ? "text-emerald-300/90" : undefined}>
+            {showTo ? <InlineHunk hunk={hunk} side="to" /> : localValue}
+          </span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-1">
+      <div className="flex gap-2">
+        <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+          Theirs
+        </span>
+        <MaskedValue value={remoteValue} revealed={revealed} />
+      </div>
+      <div className="flex gap-2">
+        <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+          Yours
+        </span>
+        <MaskedValue value={localValue} revealed={revealed} />
+      </div>
+    </div>
+  );
+};
+
+const ConflictDefinitionLines = ({
+  local,
+  remote,
+}: {
+  readonly local: EnvironmentVariable;
+  readonly remote: EnvironmentVariable;
+}) => {
+  const lines: string[] = [];
+  if (local.ownership !== remote.ownership)
+    lines.push(
+      `Ownership: yours ${ownershipLabel(local.ownership)}, theirs ${ownershipLabel(remote.ownership)}`,
+    );
+  if (local.description !== remote.description)
+    lines.push(
+      `Description: yours “${local.description || "none"}”, theirs “${remote.description || "none"}”`,
+    );
+  if (local.required !== remote.required)
+    lines.push(
+      `Required: yours ${local.required ? "yes" : "no"}, theirs ${remote.required ? "yes" : "no"}`,
+    );
+  if (lines.length === 0) return null;
+  return (
+    <div className="grid gap-0.5 text-xs text-muted-foreground">
+      <p className="text-[11px] uppercase tracking-wide">Definition</p>
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  );
+};
+
+const ConflictLane = ({
+  summary,
+  choice,
+  revealed,
+  onChoose,
+  onRevisit,
+}: {
+  readonly summary: ConflictSummary;
+  readonly choice: ConflictResolution | null;
+  readonly revealed: boolean;
+  readonly onChoose: (choice: ConflictResolution) => void;
+  readonly onRevisit: () => void;
+}) => {
+  const { local, remote, kinds } = summary;
+  const remoteAvailable = remote !== null;
+  const canMerge = remoteAvailable && !local.tombstone;
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border bg-background/40 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-sm font-medium">{summary.name}</span>
+        {kinds.map((kind) => (
+          <Badge
+            className="h-4 text-[10px] font-medium uppercase tracking-wide"
+            key={kind}
+            variant="secondary"
+          >
+            {conflictKindLabel(kind)}
+          </Badge>
+        ))}
+        {!remoteAvailable ? (
+          <Badge
+            className="h-4 text-[10px] font-medium uppercase tracking-wide"
+            variant="outline"
+          >
+            Remote unavailable
+          </Badge>
+        ) : null}
+      </div>
+      {remoteAvailable && remote ? (
+        <div className="grid gap-2">
+          <ConflictSides local={local} remote={remote} revealed={revealed} />
+          <ConflictDefinitionLines local={local} remote={remote} />
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          The remote side could not be read, so only your change is shown. Keep
+          your change, or retry reading to compare both sides.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          onClick={() => onChoose("local")}
+          size="sm"
+          variant={choice === "local" ? "default" : "outline"}
+        >
+          Keep mine
+        </Button>
+        <Button
+          disabled={!remoteAvailable}
+          onClick={() => onChoose("remote")}
+          size="sm"
+          variant={choice === "remote" ? "default" : "outline"}
+        >
+          Use theirs
+        </Button>
+        <Button
+          disabled={!canMerge}
+          onClick={() => onChoose("merge")}
+          size="sm"
+          variant={choice === "merge" ? "default" : "outline"}
+        >
+          Keep my value
+        </Button>
+        {choice ? (
+          <>
+            <span className="text-xs text-emerald-300">
+              {resolutionLabel(choice)}
+            </span>
+            <Button onClick={onRevisit} size="xs" variant="ghost">
+              Change
+            </Button>
+          </>
+        ) : null}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {resolutionConsequence(choice)}
+      </p>
     </div>
   );
 };
@@ -598,15 +835,18 @@ export const EnvironmentEditor = ({
   const [rollbackLanes, setRollbackLanes] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const [conflictingLaneIds, setConflictingLaneIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
+  const [conflictLaneIds, setConflictLaneIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [conflictChoices, setConflictChoices] = useState<
+    ReadonlyMap<string, ConflictResolution>
+  >(() => new Map());
+  const [conflictValuesRevealed, setConflictValuesRevealed] = useState(false);
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [staleHeadRevision, setStaleHeadRevision] = useState<string | null>(
     null,
   );
-  const [retryReady, setRetryReady] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [protocolHead, setProtocolHead] = useState<Readonly<{
     readonly id: string;
@@ -624,6 +864,10 @@ export const EnvironmentEditor = ({
     setHeadRevision(session.context.expectedHeadId ?? "empty-environment");
     setVerifiedHistory([]);
     setProtocolHead(headFromContext(session.context));
+    setConflictLaneIds(new Set());
+    setConflictChoices(new Map());
+    setConflictValuesRevealed(false);
+    setStaleHeadRevision(null);
     setLoadPhase("loading");
   }, [session]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt is a retry trigger whose value is intentionally not read inside the effect
@@ -734,6 +978,7 @@ export const EnvironmentEditor = ({
     setRollbackTarget(null);
     setRollbackLanes(new Set());
     setRollbackValuesRevealed(false);
+    setConflictValuesRevealed(false);
   }, [active]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
@@ -772,10 +1017,13 @@ export const EnvironmentEditor = ({
   );
   const canPublish =
     changedCount > 0 &&
-    conflictingLaneIds.size === 0 &&
     staleHeadRevision === null &&
     loadPhase === "ready" &&
     !publishing;
+  const allConflictsResolved =
+    conflictLaneIds.size > 0 &&
+    [...conflictLaneIds].every((id) => conflictChoices.has(id));
+  const retryReady = staleHeadRevision !== null && allConflictsResolved;
   const historicalValues = new Map<string, string | null>([
     ["00000000-0000-4000-8000-000000000001", "https://api.acme.example"],
     ["00000000-0000-4000-8000-000000000002", ""],
@@ -895,8 +1143,17 @@ export const EnvironmentEditor = ({
     setRollbackTarget(revision);
   };
 
-  const publish = async () => {
-    if (changedCount === 0) return;
+  const clearConflictState = () => {
+    setConflictLaneIds(new Set());
+    setConflictChoices(new Map());
+    setConflictValuesRevealed(false);
+    setStaleHeadRevision(null);
+  };
+
+  const runPublish = async (
+    publishVariables: readonly EnvironmentVariable[],
+  ) => {
+    if (changedLaneCount(publishVariables) === 0) return;
     const publishSession = session;
     const scopeAtStart = currentScopeKeyRef.current;
     const scopeLost = () => currentScopeKeyRef.current !== scopeAtStart;
@@ -910,7 +1167,7 @@ export const EnvironmentEditor = ({
           expectedHeadId,
           rollbackTargetId: rollbackMutationTarget,
         });
-        const artifacts = await createPublicationArtifacts(variables, {
+        const artifacts = await createPublicationArtifacts(publishVariables, {
           ...context,
           expectedHeadId,
           expectedHeadHash,
@@ -987,26 +1244,26 @@ export const EnvironmentEditor = ({
             mergeVerifiedHistory(current, [artifacts.request.revision.id]),
           );
         }
-        setVariables((current) => settlePublishedDraft(current, variables));
+        setVariables((current) =>
+          settlePublishedDraft(current, publishVariables),
+        );
         setDeletedVariableSnapshots(new Map());
-        setRemoteVariables(publishedBaseline(variables));
+        setRemoteVariables(publishedBaseline(publishVariables));
         setRollbackMutationTarget(null);
-        setConflictingLaneIds(new Set());
-        setStaleHeadRevision(null);
-        setRetryReady(false);
+        clearConflictState();
         setReviewOpen(false);
         setPublishMessage(`Published as ${artifacts.request.revision.id}.`);
         return;
       }
-      await prepareEncryptedPublication(variables);
+      await prepareEncryptedPublication(publishVariables);
       const nextRevision = revisionNumber(headRevision) + 1;
       setHeadRevision(`rev_${String(nextRevision).padStart(4, "0")}`);
-      setVariables((current) => settlePublishedDraft(current, variables));
+      setVariables((current) =>
+        settlePublishedDraft(current, publishVariables),
+      );
       setDeletedVariableSnapshots(new Map());
-      setRemoteVariables(publishedBaseline(variables));
-      setConflictingLaneIds(new Set());
-      setStaleHeadRevision(null);
-      setRetryReady(false);
+      setRemoteVariables(publishedBaseline(publishVariables));
+      clearConflictState();
       setReviewOpen(false);
       setPublishMessage(
         `Local preview saved as rev_${String(nextRevision).padStart(4, "0")}.`,
@@ -1058,7 +1315,7 @@ export const EnvironmentEditor = ({
             throw new Error(
               "the stale response did not provide a verified head",
             );
-          const localChangedVariableIds = variables
+          const localChangedVariableIds = publishVariables
             .filter((variable) => variable.hasDraftChange)
             .map((variable) => variable.id);
           const conflictingVariableIds =
@@ -1072,16 +1329,17 @@ export const EnvironmentEditor = ({
             hash: page.currentHeadHash,
           });
           setHeadRevision(page.currentHeadId);
-          setConflictingLaneIds(new Set(conflictingVariableIds));
+          setConflictLaneIds(new Set(conflictingVariableIds));
+          setConflictChoices(new Map());
+          setConflictValuesRevealed(false);
           setStaleHeadRevision(
             conflictingVariableIds.length > 0 ? page.currentHeadId : null,
           );
-          setRetryReady(false);
           setReviewOpen(false);
           setPublishMessage(
             conflictingVariableIds.length > 0
-              ? "Publish did not go through because someone else changed the same variables. Pick which value to keep, then retry."
-              : "Someone else published other variables. Your draft is still ready to publish.",
+              ? "Publish did not go through because someone else changed the same Variables. Review both sides, pick which to keep, then retry."
+              : "Someone else published other Variables. Your draft is still ready to publish.",
           );
         } catch {
           setPublishMessage(
@@ -1094,6 +1352,57 @@ export const EnvironmentEditor = ({
     } finally {
       setPublishing(false);
     }
+  };
+
+  const publish = () => {
+    void runPublish(variables);
+  };
+
+  const materializeConflicts = (): EnvironmentVariable[] =>
+    variables.map((variable) => {
+      const choice = conflictChoices.get(variable.id);
+      if (!choice) return variable;
+      const remote =
+        remoteVariables.find((candidate) => candidate.id === variable.id) ??
+        null;
+      const resolved = applyConflictResolution(variable, remote, choice);
+      return {
+        ...resolved,
+        hasDraftChange: variableHasDraftChange(resolved, remote ?? undefined),
+      };
+    });
+
+  const chooseConflict = (id: string, choice: ConflictResolution) => {
+    setConflictChoices((current) => {
+      const next = new Map(current);
+      next.set(id, choice);
+      return next;
+    });
+  };
+
+  const revisitConflict = (id: string) => {
+    setConflictChoices((current) => {
+      const next = new Map(current);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const retryAgainstVerifiedHead = () => {
+    if (!staleHeadRevision || publishing) return;
+    const materialized = materializeConflicts();
+    if (changedLaneCount(materialized) === 0) {
+      clearConflictState();
+      setHeadRevision(staleHeadRevision);
+      setPublishMessage(
+        "Nothing to publish: every conflict already matched the latest revision.",
+      );
+      return;
+    }
+    setVariables(materialized);
+    setHeadRevision(staleHeadRevision);
+    setPublishMessage(null);
+    void runPublish(materialized);
   };
 
   const applyRollback = async () => {
@@ -1116,76 +1425,6 @@ export const EnvironmentEditor = ({
     setRollbackMutationTarget(rollbackTarget);
     setPublishMessage(
       `Rollback from ${rollbackTarget} is staged as a new revision.`,
-    );
-  };
-
-  const resolveConflict = (
-    id: string,
-    choice: "local" | "remote" | "merge",
-  ) => {
-    if (choice === "remote") {
-      setVariables((current) =>
-        current.map((variable) =>
-          variable.id === id
-            ? (() => {
-                const remote = remoteVariables.find(
-                  (candidate) => candidate.id === id,
-                );
-                return remote
-                  ? { ...remote, id, hasDraftChange: false }
-                  : {
-                      ...variable,
-                      value: null,
-                      tombstone: true,
-                      hasDraftChange: false,
-                    };
-              })()
-            : variable,
-        ),
-      );
-    }
-    if (choice === "local") {
-      setVariables((current) =>
-        current.map((variable) =>
-          variable.id === id ? { ...variable, hasDraftChange: true } : variable,
-        ),
-      );
-    }
-    if (choice === "merge") {
-      setVariables((current) =>
-        current.map((variable) => {
-          if (variable.id !== id) return variable;
-          const remote = remoteVariables.find(
-            (candidate) => candidate.id === id,
-          );
-          return remote
-            ? {
-                ...remote,
-                value: variable.value,
-                hasDraftChange: true,
-                ...(variable.tombstone === undefined
-                  ? {}
-                  : { tombstone: variable.tombstone }),
-              }
-            : { ...variable, hasDraftChange: true };
-        }),
-      );
-    }
-    setConflictingLaneIds((current) => {
-      const next = new Set(current);
-      next.delete(id);
-      if (next.size === 0 && staleHeadRevision) setRetryReady(true);
-      return next;
-    });
-  };
-
-  const retryAgainstVerifiedHead = () => {
-    if (!staleHeadRevision) return;
-    setHeadRevision(staleHeadRevision);
-    setStaleHeadRevision(null);
-    setRetryReady(false);
-    setPublishMessage(
-      `${session ? "Retrying" : "Local preview retry"} against ${staleHeadRevision}. Your choices are still in the draft.`,
     );
   };
 
@@ -1266,49 +1505,48 @@ export const EnvironmentEditor = ({
         </Alert>
       ) : null}
 
-      {conflictingLaneIds.size > 0 ? (
+      {conflictLaneIds.size > 0 ? (
         <Card className="mb-4 border-amber-300/30">
           <CardHeader>
             <CardTitle>Someone else published these</CardTitle>
             <CardDescription>
-              Pick which value to keep for each conflict, then retry.
+              Compare your change with the verified remote change, pick which to
+              keep for each Variable, then retry the publish.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
-            {variables
-              .filter((variable) => conflictingLaneIds.has(variable.id))
-              .map((variable) => (
-                <div
-                  className="flex flex-col gap-3 rounded-lg border bg-background/40 p-3 sm:flex-row sm:items-center sm:justify-between"
-                  key={variable.id}
-                >
-                  <p className="font-mono text-sm">{variable.name}</p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      onClick={() => resolveConflict(variable.id, "local")}
-                      size="sm"
-                      variant="outline"
-                    >
-                      Keep mine
-                    </Button>
-                    <Button
-                      disabled={remoteVariables.length === 0}
-                      onClick={() => resolveConflict(variable.id, "remote")}
-                      size="sm"
-                      variant="outline"
-                    >
-                      Use theirs
-                    </Button>
-                    <Button
-                      disabled={remoteVariables.length === 0}
-                      onClick={() => resolveConflict(variable.id, "merge")}
-                      size="sm"
-                    >
-                      Keep my value
-                    </Button>
-                  </div>
-                </div>
-              ))}
+            <div className="flex justify-end">
+              <Button
+                aria-pressed={conflictValuesRevealed}
+                onClick={() => setConflictValuesRevealed((current) => !current)}
+                size="xs"
+                variant="ghost"
+              >
+                {conflictValuesRevealed ? (
+                  <EyeOff aria-hidden="true" />
+                ) : (
+                  <Eye aria-hidden="true" />
+                )}
+                {conflictValuesRevealed ? "Hide values" : "Show values"}
+              </Button>
+            </div>
+            {[...conflictLaneIds].map((id) => {
+              const local = variables.find((variable) => variable.id === id);
+              if (!local) return null;
+              const remote =
+                remoteVariables.find((candidate) => candidate.id === id) ??
+                null;
+              return (
+                <ConflictLane
+                  choice={conflictChoices.get(id) ?? null}
+                  key={id}
+                  onChoose={(choice) => chooseConflict(id, choice)}
+                  onRevisit={() => revisitConflict(id)}
+                  revealed={conflictValuesRevealed}
+                  summary={summarizeConflict(local, remote)}
+                />
+              );
+            })}
           </CardContent>
         </Card>
       ) : null}
@@ -1316,14 +1554,21 @@ export const EnvironmentEditor = ({
       {retryReady && staleHeadRevision ? (
         <Alert className="mb-4 border-primary/25 bg-primary/5">
           <Check className="text-primary" />
-          <AlertTitle>Ready to retry</AlertTitle>
+          <AlertTitle>
+            {publishing ? "Retrying publish" : "Ready to retry"}
+          </AlertTitle>
           <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <span>
-              Your choices are saved. Publish them on top of the latest
-              revision.
+              {publishing
+                ? "Publishing your choices on top of the latest revision…"
+                : "Every conflict is resolved. Retrying publishes your choices on top of the latest revision."}
             </span>
-            <Button onClick={retryAgainstVerifiedHead} size="sm">
-              Retry publish
+            <Button
+              disabled={publishing}
+              onClick={retryAgainstVerifiedHead}
+              size="sm"
+            >
+              {publishing ? "Publishing…" : "Retry publish"}
             </Button>
           </AlertDescription>
         </Alert>

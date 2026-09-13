@@ -358,6 +358,64 @@ export const rollbackValueDiffs = (
     }),
   );
 
+export type ConflictResolution = "local" | "remote" | "merge";
+
+export type ConflictChangeKind = "value" | "definition" | "deletion";
+
+export type ConflictSummary = Readonly<{
+  readonly id: string;
+  readonly name: string;
+  readonly kinds: readonly ConflictChangeKind[];
+  readonly local: EnvironmentVariable;
+  readonly remote: EnvironmentVariable | null;
+}>;
+
+export const summarizeConflict = (
+  local: EnvironmentVariable,
+  remote: EnvironmentVariable | null,
+): ConflictSummary => {
+  const kinds = new Set<ConflictChangeKind>();
+  if (remote) {
+    if (Boolean(local.tombstone) !== Boolean(remote.tombstone))
+      kinds.add("deletion");
+    if (
+      local.ownership !== remote.ownership ||
+      local.description !== remote.description ||
+      local.name !== remote.name ||
+      local.required !== remote.required
+    )
+      kinds.add("definition");
+    if (!local.tombstone && !remote.tombstone && local.value !== remote.value)
+      kinds.add("value");
+  }
+  return Object.freeze({
+    id: local.id,
+    name: local.name,
+    kinds: Object.freeze([...kinds].sort()),
+    local,
+    remote,
+  });
+};
+
+export const applyConflictResolution = (
+  local: EnvironmentVariable,
+  remote: EnvironmentVariable | null,
+  choice: ConflictResolution,
+): EnvironmentVariable => {
+  if (choice === "local")
+    return Object.freeze({ ...local, hasDraftChange: true });
+  if (!remote) return Object.freeze({ ...local, hasDraftChange: true });
+  if (choice === "remote")
+    return Object.freeze({ ...remote, id: local.id, hasDraftChange: true });
+  return Object.freeze({
+    ...remote,
+    id: local.id,
+    value: local.value,
+    tombstone: local.tombstone === true,
+    hasDraftChange: true,
+  });
+};
+
 export const changedLaneCount = (
   variables: readonly EnvironmentVariable[],
 ): number => variables.filter((variable) => variable.hasDraftChange).length;

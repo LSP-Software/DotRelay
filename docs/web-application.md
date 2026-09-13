@@ -70,9 +70,14 @@ Save changes shows the draft Variable diffs and publishes a new Revision. A live
 then encrypts each changed definition and Value lane, signs the v3 mutation with the active Device
 key, begins an idempotent operation, stages immutable objects, and finalizes with compare-and-swap
 head checks. The client verifies sync object digests, manifest hashes, and revision links before
-accepting remote state. A stale head becomes a local three-way conflict with Keep local, Use
-remote, and Merge choices. Rollback is lane-scoped and always publishes a new Revision, so the
-current head remains in immutable history. The development protected preview uses the same
+accepting remote state. A stale head becomes a local conflict: the editor shows the local draft
+side and the verified remote side of each contended Variable as a masked comparison with an
+explicit reveal, labels whether the difference is a Value, a definition (ownership/description), or
+a deletion, and explains the Value and definition consequence of each Keep mine / Use theirs /
+Keep my value choice. A choice can be revisited before publication, and retrying the publish
+re-runs the approved publication against the re-anchored head rather than only re-arming the
+publish gate. Rollback is lane-scoped and always publishes a new Revision, so the current head
+remains in immutable history. The development protected preview uses the same
 cryptographic artifact builder but is explicitly local and never reports a service publication.
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
