@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseOpenCodeTurn, selectGrillIssue } from "./run-issues-grill";
+import {
+  buildOpenCodeRunArguments,
+  parseOpenCodeTurn,
+  selectGrillIssue,
+} from "./run-issues-grill";
 import {
   createPanelServer,
   isControlRequest,
@@ -80,6 +84,75 @@ describe("run issues panel", () => {
       sessionId: "ses_123",
       text: "Question one?\nQuestion two?",
     });
+  });
+
+  test("executes workflow commands through OpenCode's command interface", () => {
+    const prompt = "Grill issue #79 and ask one focused round of questions.";
+    expect(
+      buildOpenCodeRunArguments({
+        checkout: "/repo/grill/issue-79/checkout",
+        issue: 79,
+        sessionId: null,
+        prompt,
+        command: "grill-with-docs",
+      }),
+    ).toEqual([
+      "opencode",
+      "run",
+      "--dir",
+      "/repo/grill/issue-79/checkout",
+      "--auto",
+      "--format",
+      "json",
+      "--title",
+      "dotrelay-grill-issue-79",
+      "--command",
+      "grill-with-docs",
+      prompt,
+    ]);
+  });
+
+  test("keeps ordinary human answers as session prompts", () => {
+    const args = buildOpenCodeRunArguments({
+      checkout: "/repo/grill/issue-79/checkout",
+      issue: 79,
+      sessionId: "ses_123",
+      prompt: "Keep the recovery flow explicit.",
+      command: null,
+    });
+    expect(args).toContain("--session");
+    expect(args).not.toContain("--command");
+    expect(args.at(-1)).toBe("Keep the recovery flow explicit.");
+  });
+
+  test("runs to-spec in the existing grill session", () => {
+    const args = buildOpenCodeRunArguments({
+      checkout: "/repo/grill/issue-79/checkout",
+      issue: 79,
+      sessionId: "ses_123",
+      prompt: "Prepare issue #79 for the unattended queue.",
+      command: "to-spec",
+      model: "local/coder",
+      agent: "build",
+    });
+    expect(args).toEqual([
+      "opencode",
+      "run",
+      "--dir",
+      "/repo/grill/issue-79/checkout",
+      "--auto",
+      "--format",
+      "json",
+      "--session",
+      "ses_123",
+      "--model",
+      "local/coder",
+      "--agent",
+      "build",
+      "--command",
+      "to-spec",
+      "Prepare issue #79 for the unattended queue.",
+    ]);
   });
 
   test("accepts only controller log file names", () => {
