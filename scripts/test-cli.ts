@@ -1,6 +1,7 @@
 import { access, constants, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveCliReleaseVersion } from "./build-cli";
 import { stageCliPackage } from "./stage-cli-package";
 
 const root = join(import.meta.dir, "..");
@@ -45,8 +46,14 @@ const help = await run(["--help"]);
 if (help.exitCode !== 0 || !help.stdout.includes("Usage: dotrelay <command>"))
   throw new Error("packaged CLI help contract failed");
 const version = expectSuccess(await run(["--version"]), "packaged CLI version");
-if (version !== "0.0.0-foundation")
-  throw new Error(`unexpected CLI version: ${version}`);
+// The binary must report the release version the build stamped: the
+// DOTRELAY_CLI_VERSION override, the selector release when one is set, or
+// the foundation identifier for source builds.
+const expectedVersion = await resolveCliReleaseVersion();
+if (version !== expectedVersion)
+  throw new Error(
+    `unexpected CLI version: ${version}; expected ${expectedVersion}`,
+  );
 
 const isolatedDirectory = await mkdtemp(
   join(tmpdir(), "dotrelay-cli-contract-"),

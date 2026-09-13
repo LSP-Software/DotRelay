@@ -6,7 +6,7 @@
   },
   "scripts": {
     "dev": "bun --hot run src/index.ts",
-    "build": "bun build --compile src/index.ts --outfile dist/dotrelay",
+    "build": "bun run ../../scripts/build-cli.ts",
     "smoke": "bun ../../scripts/smoke-cli.ts",
     "format": "biome format . --write",
     "format:check": "biome format .",
