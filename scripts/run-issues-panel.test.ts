@@ -14,6 +14,7 @@ import {
   isSafeRunLogName,
   panelHtml,
   readLogChunk,
+  renderMarkdown,
   summarizeQueue,
 } from "./run-issues-panel";
 
@@ -187,6 +188,39 @@ describe("run issues panel", () => {
     expect(panelHtml).not.toContain("\\u00b7");
     expect(panelHtml).not.toContain("\\u2026");
     expect(panelHtml).toContain('replace(/\\.log$/, "")');
+  });
+
+  test("renders safe GitHub-flavoured Markdown for grill questions", () => {
+    const html = renderMarkdown(`**Q1** uses \`device_not_active\`.
+
+| State | Action |
+| --- | --- |
+| Missing Device | **Repair** |
+
+- Keep the existing Device
+- Resume the operation
+
+[Documentation](https://example.com/docs)
+
+<img src=x onerror=alert(1)>
+[Unsafe](javascript:alert(1))`);
+    expect(html).toContain("<strong>Q1</strong>");
+    expect(html).toContain("<code>device_not_active</code>");
+    expect(html).toContain("<table>");
+    expect(html).toContain("<ul>");
+    expect(html).toContain('href="https://example.com/docs"');
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("onerror");
+    expect(html).not.toContain('href="javascript:');
+  });
+
+  test("uses only server-sanitized HTML for grill questions", () => {
+    expect(panelHtml).toContain(
+      "elements.grillQuestion.innerHTML = grill.questionHtml",
+    );
+    expect(panelHtml).not.toContain(
+      "elements.grillQuestion.innerHTML = grill.question ?? grill.message",
+    );
   });
 
   test("accepts only same-origin-style POST control requests", () => {
