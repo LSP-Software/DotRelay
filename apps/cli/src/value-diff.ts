@@ -261,6 +261,18 @@ export const publicationConfirmQuestion = (
   reveal: boolean = false,
 ): string => confirmQuestionWithDiff(changes, destination, "Publish?", reveal);
 
+export const rollbackConfirmQuestion = (
+  changes: readonly PublicationChange[],
+  destination: PublicationDestination,
+  reveal: boolean = false,
+): string =>
+  confirmQuestionWithDiff(
+    changes,
+    destination,
+    "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
+    reveal,
+  );
+
 export const pullConfirmQuestion = (
   path: string,
   changes: readonly PublicationChange[] | null,

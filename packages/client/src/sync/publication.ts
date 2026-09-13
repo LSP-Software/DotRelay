@@ -13,6 +13,7 @@ import {
   protocolObjectFromFields,
   SUITE_VALUE,
   type SyncPageWire,
+  type SyncRevisionWire,
   seal,
   sealWithSharedSecret,
   sha384,
@@ -719,27 +720,36 @@ export const decodeSyncVariables = async (
   );
 };
 
+export const changedVariableIdsFromRevision = (
+  revision: SyncRevisionWire,
+): ReadonlySet<string> => {
+  const revisionObject = revision.objects.find((object) =>
+    bytesEqual(object.digest, revision.digest),
+  );
+  if (!revisionObject)
+    throw new ProtocolVerificationError(
+      "sync page is missing the revision object",
+    );
+  const changed = parseProtocolObject(revisionObject.canonicalBytes).get(54);
+  const variableIds = new Set<string>();
+  if (!Array.isArray(changed)) return variableIds;
+  for (const variableId of changed) {
+    if (!(variableId instanceof Uint8Array) || variableId.length !== 16)
+      throw new ProtocolVerificationError(
+        "sync revision lane identity is malformed",
+      );
+    variableIds.add(bytesToUuid(variableId));
+  }
+  return variableIds;
+};
+
 export const changedVariableIdsFromSyncPage = (
   page: SyncPageWire,
 ): ReadonlySet<string> => {
   const variableIds = new Set<string>();
   for (const revision of page.revisions) {
-    const revisionObject = revision.objects.find((object) =>
-      bytesEqual(object.digest, revision.digest),
-    );
-    if (!revisionObject)
-      throw new ProtocolVerificationError(
-        "sync page is missing the revision object",
-      );
-    const changed = parseProtocolObject(revisionObject.canonicalBytes).get(54);
-    if (!Array.isArray(changed)) continue;
-    for (const variableId of changed) {
-      if (!(variableId instanceof Uint8Array) || variableId.length !== 16)
-        throw new ProtocolVerificationError(
-          "sync revision lane identity is malformed",
-        );
-      variableIds.add(bytesToUuid(variableId));
-    }
+    for (const variableId of changedVariableIdsFromRevision(revision))
+      variableIds.add(variableId);
   }
   return variableIds;
 };

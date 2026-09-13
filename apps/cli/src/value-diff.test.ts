@@ -5,6 +5,7 @@ import {
   renderEnvDiff,
   renderMaskedChange,
   renderValueDiff,
+  rollbackConfirmQuestion,
   valueDiffsForPull,
 } from "./value-diff";
 
@@ -250,6 +251,38 @@ describe("CLI value diffs", () => {
         "",
         ...destinationLines,
         "Publish?",
+      ].join("\n"),
+    );
+  });
+
+  test("rollback confirmation names the append-only consequence", () => {
+    const changes = [
+      {
+        kind: "updated" as const,
+        name: "DATABASE_URL",
+        from: "postgres://secret",
+        to: "abc",
+        ownership: "shared" as const,
+      },
+    ];
+    expect(rollbackConfirmQuestion(changes, destination)).toBe(
+      [
+        "1 variable being updated",
+        "  DATABASE_URL  shared  updated",
+        "",
+        ...destinationLines,
+        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
+      ].join("\n"),
+    );
+    expect(rollbackConfirmQuestion(changes, destination, true)).toBe(
+      [
+        "1 variable being updated",
+        "  DATABASE_URL  shared",
+        "  -  postgres://secret",
+        "  +  abc",
+        "",
+        ...destinationLines,
+        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
       ].join("\n"),
     );
   });

@@ -37,7 +37,8 @@ export type ParsedArguments = Readonly<{
   readonly remote?: string;
   readonly limit?: number;
   readonly classifications: Readonly<Record<string, "shared" | "user-defined">>;
-  readonly variableIds: readonly string[];
+  /** Variable references: operator-visible names or stable Variable ids. */
+  readonly variableReferences: readonly string[];
   readonly noOpen: boolean;
   readonly noInput: boolean;
   readonly force: boolean;
@@ -61,7 +62,7 @@ type MutableArguments = {
   remote?: string;
   limit?: string | number;
   classifications: Record<string, "shared" | "user-defined">;
-  variableIds: string[];
+  variableReferences: string[];
   noOpen: boolean;
   noInput: boolean;
   force: boolean;
@@ -128,15 +129,10 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
       );
     parsed.classifications[name] = classification;
   } else if (flag === "--variable") {
-    if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        value,
-      )
-    )
-      throw new CliInvocationError(
-        "--variable requires a Revision Variable id",
-      );
-    parsed.variableIds.push(value.toLowerCase());
+    // The reference may be the operator-visible Variable name or the stable
+    // Variable id; names are resolved against the live Manifest after the
+    // Environment sync, where only an id can be validated up front.
+    parsed.variableReferences.push(value);
   }
 };
 
@@ -193,7 +189,8 @@ const USAGE: Record<string, string> = {
   status: "dotrelay status",
   context: "dotrelay context",
   history: "dotrelay history",
-  rollback: "dotrelay rollback <revision-id> --variable <variable-id>",
+  rollback:
+    "dotrelay rollback <revision-id-or-ordinal> --variable <variable-name-or-id>…",
   help: "dotrelay help",
   "profile add": "dotrelay profile add <name> <origin>",
   "profile use": "dotrelay profile use <name>",
@@ -313,7 +310,7 @@ const usageFor = (
 
 const flagPresent = (parsed: MutableArguments, key: FlagKey): boolean => {
   if (key === "classify") return Object.keys(parsed.classifications).length > 0;
-  if (key === "variable") return parsed.variableIds.length > 0;
+  if (key === "variable") return parsed.variableReferences.length > 0;
   return Boolean(parsed[key]);
 };
 
@@ -408,7 +405,9 @@ const validateCommand = (parsed: MutableArguments) => {
     history: 0,
     help: 0,
     diff: 0,
-    rollback: 1,
+    // Interactively the target Revision can be chosen from the rendered
+    // history instead of named on the command line; automation must name it.
+    rollback: parsed.noInput ? 1 : [0, 1],
   };
   const expected = positionalCounts[command];
   if (expected !== undefined) {
@@ -441,9 +440,15 @@ const validateCommand = (parsed: MutableArguments) => {
     throw new CliInvocationError(
       `device backup requires --output <file>; usage: ${usage}`,
     );
-  if (command === "rollback" && parsed.variableIds.length === 0)
+  // Interactively the Variables to roll back are chosen by name from the
+  // live Manifest; automation must name at least one.
+  if (
+    command === "rollback" &&
+    parsed.noInput &&
+    parsed.variableReferences.length === 0
+  )
     throw new CliInvocationError(
-      `rollback requires at least one --variable; usage: ${usage}`,
+      `rollback --no-input requires at least one --variable <variable-name-or-id>; usage: ${usage}`,
     );
 };
 
@@ -461,7 +466,7 @@ export const parseArguments = (
     stdout: false,
     reveal: false,
     classifications: {},
-    variableIds: [],
+    variableReferences: [],
   };
   let index = 0;
   while (index < args.length) {
@@ -526,6 +531,6 @@ export const parseArguments = (
     command: parsed.command,
     positionals: Object.freeze(parsed.positionals),
     classifications: Object.freeze({ ...parsed.classifications }),
-    variableIds: Object.freeze([...parsed.variableIds]),
+    variableReferences: Object.freeze([...parsed.variableReferences]),
   }) as ParsedArguments;
 };

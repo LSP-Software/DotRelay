@@ -67,11 +67,41 @@ describe("CLI argument contract", () => {
         "11111111-1111-4111-8111-111111111111",
         "--variable",
         "22222222-2222-4222-8222-222222222222",
-      ]).variableIds,
+      ]).variableReferences,
     ).toEqual(["22222222-2222-4222-8222-222222222222"]);
-    expect(() =>
+    // Variables are selected by operator-visible name as well as by the
+    // stable id; the live Manifest resolves a name before the Rollback is
+    // built, so parse time cannot reject a name it has not seen yet.
+    expect(
+      parseArguments([
+        "rollback",
+        "11111111-1111-4111-8111-111111111111",
+        "--variable",
+        "DATABASE_URL",
+      ]).variableReferences,
+    ).toEqual(["DATABASE_URL"]);
+    // Interactively the target Revision and the Variables can both be
+    // chosen from the rendered history instead of named on the command
+    // line.
+    expect(
       parseArguments(["rollback", "11111111-1111-4111-8111-111111111111"]),
+    ).toMatchObject({
+      command: "rollback",
+    });
+    expect(parseArguments(["rollback"])).toMatchObject({
+      command: "rollback",
+      positionals: [],
+    });
+    expect(() =>
+      parseArguments([
+        "rollback",
+        "--no-input",
+        "11111111-1111-4111-8111-111111111111",
+      ]),
     ).toThrow("--variable");
+    expect(() => parseArguments(["rollback", "--no-input"])).toThrow(
+      "rollback takes exactly one positional argument",
+    );
   });
 
   test("accepts the Device trust handoff commands", () => {
