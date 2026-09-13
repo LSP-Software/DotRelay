@@ -27,6 +27,7 @@ export type GrillState = {
   checkout: string | null;
   transcript: string | null;
   lastPrompt: string | null;
+  lastCommand?: OpenCodeCommand | null;
   lastTurnCompleting: boolean;
 };
 
@@ -39,11 +40,15 @@ type GrillIssue = {
 };
 
 type Command = typeof runProcess;
+type OpenCodeCommand = "grill-with-docs" | "to-spec";
 
 const priority = (body: string) => {
   const match = /Priority:\s*P(\d+)/i.exec(body);
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 };
+
+const grillPrompt = (issue: number, title: string) =>
+  `Grill the proposed change in GitHub issue #${issue}: ${title}. Read the issue with gh and inspect the codebase first. Answer anything the repository can answer yourself. Follow the installed grilling and domain-modeling skills exactly, write resolved vocabulary and qualifying ADRs to the checkout as the skill requires, ask one focused round of recommended questions, then stop and wait for the human. Do not implement the change and do not update the issue labels yet.`;
 
 export const selectGrillIssue = (issues: GrillIssue[]) =>
   issues
@@ -94,6 +99,33 @@ export const parseOpenCodeTurn = (output: string) => {
   return { sessionId, text: text.join("").trim() };
 };
 
+export const buildOpenCodeRunArguments = (options: {
+  checkout: string;
+  issue: number | null;
+  sessionId: string | null;
+  prompt: string;
+  command: OpenCodeCommand | null;
+  model?: string;
+  agent?: string;
+}) => {
+  const args = [
+    "opencode",
+    "run",
+    "--dir",
+    options.checkout,
+    "--auto",
+    "--format",
+    "json",
+  ];
+  if (options.sessionId) args.push("--session", options.sessionId);
+  else args.push("--title", `dotrelay-grill-issue-${options.issue}`);
+  if (options.model) args.push("--model", options.model);
+  if (options.agent) args.push("--agent", options.agent);
+  if (options.command) args.push("--command", options.command);
+  args.push(options.prompt);
+  return args;
+};
+
 const initialState = (): GrillState => ({
   version: 1,
   status: "idle",
@@ -110,6 +142,7 @@ const initialState = (): GrillState => ({
   checkout: null,
   transcript: null,
   lastPrompt: null,
+  lastCommand: null,
   lastTurnCompleting: false,
 });
 
@@ -177,6 +210,7 @@ export const createGrillManager = (options: {
     state: GrillState,
     prompt: string,
     completing: boolean,
+    commandName: OpenCodeCommand | null,
   ) => {
     if (!state.checkout) throw new Error("The grill checkout is missing.");
     const checkout = state.checkout;
@@ -195,24 +229,22 @@ export const createGrillManager = (options: {
       turn,
       transcript,
       lastPrompt: prompt,
+      lastCommand: commandName,
       lastTurnCompleting: completing,
     });
-    const args = [
-      "opencode",
-      "run",
-      "--dir",
+    const args = buildOpenCodeRunArguments({
       checkout,
-      "--auto",
-      "--format",
-      "json",
-    ];
-    if (state.sessionId) args.push("--session", state.sessionId);
-    else args.push("--title", `dotrelay-grill-issue-${state.issue}`);
-    if (process.env.OPENCODE_MODEL)
-      args.push("--model", process.env.OPENCODE_MODEL);
-    if (process.env.OPENCODE_AGENT)
-      args.push("--agent", process.env.OPENCODE_AGENT);
-    args.push(prompt);
+      issue: state.issue,
+      sessionId: state.sessionId,
+      prompt,
+      command: commandName,
+      ...(process.env.OPENCODE_MODEL
+        ? { model: process.env.OPENCODE_MODEL }
+        : {}),
+      ...(process.env.OPENCODE_AGENT
+        ? { agent: process.env.OPENCODE_AGENT }
+        : {}),
+    });
     const result = await command(args, {
       cwd: checkout,
       timeout: options.sessionTimeout ?? 3_600_000,
@@ -318,8 +350,9 @@ export const createGrillManager = (options: {
     state = await save({ ...state, checkout });
     await runTurn(
       state,
-      `/grill-with-docs\n\nGrill the proposed change in GitHub issue #${issue.number}: ${issue.title}. Read the issue with gh and inspect the codebase first. Answer anything the repository can answer yourself. Follow the installed grilling and domain-modeling skills exactly, write resolved vocabulary and qualifying ADRs to the checkout as the skill requires, ask one focused round of recommended questions, then stop and wait for the human. Do not implement the change and do not update the issue labels yet.`,
+      grillPrompt(issue.number, issue.title),
       false,
+      "grill-with-docs",
     );
   };
 
@@ -343,13 +376,28 @@ export const createGrillManager = (options: {
   return {
     read,
     ensure: async () => {
-      const state = await read();
+      let state = await read();
+      if (
+        state.issue &&
+        state.lastCommand === undefined &&
+        ["preparing", "running", "awaiting-human", "completing"].includes(
+          state.status,
+        )
+      ) {
+        state = await save({
+          ...state,
+          status: "failed",
+          message:
+            "This grill was started before workflow commands were invoked correctly. Retry it to continue with the repaired command runner.",
+        });
+      }
       if (["idle", "completed"].includes(state.status)) launch(startNext);
       const current = await read();
       const {
         checkout: _checkout,
         transcript: _transcript,
         lastPrompt: _lastPrompt,
+        lastCommand: _lastCommand,
         ...publicState
       } = current;
       return publicState;
@@ -360,7 +408,7 @@ export const createGrillManager = (options: {
         throw new Error("This grill is not waiting for an answer.");
       if (!answer.trim() || answer.length > 32_000)
         throw new Error("Answer must be between 1 and 32,000 characters.");
-      if (!launch(() => runTurn(state, answer.trim(), false)))
+      if (!launch(() => runTurn(state, answer.trim(), false, null)))
         throw new Error("A grill turn is already running.");
     },
     complete: async (answer: string) => {
@@ -370,17 +418,32 @@ export const createGrillManager = (options: {
       const prefix = answer.trim()
         ? `The human's final answer is:\n\n${answer.trim()}\n\n`
         : "";
-      const prompt = `${prefix}The human confirms that the interview is complete. In this same session, run /to-spec and turn every exact answer, constraint, negative requirement, ordering guarantee, and numeric default into an implementation-ready GitHub issue #${state.issue}. Resolve nothing by guessing. Verify that grill-with-docs actually wrote any qualifying CONTEXT.md and ADR changes in this checkout. If tracked documentation changed, commit it, push this branch, open a documentation-only PR that references (but does not close) issue #${state.issue}, wait for required checks, and merge it before continuing. Finally replace the ready-for-human label with ready-for-agent using gh, preserving every other label. Do not implement the feature. Only declare success after rereading the issue and confirming it has no unresolved product questions, the label is ready-for-agent, and any documentation PR is merged.`;
-      if (!launch(() => runTurn(state, prompt, true)))
+      const prompt = `${prefix}The human confirms that the interview is complete. Turn every exact answer, constraint, negative requirement, ordering guarantee, and numeric default into an implementation-ready GitHub issue #${state.issue}. Resolve nothing by guessing. Verify that grill-with-docs actually wrote any qualifying CONTEXT.md and ADR changes in this checkout. If tracked documentation changed, commit it, push this branch, open a documentation-only PR that references (but does not close) issue #${state.issue}, wait for required checks, and merge it before continuing. Finally replace the ready-for-human label with ready-for-agent using gh, preserving every other label. Do not implement the feature. Only declare success after rereading the issue and confirming it has no unresolved product questions, the label is ready-for-agent, and any documentation PR is merged.`;
+      if (!launch(() => runTurn(state, prompt, true, "to-spec")))
         throw new Error("A grill turn is already running.");
     },
     retry: async () => {
       const state = await read();
       if (state.status !== "failed" || !state.issue || !state.lastPrompt)
         throw new Error("There is no failed grill to retry.");
+      const legacy = state.lastCommand === undefined;
+      const commandName =
+        state.lastCommand ??
+        (state.lastTurnCompleting
+          ? "to-spec"
+          : legacy
+            ? "grill-with-docs"
+            : null);
+      const prompt =
+        legacy && !state.lastTurnCompleting
+          ? grillPrompt(
+              state.issue,
+              state.issueTitle ?? `Issue #${state.issue}`,
+            )
+          : state.lastPrompt;
       if (
         !launch(() =>
-          runTurn(state, state.lastPrompt ?? "", state.lastTurnCompleting),
+          runTurn(state, prompt, state.lastTurnCompleting, commandName),
         )
       )
         throw new Error("A grill turn is already running.");
