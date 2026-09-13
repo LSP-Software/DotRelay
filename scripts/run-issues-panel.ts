@@ -1,10 +1,52 @@
 import { spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { marked } from "marked";
+import sanitizeHtml from "sanitize-html";
 import { createGrillManager } from "./run-issues-grill";
 
 const DEFAULT_PORT = 4173;
 const MAX_LOG_CHUNK_BYTES = 128 * 1024;
+
+export const renderMarkdown = (markdown: string) =>
+  sanitizeHtml(marked.parse(markdown, { async: false, gfm: true }), {
+    allowedTags: [
+      "a",
+      "blockquote",
+      "br",
+      "code",
+      "del",
+      "em",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "hr",
+      "li",
+      "ol",
+      "p",
+      "pre",
+      "strong",
+      "table",
+      "tbody",
+      "td",
+      "th",
+      "thead",
+      "tr",
+      "ul",
+    ],
+    allowedAttributes: {
+      a: ["href", "title"],
+      code: ["class"],
+      td: ["align"],
+      th: ["align"],
+    },
+    allowedSchemes: ["http", "https"],
+    allowedSchemesAppliedToAttributes: ["href"],
+    allowProtocolRelative: false,
+  });
 const INITIAL_LOG_BYTES = 96 * 1024;
 const RUN_LOG_PATTERN = /^run-\d{8}T\d{6}Z-\d+\.log$/;
 
@@ -307,8 +349,61 @@ export const panelHtml = `<!doctype html>
         border-radius: 0.75rem;
         background: rgba(5, 12, 11, 0.82);
         color: #c7ddd6;
-        white-space: pre-wrap;
+        line-height: 1.55;
       }
+      .grill-question > :first-child { margin-top: 0; }
+      .grill-question > :last-child { margin-bottom: 0; }
+      .grill-question p, .grill-question ul, .grill-question ol, .grill-question blockquote,
+      .grill-question pre, .grill-question table { margin: 0.8rem 0; }
+      .grill-question ul, .grill-question ol { padding-left: 1.5rem; }
+      .grill-question li + li { margin-top: 0.3rem; }
+      .grill-question h1, .grill-question h2, .grill-question h3,
+      .grill-question h4, .grill-question h5, .grill-question h6 {
+        margin: 1rem 0 0.5rem;
+        color: var(--text);
+        line-height: 1.25;
+      }
+      .grill-question h1 { font-size: 1.3rem; }
+      .grill-question h2 { font-size: 1.15rem; }
+      .grill-question h3, .grill-question h4, .grill-question h5,
+      .grill-question h6 { font-size: 1rem; }
+      .grill-question code {
+        padding: 0.1rem 0.3rem;
+        border-radius: 0.3rem;
+        background: rgba(98, 246, 181, 0.1);
+        color: #dcfff0;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.88em;
+        overflow-wrap: anywhere;
+      }
+      .grill-question pre {
+        padding: 0.8rem;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 0.55rem;
+        background: #050c0b;
+      }
+      .grill-question pre code { padding: 0; background: transparent; overflow-wrap: normal; }
+      .grill-question blockquote {
+        padding-left: 0.8rem;
+        border-left: 0.2rem solid var(--line-strong);
+        color: var(--muted);
+      }
+      .grill-question table {
+        width: max-content;
+        min-width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+      .grill-question th, .grill-question td {
+        padding: 0.55rem 0.65rem;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      .grill-question th { background: rgba(98, 246, 181, 0.08); color: var(--text); }
+      .grill-question a { color: var(--green); text-underline-offset: 0.15rem; }
+      .grill-question hr { border: 0; border-top: 1px solid var(--line); }
       textarea {
         width: 100%;
         min-height: 8rem;
@@ -720,7 +815,7 @@ export const panelHtml = `<!doctype html>
             ? "P" + (grill.priority ?? "?") + " · #" + grill.issue + " · " + grill.issueTitle
             : "No ready-for-human issue waiting";
           elements.grillStatus.textContent = grill.status.replaceAll("-", " ");
-          elements.grillQuestion.textContent = grill.question ?? grill.message;
+          elements.grillQuestion.innerHTML = grill.questionHtml;
           elements.grillAnswer.disabled = !waiting;
           elements.grillAnswerButton.disabled = !waiting;
           elements.grillFinish.disabled = !waiting;
@@ -1036,7 +1131,10 @@ export const createPanelServer = (
           status,
           processRunning: runnerPid !== null,
           queue: summarizeQueue(state),
-          grill,
+          grill: {
+            ...grill,
+            questionHtml: renderMarkdown(grill.question ?? grill.message),
+          },
           runs,
           serverTime: new Date().toISOString(),
         });
