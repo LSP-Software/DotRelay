@@ -25,6 +25,20 @@ there is no grill already in progress. The agent runs one question round and wai
 answer** for another round. When the shared understanding is complete, use **Finish & prepare
 ticket**; the current textarea can contain a final answer or be empty.
 
+When the agent's round ends with its machine-readable question block, the panel presents the
+questions one at a time. Each card shows the question, the agent's suggested answers with its
+preferred one flagged as **Recommended**, and a field for your own suggestion or a comment on the
+options. Pick an answer, write your own, or add a note to either; progress dots mark what you have
+already answered. If the reply carries no usable question block, the panel falls back to the free-form
+answer field. Your selections are sent back to the same session as the next prompt.
+
+When the interview goes off the rails — the agent keeps asking questions the codebase could answer,
+or the conversation no longer matches the issue — use **Reset grill** and confirm the prompt. It
+discards the interview session and any uncommitted document changes in the grill workspace, then
+starts the issue's first question round again in a fresh session. Reset is offered while a round is
+waiting for you and after a failed turn; a turn already in flight must settle (or be marked failed
+by a panel restart) first.
+
 Finishing resumes that exact session and hands it to `/to-spec`. The agent must preserve precise
 answers in the existing issue, verify the domain-doc artifacts, publish and merge a documentation PR
 when the checkout changed, then replace `ready-for-human` with `ready-for-agent`. The panel verifies

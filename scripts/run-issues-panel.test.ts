@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   buildOpenCodeRunArguments,
   createGrillManager,
+  parseGrillQuestions,
   parseOpenCodeTurn,
   selectGrillIssue,
 } from "./run-issues-grill";
@@ -133,6 +134,94 @@ describe("run issues panel", () => {
       },
     });
     expect(parseOpenCodeTurn(output).text).toBe("");
+  });
+
+  test("parses structured grill questions out of the agent's reply", () => {
+    const reply = [
+      "Two product decisions are open.",
+      "",
+      "```dotrelay-grill-questions",
+      JSON.stringify({
+        questions: [
+          {
+            question: "Keep the expired approval code distinction?",
+            header: "Approval codes",
+            options: [
+              {
+                label: "Keep it",
+                description: "Prevents silent sign-in loops.",
+              },
+              { label: "Drop it", description: "Simpler surface." },
+            ],
+            recommended: 0,
+          },
+          { question: "Should the retry budget survive restarts?" },
+        ],
+      }),
+      "```",
+      "",
+      "Answer when you are ready.",
+    ].join("\n");
+    const parsed = parseGrillQuestions(reply);
+    expect(parsed.questions).toEqual([
+      {
+        question: "Keep the expired approval code distinction?",
+        header: "Approval codes",
+        options: [
+          { label: "Keep it", description: "Prevents silent sign-in loops." },
+          { label: "Drop it", description: "Simpler surface." },
+        ],
+        recommended: 0,
+        multiple: false,
+      },
+      {
+        question: "Should the retry budget survive restarts?",
+        header: null,
+        options: [],
+        recommended: null,
+        multiple: false,
+      },
+    ]);
+    expect(parsed.prose).toBe(
+      "Two product decisions are open.\n\nAnswer when you are ready.",
+    );
+  });
+
+  test("keeps the raw reply when the question block yields no usable questions", () => {
+    const reply =
+      "My questions:\n\n```dotrelay-grill-questions\n{not json}\n```\n\nDone thinking.";
+    const parsed = parseGrillQuestions(reply);
+    expect(parsed.questions).toEqual([]);
+    expect(parsed.prose).toBe(reply);
+  });
+
+  test("drops malformed question entries and out-of-range recommendations", () => {
+    const parsed = parseGrillQuestions(
+      "```dotrelay-grill-questions\n" +
+        JSON.stringify({
+          questions: [
+            { question: "", header: "Empty" },
+            {
+              question: "Real question",
+              header: "Real",
+              options: [{ label: "Only" }],
+              recommended: 3,
+              multiple: "yes",
+            },
+            "garbage",
+          ],
+        }) +
+        "\n```",
+    );
+    expect(parsed.questions).toEqual([
+      {
+        question: "Real question",
+        header: "Real",
+        options: [{ label: "Only", description: null }],
+        recommended: null,
+        multiple: false,
+      },
+    ]);
   });
 
   test("executes workflow commands through OpenCode's command interface", () => {
@@ -485,5 +574,214 @@ describe("run issues panel", () => {
     expect(state.status).toBe("awaiting-human");
     expect(state.question).toBe("Which failure should repair first?");
     expect(state.sessionId).toBe("ses_test");
+  });
+
+  const writeGrillState = async (stateDirectory: string, state: object) => {
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(
+      join(stateDirectory, "state.json"),
+      `${JSON.stringify(state)}\n`,
+      "utf8",
+    );
+  };
+
+  const awaitingHumanState = (
+    stateDirectory: string,
+  ): Record<string, unknown> => ({
+    version: 1,
+    status: "awaiting-human",
+    issue: 79,
+    issueTitle: "Turn CLI failures into guided recovery",
+    issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+    priority: 1,
+    sessionId: "ses_stale",
+    question: "Which failure should repair first?",
+    message: "The grill is waiting for your answer.",
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    turn: 2,
+    checkout: join(stateDirectory, "issue-79", "checkout"),
+    transcript: join(stateDirectory, "issue-79-turn-2.ndjson"),
+    lastPrompt: "A previous answer",
+    lastCommand: null,
+    lastTurnCompleting: false,
+  });
+
+  test("restarts the grill with a fresh session and a clean workspace", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    await writeGrillState(stateDirectory, awaitingHumanState(stateDirectory));
+    const calls: string[][] = [];
+    const command = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "opencode") {
+        return {
+          code: 0,
+          output: "",
+          stdout:
+            `${JSON.stringify({ type: "step:started", sessionID: "ses_fresh" })}\n` +
+            `${JSON.stringify({ type: "text", part: { text: "Fresh first question?" } })}\n`,
+          infrastructure: false,
+        };
+      }
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+
+    await manager.reset();
+
+    let state = await manager.read();
+    const deadline = Date.now() + 2_000;
+    while (state.sessionId !== "ses_fresh" && Date.now() < deadline) {
+      await Bun.sleep(10);
+      state = await manager.read();
+    }
+    expect(state.status).toBe("awaiting-human");
+    expect(state.sessionId).toBe("ses_fresh");
+    expect(state.question).toBe("Fresh first question?");
+    expect(state.turn).toBe(3);
+    expect(calls).toContainEqual(["git", "reset", "--hard", "HEAD"]);
+    expect(calls).toContainEqual(["git", "clean", "-fd"]);
+    const opencode = calls.find((args) => args[0] === "opencode");
+    expect(opencode).toBeDefined();
+    expect(opencode).toContain("grill-with-docs");
+    expect(opencode).toContain("--title");
+    expect(opencode).not.toContain("--session");
+  });
+
+  test("refuses to reset a grill whose turn is still in flight", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    const state = awaitingHumanState(stateDirectory);
+    state.status = "running";
+    await writeGrillState(stateDirectory, state);
+    let releaseOpencode: () => void = () => {};
+    const opencodeGate = new Promise<void>((resolve) => {
+      releaseOpencode = resolve;
+    });
+    const command = async (args: string[]) => {
+      if (args[0] === "opencode") {
+        await opencodeGate;
+        return {
+          code: 0,
+          output: "",
+          stdout: JSON.stringify({
+            type: "text",
+            sessionID: "ses_fresh",
+            part: { text: "Fresh first question?" },
+          }),
+          infrastructure: false,
+        };
+      }
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+
+    await expect(manager.reset()).rejects.toThrow(/busy/);
+
+    const busy = await writeGrillState(
+      stateDirectory,
+      awaitingHumanState(stateDirectory),
+    ).then(async () => {
+      const first = manager.reset();
+      const second = manager.reset();
+      return Promise.allSettled([first, second]);
+    });
+    releaseOpencode();
+    const outcomes = await busy;
+    const failures = outcomes.filter(
+      (outcome) => outcome.status === "rejected",
+    );
+    expect(failures.length).toBe(1);
+    const failure = failures[0];
+    if (failure) {
+      expect(failure.reason).toBeInstanceOf(Error);
+      expect((failure.reason as Error).message).toMatch(/busy|already running/);
+    }
+  });
+
+  test("refuses to reset when there is no grill in progress", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    const state = awaitingHumanState(stateDirectory);
+    state.issue = null;
+    state.checkout = null;
+    await writeGrillState(stateDirectory, state);
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command: async () => ({
+        code: 0,
+        output: "",
+        stdout: "",
+        infrastructure: false,
+      }),
+    });
+
+    await expect(manager.reset()).rejects.toThrow(
+      "There is no grill to reset.",
+    );
+  });
+
+  test("resets the human grill through the control API", async () => {
+    let resets = 0;
+    const { server } = createPanelServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      startRunner: async () => process.pid,
+      signalRunner: () => {},
+      grillManager: {
+        read: async () => ({}),
+        ensure: async () => ({}),
+        respond: async () => {},
+        complete: async () => {},
+        retry: async () => {},
+        reset: async () => {
+          resets++;
+        },
+      } as unknown as ReturnType<typeof createGrillManager>,
+    });
+    const request = (headers: Record<string, string> = {}) =>
+      fetch(`http://127.0.0.1:${server.port}/api/grill/reset`, {
+        method: "POST",
+        headers,
+      });
+
+    try {
+      expect((await request()).status).toBe(403);
+      expect((await request({ "X-DotRelay-Panel": "1" })).status).toBe(202);
+      expect(resets).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("offers one-question-at-a-time cards and a confirmed reset", () => {
+    expect(panelHtml).toContain('id="grill-questions"');
+    expect(panelHtml).toContain('id="question-position"');
+    expect(panelHtml).toContain('id="question-note"');
+    expect(panelHtml).toContain("Recommended");
+    expect(panelHtml).toContain('id="grill-reset"');
+    expect(panelHtml).toContain(
+      "Are you sure you want to start this grill over?",
+    );
+    expect(panelHtml).toContain("Yes, start over");
   });
 });

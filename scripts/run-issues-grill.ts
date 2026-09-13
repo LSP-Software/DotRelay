@@ -49,7 +49,104 @@ const priority = (body: string) => {
 };
 
 const grillPrompt = (issue: number, title: string) =>
-  `Grill the proposed change in GitHub issue #${issue}: ${title}. Read the issue with gh and inspect the codebase first. Answer anything the repository can answer yourself. Follow the installed grilling and domain-modeling skills exactly, write resolved vocabulary and qualifying ADRs to the checkout as the skill requires, ask one focused round of recommended questions, then stop and wait for the human. Present your questions as plain text and never emit tool call or function call markup in your reply. Do not implement the change and do not update the issue labels yet.`;
+  `Grill the proposed change in GitHub issue #${issue}: ${title}. Read the issue with gh and inspect the codebase first. Answer anything the repository can answer yourself. Follow the installed grilling and domain-modeling skills exactly, write resolved vocabulary and qualifying ADRs to the checkout as the skill requires, ask one focused round of recommended questions, then stop and wait for the human. Present your questions as plain text and never emit tool call or function call markup in your reply. At the very end of your reply append one fenced code block tagged dotrelay-grill-questions containing the JSON object {"questions":[...]} with one entry per question you asked: "question" (the full question text), "header" (a short label of at most 30 characters), "options" (an array of {"label","description"} suggested answers, best first, or an empty array when you suggest none), and "recommended" (the index of the option you recommend, omitted when you have none). The block is machine-readable data for the panel, not tool call markup. Do not implement the change and do not update the issue labels yet.`;
+
+export type GrillQuestionOption = {
+  label: string;
+  description: string | null;
+};
+
+export type GrillQuestion = {
+  question: string;
+  header: string | null;
+  options: GrillQuestionOption[];
+  recommended: number | null;
+  multiple: boolean;
+};
+
+export type GrillQuestionParse = {
+  questions: GrillQuestion[];
+  prose: string;
+};
+
+const GRILL_QUESTIONS_BLOCK =
+  /```dotrelay-grill-questions[ \t]*\r?\n([\s\S]*?)```/;
+const MAX_QUESTIONS = 12;
+const MAX_OPTIONS = 10;
+const MAX_QUESTION_TEXT = 8_000;
+const MAX_HEADER = 60;
+
+const collapseBlankLines = (text: string) =>
+  text
+    .replace(/\n[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+const parseGrillQuestionRecords = (records: unknown): GrillQuestion[] => {
+  if (!Array.isArray(records)) return [];
+  return records.slice(0, MAX_QUESTIONS).flatMap((record): GrillQuestion[] => {
+    if (!record || typeof record !== "object") return [];
+    const entry = record as Record<string, unknown>;
+    const question =
+      typeof entry.question === "string" ? entry.question.trim() : "";
+    if (!question) return [];
+    const options = (Array.isArray(entry.options) ? entry.options : [])
+      .slice(0, MAX_OPTIONS)
+      .flatMap((option): GrillQuestionOption[] => {
+        if (!option || typeof option !== "object") return [];
+        const label = (option as { label?: unknown }).label;
+        const description = (option as { description?: unknown }).description;
+        if (typeof label !== "string" || !label.trim()) return [];
+        const detail =
+          typeof description === "string" ? description.trim() : "";
+        return [{ label: label.trim(), description: detail || null }];
+      });
+    const recommended =
+      typeof entry.recommended === "number" &&
+      Number.isInteger(entry.recommended) &&
+      entry.recommended >= 0 &&
+      entry.recommended < options.length
+        ? entry.recommended
+        : null;
+    const header = typeof entry.header === "string" ? entry.header.trim() : "";
+    return [
+      {
+        question: question.slice(0, MAX_QUESTION_TEXT),
+        header: header ? header.slice(0, MAX_HEADER) : null,
+        options,
+        recommended,
+        multiple: entry.multiple === true,
+      },
+    ];
+  });
+};
+
+export const parseGrillQuestions = (text: string): GrillQuestionParse => {
+  const match = GRILL_QUESTIONS_BLOCK.exec(text);
+  if (!match) return { questions: [], prose: text.trim() };
+  const block = match[1];
+  let payload: unknown = null;
+  if (block) {
+    try {
+      payload = JSON.parse(block);
+    } catch {
+      payload = null;
+    }
+  }
+  const records =
+    payload === null
+      ? null
+      : Array.isArray(payload)
+        ? payload
+        : (payload as { questions?: unknown })?.questions;
+  const questions = records === null ? [] : parseGrillQuestionRecords(records);
+  return {
+    questions,
+    prose: questions.length
+      ? collapseBlankLines(text.replace(GRILL_QUESTIONS_BLOCK, "\n"))
+      : text.trim(),
+  };
+};
 
 export const selectGrillIssue = (issues: GrillIssue[], owner: string) =>
   issues
@@ -444,6 +541,40 @@ export const createGrillManager = (options: {
         : "";
       const prompt = `${prefix}The human confirms that the interview is complete. Turn every exact answer, constraint, negative requirement, ordering guarantee, and numeric default into an implementation-ready GitHub issue #${state.issue}. Resolve nothing by guessing. Verify that grill-with-docs actually wrote any qualifying CONTEXT.md and ADR changes in this checkout. If tracked documentation changed, commit it, push this branch, open a documentation-only PR that references (but does not close) issue #${state.issue}, wait for required checks, and merge it before continuing. Finally replace the ready-for-human label with ready-for-agent using gh, preserving every other label. Do not implement the feature. Only declare success after rereading the issue and confirming it has no unresolved product questions, the label is ready-for-agent, and any documentation PR is merged.`;
       if (!launch(() => runTurn(state, prompt, true, "to-spec")))
+        throw new Error("A grill turn is already running.");
+    },
+    reset: async () => {
+      const state = await read();
+      if (!state.issue || !state.checkout)
+        throw new Error("There is no grill to reset.");
+      if (!["awaiting-human", "failed"].includes(state.status))
+        throw new Error(
+          "The grill is busy; wait for its current turn to settle before resetting it.",
+        );
+      const checkout = state.checkout;
+      const issue = state.issue;
+      const issueTitle = state.issueTitle ?? `Issue #${state.issue}`;
+      if (
+        !launch(async () => {
+          await execute(["git", "reset", "--hard", "HEAD"], checkout);
+          await execute(["git", "clean", "-fd"], checkout);
+          const fresh = await save({
+            ...state,
+            sessionId: null,
+            question: null,
+            lastPrompt: null,
+            lastCommand: null,
+            lastTurnCompleting: false,
+            message: "Starting the grill over from the beginning.",
+          });
+          await runTurn(
+            fresh,
+            grillPrompt(issue, issueTitle),
+            false,
+            "grill-with-docs",
+          );
+        })
+      )
         throw new Error("A grill turn is already running.");
     },
     retry: async () => {

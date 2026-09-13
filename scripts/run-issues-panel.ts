@@ -3,7 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
-import { createGrillManager } from "./run-issues-grill";
+import { createGrillManager, parseGrillQuestions } from "./run-issues-grill";
 
 const DEFAULT_PORT = 4173;
 const MAX_LOG_CHUNK_BYTES = 128 * 1024;
@@ -404,6 +404,81 @@ export const panelHtml = `<!doctype html>
       .grill-question th { background: rgba(98, 246, 181, 0.08); color: var(--text); }
       .grill-question a { color: var(--green); text-underline-offset: 0.15rem; }
       .grill-question hr { border: 0; border-top: 1px solid var(--line); }
+      .question-progress {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+      #question-position {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .question-dots { display: flex; gap: 0.35rem; }
+      .question-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--line-strong); }
+      .question-dot.answered { background: var(--green); }
+      .question-dot.current { background: var(--cyan); box-shadow: 0 0 0 0.25rem rgba(98, 223, 246, 0.15); }
+      #question-position.error { color: var(--red); text-transform: none; letter-spacing: normal; }
+      @keyframes grill-turn {
+        from { opacity: 0; transform: translateY(0.35rem); }
+        to { opacity: 1; transform: none; }
+      }
+      #grill-questions.turn { animation: grill-turn 0.22s ease-out; }
+      @media (prefers-reduced-motion: reduce) {
+        #grill-questions.turn { animation: none; }
+      }
+      .options { display: grid; gap: 0.5rem; }
+      .option {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        align-items: start;
+        gap: 0.65rem;
+        padding: 0.75rem 0.85rem;
+        border: 1px solid var(--line);
+        border-radius: 0.65rem;
+        background: rgba(5, 12, 11, 0.6);
+        cursor: pointer;
+      }
+      .option:hover { border-color: var(--line-strong); }
+      .option.selected { border-color: rgba(98, 246, 181, 0.55); background: var(--green-soft); }
+      .option.recommended { border-color: rgba(98, 246, 181, 0.38); }
+      .option input { margin-top: 0.32rem; accent-color: var(--green); }
+      button:focus-visible, a:focus-visible, input:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+      .option-label { font-weight: 650; }
+      .option-description { display: block; margin-top: 0.25rem; color: var(--muted); font-size: 0.82rem; line-height: 1.45; }
+      .option .badge {
+        display: inline-block;
+        margin-left: 0.5rem;
+        vertical-align: middle;
+        padding: 0.08rem 0.55rem;
+        border: 1px solid rgba(98, 246, 181, 0.55);
+        border-radius: 999px;
+        background: var(--green-soft);
+        color: var(--green);
+        font-size: 0.68rem;
+        white-space: nowrap;
+      }
+      .no-options { margin: 0; color: var(--muted); font-size: 0.85rem; }
+      .option-note { display: grid; gap: 0.4rem; }
+      .option-note > span { color: var(--muted); font-size: 0.78rem; }
+      textarea.small { min-height: 4.5rem; }
+      .confirm {
+        padding: 1rem 1.1rem;
+        border: 1px solid rgba(255, 129, 122, 0.45);
+        border-radius: 0.75rem;
+        background: rgba(255, 129, 122, 0.08);
+      }
+      .confirm p { margin: 0; font-size: 0.9rem; }
+      .confirm-detail { margin-top: 0.4rem; color: var(--muted); font-size: 0.82rem; }
+      .confirm-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.85rem; }
+      .button.danger { border-color: rgba(255, 129, 122, 0.55); background: rgba(255, 129, 122, 0.1); color: var(--red); }
+      .button.danger:hover:not(:disabled) { border-color: var(--red); background: rgba(255, 129, 122, 0.16); }
       textarea {
         width: 100%;
         min-height: 8rem;
@@ -418,7 +493,7 @@ export const panelHtml = `<!doctype html>
         line-height: 1.5;
       }
       textarea:focus { border-color: var(--green); box-shadow: 0 0 0 0.2rem var(--green-soft); }
-      .grill-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
+      .grill-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.6rem; }
       .button.primary { border-color: rgba(98, 246, 181, 0.55); background: var(--green-soft); color: var(--green); }
       .summary {
         display: grid;
@@ -591,10 +666,35 @@ export const panelHtml = `<!doctype html>
               <div><p class="eyebrow">Human lane</p><h2 id="grill-title">Preparing the next grill-with-docs ticket</h2></div>
               <span class="grill-status" id="grill-status">Connecting</span>
             </div>
-            <div class="grill-question" id="grill-question">The panel is looking for a ready-for-human issue…</div>
-            <textarea id="grill-answer" aria-label="Answer the agent's questions" placeholder="Answer the questions above. Exact constraints and examples are especially useful." disabled></textarea>
+            <div id="grill-questions" hidden>
+              <div class="question-progress">
+                <span id="question-position">Question 1 of 1</span>
+                <div class="question-dots" id="question-dots" aria-hidden="true"></div>
+              </div>
+              <div class="grill-question" id="question-body" aria-live="polite"></div>
+              <div class="options" id="question-options"></div>
+              <label class="option-note">
+                <span id="question-note-label">A different answer, or a comment on these options</span>
+                <textarea id="question-note" class="small" placeholder="Optional — suggest a different answer or add a comment."></textarea>
+              </label>
+            </div>
+            <div id="grill-free">
+              <div class="grill-question" id="grill-question">The panel is looking for a ready-for-human issue…</div>
+              <textarea id="grill-answer" aria-label="Answer the agent's questions" placeholder="Answer the questions above. Exact constraints and examples are especially useful." disabled></textarea>
+            </div>
+            <div class="confirm" id="grill-confirm" hidden>
+              <p>Are you sure you want to start this grill over?</p>
+              <p class="confirm-detail">This discards the interview session and any document changes the agent made in its workspace, then asks its first questions again.</p>
+              <div class="confirm-actions">
+                <button class="button" id="grill-confirm-cancel" type="button">Cancel</button>
+                <button class="button danger" id="grill-confirm-ok" type="button">Yes, start over</button>
+              </div>
+            </div>
             <div class="grill-actions">
+              <button class="button" id="grill-back" type="button" hidden>Back</button>
+              <button class="button primary" id="grill-next" type="button" hidden>Next question</button>
               <button class="button" id="grill-retry" type="button" hidden>Retry</button>
+              <button class="button danger" id="grill-reset" type="button" hidden>Reset grill</button>
               <button class="button primary" id="grill-answer-button" type="button" disabled>Send answer</button>
               <button class="button" id="grill-finish" type="button" disabled>Finish &amp; prepare ticket</button>
             </div>
@@ -644,11 +744,25 @@ export const panelHtml = `<!doctype html>
         stopRunner: document.querySelector("#stop-runner"),
         grillTitle: document.querySelector("#grill-title"),
         grillStatus: document.querySelector("#grill-status"),
+        grillQuestions: document.querySelector("#grill-questions"),
+        grillFree: document.querySelector("#grill-free"),
         grillQuestion: document.querySelector("#grill-question"),
         grillAnswer: document.querySelector("#grill-answer"),
         grillAnswerButton: document.querySelector("#grill-answer-button"),
         grillFinish: document.querySelector("#grill-finish"),
         grillRetry: document.querySelector("#grill-retry"),
+        grillReset: document.querySelector("#grill-reset"),
+        grillConfirm: document.querySelector("#grill-confirm"),
+        grillConfirmCancel: document.querySelector("#grill-confirm-cancel"),
+        grillConfirmOk: document.querySelector("#grill-confirm-ok"),
+        grillBack: document.querySelector("#grill-back"),
+        grillNext: document.querySelector("#grill-next"),
+        questionPosition: document.querySelector("#question-position"),
+        questionDots: document.querySelector("#question-dots"),
+        questionBody: document.querySelector("#question-body"),
+        questionOptions: document.querySelector("#question-options"),
+        questionNote: document.querySelector("#question-note"),
+        questionNoteLabel: document.querySelector("#question-note-label"),
       };
 
       let selectedRun = null;
@@ -659,6 +773,15 @@ export const panelHtml = `<!doctype html>
       let finishedAt = null;
       let statusTimer = null;
       let logTimer = null;
+      let grillQuestions = [];
+      let grillQuestionKey = null;
+      let grillQuestionIndex = 0;
+      let grillAwaiting = false;
+      let grillFailed = false;
+      let grillViewIsQuestions = false;
+      let grillResettable = false;
+      const grillChoices = new Map();
+      const grillNotes = new Map();
 
       const stageNames = {
         starting: "Starting",
@@ -755,6 +878,148 @@ export const panelHtml = `<!doctype html>
         void refreshLog();
       };
 
+      const grillQuestionIdentity = (questions) =>
+        questions
+          .map(
+            (question) =>
+              [
+                question.questionHtml,
+                question.header,
+                question.recommended,
+                question.multiple,
+                question.options.map((option) => option.label).join("␟"),
+              ].join("␞"),
+          )
+          .join("␝");
+
+      const hasAnyGrillAnswer = () =>
+        grillQuestions.some(
+          (_question, index) =>
+            (grillChoices.get(index)?.size ?? 0) > 0 ||
+            (grillNotes.get(index) ?? "").trim().length > 0,
+        );
+
+      const composeGrillAnswer = () => {
+        const lines = [];
+        grillQuestions.forEach((question, index) => {
+          const label = question.header ?? "Question " + (index + 1);
+          const chosen = [...(grillChoices.get(index) ?? [])]
+            .sort((left, right) => left - right)
+            .map((optionIndex) => question.options[optionIndex].label);
+          const note = (grillNotes.get(index) ?? "").trim();
+          if (chosen.length && note)
+            lines.push(label + ": " + chosen.join(" + ") + " — note: " + note);
+          else if (chosen.length) lines.push(label + ": " + chosen.join(" + "));
+          else if (note) lines.push(label + ": " + note);
+        });
+        return lines.join("\\n");
+      };
+
+      const renderGrillQuestionDots = () => {
+        elements.questionDots.replaceChildren(
+          ...grillQuestions.map((_question, index) => {
+            const dot = document.createElement("span");
+            const answered =
+              (grillChoices.get(index)?.size ?? 0) > 0 ||
+              (grillNotes.get(index) ?? "").trim().length > 0;
+            dot.className =
+              "question-dot" +
+              (index === grillQuestionIndex
+                ? " current"
+                : answered
+                  ? " answered"
+                  : "");
+            return dot;
+          }),
+        );
+      };
+
+      const updateGrillControls = () => {
+        const onLastQuestion =
+          grillQuestionIndex >= grillQuestions.length - 1;
+        elements.grillBack.hidden =
+          !grillViewIsQuestions || grillQuestionIndex === 0;
+        elements.grillNext.hidden = !grillViewIsQuestions || onLastQuestion;
+        elements.grillAnswerButton.disabled =
+          !grillAwaiting ||
+          (grillViewIsQuestions && !hasAnyGrillAnswer());
+        elements.grillFinish.disabled = !grillAwaiting;
+        elements.grillRetry.hidden = !grillFailed;
+        elements.grillReset.hidden = !grillResettable;
+      };
+
+      const renderGrillQuestion = () => {
+        const question = grillQuestions[grillQuestionIndex];
+        elements.questionPosition.classList.remove("error");
+        elements.questionPosition.textContent =
+          "Question " + (grillQuestionIndex + 1) + " of " + grillQuestions.length;
+        renderGrillQuestionDots();
+        elements.grillQuestions.classList.remove("turn");
+        void elements.grillQuestions.offsetWidth;
+        elements.questionBody.innerHTML = question.questionHtml;
+        elements.grillQuestions.classList.add("turn");
+        const selected = grillChoices.get(grillQuestionIndex);
+        const optionsHost = elements.questionOptions;
+        optionsHost.replaceChildren();
+        if (!question.options.length) {
+          const empty = document.createElement("p");
+          empty.className = "no-options";
+          empty.textContent = "The agent did not suggest an answer for this one.";
+          optionsHost.append(empty);
+        }
+        question.options.forEach((option, optionIndex) => {
+          const row = document.createElement("label");
+          row.className =
+            "option" +
+            (optionIndex === question.recommended ? " recommended" : "") +
+            (selected?.has(optionIndex) ? " selected" : "");
+          const input = document.createElement("input");
+          input.type = question.multiple ? "checkbox" : "radio";
+          input.name = "grill-question-option";
+          input.checked = selected?.has(optionIndex) ?? false;
+          input.addEventListener("change", () => {
+            const next = question.multiple
+              ? new Set(grillChoices.get(grillQuestionIndex) ?? [])
+              : new Set();
+            if (input.checked) next.add(optionIndex);
+            else next.delete(optionIndex);
+            grillChoices.set(grillQuestionIndex, next);
+            row.classList.toggle("selected", next.size > 0);
+            renderGrillQuestionDots();
+            updateGrillControls();
+          });
+          const text = document.createElement("span");
+          const label = document.createElement("span");
+          label.className = "option-label";
+          label.textContent = option.label;
+          text.append(label);
+          if (optionIndex === question.recommended) {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = "Recommended";
+            text.append(badge);
+          }
+          if (option.description) {
+            const description = document.createElement("span");
+            description.className = "option-description";
+            description.textContent = option.description;
+            text.append(description);
+          }
+          row.append(input, text);
+          optionsHost.append(row);
+        });
+        const hasOptions = question.options.length > 0;
+        elements.questionNoteLabel.textContent = hasOptions
+          ? "A different answer, or a comment on these options"
+          : "Answer in your own words";
+        elements.questionNote.placeholder = hasOptions
+          ? "Optional — suggest a different answer or add a comment."
+          : "What is your answer?";
+        elements.questionNote.value =
+          grillNotes.get(grillQuestionIndex) ?? "";
+        updateGrillControls();
+      };
+
       const refreshStatus = async () => {
         try {
           const response = await fetch("/api/status", { cache: "no-store" });
@@ -811,15 +1076,45 @@ export const panelHtml = `<!doctype html>
           elements.elapsed.textContent = formatDuration(startedAt, finishedAt);
           renderRuns(data.runs);
           const waiting = grill.status === "awaiting-human";
+          const questions = Array.isArray(grill.questions) ? grill.questions : [];
           elements.grillTitle.textContent = grill.issue
             ? "P" + (grill.priority ?? "?") + " · #" + grill.issue + " · " + grill.issueTitle
             : "No ready-for-human issue waiting";
           elements.grillStatus.textContent = grill.status.replaceAll("-", " ");
-          elements.grillQuestion.innerHTML = grill.questionHtml;
+          grillAwaiting = waiting;
+          grillFailed = grill.status === "failed";
+          grillResettable = !!grill.issue && (waiting || grill.status === "failed");
+          if (!grillResettable) elements.grillConfirm.hidden = true;
+          if (questions.length) {
+            const key = grillQuestionIdentity(questions);
+            const fresh = key !== grillQuestionKey;
+            if (fresh) {
+              grillQuestionKey = key;
+              grillQuestions = questions;
+              grillQuestionIndex = 0;
+              grillChoices.clear();
+              grillNotes.clear();
+            }
+            grillViewIsQuestions = waiting;
+            elements.grillQuestions.hidden = !waiting;
+            elements.grillFree.hidden = waiting;
+            if (waiting) {
+              if (fresh) renderGrillQuestion();
+              updateGrillControls();
+            } else {
+              elements.grillQuestion.innerHTML = grill.questionHtml;
+              updateGrillControls();
+            }
+          } else {
+            grillQuestionKey = null;
+            grillQuestions = [];
+            grillViewIsQuestions = false;
+            elements.grillQuestions.hidden = true;
+            elements.grillFree.hidden = false;
+            elements.grillQuestion.innerHTML = grill.questionHtml;
+            updateGrillControls();
+          }
           elements.grillAnswer.disabled = !waiting;
-          elements.grillAnswerButton.disabled = !waiting;
-          elements.grillFinish.disabled = !waiting;
-          elements.grillRetry.hidden = grill.status !== "failed";
         } catch {
           elements.connectionDot.className = "dot error";
           elements.connectionLabel.textContent = "Panel disconnected";
@@ -850,9 +1145,19 @@ export const panelHtml = `<!doctype html>
       };
 
       const controlGrill = async (action) => {
-        const answer = elements.grillAnswer.value;
-        elements.grillAnswerButton.disabled = true;
-        elements.grillFinish.disabled = true;
+        const structured = grillViewIsQuestions;
+        const answer =
+          action === "reset"
+            ? ""
+            : structured
+              ? composeGrillAnswer()
+              : elements.grillAnswer.value;
+        if (action !== "reset" && structured && !answer) return;
+        if (action === "reset") elements.grillConfirmOk.disabled = true;
+        else {
+          elements.grillAnswerButton.disabled = true;
+          elements.grillFinish.disabled = true;
+        }
         try {
           const response = await fetch("/api/grill/" + action, {
             method: "POST",
@@ -862,9 +1167,21 @@ export const panelHtml = `<!doctype html>
           const result = await response.json();
           if (!response.ok) throw new Error(result.error ?? "Grill action failed.");
           elements.grillAnswer.value = "";
+          elements.grillConfirm.hidden = true;
+          grillQuestionKey = null;
+          grillChoices.clear();
+          grillNotes.clear();
           elements.grillQuestion.textContent = result.message;
         } catch (error) {
-          elements.grillQuestion.textContent = error instanceof Error ? error.message : String(error);
+          elements.grillConfirm.hidden = true;
+          const message =
+            error instanceof Error ? error.message : String(error);
+          if (structured) {
+            elements.questionPosition.classList.add("error");
+            elements.questionPosition.textContent = message;
+          } else {
+            elements.grillQuestion.textContent = message;
+          }
         } finally {
           await refreshStatus();
         }
@@ -906,6 +1223,31 @@ export const panelHtml = `<!doctype html>
       elements.grillAnswerButton.addEventListener("click", () => void controlGrill("respond"));
       elements.grillFinish.addEventListener("click", () => void controlGrill("complete"));
       elements.grillRetry.addEventListener("click", () => void controlGrill("retry"));
+      elements.grillBack.addEventListener("click", () => {
+        if (grillQuestionIndex > 0) {
+          grillQuestionIndex--;
+          renderGrillQuestion();
+        }
+      });
+      elements.grillNext.addEventListener("click", () => {
+        if (grillQuestionIndex < grillQuestions.length - 1) {
+          grillQuestionIndex++;
+          renderGrillQuestion();
+        }
+      });
+      elements.questionNote.addEventListener("input", () => {
+        grillNotes.set(grillQuestionIndex, elements.questionNote.value);
+        renderGrillQuestionDots();
+        updateGrillControls();
+      });
+      elements.grillReset.addEventListener("click", () => {
+        elements.grillConfirm.hidden = false;
+        elements.grillConfirmOk.focus();
+      });
+      elements.grillConfirmCancel.addEventListener("click", () => {
+        elements.grillConfirm.hidden = true;
+      });
+      elements.grillConfirmOk.addEventListener("click", () => void controlGrill("reset"));
 
       statusTimer = window.setInterval(() => void refreshStatus(), 2000);
       logTimer = window.setInterval(() => void refreshLog(), 1000);
@@ -1076,6 +1418,8 @@ export const createPanelServer = (
             await grillManager.complete(answer);
           } else if (url.pathname === "/api/grill/retry") {
             await grillManager.retry();
+          } else if (url.pathname === "/api/grill/reset") {
+            await grillManager.reset();
           } else {
             return jsonResponse(
               { error: "Unknown grill action." },
@@ -1127,13 +1471,19 @@ export const createPanelServer = (
           grillManager.ensure(),
         ]);
         const runnerPid = await activeRunnerPid(status);
+        const grillText = grill.question ?? grill.message;
+        const grillQuestions = parseGrillQuestions(grillText);
         return jsonResponse({
           status,
           processRunning: runnerPid !== null,
           queue: summarizeQueue(state),
           grill: {
             ...grill,
-            questionHtml: renderMarkdown(grill.question ?? grill.message),
+            questions: grillQuestions.questions.map((question) => ({
+              ...question,
+              questionHtml: renderMarkdown(question.question),
+            })),
+            questionHtml: renderMarkdown(grillQuestions.prose),
           },
           runs,
           serverTime: new Date().toISOString(),
