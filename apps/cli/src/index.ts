@@ -448,7 +448,8 @@ const describeDuration = (seconds: number): string => {
 const retryReasonPhrase: Record<RetryReason, string> = {
   offline: "The Server Profile is unreachable",
   stalled: "The Server Profile stopped responding",
-  server: "The Server Profile is rate-limited",
+  // A rate limit or a 5xx answer: both are transient server conditions.
+  server: "The Server Profile is temporarily unavailable",
 };
 
 const loginAndEnroll = async (
@@ -622,11 +623,12 @@ const loginAndEnroll = async (
     );
   } finally {
     stopTicker();
+    // A failed login must not leave the waiting card on screen behind the
+    // error diagnostic, so the region is cleared on every exit.
+    if (!parsed.json && waitLines > 0)
+      waitLines = rewriteRegion(output, waitLines, "");
   }
-  if (!parsed.json) {
-    waitLines = rewriteRegion(output, waitLines, "");
-    writeNotice(output, "Signed in");
-  }
+  if (!parsed.json) writeNotice(output, "Signed in");
   const enrollment = await enrollFirstDevice(
     deviceWorkflowOptions(parsed, runtime, profile, credentials),
   );

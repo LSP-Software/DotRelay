@@ -3197,6 +3197,73 @@ describe("CLI sign-in display", () => {
     }
   });
 
+  test("a 5xx poll keeps the current code and names the transient server condition", async () => {
+    const fixture = await createLoginFixture({
+      token: (poll) =>
+        poll === 1
+          ? new Response("<html>service unavailable</html>", {
+              status: 503,
+              headers: { "Content-Type": "text/html" },
+            })
+          : Response.json({ access_token: "session-token" }),
+    });
+    const captured = captureTerminal();
+    const ttyOutput = captured.terminal.output as NodeJS.WritableStream & {
+      isTTY?: boolean;
+    };
+    const wasTty = ttyOutput.isTTY;
+    ttyOutput.isTTY = true;
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        {
+          ...fixture.runtime,
+          networkPolicy: fastPollPolicy,
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured.text()).toContain(
+        "The Server Profile is temporarily unavailable; retry 1 — next in 1s",
+      );
+    } finally {
+      if (wasTty === undefined) delete ttyOutput.isTTY;
+      else ttyOutput.isTTY = wasTty;
+      await fixture.cleanup();
+    }
+  });
+
+  test("a failed login clears the waiting card before the error", async () => {
+    const fixture = await createLoginFixture({
+      token: () => Response.json({ error: "expired_token" }, { status: 400 }),
+    });
+    const captured = captureTerminal();
+    const ttyOutput = captured.terminal.output as NodeJS.WritableStream & {
+      isTTY?: boolean;
+    };
+    const wasTty = ttyOutput.isTTY;
+    ttyOutput.isTTY = true;
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        {
+          ...fixture.runtime,
+          networkPolicy: fastPollPolicy,
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(6);
+      expect(captured.text()).toContain("Allow this CLI?");
+      // The last write to the terminal is the region clear, not a stale
+      // card: nothing of the waiting state survives after the failure.
+      expect(captured.text().endsWith("\x1b[0J\n")).toBe(true);
+    } finally {
+      if (wasTty === undefined) delete ttyOutput.isTTY;
+      else ttyOutput.isTTY = wasTty;
+      await fixture.cleanup();
+    }
+  });
+
   test("the waiting card tracks elapsed time on a terminal", async () => {
     const fixture = await createLoginFixture({
       token: (poll) =>
