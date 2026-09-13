@@ -656,6 +656,48 @@ describe("run issues panel", () => {
     expect(opencode).not.toContain("--session");
   });
 
+  test("reminds the agent to keep the structured question block on later rounds", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    await writeGrillState(stateDirectory, awaitingHumanState(stateDirectory));
+    const calls: string[][] = [];
+    const command = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "opencode") {
+        return {
+          code: 0,
+          output: "",
+          stdout:
+            `${JSON.stringify({ type: "step:started", sessionID: "ses_next" })}\n` +
+            `${JSON.stringify({ type: "text", part: { text: "Follow-up question?" } })}\n`,
+          infrastructure: false,
+        };
+      }
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+
+    await manager.respond("Keep one message.");
+
+    const deadline = Date.now() + 2_000;
+    let opencode = calls.find((args) => args[0] === "opencode");
+    while (!opencode && Date.now() < deadline) {
+      await Bun.sleep(10);
+      opencode = calls.find((args) => args[0] === "opencode");
+    }
+    expect(opencode).toBeDefined();
+    const prompt = opencode?.at(-1) ?? "";
+    expect(prompt.startsWith("Keep one message.")).toBe(true);
+    expect(prompt).toContain("dotrelay-grill-questions JSON block");
+  });
+
   test("refuses to reset a grill whose turn is still in flight", async () => {
     const runsDirectory = await mkdtemp(
       join(tmpdir(), "dotrelay-issue-panel-"),

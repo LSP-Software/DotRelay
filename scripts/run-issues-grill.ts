@@ -527,9 +527,11 @@ export const createGrillManager = (options: {
       const state = await read();
       if (state.status !== "awaiting-human")
         throw new Error("This grill is not waiting for an answer.");
-      if (!answer.trim() || answer.length > 32_000)
+      const trimmed = answer.trim();
+      if (!trimmed || trimmed.length > 32_000)
         throw new Error("Answer must be between 1 and 32,000 characters.");
-      if (!launch(() => runTurn(state, answer.trim(), false, null)))
+      const prompt = `${trimmed}\n\nWhen you ask your next round of questions, keep appending the dotrelay-grill-questions JSON block exactly as before.`;
+      if (!launch(() => runTurn(state, prompt, false, null)))
         throw new Error("A grill turn is already running.");
     },
     complete: async (answer: string) => {
