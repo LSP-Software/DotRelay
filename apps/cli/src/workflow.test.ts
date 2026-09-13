@@ -2560,7 +2560,7 @@ describe("protected CLI workflows", () => {
     );
     expect(revealedDeclined.exitCode).toBe(2);
     expect(revealedDeclined.stderr).toContain(
-      "publication confirmation was declined",
+      "rollback confirmation was declined",
     );
     expect(revealedDeclined.stderr).not.toContain("abc123x");
     expect(revealedDeclined.stderr).not.toContain("postgres://secret");
@@ -2572,7 +2572,7 @@ describe("protected CLI workflows", () => {
         "  +  postgres://secret",
         "",
         ...destinationLines,
-        "Publish?",
+        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
       ].join("\n"),
     ]);
     const rolled = await run(
@@ -2602,7 +2602,7 @@ describe("protected CLI workflows", () => {
         "  DATABASE_URL  shared  updated",
         "",
         ...destinationLines,
-        "Publish?",
+        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
       ].join("\n"),
     );
     expect(questions[1]).not.toContain("abc123x");
@@ -2627,6 +2627,339 @@ describe("protected CLI workflows", () => {
     expect(historyBody.ok).toBe(true);
     expect(historyBody.revisions).toHaveLength(3);
     expect(historyBody.revisions[2]?.mutation).toBe(3);
+  });
+
+  // Seeds a verified history the operator can read: a Genesis Revision with
+  // a known Value, then an Update that changes it.
+  const seededHistory = async (): Promise<{
+    readonly runtime: Awaited<ReturnType<typeof setup>>;
+    readonly genesis: Awaited<ReturnType<typeof createPublicationArtifacts>>;
+    readonly variableId: string;
+  }> => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const variableId = "99999999-9999-4999-8999-999999999999";
+    const seeded = await createPublicationArtifacts(
+      [
+        {
+          id: variableId,
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://secret",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const seededRevisionObject = seeded.stagedObjects.find(
+      (object) => object.objectId === seeded.request.revision.protocolObjectId,
+    );
+    if (!seededRevisionObject) throw new Error("revision object is missing");
+    const runtime = await setup({
+      bootstrap,
+      revisions: [
+        {
+          id: seeded.request.revision.id,
+          digest: await sha384(seededRevisionObject.bytes),
+          parentId: ids.environment,
+          parentHash: new Uint8Array(48),
+          mutation: 1,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(seeded.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            seeded.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+      ],
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=abc123x\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    return { runtime, genesis: seeded, variableId };
+  };
+
+  test("human history renders readable dates and change context without Values", async () => {
+    const { runtime, genesis } = await seededHistory();
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    expect(history.stdout).toContain(`Environment ${ids.environment}`);
+    expect(history.stdout).toContain("2 Revision");
+    expect(history.stdout).toContain("#1");
+    expect(history.stdout).toContain("#2");
+    expect(history.stdout).toContain("Genesis");
+    expect(history.stdout).toContain("Update");
+    expect(history.stdout).toContain(genesis.request.revision.id);
+    expect(history.stdout).toContain("DATABASE_URL");
+    expect(history.stdout).toContain("shared");
+    expect(history.stdout).toContain("Value changed");
+    expect(history.stdout).toContain("(current)");
+    expect(history.stdout).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
+    // History output never carries Values, even the ones this Device can read.
+    expect(history.stdout).not.toContain("postgres://secret");
+    expect(history.stdout).not.toContain("abc123x");
+  });
+
+  test("rollback selects the target by ordinal and the Variable by name", async () => {
+    const { runtime, genesis } = await seededHistory();
+    const rolled = await run(
+      [
+        "rollback",
+        "#1",
+        "--variable",
+        "DATABASE_URL",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--json",
+      ],
+      { ...runtime, confirm: async () => true },
+    );
+    expect(rolled.exitCode).toBe(0);
+    const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.message).toBe("Published");
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    const historyBody = JSON.parse(history.stdout) as {
+      revisions: Array<{
+        mutation: number;
+        rollbackTargetId: string | null;
+      }>;
+    };
+    expect(historyBody.revisions).toHaveLength(3);
+    expect(historyBody.revisions[2]?.mutation).toBe(3);
+    expect(historyBody.revisions[2]?.rollbackTargetId).toBe(
+      genesis.request.revision.id,
+    );
+  });
+
+  test("rollback --no-input accepts a Variable name and a bare ordinal", async () => {
+    const { runtime } = await seededHistory();
+    const rolled = await run(
+      [
+        "rollback",
+        "1",
+        "--variable",
+        "DATABASE_URL",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(rolled.exitCode).toBe(0);
+    const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.message).toBe("Published");
+  });
+
+  test("a bare rollback chooses the target and Variables from the rendered history", async () => {
+    const { runtime, genesis } = await seededHistory();
+    const terminalInput = new PassThrough();
+    terminalInput.end();
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => rendered.push(chunk.toString("utf8")));
+    const rolled = await run(
+      [
+        "rollback",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--json",
+      ],
+      {
+        ...runtime,
+        terminal: { input: terminalInput, output: terminalOutput },
+        prompt: async (question) => {
+          if (question.startsWith("Roll back to which Revision")) return "#1";
+          if (question.startsWith("Variables to roll back"))
+            return "DATABASE_URL";
+          throw new Error(`unexpected prompt: ${question}`);
+        },
+        confirm: async () => true,
+      },
+    );
+    expect(rolled.exitCode).toBe(0);
+    const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.message).toBe("Published");
+    // The rendered history carried the readable selection context: the
+    // operator picked a target from it without touching a JSON dump.
+    const terminalText = rendered.join("");
+    expect(terminalText).toContain("Genesis");
+    expect(terminalText).toContain(genesis.request.revision.id);
+  });
+
+  test("rollback rejects an unknown Variable name and names the live Manifest", async () => {
+    const { runtime } = await seededHistory();
+    const result = await run(
+      [
+        "rollback",
+        "#1",
+        "--variable",
+        "NOT_IN_MANIFEST",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic.category).toBe("invocation");
+    expect(String(diagnostic.detail)).toContain(
+      "unknown Variable NOT_IN_MANIFEST",
+    );
+    expect(String(diagnostic.detail)).toContain("DATABASE_URL");
+  });
+
+  test("rollback rejects an ordinal outside the verified history", async () => {
+    const { runtime } = await seededHistory();
+    const result = await run(
+      [
+        "rollback",
+        "#99",
+        "--variable",
+        "DATABASE_URL",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic.category).toBe("invocation");
+    expect(String(diagnostic.detail)).toContain("not in the verified history");
+  });
+
+  test("rolling back to the current head publishes nothing", async () => {
+    const { runtime } = await seededHistory();
+    const rolled = await run(
+      [
+        "rollback",
+        "#2",
+        "--variable",
+        "DATABASE_URL",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(rolled.exitCode).toBe(0);
+    const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.message).toBe("Already published");
+  });
+
+  test("a bare rollback refuses a Variable answer that names nothing", async () => {
+    const { runtime } = await seededHistory();
+    const terminalInput = new PassThrough();
+    terminalInput.end();
+    const terminalOutput = new PassThrough();
+    const result = await run(
+      [
+        "rollback",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--json",
+      ],
+      {
+        ...runtime,
+        terminal: { input: terminalInput, output: terminalOutput },
+        prompt: async (question) => {
+          if (question.startsWith("Roll back to which Revision")) return "#1";
+          if (question.startsWith("Variables to roll back")) return " , ";
+          throw new Error(`unexpected prompt: ${question}`);
+        },
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic.category).toBe("invocation");
+    expect(String(diagnostic.detail)).toContain(
+      "rollback requires at least one Variable",
+    );
   });
 
   test("completes a dual-control enrollment from a protected handoff", async () => {
@@ -4332,12 +4665,11 @@ describe("peer grant provisioning during ordinary reads", () => {
       },
     );
     expect(history.exitCode).toBe(0);
-    // The original read result stands and the pending action is surfaced
-    // truthfully instead of aborting or hiding it.
-    expect(history.stdout).toContain("revisions: []");
-    expect(history.stdout).toContain(
-      `Device ${peerDeviceId} is missing the Project epoch grant`,
-    );
+    // The original read result stands: the human history still renders the
+    // (empty) verified Revisions, and the pending action is surfaced
+    // truthfully on the terminal instead of aborting or hiding it.
+    expect(history.stdout).toContain(`Environment ${ids.environment}`);
+    expect(history.stdout).toContain("No Revisions have been published yet");
     expect(rendered.join("")).toContain(
       `Device ${peerDeviceId} is missing the Project epoch grant`,
     );

@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import {
   assertPublicationAccepted,
   type CliDeviceStorage,
+  changedVariableIdsFromRevision,
   createCliDeviceStorage,
   createDeviceBootstrap,
   createDeviceCertificate,
@@ -41,6 +42,7 @@ import {
   importSigningPublicKey,
   parseProtocolObject,
   type ServerProfilePin,
+  type SyncRevisionWire,
   sha384,
   sha384ToHex,
   uuidToBytes,
@@ -82,7 +84,7 @@ import {
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
 import { readTerminalLine, type TerminalIo } from "./terminal";
-import { writeNotice } from "./ui";
+import { type ColorRole, paint, writeNotice } from "./ui";
 import {
   type PublicationChange,
   type PublicationDestination,
@@ -90,6 +92,7 @@ import {
   pullConfirmQuestion,
   renderDestinationLines,
   renderEnvDiff,
+  rollbackConfirmQuestion,
   type ValueOwnership,
   valueDiffsForPull,
 } from "./value-diff";
@@ -2939,13 +2942,18 @@ const publish = async (
       options,
       synced.workflow.publicationContext,
     );
-    if (
-      !(await confirm(
-        options,
-        publicationConfirmQuestion(changes, destination, parsed.reveal),
-      ))
-    )
-      throw new CliInvocationError("publication confirmation was declined");
+    // The rollback review names the append-only consequence: the operator
+    // approves adding a Rollback Revision, not rewriting earlier ones.
+    const review =
+      mutation === "ROLLBACK"
+        ? rollbackConfirmQuestion(changes, destination, parsed.reveal)
+        : publicationConfirmQuestion(changes, destination, parsed.reveal);
+    if (!(await confirm(options, review)))
+      throw new CliInvocationError(
+        mutation === "ROLLBACK"
+          ? "rollback confirmation was declined"
+          : "publication confirmation was declined",
+      );
   }
   const progress = (title: string): void => {
     if (options.noInput || parsed.json) return;
@@ -3189,12 +3197,261 @@ const pendingActionsField = (
 ): Readonly<Record<string, unknown>> =>
   actions.length > 0 ? { pendingActions: actions } : {};
 
+// References a human or script can use instead of scraping internal ids:
+// a Variable name (resolved against the live Manifest), a Variable id, a
+// Revision id, or the ordinal the human history assigns to a Revision.
+const UUID_REFERENCE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ORDINAL_REFERENCE = /^(?:#)?(\d+)$/;
+
+const resolveRollbackTarget = (
+  reference: string,
+  page: SyncPageWire,
+): string => {
+  const trimmed = reference.trim();
+  const ordinal = ORDINAL_REFERENCE.exec(trimmed);
+  if (ordinal?.[1]) {
+    const revision = page.revisions[Number.parseInt(ordinal[1], 10) - 1];
+    if (!revision)
+      throw new CliInvocationError(
+        `Revision ${trimmed} is not in the verified history; this Environment holds ${page.revisions.length} Revision${page.revisions.length === 1 ? "" : "s"}`,
+      );
+    return revision.id;
+  }
+  if (UUID_REFERENCE.test(trimmed)) return trimmed;
+  throw new CliInvocationError(
+    `Rollback target ${trimmed} must be a Revision id or the ordinal dotrelay history shows for it`,
+  );
+};
+
+const resolveVariableReferences = (
+  references: readonly string[],
+  variables: readonly DecodedVariable[],
+): readonly string[] => {
+  const live = variables.filter((variable) => !variable.tombstone);
+  const liveNames = [...new Set(live.map((variable) => variable.name))].sort();
+  const ids: string[] = [];
+  for (const reference of references) {
+    const trimmed = reference.trim();
+    if (UUID_REFERENCE.test(trimmed)) {
+      if (
+        !live.some(
+          (variable) => variable.id.toLowerCase() === trimmed.toLowerCase(),
+        )
+      )
+        throw new CliInvocationError(
+          `rollback Variable ${trimmed} is not part of the live Manifest`,
+        );
+      ids.push(trimmed.toLowerCase());
+    } else {
+      const matches = live.filter((variable) => variable.name === trimmed);
+      if (matches.length === 0)
+        throw new CliInvocationError(
+          `unknown Variable ${trimmed}; the live Manifest holds ${liveNames.join(", ") || "no Variables"}`,
+        );
+      for (const variable of matches) ids.push(variable.id);
+    }
+  }
+  return Object.freeze([...new Set(ids)]);
+};
+
+type RevisionHistoryChange = Readonly<{
+  readonly kind: "added" | "removed" | "changed";
+  readonly name: string;
+  readonly ownership: "shared" | "user-defined";
+  readonly valueChanged: boolean;
+}>;
+
+type RevisionHistoryRow = Readonly<{
+  readonly ordinal: number;
+  readonly revision: SyncRevisionWire;
+  readonly current: boolean;
+  readonly changes: readonly RevisionHistoryChange[];
+}>;
+
+// The revision object records which Variables the Revision touched (the
+// client's changedVariableIdsFromRevision verifies those lane identities);
+// the session's decoded snapshots show what each Variable looked like
+// before and after. Together they are the change context this Device may
+// render; Values themselves never enter history output.
+const revisionHistoryRows = (
+  page: SyncPageWire,
+  snapshots: ReadonlyMap<string, readonly DecodedVariable[]>,
+): readonly RevisionHistoryRow[] => {
+  let previous: readonly DecodedVariable[] = [];
+  const rows: RevisionHistoryRow[] = [];
+  page.revisions.forEach((revision, index) => {
+    const current = snapshots.get(revision.id) ?? [];
+    const previousById = new Map(
+      previous.map((variable) => [variable.id, variable]),
+    );
+    const currentById = new Map(
+      current.map((variable) => [variable.id, variable]),
+    );
+    const changes: RevisionHistoryChange[] = [];
+    for (const id of changedVariableIdsFromRevision(revision)) {
+      const before = previousById.get(id);
+      const after = currentById.get(id);
+      if (!after) continue;
+      const ownership = classificationFromOwnership(after.ownership);
+      if (after.tombstone) {
+        if (before && !before.tombstone)
+          changes.push(
+            Object.freeze({
+              kind: "removed" as const,
+              name: after.name,
+              ownership,
+              valueChanged: false,
+            }),
+          );
+        continue;
+      }
+      if (!before || before.tombstone) {
+        changes.push(
+          Object.freeze({
+            kind: "added" as const,
+            name: after.name,
+            ownership,
+            valueChanged: false,
+          }),
+        );
+        continue;
+      }
+      const valueChanged =
+        before.value !== null &&
+        after.value !== null &&
+        before.value !== after.value;
+      const definitionChanged =
+        before.name !== after.name ||
+        before.description !== after.description ||
+        before.ownership !== after.ownership ||
+        before.required !== after.required;
+      if (valueChanged || definitionChanged)
+        changes.push(
+          Object.freeze({
+            kind: "changed" as const,
+            name: after.name,
+            ownership,
+            valueChanged,
+          }),
+        );
+    }
+    rows.push(
+      Object.freeze({
+        ordinal: index + 1,
+        revision,
+        current: page.currentHeadId === revision.id,
+        changes: Object.freeze(changes),
+      }),
+    );
+    previous = current;
+  });
+  return Object.freeze(rows);
+};
+
+const mutationLabel = (mutation: number): string =>
+  mutation === 1
+    ? "Genesis"
+    : mutation === 2
+      ? "Update"
+      : mutation === 3
+        ? "Rollback"
+        : mutation === 4
+          ? "Epoch transition"
+          : mutation === 5
+            ? "User-key rotation"
+            : `Mutation ${mutation}`;
+
+const revisionDate = (authoredAtMs: bigint): string => {
+  const date = new Date(Number(authoredAtMs));
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(
+    date.getUTCDate(),
+  )} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`;
+};
+
+// Human history: enough readable context to tell the Revisions apart and to
+// pick a Rollback target without decrypting anything, while `--json` keeps
+// the documented revision metadata for automation.
+const renderRevisionHistory = (
+  environmentId: string,
+  rows: readonly RevisionHistoryRow[],
+): string => {
+  if (rows.length === 0)
+    return [
+      `${paint("Environment", "graphite")} ${sanitizeCliText(environmentId)}`,
+      paint("No Revisions have been published yet.", "dim"),
+      "",
+    ].join("\n");
+  const ordinalById = new Map(
+    rows.map((row) => [row.revision.id, row.ordinal]),
+  );
+  const lines: string[] = [
+    `${paint("Environment", "graphite")} ${paint(
+      sanitizeCliText(environmentId),
+      "dim",
+    )}  ${paint(`— ${rows.length} Revision${rows.length === 1 ? "" : "s"}`, "dim")}`,
+  ];
+  for (const row of rows) {
+    let label = mutationLabel(row.revision.mutation);
+    if (row.revision.rollbackTargetId) {
+      const targetOrdinal = ordinalById.get(row.revision.rollbackTargetId);
+      label += targetOrdinal
+        ? ` of #${targetOrdinal}`
+        : ` of ${row.revision.rollbackTargetId}`;
+    }
+    lines.push(
+      `  ${paint(`#${row.ordinal}`, "graphite")}  ${paint(
+        revisionDate(row.revision.authoredAtMs),
+        "paper",
+      )}  ${paint(label, labelTone(row.revision.mutation))}${
+        row.current ? paint("  (current)", "ok") : ""
+      }`,
+    );
+    lines.push(`     ${paint(row.revision.id, "dim")}`);
+    for (const change of row.changes) {
+      const ownership = paint(change.ownership, "dim");
+      if (change.kind === "added")
+        lines.push(
+          `     ${paint("+", "ok")}  ${paint(change.name, "paper")}  ${ownership}`,
+        );
+      else if (change.kind === "removed")
+        lines.push(
+          `     ${paint("-", "wax")}  ${paint(change.name, "paper")}  ${ownership}`,
+        );
+      else
+        lines.push(
+          `     ${paint("~", "wax")}  ${paint(change.name, "paper")}${
+            change.valueChanged ? `  ${paint("Value changed", "dim")}` : ""
+          }`,
+        );
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+};
+
+const labelTone = (mutation: number): ColorRole =>
+  mutation === 3 ? "wax" : "paper";
+
+const renderSyncedHistory = (
+  synced: Awaited<ReturnType<typeof syncWorkflow>>,
+): string =>
+  renderRevisionHistory(
+    synced.page.environmentId,
+    revisionHistoryRows(
+      synced.page,
+      synced.workflow.session.revisionSnapshots(),
+    ),
+  );
+
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
 ): Promise<Record<string, unknown> | { stdout: string }> => {
   if (parsed.command === "history") {
     const synced = await syncWorkflow(options, parsed);
+    if (!parsed.json) return { stdout: renderSyncedHistory(synced) };
     return {
       revisions: synced.page.revisions.map((revision) => ({
         id: revision.id,
@@ -3436,30 +3693,64 @@ export const runProtectedWorkflow = async (
     return result;
   }
   if (parsed.command === "rollback") {
-    const target = parsed.positionals[0];
-    if (!target)
-      throw new CliInvocationError("rollback requires a target Revision");
-    try {
-      uuidToBytes(target);
-    } catch {
-      throw new CliInvocationError("rollback requires a valid Revision id");
-    }
     const synced = await syncWorkflow(options, parsed);
-    const selected = new Set(parsed.variableIds);
-    const current = synced.variables.filter((variable) => !variable.tombstone);
-    if (
-      parsed.variableIds.some(
-        (id) => !current.some((variable) => variable.id === id),
-      )
-    )
-      throw new CliInvocationError(
-        "rollback Variable is not part of the live Manifest",
+    const terminalOutput = options.terminal?.output ?? process.stderr;
+    // The target Revision comes from the command line or, interactively,
+    // from the rendered history, so an operator never has to lift internal
+    // ids out of a JSON dump; automation still passes them explicitly.
+    let targetReference = (parsed.positionals[0] ?? "").trim();
+    if (!targetReference && !options.noInput) {
+      terminalOutput.write(renderSyncedHistory(synced));
+      targetReference = (
+        await ask(
+          options,
+          "Roll back to which Revision (ordinal, #ordinal, or Revision id)?",
+        )
+      ).trim();
+    }
+    if (!targetReference)
+      throw new CliInvocationError("rollback requires a target Revision");
+    const target = resolveRollbackTarget(targetReference, synced.page);
+    const live = synced.variables.filter((variable) => !variable.tombstone);
+    let references = parsed.variableReferences;
+    if (references.length === 0 && !options.noInput) {
+      terminalOutput.write(
+        [
+          paint("Variables in the live Manifest:", "paper"),
+          ...live.map(
+            (variable) =>
+              `  ${variable.name}  ${classificationFromOwnership(
+                variable.ownership,
+              )}`,
+          ),
+          "",
+        ].join("\n"),
       );
+      const answer = (
+        await ask(
+          options,
+          'Variables to roll back (comma-separated names, or "all")?',
+        )
+      ).trim();
+      references =
+        answer === "all"
+          ? live.map((variable) => variable.name)
+          : answer
+              .split(",")
+              .map((name) => name.trim())
+              .filter((name) => name.length > 0);
+      // An answer of only separators names no Variable; refuse it instead
+      // of silently publishing nothing.
+      if (references.length === 0)
+        throw new CliInvocationError("rollback requires at least one Variable");
+    }
+    const selectedIds = resolveVariableReferences(references, synced.variables);
+    const selected = new Set(selectedIds);
     let targetValues: ReadonlyMap<string, string | null>;
     try {
       targetValues = await synced.workflow.session.resolveRollbackValues({
         targetRevision: target,
-        selectedVariableIds: parsed.variableIds,
+        selectedVariableIds: selectedIds,
       });
     } catch {
       throw new CliError(
@@ -3469,7 +3760,7 @@ export const runProtectedWorkflow = async (
         "rollback_target_unavailable",
       );
     }
-    const variables = current.map((variable) =>
+    const variables = synced.variables.map((variable) =>
       selected.has(variable.id)
         ? Object.freeze({
             ...variable,
@@ -3479,7 +3770,7 @@ export const runProtectedWorkflow = async (
     );
     return publish(options, parsed, variables, "ROLLBACK", {
       target,
-      ids: parsed.variableIds,
+      ids: selectedIds,
     });
   }
   throw new CliInvocationError(

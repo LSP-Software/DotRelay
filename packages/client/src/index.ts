@@ -110,6 +110,7 @@ export {
 } from "./sync/manifest";
 export {
   assertPublicationAccepted,
+  changedVariableIdsFromRevision,
   changedVariableIdsFromSyncPage,
   createPublicationArtifacts,
   type DecodedVariable,

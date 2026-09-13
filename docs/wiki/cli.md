@@ -140,10 +140,24 @@ confirmation; ordinary diagnostics never contain Values.
 Variables as names, ownership, and change types, with no Values. `--reveal` prints the unified
 Value diff for that one run instead. Unchanged Variables are omitted. `--from <dotenv>` selects
 another file. JSON reports only names and counts, with or without `--reveal`. A missing Value
-fails the comparison before any output is written. `history` reports only revision metadata.
-`rollback <revision> --variable <id>` creates a new signed Rollback Revision for the selected
-lanes, preserving all other current Values. Rollback confirmation uses the same masked review,
-and `--reveal` shows the unified Value diff.
+fails the comparison before any output is written.
+
+`history` renders the verified Revisions in a readable form: each Revision gets a `#ordinal`,
+a readable UTC date, its mutation (Genesis, Update, or Rollback, naming the target Revision
+when one is set), a marker on the current head, and the Variables the Revision added,
+removed, or changed (name, ownership, and whether the Value changed). It never shows
+Values. `history --json` keeps the documented revision metadata — id, mutation, Project
+epoch, authored-at milliseconds, and rollback target — for automation.
+
+`rollback` names the target Revision by its id or by the `#ordinal` that `history` shows,
+and `--variable` names the Variables to roll back by operator-visible name or stable id;
+names resolve against the live Manifest, so an operator never has to lift internal ids out
+of encrypted protocol objects. Run `rollback` bare to render the history and choose the
+target Revision and the Variables (comma-separated names, or `all`) from it. Under
+`--no-input` the target Revision and at least one `--variable` are required. A rollback
+never rewrites or removes earlier history: it appends a new signed Rollback Revision for
+the selected lanes, preserving all other current Values. The final review is masked and
+names that append-only consequence; `--reveal` shows the unified Value diff in it instead.
 
 ## Output and automation
 

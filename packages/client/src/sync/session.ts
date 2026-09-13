@@ -28,6 +28,16 @@ export type VerifiedEnvironmentSession = Readonly<{
     readonly targetRevision: string;
     readonly selectedVariableIds: readonly string[];
   }) => Promise<ReadonlyMap<string, string | null>>;
+  /**
+   * The decoded Manifest snapshot at each verified Revision of the last
+   * sync, keyed by Revision id. Snapshots accumulate from the previous
+   * one, so a snapshot is the complete Variable set the Environment held at
+   * that Revision; Values this Device cannot read stay null.
+   */
+  readonly revisionSnapshots: () => ReadonlyMap<
+    string,
+    readonly DecodedVariable[]
+  >;
 }>;
 
 export const createVerifiedEnvironmentSession = (input: {
@@ -102,5 +112,6 @@ export const createVerifiedEnvironmentSession = (input: {
         );
       return values;
     },
+    revisionSnapshots: () => snapshots,
   });
 };
