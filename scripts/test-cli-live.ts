@@ -1195,8 +1195,13 @@ try {
   );
   state.encryptionPublicKey = enrolledEncryptionPublicKey;
   state.signingPublicKey = enrolledSigningPublicKey;
+  // The stale bundle is an integrity failure: it keeps the documented crypto
+  // category and exit code 5, so automation can tell it apart from a
+  // retryable transient service failure (exit code 7).
   if (
-    mismatchedBackup.exitCode !== 7 ||
+    mismatchedBackup.exitCode !== 5 ||
+    !mismatchedBackup.stderr.includes('"category":"crypto"') ||
+    !mismatchedBackup.stderr.includes('"code":"device_bundle_invalid"') ||
     !mismatchedBackup.stderr.includes(
       "does not match the keys registered on this Server Profile",
     )
@@ -1253,7 +1258,8 @@ try {
     environment,
   );
   if (
-    invalidRecovery.exitCode !== 7 ||
+    invalidRecovery.exitCode !== 5 ||
+    !invalidRecovery.stderr.includes('"category":"crypto"') ||
     !invalidRecovery.stderr.includes('"code":"recovery_kit_invalid"') ||
     invalidRecovery.stderr.includes("secret")
   )
