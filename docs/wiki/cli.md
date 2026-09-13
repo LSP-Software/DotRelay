@@ -10,6 +10,20 @@ arguments, options, defaults, noninteractive requirements, and safe examples for
 help is generated from the same command registry the parser uses, so it cannot drift from the accepted
 syntax, and validation errors carry the relevant usage line.
 
+## Version and launch diagnostics
+
+`dotrelay --version` reports the release version the release build stamped into the compiled
+binary, so it agrees with the tagged/npm release the operator installed; source builds report
+the `0.0.0-foundation` identifier, and the npm selector reports the same version as the binary
+it launches. When the selector cannot launch the native binary — it is missing for this
+machine's `<platform>-<arch>`, present but not executable, or unlaunchable (for example built
+for another architecture) — it exits with code 1 and reports the release it is running, the
+`<platform>-<arch>` the machine needs, the platforms the package ships, and the supported
+repair: reinstall this release or the latest from npm (`npm install -g dotrelay@<version>`,
+`npm install -g dotrelay@latest`) or run the matching native binary from a DotRelay GitHub
+release. A `DOTRELAY_BINARY` override that points at a missing or unlaunchable binary is named
+in the same report.
+
 ## First machine and sign-in
 
 The first invocation has no ambient Server Profile. `dotrelay setup <origin>` fetches and verifies

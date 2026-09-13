@@ -43,6 +43,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
+      - run: bun run package:cli:version -- "${GITHUB_REF_NAME}"
       - run: bun run --cwd apps/cli build
       - run: bun run package:cli
       - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808

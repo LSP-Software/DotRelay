@@ -93,6 +93,7 @@ import {
   selectOption,
   writeNotice,
 } from "./ui";
+import { version } from "./version";
 import {
   approveDeviceEnrollment,
   beginDeviceEnrollment,
@@ -105,11 +106,10 @@ import {
   workspaceBoundaryFields,
 } from "./workflow";
 
-export type { TerminalIo };
-
-export const version = "0.0.0-foundation";
-
 export { renderHelp, renderPowerHelp } from "./help";
+
+export { version } from "./version";
+export type { TerminalIo };
 
 export const main = (args: string[]): string => {
   rejectForbiddenFlags(args);

@@ -1,5 +1,7 @@
 import { access, constants, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveCliReleaseVersion } from "./build-cli";
+import { runCliPackageProbes } from "./cli-package-probes";
 
 const root = join(import.meta.dir, "..");
 const packageDirectory = join(root, "packages", "dotrelay");
@@ -41,6 +43,14 @@ const [stdout, stderr, exitCode] = await Promise.all([
   new Response(child.stderr).text(),
   child.exited,
 ]);
-if (exitCode !== 0 || stdout.trim().length === 0)
-  throw new Error(`npm selector package smoke test failed: ${stderr}`);
+// The selector must surface the release version the staged binary was
+// stamped with, so a release artifact that lost its stamp (or was built
+// from the wrong source) fails the publish gate instead of shipping.
+const expectedVersion = await resolveCliReleaseVersion();
+if (exitCode !== 0 || stdout.trim() !== expectedVersion)
+  throw new Error(
+    `npm selector package smoke test failed: expected ${expectedVersion}, got ${stdout.trim() || stderr}`,
+  );
+
+await runCliPackageProbes();
 console.log("✓ npm selector package artifacts and selector run passed");

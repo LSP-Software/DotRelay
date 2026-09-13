@@ -1,6 +1,8 @@
 import { access, constants, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildCli, resolveCliReleaseVersion } from "./build-cli";
+import { runCliPackageProbes } from "./cli-package-probes";
 import { stageCliPackage } from "./stage-cli-package";
 
 const root = join(import.meta.dir, "..");
@@ -20,8 +22,9 @@ type Completed = Readonly<{
 const run = async (
   args: readonly string[],
   environment: NodeJS.ProcessEnv = process.env,
+  executable = binary,
 ): Promise<Completed> => {
-  const child = Bun.spawn([binary, ...args], {
+  const child = Bun.spawn([executable, ...args], {
     env: environment,
     stdout: "pipe",
     stderr: "pipe",
@@ -45,8 +48,14 @@ const help = await run(["--help"]);
 if (help.exitCode !== 0 || !help.stdout.includes("Usage: dotrelay <command>"))
   throw new Error("packaged CLI help contract failed");
 const version = expectSuccess(await run(["--version"]), "packaged CLI version");
-if (version !== "0.0.0-foundation")
-  throw new Error(`unexpected CLI version: ${version}`);
+// The binary must report the release version the build stamped: the
+// DOTRELAY_CLI_VERSION override, the selector release when one is set, or
+// the foundation identifier for source builds.
+const expectedVersion = await resolveCliReleaseVersion();
+if (version !== expectedVersion)
+  throw new Error(
+    `unexpected CLI version: ${version}; expected ${expectedVersion}`,
+  );
 
 const isolatedDirectory = await mkdtemp(
   join(tmpdir(), "dotrelay-cli-contract-"),
@@ -105,4 +114,29 @@ const expectedBinary =
   process.platform === "win32" ? "dotrelay.exe" : "dotrelay";
 const currentPlatformDirectory = `${process.platform}-${process.arch}`;
 await access(join(distDirectory, currentPlatformDirectory, expectedBinary));
+await runCliPackageProbes();
 console.log("✓ npm selector and current-platform artifact checks passed");
+
+// A release-shaped build must report the stamped release version, not the
+// source-build identifier: this pins the compile-time version wiring end to
+// end on every platform, where a source build's self-comparison would be
+// tautological.
+const releaseProbeVersion = "9.9.9";
+const stampedBinary = join(
+  root,
+  "apps",
+  "cli",
+  "dist",
+  process.platform === "win32" ? "dotrelay-release.exe" : "dotrelay-release",
+);
+try {
+  await buildCli(releaseProbeVersion, "dist/dotrelay-release");
+  const stamped = await run(["--version"], process.env, stampedBinary);
+  if (stamped.exitCode !== 0 || stamped.stdout.trim() !== releaseProbeVersion)
+    throw new Error(
+      `release-stamped build contract failed: expected ${releaseProbeVersion}, got ${stamped.stdout.trim()} ${stamped.stderr}`,
+    );
+  console.log(`✓ release-stamped build reports ${stamped.stdout.trim()}`);
+} finally {
+  await rm(stampedBinary, { force: true });
+}

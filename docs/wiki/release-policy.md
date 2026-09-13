@@ -9,10 +9,12 @@ checks that the tagged commit is an ancestor of `main`, reruns `bun run verify`,
 CLI binaries on Linux, macOS, and Windows. It publishes all three binaries as GitHub Release assets
 and publishes the intentional `dotrelay` npm selector containing the matching platform binaries.
 Merging to `main` never deploys production.
-
 The workflow does not enforce immutable tag references or strict SemVer beyond the tag glob.
-Platform-specific npm binaries are staged with `bun run package:cli`; the release workflow verifies
-the selector and publishes the package only after the cross-platform build matrix completes.
+Before the build matrix runs, the workflow records the tag's release version in the npm
+selector and stamps each compiled binary with it, so `dotrelay --version` agrees with the
+tagged/npm release the operator installed. Platform-specific npm binaries are staged with
+`bun run package:cli`; the release workflow verifies the selector and publishes the package
+only after the cross-platform build matrix completes.
 
 Before a production tag is approved, the release owner must attach the security review approval for
 the observability privacy boundary to the release record. The approval must verify that Application
