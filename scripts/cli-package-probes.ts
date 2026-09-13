@@ -86,14 +86,14 @@ const MACH_CPU_TYPES: Record<string, number> = {
   arm64: 0x0100000c,
   arm: 12,
 };
+// Mirrors the selector's table (ambiguous ppc64/s390x entries omitted for
+// the same reason), keeping the probe an independent oracle of the check.
 const ELF_MACHINES: Record<string, number> = {
   x64: 62,
   ia32: 3,
   arm64: 183,
   arm: 40,
   riscv64: 243,
-  ppc64: 21,
-  s390: 22,
   mips: 8,
   mipsel: 8,
 };
@@ -167,7 +167,8 @@ const runSelectorFormatProbes = async (directory: string): Promise<void> => {
     false,
   );
 
-  const elfLittleEndian = process.arch !== "ppc64" && process.arch !== "s390x";
+  // Of the verified ELF architectures only mips is big-endian.
+  const elfLittleEndian = process.arch !== "mips";
   const nativeElfMachine = ELF_MACHINES[process.arch];
   if (nativeElfMachine !== undefined) {
     await expectLaunchable(

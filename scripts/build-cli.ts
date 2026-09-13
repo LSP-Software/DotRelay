@@ -37,9 +37,14 @@ export const resolveCliReleaseVersion = async (): Promise<string> => {
 };
 
 // The release version is compiled into the binary, so `dotrelay --version`
-// agrees with the tagged/npm release the binary was cut from.
-export const buildCli = async (): Promise<string> => {
-  const version = await resolveCliReleaseVersion();
+// agrees with the tagged/npm release the binary was cut from. An explicit
+// version overrides the environment/manifest resolution so release-shaped
+// builds can be tested without release tooling.
+export const buildCli = async (
+  version?: string,
+  outfile = "dist/dotrelay",
+): Promise<string> => {
+  const stampedVersion = version ?? (await resolveCliReleaseVersion());
   const child = Bun.spawn(
     [
       process.execPath,
@@ -47,16 +52,16 @@ export const buildCli = async (): Promise<string> => {
       "--compile",
       "src/index.ts",
       "--outfile",
-      "dist/dotrelay",
+      outfile,
       "--define",
-      `__DOTRELAY_RELEASE_VERSION__=${JSON.stringify(version)}`,
+      `__DOTRELAY_RELEASE_VERSION__=${JSON.stringify(stampedVersion)}`,
     ],
     { cwd: cliDirectory, stdout: "inherit", stderr: "inherit" },
   );
   const exitCode = await child.exited;
   if (exitCode !== 0)
     throw new Error(`CLI build failed with exit code ${exitCode}`);
-  return version;
+  return stampedVersion;
 };
 
 if (import.meta.main) {

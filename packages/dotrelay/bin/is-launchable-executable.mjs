@@ -1,15 +1,16 @@
 import { open } from "node:fs/promises";
 
 // Machine identifiers for the native executable formats the selector can
-// verify, keyed by the Node architecture they launch on.
+// verify, keyed by the Node architecture they launch on. Architectures whose
+// machine number is ambiguous per Node arch (ppc64 covers both
+// EM_PPC64=21 and EM_PPC64LE=23; Node reports s390x, not s390) are omitted
+// so they fall through to the kernel's own launch attempt.
 const elfMachineForArch = {
   x64: 62,
   ia32: 3,
   arm64: 183,
   arm: 40,
   riscv64: 243,
-  ppc64: 21,
-  s390: 22,
   mips: 8,
   mipsel: 8,
 };
