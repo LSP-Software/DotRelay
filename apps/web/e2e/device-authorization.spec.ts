@@ -247,20 +247,21 @@ test("a lapsed session during approval returns to the sign-in control", async ({
       approve: "signed-out",
     },
   };
-  // The session lapses after the initial check, so only the get-session
-  // route advances the counter.
-  let sessionChecks = 0;
+  // The session lapses while the approval request is in flight, so model it
+  // as lapsed from the click on. Keying the lapse to the click (rather than
+  // to a get-session call count) keeps the initial check signed-in even
+  // though the dev server runs the mount check more than once under
+  // React StrictMode.
+  let lapsed = false;
   await mockDeviceFlow(
     page,
     () => state.current,
-    () => {
-      sessionChecks += 1;
-      return sessionChecks <= 1 ? "signed-in" : "signed-out";
-    },
+    () => (lapsed ? "signed-out" : "signed-in"),
   );
   await openDevicePage(page);
 
   await expect(page.getByTestId("device-approval-allow")).toBeVisible();
+  lapsed = true;
   await page.getByTestId("device-approval-allow").click();
   await expect(
     page.getByRole("button", { name: "Continue with GitHub" }),
