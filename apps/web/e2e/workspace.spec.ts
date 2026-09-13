@@ -226,6 +226,14 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
   await expect(page.getByText("rev_0184", { exact: true })).toBeVisible();
   await expect(page.getByText("rev_0183", { exact: true })).toBeVisible();
+  // The development preview has no verified wire record, so its history is
+  // honest about the unavailable time and author metadata.
+  await expect(
+    page.getByText("Time unavailable", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Author unavailable", { exact: true }).first(),
+  ).toBeVisible();
   await expect(
     page.getByText("The server never sees these values."),
   ).toHaveCount(0);
@@ -285,6 +293,12 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   await page.getByRole("button", { name: "Rollback" }).first().click();
   const rollbackDialog = page.getByRole("dialog", { name: "Rollback" });
   await expect(rollbackDialog).toContainText("This writes a new revision");
+  // The dialog identifies the selected target and the rollback consequence.
+  await expect(
+    rollbackDialog.getByText("rev_0183", { exact: true }),
+  ).toBeVisible();
+  await expect(rollbackDialog).toContainText("new Rollback revision");
+  await expect(rollbackDialog).toContainText("1 of 1 Variables selected");
   await expect(rollbackDialog).toContainText("API_ORIGIN");
   await expect(rollbackDialog).not.toContainText("SIGNING_KEY");
   await expect(rollbackDialog).not.toContainText("https://api.acme.example");
@@ -294,6 +308,14 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   });
   await expect(showRollbackValues).toBeVisible();
   await expect(showRollbackValues).toHaveAttribute("aria-pressed", "false");
+
+  const rollbackLane = rollbackDialog.getByRole("checkbox").first();
+  await rollbackLane.uncheck();
+  await expect(rollbackDialog).toContainText("0 of 1 Variables selected");
+  await expect(
+    rollbackDialog.getByRole("button", { name: "Stage rollback" }),
+  ).toBeDisabled();
+  await rollbackLane.check();
 
   await showRollbackValues.click();
   await expect(rollbackDialog).toContainText("https://api.acme.example");
