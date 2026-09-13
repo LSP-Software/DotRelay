@@ -9,20 +9,20 @@ const selectorManifestPath = join(root, "packages", "dotrelay", "package.json");
 const releaseVersionPattern =
   /^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
 
-export const resolveCliReleaseVersion = async (
-  environment: NodeJS.ProcessEnv = process.env,
-  manifestPath: string = selectorManifestPath,
-): Promise<string> => {
-  const override = environment.DOTRELAY_CLI_VERSION;
+export const resolveCliReleaseVersion = async (): Promise<string> => {
+  const override = process.env.DOTRELAY_CLI_VERSION;
   if (override !== undefined) {
     const normalized = override.replace(/^v/, "");
-    if (!releaseVersionPattern.test(normalized))
+    if (
+      !releaseVersionPattern.test(normalized) ||
+      normalized.split(/[.-]/u).every((part) => part === "0")
+    )
       throw new Error(
         `DOTRELAY_CLI_VERSION must be a release version such as 1.2.3; got ${override}`,
       );
     return normalized;
   }
-  const manifest = (await Bun.file(manifestPath).json()) as {
+  const manifest = (await Bun.file(selectorManifestPath).json()) as {
     readonly version?: unknown;
   };
   if (

@@ -2,6 +2,7 @@ import { access, constants, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveCliReleaseVersion } from "./build-cli";
+import { runCliPackageProbes } from "./cli-package-probes";
 import { stageCliPackage } from "./stage-cli-package";
 
 const root = join(import.meta.dir, "..");
@@ -112,4 +113,5 @@ const expectedBinary =
   process.platform === "win32" ? "dotrelay.exe" : "dotrelay";
 const currentPlatformDirectory = `${process.platform}-${process.arch}`;
 await access(join(distDirectory, currentPlatformDirectory, expectedBinary));
+await runCliPackageProbes();
 console.log("✓ npm selector and current-platform artifact checks passed");
