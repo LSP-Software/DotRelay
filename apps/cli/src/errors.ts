@@ -1,3 +1,6 @@
+import { ProtocolTransportError } from "@dotrelay/client";
+import { ContractError } from "@dotrelay/contracts";
+
 export const EXIT_CODES = Object.freeze({
   success: 0,
   invocation: 2,
@@ -40,9 +43,17 @@ const safeDiagnosticKeys = new Set([
 ]);
 const safeDiagnosticNumericKeys = new Set(safeDiagnosticKeys);
 
+// Every intentional problem code the CLI or the protocol can surface. A code
+// outside this set is masked to unexpected_failure so an unforeseen value can
+// never leak through as a stable category, while the category and exit code
+// the command assigned remain actionable.
 const safeDiagnosticCodes = new Set([
   "archived_resource",
+  "artifact_invalid",
+  "artifact_read_failed",
+  "artifact_too_large",
   "auth_response_invalid",
+  "authentication",
   "authentication_required",
   "browser_open_failed",
   "capabilities_invalid",
@@ -52,24 +63,38 @@ const safeDiagnosticCodes = new Set([
   "context_read_failed",
   "context_write_failed",
   "credential_store_delete_failed",
+  "credential_store_invalid",
   "credential_store_unavailable",
   "credential_store_unsupported",
   "credential_store_write_failed",
+  "crypto",
+  "crypto_provider_unavailable",
   "deletion_requires_approval",
   "device_authorization_denied",
   "device_authorization_expired",
   "device_authorization_failed",
   "device_authorization_timeout",
   "device_authorization_unavailable",
+  "device_bundle_invalid",
   "device_bundle_missing",
+  "device_enrollment_failed",
+  "device_enrollment_unavailable",
+  "device_mismatch",
   "device_not_active",
+  "enrollment_binding_mismatch",
+  "enrollment_certificate_invalid",
   "environment_ambiguous",
+  "environment_context_missing",
   "environment_not_found",
+  "forbidden",
   "genesis_exists",
   "git_exclusion_failed",
   "git_tracking_unavailable",
+  "grant_bootstrap_failed",
+  "grant_bootstrap_unavailable",
   "incomplete-export",
   "input_read_failed",
+  "invalid_crypto_object",
   "invalid_id",
   "invalid_request",
   "invitation_expired",
@@ -81,21 +106,29 @@ const safeDiagnosticCodes = new Set([
   "output_conflict",
   "output_tracked",
   "output_write_failed",
+  "payload_too_large",
+  "peer_share_failed",
   "profile_catalog_invalid",
-  "publication_invalid",
   "profile_catalog_read_failed",
   "profile_catalog_write_failed",
+  "profile_mismatch",
   "profile_selection_invalid",
   "project_ambiguous",
+  "publication_invalid",
+  "rate_limited",
+  "rate_limit_unavailable",
+  "recovery_generation_invalid",
+  "recovery_kit_invalid",
+  "recovery_requires_no_active_device",
   "repository_ambiguous",
   "repository_detection_failed",
   "repository_missing",
   "repository_resolution_failed",
   "request_failed",
-  "recovery_kit_invalid",
   "resource_not_found",
   "response_invalid",
   "response_too_large",
+  "rollback_target_unavailable",
   "rotation_required",
   "service_unavailable",
   "session_invalid",
@@ -106,9 +139,16 @@ const safeDiagnosticCodes = new Set([
   "stale_head",
   "state_conflict",
   "transient",
+  "trusted_head_conflict",
+  "trusted_head_invalid",
+  "trusted_head_read_failed",
+  "trust_failed",
   "unsafe_stdout",
   "unsupported_api_version",
+  "unsupported_crypto_runtime",
+  "unsupported_crypto_suite",
   "unsupported_media_type",
+  "user_mismatch",
   "unexpected_failure",
 ]);
 
@@ -124,6 +164,100 @@ export const sanitizeCliText = (detail: string): string =>
       );
     })
     .join("");
+
+export const categoryForProblem = (
+  code: string,
+): "invocation" | "conflict" | "crypto" | "authentication" | "transient" => {
+  if (
+    code === "authentication_required" ||
+    code === "device_not_active" ||
+    code === "forbidden"
+  )
+    return "authentication";
+  if (
+    [
+      "membership_not_key_provisioned",
+      "operation_conflict",
+      "stale_head",
+      "stale_epoch",
+      "stale_generation",
+      "rotation_required",
+      "archived_resource",
+      "state_conflict",
+      "staged_object_missing",
+      "invitation_expired",
+      "staging_expired",
+      "genesis_exists",
+    ].includes(code)
+  )
+    return "conflict";
+  if (
+    [
+      "invalid_crypto_object",
+      "unsupported_media_type",
+      "unsupported_api_version",
+      "unsupported_crypto_suite",
+      "unsupported_crypto_runtime",
+      "crypto_provider_unavailable",
+    ].includes(code)
+  )
+    return "crypto";
+  if (
+    ["invalid_request", "resource_not_found", "payload_too_large"].includes(
+      code,
+    )
+  )
+    return "invocation";
+  return "transient";
+};
+
+export const detailForProblem = (code: string): string => {
+  if (code === "authentication_required")
+    return "login is required for this Server Profile; run dotrelay login";
+  if (code === "device_not_active")
+    return "this Device is not active; run dotrelay device enroll to re-authorize it";
+  if (code === "forbidden") return "the Server Profile denied the request";
+  if (code === "resource_not_found")
+    return "the requested resource was not found";
+  if (code === "invalid_request")
+    return "the Server Profile rejected the request";
+  if (code === "payload_too_large") return "the request was too large";
+  if (code === "genesis_exists")
+    return "this Environment already has a genesis Revision";
+  if (code === "rate_limited")
+    return "the Server Profile rate-limited the request; wait and retry";
+  if (code === "rate_limit_unavailable")
+    return "the Server Profile's rate limiter is unavailable; retry later";
+  if (categoryForProblem(code) === "conflict")
+    return "the requested change conflicts with current Server Profile state";
+  if (categoryForProblem(code) === "crypto")
+    return "the Server Profile rejected the cryptographic request";
+  return "the Server Profile could not complete the request";
+};
+
+// A failure that is unmistakably cryptographic even though the caller did not
+// wrap it: Node crypto/OpenSSL errors carry an ERR_CRYPTO_* or ERR_OSSL_*
+// code, and WebCrypto failures surface as the matching DOMException names.
+const cryptoRuntimeErrorNames = new Set([
+  "OperationError",
+  "DataError",
+  "NotSupportedError",
+]);
+
+const isCryptoRuntimeError = (error: unknown): boolean => {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { readonly code?: unknown }).code;
+  if (typeof code === "string" && /^ERR_(CRYPTO|OSSL)_[A-Z0-9_]+$/.test(code))
+    return true;
+  const name = (error as { readonly name?: unknown }).name;
+  return typeof name === "string" && cryptoRuntimeErrorNames.has(name);
+};
+
+const problemCodeFor = (error: unknown): string | null => {
+  if (error instanceof ContractError) return error.code;
+  if (error instanceof ProtocolTransportError) return error.problem.code;
+  return null;
+};
 
 export class CliError extends Error {
   readonly category: CliErrorCategory;
@@ -164,14 +298,11 @@ export type CliDiagnostic = Readonly<{
   readonly [key: string]: string | number | boolean;
 }>;
 
-const safeDiagnosticCategory = (
-  category: CliErrorCategory,
-): CliErrorCategory => (category === "crypto" ? "transient" : category);
-
-const safeDiagnosticExitCode = (
-  category: CliErrorCategory,
-  exitCode: number,
-): number => (category === "crypto" ? EXIT_CODES.transient : exitCode);
+const debugDetailFor = (error: unknown, debug: boolean): string =>
+  debug && error instanceof Error
+    ? sanitizeCliText(error.message).slice(0, 512) ||
+      "The command could not complete."
+    : "The command could not complete.";
 
 export const diagnosticForError = (
   error: unknown,
@@ -195,27 +326,48 @@ export const diagnosticForError = (
     const detail =
       sanitizeCliText(error.message).slice(0, 512) ||
       "The command could not complete.";
+    // The category and exit code the command assigned are kept: they tell
+    // automation whether to stop, retry, or request approval. Only the code
+    // is masked when it is not one the CLI intentionally raises, so a
+    // surprise value can never mint a new stable category.
     return {
       ok: false,
-      category: safeDiagnosticCategory(error.category),
+      category: error.category,
       code: safeDiagnosticCodes.has(error.code)
         ? error.code
         : "unexpected_failure",
       detail,
       ...safeDetails,
-      exitCode: safeDiagnosticExitCode(error.category, error.exitCode),
+      exitCode: error.exitCode,
     };
   }
-  const unexpectedDetail =
-    options.debug && error instanceof Error
-      ? sanitizeCliText(error.message).slice(0, 512) ||
-        "The command could not complete."
-      : "The command could not complete.";
+  const problemCode = problemCodeFor(error);
+  if (problemCode !== null) {
+    const category = categoryForProblem(problemCode);
+    return {
+      ok: false,
+      category,
+      code: safeDiagnosticCodes.has(problemCode)
+        ? problemCode
+        : "unexpected_failure",
+      detail: detailForProblem(problemCode),
+      exitCode: categoryExitCode[category],
+    };
+  }
+  if (isCryptoRuntimeError(error)) {
+    return {
+      ok: false,
+      category: "crypto",
+      code: "crypto",
+      detail: debugDetailFor(error, options.debug === true),
+      exitCode: EXIT_CODES.crypto,
+    };
+  }
   return {
     ok: false,
     category: "local-io",
     code: "unexpected_failure",
-    detail: unexpectedDetail,
+    detail: debugDetailFor(error, options.debug === true),
     exitCode: EXIT_CODES.localIo,
   };
 };
@@ -224,6 +376,13 @@ export const humanDetailForError = (
   error: unknown,
   options: Readonly<{ readonly debug?: boolean }> = {},
 ): string => {
+  const problemCode = problemCodeFor(error);
+  if (problemCode !== null) return detailForProblem(problemCode);
+  // A raw crypto runtime failure stays as opaque on human stderr as in the
+  // JSON document, so both modes name the same severity and next action;
+  // --debug opts both into the sanitized operational message.
+  if (isCryptoRuntimeError(error))
+    return diagnosticForError(error, options).detail;
   if (error instanceof Error) {
     const detail = sanitizeCliText(error.message).slice(0, 512);
     if (detail.length > 0) return detail;

@@ -7,6 +7,7 @@ import {
   createCliDeviceStorage,
   createDeviceBootstrap,
   createMemoryDeviceRecordStore,
+  ProtocolTransportError,
 } from "@dotrelay/client";
 import {
   createCapabilitiesDocument,
@@ -17,6 +18,7 @@ import {
   type ProblemCode,
   type ServerProfilePin,
 } from "@dotrelay/contracts";
+import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
@@ -3926,6 +3928,132 @@ describe("status verifies the session and this Device", () => {
     } finally {
       fixture.stop();
       await state.cleanup();
+    }
+  });
+});
+
+describe("actionable error categories at the process boundary", () => {
+  const failingAdmin = (error: unknown): StrictJsonClient => ({
+    get: async () => {
+      throw error;
+    },
+    post: async () => {
+      throw error;
+    },
+  });
+
+  const seededState = async (): Promise<{
+    fixture: ReturnType<typeof createProtocolHttpFixture>;
+    state: Awaited<ReturnType<typeof seedProtocolCommandState>>;
+    cleanup: () => Promise<void>;
+  }> => {
+    const fixture = createProtocolHttpFixture([
+      { id: productionEnvironmentId, label: "production", lifecycle: "active" },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    await Bun.write(
+      state.contextPath,
+      JSON.stringify({
+        serverProfileId,
+        projectId,
+        environmentId: productionEnvironmentId,
+      }),
+    );
+    return {
+      fixture,
+      state,
+      cleanup: async () => {
+        fixture.stop();
+        await state.cleanup();
+      },
+    };
+  };
+
+  test("a service crypto rejection stays crypto with exit 5 in JSON and human output", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const admin = failingAdmin(
+        new ProtocolTransportError(createProblem("invalid_crypto_object")),
+      );
+      const json = await run(["history", "--profile", "relay", "--json"], {
+        ...runtimeForProtocolState(state),
+        admin,
+      });
+      expect(json.exitCode).toBe(5);
+      expect(JSON.parse(json.stderr)).toMatchObject({
+        ok: false,
+        category: "crypto",
+        code: "invalid_crypto_object",
+        exitCode: 5,
+      });
+      const human = await run(["history", "--profile", "relay"], {
+        ...runtimeForProtocolState(state),
+        admin,
+      });
+      expect(human.exitCode).toBe(5);
+      expect(human.stderr).toContain(
+        "the Server Profile rejected the cryptographic request",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a retryable service rejection stays transient with exit 7 in both modes", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const admin = failingAdmin(
+        new ProtocolTransportError(createProblem("service_unavailable")),
+      );
+      const json = await run(["history", "--profile", "relay", "--json"], {
+        ...runtimeForProtocolState(state),
+        admin,
+      });
+      expect(json.exitCode).toBe(7);
+      expect(JSON.parse(json.stderr)).toMatchObject({
+        ok: false,
+        category: "transient",
+        code: "service_unavailable",
+        exitCode: 7,
+      });
+      const human = await run(["history", "--profile", "relay"], {
+        ...runtimeForProtocolState(state),
+        admin,
+      });
+      expect(human.exitCode).toBe(7);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an unwrapped crypto runtime failure stays crypto with exit 5 in both modes", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const admin = failingAdmin(
+        Object.assign(new Error("error:06065080:digital envelope routines"), {
+          code: "ERR_OSSL_EVP_R_BAD_DECRYPT",
+        }),
+      );
+      const json = await run(["history", "--profile", "relay", "--json"], {
+        ...runtimeForProtocolState(state),
+        admin,
+      });
+      expect(json.exitCode).toBe(5);
+      const diagnostic = JSON.parse(json.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "crypto",
+        code: "crypto",
+        exitCode: 5,
+      });
+      expect(JSON.stringify(diagnostic)).not.toContain("digital envelope");
+      const human = await run(["history", "--profile", "relay"], {
+        ...runtimeForProtocolState(state),
+        admin,
+      });
+      expect(human.exitCode).toBe(5);
+    } finally {
+      await cleanup();
     }
   });
 });
