@@ -49,7 +49,7 @@ const priority = (body: string) => {
 };
 
 const grillPrompt = (issue: number, title: string) =>
-  `Grill the proposed change in GitHub issue #${issue}: ${title}. Read the issue with gh and inspect the codebase first. Answer anything the repository can answer yourself. Follow the installed grilling and domain-modeling skills exactly, write resolved vocabulary and qualifying ADRs to the checkout as the skill requires, ask one focused round of recommended questions, then stop and wait for the human. Do not implement the change and do not update the issue labels yet.`;
+  `Grill the proposed change in GitHub issue #${issue}: ${title}. Read the issue with gh and inspect the codebase first. Answer anything the repository can answer yourself. Follow the installed grilling and domain-modeling skills exactly, write resolved vocabulary and qualifying ADRs to the checkout as the skill requires, ask one focused round of recommended questions, then stop and wait for the human. Present your questions as plain text and never emit tool call or function call markup in your reply. Do not implement the change and do not update the issue labels yet.`;
 
 export const selectGrillIssue = (issues: GrillIssue[], owner: string) =>
   issues
@@ -83,6 +83,13 @@ const walk = (value: unknown, key: string): string | null => {
   return null;
 };
 
+const stripToolCallMarkup = (text: string) =>
+  text
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, " ")
+    .replace(/<\/?tool_call[^>]*>/g, " ")
+    .replace(/<\/?function=[^>]*>/g, " ")
+    .replace(/<\/?parameter=[^>]*>/g, " ");
+
 export const parseOpenCodeTurn = (output: string) => {
   let sessionId: string | null = null;
   const text: string[] = [];
@@ -93,7 +100,8 @@ export const parseOpenCodeTurn = (output: string) => {
       sessionId ??= walk(event, "sessionID") ?? walk(event, "sessionId");
       const part = event.part as Record<string, unknown> | undefined;
       if (event.type === "text" && typeof part?.text === "string") {
-        text.push(part.text);
+        const cleaned = stripToolCallMarkup(part.text);
+        if (cleaned.trim()) text.push(cleaned);
       }
     } catch {
       // OpenCode may print a non-JSON diagnostic to stderr; the exit code still gates success.

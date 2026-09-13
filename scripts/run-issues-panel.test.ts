@@ -103,6 +103,38 @@ describe("run issues panel", () => {
     });
   });
 
+  test("discards tool call markup the model emitted as plain text", () => {
+    const output = [
+      JSON.stringify({
+        type: "text",
+        sessionID: "ses_123",
+        part: {
+          text: "<tool_call>\n<function=gh>\n<parameter=command>\ngh issue view 82\n</parameter>\n</function>\n</tool_call>",
+        },
+      }),
+      JSON.stringify({
+        type: "text",
+        sessionID: "ses_123",
+        part: { text: "Which repositories should stay private?" },
+      }),
+    ].join("\n");
+    expect(parseOpenCodeTurn(output)).toEqual({
+      sessionId: "ses_123",
+      text: "Which repositories should stay private?",
+    });
+  });
+
+  test("reports no usable question when the turn only emitted tool call markup", () => {
+    const output = JSON.stringify({
+      type: "text",
+      sessionID: "ses_123",
+      part: {
+        text: "<tool_call>\n<function=read>\n<parameter=filePath>\n/docs/wiki/authentication.md\n</parameter>\n</function>\n</tool_call>",
+      },
+    });
+    expect(parseOpenCodeTurn(output).text).toBe("");
+  });
+
   test("executes workflow commands through OpenCode's command interface", () => {
     const prompt = "Grill issue #79 and ask one focused round of questions.";
     expect(
