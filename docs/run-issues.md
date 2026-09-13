@@ -2,7 +2,10 @@
 
 Run `./run-issues.sh` from a clone of `LSP-Software/DotRelay`. It selects open,
 unassigned `ready-for-agent` issues with an explicit `Priority: P<number>` and zero
-native GitHub dependency blockers. Lower priorities and issue numbers run first.
+native GitHub dependency blockers that were created by the GitHub account the CLI is
+authenticated as. Issues created by anyone else are ignored, so the unattended agent
+never executes instructions written by strangers. Lower priorities and issue numbers
+run first.
 It implements each issue, opens a PR, checks CI and reviews, repairs failures, and
 merges the expected commit. Bun, Bash, Git, GitHub CLI, jq, OpenCode, and `ps` are
 required. Authenticate GitHub CLI and configure OpenCode before starting. Keep

@@ -19,6 +19,7 @@ type Issue = {
   state: string;
   labels: { name: string }[];
   assignees: { login: string }[];
+  user?: { login: string } | null;
   issue_dependencies_summary?: { blocked_by: number };
   pull_request?: unknown;
 };
@@ -68,11 +69,12 @@ const priority = (issue: Issue) => {
   const match = /Priority:\s*P(\d+)/i.exec(issue.body ?? "");
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 };
-export const selectIssues = (issues: Issue[]) =>
+export const selectIssues = (issues: Issue[], owner: string) =>
   issues
     .filter(
       (issue) =>
         eligible(issue) &&
+        issue.user?.login === owner &&
         issue.assignees.length === 0 &&
         Number.isFinite(priority(issue)),
     )
@@ -441,7 +443,7 @@ export const main = async (argv = process.argv.slice(2)) => {
           )
             add(issue);
         }
-        for (const issue of selectIssues(issues)) add(issue);
+        for (const issue of selectIssues(issues, login)) add(issue);
         await save();
         discoveryFailures = 0;
       } catch (error) {

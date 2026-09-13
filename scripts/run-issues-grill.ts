@@ -37,6 +37,7 @@ type GrillIssue = {
   body: string;
   url: string;
   assignees: { login: string }[];
+  author: { login: string } | null;
 };
 
 type Command = typeof runProcess;
@@ -50,11 +51,13 @@ const priority = (body: string) => {
 const grillPrompt = (issue: number, title: string) =>
   `Grill the proposed change in GitHub issue #${issue}: ${title}. Read the issue with gh and inspect the codebase first. Answer anything the repository can answer yourself. Follow the installed grilling and domain-modeling skills exactly, write resolved vocabulary and qualifying ADRs to the checkout as the skill requires, ask one focused round of recommended questions, then stop and wait for the human. Do not implement the change and do not update the issue labels yet.`;
 
-export const selectGrillIssue = (issues: GrillIssue[]) =>
+export const selectGrillIssue = (issues: GrillIssue[], owner: string) =>
   issues
     .filter(
       (issue) =>
-        issue.assignees.length === 0 && Number.isFinite(priority(issue.body)),
+        issue.author?.login === owner &&
+        issue.assignees.length === 0 &&
+        Number.isFinite(priority(issue.body)),
     )
     .sort(
       (left, right) =>
@@ -315,6 +318,7 @@ export const createGrillManager = (options: {
   };
 
   const startNext = async () => {
+    const owner = await execute(["gh", "api", "user", "--jq", ".login"]);
     const output = await execute([
       "gh",
       "issue",
@@ -326,9 +330,9 @@ export const createGrillManager = (options: {
       "--limit",
       "100",
       "--json",
-      "number,title,body,url,assignees",
+      "number,title,body,url,assignees,author",
     ]);
-    const issue = selectGrillIssue(JSON.parse(output) as GrillIssue[]);
+    const issue = selectGrillIssue(JSON.parse(output) as GrillIssue[], owner);
     if (!issue) {
       await save({
         ...initialState(),
@@ -389,6 +393,18 @@ export const createGrillManager = (options: {
           status: "failed",
           message:
             "This grill was started before workflow commands were invoked correctly. Retry it to continue with the repaired command runner.",
+        });
+      }
+      if (
+        task === null &&
+        state.issue &&
+        ["preparing", "running", "completing"].includes(state.status)
+      ) {
+        state = await save({
+          ...state,
+          status: "failed",
+          message:
+            "The panel restarted while this grill turn was in flight, so its result was lost. Retry it to continue.",
         });
       }
       if (["idle", "completed"].includes(state.status)) launch(startNext);

@@ -5,7 +5,8 @@ stage, active issue and pull request, process health, elapsed time, recent runs,
 transcript. It can also start the runner or request a graceful stop.
 
 The human lane keeps one unassigned, prioritized `ready-for-human` issue prepared with
-`/grill-with-docs`. It uses a persistent checkout and resumes the same OpenCode session after each
+`/grill-with-docs`. It only considers issues created by the GitHub account the panel's
+CLI is authenticated as, so strangers cannot feed instructions to the interview agent. It uses a persistent checkout and resumes the same OpenCode session after each
 answer, so the interview context and its `CONTEXT.md`/ADR writes survive between browser visits.
 Questions that the codebase can answer are delegated to the agent; the panel only presents product
 and domain decisions that need a human.
@@ -29,7 +30,8 @@ answers in the existing issue, verify the domain-doc artifacts, publish and merg
 when the checkout changed, then replace `ready-for-human` with `ready-for-agent`. The panel verifies
 the final labels, non-empty issue body, and clean checkout before considering the grill complete. It
 then prepares the next human issue. A failed turn remains visible and requires **Retry**; it is never
-silently promoted.
+silently promoted. If the panel process restarts while a turn is in flight, the panel marks that turn
+failed on its next status poll and **Retry** resumes it, so a restart can never leave the lane stuck.
 
 This lane deliberately requires the maintainer to say when grilling is finished. Inferring completion
 from prose or punctuation would risk promoting a ticket with unresolved decisions. Do not run more

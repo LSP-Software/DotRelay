@@ -55,7 +55,7 @@ test("repeated implementation failures block just that issue", () => {
   expect(item.status).toBe("blocked");
 });
 
-test("queue excludes assigned, blocked, unprioritized issues and PRs", () => {
+test("queue excludes assigned, blocked, unprioritized, foreign-authored issues and PRs", () => {
   const base = {
     number: 1,
     title: "test",
@@ -63,17 +63,27 @@ test("queue excludes assigned, blocked, unprioritized issues and PRs", () => {
     state: "open",
     labels: [{ name: "ready-for-agent" }],
     assignees: [],
+    user: { login: "me" },
     issue_dependencies_summary: { blocked_by: 0 },
   };
   expect(
-    selectIssues([
-      base,
-      { ...base, number: 2, body: "Priority: P1" },
-      { ...base, number: 3, assignees: [{ login: "someone" }] },
-      { ...base, number: 4, issue_dependencies_summary: { blocked_by: 1 } },
-      { ...base, number: 5, body: "unspecified" },
-      { ...base, number: 6, pull_request: {} },
-    ]).map((issue) => issue.number),
+    selectIssues(
+      [
+        base,
+        { ...base, number: 2, body: "Priority: P1" },
+        { ...base, number: 3, assignees: [{ login: "someone" }] },
+        { ...base, number: 4, issue_dependencies_summary: { blocked_by: 1 } },
+        { ...base, number: 5, body: "unspecified" },
+        { ...base, number: 6, pull_request: {} },
+        {
+          ...base,
+          number: 7,
+          body: "Priority: P0",
+          user: { login: "someone-else" },
+        },
+      ],
+      "me",
+    ).map((issue) => issue.number),
   ).toEqual([2, 1]);
 });
 
@@ -209,6 +219,7 @@ const fixture = async (mode: string, count = 2) => {
       state: "open",
       labels: [{ name: "ready-for-agent" }],
       assignees: [],
+      user: { login: "runner" },
       issue_dependencies_summary: { blocked_by: 0 },
     })),
   };
