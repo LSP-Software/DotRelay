@@ -5,7 +5,8 @@ stage, active issue and pull request, process health, elapsed time, recent runs,
 transcript. It can also start the runner or request a graceful stop.
 
 The human lane keeps one unassigned, prioritized `ready-for-human` issue prepared with
-`/grill-with-docs`. It uses a persistent checkout and resumes the same OpenCode session after each
+`/grill-with-docs`. It only considers issues created by the GitHub account the panel's
+CLI is authenticated as, so strangers cannot feed instructions to the interview agent. It uses a persistent checkout and resumes the same OpenCode session after each
 answer, so the interview context and its `CONTEXT.md`/ADR writes survive between browser visits.
 Questions that the codebase can answer are delegated to the agent; the panel only presents product
 and domain decisions that need a human.

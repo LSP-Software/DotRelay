@@ -30,37 +30,52 @@ afterEach(async () => {
 });
 
 describe("run issues panel", () => {
-  test("selects the highest-priority unassigned human issue", () => {
-    const issue = selectGrillIssue([
-      {
-        number: 9,
-        title: "P2",
-        body: "Priority: P2",
-        url: "u9",
-        assignees: [],
-      },
-      {
-        number: 4,
-        title: "Claimed",
-        body: "Priority: P0",
-        url: "u4",
-        assignees: [{ login: "sam" }],
-      },
-      {
-        number: 7,
-        title: "P1",
-        body: "Priority: P1",
-        url: "u7",
-        assignees: [],
-      },
-      {
-        number: 3,
-        title: "No priority",
-        body: "Idea",
-        url: "u3",
-        assignees: [],
-      },
-    ]);
+  test("selects the highest-priority unassigned human issue authored by the owner", () => {
+    const issue = selectGrillIssue(
+      [
+        {
+          number: 9,
+          title: "P2",
+          body: "Priority: P2",
+          url: "u9",
+          assignees: [],
+          author: { login: "sam" },
+        },
+        {
+          number: 4,
+          title: "Claimed",
+          body: "Priority: P0",
+          url: "u4",
+          assignees: [{ login: "sam" }],
+          author: { login: "sam" },
+        },
+        {
+          number: 7,
+          title: "P1",
+          body: "Priority: P1",
+          url: "u7",
+          assignees: [],
+          author: { login: "sam" },
+        },
+        {
+          number: 3,
+          title: "No priority",
+          body: "Idea",
+          url: "u3",
+          assignees: [],
+          author: { login: "sam" },
+        },
+        {
+          number: 2,
+          title: "Foreign P0",
+          body: "Priority: P0",
+          url: "u2",
+          assignees: [],
+          author: { login: "someone-else" },
+        },
+      ],
+      "sam",
+    );
     expect(issue?.number).toBe(7);
   });
 
@@ -370,6 +385,14 @@ describe("run issues panel", () => {
       releaseClone = resolve;
     });
     const command = async (args: string[]) => {
+      if (args[0] === "gh" && args[1] === "api") {
+        return {
+          code: 0,
+          output: "",
+          stdout: "testowner",
+          infrastructure: false,
+        };
+      }
       if (args[0] === "gh") {
         return {
           code: 0,
@@ -381,6 +404,7 @@ describe("run issues panel", () => {
               body: "Priority: P1",
               url: "https://github.com/LSP-Software/DotRelay/issues/79",
               assignees: [],
+              author: { login: "testowner" },
             },
           ]),
           infrastructure: false,
