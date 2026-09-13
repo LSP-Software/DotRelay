@@ -48,7 +48,6 @@ import {
   uuidToBytes,
 } from "@dotrelay/contracts";
 import {
-  categoryForProblem,
   createEnvironment,
   createStrictJsonClient,
   listEnvironments,
@@ -75,7 +74,12 @@ import {
   parseDotenv,
   serializeDotenv,
 } from "./dotenv";
-import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
+import {
+  CliError,
+  CliInvocationError,
+  categoryForProblem,
+  sanitizeCliText,
+} from "./errors";
 import {
   createGitTrackingProbe,
   ensureLocalGitExclusion,

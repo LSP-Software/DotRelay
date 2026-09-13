@@ -7,7 +7,12 @@ import {
 import type { CommandName } from "./args";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
-import { CliError, CliInvocationError } from "./errors";
+import {
+  CliError,
+  CliInvocationError,
+  categoryForProblem,
+  detailForProblem,
+} from "./errors";
 import {
   defaultNetworkPolicy,
   fetchWithinBudget,
@@ -99,76 +104,6 @@ const requireLifecycle = (
       "response_invalid",
     );
   return value;
-};
-
-export const categoryForProblem = (
-  code: string,
-): "invocation" | "conflict" | "crypto" | "authentication" | "transient" => {
-  if (
-    code === "authentication_required" ||
-    code === "device_not_active" ||
-    code === "forbidden"
-  )
-    return "authentication";
-  if (
-    [
-      "membership_not_key_provisioned",
-      "operation_conflict",
-      "stale_head",
-      "stale_epoch",
-      "stale_generation",
-      "rotation_required",
-      "archived_resource",
-      "state_conflict",
-      "staged_object_missing",
-      "invitation_expired",
-      "staging_expired",
-      "genesis_exists",
-    ].includes(code)
-  )
-    return "conflict";
-  if (
-    [
-      "invalid_crypto_object",
-      "unsupported_media_type",
-      "unsupported_api_version",
-      "unsupported_crypto_suite",
-      "unsupported_crypto_runtime",
-      "crypto_provider_unavailable",
-    ].includes(code)
-  )
-    return "crypto";
-  if (
-    ["invalid_request", "resource_not_found", "payload_too_large"].includes(
-      code,
-    )
-  )
-    return "invocation";
-  return "transient";
-};
-
-const detailForProblem = (code: string): string => {
-  if (code === "authentication_required")
-    return "login is required for this Server Profile; run dotrelay login";
-  if (code === "device_not_active")
-    return "this Device is not active; run dotrelay device enroll to re-authorize it";
-  if (code === "forbidden") return "the Server Profile denied the request";
-  if (code === "resource_not_found")
-    return "the requested resource was not found";
-  if (code === "invalid_request")
-    return "the Server Profile rejected the request";
-  if (code === "payload_too_large") return "the request was too large";
-  if (code === "genesis_exists")
-    return "this Environment already has a genesis Revision";
-  if (code === "rate_limited")
-    return "the Server Profile rate-limited the request; wait and retry";
-  if (code === "rate_limit_unavailable")
-    return "the Server Profile's rate limiter is unavailable; retry later";
-  if (categoryForProblem(code) === "conflict")
-    return "the requested change conflicts with current Server Profile state";
-  if (categoryForProblem(code) === "crypto")
-    return "the Server Profile rejected the cryptographic request";
-  return "the Server Profile could not complete the request";
 };
 
 const parseEnvironment = (value: unknown): EnvironmentSummary => {

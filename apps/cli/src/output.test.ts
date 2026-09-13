@@ -58,22 +58,22 @@ describe("CLI output safety", () => {
       "unsupported_crypto_suite",
       "crypto",
     ]) {
-      expect(
-        diagnosticForError(
-          new CliError("crypto", "cryptographic component failure", {}, code),
-        ).code,
-      ).toBe("unexpected_failure");
-      expect(
-        diagnosticForError(
-          new CliError("crypto", "cryptographic component failure", {}, code),
-        ).category,
-      ).toBe("transient");
-      expect(
-        diagnosticForError(
-          new CliError("crypto", "cryptographic component failure", {}, code),
-        ).exitCode,
-      ).toBe(EXIT_CODES.transient);
+      // Integrity and compatibility failures keep the documented crypto
+      // category and exit code 5; only codes the CLI never raises are
+      // masked, and even then the category stays actionable.
+      const diagnostic = diagnosticForError(
+        new CliError("crypto", "cryptographic component failure", {}, code),
+      );
+      expect(diagnostic.category).toBe("crypto");
+      expect(diagnostic.code).toBe(code);
+      expect(diagnostic.exitCode).toBe(EXIT_CODES.crypto);
     }
+    const unknownCryptoCode = diagnosticForError(
+      new CliError("crypto", "cryptographic component failure", {}, "nope"),
+    );
+    expect(unknownCryptoCode.category).toBe("crypto");
+    expect(unknownCryptoCode.code).toBe("unexpected_failure");
+    expect(unknownCryptoCode.exitCode).toBe(EXIT_CODES.crypto);
     const terminalControl = diagnosticForError(
       new CliError("local-io", "ordinary\u001b[31m text\b"),
     );
