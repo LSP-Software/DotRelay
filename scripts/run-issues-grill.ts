@@ -482,6 +482,45 @@ export const createGrillManager = (options: {
     return true;
   };
 
+  const clearOrphanedOpenCode = async (checkout: string) => {
+    await command(["pkill", "-f", `opencode run --dir ${checkout}`]);
+  };
+
+  const orphanResume = (
+    state: GrillState,
+  ): { prompt: string; commandName: OpenCodeCommand | null } | null => {
+    if (state.issue === null || !state.lastPrompt) return null;
+    const legacy = state.lastCommand === undefined;
+    const commandName =
+      state.lastCommand ??
+      (state.lastTurnCompleting
+        ? "to-spec"
+        : legacy
+          ? "grill-with-docs"
+          : null);
+    const prompt =
+      legacy && !state.lastTurnCompleting
+        ? grillPrompt(state.issue, state.issueTitle ?? `Issue #${state.issue}`)
+        : state.lastPrompt;
+    return { prompt, commandName };
+  };
+
+  const relaunchOrphanedTurn = (state: GrillState) => {
+    if (!state.checkout) return;
+    const resume = orphanResume(state);
+    if (!resume) return;
+    const checkout = state.checkout;
+    void launch(async () => {
+      await clearOrphanedOpenCode(checkout);
+      await runTurn(
+        state,
+        resume.prompt,
+        state.lastTurnCompleting,
+        resume.commandName,
+      );
+    });
+  };
+
   return {
     read,
     ensure: async () => {
@@ -509,8 +548,9 @@ export const createGrillManager = (options: {
           ...state,
           status: "failed",
           message:
-            "The panel restarted while this grill turn was in flight, so its result was lost. Retry it to continue.",
+            "The panel restarted while this grill turn was in flight, so its result was lost. Retrying automatically.",
         });
+        relaunchOrphanedTurn(state);
       }
       if (["idle", "completed"].includes(state.status)) launch(startNext);
       const current = await read();
@@ -558,6 +598,7 @@ export const createGrillManager = (options: {
       const issueTitle = state.issueTitle ?? `Issue #${state.issue}`;
       if (
         !launch(async () => {
+          await clearOrphanedOpenCode(checkout);
           await execute(["git", "reset", "--hard", "HEAD"], checkout);
           await execute(["git", "clean", "-fd"], checkout);
           const fresh = await save({
@@ -581,27 +622,22 @@ export const createGrillManager = (options: {
     },
     retry: async () => {
       const state = await read();
-      if (state.status !== "failed" || !state.issue || !state.lastPrompt)
+      if (state.status !== "failed")
         throw new Error("There is no failed grill to retry.");
-      const legacy = state.lastCommand === undefined;
-      const commandName =
-        state.lastCommand ??
-        (state.lastTurnCompleting
-          ? "to-spec"
-          : legacy
-            ? "grill-with-docs"
-            : null);
-      const prompt =
-        legacy && !state.lastTurnCompleting
-          ? grillPrompt(
-              state.issue,
-              state.issueTitle ?? `Issue #${state.issue}`,
-            )
-          : state.lastPrompt;
+      const resume = orphanResume(state);
+      if (!state.issue || !resume)
+        throw new Error("This failed grill has no saved prompt to retry.");
+      const checkout = state.checkout;
       if (
-        !launch(() =>
-          runTurn(state, prompt, state.lastTurnCompleting, commandName),
-        )
+        !launch(async () => {
+          if (checkout) await clearOrphanedOpenCode(checkout);
+          await runTurn(
+            state,
+            resume.prompt,
+            state.lastTurnCompleting,
+            resume.commandName,
+          );
+        })
       )
         throw new Error("A grill turn is already running.");
     },

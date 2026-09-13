@@ -448,7 +448,7 @@ describe("run issues panel", () => {
     ).rejects.toThrow("Invalid run log name.");
   });
 
-  test("fails a grill turn orphaned by a panel restart", async () => {
+  test("automatically resumes a grill turn orphaned by a panel restart", async () => {
     const runsDirectory = await mkdtemp(
       join(tmpdir(), "dotrelay-issue-panel-"),
     );
@@ -456,6 +456,16 @@ describe("run issues panel", () => {
     const calls: string[][] = [];
     const command = async (args: string[]) => {
       calls.push(args);
+      if (args[0] === "opencode") {
+        return {
+          code: 0,
+          output: "",
+          stdout:
+            `${JSON.stringify({ type: "step:started", sessionID: "ses_test" })}\n` +
+            `${JSON.stringify({ type: "text", part: { text: "Resumed question?" } })}\n`,
+          infrastructure: false,
+        };
+      }
       return { code: 0, output: "", stdout: "", infrastructure: false };
     };
     const stateDirectory = join(runsDirectory, "grill");
@@ -488,6 +498,68 @@ describe("run issues panel", () => {
       repoRoot: runsDirectory,
       runsDirectory,
       command,
+    });
+    await manager.ensure();
+
+    let state = await manager.read();
+    const deadline = Date.now() + 2_000;
+    while (state.status !== "awaiting-human" && Date.now() < deadline) {
+      await Bun.sleep(10);
+      state = await manager.read();
+    }
+    expect(state.status).toBe("awaiting-human");
+    expect(state.question).toBe("Resumed question?");
+    const checkout = join(stateDirectory, "issue-79", "checkout");
+    expect(calls).toContainEqual([
+      "pkill",
+      "-f",
+      `opencode run --dir ${checkout}`,
+    ]);
+    const opencode = calls.find((args) => args[0] === "opencode");
+    expect(opencode).toContain("--session");
+    expect(opencode).toContain("ses_test");
+    expect(opencode?.at(-1)).toBe("I've just installed the skill for you now.");
+  });
+
+  test("leaves an orphaned turn without a saved prompt failed for a manual retry", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const calls: string[][] = [];
+    const stateDirectory = join(runsDirectory, "grill");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(
+      join(stateDirectory, "state.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        issue: 79,
+        issueTitle: "Turn CLI failures into guided recovery",
+        issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+        priority: 1,
+        sessionId: "ses_test",
+        question: null,
+        message: "The agent is working through this answer.",
+        startedAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        turn: 4,
+        checkout: join(stateDirectory, "issue-79", "checkout"),
+        transcript: join(stateDirectory, "issue-79-turn-4.ndjson"),
+        lastPrompt: null,
+        lastCommand: null,
+        lastTurnCompleting: false,
+      })}\n`,
+      "utf8",
+    );
+
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command: async (args: string[]) => {
+        calls.push(args);
+        return { code: 0, output: "", stdout: "", infrastructure: false };
+      },
     });
     const state = await manager.ensure();
 
@@ -647,6 +719,11 @@ describe("run issues panel", () => {
     expect(state.sessionId).toBe("ses_fresh");
     expect(state.question).toBe("Fresh first question?");
     expect(state.turn).toBe(3);
+    expect(calls).toContainEqual([
+      "pkill",
+      "-f",
+      `opencode run --dir ${join(stateDirectory, "issue-79", "checkout")}`,
+    ]);
     expect(calls).toContainEqual(["git", "reset", "--hard", "HEAD"]);
     expect(calls).toContainEqual(["git", "clean", "-fd"]);
     const opencode = calls.find((args) => args[0] === "opencode");
