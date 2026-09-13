@@ -27,6 +27,7 @@ import {
 import {
   browserOpenFailure,
   createSessionStore,
+  type LoginProgress,
   loginWithDeviceAuthorization,
   openVerificationPage,
 } from "./auth";
@@ -69,6 +70,12 @@ import {
   renderHelp,
   renderPowerHelp,
 } from "./help";
+import {
+  defaultNetworkPolicy,
+  type NetworkPolicy,
+  probeNetworkPolicy,
+  type RetryReason,
+} from "./network";
 import {
   addServerProfile,
   type CliServerProfile,
@@ -114,6 +121,7 @@ export type CliRuntime = Readonly<{
   readonly profilePath?: string;
   readonly credentials?: NativeCredentialStore;
   readonly fetch?: FetchFunction;
+  readonly networkPolicy?: NetworkPolicy;
   readonly githubFetch?: FetchFunction;
   readonly deviceId?: string;
   readonly open?: (url: string) => Promise<void>;
@@ -377,6 +385,7 @@ const deviceWorkflowOptions = (
     profile,
     credentials,
     ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+    ...(runtime.networkPolicy ? { networkPolicy: runtime.networkPolicy } : {}),
     ...(runtime.deviceStorage ? { deviceStorage: runtime.deviceStorage } : {}),
     ...(runtime.admin ? { admin: runtime.admin } : {}),
     ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
@@ -417,6 +426,7 @@ const createAdminClient = async (
   return createStrictJsonClient(profile.pin, credentials, {
     deviceId,
     ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+    ...(runtime.networkPolicy ? { networkPolicy: runtime.networkPolicy } : {}),
   });
 };
 
@@ -428,6 +438,19 @@ const describeExpiry = (seconds: number): string => {
   return `${seconds} second${seconds === 1 ? "" : "s"}`;
 };
 
+const describeDuration = (seconds: number): string => {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = (seconds % 60).toString().padStart(2, "0");
+  return `${minutes}m ${rest}s`;
+};
+
+const retryReasonPhrase: Record<RetryReason, string> = {
+  offline: "The Server Profile is unreachable",
+  stalled: "The Server Profile stopped responding",
+  server: "The Server Profile is rate-limited",
+};
+
 const loginAndEnroll = async (
   parsed: ParsedArguments,
   runtime: CliRuntime,
@@ -435,11 +458,26 @@ const loginAndEnroll = async (
 ): Promise<Record<string, unknown>> => {
   const credentials = runtime.credentials ?? createNativeCredentialStore();
   const output = runtime.terminal?.output ?? process.stderr;
+  const policy = runtime.networkPolicy ?? defaultNetworkPolicy;
+  const outputIsTty =
+    (output as NodeJS.WritableStream & { isTTY?: boolean }).isTTY === true;
   const opensBrowser = !(parsed.noOpen || parsed.noInput);
   let manualPath = !opensBrowser;
   let openFailed = false;
   let waitingBody: readonly string[] = [];
   let waitLines = 0;
+  let retryState: LoginProgress | null = null;
+  let waitStartedAtMs: number | null = null;
+  let expiresAtMs: number | null = null;
+  let tickTimer: ReturnType<typeof setInterval> | null = null;
+  const elapsedSeconds = (): number =>
+    waitStartedAtMs === null
+      ? 0
+      : Math.max(0, Math.round((policy.now() - waitStartedAtMs) / 1000));
+  const retryLine = (
+    progress: Extract<LoginProgress, { readonly kind: "retry" }>,
+  ): string =>
+    `${retryReasonPhrase[progress.reason]}; ${progress.maxAttempts !== undefined ? `retry ${progress.attempt} of ${progress.maxAttempts}` : `retry ${progress.attempt}`} — next in ${Math.max(1, Math.ceil(progress.nextDelayMs / 1000))}s`;
   const renderWaiting = (): void => {
     const body = openFailed
       ? [
@@ -448,65 +486,143 @@ const loginAndEnroll = async (
           "Could not open a browser automatically; open the URL above in any browser.",
         ]
       : waitingBody;
+    const elapsed = elapsedSeconds();
+    const hint =
+      retryState !== null && retryState.kind === "retry"
+        ? retryLine(retryState)
+        : manualPath
+          ? "Open the URL above to complete sign-in"
+          : `Waiting for the browser${elapsed >= 1 ? ` — ${describeDuration(elapsed)}` : ""}`;
     waitLines = rewriteRegion(
       output,
       waitLines,
-      renderStep(
-        "Allow this CLI?",
-        body,
-        manualPath
-          ? "Open the URL above to complete sign-in"
-          : "Waiting for the browser",
-      ),
+      renderStep("Allow this CLI?", body, hint),
     );
   };
-  const login = await loginWithDeviceAuthorization(
-    profile.pin,
-    createSessionStore(credentials),
-    {
-      noOpen: parsed.noOpen || parsed.noInput,
-      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
-      open: runtime.open ?? openVerificationPage,
-      onAuthorization: (authorization, verificationUrl) => {
-        if (parsed.json) {
-          output.write(
-            json({
-              ok: true,
-              event: "device_authorization",
-              userCode: authorization.userCode,
-              verificationUri: verificationUrl,
-              intervalSeconds: authorization.intervalSeconds,
-              expiresInSeconds: authorization.expiresInSeconds,
-            }),
-          );
-          return;
-        }
-        waitingBody = [
-          verificationUrl,
-          `Code: ${authorization.userCode}`,
-          `Expires in ${describeExpiry(authorization.expiresInSeconds)}`,
-        ];
-        renderWaiting();
-      },
-      onOpenFailed: () => {
-        if (parsed.json) {
-          output.write(
-            json(
-              diagnosticForError(
-                browserOpenFailure(
-                  "could not open the verification page in a browser; open the URL from the authorization event",
+  const stopTicker = (): void => {
+    if (tickTimer !== null) {
+      clearInterval(tickTimer);
+      tickTimer = null;
+    }
+  };
+  const startTicker = (): void => {
+    if (parsed.json || !outputIsTty) return;
+    stopTicker();
+    // Redraw the waiting state once per second so the elapsed time stays
+    // honest while the operator approves the sign-in.
+    tickTimer = setInterval(() => renderWaiting(), 1000);
+  };
+  const reportProgress = (progress: LoginProgress): void => {
+    if (progress.kind === "retry") retryState = progress;
+    if (parsed.json) {
+      output.write(
+        json(
+          progress.kind === "retry"
+            ? {
+                ok: true,
+                event: "device_login_retry",
+                attempt: progress.attempt,
+                ...(progress.maxAttempts !== undefined
+                  ? { maxAttempts: progress.maxAttempts }
+                  : {}),
+                reason: progress.reason,
+                nextDelaySeconds: Math.max(
+                  0,
+                  Math.ceil(progress.nextDelayMs / 1000),
+                ),
+                elapsedSeconds: elapsedSeconds(),
+                ...(expiresAtMs !== null
+                  ? {
+                      expiresInSeconds: Math.max(
+                        0,
+                        Math.ceil((expiresAtMs - policy.now()) / 1000),
+                      ),
+                    }
+                  : {}),
+              }
+            : {
+                ok: true,
+                event: "device_login_resumed",
+                elapsedSeconds: elapsedSeconds(),
+                ...(expiresAtMs !== null
+                  ? {
+                      expiresInSeconds: Math.max(
+                        0,
+                        Math.ceil((expiresAtMs - policy.now()) / 1000),
+                      ),
+                    }
+                  : {}),
+              },
+        ),
+      );
+      return;
+    }
+    if (!outputIsTty) {
+      // Piped human output cannot redraw the waiting card, so each change
+      // is a single appended line.
+      if (progress.kind === "retry") output.write(`${retryLine(progress)}\n`);
+      else output.write("The Server Profile is back; still waiting\n");
+      return;
+    }
+    renderWaiting();
+  };
+  let login: Awaited<ReturnType<typeof loginWithDeviceAuthorization>>;
+  try {
+    login = await loginWithDeviceAuthorization(
+      profile.pin,
+      createSessionStore(credentials),
+      {
+        noOpen: parsed.noOpen || parsed.noInput,
+        networkPolicy: policy,
+        ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+        open: runtime.open ?? openVerificationPage,
+        onAuthorization: (authorization, verificationUrl) => {
+          waitStartedAtMs = policy.now();
+          expiresAtMs = waitStartedAtMs + authorization.expiresInSeconds * 1000;
+          if (parsed.json) {
+            output.write(
+              json({
+                ok: true,
+                event: "device_authorization",
+                userCode: authorization.userCode,
+                verificationUri: verificationUrl,
+                intervalSeconds: authorization.intervalSeconds,
+                expiresInSeconds: authorization.expiresInSeconds,
+              }),
+            );
+            return;
+          }
+          waitingBody = [
+            verificationUrl,
+            `Code: ${authorization.userCode}`,
+            `Expires in ${describeExpiry(authorization.expiresInSeconds)}`,
+          ];
+          renderWaiting();
+          startTicker();
+        },
+        onOpenFailed: () => {
+          if (parsed.json) {
+            output.write(
+              json(
+                diagnosticForError(
+                  browserOpenFailure(
+                    "could not open the verification page in a browser; open the URL from the authorization event",
+                  ),
                 ),
               ),
-            ),
-          );
-          return;
-        }
-        manualPath = true;
-        openFailed = true;
-        renderWaiting();
+            );
+            return;
+          }
+          manualPath = true;
+          openFailed = true;
+          renderWaiting();
+        },
+        onProgress: reportProgress,
       },
-    },
-  );
+    );
+  } finally {
+    stopTicker();
+  }
   if (!parsed.json) {
     waitLines = rewriteRegion(output, waitLines, "");
     writeNotice(output, "Signed in");
@@ -629,6 +745,9 @@ const verifyStatus = async (
       runtime.admin ??
       createStrictJsonClient(pin, credentials, {
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+        ...(runtime.networkPolicy
+          ? { networkPolicy: runtime.networkPolicy }
+          : { networkPolicy: probeNetworkPolicy }),
         ...(storedDeviceId ? { deviceId: storedDeviceId } : {}),
       });
     try {
@@ -812,6 +931,9 @@ const execute = async (
       existing ??
       (await addServerProfile(store, profileNameFromOrigin(origin), origin, {
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+        ...(runtime.networkPolicy
+          ? { networkPolicy: runtime.networkPolicy }
+          : { networkPolicy: probeNetworkPolicy }),
         confirm: (candidate) => confirmProfileTrust(parsed, runtime, candidate),
       }));
     const selected = (await store.read()).selected;
@@ -824,6 +946,9 @@ const execute = async (
       throw new Error("profile add requires a name and origin");
     const profile = await addServerProfile(store, name, origin, {
       ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.networkPolicy
+        ? { networkPolicy: runtime.networkPolicy }
+        : { networkPolicy: probeNetworkPolicy }),
       confirm: (candidate) => confirmProfileTrust(parsed, runtime, candidate),
     });
     return {
@@ -1063,6 +1188,9 @@ const execute = async (
       profile,
       credentials,
       ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.networkPolicy
+        ? { networkPolicy: runtime.networkPolicy }
+        : {}),
       ...(runtime.deviceStorage
         ? { deviceStorage: runtime.deviceStorage }
         : {}),
@@ -1166,6 +1294,9 @@ const execute = async (
         createStrictJsonClient(profile.pin, credentials, {
           ...(deviceId ? { deviceId } : {}),
           ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+          ...(runtime.networkPolicy
+            ? { networkPolicy: runtime.networkPolicy }
+            : {}),
         });
       // An explicit --team must name a Team the User still belongs to; the
       // service re-checks the Membership when it scopes the lookup. UUIDs are
@@ -1358,6 +1489,9 @@ const execute = async (
         profile,
         credentials: runtime.credentials ?? createNativeCredentialStore(),
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+        ...(runtime.networkPolicy
+          ? { networkPolicy: runtime.networkPolicy }
+          : {}),
         ...(runtime.deviceStorage
           ? { deviceStorage: runtime.deviceStorage }
           : {}),

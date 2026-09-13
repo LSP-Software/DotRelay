@@ -10,6 +10,7 @@ import {
   writeWorktreeContext,
 } from "./context";
 import { CliError, CliInvocationError } from "./errors";
+import type { NetworkPolicy } from "./network";
 
 describe("repository and worktree context", () => {
   test("normalizes SSH and HTTPS remotes to one GitHub identity", () => {
@@ -85,6 +86,61 @@ describe("repository and worktree context", () => {
       name: "DotRelay",
       githubRepositoryId: "1311418611",
     });
+  });
+
+  // Instant-sleep twin of the default policy so outage tests stay fast.
+  const fastPolicy: NetworkPolicy = {
+    requestDeadlineMs: 20,
+    maxAttempts: 3,
+    retryBaseDelayMs: 1,
+    retryMaxDelayMs: 2,
+    sleep: async () => undefined,
+    now: Date.now,
+  };
+
+  test("retries a transient GitHub failure before resolving", async () => {
+    const repository = detectGitHubRepository([
+      { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
+    ]);
+    let calls = 0;
+    await expect(
+      resolveGitHubRepository(repository, {
+        environment: {},
+        networkPolicy: fastPolicy,
+        fetch: async () => {
+          calls += 1;
+          if (calls <= 2) throw new TypeError("fetch failed");
+          return Response.json({ id: 1311418611, name: "DotRelay" });
+        },
+      }),
+    ).resolves.toMatchObject({
+      owner: "LSP-Software",
+      name: "DotRelay",
+      githubRepositoryId: "1311418611",
+    });
+    expect(calls).toBe(3);
+  });
+
+  test("an unreachable GitHub API ends in a retryable error", async () => {
+    const repository = detectGitHubRepository([
+      { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
+    ]);
+    let calls = 0;
+    const error = await resolveGitHubRepository(repository, {
+      environment: {},
+      networkPolicy: fastPolicy,
+      fetch: async () => {
+        calls += 1;
+        throw new TypeError("fetch failed");
+      },
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).category).toBe("transient");
+    expect((error as CliError).code).toBe("repository_resolution_failed");
+    expect((error as CliError).message).toContain(
+      "could not reach the GitHub API after 3 attempts",
+    );
+    expect(calls).toBe(3);
   });
 
   test("stores only opaque ids in worktree context", async () => {

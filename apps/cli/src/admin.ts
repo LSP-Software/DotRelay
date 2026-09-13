@@ -8,6 +8,14 @@ import type { CommandName } from "./args";
 import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
 import { CliError, CliInvocationError } from "./errors";
+import {
+  defaultNetworkPolicy,
+  fetchWithinBudget,
+  NetworkAttemptError,
+  type NetworkPolicy,
+  networkFailureCliError,
+  transientResponseVerdict,
+} from "./network";
 import type { FetchFunction } from "./profile";
 import type { TerminalIo } from "./terminal";
 import { selectOption } from "./ui";
@@ -152,6 +160,10 @@ const detailForProblem = (code: string): string => {
   if (code === "payload_too_large") return "the request was too large";
   if (code === "genesis_exists")
     return "this Environment already has a genesis Revision";
+  if (code === "rate_limited")
+    return "the Server Profile rate-limited the request; wait and retry";
+  if (code === "rate_limit_unavailable")
+    return "the Server Profile's rate limiter is unavailable; retry later";
   if (categoryForProblem(code) === "conflict")
     return "the requested change conflicts with current Server Profile state";
   if (categoryForProblem(code) === "crypto")
@@ -643,9 +655,11 @@ export const createStrictJsonClient = (
     readonly fetch?: FetchFunction;
     readonly deviceId?: string;
     readonly authorization?: string;
+    readonly networkPolicy?: NetworkPolicy;
   }> = {},
 ): StrictJsonClient => {
   const fetcher = options.fetch ?? fetch;
+  const policy = options.networkPolicy ?? defaultNetworkPolicy;
   const sessions = createSessionStore(credentials);
   const request = async (
     path: string,
@@ -661,27 +675,44 @@ export const createStrictJsonClient = (
         {},
         "authentication_required",
       );
+    // The request is assembled once; every retry reuses the same headers and
+    // body, so a repeated mutation keeps its operation id instead of starting
+    // a new one.
+    const fetchInit: RequestInit = {
+      ...init,
+      redirect: "error",
+      headers: {
+        Accept: "application/json",
+        Authorization: options.authorization ?? `Bearer ${token}`,
+        ...(options.deviceId
+          ? { "X-DotRelay-Device-Id": options.deviceId }
+          : {}),
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+        ...extraHeaders,
+      },
+    };
     let response: Response;
     try {
-      response = await fetcher(`${profile.origin}${path}`, {
-        ...init,
-        redirect: "error",
-        headers: {
-          Accept: "application/json",
-          Authorization: options.authorization ?? `Bearer ${token}`,
-          ...(options.deviceId
-            ? { "X-DotRelay-Device-Id": options.deviceId }
-            : {}),
-          ...(init.body ? { "Content-Type": "application/json" } : {}),
-          ...init.headers,
-          ...extraHeaders,
-        },
-      });
-    } catch {
-      throw new CliError(
-        "transient",
-        "could not reach the Server Profile",
-        {},
+      response = (
+        await fetchWithinBudget(
+          fetcher,
+          `${profile.origin}${path}`,
+          fetchInit,
+          {
+            policy,
+            retry: {
+              verdict: (candidate) =>
+                transientResponseVerdict(candidate, policy.now),
+            },
+          },
+        )
+      ).response;
+    } catch (error) {
+      if (!(error instanceof NetworkAttemptError)) throw error;
+      throw networkFailureCliError(
+        error,
+        "the Server Profile",
         "service_unavailable",
       );
     }

@@ -21,6 +21,7 @@ import { createSessionStore } from "./auth";
 import type { NativeCredentialStore } from "./credentials";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { main, renderHelp, run, version } from "./index";
+import type { NetworkPolicy } from "./network";
 import type { FetchFunction } from "./profile";
 import type { TerminalIo } from "./terminal";
 
@@ -2765,6 +2766,16 @@ const stderrEvents = (text: string): Array<Record<string, unknown>> =>
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 
+// Instant-sleep twin of the default policy so outage tests stay fast.
+const fastPollPolicy: NetworkPolicy = {
+  requestDeadlineMs: 10_000,
+  maxAttempts: 3,
+  retryBaseDelayMs: 1,
+  retryMaxDelayMs: 2,
+  sleep: async () => undefined,
+  now: Date.now,
+};
+
 describe("CLI sign-in display", () => {
   test("no-open human login shows a copyable URL, code, and expiry before waiting", async () => {
     const fixture = await createLoginFixture();
@@ -3042,6 +3053,180 @@ describe("CLI sign-in display", () => {
       await fixture.cleanup();
     }
   });
+
+  test("a short outage during login keeps the current code and shows retry progress", async () => {
+    const fixture = await createLoginFixture({
+      token: (poll) => {
+        if (poll <= 2) throw new TypeError("fetch failed");
+        return Response.json({ access_token: "session-token" });
+      },
+    });
+    const captured = captureTerminal();
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input"],
+        {
+          ...fixture.runtime,
+          networkPolicy: fastPollPolicy,
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Signed in. Device enrolled.");
+      const output = captured.text();
+      expect(output).toContain(
+        "The Server Profile is unreachable; retry 1 — next in 1s",
+      );
+      expect(output).toContain(
+        "The Server Profile is unreachable; retry 2 — next in 1s",
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("JSON login emits retry and resumed events across an outage", async () => {
+    const fixture = await createLoginFixture({
+      token: (poll) => {
+        if (poll === 1) throw new TypeError("fetch failed");
+        if (poll === 2)
+          return Response.json(
+            { error: "authorization_pending" },
+            { status: 400 },
+          );
+        return Response.json({ access_token: "session-token" });
+      },
+    });
+    const captured = captureTerminal();
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--json", "--no-open"],
+        {
+          ...fixture.runtime,
+          networkPolicy: fastPollPolicy,
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      const events = stderrEvents(captured.text());
+      expect(events[0]).toMatchObject({
+        ok: true,
+        event: "device_authorization",
+        userCode: "KITE-MOSS",
+      });
+      const retry = events.find(
+        (event) => event.event === "device_login_retry",
+      );
+      expect(retry).toMatchObject({
+        ok: true,
+        event: "device_login_retry",
+        attempt: 1,
+        reason: "offline",
+        nextDelaySeconds: 1,
+      });
+      expect(
+        events.some((event) => event.event === "device_login_resumed"),
+      ).toBe(true);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("a stalled login poll ends in a timeout state instead of waiting forever", async () => {
+    const fixture = await createLoginFixture();
+    const captured = captureTerminal();
+    let clock = 0;
+    // Each clock read advances the fake wall clock by a minute, so the code's
+    // 600 seconds of validity run out after a couple of stalled polls while
+    // the test itself stays well under the runner's timeout.
+    const policy: NetworkPolicy = {
+      requestDeadlineMs: 10,
+      maxAttempts: 3,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 2,
+      sleep: async () => undefined,
+      now: () => {
+        clock += 60_000;
+        return clock;
+      },
+    };
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--json", "--no-open", "--no-input"],
+        {
+          ...fixture.runtime,
+          networkPolicy: policy,
+          fetch: async (input) => {
+            const url = String(input);
+            if (url.includes("/device/code"))
+              return Response.json({
+                device_code: "device-code",
+                user_code: "KITE-MOSS",
+                verification_uri: `${loginOrigin}/device`,
+                interval: 1,
+                expires_in: 600,
+              });
+            if (url.includes("/device/token"))
+              return new Promise<Response>(() => undefined);
+            return Response.json({ detail: "unhandled" }, { status: 404 });
+          },
+          terminal: captured.terminal,
+        },
+      );
+      expect(result.exitCode).toBe(6);
+      const events = stderrEvents(captured.text());
+      const retry = events.find(
+        (event) => event.event === "device_login_retry",
+      );
+      expect(retry).toMatchObject({
+        ok: true,
+        event: "device_login_retry",
+        attempt: 1,
+        reason: "stalled",
+        nextDelaySeconds: 1,
+      });
+      // The final diagnostic is returned by run(), not written to the
+      // terminal stream the retry events use.
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        category: "authentication",
+        code: "device_authorization_timeout",
+        exitCode: 6,
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("the waiting card tracks elapsed time on a terminal", async () => {
+    const fixture = await createLoginFixture({
+      token: (poll) =>
+        poll < 3
+          ? Response.json({ error: "authorization_pending" }, { status: 400 })
+          : Response.json({ access_token: "session-token" }),
+    });
+    const captured = captureTerminal();
+    // Present a TTY so the login flow redraws the waiting state each second.
+    const ttyOutput = captured.terminal.output as NodeJS.WritableStream & {
+      isTTY?: boolean;
+    };
+    const wasTty = ttyOutput.isTTY;
+    ttyOutput.isTTY = true;
+    try {
+      const result = await run(["login", "--profile", "relay"], {
+        ...fixture.runtime,
+        open: async () => undefined,
+        terminal: captured.terminal,
+      });
+      expect(result.exitCode).toBe(0);
+      const output = captured.text();
+      expect(output).toContain("Waiting for the browser");
+      expect(output).toContain("Waiting for the browser — 1s");
+    } finally {
+      if (wasTty === undefined) delete ttyOutput.isTTY;
+      else ttyOutput.isTTY = wasTty;
+      await fixture.cleanup();
+    }
+  });
 });
 
 const toHexBytes = (bytes: Uint8Array): string =>
@@ -3239,6 +3424,17 @@ const seedStatusState = async (
   };
 };
 
+// The production probe policy sleeps for real; the tests keep the same
+// shape with instant sleeps so an unreachable service stays fast.
+const fastProbePolicy: NetworkPolicy = {
+  requestDeadlineMs: 10_000,
+  maxAttempts: 2,
+  retryBaseDelayMs: 1,
+  retryMaxDelayMs: 2,
+  sleep: async () => undefined,
+  now: Date.now,
+};
+
 const statusRuntime = (state: {
   profilePath: string;
   stateDirectory: string;
@@ -3250,6 +3446,7 @@ const statusRuntime = (state: {
   stateDirectory: state.stateDirectory,
   worktreeConfig: state.contextPath,
   credentials: state.credentials,
+  networkPolicy: fastProbePolicy,
   ...(state.deviceStorage ? { deviceStorage: state.deviceStorage } : {}),
 });
 

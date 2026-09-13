@@ -10,6 +10,7 @@ import {
   resolveEnvironmentReference,
   resolveTeamForProject,
 } from "./admin";
+import type { NetworkPolicy } from "./network";
 
 const profile: ServerProfilePin = {
   origin: "https://relay.example",
@@ -455,5 +456,175 @@ describe("strict administration client", () => {
       id: "00000000-0000-4000-8000-000000000002",
       name: "Acme",
     });
+  });
+});
+
+describe("strict administration client network behaviour", () => {
+  const credentials = {
+    get: async () => new TextEncoder().encode("session-token"),
+    set: async () => undefined,
+    delete: async () => undefined,
+  };
+
+  // Instant-sleep twin of the default policy so outage tests stay fast.
+  const fastPolicy: NetworkPolicy = {
+    requestDeadlineMs: 20,
+    maxAttempts: 3,
+    retryBaseDelayMs: 1,
+    retryMaxDelayMs: 2,
+    sleep: async () => undefined,
+    now: Date.now,
+  };
+
+  test("retries a transient network failure before surfacing the answer", async () => {
+    let calls = 0;
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: fastPolicy,
+      fetch: async () => {
+        calls += 1;
+        if (calls <= 2) throw new TypeError("fetch failed");
+        return Response.json({ id: "team-1" });
+      },
+    });
+    await expect(client.get("/api/v1/teams", ["id"])).resolves.toEqual({
+      id: "team-1",
+    });
+    expect(calls).toBe(3);
+  });
+
+  test("a stalled request is retryable and ends in a service_unavailable", async () => {
+    let calls = 0;
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: fastPolicy,
+      fetch: async () => {
+        calls += 1;
+        return new Promise<Response>(() => undefined);
+      },
+    });
+    const error = await client
+      .get("/api/v1/teams", ["id"])
+      .catch((value) => value);
+    expect(error).toMatchObject({
+      category: "transient",
+      code: "service_unavailable",
+    });
+    expect(String((error as Error).message)).toContain(
+      "the Server Profile stopped responding",
+    );
+    expect(calls).toBe(3);
+  });
+
+  test("an unreachable service ends in a retryable service_unavailable", async () => {
+    let calls = 0;
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: fastPolicy,
+      fetch: async () => {
+        calls += 1;
+        throw new TypeError("fetch failed");
+      },
+    });
+    const error = await client
+      .get("/api/v1/teams", ["id"])
+      .catch((value) => value);
+    expect(error).toMatchObject({
+      category: "transient",
+      code: "service_unavailable",
+    });
+    expect(String((error as Error).message)).toContain(
+      "could not reach the Server Profile after 3 attempts",
+    );
+    expect(calls).toBe(3);
+  });
+
+  test("waits the server's Retry-After on a rate-limited request", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: {
+        ...fastPolicy,
+        sleep: async (milliseconds) => void waits.push(milliseconds),
+      },
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1)
+          return Response.json(
+            {
+              type: "https://dotrelay.dev/problems/v1",
+              title: "Rate limited",
+              status: 429,
+              code: "rate_limited",
+              detail: "slow down",
+            },
+            { status: 429, headers: { "Retry-After": "2" } },
+          );
+        return Response.json({ id: "team-1" });
+      },
+    });
+    await expect(client.get("/api/v1/teams", ["id"])).resolves.toEqual({
+      id: "team-1",
+    });
+    expect(calls).toBe(2);
+    expect(waits).toContain(2000);
+  });
+
+  test("does not retry a definitive authentication failure", async () => {
+    let calls = 0;
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: fastPolicy,
+      fetch: async () => {
+        calls += 1;
+        return Response.json(
+          {
+            type: "https://dotrelay.dev/problems/v1",
+            title: "Authentication required",
+            status: 401,
+            code: "authentication_required",
+            detail: "login required",
+          },
+          { status: 401 },
+        );
+      },
+    });
+    await expect(client.get("/api/v1/teams", ["id"])).rejects.toMatchObject({
+      category: "authentication",
+      code: "authentication_required",
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("repeats a mutation with the same Idempotency-Key and body", async () => {
+    const posts: Array<Readonly<{ key: string; body: string }>> = [];
+    let calls = 0;
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: fastPolicy,
+      fetch: async (_input, init) => {
+        posts.push({
+          key: String(new Headers(init?.headers).get("Idempotency-Key")),
+          body: String(init?.body),
+        });
+        calls += 1;
+        if (calls === 1)
+          return Response.json(
+            {
+              type: "https://dotrelay.dev/problems/v1",
+              title: "Service unavailable",
+              status: 503,
+              code: "service_unavailable",
+              detail: "try again",
+            },
+            { status: 503 },
+          );
+        return Response.json({ id: "00000000-0000-4000-8000-000000000002" });
+      },
+    });
+    await expect(
+      client.post("/api/v1/teams", { name: "Personal" }, ["id"], {
+        idempotencyKey: "op-1",
+      }),
+    ).resolves.toEqual({ id: "00000000-0000-4000-8000-000000000002" });
+    // A retried mutation must stay the same logical operation.
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toEqual(posts[1]);
+    expect(posts[0]?.key).toBe("op-1");
   });
 });

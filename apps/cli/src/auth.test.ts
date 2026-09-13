@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { ServerProfilePin } from "@dotrelay/contracts";
 import {
   createSessionStore,
+  type LoginProgress,
   loginWithDeviceAuthorization,
   openVerificationPage,
   verificationPageCommand,
 } from "./auth";
+import type { NetworkPolicy } from "./network";
 
 const profile: ServerProfilePin = {
   origin: "https://relay.example",
@@ -274,6 +276,187 @@ describe("CLI device authorization", () => {
         },
       }),
     ).rejects.toThrow("device authorization was denied");
+  });
+
+  // Instant-sleep twin of the default policy so outage tests stay fast.
+  const fastPolicy: NetworkPolicy = {
+    requestDeadlineMs: 20,
+    maxAttempts: 3,
+    retryBaseDelayMs: 1,
+    retryMaxDelayMs: 2,
+    sleep: async () => undefined,
+    now: Date.now,
+  };
+
+  test("a short outage during polling keeps the current code valid", async () => {
+    const sessions = createSessionStore(memoryCredentials());
+    const progress: LoginProgress[] = [];
+    let poll = 0;
+    const result = await loginWithDeviceAuthorization(profile, sessions, {
+      noOpen: true,
+      sleep: async () => undefined,
+      networkPolicy: fastPolicy,
+      onProgress: (event) => void progress.push(event),
+      fetch: async (input) => {
+        if (String(input).includes("/device/code")) return deviceCodeResponse();
+        poll += 1;
+        if (poll <= 3) throw new TypeError("fetch failed");
+        if (poll === 4)
+          return Response.json(
+            { error: "authorization_pending" },
+            { status: 400 },
+          );
+        return accessTokenResponse();
+      },
+    });
+    // No new code is requested: the same authorization survives the outage
+    // and the session is stored once the endpoint answers again.
+    expect(result.userCode).toBe("KITE-MOSS");
+    expect(poll).toBe(5);
+    expect(progress).toEqual([
+      { kind: "retry", attempt: 1, reason: "offline", nextDelayMs: 1 },
+      { kind: "retry", attempt: 2, reason: "offline", nextDelayMs: 2 },
+      { kind: "retry", attempt: 3, reason: "offline", nextDelayMs: 2 },
+      { kind: "resumed" },
+    ]);
+    expect(await sessions.get(profile)).toBe("bearer-secret");
+  });
+
+  test("a stalled poll is transient: login resumes when the endpoint answers", async () => {
+    const sessions = createSessionStore(memoryCredentials());
+    const progress: LoginProgress[] = [];
+    let poll = 0;
+    await loginWithDeviceAuthorization(profile, sessions, {
+      noOpen: true,
+      sleep: async () => undefined,
+      networkPolicy: fastPolicy,
+      onProgress: (event) => void progress.push(event),
+      fetch: async (input) => {
+        if (String(input).includes("/device/code")) return deviceCodeResponse();
+        poll += 1;
+        if (poll === 1) return new Promise<Response>(() => undefined);
+        if (poll === 2)
+          return Response.json(
+            { error: "authorization_pending" },
+            { status: 400 },
+          );
+        return accessTokenResponse();
+      },
+    });
+    expect(poll).toBe(3);
+    expect(progress[0]).toMatchObject({
+      kind: "retry",
+      attempt: 1,
+      reason: "stalled",
+    });
+    expect(progress[1]).toEqual({ kind: "resumed" });
+    expect(await sessions.get(profile)).toBe("bearer-secret");
+  });
+
+  test("a rate-limited poll waits the server's retry-after", async () => {
+    const sessions = createSessionStore(memoryCredentials());
+    const waits: number[] = [];
+    let poll = 0;
+    await loginWithDeviceAuthorization(profile, sessions, {
+      noOpen: true,
+      sleep: async (milliseconds) => void waits.push(milliseconds),
+      networkPolicy: fastPolicy,
+      fetch: async (input) => {
+        if (String(input).includes("/device/code")) return deviceCodeResponse();
+        poll += 1;
+        if (poll === 1)
+          // A plain proxy 429 with a non-JSON body must still be retried.
+          return new Response("rate limited", {
+            status: 429,
+            headers: { "Retry-After": "2" },
+          });
+        return poll === 2
+          ? Response.json({ error: "authorization_pending" }, { status: 400 })
+          : accessTokenResponse();
+      },
+    });
+    expect(waits).toContain(2000);
+    expect(await sessions.get(profile)).toBe("bearer-secret");
+  });
+
+  test("a stalled login ends in a timeout state when the code expires", async () => {
+    let clock = 0;
+    // Each clock read advances the fake wall clock, so the code's 600
+    // seconds of validity run out while the token endpoint stays silent.
+    const policy: NetworkPolicy = {
+      requestDeadlineMs: 20,
+      maxAttempts: 3,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 2,
+      sleep: async () => undefined,
+      now: () => {
+        clock += 5000;
+        return clock;
+      },
+    };
+    let poll = 0;
+    await expect(
+      loginWithDeviceAuthorization(
+        profile,
+        createSessionStore(memoryCredentials()),
+        {
+          noOpen: true,
+          sleep: async () => undefined,
+          networkPolicy: policy,
+          fetch: async (input) => {
+            if (String(input).includes("/device/code"))
+              return deviceCodeResponse();
+            poll += 1;
+            return new Promise<Response>(() => undefined);
+          },
+        },
+      ),
+    ).rejects.toThrow("device authorization timed out");
+    expect(poll).toBeGreaterThanOrEqual(1);
+  });
+
+  test("a transient device-code outage is retried before giving up", async () => {
+    let calls = 0;
+    await loginWithDeviceAuthorization(
+      profile,
+      createSessionStore(memoryCredentials()),
+      {
+        noOpen: true,
+        sleep: async () => undefined,
+        networkPolicy: fastPolicy,
+        fetch: async () => {
+          calls += 1;
+          if (calls <= 2) throw new TypeError("fetch failed");
+          if (calls === 3) return deviceCodeResponse();
+          return accessTokenResponse();
+        },
+      },
+    );
+    // Two failed code fetches, the code itself, then the first token poll.
+    expect(calls).toBe(4);
+  });
+
+  test("an unreachable device authorization endpoint ends in a retryable error", async () => {
+    let calls = 0;
+    await expect(
+      loginWithDeviceAuthorization(
+        profile,
+        createSessionStore(memoryCredentials()),
+        {
+          noOpen: true,
+          sleep: async () => undefined,
+          networkPolicy: fastPolicy,
+          fetch: async () => {
+            calls += 1;
+            throw new TypeError("fetch failed");
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      category: "transient",
+      code: "device_authorization_unavailable",
+    });
+    expect(calls).toBe(3);
   });
 });
 
