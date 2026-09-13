@@ -76,7 +76,11 @@ const approveFulfill = (outcome: ApprovalOutcome) => {
   }
 };
 
-const mockDeviceFlow = async (page: Page, getState: () => DeviceFlowState) => {
+const mockDeviceFlow = async (
+  page: Page,
+  getState: () => DeviceFlowState,
+  getSession: () => SessionState = () => getState().session,
+) => {
   await page.route("**/api/auth/device**", (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/auth/device")
@@ -86,7 +90,7 @@ const mockDeviceFlow = async (page: Page, getState: () => DeviceFlowState) => {
     return route.fulfill(json(404, unavailable.body));
   });
   await page.route("**/api/auth/get-session", (route) =>
-    route.fulfill(sessionFulfill(getState().session)),
+    route.fulfill(sessionFulfill(getSession())),
   );
 };
 
@@ -246,20 +250,14 @@ test("a lapsed session during approval returns to the sign-in control", async ({
   // The session lapses after the initial check, so only the get-session
   // route advances the counter.
   let sessionChecks = 0;
-  await page.route("**/api/auth/device**", (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/auth/device")
-      return route.fulfill(statusFulfill(state.current.status));
-    if (url.pathname === "/api/auth/device/approve")
-      return route.fulfill(approveFulfill(state.current.approve));
-    return route.fulfill(json(404, unavailable.body));
-  });
-  await page.route("**/api/auth/get-session", (route) => {
-    sessionChecks += 1;
-    return route.fulfill(
-      sessionFulfill(sessionChecks <= 1 ? "signed-in" : "signed-out"),
-    );
-  });
+  await mockDeviceFlow(
+    page,
+    () => state.current,
+    () => {
+      sessionChecks += 1;
+      return sessionChecks <= 1 ? "signed-in" : "signed-out";
+    },
+  );
   await openDevicePage(page);
 
   await expect(page.getByTestId("device-approval-allow")).toBeVisible();

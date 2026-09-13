@@ -139,8 +139,12 @@ test("maps approval outcomes to views or a re-check", () => {
   expect(deviceApprovalAttemptView({ kind: "unavailable" })).toEqual({
     kind: "connection",
   });
-  expect(deviceApprovalAttemptView({ kind: "stale" })).toBeUndefined();
-  expect(deviceApprovalAttemptView({ kind: "signed-out" })).toBeUndefined();
+  expect(deviceApprovalAttemptView({ kind: "stale" })).toEqual({
+    kind: "recheck",
+  });
+  expect(deviceApprovalAttemptView({ kind: "signed-out" })).toEqual({
+    kind: "recheck",
+  });
 });
 
 type StubFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -253,7 +257,7 @@ test("a signed-out approval lands on the sign-in view through a re-check", async
     "ABCDEFGH",
     fetcher,
   );
-  expect(deviceApprovalAttemptView(attempt)).toBeUndefined();
+  expect(deviceApprovalAttemptView(attempt)).toEqual({ kind: "recheck" });
   const [status, session] = await Promise.all([
     checkDeviceStatus("http://localhost:3001", "ABCDEFGH", fetcher),
     checkServerProfileSession("http://localhost:3001", fetcher),

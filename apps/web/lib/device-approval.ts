@@ -114,9 +114,13 @@ export const deviceApprovalView = (
   return { kind: "connection" };
 };
 
+export type DeviceApprovalResolution =
+  | DeviceApprovalView
+  | { readonly kind: "recheck" };
+
 export const deviceApprovalAttemptView = (
   attempt: DeviceApprovalAttempt,
-): DeviceApprovalView | undefined => {
+): DeviceApprovalResolution => {
   switch (attempt.kind) {
     case "approved":
       return { kind: "approved" };
@@ -128,7 +132,7 @@ export const deviceApprovalAttemptView = (
       return { kind: "connection" };
     case "stale":
     case "signed-out":
-      return undefined;
+      return { kind: "recheck" };
   }
 };
 

@@ -26,16 +26,23 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
   const [busy, setBusy] = useState(false);
   const runRef = useRef(0);
 
+  const settle = useCallback(
+    async (run: number) => {
+      const [status, session] = await Promise.all([
+        checkDeviceStatus(apiOrigin, userCode),
+        checkServerProfileSession(apiOrigin),
+      ]);
+      if (run !== runRef.current) return;
+      setView(deviceApprovalView(status, session));
+    },
+    [apiOrigin, userCode],
+  );
+
   const checkState = useCallback(async () => {
     const run = ++runRef.current;
     setView("checking");
-    const [status, session] = await Promise.all([
-      checkDeviceStatus(apiOrigin, userCode),
-      checkServerProfileSession(apiOrigin),
-    ]);
-    if (run !== runRef.current) return;
-    setView(deviceApprovalView(status, session));
-  }, [apiOrigin, userCode]);
+    await settle(run);
+  }, [settle]);
 
   useEffect(() => {
     void checkState();
@@ -48,19 +55,14 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
       const attempt = await attemptDeviceApproval(apiOrigin, userCode);
       if (run !== runRef.current) return;
       const resolved = deviceApprovalAttemptView(attempt);
-      if (resolved !== undefined) {
+      if (resolved.kind !== "recheck") {
         setView(resolved);
         return;
       }
       // The code may have been processed or the session may have lapsed while
       // the request ran; re-derive the view from a fresh status check.
       setView("checking");
-      const [status, session] = await Promise.all([
-        checkDeviceStatus(apiOrigin, userCode),
-        checkServerProfileSession(apiOrigin),
-      ]);
-      if (run !== runRef.current) return;
-      setView(deviceApprovalView(status, session));
+      await settle(run);
     } finally {
       if (run === runRef.current) setBusy(false);
     }
@@ -152,11 +154,11 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
         >
           <ShieldOff aria-hidden="true" className="text-amber-300" />
           <AlertTitle>
-            This code can&apos;t be allowed from this account
+            This code can&apos;t be allowed from this sign-in
           </AlertTitle>
           <AlertDescription>
-            It was claimed by a different account. Return to the CLI and check
-            the code it shows.
+            It was claimed by a different User. Return to the CLI and check the
+            code it shows.
           </AlertDescription>
         </Alert>
       );
