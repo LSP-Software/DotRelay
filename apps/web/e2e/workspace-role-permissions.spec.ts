@@ -251,8 +251,14 @@ test("a Member reads every Value but edits only the lanes they provided or own",
   test.setTimeout(90_000);
   await installRoutes(page);
   await page.goto("/workspace");
+  // Setting the preview role switches the main view to the Team page, which
+  // hides the Projects list heading, so open the project from the sidebar
+  // navigation instead of the Projects view.
   await setPreviewRole(page, "MEMBER");
-  await openFirstProject(page);
+  await page
+    .locator("aside")
+    .getByRole("button", { name: "LSP-Software / DotRelay" })
+    .click();
   await enrollBrowserAndReturn(page);
   const editor = await editorReady(page);
 
