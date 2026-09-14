@@ -64,12 +64,40 @@ The external source repository, identified by its stable GitHub identity, that i
 to clients but does not grant DotRelay access.
 _Avoid_: Project
 
+**Repository Identity**:
+The stable GitHub-side identifier of a GitHub Repository that does not change when the repository
+is renamed or transferred, unlike its descriptive owner/name.
+_Avoid_: Full name, repository name, slug
+
+**Repository Linkage**:
+The stable association between a Project and one Repository Identity, established through a
+deliberately supported user-authorized path and remaining valid while live GitHub data is
+unavailable.
+_Avoid_: Repository binding, repo link
+
+**Delegated GitHub Access**:
+The fine-grained GitHub authorization a User grants to the service at sign-in, covering only the
+repositories the User selects, which lets the service resolve Repository Identities and verify
+repository access on the User's behalf; clients never send or store it.
+_Avoid_: GitHub token, OAuth token, API key
+
+**Repository Resolution**:
+The service-side resolution of a repository's descriptive owner/name to its Repository Identity
+on the acting User's behalf through their Delegated GitHub Access, returning an access verdict
+or a classified failure.
+_Avoid_: Repository lookup, identity check
+
 **Repository Choice**:
 The explicit selection of which Git remote identifies a worktree's GitHub Repository when remotes
 name different repositories, such as a fork `origin` and a source `upstream`; it is stored in the
 worktree context as opaque identifiers and re-used until that remote stops pointing at the same
 repository, and it never grants access beyond the Project that identity identifies.
 _Avoid_: Remote switch, repository toggle
+
+**Canonical Rename**:
+A GitHub rename or transfer that changes a repository's descriptive owner/name while its
+Repository Identity stays the same, so an existing Repository Linkage must continue to apply.
+_Avoid_: Repository move, relocation
 
 **Environment**:
 A revisioned, named configuration scope within a Project, such as development, staging, or
