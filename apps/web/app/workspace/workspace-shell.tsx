@@ -102,6 +102,16 @@ import {
   type WorkspaceProject,
   workspaceProfileCatalog,
 } from "@/lib/workspace-boundary";
+import {
+  parseWorkspaceLocation,
+  resolveWorkspaceLocation,
+  sameWorkspaceLocation,
+  serializeWorkspaceLocation,
+  WORKSPACE_DEFAULT_PROFILE_ID,
+  type WorkspaceLocation,
+  type WorkspaceMissingResource,
+  type WorkspaceView,
+} from "@/lib/workspace-location";
 import { EnvironmentEditor } from "./environment-editor";
 
 type ProfileId = WorkspaceProfileId;
@@ -112,7 +122,7 @@ type SelectionRequest = Readonly<{
   readonly teamId: string | null;
   readonly projectId: string | null;
   readonly environmentId: string | null;
-  readonly view?: WorkspaceView;
+  readonly view: WorkspaceView;
 }>;
 
 type RetainedEditorContext = Readonly<{
@@ -130,12 +140,14 @@ type DraftState = Readonly<{
 }>;
 
 type PendingSwitch = Readonly<{
-  readonly request: SelectionRequest;
-  readonly onCommit?: (() => void) | undefined;
+  readonly target: WorkspaceLocation;
   readonly rebinding: boolean;
   readonly leavingLabel: string;
   readonly targetLabel?: string | undefined;
   readonly details: readonly string[];
+  // history.go delta that returns the browser to the entry the user left
+  // when dismissing a prompt opened by Back/Forward.
+  readonly restore?: number | undefined;
 }>;
 
 type PendingEnrollment = Readonly<{
@@ -157,12 +169,6 @@ const WORKSPACE_REFRESH_MS = Math.max(
 );
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
-type WorkspaceView =
-  | "projects"
-  | "environment"
-  | "team"
-  | "devices"
-  | "recovery";
 
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -194,26 +200,27 @@ const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
   MEMBER: "Members can view this Team's Projects.",
 };
 
-const writeWorkspaceParams = (input: {
-  readonly teamId: string | null;
-  readonly projectId: string | null;
-  readonly environmentId: string | null;
-}) => {
-  if (typeof window === "undefined") return;
-  const params = new URLSearchParams(window.location.search);
-  const assign = (key: string, value: string | null) => {
-    if (value) params.set(key, value);
-    else params.delete(key);
-  };
-  assign("team", input.teamId);
-  assign("project", input.projectId);
-  assign("environment", input.environmentId);
-  const next = params.toString();
-  window.history.replaceState(
-    null,
-    "",
-    next ? `${window.location.pathname}?${next}` : window.location.pathname,
-  );
+const missingResourceCopy: Readonly<
+  Record<
+    WorkspaceMissingResource["kind"],
+    Readonly<{ title: string; description: string }>
+  >
+> = {
+  team: {
+    title: "That Team is no longer available",
+    description:
+      "It may have been deleted, or you may have lost access. The first Team is shown instead.",
+  },
+  project: {
+    title: "That Project is no longer available",
+    description:
+      "It may have been archived or deleted, or you may have lost access. Choose a Project to continue.",
+  },
+  environment: {
+    title: "That Environment is no longer available",
+    description:
+      "It may have been deleted, or you may have lost access. The first Environment of the Project is shown instead.",
+  },
 };
 
 const LifecycleDialog = ({
@@ -328,7 +335,14 @@ export const WorkspaceShell = ({
     null,
   );
   const [contextStale, setContextStale] = useState(false);
+  const [missingResource, setMissingResource] =
+    useState<WorkspaceMissingResource | null>(null);
   const draftStateRef = useRef<Map<string, DraftState>>(new Map());
+  // The app's view of its own history entries (search strings) and the
+  // current position in them. Next's router owns the real entries, so the
+  // shell tracks its own commits to tell Back from Forward on popstate.
+  const historyEntriesRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(0);
   const [deviceSetupMessage, setDeviceSetupMessage] = useState<string | null>(
     null,
   );
@@ -453,22 +467,6 @@ export const WorkspaceShell = ({
     inProgress: deviceSetupInProgress,
   });
 
-  const syncSelection = useCallback(
-    (next: {
-      readonly teamId: string | null;
-      readonly projectId: string | null;
-      readonly environmentId: string | null;
-      readonly view?: WorkspaceView;
-    }) => {
-      setTeamId(next.teamId);
-      setProjectId(next.projectId);
-      setEnvironmentId(next.environmentId);
-      if (next.view) setView(next.view);
-      writeWorkspaceParams(next);
-    },
-    [],
-  );
-
   const removeSessionByKey = useCallback((key: string) => {
     setSessionsByKey((prev) => {
       if (!prev.has(key)) return prev;
@@ -486,26 +484,65 @@ export const WorkspaceShell = ({
     setupMessage: deviceSetupMessage,
   });
 
-  const commitSelection = (
-    request: SelectionRequest,
-    onCommit: (() => void) | undefined,
-    discard: boolean,
+  // Commit a location to app state and to the URL. A push records a new
+  // history entry for user-initiated navigation; anything else (hydration,
+  // catalog reconciliation, browser Back/Forward) replaces the current
+  // entry so the URL keeps normalizing to the visible state.
+  const applySelection = (
+    location: Readonly<
+      WorkspaceLocation & {
+        readonly missing?: WorkspaceMissingResource | null;
+      }
+    >,
+    options: Readonly<{
+      readonly push: boolean;
+      readonly discard?: boolean;
+    }>,
   ) => {
-    const rebinding =
-      request.profileId !== undefined && request.profileId !== profileId;
+    if (
+      sameWorkspaceLocation(location, {
+        profileId,
+        teamId,
+        projectId,
+        environmentId,
+        view,
+      })
+    ) {
+      if (location.missing) setMissingResource(location.missing);
+      // The location is unchanged but the URL entry can still carry stale
+      // params (a history entry written before the catalog dropped a
+      // resource); rewrite it so the entry matches the visible state.
+      if (typeof window === "undefined") return;
+      const search = serializeWorkspaceLocation(
+        location,
+        new URLSearchParams(window.location.search),
+      );
+      if (window.location.search === (search ? `?${search}` : "")) return;
+      const url = search
+        ? `${window.location.pathname}?${search}`
+        : window.location.pathname;
+      if (historyEntriesRef.current.length === 0) {
+        historyEntriesRef.current = [search];
+      }
+      historyEntriesRef.current[historyIndexRef.current] = search;
+      window.history.replaceState(null, "", url);
+      return;
+    }
+    const rebinding = location.profileId !== profileId;
+    const contextChanged =
+      !rebinding &&
+      (location.teamId !== teamId ||
+        location.projectId !== projectId ||
+        location.environmentId !== environmentId);
+    const discard = options.discard ?? false;
     if (rebinding) {
       setRetainedEditors(new Map());
       setSessionsByKey(new Map());
       draftStateRef.current.clear();
       pendingEnrollmentRef.current.clear();
       durableBrowserDeviceRef.current.clear();
-    } else {
-      const incomingKey = environmentContextKey({
-        ...currentIdentity,
-        teamId: request.teamId,
-        projectId: request.projectId,
-        environmentId: request.environmentId,
-      });
+      setContextStale(true);
+    } else if (contextChanged) {
       if (currentIdentity.environmentId) {
         setRetainedEditors((prev) => {
           const next = new Map(prev);
@@ -516,22 +553,74 @@ export const WorkspaceShell = ({
         if (discard) draftStateRef.current.delete(currentKey);
       }
       if (discard) removeSessionByKey(currentKey);
-      removeSessionByKey(incomingKey);
+      removeSessionByKey(
+        environmentContextKey(
+          environmentContextIdentity({
+            ...currentIdentity,
+            teamId: location.teamId,
+            projectId: location.projectId,
+            environmentId: location.environmentId,
+          }),
+        ),
+      );
+      setContextStale(true);
     }
+    // View-only commits keep the live session and editor state: Back/Forward
+    // and sidebar view switches must not reload or reset the Environment the
+    // user is working in.
     setPendingSwitch(null);
-    setContextStale(true);
+    setMissingResource(location.missing ?? null);
     if (rebinding) {
       resetWorkspaceContext();
-      const nextProfileId = request.profileId as ProfileId;
-      setProfileId(nextProfileId);
-      const placeholder = emptyWorkspaceBoundary(nextProfileId);
+      setProfileId(location.profileId);
+      const placeholder = emptyWorkspaceBoundary(location.profileId);
       setBoundary(placeholder);
       boundaryJsonRef.current = JSON.stringify(placeholder);
       setVerifiedAt(null);
       setConnection("loading");
     }
-    syncSelection(request);
-    onCommit?.();
+    setTeamId(location.teamId);
+    setProjectId(location.projectId);
+    setEnvironmentId(location.environmentId);
+    setView(location.view);
+    const project = displayBoundary.catalog.projects.find(
+      (candidate) => candidate.id === location.projectId,
+    );
+    const environment = project?.environments.find(
+      (candidate) => candidate.id === location.environmentId,
+    );
+    setProjectLifecycle(project?.lifecycle ?? "ACTIVE");
+    setEnvironmentLifecycle(environment?.lifecycle ?? "ACTIVE");
+    if (typeof window === "undefined") return;
+    const search = serializeWorkspaceLocation(
+      location,
+      new URLSearchParams(window.location.search),
+    );
+    const url = search
+      ? `${window.location.pathname}?${search}`
+      : window.location.pathname;
+    // Raw history calls create the entry synchronously. Router-queued pushes
+    // can be demoted to a replace when a follow-up URL write lands in the
+    // same cycle (a profile rebind reloads the boundary and re-normalizes
+    // the URL), which would swallow the entry and break Back/Forward.
+    // Next's patched pushState/replaceState mirror the URL into its router
+    // state, so the two stay in step.
+    if (options.push) {
+      const entries = historyEntriesRef.current.slice(
+        0,
+        historyIndexRef.current + 1,
+      );
+      entries.push(search);
+      historyEntriesRef.current = entries;
+      historyIndexRef.current += 1;
+      window.history.pushState(null, "", url);
+    } else {
+      if (historyEntriesRef.current.length === 0) {
+        historyEntriesRef.current = [search];
+      }
+      historyEntriesRef.current[historyIndexRef.current] = search;
+      window.history.replaceState(null, "", url);
+    }
   };
 
   const affectedEnvironmentLabels = (): string[] => {
@@ -561,17 +650,21 @@ export const WorkspaceShell = ({
     return labels;
   };
 
-  const requestSelection = (
-    request: SelectionRequest,
-    onCommit?: () => void,
-  ) => {
+  const requestSelection = (request: SelectionRequest) => {
     if (pendingSwitch) return;
-    const next = environmentContextIdentity({
-      ...currentIdentity,
-      profileId: request.profileId ?? currentIdentity.profileId,
+    const target: WorkspaceLocation = {
+      profileId: request.profileId ?? profileId,
       teamId: request.teamId,
       projectId: request.projectId,
       environmentId: request.environmentId,
+      view: request.view,
+    };
+    const next = environmentContextIdentity({
+      ...currentIdentity,
+      profileId: target.profileId,
+      teamId: target.teamId,
+      projectId: target.projectId,
+      environmentId: target.environmentId,
     });
     const dirtyDraft = draftStateRef.current.get(currentKey)?.dirty === true;
     const anyDraftDirty =
@@ -584,8 +677,7 @@ export const WorkspaceShell = ({
     });
     const promptSwitch = (rebinding: boolean) => {
       setPendingSwitch({
-        request,
-        onCommit,
+        target,
         rebinding,
         leavingLabel: rebinding
           ? workspaceProfileCatalog[profileId].name
@@ -601,41 +693,36 @@ export const WorkspaceShell = ({
           : (draftStateRef.current.get(currentKey)?.changedVariableNames ?? []),
       });
     };
-    if (decision.type === "noop") {
-      syncSelection(request);
-      onCommit?.();
-      return;
-    }
     if (decision.type === "rebind") {
       if (anyDraftDirty) promptSwitch(true);
-      else commitSelection(request, onCommit, false);
+      else applySelection(target, { push: true });
       return;
     }
     if (decision.type === "prompt") {
       promptSwitch(false);
       return;
     }
-    commitSelection(request, onCommit, false);
+    // "noop" (same context, possibly a new view) and "switch" (no dirty
+    // draft) both commit directly; drafts are kept for the later return.
+    applySelection(target, { push: true });
   };
-  const requestSelectionRef = useRef(requestSelection);
-  requestSelectionRef.current = requestSelection;
 
   const openProject = (project: WorkspaceProject) => {
-    const firstEnvironment = project.environments[0];
-    requestSelection(
-      {
-        teamId: project.teamId,
-        projectId: project.id,
-        environmentId: firstEnvironment?.id ?? null,
-        view: "environment",
-      },
-      () => {
-        setProjectLifecycle(project.lifecycle);
-        setEnvironmentLifecycle(firstEnvironment?.lifecycle ?? "ACTIVE");
-      },
-    );
+    requestSelection({
+      teamId: project.teamId,
+      projectId: project.id,
+      environmentId: project.environments[0]?.id ?? null,
+      view: "environment",
+    });
   };
 
+  const openWorkspaceView = (nextView: WorkspaceView) => {
+    requestSelection({ teamId, projectId, environmentId, view: nextView });
+  };
+
+  // Hydrate the location the URL names. Profile and view are validated up
+  // front; team/project/environment ids are validated against the catalog by
+  // the reconciliation effect once the boundary loads.
   useEffect(() => {
     setBrowserCrypto(
       typeof globalThis.crypto?.subtle?.importKey === "function",
@@ -643,11 +730,38 @@ export const WorkspaceShell = ({
     const params = new URLSearchParams(window.location.search);
     const nextPreview = params.get("preview");
     setPreview(nextPreview);
-    setTeamId(params.get("team"));
-    setProjectId(params.get("project"));
-    setEnvironmentId(params.get("environment"));
-    if (nextPreview === "protected" || params.get("project"))
-      setView("environment");
+    const parsed = parseWorkspaceLocation(params);
+    if (parsed.profileId !== WORKSPACE_DEFAULT_PROFILE_ID) {
+      setProfileId(parsed.profileId);
+      const placeholder = emptyWorkspaceBoundary(parsed.profileId);
+      setBoundary(placeholder);
+      boundaryJsonRef.current = JSON.stringify(placeholder);
+    }
+    const initialView: WorkspaceView =
+      parsed.view ??
+      (parsed.projectId || nextPreview === "protected"
+        ? "environment"
+        : "projects");
+    setTeamId(parsed.teamId);
+    setProjectId(parsed.projectId);
+    setEnvironmentId(parsed.environmentId);
+    setView(initialView);
+    const search = serializeWorkspaceLocation(
+      {
+        profileId: parsed.profileId,
+        teamId: parsed.teamId,
+        projectId: parsed.projectId,
+        environmentId: parsed.environmentId,
+        view: initialView,
+      },
+      params,
+    );
+    const url = search
+      ? `${window.location.pathname}?${search}`
+      : window.location.pathname;
+    historyEntriesRef.current = [search];
+    historyIndexRef.current = 0;
+    window.history.replaceState(null, "", url);
   }, []);
 
   useEffect(() => {
@@ -663,25 +777,161 @@ export const WorkspaceShell = ({
     return () => window.removeEventListener("beforeunload", guardUnload);
   }, []);
 
+  const viewFallback = (hasProject: boolean): WorkspaceView =>
+    hasProject || preview === "protected" ? "environment" : "projects";
+
+  // Reconcile the app's location against the loaded catalog: default to the
+  // first Team, drop resources the catalog no longer knows (with a recovery
+  // notice), and open the first Project for the protected preview when no
+  // Project is open. The location comes from app state, never from the URL:
+  // the URL can still lag a user-initiated navigation, and re-reading it
+  // here would undo the navigation that just committed. Skipped until a
+  // catalog is verified so a fresh offline load never treats the empty
+  // placeholder as the real workspace.
   useEffect(() => {
-    if (teams.length === 0) return;
-    const firstTeam = teams.find((team) => team.id === teamId) ?? teams[0];
-    if (!firstTeam) return;
-    const firstProject = displayBoundary.catalog.projects.find(
-      (project) => project.teamId === firstTeam.id,
+    // A prompt is waiting on the user's decision; never reconcile
+    // behind its back or the prompt gets committed away.
+    if (pendingSwitch) return;
+    if (teams.length === 0 && connection !== "online") return;
+    const target = resolveWorkspaceLocation(
+      { profileId, teamId, projectId, environmentId, view },
+      displayBoundary.catalog,
+      viewFallback,
     );
-    const firstEnvironment = firstProject?.environments[0];
-    if (preview === "protected" && !projectId && firstProject) {
-      requestSelectionRef.current({
-        teamId: firstTeam.id,
-        projectId: firstProject.id,
-        environmentId: firstEnvironment?.id ?? null,
-        view: "environment",
-      });
+    if (
+      sameWorkspaceLocation(target, {
+        profileId,
+        teamId,
+        projectId,
+        environmentId,
+        view,
+      })
+    ) {
+      if (preview !== "protected") return;
+      if (!target.teamId) return;
+      // A Project is already open, so the user's Team/Project/Environment
+      // choice stands; never re-point it at the first Project.
+      if (target.projectId) return;
+      const firstProject = displayBoundary.catalog.projects.find(
+        (project) => project.teamId === target.teamId,
+      );
+      if (!firstProject) return;
+      applySelection(
+        {
+          ...target,
+          projectId: firstProject.id,
+          environmentId: firstProject.environments[0]?.id ?? null,
+          view: "environment",
+        },
+        { push: false },
+      );
       return;
     }
-    if (!teamId) setTeamId(firstTeam.id);
-  }, [displayBoundary.catalog.projects, preview, projectId, teamId, teams]);
+    applySelection(target, { push: false });
+  }, [
+    displayBoundary.catalog,
+    teams,
+    connection,
+    preview,
+    pendingSwitch,
+    profileId,
+    teamId,
+    projectId,
+    environmentId,
+    view,
+  ]);
+
+  // Browser Back/Forward: the URL of the history entry is the source of
+  // truth, so reconcile app state to it. Same-Profile moves keep any dirty
+  // drafts (they stay retained for the forward trip); a Profile rebind with
+  // dirty drafts prompts, and dismissing the prompt restores the entry the
+  // user left.
+  const handlePopState = () => {
+    // A Back/Forward that leaves the workspace page navigates away from it;
+    // only entries under /workspace are owned by this shell.
+    if (window.location.pathname !== "/workspace") return;
+    const fromIndex = historyIndexRef.current;
+    const entries = historyEntriesRef.current;
+    // The stored entries carry no leading "?" while location.search does.
+    // Back/Forward lands on the entry next to the one left, so match the
+    // adjacent entries first; that also keeps repeated search strings
+    // unambiguous. Anything else is an entry the app never wrote, which can
+    // only sit below the first entry the shell committed.
+    const search = window.location.search.replace(/^\?/, "");
+    let toIndex: number;
+    if (fromIndex > 0 && entries[fromIndex - 1] === search) {
+      toIndex = fromIndex - 1;
+    } else if (
+      fromIndex < entries.length - 1 &&
+      entries[fromIndex + 1] === search
+    ) {
+      toIndex = fromIndex + 1;
+    } else {
+      const found = entries.indexOf(search);
+      toIndex = found === -1 ? 0 : found;
+    }
+    historyIndexRef.current = toIndex;
+    const restore = fromIndex - toIndex;
+    if (pendingSwitch) setPendingSwitch(null);
+    const parsed = parseWorkspaceLocation(
+      new URLSearchParams(window.location.search),
+    );
+    const target =
+      teams.length > 0 || connection === "online"
+        ? resolveWorkspaceLocation(
+            parsed,
+            displayBoundary.catalog,
+            viewFallback,
+          )
+        : {
+            profileId: parsed.profileId,
+            teamId: parsed.teamId,
+            projectId: parsed.projectId,
+            environmentId: parsed.environmentId,
+            view: parsed.view ?? viewFallback(parsed.projectId !== null),
+            missing: null,
+          };
+    if (
+      sameWorkspaceLocation(target, {
+        profileId,
+        teamId,
+        projectId,
+        environmentId,
+        view,
+      })
+    ) {
+      // Same location, but the entry's URL can still need normalizing.
+      applySelection(target, { push: false });
+      return;
+    }
+    const rebinding = target.profileId !== profileId;
+    if (rebinding) {
+      const anyDraftDirty = [...draftStateRef.current.values()].some(
+        (state) => state.dirty,
+      );
+      if (anyDraftDirty) {
+        setPendingSwitch({
+          target,
+          rebinding: true,
+          restore,
+          leavingLabel: workspaceProfileCatalog[profileId].name,
+          targetLabel: workspaceProfileCatalog[target.profileId].name,
+          details: affectedEnvironmentLabels(),
+        });
+        return;
+      }
+      applySelection(target, { push: false, discard: true });
+      return;
+    }
+    applySelection(target, { push: false });
+  };
+  const handlePopStateRef = useRef(handlePopState);
+  handlePopStateRef.current = handlePopState;
+  useEffect(() => {
+    const listener = () => handlePopStateRef.current();
+    window.addEventListener("popstate", listener);
+    return () => window.removeEventListener("popstate", listener);
+  }, []);
 
   const commitBoundary = (next: WorkspaceBoundary) => {
     boundaryJsonRef.current = JSON.stringify(next);
@@ -1209,18 +1459,12 @@ export const WorkspaceShell = ({
   };
 
   const handleTeamChange = (nextTeamId: string) => {
-    requestSelection(
-      {
-        teamId: nextTeamId,
-        projectId: null,
-        environmentId: null,
-        view: "projects",
-      },
-      () => {
-        setProjectLifecycle("ACTIVE");
-        setEnvironmentLifecycle("ACTIVE");
-      },
-    );
+    requestSelection({
+      teamId: nextTeamId,
+      projectId: null,
+      environmentId: null,
+      view: "projects",
+    });
   };
 
   const createInvitation = () => {
@@ -1243,7 +1487,7 @@ export const WorkspaceShell = ({
             : "text-muted-foreground",
         )}
         onClick={() => {
-          setView("projects");
+          openWorkspaceView("projects");
           onNavigate?.();
         }}
         type="button"
@@ -1277,7 +1521,7 @@ export const WorkspaceShell = ({
             : "text-muted-foreground",
         )}
         onClick={() => {
-          setView("team");
+          openWorkspaceView("team");
           onNavigate?.();
         }}
         type="button"
@@ -1293,7 +1537,7 @@ export const WorkspaceShell = ({
             : "text-muted-foreground",
         )}
         onClick={() => {
-          setView("devices");
+          openWorkspaceView("devices");
           onNavigate?.();
         }}
         type="button"
@@ -1309,7 +1553,7 @@ export const WorkspaceShell = ({
             : "text-muted-foreground",
         )}
         onClick={() => {
-          setView("recovery");
+          openWorkspaceView("recovery");
           onNavigate?.();
         }}
         type="button"
@@ -1319,6 +1563,12 @@ export const WorkspaceShell = ({
       </button>
     </nav>
   );
+
+  const restoreHistoryEntry = (delta: number) => {
+    if (delta !== 0 && typeof window !== "undefined") {
+      window.history.go(delta);
+    }
+  };
 
   const switchRebinding = pendingSwitch?.rebinding === true;
   const envVisible =
@@ -1554,6 +1804,19 @@ export const WorkspaceShell = ({
                     Try again
                   </Button>
                 </div>
+              ) : null}
+              {missingResource ? (
+                <Alert
+                  className="mb-4 border-amber-300/30 bg-amber-300/5"
+                  data-testid="workspace-missing-resource"
+                >
+                  <AlertTitle>
+                    {missingResourceCopy[missingResource.kind].title}
+                  </AlertTitle>
+                  <AlertDescription>
+                    {missingResourceCopy[missingResource.kind].description}
+                  </AlertDescription>
+                </Alert>
               ) : null}
               {view === "projects" ? (
                 <section>
@@ -2038,7 +2301,12 @@ export const WorkspaceShell = ({
 
       <Dialog
         onOpenChange={(open) => {
-          if (!open) setPendingSwitch(null);
+          if (open) return;
+          const pending = pendingSwitch;
+          setPendingSwitch(null);
+          // Dismissing via the close control or Escape counts as staying, so
+          // a prompt opened by Back/Forward returns to the entry left behind.
+          if (pending?.restore) restoreHistoryEntry(pending.restore);
         }}
         open={pendingSwitch !== null}
       >
@@ -2062,46 +2330,43 @@ export const WorkspaceShell = ({
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const pending = pendingSwitch;
+                setPendingSwitch(null);
+                if (pending?.restore) restoreHistoryEntry(pending.restore);
+              }}
+            >
               {switchRebinding ? "Stay" : "Cancel"}
-            </DialogClose>
+            </Button>
             {!switchRebinding ? (
-              <DialogClose
-                render={
-                  <Button
-                    data-testid="switch-keep-draft"
-                    onClick={() => {
-                      if (pendingSwitch)
-                        commitSelection(
-                          pendingSwitch.request,
-                          pendingSwitch.onCommit,
-                          false,
-                        );
-                    }}
-                  />
-                }
+              <Button
+                data-testid="switch-keep-draft"
+                onClick={() => {
+                  if (pendingSwitch)
+                    applySelection(pendingSwitch.target, {
+                      push: true,
+                      discard: false,
+                    });
+                }}
               >
                 Keep draft
-              </DialogClose>
+              </Button>
             ) : null}
-            <DialogClose
-              render={
-                <Button
-                  data-testid="switch-discard-draft"
-                  onClick={() => {
-                    if (pendingSwitch)
-                      commitSelection(
-                        pendingSwitch.request,
-                        pendingSwitch.onCommit,
-                        true,
-                      );
-                  }}
-                  variant="destructive"
-                />
-              }
+            <Button
+              data-testid="switch-discard-draft"
+              variant="destructive"
+              onClick={() => {
+                if (pendingSwitch)
+                  applySelection(pendingSwitch.target, {
+                    push: true,
+                    discard: true,
+                  });
+              }}
             >
               {switchRebinding ? "Discard and switch" : "Discard changes"}
-            </DialogClose>
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
