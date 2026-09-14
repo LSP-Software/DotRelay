@@ -146,6 +146,8 @@ export type DecodedVariable = Readonly<{
   readonly value: string | null;
   readonly required: boolean;
   readonly tombstone: boolean;
+  readonly originalProviderUserId?: string | null;
+  readonly ownerUserId?: string | null;
 }>;
 
 const zeroBytes = (length: number): Uint8Array => new Uint8Array(length);
@@ -610,6 +612,12 @@ export const createPublicationArtifacts = async (
   });
 };
 
+const laneUserId = (lane: ProtocolObject, field: 26 | 27): string | null => {
+  const value = lane.get(field);
+  if (!(value instanceof Uint8Array) || value.length !== 16) return null;
+  return bytesToUuid(value);
+};
+
 export const decodeSyncVariables = async (
   page: SyncPageWire,
   resolvePrivateKey: (
@@ -627,6 +635,8 @@ export const decodeSyncVariables = async (
       value: string | null;
       required: boolean;
       tombstone: boolean;
+      originalProviderUserId: string | null;
+      ownerUserId: string | null;
     }
   >();
   for (const variable of existingVariables)
@@ -637,6 +647,8 @@ export const decodeSyncVariables = async (
       value: variable.value,
       required: variable.required,
       tombstone: variable.tombstone,
+      originalProviderUserId: variable.originalProviderUserId ?? null,
+      ownerUserId: variable.ownerUserId ?? null,
     });
   for (const revision of page.revisions) {
     const laneObjects = revision.objects.filter((object) => {
@@ -689,6 +701,12 @@ export const decodeSyncVariables = async (
         variables.set(id, {
           ...definition,
           value: definition.tombstone ? null : (existing?.value ?? null),
+          originalProviderUserId: definition.tombstone
+            ? null
+            : (existing?.originalProviderUserId ?? null),
+          ownerUserId: definition.tombstone
+            ? null
+            : (existing?.ownerUserId ?? null),
         });
       } else if (scope === 3 || scope === 4) {
         const existing = variables.get(id);
@@ -701,6 +719,13 @@ export const decodeSyncVariables = async (
           throw new ProtocolVerificationError(
             "sync Value lane ownership does not match its definition",
           );
+        if (scope === 3) {
+          existing.originalProviderUserId = laneUserId(lane, 27);
+          existing.ownerUserId = null;
+        } else {
+          existing.ownerUserId = laneUserId(lane, 26);
+          existing.originalProviderUserId = null;
+        }
         const plaintext = await openReadableLane(
           object.canonicalBytes,
           resolvePrivateKey(

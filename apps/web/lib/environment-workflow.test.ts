@@ -3,6 +3,8 @@ import {
   applyConflictResolution,
   applyRollbackToVariables,
   bareVerifiedRevision,
+  canActorChangeDefinitions,
+  canActorChangeVariableValue,
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
@@ -17,7 +19,10 @@ import {
   prepareEncryptedPublication,
   publicationMutationForHead,
   publishedBaseline,
+  readOnlyReason,
+  reconcileDraftWithPermissions,
   revisionMutationLabel,
+  roleLabel,
   rollbackValueDiffs,
   settlePublishedDraft,
   splitInlineValueDiff,
@@ -924,4 +929,208 @@ test("setup reports only the next action the person can take", () => {
   expect(displayedSetupAction(null, { localDeviceBlockers: true })?.id).toBe(
     "enroll-device",
   );
+});
+
+test("privileged Team roles may change every Value and the Manifest definition", () => {
+  const shared = createEnvironmentVariable(sharedDraft, "lane-1");
+  const owned = createEnvironmentVariable(
+    { ...sharedDraft, name: "MY_TOKEN", ownership: "USER_DEFINED_VALUE" },
+    "lane-2",
+  );
+
+  for (const role of ["OWNER", "ADMIN"] as const) {
+    expect(roleLabel(role)).not.toBe("Member");
+    expect(canActorChangeDefinitions({ role, actorUserId: null })).toBe(true);
+    expect(
+      canActorChangeVariableValue({ role, actorUserId: null }, shared),
+    ).toBe(true);
+    expect(
+      canActorChangeVariableValue({ role, actorUserId: "u-2" }, owned),
+    ).toBe(true);
+  }
+});
+
+test("a Member may change only the Values they provided or own", () => {
+  const provided = createEnvironmentVariable(sharedDraft, "lane-1", {
+    actorUserId: "u-1",
+  });
+  const foreignShared = createEnvironmentVariable(
+    { ...sharedDraft, name: "OTHER" },
+    "lane-2",
+    { actorUserId: "u-2" },
+  );
+  const ownToken = createEnvironmentVariable(
+    { ...sharedDraft, name: "MY_TOKEN", ownership: "USER_DEFINED_VALUE" },
+    "lane-3",
+    { actorUserId: "u-1" },
+  );
+  const foreignToken = createEnvironmentVariable(
+    { ...sharedDraft, name: "THEIR_TOKEN", ownership: "USER_DEFINED_VALUE" },
+    "lane-4",
+    { actorUserId: "u-2" },
+  );
+  const member = { role: "MEMBER" as const, actorUserId: "u-1" };
+
+  expect(canActorChangeVariableValue(member, provided)).toBe(true);
+  expect(canActorChangeVariableValue(member, foreignShared)).toBe(false);
+  expect(canActorChangeVariableValue(member, ownToken)).toBe(true);
+  expect(canActorChangeVariableValue(member, foreignToken)).toBe(false);
+  expect(
+    canActorChangeVariableValue(
+      { role: "MEMBER", actorUserId: null },
+      provided,
+    ),
+  ).toBe(false);
+  expect(canActorChangeDefinitions(member)).toBe(false);
+});
+
+test("creating a Variable records the acting User as provider or owner", () => {
+  const shared = createEnvironmentVariable(sharedDraft, "lane-1", {
+    actorUserId: "u-1",
+  });
+  expect(shared.originalProviderUserId).toBe("u-1");
+  expect(shared.ownerUserId).toBeUndefined();
+
+  const owned = createEnvironmentVariable(
+    { ...sharedDraft, name: "MY_TOKEN", ownership: "USER_DEFINED_VALUE" },
+    "lane-2",
+    { actorUserId: "u-1" },
+  );
+  expect(owned.ownerUserId).toBe("u-1");
+  expect(owned.originalProviderUserId).toBeUndefined();
+
+  const absent = createEnvironmentVariable(
+    {
+      ...sharedDraft,
+      name: "OPTIONAL_FLAG",
+      value: "",
+      valuePresent: false,
+      required: false,
+    },
+    "lane-3",
+    { actorUserId: "u-1" },
+  );
+  expect(absent.originalProviderUserId).toBeUndefined();
+  expect(absent.ownerUserId).toBeUndefined();
+});
+
+test("read-only Variables carry a reason for their locked controls", () => {
+  const provided = createEnvironmentVariable(sharedDraft, "lane-1", {
+    actorUserId: "u-1",
+  });
+  const foreignShared = createEnvironmentVariable(
+    { ...sharedDraft, name: "OTHER" },
+    "lane-2",
+    { actorUserId: "u-2" },
+  );
+  const foreignToken = createEnvironmentVariable(
+    { ...sharedDraft, name: "THEIR_TOKEN", ownership: "USER_DEFINED_VALUE" },
+    "lane-3",
+    { actorUserId: "u-2" },
+  );
+  const member = { role: "MEMBER" as const, actorUserId: "u-1" };
+
+  expect(readOnlyReason(member, provided)).toBeNull();
+  expect(readOnlyReason(member, foreignShared)).toBe(
+    "Only the provider or a Team admin can change this Shared Value.",
+  );
+  expect(readOnlyReason(member, foreignToken)).toBe(
+    "This User-defined Value belongs to another User.",
+  );
+  expect(
+    readOnlyReason({ role: "ADMIN", actorUserId: null }, foreignShared),
+  ).toBeNull();
+});
+
+test("a permission change drops uncovered draft lanes and keeps the rest", () => {
+  const provided = {
+    ...createEnvironmentVariable(sharedDraft, "lane-1", { actorUserId: "u-1" }),
+    hasDraftChange: false,
+  };
+  const foreignBaseline = {
+    ...createEnvironmentVariable(
+      { ...sharedDraft, name: "OTHER", value: "remote" },
+      "lane-2",
+      { actorUserId: "u-2" },
+    ),
+    hasDraftChange: false,
+  };
+  const foreignEdit = {
+    ...foreignBaseline,
+    value: "foreign-edit",
+    hasDraftChange: true,
+  };
+  const localAddition = createEnvironmentVariable(
+    { ...sharedDraft, name: "LATE_ADDITION" },
+    "lane-3",
+    { actorUserId: "u-1" },
+  );
+  const draft = [provided, foreignEdit, localAddition];
+  const remote = [provided, foreignBaseline];
+
+  const asMember = reconcileDraftWithPermissions(draft, remote, {
+    role: "MEMBER",
+    actorUserId: "u-1",
+  });
+  expect(asMember.droppedVariableNames).toEqual(["OTHER", "LATE_ADDITION"]);
+  expect(asMember.variables.map((variable) => variable.id)).toEqual([
+    "lane-1",
+    "lane-2",
+  ]);
+  expect(asMember.variables[1]).toMatchObject({
+    id: "lane-2",
+    value: "remote",
+    hasDraftChange: false,
+  });
+
+  const asOwner = reconcileDraftWithPermissions(draft, remote, {
+    role: "OWNER",
+    actorUserId: "u-1",
+  });
+  expect(asOwner.droppedVariableNames).toEqual([]);
+  expect(asOwner.variables.map((variable) => variable.id)).toEqual([
+    "lane-1",
+    "lane-2",
+    "lane-3",
+  ]);
+});
+
+test("a Member cannot keep a deletion draft after losing admin rights", () => {
+  const baseline = {
+    ...createEnvironmentVariable(
+      {
+        ...sharedDraft,
+        name: "OPTIONAL_FLAG",
+        value: "kept",
+        valuePresent: true,
+        required: false,
+      },
+      "lane-4",
+      { actorUserId: "u-2" },
+    ),
+    hasDraftChange: false,
+  };
+  const deleted = {
+    ...deleteEnvironmentVariable(baseline),
+    hasDraftChange: true,
+  };
+
+  const asMember = reconcileDraftWithPermissions([deleted], [baseline], {
+    role: "MEMBER",
+    actorUserId: "u-1",
+  });
+  expect(asMember.droppedVariableNames).toEqual(["OPTIONAL_FLAG"]);
+  expect(asMember.variables[0]).toMatchObject({
+    id: "lane-4",
+    value: "kept",
+    hasDraftChange: false,
+  });
+  expect(asMember.variables[0]?.tombstone).toBe(false);
+
+  const asAdmin = reconcileDraftWithPermissions([deleted], [baseline], {
+    role: "ADMIN",
+    actorUserId: "u-1",
+  });
+  expect(asAdmin.droppedVariableNames).toEqual([]);
+  expect(asAdmin.variables[0]?.tombstone).toBe(true);
 });

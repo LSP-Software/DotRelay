@@ -84,6 +84,7 @@ import {
 } from "@/lib/environment-protocol-session";
 import {
   displayedSetupAction,
+  isPrivilegedRole,
   nextSetupAction,
   type SetupAction,
 } from "@/lib/environment-workflow";
@@ -396,11 +397,12 @@ export const WorkspaceShell = ({
     ) ??
     selectedProject?.environments[0] ??
     null;
-  const effectiveRole =
+  const teamRoleFor = (teamId: string | null): MembershipRole =>
     displayBoundary.source === "fixture" || preview === "admin"
       ? role
-      : (selectedTeam?.role ?? "MEMBER");
-  const canAdminister = effectiveRole === "OWNER" || effectiveRole === "ADMIN";
+      : (teams.find((team) => team.id === teamId)?.role ?? "MEMBER");
+  const effectiveRole = teamRoleFor(selectedTeam?.id ?? null);
+  const canAdminister = isPrivilegedRole(effectiveRole);
   const cliCommand = `dotrelay setup ${displayBoundary.profile.origin}`;
   const currentIdentity = environmentContextIdentity({
     profileId,
@@ -1574,6 +1576,7 @@ export const WorkspaceShell = ({
                         available={false}
                         contextIdentity={currentIdentity}
                         onSetupAction={handleSetupAction}
+                        role={teamRoleFor(currentIdentity.teamId)}
                         setupAction={setupAction}
                         setupBusy={deviceSetupInProgress}
                         setupCommand={cliSetupCommand}
@@ -1974,6 +1977,7 @@ export const WorkspaceShell = ({
                         }
                         contextIdentity={entry.identity}
                         loading={isCurrent && contextStale}
+                        role={teamRoleFor(entry.identity.teamId)}
                         onDraftDirtyChange={(dirty, changedVariableNames) => {
                           draftStateRef.current.set(entryKey, {
                             dirty,
