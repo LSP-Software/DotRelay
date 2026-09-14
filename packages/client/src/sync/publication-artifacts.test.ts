@@ -412,10 +412,11 @@ describe("publication artifacts", () => {
     );
   });
 
-  test("verifies a page authored by different Users and decodes per-lane ownership", async () => {
+  test("verifies a page authored by different Users and keeps the original Shared Value provider", async () => {
     const device = await generateEncryptionKeyPair();
     const signing = await generateSigningKeyPair();
     const otherActor = "99999999-9999-4999-8999-999999999998";
+    const adminActor = "99999999-9999-4999-8999-999999999999";
     const otherShared = variable({
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
       name: "OTHER_SHARED",
@@ -500,7 +501,7 @@ describe("publication artifacts", () => {
     const head = await revisionArtifacts(
       [{ ...otherShared, value: "v3", hasDraftChange: true }],
       {
-        actorUserId: otherActor,
+        actorUserId: adminActor,
         expectedHeadId: mine.id,
         expectedHeadHash: mine.digest,
         mutation: "MANIFEST_UPDATE",
@@ -558,6 +559,45 @@ describe("publication artifacts", () => {
         value: "v3",
         originalProviderUserId: otherActor,
         ownerUserId: null,
+      }),
+    );
+    const adminDecoded = await decodeSyncVariables(
+      {
+        ...page,
+        currentHeadId: head.id,
+        currentHeadHash: head.digest,
+        revisions: [
+          {
+            ...head,
+            parentId: mine.id,
+            parentHash: mine.digest,
+            projectEpoch: BigInt(head.projectEpoch),
+            authoredAtMs: BigInt(head.authoredAtMs),
+            rollbackTargetId: null,
+          },
+        ],
+      },
+      () => device.privateKey,
+      [
+        {
+          id: otherShared.id,
+          name: otherShared.name,
+          description: otherShared.description,
+          ownership: otherShared.ownership,
+          value: "v1",
+          required: otherShared.required,
+          hasDraftChange: false,
+          tombstone: false,
+          originalProviderUserId: otherActor,
+          ownerUserId: null,
+        },
+      ],
+    );
+    expect(adminDecoded[0]).toEqual(
+      expect.objectContaining({
+        name: "OTHER_SHARED",
+        value: "v3",
+        originalProviderUserId: otherActor,
       }),
     );
     expect(decodedById.get(mineShared.id)).toEqual(

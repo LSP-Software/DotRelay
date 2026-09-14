@@ -1071,8 +1071,8 @@ export const EnvironmentEditor = ({
     const names = reconciled.droppedVariableNames.join(" and ");
     const cause =
       previous.role !== role
-        ? `Your Team role changed to ${roleLabel(role)}.`
-        : "This Environment is now acting as a different User.";
+        ? `Your Membership role changed to ${roleLabel(role)}.`
+        : "This Environment is now signed in as a different User.";
     setPublishMessage(
       `${cause} We removed ${names} from your draft because your current permissions no longer cover it. Other changes are kept.`,
     );

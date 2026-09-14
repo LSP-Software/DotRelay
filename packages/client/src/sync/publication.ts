@@ -720,7 +720,7 @@ export const decodeSyncVariables = async (
             "sync Value lane ownership does not match its definition",
           );
         if (scope === 3) {
-          existing.originalProviderUserId = laneUserId(lane, 27);
+          existing.originalProviderUserId ??= laneUserId(lane, 27);
           existing.ownerUserId = null;
         } else {
           existing.ownerUserId = laneUserId(lane, 26);

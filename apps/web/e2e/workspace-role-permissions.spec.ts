@@ -245,7 +245,7 @@ const editorReady = async (page: Page) => {
   return editor;
 };
 
-test("a Member reads every Value but edits only the lanes they provided or own", async ({
+test("a Member reads every Value but edits only the Values they provided or own", async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -268,6 +268,11 @@ test("a Member reads every Value but edits only the lanes they provided or own",
   const tokenRow = editor.getByTestId("environment-variable-MY_TOKEN");
   await expect(editor.getByLabel("OTHER_SHARED Value")).toBeDisabled();
   await expect(otherRow.getByText("Read-only", { exact: true })).toBeVisible();
+  await otherRow.getByRole("button", { name: "Reveal OTHER_SHARED" }).click();
+  await expect(editor.getByLabel("OTHER_SHARED Value")).toHaveAttribute(
+    "type",
+    "text",
+  );
   await expect(editor.getByLabel("MINE_SHARED Value")).toBeEnabled();
   await expect(editor.getByLabel("MY_TOKEN Value")).toBeEnabled();
   await expect(
@@ -313,7 +318,7 @@ test("a Member reads every Value but edits only the lanes they provided or own",
   await rollbackDialog.getByRole("button", { name: "Cancel" }).click();
 });
 
-test("demoting to Member mid-draft removes the lanes the new role cannot publish", async ({
+test("demoting to Member mid-draft removes the Values the new role cannot publish", async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -370,7 +375,7 @@ test("demoting to Member mid-draft removes the lanes the new role cannot publish
   await reviewDialog.getByRole("button", { name: "Cancel" }).click();
 });
 
-test("an Owner edits every Value, adds Variables, and may roll back any lane", async ({
+test("an Owner edits every Value, adds Variables, and may roll back any Value", async ({
   page,
 }) => {
   test.setTimeout(90_000);
