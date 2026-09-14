@@ -24,6 +24,14 @@ export type VerifiedEnvironmentSession = Readonly<{
       readonly variables: readonly DecodedVariable[];
     }>
   >;
+  /**
+   * Resolves the Values this Device verified at the target Revision for the
+   * requested Variables. A requested Variable that did not exist in that
+   * Revision is omitted from the result: the verified history says it was
+   * absent, which is not a failure. The call rejects only when the Revision
+   * itself is unavailable to this Device (missing from the local verified
+   * sync cache) or its data cannot be read.
+   */
   readonly resolveRollbackValues: (input: {
     readonly targetRevision: string;
     readonly selectedVariableIds: readonly string[];
@@ -106,10 +114,6 @@ export const createVerifiedEnvironmentSession = (input: {
       for (const variable of snapshot) {
         if (selected.has(variable.id)) values.set(variable.id, variable.value);
       }
-      if (values.size !== selected.size)
-        throw new Error(
-          "verified historical Value is missing for rollback lane",
-        );
       return values;
     },
     revisionSnapshots: () => snapshots,

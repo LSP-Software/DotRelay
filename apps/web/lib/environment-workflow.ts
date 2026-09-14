@@ -456,6 +456,52 @@ export const rollbackValueDiffs = (
     }),
   );
 
+// values holds the Variables verified present at the Revision; a requested
+// Variable missing from it was verified absent there. After a failed bulk
+// read, unresolvedVariableIds lists the Variables that could not be read at
+// all, so a failure is never mistaken for an unchanged or absent Variable.
+export type RollbackHistoryResolution = Readonly<{
+  readonly values: ReadonlyMap<string, string | null>;
+  readonly unresolvedVariableIds: readonly string[];
+}>;
+
+export const loadRollbackHistory = async (
+  resolve: (
+    input: Readonly<{
+      readonly targetRevision: string;
+      readonly selectedVariableIds: readonly string[];
+    }>,
+  ) => Promise<ReadonlyMap<string, string | null>>,
+  input: Readonly<{
+    readonly targetRevision: string;
+    readonly variableIds: readonly string[];
+  }>,
+): Promise<RollbackHistoryResolution> => {
+  try {
+    const values = await resolve({
+      targetRevision: input.targetRevision,
+      selectedVariableIds: input.variableIds,
+    });
+    return { values, unresolvedVariableIds: [] };
+  } catch {
+    const values = new Map<string, string | null>();
+    const unresolvedVariableIds: string[] = [];
+    for (const variableId of input.variableIds) {
+      try {
+        const one = await resolve({
+          targetRevision: input.targetRevision,
+          selectedVariableIds: [variableId],
+        });
+        if (one.has(variableId))
+          values.set(variableId, one.get(variableId) ?? null);
+      } catch {
+        unresolvedVariableIds.push(variableId);
+      }
+    }
+    return { values, unresolvedVariableIds };
+  }
+};
+
 export type ConflictResolution = "local" | "remote" | "merge";
 
 export type ConflictChangeKind = "value" | "definition" | "deletion";

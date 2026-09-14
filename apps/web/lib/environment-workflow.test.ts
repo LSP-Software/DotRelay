@@ -12,6 +12,7 @@ import {
   displayedSetupAction,
   draftValueDiffs,
   type EnvironmentVariable,
+  loadRollbackHistory,
   locallyPublishedRevision,
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
@@ -873,6 +874,69 @@ test("rollback refuses a selected lane without verified historical state", () =>
   expect(() =>
     applyRollbackToVariables(variable ? [variable] : [], new Map(), ["lane-1"]),
   ).toThrow("historical Value");
+});
+
+test("a verified rollback history read reports absence without failure", async () => {
+  const resolve = async (input: {
+    targetRevision: string;
+    selectedVariableIds: readonly string[];
+  }) => {
+    expect(input.targetRevision).toBe("rev_0183");
+    // lane-2 is verified absent from the Revision: the read succeeds and
+    // simply omits it.
+    return new Map<string, string | null>([
+      ["lane-1", "then"],
+      ["lane-3", null],
+    ]);
+  };
+
+  const result = await loadRollbackHistory(resolve, {
+    targetRevision: "rev_0183",
+    variableIds: ["lane-1", "lane-2", "lane-3"],
+  });
+
+  expect(result.values.get("lane-1")).toBe("then");
+  expect(result.values.has("lane-2")).toBe(false);
+  expect(result.values.get("lane-3")).toBeNull();
+  expect(result.unresolvedVariableIds).toEqual([]);
+});
+
+test("a failed bulk history read salvages readable Variables and names the rest unresolved", async () => {
+  const resolve = async (input: {
+    targetRevision: string;
+    selectedVariableIds: readonly string[];
+  }) => {
+    if (input.selectedVariableIds.length > 1)
+      throw new Error("integrity verification failed");
+    const variableId = input.selectedVariableIds[0] ?? "";
+    if (variableId === "lane-3") throw new Error("value could not be opened");
+    if (variableId === "lane-2") return new Map<string, string | null>();
+    return new Map<string, string | null>([[variableId, "then"]]);
+  };
+
+  const result = await loadRollbackHistory(resolve, {
+    targetRevision: "rev_0183",
+    variableIds: ["lane-1", "lane-2", "lane-3"],
+  });
+
+  expect(result.values.get("lane-1")).toBe("then");
+  // lane-2 verified absent on retry is not unresolved; lane-3 still failed.
+  expect(result.values.has("lane-2")).toBe(false);
+  expect(result.unresolvedVariableIds).toEqual(["lane-3"]);
+});
+
+test("an unreadable history reports every Variable unresolved", async () => {
+  const resolve = async () => {
+    throw new Error("verified historical Revision is not present");
+  };
+
+  const result = await loadRollbackHistory(resolve, {
+    targetRevision: "rev_0183",
+    variableIds: ["lane-1", "lane-2"],
+  });
+
+  expect(result.values.size).toBe(0);
+  expect(result.unresolvedVariableIds).toEqual(["lane-1", "lane-2"]);
 });
 
 const blockedSetup = {
