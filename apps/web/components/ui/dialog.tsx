@@ -47,9 +47,10 @@ const scrollElementIntoDialog = (
   // A sticky footer covers the bottom of the scroll region, so the target
   // must clear it to stay visible; an on-screen keyboard can shrink the
   // visual viewport below the layout viewport, so it must also clear the
-  // visible bottom. Fall back to the container bottom only when the target
-  // is too tall to fit above those. The 2px margin absorbs integer
-  // scrollTop rounding.
+  // visible bottom. When the target is too tall to fit above those, align
+  // its top with the scroll region's top so the visible portion is the
+  // start of the field rather than its bottom behind the footer. The 2px
+  // margin absorbs integer scrollTop rounding.
   let clearBottom = containerBox.bottom - 2;
   const footer = container.querySelector('[data-slot="dialog-footer"]');
   if (footer instanceof HTMLElement) {
@@ -73,7 +74,7 @@ const scrollElementIntoDialog = (
     clearBottom - containerBox.top
   ) {
     container.scrollTop += targetBox.bottom - clearBottom;
-  } else container.scrollTop += targetBox.bottom - containerBox.bottom;
+  } else container.scrollTop += targetBox.top - containerBox.top;
 };
 
 const scrollFocusedElementIntoDialog = (

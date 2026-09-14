@@ -166,8 +166,8 @@ test("the Add Variable form stays reachable at 200% zoom", async ({ page }) => {
   const name = dialog.getByLabel("Variable name");
   await expectInViewport(page, name);
 
-  // The pinned footer never covers a focused field: focusing the last field
-  // scrolls it fully above the footer actions.
+  // The pinned footer never covers a focused field: focusing the Initial
+  // Value field scrolls it fully above the footer actions.
   const initial = dialog.getByLabel("Initial Value");
   await initial.focus();
   await expectInViewport(page, initial);
@@ -194,7 +194,7 @@ test("a focused field and the submit action stay visible over the keyboard", asy
   const add = dialog.getByRole("button", { name: "Add Variable" });
   const cancel = dialog.getByRole("button", { name: "Cancel" });
 
-  // Focusing the last field keeps both the field and the submit action on
+  // Focusing a mid-form field keeps both the field and the submit action on
   // screen, with the field clear of the pinned footer.
   const initial = dialog.getByLabel("Initial Value");
   await initial.focus();
@@ -203,23 +203,32 @@ test("a focused field and the submit action stay visible over the keyboard", asy
   await expectInViewport(page, add);
   await expectInViewport(page, cancel);
 
-  // A mobile keyboard raises after focus, shrinking the visible viewport
-  // below the layout viewport; the focused field must stay visible above
-  // the pinned footer and the submit action must stay on screen.
+  // Focus the last field, then let the keyboard raise. Playwright cannot
+  // shrink only the visual viewport, so the on-screen keyboard is
+  // approximated by resizing the layout viewport, which dvh-based dialog
+  // constraints track; the focused field must stay visible above the pinned
+  // footer and the submit action must stay on screen.
+  const requiresValue = dialog.getByLabel("This Variable requires a Value");
+  await requiresValue.focus();
+  await expectInViewport(page, requiresValue);
+  await expectAboveDialogFooter(dialog, requiresValue);
+  await expectInViewport(page, add);
+  await expectInViewport(page, cancel);
+
   await page.setViewportSize(KEYBOARD_VIEWPORT);
   await expectInViewport(page, dialog);
-  await expectInViewport(page, initial);
-  await expectAboveDialogFooter(dialog, initial);
+  await expectInViewport(page, requiresValue);
+  await expectAboveDialogFooter(dialog, requiresValue);
   await expectInViewport(page, add);
   await expectInViewport(page, cancel);
 
   // Focusing a field while the keyboard is up scrolls it into view; blur
   // first because focusing the already-focused field fires no focus event
   // to scroll on.
-  await initial.blur();
-  await initial.focus();
-  await expectInViewport(page, initial);
-  await expectAboveDialogFooter(dialog, initial);
+  await requiresValue.blur();
+  await requiresValue.focus();
+  await expectInViewport(page, requiresValue);
+  await expectAboveDialogFooter(dialog, requiresValue);
   await expectInViewport(page, add);
   await expectInViewport(page, cancel);
 });
