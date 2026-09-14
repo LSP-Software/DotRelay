@@ -70,16 +70,40 @@ test("a long name stays distinguishable next to its Value and delete controls", 
   await expect(row.getByText("Draft change", { exact: true })).toBeVisible();
 });
 
+const boxesDoNotOverlap = async (a: Locator, b: Locator) => {
+  await expect
+    .poll(async () => {
+      const [boxA, boxB] = await Promise.all([
+        a.boundingBox(),
+        b.boundingBox(),
+      ]);
+      if (!boxA || !boxB) return false;
+      const touchesX =
+        boxA.x < boxB.x + boxB.width - 2 && boxB.x < boxA.x + boxA.width - 2;
+      const touchesY =
+        boxA.y < boxB.y + boxB.height - 2 && boxB.y < boxA.y + boxA.height - 2;
+      return !(touchesX && touchesY);
+    })
+    .toBe(true);
+};
+
 const assertRowReadable = async (row: Locator) => {
   await expect
     .poll(async () => row.evaluate((el) => el.scrollWidth <= el.clientWidth))
     .toBe(true);
-  await assertReadableWithoutHover(row.getByText(LONG_NAME, { exact: true }));
+  const name = row.getByText(LONG_NAME, { exact: true });
+  await assertReadableWithoutHover(name);
   await assertReadableWithoutHover(
     row.getByText(LONG_DESCRIPTION, { exact: true }),
   );
-  await expect(row.getByText("Shared Value", { exact: true })).toBeVisible();
-  await expect(row.getByText("Draft change", { exact: true })).toBeVisible();
+  const ownership = row.getByText("Shared Value", { exact: true });
+  const draft = row.getByText("Draft change", { exact: true });
+  await expect(ownership).toBeVisible();
+  await expect(draft).toBeVisible();
+  // toBeVisible cannot detect overlap; assert the boxes stay disjoint.
+  await boxesDoNotOverlap(name, ownership);
+  await boxesDoNotOverlap(name, draft);
+  await boxesDoNotOverlap(ownership, draft);
 };
 
 test("text zoom and a phone viewport keep names, descriptions, and badges readable", async ({
