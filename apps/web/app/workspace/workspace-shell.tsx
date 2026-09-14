@@ -219,7 +219,7 @@ const missingResourceCopy: Readonly<
   environment: {
     title: "That Environment is no longer available",
     description:
-      "It may have been deleted, or you may have lost access. The first available Environment of the Project is shown instead.",
+      "It may have been deleted, or you may have lost access. The first Environment of the Project is shown instead.",
   },
 };
 
@@ -232,18 +232,15 @@ const workspaceHistoryBookkeeping = {
   index: 0,
 };
 
-// Search strings alone do not identify a history entry: a projects → team →
-// projects round trip stores the same string on two entries, and inferring
-// the position from the URL then matches the wrong side. Each entry the
-// shell writes therefore carries its own bookkeeping index in history.state,
-// and Back/Forward reads it back from the popstate event. Next.js copies its
-// router state on top of the object (and ignores the extra key), so the two
-// stay in step; entries the shell never wrote fall back to URL matching.
-const WORKSPACE_ENTRY_INDEX_STATE_KEY = "dotrelayWorkspaceEntryIndex";
-const workspaceEntryState = (index: number) => ({
-  [WORKSPACE_ENTRY_INDEX_STATE_KEY]: index,
-});
-
+// The entries the shell writes keep a null history.state: Next.js's App
+// Router reloads the page for popstate entries it does not own (any custom
+// state object triggers that), and re-asserts stale URLs for ones it does,
+// so the shell must stay out of history.state entirely. Back/Forward then
+// identifies its target by the entry's search string, matching the adjacent
+// entries first; when a search string repeats on both sides of the current
+// entry (a projects → team → projects round trip), the two sides denote the
+// same location, so the visible state stays correct and the bookkeeping
+// index re-syncs on the next move.
 const urlForSearch = (search: string) =>
   search ? `${window.location.pathname}?${search}` : window.location.pathname;
 
@@ -255,11 +252,7 @@ const replaceHistoryEntry = (search: string) => {
   }
   workspaceHistoryBookkeeping.entries[workspaceHistoryBookkeeping.index] =
     search;
-  window.history.replaceState(
-    workspaceEntryState(workspaceHistoryBookkeeping.index),
-    "",
-    urlForSearch(search),
-  );
+  window.history.replaceState(null, "", urlForSearch(search));
 };
 
 const LifecycleDialog = ({
@@ -547,7 +540,11 @@ export const WorkspaceShell = ({
         view,
       })
     ) {
-      setMissingResource(location.missing ?? null);
+      // Keep the missing-resource notice an earlier commit reported: the
+      // re-resolved location no longer names the dropped resource, so
+      // `location.missing` is null here even though the page still shows
+      // the fallback for a resource the user asked for.
+      setMissingResource(location.missing ?? missingResource);
       // The location is unchanged, but resource state can still drift under
       // it: a reload of a shared link reaches this branch after the catalog
       // loads, so lifecycle is re-derived from the catalog instead of
@@ -655,11 +652,7 @@ export const WorkspaceShell = ({
       entries.push(search);
       workspaceHistoryBookkeeping.entries = entries;
       workspaceHistoryBookkeeping.index += 1;
-      window.history.pushState(
-        workspaceEntryState(workspaceHistoryBookkeeping.index),
-        "",
-        urlForSearch(search),
-      );
+      window.history.pushState(null, "", urlForSearch(search));
     } else {
       replaceHistoryEntry(search);
     }
@@ -864,9 +857,9 @@ export const WorkspaceShell = ({
       })
     ) {
       if (preview !== "protected") {
-        // Commit through applySelection so the same-location path refreshes
-        // resource lifecycle and normalizes the URL entry (a reload of a
-        // shared link lands here).
+        // Commit through applySelection so the same-location path re-derives
+        // resource lifecycle from the catalog and normalizes the URL entry;
+        // a reload of a shared link lands here.
         applySelectionRef.current(target, { push: false });
         return;
       }
@@ -909,28 +902,21 @@ export const WorkspaceShell = ({
   // drafts (they stay retained for the forward trip); a Profile rebind with
   // dirty drafts prompts, and dismissing the prompt restores the entry the
   // user left.
-  const handlePopState = (state: unknown) => {
+  const handlePopState = () => {
     // A Back/Forward that leaves the workspace page navigates away from it;
     // only entries under /workspace are owned by this shell.
     if (window.location.pathname !== "/workspace") return;
     const fromIndex = workspaceHistoryBookkeeping.index;
     const entries = workspaceHistoryBookkeeping.entries;
+    // The stored entries carry no leading "?" while location.search does.
+    // Back/Forward lands on the entry next to the one left, so match the
+    // adjacent entries first; a search string that repeats on both sides
+    // names the same location, so either side keeps the visible state
+    // correct. Anything else is an entry the app never wrote, which can
+    // only sit below the first entry the shell committed.
     const search = window.location.search.replace(/^\?/, "");
-    // Entries the shell wrote carry their own index in history.state, which
-    // identifies them even when another entry repeats their search string
-    // (a projects → team → projects round trip). Anything else is an entry
-    // the app never wrote, which can only sit below the first entry the
-    // shell committed, so fall back to matching the adjacent entries first.
-    const stored = state as Readonly<Record<string, unknown>> | null;
-    const storedIndex = stored?.[WORKSPACE_ENTRY_INDEX_STATE_KEY];
     let toIndex: number;
-    if (
-      typeof storedIndex === "number" &&
-      storedIndex >= 0 &&
-      storedIndex < entries.length
-    ) {
-      toIndex = storedIndex;
-    } else if (fromIndex > 0 && entries[fromIndex - 1] === search) {
+    if (fromIndex > 0 && entries[fromIndex - 1] === search) {
       toIndex = fromIndex - 1;
     } else if (
       fromIndex < entries.length - 1 &&
@@ -1005,8 +991,7 @@ export const WorkspaceShell = ({
   const handlePopStateRef = useRef(handlePopState);
   handlePopStateRef.current = handlePopState;
   useEffect(() => {
-    const listener = (event: PopStateEvent) =>
-      handlePopStateRef.current(event.state);
+    const listener = () => handlePopStateRef.current();
     window.addEventListener("popstate", listener);
     return () => window.removeEventListener("popstate", listener);
   }, []);

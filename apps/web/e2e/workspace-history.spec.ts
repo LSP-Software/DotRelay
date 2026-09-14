@@ -142,6 +142,25 @@ test("reload and shared links reopen the visible view and Server Profile", async
   ).toBeVisible();
 });
 
+test("reloading Team with a selected Project reopens the Team view", async ({
+  page,
+}) => {
+  await page.goto("/workspace");
+  await openFirstProject(page);
+  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await expectUrl(page, "view=team");
+  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  const teamUrl = page.url();
+
+  await page.goto(teamUrl);
+  await expectUrl(page, "view=team");
+  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  // The selected Project survives the reload; the URL keeps naming it.
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has("project"))
+    .toBe(true);
+});
+
 test("reloading the Projects, Team, and Devices views reopens them", async ({
   page,
 }) => {
