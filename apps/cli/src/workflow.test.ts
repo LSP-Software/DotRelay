@@ -2907,6 +2907,173 @@ describe("protected CLI workflows", () => {
     expect(String(diagnostic.detail)).toContain("not in the verified history");
   });
 
+  test("rollback rejects a Variable that did not exist in the target Revision", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const genesisVariableId = "99999999-9999-4999-8999-999999999999";
+    const laterVariableId = "99999999-9999-4999-8999-9999999999a0";
+    const genesis = await createPublicationArtifacts(
+      [
+        {
+          id: genesisVariableId,
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://secret",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const genesisRevisionObject = genesis.stagedObjects.find(
+      (object) => object.objectId === genesis.request.revision.protocolObjectId,
+    );
+    if (!genesisRevisionObject) throw new Error("revision object is missing");
+    const genesisDigest = await sha384(genesisRevisionObject.bytes);
+    // A later Revision adds NEW_FLAG, so the live Manifest carries it while
+    // the Genesis Revision it was added in does not.
+    const later = await createPublicationArtifacts(
+      [
+        {
+          id: genesisVariableId,
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://secret",
+          required: true,
+          hasDraftChange: false,
+        },
+        {
+          id: laterVariableId,
+          name: "NEW_FLAG",
+          description: "Flag added after the target Revision.",
+          ownership: "SHARED_VALUE",
+          value: "on",
+          required: false,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: genesis.request.revision.id,
+        expectedHeadHash: genesisDigest,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+        mutation: "MANIFEST_UPDATE",
+      },
+    );
+    const laterRevisionObject = later.stagedObjects.find(
+      (object) => object.objectId === later.request.revision.protocolObjectId,
+    );
+    if (!laterRevisionObject) throw new Error("revision object is missing");
+    const runtime = await setup({
+      bootstrap,
+      revisions: [
+        {
+          id: genesis.request.revision.id,
+          digest: genesisDigest,
+          parentId: ids.environment,
+          parentHash: new Uint8Array(48),
+          mutation: 1,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(genesis.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            genesis.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+        {
+          id: later.request.revision.id,
+          digest: await sha384(laterRevisionObject.bytes),
+          parentId: genesis.request.revision.id,
+          parentHash: genesisDigest,
+          mutation: 2,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(later.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            later.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+      ],
+    });
+    const result = await run(
+      [
+        "rollback",
+        genesis.request.revision.id,
+        "--variable",
+        "NEW_FLAG",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic.category).toBe("conflict");
+    expect(diagnostic.code).toBe("rollback_variable_absent");
+    expect(String(diagnostic.detail)).toContain("NEW_FLAG");
+    // The refusal happens before any publication: the history is untouched.
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    const historyBody = JSON.parse(history.stdout) as {
+      revisions: unknown[];
+    };
+    expect(historyBody.revisions).toHaveLength(2);
+  });
+
   test("rolling back to the current head publishes nothing", async () => {
     const { runtime } = await seededHistory();
     const rolled = await run(

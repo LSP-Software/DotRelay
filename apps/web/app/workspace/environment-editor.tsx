@@ -22,7 +22,14 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -69,12 +76,14 @@ import {
   draftValueDiffs,
   type EditorActor,
   type EnvironmentVariable,
+  loadRollbackHistory,
   locallyPublishedRevision,
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
   publicationMutationForHead,
   publishedBaseline,
+  type RollbackHistoryResolution,
   readOnlyReason,
   reconcileDraftWithPermissions,
   revisionMutationLabel,
@@ -1107,24 +1116,39 @@ export const EnvironmentEditor = ({
     },
     [],
   );
+  const [rollbackHistoricalValues, setRollbackHistoricalValues] = useState<
+    ReadonlyMap<string, string | null>
+  >(() => new Map());
+  const [rollbackHistoryLoading, setRollbackHistoryLoading] = useState(false);
+  const [rollbackHistoryError, setRollbackHistoryError] = useState<
+    string | null
+  >(null);
+  const [rollbackUnresolvedVariableIds, setRollbackUnresolvedVariableIds] =
+    useState<ReadonlySet<string>>(() => new Set());
+  const rollbackLoadSequenceRef = useRef(0);
+  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(false);
+  const resetRollbackState = useCallback(() => {
+    rollbackLoadSequenceRef.current += 1;
+    setRollbackTarget(null);
+    setRollbackLanes(new Set());
+    setRollbackHistoricalValues(new Map());
+    setRollbackUnresolvedVariableIds(new Set());
+    setRollbackHistoryError(null);
+    setRollbackHistoryLoading(false);
+    setRollbackValuesRevealed(false);
+  }, []);
   useEffect(() => {
     if (active !== false) return;
     setAddOpen(false);
     setReviewOpen(false);
     setReviewValuesRevealed(false);
-    setRollbackTarget(null);
-    setRollbackLanes(new Set());
-    setRollbackValuesRevealed(false);
+    resetRollbackState();
     setConflictValuesRevealed(false);
-  }, [active]);
+  }, [active, resetRollbackState]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
   >(() => new Map());
-  const [rollbackHistoricalValues, setRollbackHistoricalValues] = useState<
-    ReadonlyMap<string, string | null>
-  >(() => new Map());
   const [reviewValuesRevealed, setReviewValuesRevealed] = useState(false);
-  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(false);
   const baselineFor = (id: string): EnvironmentVariable | undefined =>
     remoteVariables.find((variable) => variable.id === id);
   const withDraftFlag = (
@@ -1152,6 +1176,9 @@ export const EnvironmentEditor = ({
     variables,
     rollbackHistoricalValues,
   );
+  const unresolvedRollbackNames = [...rollbackUnresolvedVariableIds]
+    .map((id) => variables.find((variable) => variable.id === id)?.name)
+    .filter((name): name is string => name !== undefined);
   const disallowedDraftCount = variables.filter(
     (variable) =>
       variable.hasDraftChange &&
@@ -1258,30 +1285,14 @@ export const EnvironmentEditor = ({
   const loadHistoricalValues = async (
     revision: string,
     variableIds: readonly string[],
-  ): Promise<ReadonlyMap<string, string | null>> => {
+  ): Promise<RollbackHistoryResolution> => {
     const rollbackSession = session;
-    if (!rollbackSession?.resolveRollbackValues) return historicalValues;
-    try {
-      return await rollbackSession.resolveRollbackValues({
-        targetRevision: revision,
-        selectedVariableIds: variableIds,
-      });
-    } catch {
-      const values = new Map<string, string | null>();
-      for (const variableId of variableIds) {
-        try {
-          const one = await rollbackSession.resolveRollbackValues({
-            targetRevision: revision,
-            selectedVariableIds: [variableId],
-          });
-          if (one.has(variableId))
-            values.set(variableId, one.get(variableId) ?? null);
-        } catch {
-          // This Variable did not exist in that revision.
-        }
-      }
-      return values;
-    }
+    if (!rollbackSession?.resolveRollbackValues)
+      return { values: historicalValues, unresolvedVariableIds: [] };
+    return loadRollbackHistory(rollbackSession.resolveRollbackValues, {
+      targetRevision: revision,
+      variableIds,
+    });
   };
 
   const canRollbackVariable = (variable: EnvironmentVariable): boolean =>
@@ -1291,24 +1302,37 @@ export const EnvironmentEditor = ({
     canRollbackVariable(variable),
   );
   const openRollback = async (revision: string) => {
-    const values = await loadHistoricalValues(
-      revision,
-      variables.map((variable) => variable.id),
-    );
-    const diffs = rollbackValueDiffs(variables, values);
+    const requestedVariableIds = variables.map((variable) => variable.id);
+    resetRollbackState();
+    const loadSequence = ++rollbackLoadSequenceRef.current;
+    setRollbackTarget(revision);
+    setRollbackHistoryLoading(true);
+    const history = await loadHistoricalValues(revision, requestedVariableIds);
+    if (rollbackLoadSequenceRef.current !== loadSequence) return;
+    setRollbackHistoryLoading(false);
+    if (
+      requestedVariableIds.length > 0 &&
+      history.values.size === 0 &&
+      history.unresolvedVariableIds.length === requestedVariableIds.length
+    ) {
+      setRollbackHistoryError(
+        "This Device could not read this Revision's Values, so it cannot be compared. Nothing was staged.",
+      );
+      return;
+    }
+    const diffs = rollbackValueDiffs(variables, history.values);
     const selectableIds = new Set(
       variables
         .filter((variable) => canRollbackVariable(variable))
         .map((variable) => variable.id),
     );
-    setRollbackHistoricalValues(values);
+    setRollbackHistoricalValues(history.values);
+    setRollbackUnresolvedVariableIds(new Set(history.unresolvedVariableIds));
     setRollbackLanes(
       new Set(
         diffs.map((diff) => diff.id).filter((id) => selectableIds.has(id)),
       ),
     );
-    setRollbackValuesRevealed(false);
-    setRollbackTarget(revision);
   };
 
   const clearConflictState = () => {
@@ -1985,11 +2009,7 @@ export const EnvironmentEditor = ({
 
       <Dialog
         onOpenChange={(open) => {
-          if (!open) {
-            setRollbackTarget(null);
-            setRollbackHistoricalValues(new Map());
-            setRollbackValuesRevealed(false);
-          }
+          if (!open) resetRollbackState();
         }}
         open={rollbackTarget !== null}
       >
@@ -2015,87 +2035,141 @@ export const EnvironmentEditor = ({
               </p>
             </div>
           ) : null}
-          {pendingRollbackDiffs.length === 0 ? (
+          {rollbackHistoryLoading ? (
+            <p
+              className="text-sm text-muted-foreground"
+              data-testid="rollback-history-loading"
+              role="status"
+            >
+              Reading this Revision&rsquo;s Values…
+            </p>
+          ) : rollbackHistoryError !== null ? (
+            <Alert
+              className="mt-2 border-destructive/30"
+              data-testid="rollback-history-error"
+            >
+              <AlertTitle>Rollback history unavailable</AlertTitle>
+              <AlertDescription className="flex flex-col gap-3">
+                <span>{rollbackHistoryError}</span>
+                <div>
+                  <Button
+                    disabled={rollbackTarget === null}
+                    onClick={() => {
+                      if (rollbackTarget !== null)
+                        void openRollback(rollbackTarget);
+                    }}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <RotateCcw aria-hidden="true" /> Retry reading
+                  </Button>
+                </div>
+              </AlertDescription>
+            </Alert>
+          ) : pendingRollbackDiffs.length === 0 &&
+            rollbackUnresolvedVariableIds.size === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing is different from this revision.
             </p>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">
-                  {rollbackLanes.size} of {pendingRollbackDiffs.length}{" "}
-                  Variables selected
-                </p>
-                <Button
-                  aria-pressed={rollbackValuesRevealed}
-                  onClick={() =>
-                    setRollbackValuesRevealed((current) => !current)
-                  }
-                  size="xs"
-                  variant="ghost"
+              {rollbackUnresolvedVariableIds.size > 0 ? (
+                <Alert
+                  className="mt-2 border-amber-300/30"
+                  data-testid="rollback-history-partial"
                 >
-                  {rollbackValuesRevealed ? (
-                    <EyeOff aria-hidden="true" />
-                  ) : (
-                    <Eye aria-hidden="true" />
-                  )}
-                  {rollbackValuesRevealed ? "Hide values" : "Show values"}
-                </Button>
-              </div>
-              <div className="grid max-h-[min(50vh,28rem)] gap-2 overflow-y-auto">
-                {pendingRollbackDiffs.map((diff) => {
-                  const rollbackVariable = variables.find(
-                    (candidate) => candidate.id === diff.id,
-                  );
-                  const selectable =
-                    rollbackVariable !== undefined &&
-                    canRollbackVariable(rollbackVariable);
-                  return (
-                    <label
-                      className="flex items-start gap-3 rounded-lg border p-3"
-                      key={diff.id}
+                  <AlertTitle>Partial comparison</AlertTitle>
+                  <AlertDescription>
+                    {`The historical Values for ${unresolvedRollbackNames.join(", ")} could not be read from this Revision, so this comparison is partial. Staging applies only to the Variables verified from it.`}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {pendingRollbackDiffs.length > 0 ? (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      {rollbackLanes.size} of {pendingRollbackDiffs.length}{" "}
+                      Variables selected
+                    </p>
+                    <Button
+                      aria-pressed={rollbackValuesRevealed}
+                      onClick={() =>
+                        setRollbackValuesRevealed((current) => !current)
+                      }
+                      size="xs"
+                      variant="ghost"
                     >
-                      <input
-                        checked={rollbackLanes.has(diff.id)}
-                        className="mt-1"
-                        disabled={!selectable}
-                        onChange={(event) =>
-                          setRollbackLanes((current) => {
-                            const next = new Set(current);
-                            if (event.target.checked) next.add(diff.id);
-                            else next.delete(diff.id);
-                            return next;
-                          })
-                        }
-                        type="checkbox"
-                      />
-                      <span className="grid min-w-0 flex-1 gap-1">
-                        <ValueDiffLines
-                          diff={diff}
-                          revealed={rollbackValuesRevealed}
-                        />
-                        {!selectable ? (
-                          <span className="text-[11px] text-muted-foreground">
-                            {rollbackVariable
-                              ? (readOnlyReason(actor, rollbackVariable) ??
-                                (rollbackVariable.tombstone
-                                  ? "This Variable is marked for deletion in your draft."
-                                  : null))
-                              : null}
+                      {rollbackValuesRevealed ? (
+                        <EyeOff aria-hidden="true" />
+                      ) : (
+                        <Eye aria-hidden="true" />
+                      )}
+                      {rollbackValuesRevealed ? "Hide values" : "Show values"}
+                    </Button>
+                  </div>
+                  <div className="grid max-h-[min(50vh,28rem)] gap-2 overflow-y-auto">
+                    {pendingRollbackDiffs.map((diff) => {
+                      const rollbackVariable = variables.find(
+                        (candidate) => candidate.id === diff.id,
+                      );
+                      const selectable =
+                        rollbackVariable !== undefined &&
+                        canRollbackVariable(rollbackVariable);
+                      return (
+                        <label
+                          className="flex items-start gap-3 rounded-lg border p-3"
+                          key={diff.id}
+                        >
+                          <input
+                            checked={rollbackLanes.has(diff.id)}
+                            className="mt-1"
+                            disabled={!selectable}
+                            onChange={(event) =>
+                              setRollbackLanes((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) next.add(diff.id);
+                                else next.delete(diff.id);
+                                return next;
+                              })
+                            }
+                            type="checkbox"
+                          />
+                          <span className="grid min-w-0 flex-1 gap-1">
+                            <ValueDiffLines
+                              diff={diff}
+                              revealed={rollbackValuesRevealed}
+                            />
+                            {!selectable ? (
+                              <span className="text-[11px] text-muted-foreground">
+                                {rollbackVariable
+                                  ? (readOnlyReason(actor, rollbackVariable) ??
+                                    (rollbackVariable.tombstone
+                                      ? "This Variable is marked for deletion in your draft."
+                                      : null))
+                                  : null}
+                              </span>
+                            ) : null}
                           </span>
-                        ) : null}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
             </>
           )}
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>
               Cancel
             </DialogClose>
-            <Button disabled={rollbackLanes.size === 0} onClick={applyRollback}>
+            <Button
+              disabled={
+                rollbackLanes.size === 0 ||
+                rollbackHistoryLoading ||
+                rollbackHistoryError !== null
+              }
+              onClick={applyRollback}
+            >
               Stage rollback
             </Button>
           </DialogFooter>

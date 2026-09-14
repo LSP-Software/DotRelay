@@ -133,6 +133,7 @@ const safeDiagnosticCodes = new Set([
   "response_invalid",
   "response_too_large",
   "rollback_target_unavailable",
+  "rollback_variable_absent",
   "rotation_required",
   "service_unavailable",
   "session_invalid",

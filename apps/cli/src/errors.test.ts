@@ -100,6 +100,7 @@ describe("CLI diagnostics", () => {
       ["conflict", "recovery_generation_invalid"],
       ["conflict", "recovery_requires_no_active_device"],
       ["conflict", "rollback_target_unavailable"],
+      ["conflict", "rollback_variable_absent"],
       ["incomplete-export", "missing_values"],
       ["invocation", "invalid_id"],
       ["invocation", "payload_too_large"],

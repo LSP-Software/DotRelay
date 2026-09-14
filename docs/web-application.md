@@ -82,7 +82,12 @@ re-runs the approved publication against the re-anchored head rather than only r
  them, an honest unavailable label where it does not, and a short id suffix so a Revision can be
  referenced without memorizing its full id. The rollback dialog identifies the target Revision and
  previews the masked consequence of the selected lanes — a new Rollback revision that restores
- only the chosen Variables — before it is staged. The development protected preview uses the same
+ only the chosen Variables — before it is staged. Reading a target Revision's Values shows
+ progress while the Device resolves them. If the Revision is missing from the Device's verified
+ history, or an integrity or decryption check fails, the dialog reports the failure with a retry
+ instead of claiming the Revision is unchanged: only a Variable verified absent from the Revision
+ is left out of the preview, and a partial read names every Variable it could not resolve so it
+ cannot imply a complete comparison. The development protected preview uses the same
  cryptographic artifact builder but is explicitly local and never reports a service publication.
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
