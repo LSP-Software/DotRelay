@@ -223,6 +223,29 @@ const missingResourceCopy: Readonly<
   },
 };
 
+// The search strings of the history entries the shell committed itself, plus
+// the position it believes it holds. Module-scoped so the bookkeeping
+// survives a remount of the shell within the tab; a full page load starts
+// fresh and re-anchors on the URL the shell hydrates.
+const workspaceHistoryBookkeeping = {
+  entries: [] as string[],
+  index: 0,
+};
+
+const urlForSearch = (search: string) =>
+  search ? `${window.location.pathname}?${search}` : window.location.pathname;
+
+// Rewrite the current entry in place so its URL keeps matching the visible
+// state without adding a history entry.
+const replaceHistoryEntry = (search: string) => {
+  if (workspaceHistoryBookkeeping.entries.length === 0) {
+    workspaceHistoryBookkeeping.entries = [search];
+  }
+  workspaceHistoryBookkeeping.entries[workspaceHistoryBookkeeping.index] =
+    search;
+  window.history.replaceState(null, "", urlForSearch(search));
+};
+
 const LifecycleDialog = ({
   resource,
   lifecycle,
@@ -338,11 +361,6 @@ export const WorkspaceShell = ({
   const [missingResource, setMissingResource] =
     useState<WorkspaceMissingResource | null>(null);
   const draftStateRef = useRef<Map<string, DraftState>>(new Map());
-  // The app's view of its own history entries (search strings) and the
-  // current position in them. Next's router owns the real entries, so the
-  // shell tracks its own commits to tell Back from Forward on popstate.
-  const historyEntriesRef = useRef<string[]>([]);
-  const historyIndexRef = useRef(0);
   const [deviceSetupMessage, setDeviceSetupMessage] = useState<string | null>(
     null,
   );
@@ -508,7 +526,7 @@ export const WorkspaceShell = ({
         view,
       })
     ) {
-      if (location.missing) setMissingResource(location.missing);
+      setMissingResource(location.missing ?? null);
       // The location is unchanged but the URL entry can still carry stale
       // params (a history entry written before the catalog dropped a
       // resource); rewrite it so the entry matches the visible state.
@@ -518,14 +536,7 @@ export const WorkspaceShell = ({
         new URLSearchParams(window.location.search),
       );
       if (window.location.search === (search ? `?${search}` : "")) return;
-      const url = search
-        ? `${window.location.pathname}?${search}`
-        : window.location.pathname;
-      if (historyEntriesRef.current.length === 0) {
-        historyEntriesRef.current = [search];
-      }
-      historyEntriesRef.current[historyIndexRef.current] = search;
-      window.history.replaceState(null, "", url);
+      replaceHistoryEntry(search);
       return;
     }
     const rebinding = location.profileId !== profileId;
@@ -596,9 +607,6 @@ export const WorkspaceShell = ({
       location,
       new URLSearchParams(window.location.search),
     );
-    const url = search
-      ? `${window.location.pathname}?${search}`
-      : window.location.pathname;
     // Raw history calls create the entry synchronously. Router-queued pushes
     // can be demoted to a replace when a follow-up URL write lands in the
     // same cycle (a profile rebind reloads the boundary and re-normalizes
@@ -606,20 +614,16 @@ export const WorkspaceShell = ({
     // Next's patched pushState/replaceState mirror the URL into its router
     // state, so the two stay in step.
     if (options.push) {
-      const entries = historyEntriesRef.current.slice(
+      const entries = workspaceHistoryBookkeeping.entries.slice(
         0,
-        historyIndexRef.current + 1,
+        workspaceHistoryBookkeeping.index + 1,
       );
       entries.push(search);
-      historyEntriesRef.current = entries;
-      historyIndexRef.current += 1;
-      window.history.pushState(null, "", url);
+      workspaceHistoryBookkeeping.entries = entries;
+      workspaceHistoryBookkeeping.index += 1;
+      window.history.pushState(null, "", urlForSearch(search));
     } else {
-      if (historyEntriesRef.current.length === 0) {
-        historyEntriesRef.current = [search];
-      }
-      historyEntriesRef.current[historyIndexRef.current] = search;
-      window.history.replaceState(null, "", url);
+      replaceHistoryEntry(search);
     }
   };
 
@@ -756,12 +760,18 @@ export const WorkspaceShell = ({
       },
       params,
     );
-    const url = search
-      ? `${window.location.pathname}?${search}`
-      : window.location.pathname;
-    historyEntriesRef.current = [search];
-    historyIndexRef.current = 0;
-    window.history.replaceState(null, "", url);
+    // A full load starts with empty bookkeeping and anchors on this URL. A
+    // remount within the tab re-anchors on the entry the tab already wrote,
+    // so Back/Forward prompts opened after the remount still restore the
+    // entry the user left.
+    const anchored = workspaceHistoryBookkeeping.entries.indexOf(search);
+    if (anchored === -1) {
+      workspaceHistoryBookkeeping.entries = [search];
+      workspaceHistoryBookkeeping.index = 0;
+    } else {
+      workspaceHistoryBookkeeping.index = anchored;
+    }
+    replaceHistoryEntry(search);
   }, []);
 
   useEffect(() => {
@@ -850,8 +860,8 @@ export const WorkspaceShell = ({
     // A Back/Forward that leaves the workspace page navigates away from it;
     // only entries under /workspace are owned by this shell.
     if (window.location.pathname !== "/workspace") return;
-    const fromIndex = historyIndexRef.current;
-    const entries = historyEntriesRef.current;
+    const fromIndex = workspaceHistoryBookkeeping.index;
+    const entries = workspaceHistoryBookkeeping.entries;
     // The stored entries carry no leading "?" while location.search does.
     // Back/Forward lands on the entry next to the one left, so match the
     // adjacent entries first; that also keeps repeated search strings
@@ -870,7 +880,7 @@ export const WorkspaceShell = ({
       const found = entries.indexOf(search);
       toIndex = found === -1 ? 0 : found;
     }
-    historyIndexRef.current = toIndex;
+    workspaceHistoryBookkeeping.index = toIndex;
     const restore = fromIndex - toIndex;
     if (pendingSwitch) setPendingSwitch(null);
     const parsed = parseWorkspaceLocation(
@@ -2346,7 +2356,9 @@ export const WorkspaceShell = ({
                 onClick={() => {
                   if (pendingSwitch)
                     applySelection(pendingSwitch.target, {
-                      push: true,
+                      // A prompt opened by Back/Forward already sits on the
+                      // target entry; pushing again would duplicate it.
+                      push: pendingSwitch.restore === undefined,
                       discard: false,
                     });
                 }}
@@ -2360,7 +2372,7 @@ export const WorkspaceShell = ({
               onClick={() => {
                 if (pendingSwitch)
                   applySelection(pendingSwitch.target, {
-                    push: true,
+                    push: pendingSwitch.restore === undefined,
                     discard: true,
                   });
               }}

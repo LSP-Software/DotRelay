@@ -160,7 +160,12 @@ covers unpublished draft protection: drafts survive subview navigation and retur
 warns only while a draft is dirty and keeps or discards it on the user's choice, discard
 prompts name the affected Environments and, within a Server Profile, the changed Variables, a
 Server Profile switch with a dirty draft requires an explicit discard, and draft Values never
-appear in browser storage. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
+appear in browser storage. `apps/web/e2e/workspace-history.spec.ts` keeps the workspace
+location, URL, and browser history in sync: Back/Forward traverses the workspace views and the
+selected Environment, a reload or shared link reopens the visible view and Server Profile, a
+link to a deleted Team, Project, or Environment shows a recovery notice instead of a blank
+page, and history navigation preserves dirty drafts or, for a Server Profile rebind, prompts so
+dismissing it returns to the entry left behind. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
 read states with a live protocol session: a slow initial read shows the loading state instead of
 the empty-claim, and a failed read discloses the failure with a retry action while Add Variable,
 Save changes, and per-Variable edits stay blocked; retry re-enters the loading state.

@@ -16,10 +16,6 @@ export type WorkspaceView = (typeof WORKSPACE_VIEWS)[number];
 
 export const WORKSPACE_DEFAULT_PROFILE_ID: WorkspaceProfileId = "hosted";
 
-export const WORKSPACE_PROFILE_IDS: readonly string[] = Object.keys(
-  workspaceProfileCatalog,
-);
-
 /**
  * Raw location parsed from the page URL. Profile and view are validated
  * immediately; team, project, and environment ids are validated later, once
@@ -61,10 +57,10 @@ export type WorkspaceLocation = Readonly<{
 
 export const parseWorkspaceLocation = (
   search: URLSearchParams,
-  knownProfiles: readonly string[] = WORKSPACE_PROFILE_IDS,
 ): ParsedWorkspaceLocation => {
   const profileId = search.get("profile");
   const view = search.get("view");
+  const knownProfiles = Object.keys(workspaceProfileCatalog);
   return {
     profileId:
       profileId && knownProfiles.includes(profileId)
@@ -112,12 +108,6 @@ export const sameWorkspaceLocation = (
   a.projectId === b.projectId &&
   a.environmentId === b.environmentId &&
   a.view === b.view;
-
-export const readHistorySeq = (state: unknown): number => {
-  if (state === null || typeof state !== "object") return 0;
-  const seq = (state as { readonly seq?: unknown }).seq;
-  return typeof seq === "number" && Number.isFinite(seq) ? seq : 0;
-};
 
 /**
  * Validate a parsed location against the workspace catalog. A missing Team

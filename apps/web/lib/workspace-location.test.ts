@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import type { WorkspaceCatalog } from "./workspace-boundary";
 import {
   parseWorkspaceLocation,
-  readHistorySeq,
   resolveWorkspaceLocation,
   sameWorkspaceLocation,
   serializeWorkspaceLocation,
@@ -146,14 +145,6 @@ test("sameWorkspaceLocation compares all five fields", () => {
   expect(sameWorkspaceLocation(a, { ...a })).toBe(true);
   expect(sameWorkspaceLocation(a, { ...a, view: "team" as const })).toBe(false);
   expect(sameWorkspaceLocation(a, { ...a, teamId: null })).toBe(false);
-});
-
-test("readHistorySeq reads a finite number and defaults to zero", () => {
-  expect(readHistorySeq({ seq: 3 })).toBe(3);
-  expect(readHistorySeq({ seq: "no" })).toBe(0);
-  expect(readHistorySeq(null)).toBe(0);
-  expect(readHistorySeq(undefined)).toBe(0);
-  expect(readHistorySeq({})).toBe(0);
 });
 
 test("resolve validates a full chain against the catalog", () => {
