@@ -15,6 +15,7 @@ export const PROBLEM_STATUS = {
   genesis_exists: 409,
   state_conflict: 409,
   staged_object_missing: 409,
+  repository_access_denied: 403,
   invitation_expired: 410,
   staging_expired: 410,
   payload_too_large: 413,
@@ -23,8 +24,10 @@ export const PROBLEM_STATUS = {
   unsupported_crypto_suite: 422,
   unsupported_crypto_runtime: 422,
   rate_limited: 429,
+  github_rate_limited: 429,
   rate_limit_unavailable: 503,
   crypto_provider_unavailable: 503,
+  github_unavailable: 503,
   service_unavailable: 503,
 } as const;
 
@@ -37,6 +40,7 @@ const GENERIC_TITLES: Record<ProblemCode, string> = {
   forbidden: "Forbidden",
   device_not_active: "Device not active",
   resource_not_found: "Resource not found",
+  repository_access_denied: "Repository access denied",
   membership_not_key_provisioned: "Membership not key provisioned",
   operation_conflict: "Operation conflict",
   stale_head: "Stale head",
@@ -55,8 +59,10 @@ const GENERIC_TITLES: Record<ProblemCode, string> = {
   unsupported_crypto_suite: "Unsupported cryptographic suite",
   unsupported_crypto_runtime: "Unsupported cryptographic runtime",
   rate_limited: "Rate limited",
+  github_rate_limited: "GitHub rate limited",
   rate_limit_unavailable: "Rate limit unavailable",
   crypto_provider_unavailable: "Cryptographic provider unavailable",
+  github_unavailable: "GitHub unavailable",
   service_unavailable: "Service unavailable",
 };
 

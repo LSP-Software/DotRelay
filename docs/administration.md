@@ -46,6 +46,17 @@ closed while another active Project holds it.
 GitHub Repository metadata is descriptive only. A User with repository admission but no active
 Membership receives no Project or Environment disclosure or authorization.
 
+The Client never calls the GitHub API and never sends a GitHub token. To resolve the descriptive
+`owner/repo` name a Client read from its Git remote, the service answers
+`GET /api/v1/github-repositories/resolve` for the acting protocol actor: it looks up the
+Repository on that User's behalf with the fine-grained GitHub App grant the User made while
+signing in (Delegated GitHub Access), and returns the current descriptive owner/name with GitHub's
+stable numeric Repository Identity. Without Delegated GitHub Access for the User — or when GitHub
+answers 403 or 404, which the endpoint conflates on purpose so it is not an existence oracle —
+the service reports `repository_access_denied`. GitHub rate limits surface as
+`github_rate_limited` with the retry window, and an unreachable or malformed GitHub answer as
+`github_unavailable`; both are transient and leave established sync unaffected.
+
 ## Environment lifecycle and disclosure
 
 An Environment belongs permanently to a Project and has `ACTIVE` or `ARCHIVED` metadata state.

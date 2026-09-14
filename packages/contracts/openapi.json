@@ -29,6 +29,7 @@
       "genesis_exists": 409,
       "state_conflict": 409,
       "staged_object_missing": 409,
+      "repository_access_denied": 403,
       "invitation_expired": 410,
       "staging_expired": 410,
       "payload_too_large": 413,
@@ -37,8 +38,10 @@
       "unsupported_crypto_suite": 422,
       "unsupported_crypto_runtime": 422,
       "rate_limited": 429,
+      "github_rate_limited": 429,
       "rate_limit_unavailable": 503,
       "crypto_provider_unavailable": 503,
+      "github_unavailable": 503,
       "service_unavailable": 503
     }
   },
@@ -1013,6 +1016,7 @@
               "genesis_exists",
               "state_conflict",
               "staged_object_missing",
+              "repository_access_denied",
               "invitation_expired",
               "staging_expired",
               "payload_too_large",
@@ -1021,8 +1025,10 @@
               "unsupported_crypto_suite",
               "unsupported_crypto_runtime",
               "rate_limited",
+              "github_rate_limited",
               "rate_limit_unavailable",
               "crypto_provider_unavailable",
+              "github_unavailable",
               "service_unavailable"
             ]
           },

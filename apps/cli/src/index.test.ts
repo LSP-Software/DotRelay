@@ -209,6 +209,59 @@ describe("CLI foundation", () => {
     }
   });
 
+  test("context reports the descriptive selection when verification is unavailable", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-context-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(
+        profilePath,
+        JSON.stringify({
+          version: 1,
+          selected: "relay",
+          profiles: [
+            {
+              name: "relay",
+              origin: "https://relay.example",
+              pin: {
+                origin: "https://relay.example",
+                serverProfileId: "00000000-0000-4000-8000-000000000042",
+              },
+            },
+          ],
+        }),
+      );
+      const result = await run(["context", "--profile", "relay", "--json"], {
+        profilePath,
+        worktreeConfig: contextPath,
+        readGitRemotes: async () => [
+          { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
+        ],
+        credentials: {
+          get: async () => null,
+          set: async () => undefined,
+          delete: async () => undefined,
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        repository: "github.com/LSP-Software/DotRelay",
+        nextAction:
+          "sign in to this Server Profile and enroll a Device to verify the repository identity",
+      });
+      // A detected selection that could not be verified records nothing, so
+      // the next run starts from the Git configuration again.
+      expect(await Bun.file(contextPath).exists()).toBe(false);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
   test("links a Project and writes only opaque worktree context", async () => {
     const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
     const contextPath = `${import.meta.dir}/.tmp-context-${crypto.randomUUID()}`;
@@ -244,7 +297,6 @@ describe("CLI foundation", () => {
           readGitRemotes: async () => [
             { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
           ],
-          githubFetch: async () => Response.json({ id: 1311418611 }),
           admin: {
             post: async () => ({
               id: "00000000-0000-4000-8000-000000000002",
@@ -252,7 +304,17 @@ describe("CLI foundation", () => {
               githubRepositoryId: "1311418611",
               lifecycle: "active",
             }),
-            get: async () => ({}) as never,
+            get: async (path) => {
+              expect(
+                String(path).startsWith("/api/v1/github-repositories/resolve?"),
+              ).toBe(true);
+              return {
+                host: "github.com",
+                owner: "LSP-Software",
+                name: "DotRelay",
+                githubRepositoryId: "1311418611",
+              } as never;
+            },
           },
         },
       );
@@ -262,7 +324,7 @@ describe("CLI foundation", () => {
         projectId: "00000000-0000-4000-8000-000000000002",
       });
       expect(await Bun.file(contextPath).text()).toBe(
-        '{"serverProfileId":"00000000-0000-4000-8000-000000000042","projectId":"00000000-0000-4000-8000-000000000002"}\n',
+        '{"serverProfileId":"00000000-0000-4000-8000-000000000042","projectId":"00000000-0000-4000-8000-000000000002","repositoryRemote":"origin","repositoryOwner":"LSP-Software","repositoryName":"DotRelay","repositoryIdentity":"1311418611"}\n',
       );
     } finally {
       await (await import("node:fs/promises"))
@@ -541,7 +603,10 @@ const createAdminHttpFixture = (
     port: 0,
     fetch: async (request) => {
       const url = new URL(request.url);
-      if (!url.pathname.startsWith("/api/v1/projects"))
+      if (
+        !url.pathname.startsWith("/api/v1/projects") &&
+        url.pathname !== "/api/v1/github-repositories/resolve"
+      )
         return problemResponse("resource_not_found");
       requests.push({
         method: request.method,
@@ -554,6 +619,18 @@ const createAdminHttpFixture = (
       const presented = request.headers.get(DEVICE_ID_HEADER);
       if (!presented) return problemResponse("invalid_request");
       if (!active.has(presented)) return problemResponse("device_not_active");
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/v1/github-repositories/resolve"
+      ) {
+        const owner = url.searchParams.get("owner");
+        return jsonResponse({
+          host: "github.com",
+          owner: owner ?? "LSP-Software",
+          name: url.searchParams.get("name") ?? "DotRelay",
+          githubRepositoryId: owner === "my-user" ? "1311418612" : "1311418611",
+        });
+      }
       if (request.method === "POST" && url.pathname === "/api/v1/projects")
         return jsonResponse(
           {
@@ -667,7 +744,6 @@ const runtimeForCommandState = (state: {
   readGitRemotes: async () => [
     { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
   ],
-  githubFetch: async () => Response.json({ id: 1311418611 }),
 });
 
 describe("command-to-HTTP administration", () => {
@@ -686,8 +762,12 @@ describe("command-to-HTTP administration", () => {
         projectId,
         environmentId,
       });
-      expect(fixture.requests).toHaveLength(1);
-      const request = fixture.requests[0];
+      expect(fixture.requests).toHaveLength(2);
+      const resolution = fixture.requests[0];
+      expect(resolution?.method).toBe("GET");
+      expect(resolution?.path).toBe("/api/v1/github-repositories/resolve");
+      expect(resolution?.deviceIdHeader).toBe(deviceId);
+      const request = fixture.requests[1];
       expect(request?.method).toBe("POST");
       expect(request?.path).toBe("/api/v1/projects");
       expect(request?.deviceIdHeader).toBe(deviceId);
@@ -696,6 +776,10 @@ describe("command-to-HTTP administration", () => {
         serverProfileId,
         projectId,
         environmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -869,6 +953,18 @@ const createProtocolHttpFixture = (
         method: request.method,
         path: `${url.pathname}${url.search}`,
       });
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/v1/github-repositories/resolve"
+      ) {
+        const owner = url.searchParams.get("owner");
+        return jsonResponse({
+          host: "github.com",
+          owner: owner ?? "LSP-Software",
+          name: url.searchParams.get("name") ?? "DotRelay",
+          githubRepositoryId: owner === "my-user" ? "1311418612" : repositoryId,
+        });
+      }
       if (request.method === "GET" && url.pathname === "/api/v1/projects") {
         const project =
           url.searchParams.get("githubRepositoryId") === repositoryId
@@ -1043,7 +1139,6 @@ const runtimeForProtocolState = (state: {
   readGitRemotes: async () => [
     { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
   ],
-  githubFetch: async () => Response.json({ id: 1311418611 }),
 });
 
 describe("protected command Environment selection", () => {
@@ -1094,6 +1189,10 @@ describe("protected command Environment selection", () => {
         serverProfileId,
         projectId,
         environmentId: productionEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1182,6 +1281,10 @@ describe("protected command Environment selection", () => {
         serverProfileId,
         projectId,
         environmentId: productionEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1234,6 +1337,10 @@ describe("protected command Environment selection", () => {
         serverProfileId,
         projectId,
         environmentId: productionEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1442,6 +1549,10 @@ describe("protected command Environment selection", () => {
         serverProfileId,
         projectId,
         environmentId: developmentEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1599,6 +1710,10 @@ describe("protected command Environment selection", () => {
         serverProfileId,
         projectId,
         environmentId: productionEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1660,6 +1775,18 @@ const createMultiProjectProtocolHttpFixture = (
         method: request.method,
         path: `${url.pathname}${url.search}`,
       });
+      if (
+        request.method === "GET" &&
+        url.pathname === "/api/v1/github-repositories/resolve"
+      ) {
+        const owner = url.searchParams.get("owner");
+        return jsonResponse({
+          host: "github.com",
+          owner: owner ?? "LSP-Software",
+          name: url.searchParams.get("name") ?? "DotRelay",
+          githubRepositoryId: owner === "my-user" ? "1311418612" : "1311418611",
+        });
+      }
       if (request.method === "GET" && url.pathname === "/api/v1/projects") {
         const teamId = url.searchParams.get("teamId");
         const eligible = spec.projects.filter(
@@ -1841,6 +1968,10 @@ describe("Project resolution across Teams and lifecycles", () => {
         serverProfileId,
         projectId,
         environmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1868,6 +1999,10 @@ describe("Project resolution across Teams and lifecycles", () => {
         serverProfileId,
         projectId,
         environmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1902,6 +2037,10 @@ describe("Project resolution across Teams and lifecycles", () => {
         serverProfileId,
         projectId: secondTeamProjectId,
         environmentId: secondTeamEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1943,6 +2082,10 @@ describe("Project resolution across Teams and lifecycles", () => {
         serverProfileId,
         projectId: secondTeamProjectId,
         environmentId: secondTeamEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -1985,6 +2128,10 @@ describe("Project resolution across Teams and lifecycles", () => {
         serverProfileId,
         projectId,
         environmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -2014,6 +2161,7 @@ describe("Project resolution across Teams and lifecycles", () => {
       });
       expect(result.stderr).toContain("the specified Team is not available");
       expect(fixture.requests.map((request) => request.path)).toEqual([
+        "/api/v1/github-repositories/resolve?host=github.com&owner=LSP-Software&name=DotRelay",
         "/api/v1/teams",
       ]);
     } finally {
@@ -2099,6 +2247,10 @@ describe("Project resolution across Teams and lifecycles", () => {
         serverProfileId,
         projectId: secondTeamProjectId,
         environmentId: secondTeamEnvironmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -2117,13 +2269,35 @@ describe("explicit GitHub repository choice", () => {
     url: "git@github.com:LSP-Software/DotRelay.git",
   };
   // The source repository and the fork resolve to different GitHub
-  // identities, as does a normal fork checkout with origin and upstream.
-  const githubFetch = async (
-    input: string | URL | Request,
-  ): Promise<Response> =>
-    String(input).includes("my-user")
-      ? Response.json({ id: 1311418612 })
-      : Response.json({ id: 1311418611 });
+  // identities, as does a normal fork checkout with origin and upstream. The
+  // lookups run on the Server Profile's side of the boundary, so the tests
+  // stand in for it with an administration client that resolves the
+  // descriptive owner/name the way the service would.
+  const resolvingAdmin = (): StrictJsonClient => ({
+    get: async (path) => {
+      const owner = new URL(`https://relay.example${path}`).searchParams.get(
+        "owner",
+      );
+      return (
+        owner === "my-user"
+          ? {
+              host: "github.com",
+              owner: "my-user",
+              name: "DotRelay",
+              githubRepositoryId: "1311418612",
+            }
+          : {
+              host: "github.com",
+              owner: owner ?? "LSP-Software",
+              name: "DotRelay",
+              githubRepositoryId: "1311418611",
+            }
+      ) as never;
+    },
+    post: async () => {
+      throw new Error("this fake client only resolves repositories");
+    },
+  });
 
   const seedProfile = async (profilePath: string): Promise<void> => {
     await Bun.write(
@@ -2162,7 +2336,7 @@ describe("explicit GitHub repository choice", () => {
         profilePath,
         worktreeConfig: contextPath,
         readGitRemotes: async () => [forkRemote, sourceRemote],
-        githubFetch,
+        admin: resolvingAdmin(),
         terminal: { input, output },
       });
       expect(result.exitCode).toBe(0);
@@ -2180,6 +2354,7 @@ describe("explicit GitHub repository choice", () => {
         repositoryRemote: "origin",
         repositoryOwner: "my-user",
         repositoryName: "DotRelay",
+        repositoryIdentity: "1311418612",
       });
     } finally {
       await (await import("node:fs/promises"))
@@ -2208,7 +2383,7 @@ describe("explicit GitHub repository choice", () => {
         profilePath,
         worktreeConfig: contextPath,
         readGitRemotes: async () => [forkRemote, sourceRemote],
-        githubFetch,
+        admin: resolvingAdmin(),
         prompt: async () => {
           throw new Error("selection must not prompt");
         },
@@ -2241,7 +2416,6 @@ describe("explicit GitHub repository choice", () => {
           profilePath,
           worktreeConfig: contextPath,
           readGitRemotes: async () => [forkRemote, sourceRemote],
-          githubFetch,
         },
       );
       expect(result.exitCode).toBe(2);
@@ -2287,7 +2461,6 @@ describe("explicit GitHub repository choice", () => {
           profilePath,
           worktreeConfig: contextPath,
           readGitRemotes: async () => [forkRemote],
-          githubFetch,
         },
       );
       expect(result.exitCode).toBe(2);
@@ -2337,7 +2510,7 @@ describe("explicit GitHub repository choice", () => {
           profilePath,
           worktreeConfig: contextPath,
           readGitRemotes: async () => [forkRemote, sourceRemote],
-          githubFetch,
+          admin: resolvingAdmin(),
         },
       );
       expect(result.exitCode).toBe(0);
@@ -2350,6 +2523,7 @@ describe("explicit GitHub repository choice", () => {
         repositoryRemote: "upstream",
         repositoryOwner: "LSP-Software",
         repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       await (await import("node:fs/promises"))
@@ -2382,7 +2556,6 @@ describe("explicit GitHub repository choice", () => {
           profilePath,
           worktreeConfig: contextPath,
           readGitRemotes: async () => [forkRemote, sourceRemote],
-          githubFetch,
           admin: {
             post: async (_path, body) => {
               linkedBody = body;
@@ -2393,7 +2566,13 @@ describe("explicit GitHub repository choice", () => {
                 lifecycle: "active",
               };
             },
-            get: async () => ({}) as never,
+            get: async () =>
+              ({
+                host: "github.com",
+                owner: "my-user",
+                name: "DotRelay",
+                githubRepositoryId: "1311418612",
+              }) as never,
           },
         },
       );
@@ -2411,6 +2590,7 @@ describe("explicit GitHub repository choice", () => {
         repositoryRemote: "origin",
         repositoryOwner: "my-user",
         repositoryName: "DotRelay",
+        repositoryIdentity: "1311418612",
       });
     } finally {
       await (await import("node:fs/promises"))
@@ -2422,7 +2602,7 @@ describe("explicit GitHub repository choice", () => {
     }
   });
 
-  test("a recorded choice steers a protected command without asking", async () => {
+  test("a recorded choice with a verified identity never re-resolves", async () => {
     const fixture = createProtocolHttpFixture([
       { id: environmentId, label: "default", lifecycle: "active" },
     ]);
@@ -2434,6 +2614,7 @@ describe("explicit GitHub repository choice", () => {
           repositoryRemote: "upstream",
           repositoryOwner: "LSP-Software",
           repositoryName: "DotRelay",
+          repositoryIdentity: "1311418611",
         }),
       );
       const result = await run(
@@ -2449,10 +2630,16 @@ describe("explicit GitHub repository choice", () => {
         {
           ...runtimeForProtocolState(state),
           readGitRemotes: async () => [forkRemote, sourceRemote],
-          githubFetch,
         },
       );
       expect(result.exitCode).toBe(0);
+      // The recorded identity is trusted as-is: the established linkage
+      // never asks the Server Profile to reach GitHub again.
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/api/v1/github-repositories/resolve"),
+        ),
+      ).toBe(false);
       expect(
         fixture.requests.some(
           (request) =>
@@ -2467,6 +2654,7 @@ describe("explicit GitHub repository choice", () => {
         repositoryRemote: "upstream",
         repositoryOwner: "LSP-Software",
         repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
     } finally {
       fixture.stop();
@@ -2495,7 +2683,6 @@ describe("explicit GitHub repository choice", () => {
         {
           ...runtimeForProtocolState(state),
           readGitRemotes: async () => [forkRemote, sourceRemote],
-          githubFetch,
         },
       );
       expect(result.exitCode).toBe(2);
@@ -2550,7 +2737,6 @@ describe("explicit GitHub repository choice", () => {
         {
           ...runtimeForProtocolState(state),
           readGitRemotes: async () => [forkRemote, sourceRemote],
-          githubFetch,
         },
       );
       expect(result.exitCode).toBe(0);
@@ -2568,7 +2754,111 @@ describe("explicit GitHub repository choice", () => {
         repositoryRemote: "upstream",
         repositoryOwner: "LSP-Software",
         repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
       });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("a renamed Repository is followed to its current descriptive name", async () => {
+    const fixture = createProtocolHttpFixture([
+      { id: environmentId, label: "default", lifecycle: "active" },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    try {
+      await Bun.write(
+        state.contextPath,
+        JSON.stringify({
+          serverProfileId,
+          projectId,
+          repositoryRemote: "origin",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+          repositoryIdentity: "1311418611",
+        }),
+      );
+      // The remote still names the same GitHub Repository, only its
+      // descriptive name changed: the identity is re-verified and the
+      // record follows the rename.
+      input.write("1\n");
+      input.end();
+      const result = await run(["pull", "--profile", "relay", "--stdout"], {
+        ...runtimeForProtocolState(state),
+        readGitRemotes: async () => [
+          { name: "origin", url: "git@github.com:LSP-Software/Relay.git" },
+        ],
+        terminal: { input, output },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes(
+            "/api/v1/github-repositories/resolve?host=github.com&owner=LSP-Software&name=Relay",
+          ),
+        ),
+      ).toBe(true);
+      expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
+        serverProfileId,
+        projectId,
+        environmentId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "Relay",
+        repositoryIdentity: "1311418611",
+      });
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("a remote re-pointed at a different Repository is a conflict, not a relink", async () => {
+    const fixture = createProtocolHttpFixture([
+      { id: environmentId, label: "default", lifecycle: "active" },
+    ]);
+    const state = await seedProtocolCommandState(fixture);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    try {
+      const saved = JSON.stringify({
+        serverProfileId,
+        projectId,
+        repositoryRemote: "origin",
+        repositoryOwner: "LSP-Software",
+        repositoryName: "DotRelay",
+        repositoryIdentity: "1311418611",
+      });
+      await Bun.write(state.contextPath, saved);
+      // The recorded Repository is the source; the remote now points at the
+      // fork, a different Repository. The linkage must not silently follow
+      // it somewhere the operator did not choose.
+      input.write("1\n");
+      input.end();
+      const result = await run(["pull", "--profile", "relay", "--json"], {
+        ...runtimeForProtocolState(state),
+        readGitRemotes: async () => [forkRemote],
+        terminal: { input, output },
+      });
+      expect(result.exitCode).toBe(4);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "conflict",
+        code: "repository_renamed",
+        exitCode: 4,
+      });
+      // The fork's identity is resolved, but the recorded linkage never
+      // follows it: no workspace boundary (the access boundary) is queried.
+      expect(
+        fixture.requests.some((request) =>
+          request.path.includes("/workspace/boundary"),
+        ),
+      ).toBe(false);
+      expect(await Bun.file(state.contextPath).text()).toBe(saved);
     } finally {
       fixture.stop();
       await state.cleanup();
@@ -3942,6 +4232,25 @@ describe("actionable error categories at the process boundary", () => {
     },
   });
 
+  // Instant-sleep twin of the default policy so retry-budget tests stay fast.
+  const instantNetworkPolicy: NetworkPolicy = {
+    requestDeadlineMs: 10_000,
+    maxAttempts: 2,
+    retryBaseDelayMs: 1,
+    retryMaxDelayMs: 2,
+    sleep: async () => undefined,
+    now: Date.now,
+  };
+
+  const resolveFetch =
+    (response: (url: string) => Response): FetchFunction =>
+    async (input) => {
+      const url = String(input);
+      if (url.includes("/api/v1/github-repositories/resolve"))
+        return response(url);
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+
   const seededState = async (): Promise<{
     fixture: ReturnType<typeof createProtocolHttpFixture>;
     state: Awaited<ReturnType<typeof seedProtocolCommandState>>;
@@ -4052,6 +4361,93 @@ describe("actionable error categories at the process boundary", () => {
         admin,
       });
       expect(human.exitCode).toBe(5);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a repository the delegated access cannot see is an authentication failure", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const result = await run(
+        ["history", "--profile", "relay", "--no-input", "--json"],
+        {
+          ...runtimeForProtocolState(state),
+          networkPolicy: instantNetworkPolicy,
+          fetch: resolveFetch((url) => {
+            void url;
+            return jsonResponse(createProblem("repository_access_denied"), 403);
+          }),
+        },
+      );
+      expect(result.exitCode).toBe(6);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "authentication",
+        code: "repository_access_denied",
+        exitCode: 6,
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a rate-limited repository lookup stays transient and surfaces the retry window", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const result = await run(
+        ["history", "--profile", "relay", "--no-input", "--json"],
+        {
+          ...runtimeForProtocolState(state),
+          networkPolicy: instantNetworkPolicy,
+          fetch: resolveFetch((url) => {
+            void url;
+            return jsonResponse(
+              createProblem("github_rate_limited", {
+                retryAfterSeconds: 42,
+              }),
+              429,
+            );
+          }),
+        },
+      );
+      expect(result.exitCode).toBe(7);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "transient",
+        code: "github_rate_limited",
+        exitCode: 7,
+        retryAfterSeconds: 42,
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an unreachable GitHub through the Server Profile stays transient", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const result = await run(
+        ["history", "--profile", "relay", "--no-input", "--json"],
+        {
+          ...runtimeForProtocolState(state),
+          networkPolicy: instantNetworkPolicy,
+          fetch: resolveFetch((url) => {
+            void url;
+            return jsonResponse(createProblem("github_unavailable"), 503);
+          }),
+        },
+      );
+      expect(result.exitCode).toBe(7);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "transient",
+        code: "github_unavailable",
+        exitCode: 7,
+      });
     } finally {
       await cleanup();
     }
