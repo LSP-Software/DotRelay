@@ -59,11 +59,15 @@ import {
   type ConflictChangeKind,
   type ConflictResolution,
   type ConflictSummary,
+  canActorChangeDefinitions,
+  canActorChangeVariableValue,
+  canActorPublishVariable,
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
   deleteEnvironmentVariable,
   draftValueDiffs,
+  type EditorActor,
   type EnvironmentVariable,
   locallyPublishedRevision,
   mergeDraftVariablesOverRemote,
@@ -71,7 +75,10 @@ import {
   prepareEncryptedPublication,
   publicationMutationForHead,
   publishedBaseline,
+  readOnlyReason,
+  reconcileDraftWithPermissions,
   revisionMutationLabel,
+  roleLabel,
   rollbackValueDiffs,
   type SetupAction,
   settlePublishedDraft,
@@ -85,12 +92,14 @@ import {
   variableHasDraftChange,
   verifiedRevisionFromWire,
 } from "@/lib/environment-workflow";
+import type { MembershipRole } from "@/lib/workspace-boundary";
 
 type EnvironmentEditorProps = Readonly<{
   readonly available: boolean;
   readonly active?: boolean | undefined;
   readonly loading?: boolean | undefined;
   readonly contextIdentity: EnvironmentContextIdentity;
+  readonly role: MembershipRole;
   readonly onDraftDirtyChange?: (
     dirty: boolean,
     changedVariableNames: readonly string[],
@@ -580,6 +589,9 @@ const VariableRow = ({
   variable,
   revealed,
   editingDisabled,
+  canEdit,
+  canDelete,
+  readOnlyDisclosure,
   canUndoDelete,
   onDelete,
   onSetAbsent,
@@ -590,6 +602,9 @@ const VariableRow = ({
   readonly variable: EnvironmentVariable;
   readonly revealed: boolean;
   readonly editingDisabled: boolean;
+  readonly canEdit: boolean;
+  readonly canDelete: boolean;
+  readonly readOnlyDisclosure: string | null;
   readonly canUndoDelete: boolean;
   readonly onDelete: () => void;
   readonly onSetAbsent: () => void;
@@ -614,6 +629,14 @@ const VariableRow = ({
             <span className="shrink-0 text-[11px] text-muted-foreground">
               {ownershipLabel(variable.ownership)}
             </span>
+            {readOnlyDisclosure ? (
+              <span
+                className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+                title={readOnlyDisclosure}
+              >
+                Read-only
+              </span>
+            ) : null}
             {variable.hasDraftChange ? (
               <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-200">
                 Draft change
@@ -634,7 +657,7 @@ const VariableRow = ({
             </span>
             {variable.hasDraftChange && canUndoDelete ? (
               <Button
-                disabled={editingDisabled}
+                disabled={editingDisabled || !canDelete}
                 onClick={onUndoDelete}
                 size="xs"
                 variant="outline"
@@ -649,9 +672,10 @@ const VariableRow = ({
               {variable.name} Value
             </Label>
             <Input
+              aria-readonly={!canEdit}
               autoComplete="off"
               className="font-mono"
-              disabled={editingDisabled}
+              disabled={editingDisabled || !canEdit}
               id={`value-${variable.id}`}
               onChange={(event) => onValueChange(event.target.value)}
               placeholder={variable.value === null ? "Absent" : "Empty Value"}
@@ -678,7 +702,7 @@ const VariableRow = ({
             </Button>
             {!variable.required && variable.value !== null ? (
               <Button
-                disabled={editingDisabled}
+                disabled={editingDisabled || !canEdit}
                 onClick={onSetAbsent}
                 size="xs"
                 variant="ghost"
@@ -689,7 +713,7 @@ const VariableRow = ({
             <Button
               aria-label={`Delete ${variable.name}`}
               className="text-muted-foreground hover:text-destructive"
-              disabled={editingDisabled}
+              disabled={editingDisabled || !canDelete}
               onClick={onDelete}
               size="icon-sm"
               variant="ghost"
@@ -854,6 +878,7 @@ export const EnvironmentEditor = ({
   active,
   loading,
   contextIdentity,
+  role,
   onDraftDirtyChange,
   setupAction,
   setupCommand,
@@ -867,6 +892,9 @@ export const EnvironmentEditor = ({
     sessionMatchesContext(protocolSession.context, contextIdentity)
       ? protocolSession
       : null;
+  const actorUserId = session?.context.actorUserId ?? null;
+  const actor: EditorActor = { role, actorUserId };
+  const canChangeDefinitions = canActorChangeDefinitions(actor);
   const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
     session ? [] : [...initialVariables],
   );
@@ -997,6 +1025,59 @@ export const EnvironmentEditor = ({
       cancelled = true;
     };
   }, [session, available, loadAttempt]);
+  const previousActorRef = useRef<EditorActor | null>(null);
+  const reconciliationNoticeRef = useRef(false);
+  useEffect(() => {
+    const previous = previousActorRef.current;
+    previousActorRef.current = { role, actorUserId };
+    if (!previous) return;
+    if (previous.role === role && previous.actorUserId === actorUserId) return;
+    const reconciled = reconcileDraftWithPermissions(
+      variables,
+      remoteVariables,
+      { role, actorUserId },
+    );
+    if (reconciled.droppedVariableNames.length === 0) {
+      if (reconciliationNoticeRef.current) setPublishMessage(null);
+      reconciliationNoticeRef.current = false;
+      return;
+    }
+    const keptIds = new Set(
+      reconciled.variables.map((variable) => variable.id),
+    );
+    const remoteById = new Map(
+      remoteVariables.map((variable) => [variable.id, variable]),
+    );
+    const publishableIds = new Set(
+      reconciled.variables
+        .filter((variable) =>
+          canActorPublishVariable(
+            { role, actorUserId },
+            variable,
+            remoteById.get(variable.id),
+          ),
+        )
+        .map((variable) => variable.id),
+    );
+    setVariables([...reconciled.variables]);
+    setDeletedVariableSnapshots(
+      (snapshots) => new Map([...snapshots].filter(([id]) => keptIds.has(id))),
+    );
+    setRollbackLanes(
+      (current) => new Set([...current].filter((id) => publishableIds.has(id))),
+    );
+    setAddOpen(false);
+    setReviewOpen(false);
+    const names = reconciled.droppedVariableNames.join(" and ");
+    const cause =
+      previous.role !== role
+        ? `Your Membership role changed to ${roleLabel(role)}.`
+        : "This Environment is now signed in as a different User.";
+    setPublishMessage(
+      `${cause} We removed ${names} from your draft because your current permissions no longer cover it. Other changes are kept.`,
+    );
+    reconciliationNoticeRef.current = true;
+  }, [role, actorUserId, variables, remoteVariables]);
   const retryRead = () => {
     if (loadPhase !== "failed") return;
     setPublishMessage(null);
@@ -1071,8 +1152,14 @@ export const EnvironmentEditor = ({
     variables,
     rollbackHistoricalValues,
   );
+  const disallowedDraftCount = variables.filter(
+    (variable) =>
+      variable.hasDraftChange &&
+      !canActorPublishVariable(actor, variable, baselineFor(variable.id)),
+  ).length;
   const canPublish =
     changedCount > 0 &&
+    disallowedDraftCount === 0 &&
     staleHeadRevision === null &&
     loadPhase === "ready" &&
     !publishing;
@@ -1159,7 +1246,9 @@ export const EnvironmentEditor = ({
       setAddError(error);
       return;
     }
-    const variable = createEnvironmentVariable(addDraft, nextVariableId());
+    const variable = createEnvironmentVariable(addDraft, nextVariableId(), {
+      actorUserId,
+    });
     setVariables((current) => [...current, variable]);
     setAddDraft(emptyVariableDraft);
     setAddError(null);
@@ -1195,14 +1284,29 @@ export const EnvironmentEditor = ({
     }
   };
 
+  const canRollbackVariable = (variable: EnvironmentVariable): boolean =>
+    !variable.tombstone &&
+    canActorPublishVariable(actor, variable, baselineFor(variable.id));
+  const canStageAnyRollback = variables.some((variable) =>
+    canRollbackVariable(variable),
+  );
   const openRollback = async (revision: string) => {
     const values = await loadHistoricalValues(
       revision,
       variables.map((variable) => variable.id),
     );
     const diffs = rollbackValueDiffs(variables, values);
+    const selectableIds = new Set(
+      variables
+        .filter((variable) => canRollbackVariable(variable))
+        .map((variable) => variable.id),
+    );
     setRollbackHistoricalValues(values);
-    setRollbackLanes(new Set(diffs.map((diff) => diff.id)));
+    setRollbackLanes(
+      new Set(
+        diffs.map((diff) => diff.id).filter((id) => selectableIds.has(id)),
+      ),
+    );
     setRollbackValuesRevealed(false);
     setRollbackTarget(revision);
   };
@@ -1471,10 +1575,23 @@ export const EnvironmentEditor = ({
       );
       return;
     }
-    setVariables(materialized);
+    const reconciled = reconcileDraftWithPermissions(
+      materialized,
+      remoteVariables,
+      actor,
+    ).variables;
+    if (changedLaneCount(reconciled) === 0) {
+      clearConflictState();
+      setHeadRevision(staleHeadRevision);
+      setPublishMessage(
+        "Nothing to publish: your current permissions no longer cover the kept changes.",
+      );
+      return;
+    }
+    setVariables([...reconciled]);
     setHeadRevision(staleHeadRevision);
     setPublishMessage(null);
-    void runPublish(materialized);
+    void runPublish(reconciled);
   };
 
   const applyRollback = async () => {
@@ -1654,7 +1771,7 @@ export const EnvironmentEditor = ({
           </CardTitle>
           <CardAction className="flex flex-wrap justify-end gap-2">
             <Button
-              disabled={loadPhase !== "ready"}
+              disabled={loadPhase !== "ready" || !canChangeDefinitions}
               onClick={() => {
                 setAddError(null);
                 setAddOpen(true);
@@ -1685,6 +1802,14 @@ export const EnvironmentEditor = ({
               </Button>
             ) : null}
           </CardAction>
+          {!canChangeDefinitions ? (
+            <CardDescription data-testid="member-permissions-note">
+              As a {roleLabel(role)}, you can read every Variable. You can edit
+              the User-defined Values you own and the Shared Values you
+              provided. Owners and Admins can change the rest, and can add and
+              delete Variables.
+            </CardDescription>
+          ) : null}
         </CardHeader>
         <CardContent className="px-0">
           {variables.length === 0 ? (
@@ -1713,6 +1838,8 @@ export const EnvironmentEditor = ({
             <ul className="divide-y divide-border">
               {variables.map((variable) => (
                 <VariableRow
+                  canDelete={canChangeDefinitions}
+                  canEdit={canActorChangeVariableValue(actor, variable)}
                   canUndoDelete={deletedVariableSnapshots.has(variable.id)}
                   editingDisabled={loadPhase !== "ready"}
                   key={variable.id}
@@ -1729,6 +1856,7 @@ export const EnvironmentEditor = ({
                   onToggleReveal={() => toggleReveal(variable.id)}
                   onUndoDelete={() => undoDelete(variable.id)}
                   onValueChange={(value) => updateValue(variable.id, value)}
+                  readOnlyDisclosure={readOnlyReason(actor, variable)}
                   revealed={revealed.has(variable.id)}
                   variable={variable}
                 />
@@ -1780,7 +1908,7 @@ export const EnvironmentEditor = ({
                   <Badge>Current</Badge>
                 ) : (
                   <Button
-                    disabled={loadPhase !== "ready"}
+                    disabled={loadPhase !== "ready" || !canStageAnyRollback}
                     onClick={() => {
                       void openRollback(revision.id);
                     }}
@@ -1915,30 +2043,51 @@ export const EnvironmentEditor = ({
                 </Button>
               </div>
               <div className="grid max-h-[min(50vh,28rem)] gap-2 overflow-y-auto">
-                {pendingRollbackDiffs.map((diff) => (
-                  <label
-                    className="flex items-start gap-3 rounded-lg border p-3"
-                    key={diff.id}
-                  >
-                    <input
-                      checked={rollbackLanes.has(diff.id)}
-                      className="mt-1"
-                      onChange={(event) =>
-                        setRollbackLanes((current) => {
-                          const next = new Set(current);
-                          if (event.target.checked) next.add(diff.id);
-                          else next.delete(diff.id);
-                          return next;
-                        })
-                      }
-                      type="checkbox"
-                    />
-                    <ValueDiffLines
-                      diff={diff}
-                      revealed={rollbackValuesRevealed}
-                    />
-                  </label>
-                ))}
+                {pendingRollbackDiffs.map((diff) => {
+                  const rollbackVariable = variables.find(
+                    (candidate) => candidate.id === diff.id,
+                  );
+                  const selectable =
+                    rollbackVariable !== undefined &&
+                    canRollbackVariable(rollbackVariable);
+                  return (
+                    <label
+                      className="flex items-start gap-3 rounded-lg border p-3"
+                      key={diff.id}
+                    >
+                      <input
+                        checked={rollbackLanes.has(diff.id)}
+                        className="mt-1"
+                        disabled={!selectable}
+                        onChange={(event) =>
+                          setRollbackLanes((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.add(diff.id);
+                            else next.delete(diff.id);
+                            return next;
+                          })
+                        }
+                        type="checkbox"
+                      />
+                      <span className="grid min-w-0 flex-1 gap-1">
+                        <ValueDiffLines
+                          diff={diff}
+                          revealed={rollbackValuesRevealed}
+                        />
+                        {!selectable ? (
+                          <span className="text-[11px] text-muted-foreground">
+                            {rollbackVariable
+                              ? (readOnlyReason(actor, rollbackVariable) ??
+                                (rollbackVariable.tombstone
+                                  ? "This Variable is marked for deletion in your draft."
+                                  : null))
+                              : null}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </>
           )}
