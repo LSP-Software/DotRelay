@@ -232,6 +232,18 @@ const workspaceHistoryBookkeeping = {
   index: 0,
 };
 
+// Search strings alone do not identify a history entry: a projects → team →
+// projects round trip stores the same string on two entries, and inferring
+// the position from the URL then matches the wrong side. Each entry the
+// shell writes therefore carries its own bookkeeping index in history.state,
+// and Back/Forward reads it back from the popstate event. Next.js copies its
+// router state on top of the object (and ignores the extra key), so the two
+// stay in step; entries the shell never wrote fall back to URL matching.
+const WORKSPACE_ENTRY_INDEX_STATE_KEY = "dotrelayWorkspaceEntryIndex";
+const workspaceEntryState = (index: number) => ({
+  [WORKSPACE_ENTRY_INDEX_STATE_KEY]: index,
+});
+
 const urlForSearch = (search: string) =>
   search ? `${window.location.pathname}?${search}` : window.location.pathname;
 
@@ -243,7 +255,11 @@ const replaceHistoryEntry = (search: string) => {
   }
   workspaceHistoryBookkeeping.entries[workspaceHistoryBookkeeping.index] =
     search;
-  window.history.replaceState(null, "", urlForSearch(search));
+  window.history.replaceState(
+    workspaceEntryState(workspaceHistoryBookkeeping.index),
+    "",
+    urlForSearch(search),
+  );
 };
 
 const LifecycleDialog = ({
@@ -639,7 +655,11 @@ export const WorkspaceShell = ({
       entries.push(search);
       workspaceHistoryBookkeeping.entries = entries;
       workspaceHistoryBookkeeping.index += 1;
-      window.history.pushState(null, "", urlForSearch(search));
+      window.history.pushState(
+        workspaceEntryState(workspaceHistoryBookkeeping.index),
+        "",
+        urlForSearch(search),
+      );
     } else {
       replaceHistoryEntry(search);
     }
@@ -889,20 +909,28 @@ export const WorkspaceShell = ({
   // drafts (they stay retained for the forward trip); a Profile rebind with
   // dirty drafts prompts, and dismissing the prompt restores the entry the
   // user left.
-  const handlePopState = () => {
+  const handlePopState = (state: unknown) => {
     // A Back/Forward that leaves the workspace page navigates away from it;
     // only entries under /workspace are owned by this shell.
     if (window.location.pathname !== "/workspace") return;
     const fromIndex = workspaceHistoryBookkeeping.index;
     const entries = workspaceHistoryBookkeeping.entries;
-    // The stored entries carry no leading "?" while location.search does.
-    // Back/Forward lands on the entry next to the one left, so match the
-    // adjacent entries first; that also keeps repeated search strings
-    // unambiguous. Anything else is an entry the app never wrote, which can
-    // only sit below the first entry the shell committed.
     const search = window.location.search.replace(/^\?/, "");
+    // Entries the shell wrote carry their own index in history.state, which
+    // identifies them even when another entry repeats their search string
+    // (a projects → team → projects round trip). Anything else is an entry
+    // the app never wrote, which can only sit below the first entry the
+    // shell committed, so fall back to matching the adjacent entries first.
+    const stored = state as Readonly<Record<string, unknown>> | null;
+    const storedIndex = stored?.[WORKSPACE_ENTRY_INDEX_STATE_KEY];
     let toIndex: number;
-    if (fromIndex > 0 && entries[fromIndex - 1] === search) {
+    if (
+      typeof storedIndex === "number" &&
+      storedIndex >= 0 &&
+      storedIndex < entries.length
+    ) {
+      toIndex = storedIndex;
+    } else if (fromIndex > 0 && entries[fromIndex - 1] === search) {
       toIndex = fromIndex - 1;
     } else if (
       fromIndex < entries.length - 1 &&
@@ -977,7 +1005,8 @@ export const WorkspaceShell = ({
   const handlePopStateRef = useRef(handlePopState);
   handlePopStateRef.current = handlePopState;
   useEffect(() => {
-    const listener = () => handlePopStateRef.current();
+    const listener = (event: PopStateEvent) =>
+      handlePopStateRef.current(event.state);
     window.addEventListener("popstate", listener);
     return () => window.removeEventListener("popstate", listener);
   }, []);
