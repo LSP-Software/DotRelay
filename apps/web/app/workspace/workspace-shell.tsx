@@ -329,6 +329,107 @@ const copyText = async (value: string) => {
   }
 };
 
+const NavLinks = ({
+  onNavigate,
+  onOpenProject,
+  onSetView,
+  selectedProjectId,
+  teamProjects,
+  view,
+}: {
+  readonly onNavigate?: () => void;
+  readonly onOpenProject: (project: WorkspaceProject) => void;
+  readonly onSetView: (view: WorkspaceView) => void;
+  readonly selectedProjectId: string | null;
+  readonly teamProjects: readonly WorkspaceProject[];
+  readonly view: WorkspaceView;
+}) => (
+  <nav aria-label="Workspace navigation" className="grid gap-1">
+    <button
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        view === "projects" || view === "environment"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-muted-foreground",
+      )}
+      onClick={() => {
+        onSetView("projects");
+        onNavigate?.();
+      }}
+      type="button"
+    >
+      <FolderGit2 aria-hidden="true" className="size-4" />
+      Projects
+    </button>
+    {teamProjects.map((project) => (
+      <button
+        className={cn(
+          "ml-4 truncate rounded-lg px-3 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          selectedProjectId === project.id && view === "environment"
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : "text-muted-foreground",
+        )}
+        key={project.id}
+        onClick={() => {
+          onOpenProject(project);
+          onNavigate?.();
+        }}
+        type="button"
+      >
+        {projectDisplayName(project)}
+      </button>
+    ))}
+    <button
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        view === "team"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-muted-foreground",
+      )}
+      onClick={() => {
+        onSetView("team");
+        onNavigate?.();
+      }}
+      type="button"
+    >
+      <Users aria-hidden="true" className="size-4" />
+      Team
+    </button>
+    <button
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        view === "devices"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-muted-foreground",
+      )}
+      onClick={() => {
+        onSetView("devices");
+        onNavigate?.();
+      }}
+      type="button"
+    >
+      <MonitorSmartphone aria-hidden="true" className="size-4" />
+      Devices
+    </button>
+    <button
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        view === "recovery"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-muted-foreground",
+      )}
+      onClick={() => {
+        onSetView("recovery");
+        onNavigate?.();
+      }}
+      type="button"
+    >
+      <KeyRound aria-hidden="true" className="size-4" />
+      Recovery
+    </button>
+  </nav>
+);
+
 export const WorkspaceShell = ({
   protocolSession,
 }: Readonly<{
@@ -1540,99 +1641,11 @@ export const WorkspaceShell = ({
 
   const closeMobile = () => setMobileOpen(false);
 
-  const NavLinks = ({ onNavigate }: { readonly onNavigate?: () => void }) => (
-    <nav aria-label="Workspace navigation" className="grid gap-1">
-      <button
-        className={cn(
-          "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring",
-          view === "projects" || view === "environment"
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "text-muted-foreground",
-        )}
-        onClick={() => {
-          openWorkspaceView("projects");
-          onNavigate?.();
-        }}
-        type="button"
-      >
-        <FolderGit2 aria-hidden="true" className="size-4" />
-        Projects
-      </button>
-      {teamProjects.map((project) => (
-        <button
-          className={cn(
-            "ml-4 truncate rounded-lg px-3 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-            selectedProject?.id === project.id && view === "environment"
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "text-muted-foreground",
-          )}
-          key={project.id}
-          onClick={() => {
-            openProject(project);
-            onNavigate?.();
-          }}
-          type="button"
-        >
-          {projectDisplayName(project)}
-        </button>
-      ))}
-      <button
-        className={cn(
-          "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          view === "team"
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "text-muted-foreground",
-        )}
-        onClick={() => {
-          openWorkspaceView("team");
-          onNavigate?.();
-        }}
-        type="button"
-      >
-        <Users aria-hidden="true" className="size-4" />
-        Team
-      </button>
-      <button
-        className={cn(
-          "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          view === "devices"
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "text-muted-foreground",
-        )}
-        onClick={() => {
-          openWorkspaceView("devices");
-          onNavigate?.();
-        }}
-        type="button"
-      >
-        <MonitorSmartphone aria-hidden="true" className="size-4" />
-        Devices
-      </button>
-      <button
-        className={cn(
-          "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          view === "recovery"
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "text-muted-foreground",
-        )}
-        onClick={() => {
-          openWorkspaceView("recovery");
-          onNavigate?.();
-        }}
-        type="button"
-      >
-        <KeyRound aria-hidden="true" className="size-4" />
-        Recovery
-      </button>
-    </nav>
-  );
-
   const restoreHistoryEntry = (delta: number) => {
     if (delta !== 0 && typeof window !== "undefined") {
       window.history.go(delta);
     }
   };
-
   const switchRebinding = pendingSwitch?.rebinding === true;
   const envVisible =
     view === "environment" &&
@@ -1665,7 +1678,7 @@ export const WorkspaceShell = ({
           </span>
           <span className="font-heading font-semibold">DotRelay</span>
         </div>
-        <div className="space-y-3 p-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
           <div>
             <Label
               className="px-3 text-xs text-muted-foreground"
@@ -1687,7 +1700,13 @@ export const WorkspaceShell = ({
               ))}
             </select>
           </div>
-          <NavLinks />
+          <NavLinks
+            onOpenProject={openProject}
+            onSetView={openWorkspaceView}
+            selectedProjectId={selectedProject?.id ?? null}
+            teamProjects={teamProjects}
+            view={view}
+          />
         </div>
         <div className="mt-auto border-t p-4">
           <div className="flex items-center gap-3">
@@ -1735,7 +1754,7 @@ export const WorkspaceShell = ({
                   </SheetTitle>
                   <SheetDescription>Workspace navigation</SheetDescription>
                 </SheetHeader>
-                <div className="space-y-3 p-3">
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
                   <Label htmlFor="team-switcher-mobile">Team</Label>
                   <select
                     aria-label="Team"
@@ -1753,7 +1772,14 @@ export const WorkspaceShell = ({
                       </option>
                     ))}
                   </select>
-                  <NavLinks onNavigate={closeMobile} />
+                  <NavLinks
+                    onNavigate={closeMobile}
+                    onOpenProject={openProject}
+                    onSetView={openWorkspaceView}
+                    selectedProjectId={selectedProject?.id ?? null}
+                    teamProjects={teamProjects}
+                    view={view}
+                  />
                 </div>
               </SheetContent>
             </Sheet>

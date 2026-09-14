@@ -182,5 +182,12 @@ control only when the session is genuinely absent, an expired or invalid code fi
 return-to-CLI instruction without re-offering sign-in, an already-approved code finishes as
 completed, and a transient check or approval failure preserves the code and recovers through an
 explicit retry, including a lapsed session that returns to the sign-in control.
-Tests observe browser-visible behavior and never
+`apps/web/e2e/workspace-small-viewport.spec.ts` covers small-viewport and zoom reachability:
+the Add Variable dialog stays inside the viewport on short phone heights and at 200% zoom,
+its body scrolls, a focused field — including the last field — scrolls into view above the
+pinned footer, and its Cancel/Add actions stay visible, including while the visible
+viewport shrinks as an on-screen keyboard raises (Playwright cannot shrink only the visual
+viewport, so the keyboard is simulated by resizing the viewport), whether before or after
+the field is focused. Desktop and mobile navigation keep Devices and Recovery reachable
+with a long Project list. Tests observe browser-visible behavior and never
 reach into component state.
