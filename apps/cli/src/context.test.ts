@@ -5,12 +5,10 @@ import {
   readWorktreeContext,
   repositoryChoiceFrom,
   resolveEnvironmentSelection,
-  resolveGitHubRepository,
   selectGitHubRepository,
   writeWorktreeContext,
 } from "./context";
 import { CliError, CliInvocationError } from "./errors";
-import type { NetworkPolicy } from "./network";
 
 describe("repository and worktree context", () => {
   test("normalizes SSH and HTTPS remotes to one GitHub identity", () => {
@@ -39,108 +37,40 @@ describe("repository and worktree context", () => {
     ).toThrow("ambiguous");
   });
 
-  test("resolves the stable GitHub numeric repository id", async () => {
-    const repository = detectGitHubRepository([
-      { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
-    ]);
-    await expect(
-      resolveGitHubRepository(repository, {
-        environment: {},
-        fetch: async (input, init) => {
-          expect(input).toBe(
-            "https://api.github.com/repos/LSP-Software/DotRelay",
-          );
-          expect(new Headers(init?.headers).get("User-Agent")).toBe(
-            "dotrelay-cli",
-          );
-          expect(new Headers(init?.headers).get("Authorization")).toBeNull();
-          return Response.json({ id: 1311418611, name: "DotRelay" });
-        },
-      }),
-    ).resolves.toMatchObject({
-      owner: "LSP-Software",
-      name: "DotRelay",
-      githubRepositoryId: "1311418611",
-    });
+  test("stores a verified Repository Identity with the recorded choice", async () => {
+    const file = `${import.meta.dir}/.tmp-identity-${crypto.randomUUID()}`;
+    const context = {
+      repositoryRemote: "origin",
+      repositoryOwner: "LSP-Software",
+      repositoryName: "DotRelay",
+      repositoryIdentity: "1311418611",
+    } as const;
+    try {
+      await writeWorktreeContext(file, context);
+      expect(await readWorktreeContext(file)).toEqual(context);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(file)
+        .catch(() => undefined);
+    }
   });
 
-  test("authenticates GitHub lookups with a configured token", async () => {
-    const repository = detectGitHubRepository([
-      { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
-    ]);
+  test("rejects a Repository Identity that is not bound to a complete choice", async () => {
     await expect(
-      resolveGitHubRepository(repository, {
-        environment: { GITHUB_TOKEN: "live-test-token" },
-        fetch: async (input, init) => {
-          expect(input).toBe(
-            "https://api.github.com/repos/LSP-Software/DotRelay",
-          );
-          expect(new Headers(init?.headers).get("Authorization")).toBe(
-            "Bearer live-test-token",
-          );
-          return Response.json({ id: 1311418611, name: "DotRelay" });
-        },
-      }),
-    ).resolves.toMatchObject({
-      owner: "LSP-Software",
-      name: "DotRelay",
-      githubRepositoryId: "1311418611",
-    });
-  });
-
-  // Instant-sleep twin of the default policy so outage tests stay fast.
-  const fastPolicy: NetworkPolicy = {
-    requestDeadlineMs: 20,
-    maxAttempts: 3,
-    retryBaseDelayMs: 1,
-    retryMaxDelayMs: 2,
-    sleep: async () => undefined,
-    now: Date.now,
-  };
-
-  test("retries a transient GitHub failure before resolving", async () => {
-    const repository = detectGitHubRepository([
-      { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
-    ]);
-    let calls = 0;
+      writeWorktreeContext(
+        `${import.meta.dir}/.tmp-identity-bare-${crypto.randomUUID()}`,
+        { repositoryIdentity: "1311418611" },
+      ),
+    ).rejects.toThrow(CliInvocationError);
     await expect(
-      resolveGitHubRepository(repository, {
-        environment: {},
-        networkPolicy: fastPolicy,
-        fetch: async () => {
-          calls += 1;
-          if (calls <= 2) throw new TypeError("fetch failed");
-          return Response.json({ id: 1311418611, name: "DotRelay" });
+      writeWorktreeContext(
+        `${import.meta.dir}/.tmp-identity-partial-${crypto.randomUUID()}`,
+        {
+          repositoryRemote: "origin",
+          repositoryIdentity: "1311418611",
         },
-      }),
-    ).resolves.toMatchObject({
-      owner: "LSP-Software",
-      name: "DotRelay",
-      githubRepositoryId: "1311418611",
-    });
-    expect(calls).toBe(3);
-  });
-
-  test("an unreachable GitHub API ends in a retryable error", async () => {
-    const repository = detectGitHubRepository([
-      { name: "origin", url: "git@github.com:LSP-Software/DotRelay.git" },
-    ]);
-    let calls = 0;
-    const error = await resolveGitHubRepository(repository, {
-      environment: {},
-      networkPolicy: fastPolicy,
-      fetch: async () => {
-        calls += 1;
-        throw new TypeError("fetch failed");
-      },
-    }).catch((caught) => caught);
-    expect(error).toBeInstanceOf(CliError);
-    expect((error as CliError).category).toBe("transient");
-    expect((error as CliError).code).toBe("repository_resolution_failed");
-    expect((error as CliError).message).toContain(
-      "could not reach the GitHub API after 3 attempts",
-    );
-    expect(calls).toBe(3);
+      ),
+    ).rejects.toThrow(CliInvocationError);
   });
 
   test("stores only opaque ids in worktree context", async () => {

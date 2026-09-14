@@ -38,6 +38,62 @@ export type StrictJsonClient = Readonly<{
   ) => Promise<Record<string, unknown>>;
 }>;
 
+export type RepositoryIdentityResolution = Readonly<{
+  readonly host: "github.com";
+  /** The repository's current descriptive owner, as GitHub reports it. */
+  readonly owner: string;
+  /** The repository's current descriptive name, as GitHub reports it. */
+  readonly name: string;
+  /** GitHub's stable numeric Repository Identity, service-verified. */
+  readonly identity: string;
+}>;
+
+// Asks the Server Profile to resolve the descriptive owner/name the Client
+// read from its Git remote to the stable Repository Identity, using the
+// signed-in User's Delegated GitHub Access. The Client never calls the
+// GitHub API and never sends a GitHub token.
+export const resolveRepositoryIdentity = async (
+  client: Pick<StrictJsonClient, "get">,
+  repository: Readonly<{
+    readonly host: "github.com";
+    readonly owner: string;
+    readonly name: string;
+  }>,
+): Promise<RepositoryIdentityResolution> => {
+  const query = new URLSearchParams({
+    host: repository.host,
+    owner: repository.owner,
+    name: repository.name,
+  });
+  const response = await client.get(
+    `/api/v1/github-repositories/resolve?${query}`,
+    ["host", "owner", "name", "githubRepositoryId"],
+  );
+  const owner = response.owner;
+  const name = response.name;
+  if (
+    response.host !== "github.com" ||
+    typeof owner !== "string" ||
+    owner.length === 0 ||
+    owner.length > 39 ||
+    typeof name !== "string" ||
+    name.length === 0 ||
+    name.length > 39
+  )
+    throw new CliError(
+      "transient",
+      "the server returned an invalid repository identity",
+      {},
+      "response_invalid",
+    );
+  return Object.freeze({
+    host: "github.com",
+    owner,
+    name,
+    identity: requireGitHubRepositoryId(response.githubRepositoryId),
+  });
+};
+
 export type ProjectLinkInput = Readonly<{
   readonly teamId: string;
   readonly repository: Readonly<{
@@ -667,6 +723,9 @@ export const createStrictJsonClient = (
                   ) as string,
                 }
               : {}),
+            ...(problem.retryAfterSeconds === undefined
+              ? {}
+              : { retryAfterSeconds: problem.retryAfterSeconds }),
           },
           problem.code,
         );

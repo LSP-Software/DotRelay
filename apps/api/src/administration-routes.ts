@@ -19,6 +19,7 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DotRelayAuth } from "./auth";
+import { resolveGitHubRepositoryIdentity } from "./github-repository";
 import type { ServerProfileConfig } from "./profile";
 import { requireProtocolActor } from "./protocol/context";
 import { mapPersistenceError } from "./protocol/errors";
@@ -27,6 +28,7 @@ type AdministrationRouteDependencies = Readonly<{
   readonly database: DatabaseClient;
   readonly profile: ServerProfileConfig;
   readonly auth: DotRelayAuth;
+  readonly githubFetch?: typeof fetch;
 }>;
 
 const responseProblem = (context: Context, code: ProblemCode) => {
@@ -137,9 +139,15 @@ const projectWithEnvironmentResponse = (
   environment: environmentResponse(environment),
 });
 
+// GitHub limits owner and repository names to 1 to 39 characters of letters,
+// digits, hyphens, and periods; the pattern keeps the descriptive parts the
+// Client sends from ever encoding a path or a credential.
+const repositoryNamePattern =
+  /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,37}[A-Za-z0-9])?$/;
+
 export const registerAdministrationRoutes = (
   app: Hono,
-  { database, profile, auth }: AdministrationRouteDependencies,
+  { database, profile, auth, githubFetch }: AdministrationRouteDependencies,
 ) => {
   const administration = new AdministrationRepository();
   const environments = new EnvironmentRepository();
@@ -225,6 +233,55 @@ export const registerAdministrationRoutes = (
     } catch (error) {
       return responseProblem(context, mapAdministrationError(error));
     }
+  });
+
+  // Resolves the descriptive owner/name the Client read from its Git remote
+  // to GitHub's stable Repository Identity, on the acting User's behalf with
+  // their Delegated GitHub Access. The Client never sends a GitHub token and
+  // never calls the GitHub API itself.
+  app.get("/api/v1/github-repositories/resolve", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    const host = context.req.query("host") ?? "github.com";
+    const owner = context.req.query("owner");
+    const name = context.req.query("name");
+    if (
+      host !== "github.com" ||
+      typeof owner !== "string" ||
+      !repositoryNamePattern.test(owner) ||
+      typeof name !== "string" ||
+      !repositoryNamePattern.test(name)
+    )
+      return responseProblem(context, "invalid_request");
+    const resolutionOptions = githubFetch ? { fetch: githubFetch } : {};
+    const outcome = await resolveGitHubRepositoryIdentity(
+      auth,
+      actor.userId,
+      { owner, name },
+      resolutionOptions,
+    );
+    if (outcome.code === "resolved")
+      return context.json(
+        {
+          host: "github.com",
+          owner: outcome.owner,
+          name: outcome.name,
+          githubRepositoryId: outcome.githubRepositoryId,
+        },
+        200,
+        { "Cache-Control": "no-store" },
+      );
+    const problem = createProblem(
+      outcome.code,
+      outcome.code === "github_rate_limited" &&
+        outcome.retryAfterSeconds !== undefined
+        ? { retryAfterSeconds: outcome.retryAfterSeconds }
+        : undefined,
+    );
+    return context.json(problem, problem.status as ContentfulStatusCode, {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/problem+json",
+    });
   });
 
   app.get("/api/v1/teams", async (context) => {
