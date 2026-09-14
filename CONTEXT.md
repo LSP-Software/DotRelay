@@ -104,6 +104,34 @@ A new Revision that restores content from an earlier Revision without deleting i
 history.
 _Avoid_: Revert, restore, delete
 
+**Publication**:
+The client operation that stages signed lanes for a Manifest's changed Variables and submits a new
+Revision against an expected head; a Variable the Publication does not mention keeps the state it
+held in the parent Revision.
+_Avoid_: Commit, push, upload
+
+**Draft**:
+An unpublished, client-held set of intended Variable changes derived from a Publication Baseline;
+it is not a Revision and the Server Profile never sees it.
+_Avoid_: Working copy, pending change, WIP
+
+**Publication Baseline**:
+The verified Revision from which a Draft's content was derived; a publication built from a Draft
+must reconcile that Baseline, the Draft, and the Environment's current Manifest before it may be
+accepted against a newer head.
+_Avoid_: Expected head, base revision, anchor
+
+**Baseline Reconciliation**:
+The three-way comparison of a Publication Baseline, a Draft, and an Environment's current Manifest
+that yields the merged publication content and the Variable Conflicts requiring a human choice.
+_Avoid_: Sync, three-way merge, bare reconciliation
+
+**Variable Conflict**:
+A Variable changed in both a Draft and the Environment's current Manifest relative to the Draft's
+Publication Baseline, where the two results diverge; it blocks publication until a person chooses
+the Draft's state, the remote state, or a merge of them.
+_Avoid_: Collision, merge conflict, stale head
+
 **Server Profile**:
 A named hosted or self-hosted DotRelay service selected by a client.
 _Avoid_: Instance, endpoint
