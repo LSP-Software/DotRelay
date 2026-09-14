@@ -15,6 +15,7 @@ import {
   type ProjectSummary,
   resolveEnvironmentForProject,
   resolveEnvironmentReference,
+  resolveRepositoryIdentity,
   resolveTeamForProject,
   type StrictJsonClient,
   type TeamSummary,
@@ -39,7 +40,7 @@ import {
   repositoryChoiceFields,
   repositoryChoiceFrom,
   resolveEnvironmentSelection,
-  resolveGitHubRepository,
+  sameGitHubIdentity,
   selectGitHubRepository,
   type WorktreeContext,
   worktreeConfigPath,
@@ -122,7 +123,6 @@ export type CliRuntime = Readonly<{
   readonly credentials?: NativeCredentialStore;
   readonly fetch?: FetchFunction;
   readonly networkPolicy?: NetworkPolicy;
-  readonly githubFetch?: FetchFunction;
   readonly deviceId?: string;
   readonly open?: (url: string) => Promise<void>;
   readonly readGitRemotes?: () => Promise<readonly GitRemote[]>;
@@ -213,6 +213,64 @@ const repositorySelectionOptions = (
   ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
   ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
 });
+
+// Resolves the selected GitHub Repository to its stable Repository Identity.
+// While the remote still points at the repository recorded in the worktree
+// context, the recorded identity is trusted as-is and no further resolution
+// runs, so an established linkage never needs to reach GitHub again.
+// Otherwise the Server Profile resolves the descriptive name on the
+// signed-in User's behalf with their Delegated GitHub Access.
+const resolveSelectedRepository = async (
+  admin: Pick<StrictJsonClient, "get">,
+  context: WorktreeContext | null,
+  selection: GitHubRepositorySelection,
+): Promise<
+  Readonly<{
+    readonly identity: string;
+    readonly owner: string;
+    readonly name: string;
+  }>
+> => {
+  const record = repositoryChoiceFrom(context);
+  const recordedIdentity = context?.repositoryIdentity;
+  if (
+    record !== null &&
+    recordedIdentity !== undefined &&
+    sameGitHubIdentity(record, selection.choice)
+  )
+    return {
+      identity: recordedIdentity,
+      owner: record.owner,
+      name: record.name,
+    };
+  const resolved = await resolveRepositoryIdentity(admin, {
+    host: "github.com",
+    owner: selection.choice.owner,
+    name: selection.choice.name,
+  });
+  // An explicit --remote override declares which Repository identifies this
+  // worktree, and the record is replaced when the command succeeds, so it is
+  // never blocked by the rename diagnosis.
+  if (
+    record !== null &&
+    recordedIdentity !== undefined &&
+    selection.source !== "override" &&
+    recordedIdentity !== resolved.identity
+  )
+    throw new CliError(
+      "conflict",
+      `the remote ${selection.choice.remote} names ${selection.choice.owner}/${selection.choice.name}, a different GitHub Repository than the one recorded for this worktree (${record.owner}/${record.name}); re-point the remote at the recorded repository, or re-record the choice with dotrelay context --remote ${selection.choice.remote}`,
+      {},
+      "repository_renamed",
+    );
+  // A matching identity means the recorded Repository was renamed or
+  // transferred: follow its current descriptive name.
+  return {
+    identity: resolved.identity,
+    owner: resolved.owner,
+    name: resolved.name,
+  };
+};
 
 const json = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
@@ -1033,24 +1091,75 @@ const execute = async (
       await (runtime.readGitRemotes ?? readGitRemotes)(),
       repositorySelectionOptions(parsed, runtime, context),
     );
-    const resolvedRepository = await resolveGitHubRepository(
-      selection.repository,
-      { ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}) },
-    );
-    // The explicit choice is recorded only after the whole command succeeds;
-    // an unambiguous detection is never recorded, so the worktree context
-    // holds only choices the operator made.
-    if (selection.source !== "detected")
+    // Verifying the Repository Identity is the Server Profile's work for the
+    // User: it needs a session and an active Device, and while those are
+    // unavailable the command reports the descriptive selection and the
+    // recorded identity instead of reaching GitHub itself.
+    let verifiedIdentity: string | undefined;
+    const recordedChoice = repositoryChoiceFrom(context);
+    if (
+      recordedChoice !== null &&
+      context?.repositoryIdentity !== undefined &&
+      sameGitHubIdentity(recordedChoice, selection.choice)
+    )
+      verifiedIdentity = context.repositoryIdentity;
+    else if (runtime.admin) {
+      verifiedIdentity = (
+        await resolveRepositoryIdentity(runtime.admin, {
+          host: "github.com",
+          owner: selection.choice.owner,
+          name: selection.choice.name,
+        })
+      ).identity;
+    } else {
+      const credentials = runtime.credentials ?? createNativeCredentialStore();
+      const sessionToken = await createSessionStore(credentials).get(
+        profile.pin,
+      );
+      const stateDirectory =
+        runtime.stateDirectory ??
+        dirname(runtime.profilePath ?? profileCatalogPath());
+      const deviceId =
+        runtime.deviceId ??
+        (sessionToken
+          ? await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin))
+          : null);
+      if (sessionToken && deviceId) {
+        const admin = await createAdminClient(runtime, profile, credentials);
+        verifiedIdentity = (
+          await resolveRepositoryIdentity(admin, {
+            host: "github.com",
+            owner: selection.choice.owner,
+            name: selection.choice.name,
+          })
+        ).identity;
+      }
+    }
+    // The choice is recorded only after the whole command succeeds; a
+    // verified identity is recorded with it so later runs match the local
+    // record without resolving again.
+    if (selection.source !== "detected" || verifiedIdentity !== undefined)
       await writeWorktreeContext(contextPath, {
         ...(context ?? {}),
         ...repositoryChoiceFields(selection.choice),
+        ...(verifiedIdentity !== undefined
+          ? { repositoryIdentity: verifiedIdentity }
+          : {}),
       });
     return {
       value: {
         profile: profile.name,
-        repository: `${resolvedRepository.host}/${resolvedRepository.owner}/${resolvedRepository.name}`,
-        remoteNames: resolvedRepository.remoteNames,
-        githubRepositoryId: resolvedRepository.githubRepositoryId,
+        repository: `github.com/${selection.repository.owner}/${selection.repository.name}`,
+        remoteNames: selection.repository.remoteNames,
+        ...(verifiedIdentity !== undefined
+          ? { githubRepositoryId: verifiedIdentity }
+          : {}),
+        ...(verifiedIdentity === undefined
+          ? {
+              nextAction:
+                "sign in to this Server Profile and enroll a Device to verify the repository identity",
+            }
+          : {}),
         ...(context?.projectId ? { projectId: context.projectId } : {}),
         ...(context?.environmentId
           ? { environmentId: context.environmentId }
@@ -1084,44 +1193,36 @@ const execute = async (
       await (runtime.readGitRemotes ?? readGitRemotes)(),
       repositorySelectionOptions(parsed, runtime, context),
     );
-    const repository = await resolveGitHubRepository(selection.repository, {
-      ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
-    });
     const credentials = runtime.credentials ?? createNativeCredentialStore();
     const admin = await createAdminClient(runtime, profile, credentials);
+    const resolved = await resolveSelectedRepository(admin, context, selection);
     const project = await linkProject(admin, {
       teamId: team,
       repository: {
-        ...repository,
-        githubRepositoryId:
-          repository.githubRepositoryId ??
-          (() => {
-            throw new CliError(
-              "transient",
-              "GitHub repository identity was not resolved",
-              {},
-              "repository_resolution_failed",
-            );
-          })(),
+        host: "github.com",
+        owner: resolved.owner,
+        name: resolved.name,
+        githubRepositoryId: resolved.identity,
       },
     });
     await writeWorktreeContext(contextPath, {
       serverProfileId: profile.pin.serverProfileId,
       projectId: project.id,
       ...(project.environment ? { environmentId: project.environment.id } : {}),
-      ...(selection.source !== "detected"
-        ? repositoryChoiceFields(selection.choice)
-        : {}),
+      repositoryRemote: selection.choice.remote,
+      repositoryOwner: resolved.owner,
+      repositoryName: resolved.name,
+      repositoryIdentity: resolved.identity,
     });
     return {
       value: {
         profile: profile.name,
         projectId: project.id,
-        repository: `${repository.host}/${repository.owner}/${repository.name}`,
+        repository: `github.com/${resolved.owner}/${resolved.name}`,
         ...(project.environment
           ? { environmentId: project.environment.id }
           : {}),
-        message: `Linked ${repository.owner}/${repository.name}`,
+        message: `Linked ${resolved.owner}/${resolved.name}`,
       },
     };
   }
@@ -1276,9 +1377,10 @@ const execute = async (
           readonly serverProfileId: string;
           readonly projectId: string;
           readonly environmentId?: string;
-          readonly repositoryRemote?: string;
-          readonly repositoryOwner?: string;
-          readonly repositoryName?: string;
+          readonly repositoryRemote: string;
+          readonly repositoryOwner: string;
+          readonly repositoryName: string;
+          readonly repositoryIdentity: string;
         }>
       | undefined;
     if (!runtime.admin) {
@@ -1287,9 +1389,6 @@ const execute = async (
         await (runtime.readGitRemotes ?? readGitRemotes)(),
         repositorySelectionOptions(parsed, runtime, localContext),
       );
-      const repository = await resolveGitHubRepository(selection.repository, {
-        ...(runtime.githubFetch ? { fetch: runtime.githubFetch } : {}),
-      });
       const credentials = runtime.credentials ?? createNativeCredentialStore();
       const admin =
         runtime.admin ??
@@ -1300,6 +1399,11 @@ const execute = async (
             ? { networkPolicy: runtime.networkPolicy }
             : {}),
         });
+      const resolved = await resolveSelectedRepository(
+        admin,
+        localContext,
+        selection,
+      );
       // An explicit --team must name a Team the User still belongs to; the
       // service re-checks the Membership when it scopes the lookup. UUIDs are
       // case-insensitive, so the value is normalized before any comparison.
@@ -1312,7 +1416,7 @@ const execute = async (
       }
       const resolution = await findProjectByRepository(
         admin,
-        repository.githubRepositoryId ?? "",
+        resolved.identity,
         {
           ...(explicitTeamId ? { teamId: explicitTeamId } : {}),
         },
@@ -1334,7 +1438,7 @@ const execute = async (
         const teamName = (teamId: string): string =>
           teams?.find((team) => team.id === teamId)?.name ?? teamId;
         const label = (candidate: ProjectSummary): string =>
-          `${teamName(candidate.teamId)} (${candidate.teamId}) — ${repository.owner}/${repository.name}`;
+          `${teamName(candidate.teamId)} (${candidate.teamId}) — ${resolved.owner}/${resolved.name}`;
         if (parsed.noInput)
           throw new CliError(
             "invocation",
@@ -1388,7 +1492,7 @@ const execute = async (
           teamId: (
             await resolveTeamForProject(admin, {
               ...(explicitTeamId ? { teamId: explicitTeamId } : {}),
-              suggestedName: repository.owner,
+              suggestedName: resolved.owner,
               noInput: parsed.noInput,
               prompt: ask,
               write,
@@ -1396,8 +1500,10 @@ const execute = async (
             })
           ).id,
           repository: {
-            ...repository,
-            githubRepositoryId: repository.githubRepositoryId ?? "",
+            host: "github.com",
+            owner: resolved.owner,
+            name: resolved.name,
+            githubRepositoryId: resolved.identity,
           },
         }));
       // A saved Project that is no longer an eligible destination (archived,
@@ -1479,11 +1585,12 @@ const execute = async (
         serverProfileId: profile.pin.serverProfileId,
         projectId: initializedProject.id,
         ...(environmentId ? { environmentId } : {}),
-        // Only explicit choices are persisted; a detected single repository
-        // is re-read from the Git configuration on every run.
-        ...(selection.source !== "detected"
-          ? repositoryChoiceFields(selection.choice)
-          : {}),
+        // The verified identity is recorded with the choice so later runs
+        // match the local record and skip resolution entirely.
+        repositoryRemote: selection.choice.remote,
+        repositoryOwner: resolved.owner,
+        repositoryName: resolved.name,
+        repositoryIdentity: resolved.identity,
       });
     }
     const workflowResult = await runProtectedWorkflow(

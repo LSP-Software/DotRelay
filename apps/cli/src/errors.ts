@@ -34,6 +34,7 @@ const categoryExitCode: Record<CliErrorCategory, number> = {
 const safeDiagnosticKeys = new Set([
   "requestPath",
   "correlationId",
+  "retryAfterSeconds",
   "count",
   "variableCount",
   "sharedValueCount",
@@ -90,6 +91,8 @@ const safeDiagnosticCodes = new Set([
   "genesis_exists",
   "git_exclusion_failed",
   "git_tracking_unavailable",
+  "github_rate_limited",
+  "github_unavailable",
   "grant_bootstrap_failed",
   "grant_bootstrap_unavailable",
   "incomplete-export",
@@ -120,15 +123,17 @@ const safeDiagnosticCodes = new Set([
   "recovery_generation_invalid",
   "recovery_kit_invalid",
   "recovery_requires_no_active_device",
+  "repository_access_denied",
   "repository_ambiguous",
   "repository_detection_failed",
   "repository_missing",
-  "repository_resolution_failed",
+  "repository_renamed",
   "request_failed",
   "resource_not_found",
   "response_invalid",
   "response_too_large",
   "rollback_target_unavailable",
+  "rollback_variable_absent",
   "rotation_required",
   "service_unavailable",
   "session_invalid",
@@ -171,7 +176,8 @@ export const categoryForProblem = (
   if (
     code === "authentication_required" ||
     code === "device_not_active" ||
-    code === "forbidden"
+    code === "forbidden" ||
+    code === "repository_access_denied"
   )
     return "authentication";
   if (
@@ -224,6 +230,12 @@ export const detailForProblem = (code: string): string => {
   if (code === "payload_too_large") return "the request was too large";
   if (code === "genesis_exists")
     return "this Environment already has a genesis Revision";
+  if (code === "repository_access_denied")
+    return "the Server Profile could not see this GitHub Repository with your delegated access; sign in again to authorize it, and check that your account can access the Repository";
+  if (code === "github_rate_limited")
+    return "GitHub rate-limited the Server Profile's repository lookup; wait for the stated retry window and retry";
+  if (code === "github_unavailable")
+    return "GitHub could not be reached through the Server Profile; established sync is unaffected, retry once GitHub is available";
   if (code === "rate_limited")
     return "the Server Profile rate-limited the request; wait and retry";
   if (code === "rate_limit_unavailable")

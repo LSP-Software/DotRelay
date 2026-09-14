@@ -82,7 +82,12 @@ re-runs the approved publication against the re-anchored head rather than only r
  them, an honest unavailable label where it does not, and a short id suffix so a Revision can be
  referenced without memorizing its full id. The rollback dialog identifies the target Revision and
  previews the masked consequence of the selected lanes — a new Rollback revision that restores
- only the chosen Variables — before it is staged. The development protected preview uses the same
+ only the chosen Variables — before it is staged. Reading a target Revision's Values shows
+ progress while the Device resolves them. If the Revision is missing from the Device's verified
+ history, or an integrity or decryption check fails, the dialog reports the failure with a retry
+ instead of claiming the Revision is unchanged: only a Variable verified absent from the Revision
+ is left out of the preview, and a partial read names every Variable it could not resolve so it
+ cannot imply a complete comparison. The development protected preview uses the same
  cryptographic artifact builder but is explicitly local and never reports a service publication.
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
@@ -155,7 +160,12 @@ covers unpublished draft protection: drafts survive subview navigation and retur
 warns only while a draft is dirty and keeps or discards it on the user's choice, discard
 prompts name the affected Environments and, within a Server Profile, the changed Variables, a
 Server Profile switch with a dirty draft requires an explicit discard, and draft Values never
-appear in browser storage. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
+appear in browser storage. `apps/web/e2e/workspace-history.spec.ts` keeps the workspace
+location, URL, and browser history in sync: Back/Forward traverses the workspace views and the
+selected Environment, a reload or shared link reopens the visible view and Server Profile, a
+link to a deleted Team, Project, or Environment shows a recovery notice instead of a blank
+page, and history navigation preserves dirty drafts or, for a Server Profile rebind, prompts so
+dismissing it returns to the entry left behind. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
 read states with a live protocol session: a slow initial read shows the loading state instead of
 the empty-claim, and a failed read discloses the failure with a retry action while Add Variable,
 Save changes, and per-Variable edits stay blocked; retry re-enters the loading state.

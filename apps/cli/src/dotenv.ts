@@ -14,57 +14,154 @@ export type ClassifiedDotenvEntry = DotenvEntry &
 
 const variableName = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const parseValue = (raw: string, line: number): string => {
-  const value = raw.trim();
-  if (value.startsWith('"')) {
-    if (!value.endsWith('"') || value.length === 1)
+const escapeHelp = 'only \\\\, \\", \\n, \\r and \\t are supported';
+
+const readQuotedValue = (
+  lines: readonly string[],
+  crlf: readonly boolean[],
+  startLine: number,
+  startCol: number,
+  quote: '"' | "'",
+  name: string,
+): { value: string; line: number; col: number } => {
+  const chunks: string[] = [];
+  let line = startLine;
+  let col = startCol + 1;
+  for (;;) {
+    const text = lines[line];
+    if (text === undefined)
       throw new CliInvocationError(
-        `invalid quoted dotenv value on line ${line}`,
+        `unterminated ${
+          quote === '"' ? "double" : "single"
+        }-quoted dotenv value for ${name} starting on line ${startLine + 1}, column ${startCol + 1}`,
       );
-    const body = value.slice(1, -1);
-    return body.replaceAll(/\\([\\"nrt])/g, (_, escaped: string) => {
-      if (escaped === "n") return "\n";
-      if (escaped === "r") return "\r";
-      if (escaped === "t") return "\t";
-      return escaped;
-    });
+    while (col < text.length) {
+      const ch = text.charAt(col);
+      if (ch === quote) return { value: chunks.join(""), line, col };
+      if (quote === '"' && ch === "\\") {
+        const next = text[col + 1];
+        if (next === undefined)
+          throw new CliInvocationError(
+            `a backslash at the end of line ${line + 1}, column ${col + 1} in the double-quoted dotenv value for ${name} is not a supported escape; ${escapeHelp}`,
+          );
+        if (
+          next !== "n" &&
+          next !== "r" &&
+          next !== "t" &&
+          next !== "\\" &&
+          next !== '"'
+        )
+          throw new CliInvocationError(
+            `unsupported escape "\\${next}" on line ${line + 1}, column ${col + 1} in the double-quoted dotenv value for ${name}; ${escapeHelp}`,
+          );
+        chunks.push(
+          next === "n"
+            ? "\n"
+            : next === "r"
+              ? "\r"
+              : next === "t"
+                ? "\t"
+                : next,
+        );
+        col += 2;
+        continue;
+      }
+      chunks.push(ch);
+      col += 1;
+    }
+    chunks.push(crlf[line] ? "\r\n" : "\n");
+    line += 1;
+    col = 0;
   }
-  if (value.startsWith("'")) {
-    if (!value.endsWith("'") || value.length === 1)
-      throw new CliInvocationError(
-        `invalid quoted dotenv value on line ${line}`,
-      );
-    return value.slice(1, -1);
+};
+
+const parseUnquotedValue = (text: string): string => {
+  let valueEnd = text.length;
+  for (let i = 1; i < text.length; i += 1) {
+    if (text[i] === "#" && /\s/.test(text.charAt(i - 1))) {
+      valueEnd = i;
+      break;
+    }
   }
-  return value.replace(/\s+#.*$/, "").trim();
+  return text.slice(0, valueEnd).trim();
 };
 
 export const parseDotenv = (source: string): readonly DotenvEntry[] => {
+  const rawLines = source.split("\n");
+  const crlf = rawLines.map(
+    (raw, i) => i < rawLines.length - 1 && raw.endsWith("\r"),
+  );
+  const lines = rawLines.map((raw, i) => (crlf[i] ? raw.slice(0, -1) : raw));
   const entries: DotenvEntry[] = [];
   const seen = new Set<string>();
-  for (const [index, original] of source
-    .replaceAll("\r\n", "\n")
-    .split("\n")
-    .entries()) {
+  let index = 0;
+  while (index < lines.length) {
     const line = index + 1;
+    const original = lines[index] ?? "";
     const trimmed = original.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/.exec(
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      index += 1;
+      continue;
+    }
+    const lead = original.length - original.trimStart().length;
+    if (original.includes("\r"))
+      throw new CliInvocationError(
+        `invalid dotenv assignment on line ${line}, column ${lead + 1}: the line contains a stray carriage return; use LF or CRLF line endings`,
+      );
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/d.exec(
       trimmed,
     );
     if (!match)
-      throw new CliInvocationError(`invalid dotenv assignment on line ${line}`);
-    const [, name, rawValue] = match;
-    if (!name || !variableName.test(name))
       throw new CliInvocationError(
-        `invalid dotenv Variable name on line ${line}`,
+        `invalid dotenv assignment on line ${line}, column ${lead + 1}`,
+      );
+    const name = match[1] ?? "";
+    const nameCol =
+      (match.indices?.[1]?.[0] ?? 0) +
+      (original.length - original.trimStart().length) +
+      1;
+    if (!variableName.test(name))
+      throw new CliInvocationError(
+        `invalid dotenv Variable name on line ${line}, column ${nameCol}`,
       );
     if (seen.has(name))
-      throw new CliInvocationError(`duplicate dotenv Variable: ${name}`);
+      throw new CliInvocationError(
+        `duplicate dotenv Variable: ${name} on line ${line}`,
+      );
     seen.add(name);
-    entries.push(
-      Object.freeze({ name, value: parseValue(rawValue ?? "", line) }),
-    );
+    const valueStart = original.indexOf("=") + 1;
+    let valueCol = valueStart;
+    while (
+      valueCol < original.length &&
+      (original[valueCol] === " " || original[valueCol] === "\t")
+    )
+      valueCol += 1;
+    const firstChar = original[valueCol];
+    let value: string;
+    if (firstChar === '"' || firstChar === "'") {
+      const parsed = readQuotedValue(
+        lines,
+        crlf,
+        index,
+        valueCol,
+        firstChar,
+        name,
+      );
+      const after = (lines[parsed.line] ?? "").slice(parsed.col + 1);
+      const content = after.trimStart();
+      if (content !== "" && !content.startsWith("#")) {
+        const contentCol = parsed.col + 2 + (after.length - content.length);
+        throw new CliInvocationError(
+          `unexpected content after the closing quote of ${name} on line ${parsed.line + 1}, column ${contentCol}`,
+        );
+      }
+      value = parsed.value;
+      index = parsed.line + 1;
+    } else {
+      value = parseUnquotedValue(original.slice(valueStart));
+      index += 1;
+    }
+    entries.push(Object.freeze({ name, value }));
   }
   return Object.freeze(entries);
 };
@@ -167,6 +264,8 @@ export const serializeDotenv = (entries: readonly DotenvEntry[]): string =>
       const escaped = value
         .replaceAll("\\", "\\\\")
         .replaceAll("\n", "\\n")
+        .replaceAll("\r", "\\r")
+        .replaceAll("\t", "\\t")
         .replaceAll('"', '\\"');
       return `${name}="${escaped}"`;
     })

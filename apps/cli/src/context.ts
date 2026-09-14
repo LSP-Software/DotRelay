@@ -1,16 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CliError, CliInvocationError } from "./errors";
-import {
-  defaultNetworkPolicy,
-  fetchWithinBudget,
-  NetworkAttemptError,
-  type NetworkPolicy,
-  networkFailureCliError,
-  transientResponseVerdict,
-} from "./network";
 import { atomicWriteProtectedFile } from "./output";
-import type { FetchFunction } from "./profile";
 import type { TerminalIo } from "./terminal";
 import { selectOption } from "./ui";
 
@@ -23,7 +14,6 @@ export type GitHubRepository = Readonly<{
   readonly owner: string;
   readonly name: string;
   readonly remoteNames: readonly string[];
-  readonly githubRepositoryId?: string;
 }>;
 
 export type RepositoryChoice = Readonly<{
@@ -46,6 +36,13 @@ export type WorktreeContext = Readonly<{
   readonly repositoryRemote?: string;
   readonly repositoryOwner?: string;
   readonly repositoryName?: string;
+  /**
+   * The verified Repository Identity (GitHub's stable numeric id) the
+   * Server Profile confirmed for the recorded choice. While it is present
+   * and the remote still points at the recorded repository, sync resolves
+   * the Project from this local record without any further resolution.
+   */
+  readonly repositoryIdentity?: string;
 }>;
 
 export type EnvironmentSelection = Readonly<{
@@ -60,6 +57,7 @@ const repositoryIdentifier = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const contextKeys = new Set([
   "environmentId",
   "projectId",
+  "repositoryIdentity",
   "repositoryName",
   "repositoryOwner",
   "repositoryRemote",
@@ -122,7 +120,7 @@ const listGitHubRemoteMatches = (
     }),
   );
 
-const sameGitHubIdentity = (
+export const sameGitHubIdentity = (
   left: Readonly<{ readonly owner: string; readonly name: string }>,
   right: Readonly<{ readonly owner: string; readonly name: string }>,
 ): boolean =>
@@ -316,94 +314,6 @@ export const readStoredWorktreeContext = async (
   }
 };
 
-const readRepositoryId = async (response: Response): Promise<string> => {
-  if (!response.ok)
-    throw new CliError(
-      "transient",
-      "GitHub could not resolve the repository identity",
-      {},
-      "repository_resolution_failed",
-    );
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new CliError(
-      "transient",
-      "GitHub returned an invalid repository identity",
-      {},
-      "repository_resolution_failed",
-    );
-  }
-  if (
-    body === null ||
-    typeof body !== "object" ||
-    Array.isArray(body) ||
-    typeof (body as Record<string, unknown>).id !== "number" ||
-    !Number.isSafeInteger((body as Record<string, unknown>).id) ||
-    Number((body as Record<string, unknown>).id) < 1
-  )
-    throw new CliError(
-      "transient",
-      "GitHub returned an invalid repository identity",
-      {},
-      "repository_resolution_failed",
-    );
-  return String((body as Record<string, unknown>).id);
-};
-
-export const resolveGitHubRepository = async (
-  repository: GitHubRepository,
-  options: Readonly<{
-    readonly fetch?: FetchFunction;
-    readonly environment?: NodeJS.ProcessEnv;
-    readonly networkPolicy?: NetworkPolicy;
-  }> = {},
-): Promise<GitHubRepository> => {
-  if (repository.githubRepositoryId) return repository;
-  const fetcher = options.fetch ?? fetch;
-  const environment = options.environment ?? process.env;
-  const policy = options.networkPolicy ?? defaultNetworkPolicy;
-  const githubToken = (environment.GITHUB_TOKEN ?? "").trim();
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "dotrelay-cli",
-  };
-  if (githubToken.length > 0) headers.Authorization = `Bearer ${githubToken}`;
-  let response: Response;
-  try {
-    response = (
-      await fetchWithinBudget(
-        fetcher,
-        `https://api.github.com/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`,
-        {
-          method: "GET",
-          redirect: "error",
-          headers,
-        },
-        {
-          policy,
-          retry: {
-            verdict: (candidate) =>
-              transientResponseVerdict(candidate, policy.now),
-          },
-        },
-      )
-    ).response;
-  } catch (error) {
-    if (!(error instanceof NetworkAttemptError)) throw error;
-    throw networkFailureCliError(
-      error,
-      "the GitHub API",
-      "repository_resolution_failed",
-    );
-  }
-  return Object.freeze({
-    ...repository,
-    githubRepositoryId: await readRepositoryId(response),
-  });
-};
-
 const validateContext = (value: unknown): WorktreeContext => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new CliInvocationError("worktree context is invalid");
@@ -417,6 +327,12 @@ const validateContext = (value: unknown): WorktreeContext => {
   // choice cannot be trusted to name one remote's identity.
   const choiceKeys = keys.filter((key) => repositoryChoiceKeys.has(key));
   if (choiceKeys.length !== 0 && choiceKeys.length !== 3)
+    throw new CliInvocationError(
+      "worktree context must contain only opaque ids",
+    );
+  // A verified Repository Identity only means anything bound to a complete
+  // choice; it is never trusted on its own.
+  if (keys.includes("repositoryIdentity") && choiceKeys.length !== 3)
     throw new CliInvocationError(
       "worktree context must contain only opaque ids",
     );
@@ -460,6 +376,9 @@ const validateContext = (value: unknown): WorktreeContext => {
     ...(object.repositoryName === undefined
       ? {}
       : { repositoryName: object.repositoryName as string }),
+    ...(object.repositoryIdentity === undefined
+      ? {}
+      : { repositoryIdentity: object.repositoryIdentity as string }),
   });
 };
 

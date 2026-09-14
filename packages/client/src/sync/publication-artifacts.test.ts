@@ -412,6 +412,244 @@ describe("publication artifacts", () => {
     );
   });
 
+  test("verifies a page authored by different Users and keeps the original Shared Value provider", async () => {
+    const device = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const otherActor = "99999999-9999-4999-8999-999999999998";
+    const adminActor = "99999999-9999-4999-8999-999999999999";
+    const otherShared = variable({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+      name: "OTHER_SHARED",
+      description: "Provided by another User.",
+    });
+    const mineShared = variable({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02",
+      name: "MINE_SHARED",
+      description: "Provided by this User.",
+    });
+    const mineToken = variable({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa03",
+      name: "MY_TOKEN",
+      description: "Owned by this User.",
+      ownership: "USER_DEFINED_VALUE",
+      value: "my-token",
+    });
+
+    const revisionArtifacts = async (
+      variables: readonly PublicationVariable[],
+      context: Readonly<{
+        actorUserId: string;
+        expectedHeadId: string | null;
+        expectedHeadHash: Uint8Array | null;
+        mutation: "GENESIS" | "MANIFEST_UPDATE";
+      }>,
+    ) => {
+      const artifacts = await createPublicationArtifacts(variables, {
+        ...ids,
+        actorUserId: context.actorUserId,
+        projectEpoch: 1,
+        expectedHeadId: context.expectedHeadId,
+        expectedHeadHash: context.expectedHeadHash,
+        valueRecipientPublicKey: device.publicKey,
+        userDefinedValueRecipientPublicKey: device.publicKey,
+        signingPrivateKey: signing.privateKey,
+        mutation: context.mutation,
+      });
+      const revisionObject = artifacts.stagedObjects.find(
+        (object) =>
+          object.objectId === artifacts.request.revision.protocolObjectId,
+      );
+      if (!revisionObject) throw new Error("revision object is missing");
+      const revision = parseProtocolObject(revisionObject.bytes);
+      const digest = await sha384(revisionObject.bytes);
+      return {
+        id: artifacts.request.revision.id,
+        digest,
+        mutation: revision.get(35) as number,
+        projectEpoch: revision.get(30) as number,
+        authoredAtMs: revision.get(34) as number,
+        objects: await Promise.all(
+          artifacts.stagedObjects.map(async (object) => ({
+            objectId: object.objectId,
+            canonicalBytes: object.bytes,
+            digest: await sha384(object.bytes),
+          })),
+        ),
+      };
+    };
+    const genesis = await revisionArtifacts(
+      [{ ...otherShared, value: "v1", hasDraftChange: true }],
+      {
+        actorUserId: otherActor,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        mutation: "GENESIS",
+      },
+    );
+    const mine = await revisionArtifacts(
+      [
+        { ...mineShared, value: "mine-value", hasDraftChange: true },
+        { ...mineToken, hasDraftChange: true },
+      ],
+      {
+        actorUserId: ids.actorUserId,
+        expectedHeadId: genesis.id,
+        expectedHeadHash: genesis.digest,
+        mutation: "MANIFEST_UPDATE",
+      },
+    );
+    const head = await revisionArtifacts(
+      [{ ...otherShared, value: "v3", hasDraftChange: true }],
+      {
+        actorUserId: adminActor,
+        expectedHeadId: mine.id,
+        expectedHeadHash: mine.digest,
+        mutation: "MANIFEST_UPDATE",
+      },
+    );
+    const page = {
+      environmentId: ids.environmentId,
+      trustedRevisionId: ids.environmentId,
+      trustedRevisionHash: new Uint8Array(48),
+      currentHeadId: head.id,
+      currentHeadHash: head.digest,
+      projectEpoch: 1n,
+      revisions: [
+        {
+          ...genesis,
+          parentId: ids.environmentId,
+          parentHash: new Uint8Array(48),
+          projectEpoch: BigInt(genesis.projectEpoch),
+          authoredAtMs: BigInt(genesis.authoredAtMs),
+          rollbackTargetId: null,
+        },
+        {
+          ...mine,
+          parentId: genesis.id,
+          parentHash: genesis.digest,
+          projectEpoch: BigInt(mine.projectEpoch),
+          authoredAtMs: BigInt(mine.authoredAtMs),
+          rollbackTargetId: null,
+        },
+        {
+          ...head,
+          parentId: mine.id,
+          parentHash: mine.digest,
+          projectEpoch: BigInt(head.projectEpoch),
+          authoredAtMs: BigInt(head.authoredAtMs),
+          rollbackTargetId: null,
+        },
+      ],
+      nextCursor: null,
+    };
+    await verifySyncPage(
+      page,
+      await exportSigningPublicKey(signing.publicKey),
+      { actorUserId: ids.actorUserId },
+    );
+    const decoded = await decodeSyncVariables(
+      page,
+      () => device.privateKey,
+      [],
+    );
+    const decodedById = new Map(decoded.map((item) => [item.id, item]));
+    expect(decodedById.get(otherShared.id)).toEqual(
+      expect.objectContaining({
+        name: "OTHER_SHARED",
+        value: "v3",
+        originalProviderUserId: otherActor,
+        ownerUserId: null,
+      }),
+    );
+    const adminDecoded = await decodeSyncVariables(
+      {
+        ...page,
+        currentHeadId: head.id,
+        currentHeadHash: head.digest,
+        revisions: [
+          {
+            ...head,
+            parentId: mine.id,
+            parentHash: mine.digest,
+            projectEpoch: BigInt(head.projectEpoch),
+            authoredAtMs: BigInt(head.authoredAtMs),
+            rollbackTargetId: null,
+          },
+        ],
+      },
+      () => device.privateKey,
+      [
+        {
+          id: otherShared.id,
+          name: otherShared.name,
+          description: otherShared.description,
+          ownership: otherShared.ownership,
+          value: "v1",
+          required: otherShared.required,
+          hasDraftChange: false,
+          tombstone: false,
+          originalProviderUserId: otherActor,
+          ownerUserId: null,
+        },
+      ],
+    );
+    expect(adminDecoded[0]).toEqual(
+      expect.objectContaining({
+        name: "OTHER_SHARED",
+        value: "v3",
+        originalProviderUserId: otherActor,
+      }),
+    );
+    expect(decodedById.get(mineShared.id)).toEqual(
+      expect.objectContaining({
+        name: "MINE_SHARED",
+        value: "mine-value",
+        originalProviderUserId: ids.actorUserId,
+      }),
+    );
+    expect(decodedById.get(mineToken.id)).toEqual(
+      expect.objectContaining({
+        name: "MY_TOKEN",
+        value: "my-token",
+        ownerUserId: ids.actorUserId,
+      }),
+    );
+  });
+
+  test("surfaces per-Value ownership from signed value lanes when decoding", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const shared = variable();
+    const owned = variable({
+      id: "99999999-9999-4999-8999-999999999999",
+      name: "MY_TOKEN",
+      description: "Owner-scoped token",
+      ownership: "USER_DEFINED_VALUE",
+      value: "my-token",
+    });
+    const artifacts = await createPublicationArtifacts([shared, owned], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: ids.environmentId,
+      expectedHeadHash: new Uint8Array(48),
+      valueRecipientPublicKey: encryption.publicKey,
+      userDefinedValueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: signing.privateKey,
+    });
+    const decoded = await decodeSyncVariables(
+      await syncPageFor(artifacts),
+      () => encryption.privateKey,
+      [],
+    );
+    const decodedById = new Map(decoded.map((item) => [item.id, item]));
+    expect(decodedById.get(shared.id)?.originalProviderUserId).toBe(
+      ids.actorUserId,
+    );
+    expect(decodedById.get(shared.id)?.ownerUserId).toBeNull();
+    expect(decodedById.get(owned.id)?.ownerUserId).toBe(ids.actorUserId);
+    expect(decodedById.get(owned.id)?.originalProviderUserId).toBeNull();
+  });
+
   test("a second Device reads Shared Values sealed with the Project epoch key", async () => {
     const first = await generateEncryptionKeyPair();
     const second = await generateEncryptionKeyPair();

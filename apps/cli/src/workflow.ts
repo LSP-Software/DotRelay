@@ -3787,6 +3787,25 @@ export const runProtectedWorkflow = async (
         "rollback_target_unavailable",
       );
     }
+    const absentSelected = selectedIds.filter(
+      (variableId) => !targetValues.has(variableId),
+    );
+    if (absentSelected.length > 0) {
+      const names = absentSelected
+        .map((variableId) => {
+          const candidate = synced.variables.find(
+            (variable) => variable.id === variableId,
+          );
+          return candidate ? candidate.name : variableId;
+        })
+        .join(", ");
+      throw new CliError(
+        "conflict",
+        `${names} did not exist in the target Revision and cannot be rolled back`,
+        {},
+        "rollback_variable_absent",
+      );
+    }
     const variables = synced.variables.map((variable) =>
       selected.has(variable.id)
         ? Object.freeze({

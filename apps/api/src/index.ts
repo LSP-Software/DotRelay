@@ -58,6 +58,8 @@ export type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
   readonly profile: ServerProfileConfig;
   readonly auth: DotRelayAuth;
+  /** Outbound GitHub transport for the delegated-access seam; tests stub it. */
+  readonly githubFetch?: typeof fetch;
   readonly observability?: ApiObservability;
   readonly resolveClientIp?: (request: Request) => string | null;
 }>;
@@ -374,6 +376,7 @@ const createApi = ({
   database,
   profile,
   auth,
+  githubFetch,
   observability: suppliedObservability,
   resolveClientIp,
 }: ApiDependencies) => {
@@ -1019,7 +1022,12 @@ const createApi = ({
     );
   });
 
-  registerAdministrationRoutes(app, { database, profile, auth });
+  registerAdministrationRoutes(app, {
+    database,
+    profile,
+    auth,
+    ...(githubFetch ? { githubFetch } : {}),
+  });
 
   registerDeviceRoutes(app, { database, profile, auth });
 

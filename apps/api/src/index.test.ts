@@ -734,6 +734,208 @@ describe("API foundation", () => {
   });
 });
 
+describe("Resolving a GitHub Repository's identity", () => {
+  // The protocol actor for the route: a signed-in session plus an active
+  // Device, mirroring how the Client reaches the administration surface.
+  const actorDependencies = (
+    accounts: ReadonlyArray<
+      Readonly<{ readonly providerId: string; readonly accessToken?: string }>
+    >,
+  ) => ({
+    auth: {
+      api: {
+        getSession: async () => ({
+          user: { id: "auth-user", name: "Ari" },
+        }),
+      },
+      $context: Promise.resolve({
+        options: {},
+        secretConfig: { secret: "test-secret" },
+        internalAdapter: {
+          findAccounts: async (userId: string) =>
+            userId === "user-id" ? accounts : [],
+        },
+      }),
+    } as never,
+    database: {
+      authAccount: {
+        findFirst: async () => ({ accountId: "github-account" }),
+      },
+      user: { upsert: async () => ({ id: "user-id" }) },
+      device: { findFirst: async () => ({ id: "device-id" }) },
+    } as never,
+  });
+
+  const resolveRequest = (
+    testApp: ReturnType<typeof createApi>,
+    profile: ReturnType<typeof loadServerProfileConfig>,
+    query: string,
+  ) =>
+    testApp.request(
+      `${profile.origin}/api/v1/github-repositories/resolve${query}`,
+      {
+        headers: {
+          Origin: profile.origin,
+          Authorization: "Bearer session-token",
+          "X-DotRelay-Device-Id": "device-id",
+        },
+      },
+    );
+
+  test("resolves the Repository on the acting User's behalf with their delegated access", async () => {
+    const profile = loadServerProfileConfig({});
+    const { auth, database } = actorDependencies([
+      { providerId: "github", accessToken: "delegated-token" },
+    ]);
+    const calls: Array<
+      Readonly<{ url: string; authorization: string | null }>
+    > = [];
+    const testApp = createApi({
+      database,
+      profile,
+      auth,
+      githubFetch: (async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        calls.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get("Authorization"),
+        });
+        return Response.json({
+          id: 1311418611,
+          full_name: "LSP-Software/DotRelay",
+        });
+      }) as typeof fetch,
+    });
+
+    const response = await resolveRequest(
+      testApp,
+      profile,
+      "?host=github.com&owner=LSP-Software&name=DotRelay",
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      host: "github.com",
+      owner: "LSP-Software",
+      name: "DotRelay",
+      githubRepositoryId: "1311418611",
+    });
+    expect(calls).toEqual([
+      {
+        url: "https://api.github.com/repos/LSP-Software/DotRelay",
+        authorization: "Bearer delegated-token",
+      },
+    ]);
+  });
+
+  test("denies resolution for a User without Delegated GitHub Access", async () => {
+    const profile = loadServerProfileConfig({});
+    const { auth, database } = actorDependencies([]);
+    const testApp = createApi({ database, profile, auth });
+
+    const response = await resolveRequest(
+      testApp,
+      profile,
+      "?host=github.com&owner=LSP-Software&name=DotRelay",
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      code: "repository_access_denied",
+    });
+  });
+
+  test("reports GitHub's rate limit with its retry window", async () => {
+    const profile = loadServerProfileConfig({});
+    const { auth, database } = actorDependencies([
+      { providerId: "github", accessToken: "t" },
+    ]);
+    // A one-second window keeps the in-budget retries fast; after the
+    // attempt budget the final answer carries the window as GitHub stated it.
+    const testApp = createApi({
+      database,
+      profile,
+      auth,
+      githubFetch: (async (_input: string | URL | Request) =>
+        new Response("rate limited", {
+          status: 429,
+          headers: { "Retry-After": "1" },
+        })) as typeof fetch,
+    });
+
+    const response = await resolveRequest(
+      testApp,
+      profile,
+      "?host=github.com&owner=LSP-Software&name=DotRelay",
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toMatchObject({
+      code: "github_rate_limited",
+      retryAfterSeconds: 1,
+    });
+  });
+
+  test("reports an unreachable GitHub as a service outage", async () => {
+    const profile = loadServerProfileConfig({});
+    const { auth, database } = actorDependencies([
+      { providerId: "github", accessToken: "t" },
+    ]);
+    const testApp = createApi({
+      database,
+      profile,
+      auth,
+      githubFetch: (async (
+        _input: string | URL | Request,
+      ): Promise<Response> => {
+        throw new TypeError("fetch failed");
+      }) as typeof fetch,
+    });
+
+    const response = await resolveRequest(
+      testApp,
+      profile,
+      "?host=github.com&owner=LSP-Software&name=DotRelay",
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: "github_unavailable",
+    });
+  });
+
+  test("rejects a descriptive name the GitHub API cannot take", async () => {
+    const profile = loadServerProfileConfig({});
+    const { auth, database } = actorDependencies([
+      { providerId: "github", accessToken: "t" },
+    ]);
+    const testApp = createApi({ database, profile, auth });
+
+    const wrongHost = await resolveRequest(
+      testApp,
+      profile,
+      "?host=gitlab.com&owner=LSP-Software&name=DotRelay",
+    );
+    const missingName = await resolveRequest(
+      testApp,
+      profile,
+      "?host=github.com&owner=LSP-Software",
+    );
+    const invalidName = await resolveRequest(
+      testApp,
+      profile,
+      "?host=github.com&owner=LSP-Software&name=../etc/passwd",
+    );
+
+    for (const response of [wrongHost, missingName, invalidName]) {
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "invalid_request" });
+    }
+  });
+});
+
 describe("Project resolution against a GitHub Repository", () => {
   const repositoryId = 1311418611n;
   const teamA = "00000000-0000-4000-8000-000000000001";

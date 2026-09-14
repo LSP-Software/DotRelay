@@ -22,7 +22,14 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -59,19 +66,28 @@ import {
   type ConflictChangeKind,
   type ConflictResolution,
   type ConflictSummary,
+  canActorChangeDefinitions,
+  canActorChangeVariableValue,
+  canActorPublishVariable,
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
   deleteEnvironmentVariable,
   draftValueDiffs,
+  type EditorActor,
   type EnvironmentVariable,
+  loadRollbackHistory,
   locallyPublishedRevision,
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
   publicationMutationForHead,
   publishedBaseline,
+  type RollbackHistoryResolution,
+  readOnlyReason,
+  reconcileDraftWithPermissions,
   revisionMutationLabel,
+  roleLabel,
   rollbackValueDiffs,
   type SetupAction,
   settlePublishedDraft,
@@ -85,12 +101,14 @@ import {
   variableHasDraftChange,
   verifiedRevisionFromWire,
 } from "@/lib/environment-workflow";
+import type { MembershipRole } from "@/lib/workspace-boundary";
 
 type EnvironmentEditorProps = Readonly<{
   readonly available: boolean;
   readonly active?: boolean | undefined;
   readonly loading?: boolean | undefined;
   readonly contextIdentity: EnvironmentContextIdentity;
+  readonly role: MembershipRole;
   readonly onDraftDirtyChange?: (
     dirty: boolean,
     changedVariableNames: readonly string[],
@@ -301,10 +319,8 @@ const ValueDiffLines = ({
     const showFrom = hunk.removed.length > 0;
     const showTo = hunk.added.length > 0 || !showFrom;
     return (
-      <div className="min-w-0 font-mono text-[13px] leading-5">
-        <p className="truncate font-medium text-foreground" title={diff.name}>
-          {diff.name}
-        </p>
+      <div className="min-w-0 font-mono text-sm leading-5">
+        <p className="break-all font-medium text-foreground">{diff.name}</p>
         {showFrom ? (
           <p>
             {showTo ? <span className="text-muted-foreground">- </span> : null}
@@ -326,10 +342,8 @@ const ValueDiffLines = ({
   const from = formatDiffValue(diff.from, revealed);
   const to = formatDiffValue(diff.to, revealed);
   return (
-    <div className="min-w-0 font-mono text-[13px] leading-5">
-      <p className="truncate font-medium text-foreground" title={diff.name}>
-        {diff.name}
-      </p>
+    <div className="min-w-0 font-mono text-sm leading-5">
+      <p className="break-all font-medium text-foreground">{diff.name}</p>
       {from ? (
         <p className="break-all text-red-300/90" title={from}>
           - {from}
@@ -377,7 +391,7 @@ const MaskedValue = ({
   readonly value: string | null;
   readonly revealed: boolean;
 }) => (
-  <span className="break-all font-mono text-[13px]">
+  <span className="break-all font-mono text-sm">
     {formatDiffValue(value, revealed) ?? "—"}
   </span>
 );
@@ -418,7 +432,7 @@ const ConflictSides = ({
     const showFrom = hunk.removed.length > 0;
     const showTo = hunk.added.length > 0 || !showFrom;
     return (
-      <div className="min-w-0 font-mono text-[13px] leading-5">
+      <div className="min-w-0 font-mono text-sm leading-5">
         <div className="flex gap-2">
           <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
             Theirs
@@ -506,7 +520,9 @@ const ConflictLane = ({
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-background/40 p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-sm font-medium">{summary.name}</span>
+        <span className="min-w-0 break-all font-mono text-sm font-medium">
+          {summary.name}
+        </span>
         {kinds.map((kind) => (
           <Badge
             className="h-4 text-[10px] font-medium uppercase tracking-wide"
@@ -582,6 +598,9 @@ const VariableRow = ({
   variable,
   revealed,
   editingDisabled,
+  canEdit,
+  canDelete,
+  readOnlyDisclosure,
   canUndoDelete,
   onDelete,
   onSetAbsent,
@@ -592,6 +611,9 @@ const VariableRow = ({
   readonly variable: EnvironmentVariable;
   readonly revealed: boolean;
   readonly editingDisabled: boolean;
+  readonly canEdit: boolean;
+  readonly canDelete: boolean;
+  readonly readOnlyDisclosure: string | null;
   readonly canUndoDelete: boolean;
   readonly onDelete: () => void;
   readonly onSetAbsent: () => void;
@@ -609,16 +631,21 @@ const VariableRow = ({
     >
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
         <div className="min-w-0 sm:w-[min(22rem,36%)] sm:shrink-0">
-          <div className="flex min-w-0 items-baseline gap-x-2">
-            <span
-              className="truncate font-mono text-[13px] font-medium tracking-tight"
-              title={variable.name}
-            >
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span className="min-w-0 flex-1 break-all font-mono text-sm font-medium tracking-tight">
               {variable.name}
             </span>
             <span className="shrink-0 text-[11px] text-muted-foreground">
               {ownershipLabel(variable.ownership)}
             </span>
+            {readOnlyDisclosure ? (
+              <span
+                className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+                title={readOnlyDisclosure}
+              >
+                Read-only
+              </span>
+            ) : null}
             {variable.hasDraftChange ? (
               <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-200">
                 Draft change
@@ -626,10 +653,7 @@ const VariableRow = ({
             ) : null}
           </div>
           {variable.description ? (
-            <p
-              className="truncate text-[11px] leading-4 text-muted-foreground/80"
-              title={variable.description}
-            >
+            <p className="break-words text-xs leading-5 text-muted-foreground/80">
               {variable.description}
             </p>
           ) : null}
@@ -642,7 +666,7 @@ const VariableRow = ({
             </span>
             {variable.hasDraftChange && canUndoDelete ? (
               <Button
-                disabled={editingDisabled}
+                disabled={editingDisabled || !canDelete}
                 onClick={onUndoDelete}
                 size="xs"
                 variant="outline"
@@ -657,9 +681,10 @@ const VariableRow = ({
               {variable.name} Value
             </Label>
             <Input
+              aria-readonly={!canEdit}
               autoComplete="off"
-              className="h-7 font-mono text-[13px]"
-              disabled={editingDisabled}
+              className="font-mono"
+              disabled={editingDisabled || !canEdit}
               id={`value-${variable.id}`}
               onChange={(event) => onValueChange(event.target.value)}
               placeholder={variable.value === null ? "Absent" : "Empty Value"}
@@ -686,7 +711,7 @@ const VariableRow = ({
             </Button>
             {!variable.required && variable.value !== null ? (
               <Button
-                disabled={editingDisabled}
+                disabled={editingDisabled || !canEdit}
                 onClick={onSetAbsent}
                 size="xs"
                 variant="ghost"
@@ -697,7 +722,7 @@ const VariableRow = ({
             <Button
               aria-label={`Delete ${variable.name}`}
               className="text-muted-foreground hover:text-destructive"
-              disabled={editingDisabled}
+              disabled={editingDisabled || !canDelete}
               onClick={onDelete}
               size="icon-sm"
               variant="ghost"
@@ -862,6 +887,7 @@ export const EnvironmentEditor = ({
   active,
   loading,
   contextIdentity,
+  role,
   onDraftDirtyChange,
   setupAction,
   setupCommand,
@@ -875,6 +901,9 @@ export const EnvironmentEditor = ({
     sessionMatchesContext(protocolSession.context, contextIdentity)
       ? protocolSession
       : null;
+  const actorUserId = session?.context.actorUserId ?? null;
+  const actor: EditorActor = { role, actorUserId };
+  const canChangeDefinitions = canActorChangeDefinitions(actor);
   const [variables, setVariables] = useState<EnvironmentVariable[]>(() =>
     session ? [] : [...initialVariables],
   );
@@ -1005,6 +1034,59 @@ export const EnvironmentEditor = ({
       cancelled = true;
     };
   }, [session, available, loadAttempt]);
+  const previousActorRef = useRef<EditorActor | null>(null);
+  const reconciliationNoticeRef = useRef(false);
+  useEffect(() => {
+    const previous = previousActorRef.current;
+    previousActorRef.current = { role, actorUserId };
+    if (!previous) return;
+    if (previous.role === role && previous.actorUserId === actorUserId) return;
+    const reconciled = reconcileDraftWithPermissions(
+      variables,
+      remoteVariables,
+      { role, actorUserId },
+    );
+    if (reconciled.droppedVariableNames.length === 0) {
+      if (reconciliationNoticeRef.current) setPublishMessage(null);
+      reconciliationNoticeRef.current = false;
+      return;
+    }
+    const keptIds = new Set(
+      reconciled.variables.map((variable) => variable.id),
+    );
+    const remoteById = new Map(
+      remoteVariables.map((variable) => [variable.id, variable]),
+    );
+    const publishableIds = new Set(
+      reconciled.variables
+        .filter((variable) =>
+          canActorPublishVariable(
+            { role, actorUserId },
+            variable,
+            remoteById.get(variable.id),
+          ),
+        )
+        .map((variable) => variable.id),
+    );
+    setVariables([...reconciled.variables]);
+    setDeletedVariableSnapshots(
+      (snapshots) => new Map([...snapshots].filter(([id]) => keptIds.has(id))),
+    );
+    setRollbackLanes(
+      (current) => new Set([...current].filter((id) => publishableIds.has(id))),
+    );
+    setAddOpen(false);
+    setReviewOpen(false);
+    const names = reconciled.droppedVariableNames.join(" and ");
+    const cause =
+      previous.role !== role
+        ? `Your Membership role changed to ${roleLabel(role)}.`
+        : "This Environment is now signed in as a different User.";
+    setPublishMessage(
+      `${cause} We removed ${names} from your draft because your current permissions no longer cover it. Other changes are kept.`,
+    );
+    reconciliationNoticeRef.current = true;
+  }, [role, actorUserId, variables, remoteVariables]);
   const retryRead = () => {
     if (loadPhase !== "failed") return;
     setPublishMessage(null);
@@ -1034,24 +1116,39 @@ export const EnvironmentEditor = ({
     },
     [],
   );
+  const [rollbackHistoricalValues, setRollbackHistoricalValues] = useState<
+    ReadonlyMap<string, string | null>
+  >(() => new Map());
+  const [rollbackHistoryLoading, setRollbackHistoryLoading] = useState(false);
+  const [rollbackHistoryError, setRollbackHistoryError] = useState<
+    string | null
+  >(null);
+  const [rollbackUnresolvedVariableIds, setRollbackUnresolvedVariableIds] =
+    useState<ReadonlySet<string>>(() => new Set());
+  const rollbackLoadSequenceRef = useRef(0);
+  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(false);
+  const resetRollbackState = useCallback(() => {
+    rollbackLoadSequenceRef.current += 1;
+    setRollbackTarget(null);
+    setRollbackLanes(new Set());
+    setRollbackHistoricalValues(new Map());
+    setRollbackUnresolvedVariableIds(new Set());
+    setRollbackHistoryError(null);
+    setRollbackHistoryLoading(false);
+    setRollbackValuesRevealed(false);
+  }, []);
   useEffect(() => {
     if (active !== false) return;
     setAddOpen(false);
     setReviewOpen(false);
     setReviewValuesRevealed(false);
-    setRollbackTarget(null);
-    setRollbackLanes(new Set());
-    setRollbackValuesRevealed(false);
+    resetRollbackState();
     setConflictValuesRevealed(false);
-  }, [active]);
+  }, [active, resetRollbackState]);
   const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
     ReadonlyMap<string, EnvironmentVariable>
   >(() => new Map());
-  const [rollbackHistoricalValues, setRollbackHistoricalValues] = useState<
-    ReadonlyMap<string, string | null>
-  >(() => new Map());
   const [reviewValuesRevealed, setReviewValuesRevealed] = useState(false);
-  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(false);
   const baselineFor = (id: string): EnvironmentVariable | undefined =>
     remoteVariables.find((variable) => variable.id === id);
   const withDraftFlag = (
@@ -1079,8 +1176,17 @@ export const EnvironmentEditor = ({
     variables,
     rollbackHistoricalValues,
   );
+  const unresolvedRollbackNames = [...rollbackUnresolvedVariableIds]
+    .map((id) => variables.find((variable) => variable.id === id)?.name)
+    .filter((name): name is string => name !== undefined);
+  const disallowedDraftCount = variables.filter(
+    (variable) =>
+      variable.hasDraftChange &&
+      !canActorPublishVariable(actor, variable, baselineFor(variable.id)),
+  ).length;
   const canPublish =
     changedCount > 0 &&
+    disallowedDraftCount === 0 &&
     staleHeadRevision === null &&
     loadPhase === "ready" &&
     !publishing;
@@ -1167,7 +1273,9 @@ export const EnvironmentEditor = ({
       setAddError(error);
       return;
     }
-    const variable = createEnvironmentVariable(addDraft, nextVariableId());
+    const variable = createEnvironmentVariable(addDraft, nextVariableId(), {
+      actorUserId,
+    });
     setVariables((current) => [...current, variable]);
     setAddDraft(emptyVariableDraft);
     setAddError(null);
@@ -1177,42 +1285,54 @@ export const EnvironmentEditor = ({
   const loadHistoricalValues = async (
     revision: string,
     variableIds: readonly string[],
-  ): Promise<ReadonlyMap<string, string | null>> => {
+  ): Promise<RollbackHistoryResolution> => {
     const rollbackSession = session;
-    if (!rollbackSession?.resolveRollbackValues) return historicalValues;
-    try {
-      return await rollbackSession.resolveRollbackValues({
-        targetRevision: revision,
-        selectedVariableIds: variableIds,
-      });
-    } catch {
-      const values = new Map<string, string | null>();
-      for (const variableId of variableIds) {
-        try {
-          const one = await rollbackSession.resolveRollbackValues({
-            targetRevision: revision,
-            selectedVariableIds: [variableId],
-          });
-          if (one.has(variableId))
-            values.set(variableId, one.get(variableId) ?? null);
-        } catch {
-          // This Variable did not exist in that revision.
-        }
-      }
-      return values;
-    }
+    if (!rollbackSession?.resolveRollbackValues)
+      return { values: historicalValues, unresolvedVariableIds: [] };
+    return loadRollbackHistory(rollbackSession.resolveRollbackValues, {
+      targetRevision: revision,
+      variableIds,
+    });
   };
 
+  const canRollbackVariable = (variable: EnvironmentVariable): boolean =>
+    !variable.tombstone &&
+    canActorPublishVariable(actor, variable, baselineFor(variable.id));
+  const canStageAnyRollback = variables.some((variable) =>
+    canRollbackVariable(variable),
+  );
   const openRollback = async (revision: string) => {
-    const values = await loadHistoricalValues(
-      revision,
-      variables.map((variable) => variable.id),
-    );
-    const diffs = rollbackValueDiffs(variables, values);
-    setRollbackHistoricalValues(values);
-    setRollbackLanes(new Set(diffs.map((diff) => diff.id)));
-    setRollbackValuesRevealed(false);
+    const requestedVariableIds = variables.map((variable) => variable.id);
+    resetRollbackState();
+    const loadSequence = ++rollbackLoadSequenceRef.current;
     setRollbackTarget(revision);
+    setRollbackHistoryLoading(true);
+    const history = await loadHistoricalValues(revision, requestedVariableIds);
+    if (rollbackLoadSequenceRef.current !== loadSequence) return;
+    setRollbackHistoryLoading(false);
+    if (
+      requestedVariableIds.length > 0 &&
+      history.values.size === 0 &&
+      history.unresolvedVariableIds.length === requestedVariableIds.length
+    ) {
+      setRollbackHistoryError(
+        "This Device could not read this Revision's Values, so it cannot be compared. Nothing was staged.",
+      );
+      return;
+    }
+    const diffs = rollbackValueDiffs(variables, history.values);
+    const selectableIds = new Set(
+      variables
+        .filter((variable) => canRollbackVariable(variable))
+        .map((variable) => variable.id),
+    );
+    setRollbackHistoricalValues(history.values);
+    setRollbackUnresolvedVariableIds(new Set(history.unresolvedVariableIds));
+    setRollbackLanes(
+      new Set(
+        diffs.map((diff) => diff.id).filter((id) => selectableIds.has(id)),
+      ),
+    );
   };
 
   const clearConflictState = () => {
@@ -1479,10 +1599,23 @@ export const EnvironmentEditor = ({
       );
       return;
     }
-    setVariables(materialized);
+    const reconciled = reconcileDraftWithPermissions(
+      materialized,
+      remoteVariables,
+      actor,
+    ).variables;
+    if (changedLaneCount(reconciled) === 0) {
+      clearConflictState();
+      setHeadRevision(staleHeadRevision);
+      setPublishMessage(
+        "Nothing to publish: your current permissions no longer cover the kept changes.",
+      );
+      return;
+    }
+    setVariables([...reconciled]);
     setHeadRevision(staleHeadRevision);
     setPublishMessage(null);
-    void runPublish(materialized);
+    void runPublish(reconciled);
   };
 
   const applyRollback = async () => {
@@ -1662,7 +1795,7 @@ export const EnvironmentEditor = ({
           </CardTitle>
           <CardAction className="flex flex-wrap justify-end gap-2">
             <Button
-              disabled={loadPhase !== "ready"}
+              disabled={loadPhase !== "ready" || !canChangeDefinitions}
               onClick={() => {
                 setAddError(null);
                 setAddOpen(true);
@@ -1693,6 +1826,14 @@ export const EnvironmentEditor = ({
               </Button>
             ) : null}
           </CardAction>
+          {!canChangeDefinitions ? (
+            <CardDescription data-testid="member-permissions-note">
+              As a {roleLabel(role)}, you can read every Variable. You can edit
+              the User-defined Values you own and the Shared Values you
+              provided. Owners and Admins can change the rest, and can add and
+              delete Variables.
+            </CardDescription>
+          ) : null}
         </CardHeader>
         <CardContent className="px-0">
           {variables.length === 0 ? (
@@ -1721,6 +1862,8 @@ export const EnvironmentEditor = ({
             <ul className="divide-y divide-border">
               {variables.map((variable) => (
                 <VariableRow
+                  canDelete={canChangeDefinitions}
+                  canEdit={canActorChangeVariableValue(actor, variable)}
                   canUndoDelete={deletedVariableSnapshots.has(variable.id)}
                   editingDisabled={loadPhase !== "ready"}
                   key={variable.id}
@@ -1737,6 +1880,7 @@ export const EnvironmentEditor = ({
                   onToggleReveal={() => toggleReveal(variable.id)}
                   onUndoDelete={() => undoDelete(variable.id)}
                   onValueChange={(value) => updateValue(variable.id, value)}
+                  readOnlyDisclosure={readOnlyReason(actor, variable)}
                   revealed={revealed.has(variable.id)}
                   variable={variable}
                 />
@@ -1788,7 +1932,7 @@ export const EnvironmentEditor = ({
                   <Badge>Current</Badge>
                 ) : (
                   <Button
-                    disabled={loadPhase !== "ready"}
+                    disabled={loadPhase !== "ready" || !canStageAnyRollback}
                     onClick={() => {
                       void openRollback(revision.id);
                     }}
@@ -1865,11 +2009,7 @@ export const EnvironmentEditor = ({
 
       <Dialog
         onOpenChange={(open) => {
-          if (!open) {
-            setRollbackTarget(null);
-            setRollbackHistoricalValues(new Map());
-            setRollbackValuesRevealed(false);
-          }
+          if (!open) resetRollbackState();
         }}
         open={rollbackTarget !== null}
       >
@@ -1895,66 +2035,141 @@ export const EnvironmentEditor = ({
               </p>
             </div>
           ) : null}
-          {pendingRollbackDiffs.length === 0 ? (
+          {rollbackHistoryLoading ? (
+            <p
+              className="text-sm text-muted-foreground"
+              data-testid="rollback-history-loading"
+              role="status"
+            >
+              Reading this Revision&rsquo;s Values…
+            </p>
+          ) : rollbackHistoryError !== null ? (
+            <Alert
+              className="mt-2 border-destructive/30"
+              data-testid="rollback-history-error"
+            >
+              <AlertTitle>Rollback history unavailable</AlertTitle>
+              <AlertDescription className="flex flex-col gap-3">
+                <span>{rollbackHistoryError}</span>
+                <div>
+                  <Button
+                    disabled={rollbackTarget === null}
+                    onClick={() => {
+                      if (rollbackTarget !== null)
+                        void openRollback(rollbackTarget);
+                    }}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <RotateCcw aria-hidden="true" /> Retry reading
+                  </Button>
+                </div>
+              </AlertDescription>
+            </Alert>
+          ) : pendingRollbackDiffs.length === 0 &&
+            rollbackUnresolvedVariableIds.size === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing is different from this revision.
             </p>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">
-                  {rollbackLanes.size} of {pendingRollbackDiffs.length}{" "}
-                  Variables selected
-                </p>
-                <Button
-                  aria-pressed={rollbackValuesRevealed}
-                  onClick={() =>
-                    setRollbackValuesRevealed((current) => !current)
-                  }
-                  size="xs"
-                  variant="ghost"
+              {rollbackUnresolvedVariableIds.size > 0 ? (
+                <Alert
+                  className="mt-2 border-amber-300/30"
+                  data-testid="rollback-history-partial"
                 >
-                  {rollbackValuesRevealed ? (
-                    <EyeOff aria-hidden="true" />
-                  ) : (
-                    <Eye aria-hidden="true" />
-                  )}
-                  {rollbackValuesRevealed ? "Hide values" : "Show values"}
-                </Button>
-              </div>
-              <div className="grid max-h-[min(50vh,28rem)] gap-2 overflow-y-auto">
-                {pendingRollbackDiffs.map((diff) => (
-                  <label
-                    className="flex items-start gap-3 rounded-lg border p-3"
-                    key={diff.id}
-                  >
-                    <input
-                      checked={rollbackLanes.has(diff.id)}
-                      className="mt-1"
-                      onChange={(event) =>
-                        setRollbackLanes((current) => {
-                          const next = new Set(current);
-                          if (event.target.checked) next.add(diff.id);
-                          else next.delete(diff.id);
-                          return next;
-                        })
+                  <AlertTitle>Partial comparison</AlertTitle>
+                  <AlertDescription>
+                    {`The historical Values for ${unresolvedRollbackNames.join(", ")} could not be read from this Revision, so this comparison is partial. Staging applies only to the Variables verified from it.`}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {pendingRollbackDiffs.length > 0 ? (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      {rollbackLanes.size} of {pendingRollbackDiffs.length}{" "}
+                      Variables selected
+                    </p>
+                    <Button
+                      aria-pressed={rollbackValuesRevealed}
+                      onClick={() =>
+                        setRollbackValuesRevealed((current) => !current)
                       }
-                      type="checkbox"
-                    />
-                    <ValueDiffLines
-                      diff={diff}
-                      revealed={rollbackValuesRevealed}
-                    />
-                  </label>
-                ))}
-              </div>
+                      size="xs"
+                      variant="ghost"
+                    >
+                      {rollbackValuesRevealed ? (
+                        <EyeOff aria-hidden="true" />
+                      ) : (
+                        <Eye aria-hidden="true" />
+                      )}
+                      {rollbackValuesRevealed ? "Hide values" : "Show values"}
+                    </Button>
+                  </div>
+                  <div className="grid max-h-[min(50vh,28rem)] gap-2 overflow-y-auto">
+                    {pendingRollbackDiffs.map((diff) => {
+                      const rollbackVariable = variables.find(
+                        (candidate) => candidate.id === diff.id,
+                      );
+                      const selectable =
+                        rollbackVariable !== undefined &&
+                        canRollbackVariable(rollbackVariable);
+                      return (
+                        <label
+                          className="flex items-start gap-3 rounded-lg border p-3"
+                          key={diff.id}
+                        >
+                          <input
+                            checked={rollbackLanes.has(diff.id)}
+                            className="mt-1"
+                            disabled={!selectable}
+                            onChange={(event) =>
+                              setRollbackLanes((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) next.add(diff.id);
+                                else next.delete(diff.id);
+                                return next;
+                              })
+                            }
+                            type="checkbox"
+                          />
+                          <span className="grid min-w-0 flex-1 gap-1">
+                            <ValueDiffLines
+                              diff={diff}
+                              revealed={rollbackValuesRevealed}
+                            />
+                            {!selectable ? (
+                              <span className="text-[11px] text-muted-foreground">
+                                {rollbackVariable
+                                  ? (readOnlyReason(actor, rollbackVariable) ??
+                                    (rollbackVariable.tombstone
+                                      ? "This Variable is marked for deletion in your draft."
+                                      : null))
+                                  : null}
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
             </>
           )}
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>
               Cancel
             </DialogClose>
-            <Button disabled={rollbackLanes.size === 0} onClick={applyRollback}>
+            <Button
+              disabled={
+                rollbackLanes.size === 0 ||
+                rollbackHistoryLoading ||
+                rollbackHistoryError !== null
+              }
+              onClick={applyRollback}
+            >
               Stage rollback
             </Button>
           </DialogFooter>

@@ -85,6 +85,56 @@ const syncPageFor = async (
   };
 };
 
+const ABSENT_VARIABLE_ID = "88888888-8888-4888-8888-888888888888";
+
+// A session that has verified and decoded one Genesis Revision holding a
+// single Variable, so resolveRollbackValues has a snapshot to read.
+const syncedGenesisSession = async (): Promise<{
+  readonly session: ReturnType<typeof createVerifiedEnvironmentSession>;
+  readonly revisionId: string;
+}> => {
+  const encryption = await generateEncryptionKeyPair();
+  const local = await generateSigningKeyPair();
+  const author = await generateSigningKeyPair();
+  const artifacts = await createPublicationArtifacts([variable()], {
+    ...ids,
+    projectEpoch: 1,
+    expectedHeadId: null,
+    expectedHeadHash: null,
+    valueRecipientPublicKey: encryption.publicKey,
+    signingPrivateKey: author.privateKey,
+    mutation: "GENESIS",
+  });
+  const page = await syncPageFor(artifacts);
+  const localKey = await exportSigningPublicKey(local.publicKey);
+  const authorKey = await exportSigningPublicKey(author.publicKey);
+  const context = {
+    ...ids,
+    projectEpoch: 1,
+    expectedHeadId: page.currentHeadId,
+    expectedHeadHash: page.currentHeadHash,
+    valueRecipientPublicKey: encryption.publicKey,
+    signingPrivateKey: local.privateKey,
+    revisionSigningPublicKey: localKey,
+  };
+  const request = {
+    environmentId: ids.environmentId,
+    deviceId: ids.actorDeviceId,
+    request: {
+      trustedRevisionId: ids.environmentId,
+      trustedRevisionHash: new Uint8Array(48),
+    },
+  };
+  const session = createVerifiedEnvironmentSession({
+    context,
+    transport: transportFor(page),
+    sharedValuePrivateKey: encryption.privateKey,
+    signingTrustKeys: [localKey, authorKey],
+  });
+  await session.syncAndDecode(request);
+  return { session, revisionId: page.currentHeadId };
+};
+
 describe("verified Environment session", () => {
   test("verifies peer-signed Revisions with the workspace signing trust set", async () => {
     const encryption = await generateEncryptionKeyPair();
@@ -138,5 +188,27 @@ describe("verified Environment session", () => {
         value: "postgres://example",
       }),
     ]);
+  });
+
+  test("resolveRollbackValues omits a Variable verified absent from the target Revision", async () => {
+    const { session, revisionId } = await syncedGenesisSession();
+    const values = await session.resolveRollbackValues({
+      targetRevision: revisionId,
+      selectedVariableIds: [variable().id, ABSENT_VARIABLE_ID],
+    });
+    expect(values.get(variable().id)).toBe("postgres://example");
+    // The Genesis snapshot verified this Variable was never part of the
+    // Revision, so the answer is absence in the result, not a failure.
+    expect(values.has(ABSENT_VARIABLE_ID)).toBe(false);
+  });
+
+  test("resolveRollbackValues rejects a target Revision missing from verified history", async () => {
+    const { session } = await syncedGenesisSession();
+    await expect(
+      session.resolveRollbackValues({
+        targetRevision: "99999999-9999-4999-8999-999999999999",
+        selectedVariableIds: [variable().id],
+      }),
+    ).rejects.toThrow("not present in the local sync cache");
   });
 });

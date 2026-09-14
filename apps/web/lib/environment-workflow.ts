@@ -8,6 +8,7 @@ import {
   sign,
   validatePublicationVariables,
 } from "@dotrelay/client";
+import type { MembershipRole } from "./workspace-boundary";
 
 export { type InlineValueHunk, splitInlineValueDiff } from "@dotrelay/client";
 
@@ -22,7 +23,94 @@ export type EnvironmentVariable = Readonly<{
   readonly required: boolean;
   readonly hasDraftChange: boolean;
   readonly tombstone?: boolean;
+  readonly originalProviderUserId?: string | null;
+  readonly ownerUserId?: string | null;
 }>;
+
+export type EditorActor = Readonly<{
+  readonly role: MembershipRole;
+  readonly actorUserId: string | null;
+}>;
+
+export const isPrivilegedRole = (role: MembershipRole): boolean =>
+  role === "OWNER" || role === "ADMIN";
+
+export const roleLabel = (role: MembershipRole): string =>
+  role === "OWNER" ? "Owner" : role === "ADMIN" ? "Admin" : "Member";
+
+export const canActorChangeVariableValue = (
+  actor: EditorActor,
+  variable: Pick<
+    EnvironmentVariable,
+    "ownership" | "originalProviderUserId" | "ownerUserId"
+  >,
+): boolean => {
+  if (isPrivilegedRole(actor.role)) return true;
+  if (actor.actorUserId === null) return false;
+  if (variable.ownership === "SHARED_VALUE")
+    return variable.originalProviderUserId === actor.actorUserId;
+  return variable.ownerUserId === actor.actorUserId;
+};
+
+export const canActorChangeDefinitions = (actor: EditorActor): boolean =>
+  isPrivilegedRole(actor.role);
+
+export const canActorPublishVariable = (
+  actor: EditorActor,
+  variable: Pick<
+    EnvironmentVariable,
+    "tombstone" | "ownership" | "originalProviderUserId" | "ownerUserId"
+  >,
+  remoteBaseline?: EnvironmentVariable,
+): boolean => {
+  if (variable.tombstone || remoteBaseline === undefined)
+    return canActorChangeDefinitions(actor);
+  return canActorChangeVariableValue(actor, variable);
+};
+
+export const readOnlyReason = (
+  actor: EditorActor,
+  variable: Pick<
+    EnvironmentVariable,
+    "ownership" | "originalProviderUserId" | "ownerUserId"
+  >,
+): string | null => {
+  if (canActorChangeVariableValue(actor, variable)) return null;
+  if (variable.ownership === "SHARED_VALUE")
+    return "Only the provider or a Team admin can change this Shared Value.";
+  return "This User-defined Value belongs to another User.";
+};
+
+export const reconcileDraftWithPermissions = (
+  variables: readonly EnvironmentVariable[],
+  remoteVariables: readonly EnvironmentVariable[],
+  actor: EditorActor,
+): Readonly<{
+  readonly variables: readonly EnvironmentVariable[];
+  readonly droppedVariableNames: readonly string[];
+}> => {
+  const remoteById = new Map(
+    remoteVariables.map((variable) => [variable.id, variable]),
+  );
+  const kept: EnvironmentVariable[] = [];
+  const droppedVariableNames: string[] = [];
+  for (const variable of variables) {
+    const baseline = remoteById.get(variable.id);
+    if (
+      !variable.hasDraftChange ||
+      canActorPublishVariable(actor, variable, baseline)
+    ) {
+      kept.push(variable);
+      continue;
+    }
+    droppedVariableNames.push(variable.name);
+    if (baseline) kept.push(baseline);
+  }
+  return Object.freeze({
+    variables: Object.freeze(kept),
+    droppedVariableNames: Object.freeze(droppedVariableNames),
+  });
+};
 
 export type VariableDraft = Readonly<{
   readonly name: string;
@@ -104,20 +192,29 @@ export const validateVariableDraft = (
 export const createEnvironmentVariable = (
   draft: VariableDraft,
   id: string,
+  actor?: Readonly<{ readonly actorUserId: string | null }>,
 ): EnvironmentVariable => {
   const error = validateVariableDraft(draft);
   if (error) throw new Error(error);
   const ownership = draft.ownership;
   if (!ownership) throw new Error("Variable ownership is required.");
+  const valuePresent = draft.valuePresent !== false;
+  const actorUserId = actor?.actorUserId ?? null;
   return Object.freeze({
     id,
     name: draft.name,
     description: draft.description,
     ownership,
-    value: draft.valuePresent === false ? null : draft.value,
+    value: valuePresent ? draft.value : null,
     required: draft.required,
     hasDraftChange: true,
     tombstone: false,
+    ...(ownership === "SHARED_VALUE" && valuePresent && actorUserId
+      ? { originalProviderUserId: actorUserId }
+      : {}),
+    ...(ownership === "USER_DEFINED_VALUE" && valuePresent && actorUserId
+      ? { ownerUserId: actorUserId }
+      : {}),
   });
 };
 
@@ -358,6 +455,52 @@ export const rollbackValueDiffs = (
       ];
     }),
   );
+
+// values holds the Variables verified present at the Revision; a requested
+// Variable missing from it was verified absent there. After a failed bulk
+// read, unresolvedVariableIds lists the Variables that could not be read at
+// all, so a failure is never mistaken for an unchanged or absent Variable.
+export type RollbackHistoryResolution = Readonly<{
+  readonly values: ReadonlyMap<string, string | null>;
+  readonly unresolvedVariableIds: readonly string[];
+}>;
+
+export const loadRollbackHistory = async (
+  resolve: (
+    input: Readonly<{
+      readonly targetRevision: string;
+      readonly selectedVariableIds: readonly string[];
+    }>,
+  ) => Promise<ReadonlyMap<string, string | null>>,
+  input: Readonly<{
+    readonly targetRevision: string;
+    readonly variableIds: readonly string[];
+  }>,
+): Promise<RollbackHistoryResolution> => {
+  try {
+    const values = await resolve({
+      targetRevision: input.targetRevision,
+      selectedVariableIds: input.variableIds,
+    });
+    return { values, unresolvedVariableIds: [] };
+  } catch {
+    const values = new Map<string, string | null>();
+    const unresolvedVariableIds: string[] = [];
+    for (const variableId of input.variableIds) {
+      try {
+        const one = await resolve({
+          targetRevision: input.targetRevision,
+          selectedVariableIds: [variableId],
+        });
+        if (one.has(variableId))
+          values.set(variableId, one.get(variableId) ?? null);
+      } catch {
+        unresolvedVariableIds.push(variableId);
+      }
+    }
+    return { values, unresolvedVariableIds };
+  }
+};
 
 export type ConflictResolution = "local" | "remote" | "merge";
 
