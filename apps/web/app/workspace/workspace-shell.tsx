@@ -219,7 +219,7 @@ const missingResourceCopy: Readonly<
   environment: {
     title: "That Environment is no longer available",
     description:
-      "It may have been deleted, or you may have lost access. The first Environment of the Project is shown instead.",
+      "It may have been deleted, or you may have lost access. The first available Environment of the Project is shown instead.",
   },
 };
 
@@ -379,6 +379,11 @@ export const WorkspaceShell = ({
   // stored Device bundle was loaded from durable storage. A memory-only
   // fallback is never added, so it is never claimed as enrolled.
   const durableBrowserDeviceRef = useRef<Set<string>>(new Set());
+  // history.go delta of the prompt opened by Back/Forward, or null. A ref so
+  // a popstate that discards an open prompt invalidates its restore before
+  // the dialog's close handler can run; a stale prompt must not pull the
+  // browser back to the entry the user just left.
+  const promptRestoreRef = useRef<number | null>(null);
 
   const protectedPreview = preview === "protected";
   const noCryptoPreview = preview === "no-crypto";
@@ -527,9 +532,21 @@ export const WorkspaceShell = ({
       })
     ) {
       setMissingResource(location.missing ?? null);
-      // The location is unchanged but the URL entry can still carry stale
-      // params (a history entry written before the catalog dropped a
-      // resource); rewrite it so the entry matches the visible state.
+      // The location is unchanged, but resource state can still drift under
+      // it: a reload of a shared link reaches this branch after the catalog
+      // loads, so lifecycle is re-derived from the catalog instead of
+      // keeping the initial defaults.
+      const project = displayBoundary.catalog.projects.find(
+        (candidate) => candidate.id === location.projectId,
+      );
+      const environment = project?.environments.find(
+        (candidate) => candidate.id === location.environmentId,
+      );
+      setProjectLifecycle(project?.lifecycle ?? "ACTIVE");
+      setEnvironmentLifecycle(environment?.lifecycle ?? "ACTIVE");
+      // The URL entry can still carry stale params (a history entry written
+      // before the catalog dropped a resource); rewrite it so the entry
+      // matches the visible state.
       if (typeof window === "undefined") return;
       const search = serializeWorkspaceLocation(
         location,
@@ -580,6 +597,7 @@ export const WorkspaceShell = ({
     // and sidebar view switches must not reload or reset the Environment the
     // user is working in.
     setPendingSwitch(null);
+    promptRestoreRef.current = null;
     setMissingResource(location.missing ?? null);
     if (rebinding) {
       resetWorkspaceContext();
@@ -683,6 +701,8 @@ export const WorkspaceShell = ({
       dirtyDraft,
     });
     const promptSwitch = (rebinding: boolean) => {
+      // A prompt opened by user navigation has no entry to restore to.
+      promptRestoreRef.current = null;
       setPendingSwitch({
         target,
         rebinding,
@@ -823,7 +843,13 @@ export const WorkspaceShell = ({
         view,
       })
     ) {
-      if (preview !== "protected") return;
+      if (preview !== "protected") {
+        // Commit through applySelection so the same-location path refreshes
+        // resource lifecycle and normalizes the URL entry (a reload of a
+        // shared link lands here).
+        applySelectionRef.current(target, { push: false });
+        return;
+      }
       if (!target.teamId) return;
       // A Project is already open, so the user's Team/Project/Environment
       // choice stands; never re-point it at the first Project.
@@ -889,7 +915,12 @@ export const WorkspaceShell = ({
     }
     workspaceHistoryBookkeeping.index = toIndex;
     const restore = fromIndex - toIndex;
-    if (pendingSwitch) setPendingSwitch(null);
+    if (pendingSwitch) {
+      // The browser moved again; the open prompt describes the entry left
+      // behind, so drop it (and any restore it would have run).
+      setPendingSwitch(null);
+      promptRestoreRef.current = null;
+    }
     const parsed = parseWorkspaceLocation(
       new URLSearchParams(window.location.search),
     );
@@ -927,6 +958,7 @@ export const WorkspaceShell = ({
         (state) => state.dirty,
       );
       if (anyDraftDirty) {
+        promptRestoreRef.current = restore;
         setPendingSwitch({
           target,
           rebinding: true,
@@ -2319,11 +2351,12 @@ export const WorkspaceShell = ({
       <Dialog
         onOpenChange={(open) => {
           if (open) return;
-          const pending = pendingSwitch;
+          const restore = promptRestoreRef.current;
+          promptRestoreRef.current = null;
           setPendingSwitch(null);
           // Dismissing via the close control or Escape counts as staying, so
           // a prompt opened by Back/Forward returns to the entry left behind.
-          if (pending?.restore) restoreHistoryEntry(pending.restore);
+          if (restore) restoreHistoryEntry(restore);
         }}
         open={pendingSwitch !== null}
       >
@@ -2350,9 +2383,10 @@ export const WorkspaceShell = ({
             <Button
               variant="outline"
               onClick={() => {
-                const pending = pendingSwitch;
+                const restore = promptRestoreRef.current;
+                promptRestoreRef.current = null;
                 setPendingSwitch(null);
-                if (pending?.restore) restoreHistoryEntry(pending.restore);
+                if (restore) restoreHistoryEntry(restore);
               }}
             >
               {switchRebinding ? "Stay" : "Cancel"}

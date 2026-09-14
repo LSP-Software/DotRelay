@@ -77,13 +77,7 @@ export const parseWorkspaceLocation = (
 };
 
 export const serializeWorkspaceLocation = (
-  location: Readonly<{
-    readonly profileId: WorkspaceProfileId;
-    readonly teamId: string | null;
-    readonly projectId: string | null;
-    readonly environmentId: string | null;
-    readonly view: WorkspaceView;
-  }>,
+  location: WorkspaceLocation,
   baseSearch: URLSearchParams,
 ): string => {
   const params = new URLSearchParams(baseSearch);
@@ -110,12 +104,13 @@ export const sameWorkspaceLocation = (
   a.view === b.view;
 
 /**
- * Validate a parsed location against the workspace catalog. A missing Team
- * falls back to the first Team, a missing Project drops the Project and
- * Environment, and a missing Environment falls back to the Project's first
- * Environment. `missing` names the first resource, from the top down, that
- * the caller asked for and the catalog could not provide, so the shell can
- * offer a recovery path instead of a blank page.
+ * Validate a parsed location against the workspace catalog. A Project linked
+ * without a Team is accepted from any Team and selects that Team; otherwise
+ * a missing Team falls back to the first Team, a missing Project drops the
+ * Project and Environment, and a missing Environment falls back to the
+ * Project's first Environment. `missing` names the first resource, from the
+ * top down, that the caller asked for and the catalog could not provide, so
+ * the shell can offer a recovery path instead of a blank page.
  */
 export const resolveWorkspaceLocation = (
   parsed: ParsedWorkspaceLocation,
@@ -127,20 +122,27 @@ export const resolveWorkspaceLocation = (
   let missing: WorkspaceMissingResource | null = null;
   const teamKnown =
     parsed.teamId !== null && teams.some((team) => team.id === parsed.teamId);
-  const teamId = teamKnown ? parsed.teamId : (teams[0]?.id ?? null);
   if (parsed.teamId !== null && !teamKnown) missing = { kind: "team" };
+  let teamId = parsed.teamId !== null && teamKnown ? parsed.teamId : null;
   let projectId: string | null = null;
   if (parsed.projectId !== null && missing === null) {
-    const team = teams.find((candidate) => candidate.id === teamId) ?? null;
-    const project = team
-      ? projects.find(
-          (candidate) =>
-            candidate.id === parsed.projectId && candidate.teamId === team.id,
-        )
-      : null;
-    if (project) projectId = project.id;
-    else missing = { kind: "project" };
+    // A link without a Team may name a Project from any Team; a link that
+    // names a Team restricts the Project to that Team.
+    const project =
+      teamId === null
+        ? projects.find((candidate) => candidate.id === parsed.projectId)
+        : projects.find(
+            (candidate) =>
+              candidate.id === parsed.projectId && candidate.teamId === teamId,
+          );
+    if (project) {
+      projectId = project.id;
+      teamId = project.teamId;
+    } else {
+      missing = { kind: "project" };
+    }
   }
+  if (teamId === null) teamId = teams[0]?.id ?? null;
   let environmentId: string | null = null;
   if (projectId !== null) {
     const project = projects.find((candidate) => candidate.id === projectId);

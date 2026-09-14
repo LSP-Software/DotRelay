@@ -40,6 +40,33 @@ test("back and forward traverse workspace views", async ({ page }) => {
   await expect(page.getByText("OWNER Membership")).toBeVisible();
 });
 
+test("switching Teams is a history entry that Back and Forward traverse", async ({
+  page,
+}) => {
+  await page.goto("/workspace");
+  await expectUrl(page, "view=projects");
+  await expect(
+    page.getByRole("heading", { name: "LSP Software" }),
+  ).toBeVisible();
+
+  await page
+    .locator("aside")
+    .getByLabel("Team")
+    .selectOption("00000000-0000-4000-8000-000000000012");
+  await expectUrl(page, "team=00000000-0000-4000-8000-000000000012");
+  await expect(page.getByRole("heading", { name: "Acme Labs" })).toBeVisible();
+
+  await page.goBack();
+  await expectUrl(page, "team=00000000-0000-4000-8000-000000000011");
+  await expect(
+    page.getByRole("heading", { name: "LSP Software" }),
+  ).toBeVisible();
+
+  await page.goForward();
+  await expectUrl(page, "team=00000000-0000-4000-8000-000000000012");
+  await expect(page.getByRole("heading", { name: "Acme Labs" })).toBeVisible();
+});
+
 test("opening Projects and switching Environments are history entries", async ({
   page,
 }) => {
@@ -96,6 +123,14 @@ test("reload and shared links reopen the visible view and Server Profile", async
   await expect(
     page.getByRole("heading", { name: "LSP Software" }),
   ).toBeVisible();
+  // Rebinding to the new profile drops the Project/Environment params the
+  // old profile owned; only the default Team of the new profile remains.
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has("project"))
+    .toBe(false);
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has("environment"))
+    .toBe(false);
   const profileUrl = page.url();
 
   await page.goto(profileUrl);
@@ -105,6 +140,33 @@ test("reload and shared links reopen the visible view and Server Profile", async
   await expect(
     page.getByRole("heading", { name: "LSP Software" }),
   ).toBeVisible();
+});
+
+test("reloading the Projects, Team, and Devices views reopens them", async ({
+  page,
+}) => {
+  await page.goto("/workspace");
+  await expectUrl(page, "view=projects");
+  const projectsUrl = page.url();
+  await page.goto(projectsUrl);
+  await expectUrl(page, "view=projects");
+  await expect(
+    page.getByRole("heading", { name: "LSP-Software / DotRelay" }),
+  ).toBeVisible();
+
+  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await expectUrl(page, "view=team");
+  const teamUrl = page.url();
+  await page.goto(teamUrl);
+  await expectUrl(page, "view=team");
+  await expect(page.getByText("OWNER Membership")).toBeVisible();
+
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
+  await expectUrl(page, "view=devices");
+  const devicesUrl = page.url();
+  await page.goto(devicesUrl);
+  await expectUrl(page, "view=devices");
+  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
 });
 
 test("links to deleted resources recover instead of blanking the page", async ({
@@ -145,6 +207,23 @@ test("deleted teams recover to the first team", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "LSP-Software / DotRelay" }),
   ).toBeVisible();
+});
+
+test("a project link without a team opens the project from its own team", async ({
+  page,
+}) => {
+  await page.goto(
+    "/workspace?profile=hosted&project=00000000-0000-4000-8000-000000000022&view=environment",
+  );
+  await expect(
+    page.getByRole("heading", { name: "acme / widget" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("workspace-missing-resource")).toHaveCount(0);
+  await expectUrl(page, "team=00000000-0000-4000-8000-000000000012");
+  await expect(page.getByRole("tab", { name: "default" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 test("history navigation keeps dirty drafts for the return trip", async ({

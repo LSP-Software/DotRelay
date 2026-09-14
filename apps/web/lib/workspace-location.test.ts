@@ -181,6 +181,23 @@ test("resolve picks the first environment for a project deep link", () => {
   expect(resolved.missing).toBe(null);
 });
 
+test("resolve accepts a team-less project link from any team", () => {
+  const resolved = resolveWorkspaceLocation(
+    parseWorkspaceLocation(
+      new URLSearchParams(
+        "profile=hosted&project=00000000-0000-4000-8000-000000000022",
+      ),
+    ),
+    catalogFixture(),
+    viewFallback,
+  );
+  expect(resolved.teamId).toBe("00000000-0000-4000-8000-000000000012");
+  expect(resolved.projectId).toBe("00000000-0000-4000-8000-000000000022");
+  expect(resolved.environmentId).toBe("00000000-0000-4000-8000-000000000033");
+  expect(resolved.view).toBe("environment");
+  expect(resolved.missing).toBe(null);
+});
+
 test("resolve falls back to the first team for a deleted team", () => {
   const resolved = resolveWorkspaceLocation(
     parseWorkspaceLocation(
