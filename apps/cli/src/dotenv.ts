@@ -18,6 +18,7 @@ const escapeHelp = 'only \\\\, \\", \\n, \\r and \\t are supported';
 
 const readQuotedValue = (
   lines: readonly string[],
+  crlf: readonly boolean[],
   startLine: number,
   startCol: number,
   quote: '"' | "'",
@@ -68,7 +69,7 @@ const readQuotedValue = (
       chunks.push(ch);
       col += 1;
     }
-    chunks.push("\n");
+    chunks.push(crlf[line] ? "\r\n" : "\n");
     line += 1;
     col = 0;
   }
@@ -86,7 +87,11 @@ const parseUnquotedValue = (text: string): string => {
 };
 
 export const parseDotenv = (source: string): readonly DotenvEntry[] => {
-  const lines = source.replaceAll("\r\n", "\n").split("\n");
+  const rawLines = source.split("\n");
+  const crlf = rawLines.map(
+    (raw, i) => i < rawLines.length - 1 && raw.endsWith("\r"),
+  );
+  const lines = rawLines.map((raw, i) => (crlf[i] ? raw.slice(0, -1) : raw));
   const entries: DotenvEntry[] = [];
   const seen = new Set<string>();
   let index = 0;
@@ -98,19 +103,18 @@ export const parseDotenv = (source: string): readonly DotenvEntry[] => {
       index += 1;
       continue;
     }
+    const lead = original.length - original.trimStart().length;
+    if (original.includes("\r"))
+      throw new CliInvocationError(
+        `invalid dotenv assignment on line ${line}, column ${lead + 1}: the line contains a stray carriage return; use LF or CRLF line endings`,
+      );
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/d.exec(
       trimmed,
     );
-    if (!match) {
-      const lead = original.length - original.trimStart().length;
-      if (original.includes("\r"))
-        throw new CliInvocationError(
-          `invalid dotenv assignment on line ${line}, column ${lead + 1}: the line contains a stray carriage return; use LF or CRLF line endings`,
-        );
+    if (!match)
       throw new CliInvocationError(
         `invalid dotenv assignment on line ${line}, column ${lead + 1}`,
       );
-    }
     const name = match[1] ?? "";
     const nameCol =
       (match.indices?.[1]?.[0] ?? 0) +
@@ -125,7 +129,8 @@ export const parseDotenv = (source: string): readonly DotenvEntry[] => {
         `duplicate dotenv Variable: ${name} on line ${line}`,
       );
     seen.add(name);
-    let valueCol = original.indexOf("=") + 1;
+    const valueStart = original.indexOf("=") + 1;
+    let valueCol = valueStart;
     while (
       valueCol < original.length &&
       (original[valueCol] === " " || original[valueCol] === "\t")
@@ -134,7 +139,14 @@ export const parseDotenv = (source: string): readonly DotenvEntry[] => {
     const firstChar = original[valueCol];
     let value: string;
     if (firstChar === '"' || firstChar === "'") {
-      const parsed = readQuotedValue(lines, index, valueCol, firstChar, name);
+      const parsed = readQuotedValue(
+        lines,
+        crlf,
+        index,
+        valueCol,
+        firstChar,
+        name,
+      );
       const after = (lines[parsed.line] ?? "").slice(parsed.col + 1);
       const content = after.trimStart();
       if (content !== "" && !content.startsWith("#")) {
@@ -146,7 +158,7 @@ export const parseDotenv = (source: string): readonly DotenvEntry[] => {
       value = parsed.value;
       index = parsed.line + 1;
     } else {
-      value = parseUnquotedValue(original.slice(valueCol));
+      value = parseUnquotedValue(original.slice(valueStart));
       index += 1;
     }
     entries.push(Object.freeze({ name, value }));

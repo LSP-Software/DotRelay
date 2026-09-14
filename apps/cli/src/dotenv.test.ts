@@ -54,10 +54,12 @@ describe("local dotenv parsing", () => {
   });
 
   test("accepts CRLF line endings, including inside quoted values", () => {
-    expect(parseDotenv('A="one\r\ntwo" # note\r\nB=x\r\n')).toEqual([
-      { name: "A", value: "one\ntwo" },
+    const entries = parseDotenv('A="one\r\ntwo" # note\r\nB=x\r\n');
+    expect(entries).toEqual([
+      { name: "A", value: "one\r\ntwo" },
       { name: "B", value: "x" },
     ]);
+    expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
   });
 
   test("interprets supported double-quoted escapes and keeps single quotes literal", () => {
@@ -116,10 +118,14 @@ describe("local dotenv parsing", () => {
   });
 
   test("keeps a leading # in unquoted values literal unless preceded by whitespace", () => {
-    expect(parseDotenv("A=#c\nB=a # d\n")).toEqual([
-      { name: "A", value: "#c" },
-      { name: "B", value: "a" },
-    ]);
+    expect(parseDotenv("A=#c\nB=a # d\nC= # comment\nD=\t# comment\n")).toEqual(
+      [
+        { name: "A", value: "#c" },
+        { name: "B", value: "a" },
+        { name: "C", value: "" },
+        { name: "D", value: "" },
+      ],
+    );
   });
 
   test("reports malformed assignments with line and column diagnostics", () => {
@@ -127,6 +133,15 @@ describe("local dotenv parsing", () => {
       /invalid dotenv assignment on line 1, column 3/,
     );
     expect(() => parseDotenv("A=x\rB=y")).toThrow(
+      /stray carriage return; use LF or CRLF line endings/,
+    );
+    expect(() => parseDotenv("A=x\r")).toThrow(
+      /stray carriage return; use LF or CRLF line endings/,
+    );
+    expect(() => parseDotenv("A=x\r \nB=y")).toThrow(
+      /stray carriage return; use LF or CRLF line endings/,
+    );
+    expect(() => parseDotenv('A="x\r"')).toThrow(
       /stray carriage return; use LF or CRLF line endings/,
     );
     expect(() => parseDotenv("VALUE=one\nVALUE=two")).toThrow(
