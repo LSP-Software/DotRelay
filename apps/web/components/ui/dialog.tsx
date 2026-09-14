@@ -38,6 +38,37 @@ function DialogOverlay({
   );
 }
 
+const scrollFocusedElementIntoDialog = (
+  event: React.FocusEvent<HTMLElement>,
+) => {
+  const container = event.currentTarget;
+  const target = event.target;
+  if (target === container || !(target instanceof HTMLElement)) return;
+  const containerBox = container.getBoundingClientRect();
+  const targetBox = target.getBoundingClientRect();
+  // A sticky footer covers the bottom of the scroll region, so the target
+  // must clear it to stay visible; fall back to the container bottom only
+  // when the target is too tall to fit above the footer. The 2px margin
+  // absorbs integer scrollTop rounding.
+  const footer = container.querySelector('[data-slot="dialog-footer"]');
+  let clearBottom = containerBox.bottom - 2;
+  if (footer instanceof HTMLElement) {
+    const footerBox = footer.getBoundingClientRect();
+    if (footerBox.top > containerBox.top)
+      clearBottom = Math.min(footerBox.top, containerBox.bottom) - 2;
+  }
+  if (targetBox.top >= containerBox.top && targetBox.bottom <= clearBottom)
+    return;
+  if (targetBox.top < containerBox.top) {
+    container.scrollTop += targetBox.top - containerBox.top;
+  } else if (
+    targetBox.bottom - targetBox.top <=
+    clearBottom - containerBox.top
+  ) {
+    container.scrollTop += targetBox.bottom - clearBottom;
+  } else container.scrollTop += targetBox.bottom - containerBox.bottom;
+};
+
 function DialogContent({
   className,
   children,
@@ -52,9 +83,10 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
+        onFocusCapture={scrollFocusedElementIntoDialog}
         {...props}
       >
         {children}
@@ -100,7 +132,7 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        "sticky bottom-0 -mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end max-sm:[&>button]:h-auto max-sm:[&>button]:min-h-8 max-sm:[&>button]:min-w-0 max-sm:[&>button]:w-full max-sm:[&>button]:whitespace-normal",
         className,
       )}
       {...props}
