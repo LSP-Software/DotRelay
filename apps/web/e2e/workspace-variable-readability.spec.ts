@@ -70,22 +70,7 @@ test("a long name stays distinguishable next to its Value and delete controls", 
   await expect(row.getByText("Draft change", { exact: true })).toBeVisible();
 });
 
-test("text zoom and a phone viewport keep names, descriptions, and badges readable", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await openProtectedEditor(page);
-  await addLongVariable(page);
-
-  const row = page.getByTestId(`environment-variable-${LONG_NAME}`);
-  await expect(row).toBeVisible();
-  await assertReadableWithoutHover(row.getByText(LONG_NAME, { exact: true }));
-  await assertReadableWithoutHover(
-    row.getByText(LONG_DESCRIPTION, { exact: true }),
-  );
-
-  await page.addStyleTag({ content: "html { zoom: 1.5; }" });
-
+const assertRowReadable = async (row: Locator) => {
   await expect
     .poll(async () => row.evaluate((el) => el.scrollWidth <= el.clientWidth))
     .toBe(true);
@@ -95,6 +80,27 @@ test("text zoom and a phone viewport keep names, descriptions, and badges readab
   );
   await expect(row.getByText("Shared Value", { exact: true })).toBeVisible();
   await expect(row.getByText("Draft change", { exact: true })).toBeVisible();
+};
+
+test("text zoom and a phone viewport keep names, descriptions, and badges readable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openProtectedEditor(page);
+  await addLongVariable(page);
+
+  const row = page.getByTestId(`environment-variable-${LONG_NAME}`);
+  await expect(row).toBeVisible();
+  await assertRowReadable(row);
+
+  // Uniform page zoom.
+  await page.addStyleTag({ content: "html { zoom: 1.5; }" });
+  await assertRowReadable(row);
+
+  // Text-size zoom: rem-based text and containers grow while the px-sized
+  // ownership/draft badges keep their size, the harder no-overlap case.
+  await page.addStyleTag({ content: "html { zoom: 1; font-size: 24px; }" });
+  await assertRowReadable(row);
 });
 
 test("the Save changes review shows full long names without hover", async ({
