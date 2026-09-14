@@ -627,6 +627,9 @@ export const WorkspaceShell = ({
     }
   };
 
+  const applySelectionRef = useRef(applySelection);
+  applySelectionRef.current = applySelection;
+
   const affectedEnvironmentLabels = (): string[] => {
     const labels: string[] = [];
     const seen = new Set<string>();
@@ -787,8 +790,11 @@ export const WorkspaceShell = ({
     return () => window.removeEventListener("beforeunload", guardUnload);
   }, []);
 
-  const viewFallback = (hasProject: boolean): WorkspaceView =>
-    hasProject || preview === "protected" ? "environment" : "projects";
+  const viewFallback = useCallback(
+    (hasProject: boolean): WorkspaceView =>
+      hasProject || preview === "protected" ? "environment" : "projects",
+    [preview],
+  );
 
   // Reconcile the app's location against the loaded catalog: default to the
   // first Team, drop resources the catalog no longer knows (with a recovery
@@ -826,7 +832,7 @@ export const WorkspaceShell = ({
         (project) => project.teamId === target.teamId,
       );
       if (!firstProject) return;
-      applySelection(
+      applySelectionRef.current(
         {
           ...target,
           projectId: firstProject.id,
@@ -837,12 +843,13 @@ export const WorkspaceShell = ({
       );
       return;
     }
-    applySelection(target, { push: false });
+    applySelectionRef.current(target, { push: false });
   }, [
     displayBoundary.catalog,
     teams,
     connection,
     preview,
+    viewFallback,
     pendingSwitch,
     profileId,
     teamId,
