@@ -53,8 +53,8 @@ const setDialogScroll = (dialog: Locator, value: number) =>
     element.scrollTop = next;
   }, value);
 
-const addLongProjectList = (page: Page, projectCount: number) => {
-  void page.route("**/api/workspace/boundary*", async (route) => {
+const addLongProjectList = async (page: Page, projectCount: number) => {
+  await page.route("**/api/workspace/boundary*", async (route) => {
     const response = await route.fetch();
     const body = (await response.json()) as {
       catalog?: {
@@ -185,7 +185,7 @@ test("the Add Variable form stays reachable at 200% zoom", async ({ page }) => {
 test("a focused field and the submit action stay visible over the keyboard", async ({
   page,
 }) => {
-  await page.setViewportSize(KEYBOARD_VIEWPORT);
+  await page.setViewportSize(MOBILE_VIEWPORT);
   await page.goto("/workspace?preview=protected");
   const dialog = openAddVariableDialog(page);
   await expect(dialog).toBeVisible();
@@ -194,10 +194,29 @@ test("a focused field and the submit action stay visible over the keyboard", asy
   const add = dialog.getByRole("button", { name: "Add Variable" });
   const cancel = dialog.getByRole("button", { name: "Cancel" });
 
-  // With the visible viewport shrunk to room for a keyboard, focusing the
-  // last field keeps both the field and the submit action on screen, with
-  // the field clear of the pinned footer.
+  // Focusing the last field keeps both the field and the submit action on
+  // screen, with the field clear of the pinned footer.
   const initial = dialog.getByLabel("Initial Value");
+  await initial.focus();
+  await expectInViewport(page, initial);
+  await expectAboveDialogFooter(dialog, initial);
+  await expectInViewport(page, add);
+  await expectInViewport(page, cancel);
+
+  // A mobile keyboard raises after focus, shrinking the visible viewport
+  // below the layout viewport; the focused field must stay visible above
+  // the pinned footer and the submit action must stay on screen.
+  await page.setViewportSize(KEYBOARD_VIEWPORT);
+  await expectInViewport(page, dialog);
+  await expectInViewport(page, initial);
+  await expectAboveDialogFooter(dialog, initial);
+  await expectInViewport(page, add);
+  await expectInViewport(page, cancel);
+
+  // Focusing a field while the keyboard is up scrolls it into view; blur
+  // first because focusing the already-focused field fires no focus event
+  // to scroll on.
+  await initial.blur();
   await initial.focus();
   await expectInViewport(page, initial);
   await expectAboveDialogFooter(dialog, initial);
@@ -208,7 +227,7 @@ test("a focused field and the submit action stay visible over the keyboard", asy
 test("a long Project list keeps desktop navigation reachable", async ({
   page,
 }) => {
-  addLongProjectList(page, 60);
+  await addLongProjectList(page, 60);
   await page.goto("/workspace");
   await expect(
     page.getByRole("heading", { name: "LSP Software" }),
@@ -235,7 +254,7 @@ test("a long Project list keeps mobile navigation reachable", async ({
   page,
 }) => {
   await page.setViewportSize(MOBILE_VIEWPORT);
-  addLongProjectList(page, 60);
+  await addLongProjectList(page, 60);
   await page.goto("/workspace");
   await expect(
     page.getByRole("heading", { name: "LSP Software" }),

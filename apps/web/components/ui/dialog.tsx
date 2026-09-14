@@ -2,7 +2,7 @@
 
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -38,24 +38,31 @@ function DialogOverlay({
   );
 }
 
-const scrollFocusedElementIntoDialog = (
-  event: React.FocusEvent<HTMLElement>,
+const scrollElementIntoDialog = (
+  container: HTMLElement,
+  target: HTMLElement,
 ) => {
-  const container = event.currentTarget;
-  const target = event.target;
-  if (target === container || !(target instanceof HTMLElement)) return;
   const containerBox = container.getBoundingClientRect();
   const targetBox = target.getBoundingClientRect();
   // A sticky footer covers the bottom of the scroll region, so the target
-  // must clear it to stay visible; fall back to the container bottom only
-  // when the target is too tall to fit above the footer. The 2px margin
-  // absorbs integer scrollTop rounding.
-  const footer = container.querySelector('[data-slot="dialog-footer"]');
+  // must clear it to stay visible; an on-screen keyboard can shrink the
+  // visual viewport below the layout viewport, so it must also clear the
+  // visible bottom. Fall back to the container bottom only when the target
+  // is too tall to fit above those. The 2px margin absorbs integer
+  // scrollTop rounding.
   let clearBottom = containerBox.bottom - 2;
+  const footer = container.querySelector('[data-slot="dialog-footer"]');
   if (footer instanceof HTMLElement) {
     const footerBox = footer.getBoundingClientRect();
     if (footerBox.top > containerBox.top)
-      clearBottom = Math.min(footerBox.top, containerBox.bottom) - 2;
+      clearBottom = Math.min(clearBottom, footerBox.top - 2);
+  }
+  const visualViewport = window.visualViewport;
+  if (visualViewport) {
+    const visibleBottom =
+      visualViewport.offsetTop + visualViewport.height / visualViewport.scale;
+    if (visibleBottom < window.innerHeight - 1)
+      clearBottom = Math.min(clearBottom, visibleBottom - 2);
   }
   if (targetBox.top >= containerBox.top && targetBox.bottom <= clearBottom)
     return;
@@ -69,6 +76,15 @@ const scrollFocusedElementIntoDialog = (
   } else container.scrollTop += targetBox.bottom - containerBox.bottom;
 };
 
+const scrollFocusedElementIntoDialog = (
+  event: React.FocusEvent<HTMLElement>,
+) => {
+  const container = event.currentTarget;
+  const target = event.target;
+  if (target === container || !(target instanceof HTMLElement)) return;
+  scrollElementIntoDialog(container, target);
+};
+
 function DialogContent({
   className,
   children,
@@ -77,11 +93,55 @@ function DialogContent({
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
 }) {
+  const popupRef = React.useRef<HTMLDivElement>(null);
+
+  // A keyboard or zoom change can shrink the viewport after a field is
+  // focused, and a dvh-constrained dialog then shrinks without any focus
+  // event: re-run the scroll-into-view pass for the focused element on
+  // layout and visual viewport resize. The popup node only exists while
+  // the dialog is open, so resolve it at event time rather than at mount
+  // (the component mounts with the dialog closed). The dvh constraint
+  // settles over a short layout animation, so keep re-running the pass
+  // for a few frames after each resize to land on the final geometry.
+  React.useEffect(() => {
+    const repositionFocusedElement = () => {
+      const popup = popupRef.current;
+      if (!popup) return;
+      const target = popup.ownerDocument.activeElement;
+      if (
+        target instanceof HTMLElement &&
+        target !== popup &&
+        popup.contains(target)
+      ) {
+        scrollElementIntoDialog(popup, target);
+      }
+    };
+    let settleFrames = 0;
+    const settle = () => {
+      if (settleFrames <= 0) return;
+      settleFrames -= 1;
+      repositionFocusedElement();
+      requestAnimationFrame(settle);
+    };
+    const onResize = () => {
+      settleFrames = 20;
+      settle();
+    };
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener("resize", onResize);
+    window.addEventListener("resize", onResize);
+    return () => {
+      visualViewport?.removeEventListener("resize", onResize);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
   return (
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
+        ref={popupRef}
         className={cn(
           "fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
