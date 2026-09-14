@@ -22,7 +22,14 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -1109,17 +1116,6 @@ export const EnvironmentEditor = ({
     },
     [],
   );
-  useEffect(() => {
-    if (active !== false) return;
-    setAddOpen(false);
-    setReviewOpen(false);
-    setReviewValuesRevealed(false);
-    resetRollbackState();
-    setConflictValuesRevealed(false);
-  }, [active]);
-  const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
-    ReadonlyMap<string, EnvironmentVariable>
-  >(() => new Map());
   const [rollbackHistoricalValues, setRollbackHistoricalValues] = useState<
     ReadonlyMap<string, string | null>
   >(() => new Map());
@@ -1130,7 +1126,8 @@ export const EnvironmentEditor = ({
   const [rollbackUnresolvedVariableIds, setRollbackUnresolvedVariableIds] =
     useState<ReadonlySet<string>>(() => new Set());
   const rollbackLoadSequenceRef = useRef(0);
-  const resetRollbackState = () => {
+  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(false);
+  const resetRollbackState = useCallback(() => {
     rollbackLoadSequenceRef.current += 1;
     setRollbackTarget(null);
     setRollbackLanes(new Set());
@@ -1139,9 +1136,19 @@ export const EnvironmentEditor = ({
     setRollbackHistoryError(null);
     setRollbackHistoryLoading(false);
     setRollbackValuesRevealed(false);
-  };
+  }, []);
+  useEffect(() => {
+    if (active !== false) return;
+    setAddOpen(false);
+    setReviewOpen(false);
+    setReviewValuesRevealed(false);
+    resetRollbackState();
+    setConflictValuesRevealed(false);
+  }, [active, resetRollbackState]);
+  const [deletedVariableSnapshots, setDeletedVariableSnapshots] = useState<
+    ReadonlyMap<string, EnvironmentVariable>
+  >(() => new Map());
   const [reviewValuesRevealed, setReviewValuesRevealed] = useState(false);
-  const [rollbackValuesRevealed, setRollbackValuesRevealed] = useState(false);
   const baselineFor = (id: string): EnvironmentVariable | undefined =>
     remoteVariables.find((variable) => variable.id === id);
   const withDraftFlag = (
