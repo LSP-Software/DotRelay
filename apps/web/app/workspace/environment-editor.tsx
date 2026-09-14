@@ -301,10 +301,8 @@ const ValueDiffLines = ({
     const showFrom = hunk.removed.length > 0;
     const showTo = hunk.added.length > 0 || !showFrom;
     return (
-      <div className="min-w-0 font-mono text-[13px] leading-5">
-        <p className="truncate font-medium text-foreground" title={diff.name}>
-          {diff.name}
-        </p>
+      <div className="min-w-0 font-mono text-sm leading-5">
+        <p className="break-all font-medium text-foreground">{diff.name}</p>
         {showFrom ? (
           <p>
             {showTo ? <span className="text-muted-foreground">- </span> : null}
@@ -326,10 +324,8 @@ const ValueDiffLines = ({
   const from = formatDiffValue(diff.from, revealed);
   const to = formatDiffValue(diff.to, revealed);
   return (
-    <div className="min-w-0 font-mono text-[13px] leading-5">
-      <p className="truncate font-medium text-foreground" title={diff.name}>
-        {diff.name}
-      </p>
+    <div className="min-w-0 font-mono text-sm leading-5">
+      <p className="break-all font-medium text-foreground">{diff.name}</p>
       {from ? (
         <p className="break-all text-red-300/90" title={from}>
           - {from}
@@ -377,7 +373,7 @@ const MaskedValue = ({
   readonly value: string | null;
   readonly revealed: boolean;
 }) => (
-  <span className="break-all font-mono text-[13px]">
+  <span className="break-all font-mono text-sm">
     {formatDiffValue(value, revealed) ?? "—"}
   </span>
 );
@@ -418,7 +414,7 @@ const ConflictSides = ({
     const showFrom = hunk.removed.length > 0;
     const showTo = hunk.added.length > 0 || !showFrom;
     return (
-      <div className="min-w-0 font-mono text-[13px] leading-5">
+      <div className="min-w-0 font-mono text-sm leading-5">
         <div className="flex gap-2">
           <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
             Theirs
@@ -506,7 +502,9 @@ const ConflictLane = ({
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-background/40 p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-sm font-medium">{summary.name}</span>
+        <span className="min-w-0 break-all font-mono text-sm font-medium">
+          {summary.name}
+        </span>
         {kinds.map((kind) => (
           <Badge
             className="h-4 text-[10px] font-medium uppercase tracking-wide"
@@ -609,11 +607,8 @@ const VariableRow = ({
     >
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
         <div className="min-w-0 sm:w-[min(22rem,36%)] sm:shrink-0">
-          <div className="flex min-w-0 items-baseline gap-x-2">
-            <span
-              className="truncate font-mono text-[13px] font-medium tracking-tight"
-              title={variable.name}
-            >
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span className="min-w-0 flex-1 break-all font-mono text-sm font-medium tracking-tight">
               {variable.name}
             </span>
             <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -626,10 +621,7 @@ const VariableRow = ({
             ) : null}
           </div>
           {variable.description ? (
-            <p
-              className="truncate text-[11px] leading-4 text-muted-foreground/80"
-              title={variable.description}
-            >
+            <p className="break-words text-xs leading-5 text-muted-foreground/80">
               {variable.description}
             </p>
           ) : null}
@@ -658,7 +650,7 @@ const VariableRow = ({
             </Label>
             <Input
               autoComplete="off"
-              className="h-7 font-mono text-[13px]"
+              className="font-mono"
               disabled={editingDisabled}
               id={`value-${variable.id}`}
               onChange={(event) => onValueChange(event.target.value)}
