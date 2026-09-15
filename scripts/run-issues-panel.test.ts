@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromium } from "@playwright/test";
 import {
   buildOpenCodeRunArguments,
   createGrillManager,
+  parseGrillQuestions,
   parseOpenCodeTurn,
   selectGrillIssue,
 } from "./run-issues-grill";
@@ -133,6 +135,94 @@ describe("run issues panel", () => {
       },
     });
     expect(parseOpenCodeTurn(output).text).toBe("");
+  });
+
+  test("parses structured grill questions out of the agent's reply", () => {
+    const reply = [
+      "Two product decisions are open.",
+      "",
+      "```dotrelay-grill-questions",
+      JSON.stringify({
+        questions: [
+          {
+            question: "Keep the expired approval code distinction?",
+            header: "Approval codes",
+            options: [
+              {
+                label: "Keep it",
+                description: "Prevents silent sign-in loops.",
+              },
+              { label: "Drop it", description: "Simpler surface." },
+            ],
+            recommended: 0,
+          },
+          { question: "Should the retry budget survive restarts?" },
+        ],
+      }),
+      "```",
+      "",
+      "Answer when you are ready.",
+    ].join("\n");
+    const parsed = parseGrillQuestions(reply);
+    expect(parsed.questions).toEqual([
+      {
+        question: "Keep the expired approval code distinction?",
+        header: "Approval codes",
+        options: [
+          { label: "Keep it", description: "Prevents silent sign-in loops." },
+          { label: "Drop it", description: "Simpler surface." },
+        ],
+        recommended: 0,
+        multiple: false,
+      },
+      {
+        question: "Should the retry budget survive restarts?",
+        header: null,
+        options: [],
+        recommended: null,
+        multiple: false,
+      },
+    ]);
+    expect(parsed.prose).toBe(
+      "Two product decisions are open.\n\nAnswer when you are ready.",
+    );
+  });
+
+  test("keeps the raw reply when the question block yields no usable questions", () => {
+    const reply =
+      "My questions:\n\n```dotrelay-grill-questions\n{not json}\n```\n\nDone thinking.";
+    const parsed = parseGrillQuestions(reply);
+    expect(parsed.questions).toEqual([]);
+    expect(parsed.prose).toBe(reply);
+  });
+
+  test("drops malformed question entries and out-of-range recommendations", () => {
+    const parsed = parseGrillQuestions(
+      "```dotrelay-grill-questions\n" +
+        JSON.stringify({
+          questions: [
+            { question: "", header: "Empty" },
+            {
+              question: "Real question",
+              header: "Real",
+              options: [{ label: "Only" }],
+              recommended: 3,
+              multiple: "yes",
+            },
+            "garbage",
+          ],
+        }) +
+        "\n```",
+    );
+    expect(parsed.questions).toEqual([
+      {
+        question: "Real question",
+        header: "Real",
+        options: [{ label: "Only", description: null }],
+        recommended: null,
+        multiple: false,
+      },
+    ]);
   });
 
   test("executes workflow commands through OpenCode's command interface", () => {
@@ -359,7 +449,7 @@ describe("run issues panel", () => {
     ).rejects.toThrow("Invalid run log name.");
   });
 
-  test("fails a grill turn orphaned by a panel restart", async () => {
+  test("automatically resumes a grill turn orphaned by a panel restart", async () => {
     const runsDirectory = await mkdtemp(
       join(tmpdir(), "dotrelay-issue-panel-"),
     );
@@ -367,6 +457,16 @@ describe("run issues panel", () => {
     const calls: string[][] = [];
     const command = async (args: string[]) => {
       calls.push(args);
+      if (args[0] === "opencode") {
+        return {
+          code: 0,
+          output: "",
+          stdout:
+            `${JSON.stringify({ type: "step:started", sessionID: "ses_test" })}\n` +
+            `${JSON.stringify({ type: "text", part: { text: "Resumed question?" } })}\n`,
+          infrastructure: false,
+        };
+      }
       return { code: 0, output: "", stdout: "", infrastructure: false };
     };
     const stateDirectory = join(runsDirectory, "grill");
@@ -399,6 +499,68 @@ describe("run issues panel", () => {
       repoRoot: runsDirectory,
       runsDirectory,
       command,
+    });
+    await manager.ensure();
+
+    let state = await manager.read();
+    const deadline = Date.now() + 2_000;
+    while (state.status !== "awaiting-human" && Date.now() < deadline) {
+      await Bun.sleep(10);
+      state = await manager.read();
+    }
+    expect(state.status).toBe("awaiting-human");
+    expect(state.question).toBe("Resumed question?");
+    const checkout = join(stateDirectory, "issue-79", "checkout");
+    expect(calls).toContainEqual([
+      "pkill",
+      "-f",
+      `opencode run --dir ${checkout}`,
+    ]);
+    const opencode = calls.find((args) => args[0] === "opencode");
+    expect(opencode).toContain("--session");
+    expect(opencode).toContain("ses_test");
+    expect(opencode?.at(-1)).toBe("I've just installed the skill for you now.");
+  });
+
+  test("leaves an orphaned turn without a saved prompt failed for a manual retry", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const calls: string[][] = [];
+    const stateDirectory = join(runsDirectory, "grill");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(
+      join(stateDirectory, "state.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        issue: 79,
+        issueTitle: "Turn CLI failures into guided recovery",
+        issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+        priority: 1,
+        sessionId: "ses_test",
+        question: null,
+        message: "The agent is working through this answer.",
+        startedAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        turn: 4,
+        checkout: join(stateDirectory, "issue-79", "checkout"),
+        transcript: join(stateDirectory, "issue-79-turn-4.ndjson"),
+        lastPrompt: null,
+        lastCommand: null,
+        lastTurnCompleting: false,
+      })}\n`,
+      "utf8",
+    );
+
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command: async (args: string[]) => {
+        calls.push(args);
+        return { code: 0, output: "", stdout: "", infrastructure: false };
+      },
     });
     const state = await manager.ensure();
 
@@ -486,4 +648,370 @@ describe("run issues panel", () => {
     expect(state.question).toBe("Which failure should repair first?");
     expect(state.sessionId).toBe("ses_test");
   });
+
+  const writeGrillState = async (stateDirectory: string, state: object) => {
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(
+      join(stateDirectory, "state.json"),
+      `${JSON.stringify(state)}\n`,
+      "utf8",
+    );
+  };
+
+  const awaitingHumanState = (
+    stateDirectory: string,
+  ): Record<string, unknown> => ({
+    version: 1,
+    status: "awaiting-human",
+    issue: 79,
+    issueTitle: "Turn CLI failures into guided recovery",
+    issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+    priority: 1,
+    sessionId: "ses_stale",
+    question: "Which failure should repair first?",
+    message: "The grill is waiting for your answer.",
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    turn: 2,
+    checkout: join(stateDirectory, "issue-79", "checkout"),
+    transcript: join(stateDirectory, "issue-79-turn-2.ndjson"),
+    lastPrompt: "A previous answer",
+    lastCommand: null,
+    lastTurnCompleting: false,
+  });
+
+  test("restarts the grill with a fresh session and a clean workspace", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    await writeGrillState(stateDirectory, awaitingHumanState(stateDirectory));
+    const calls: string[][] = [];
+    const command = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "opencode") {
+        return {
+          code: 0,
+          output: "",
+          stdout:
+            `${JSON.stringify({ type: "step:started", sessionID: "ses_fresh" })}\n` +
+            `${JSON.stringify({ type: "text", part: { text: "Fresh first question?" } })}\n`,
+          infrastructure: false,
+        };
+      }
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+
+    await manager.reset();
+
+    let state = await manager.read();
+    const deadline = Date.now() + 2_000;
+    while (state.sessionId !== "ses_fresh" && Date.now() < deadline) {
+      await Bun.sleep(10);
+      state = await manager.read();
+    }
+    expect(state.status).toBe("awaiting-human");
+    expect(state.sessionId).toBe("ses_fresh");
+    expect(state.question).toBe("Fresh first question?");
+    expect(state.turn).toBe(3);
+    expect(calls).toContainEqual([
+      "pkill",
+      "-f",
+      `opencode run --dir ${join(stateDirectory, "issue-79", "checkout")}`,
+    ]);
+    expect(calls).toContainEqual(["git", "reset", "--hard", "HEAD"]);
+    expect(calls).toContainEqual(["git", "clean", "-fd"]);
+    const opencode = calls.find((args) => args[0] === "opencode");
+    expect(opencode).toBeDefined();
+    expect(opencode).toContain("grill-with-docs");
+    expect(opencode).toContain("--title");
+    expect(opencode).not.toContain("--session");
+  });
+
+  test("reminds the agent to keep the structured question block on later rounds", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    await writeGrillState(stateDirectory, awaitingHumanState(stateDirectory));
+    const calls: string[][] = [];
+    const command = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "opencode") {
+        return {
+          code: 0,
+          output: "",
+          stdout:
+            `${JSON.stringify({ type: "step:started", sessionID: "ses_next" })}\n` +
+            `${JSON.stringify({ type: "text", part: { text: "Follow-up question?" } })}\n`,
+          infrastructure: false,
+        };
+      }
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+
+    await manager.respond("Keep one message.");
+
+    const deadline = Date.now() + 2_000;
+    let opencode = calls.find((args) => args[0] === "opencode");
+    while (!opencode && Date.now() < deadline) {
+      await Bun.sleep(10);
+      opencode = calls.find((args) => args[0] === "opencode");
+    }
+    expect(opencode).toBeDefined();
+    const prompt = opencode?.at(-1) ?? "";
+    expect(prompt.startsWith("Keep one message.")).toBe(true);
+    expect(prompt).toContain("dotrelay-grill-questions JSON block");
+  });
+
+  test("refuses to reset a grill whose turn is still in flight", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    const state = awaitingHumanState(stateDirectory);
+    state.status = "running";
+    await writeGrillState(stateDirectory, state);
+    let releaseOpencode: () => void = () => {};
+    const opencodeGate = new Promise<void>((resolve) => {
+      releaseOpencode = resolve;
+    });
+    const command = async (args: string[]) => {
+      if (args[0] === "opencode") {
+        await opencodeGate;
+        return {
+          code: 0,
+          output: "",
+          stdout: JSON.stringify({
+            type: "text",
+            sessionID: "ses_fresh",
+            part: { text: "Fresh first question?" },
+          }),
+          infrastructure: false,
+        };
+      }
+      return { code: 0, output: "", stdout: "", infrastructure: false };
+    };
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command,
+    });
+
+    await expect(manager.reset()).rejects.toThrow(/busy/);
+
+    const busy = await writeGrillState(
+      stateDirectory,
+      awaitingHumanState(stateDirectory),
+    ).then(async () => {
+      const first = manager.reset();
+      const second = manager.reset();
+      return Promise.allSettled([first, second]);
+    });
+    releaseOpencode();
+    const outcomes = await busy;
+    const failures = outcomes.filter(
+      (outcome) => outcome.status === "rejected",
+    );
+    expect(failures.length).toBe(1);
+    const failure = failures[0];
+    if (failure) {
+      expect(failure.reason).toBeInstanceOf(Error);
+      expect((failure.reason as Error).message).toMatch(/busy|already running/);
+    }
+  });
+
+  test("refuses to reset when there is no grill in progress", async () => {
+    const runsDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(runsDirectory);
+    const stateDirectory = join(runsDirectory, "grill");
+    const state = awaitingHumanState(stateDirectory);
+    state.issue = null;
+    state.checkout = null;
+    await writeGrillState(stateDirectory, state);
+    const manager = createGrillManager({
+      repoRoot: runsDirectory,
+      runsDirectory,
+      command: async () => ({
+        code: 0,
+        output: "",
+        stdout: "",
+        infrastructure: false,
+      }),
+    });
+
+    await expect(manager.reset()).rejects.toThrow(
+      "There is no grill to reset.",
+    );
+  });
+
+  test("resets the human grill through the control API", async () => {
+    let resets = 0;
+    const { server } = createPanelServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      startRunner: async () => process.pid,
+      signalRunner: () => {},
+      grillManager: {
+        read: async () => ({}),
+        ensure: async () => ({}),
+        respond: async () => {},
+        complete: async () => {},
+        retry: async () => {},
+        reset: async () => {
+          resets++;
+        },
+      } as unknown as ReturnType<typeof createGrillManager>,
+    });
+    const request = (headers: Record<string, string> = {}) =>
+      fetch(`http://127.0.0.1:${server.port}/api/grill/reset`, {
+        method: "POST",
+        headers,
+      });
+
+    try {
+      expect((await request()).status).toBe(403);
+      expect((await request({ "X-DotRelay-Panel": "1" })).status).toBe(202);
+      expect(resets).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("offers one-question-at-a-time cards and a confirmed reset", () => {
+    expect(panelHtml).toContain('id="grill-questions"');
+    expect(panelHtml).toContain('id="question-position"');
+    expect(panelHtml).toContain('id="question-note"');
+    expect(panelHtml).toContain("Recommended");
+    expect(panelHtml).toContain('id="grill-reset"');
+    expect(panelHtml).toContain(
+      "Are you sure you want to start this grill over?",
+    );
+    expect(panelHtml).toContain("Yes, start over");
+  });
+
+  test("replaces a stale option pick and holds Send answer until every question is answered", async () => {
+    const sent: string[] = [];
+    const questionReply = [
+      "Two product decisions are open.",
+      "```dotrelay-grill-questions",
+      JSON.stringify({
+        questions: [
+          {
+            question: "Keep the recovery flow explicit?",
+            header: "Recovery flow",
+            options: [{ label: "Keep it explicit" }, { label: "Collapse it" }],
+            recommended: 0,
+          },
+          {
+            question: "Should the retry budget survive restarts?",
+            header: "Retry budget",
+            options: [],
+          },
+        ],
+      }),
+      "```",
+    ].join("\n");
+    const { server } = createPanelServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      startRunner: async () => process.pid,
+      signalRunner: () => {},
+      grillManager: {
+        read: async () => ({}),
+        ensure: async () => ({
+          version: 1,
+          status: "awaiting-human",
+          issue: 79,
+          issueTitle: "Turn CLI failures into guided recovery",
+          issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+          priority: 1,
+          sessionId: "ses_test",
+          question: questionReply,
+          message: "The grill is waiting for your answer.",
+          startedAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          turn: 2,
+          lastTurnCompleting: false,
+        }),
+        respond: async (answer: string) => {
+          sent.push(answer);
+        },
+        complete: async () => {},
+        retry: async () => {},
+        reset: async () => {},
+      } as unknown as ReturnType<typeof createGrillManager>,
+    });
+
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://127.0.0.1:${server.port}/`);
+      const send = page.locator("#grill-answer-button");
+      await page.waitForSelector("#grill-questions:not([hidden])", {
+        timeout: 15_000,
+      });
+      expect(await send.isDisabled()).toBe(true);
+
+      const optionInputs = page.locator("#question-options input[type=radio]");
+      await optionInputs.nth(1).click();
+      await optionInputs.nth(0).click();
+      await page.waitForFunction(
+        "() => {\n" +
+          "  const rows = document.querySelectorAll('#question-options .option');\n" +
+          "  return (\n" +
+          "    rows.length === 2 &&\n" +
+          "    rows[0].classList.contains('selected') &&\n" +
+          "    !rows[1].classList.contains('selected')\n" +
+          "  );\n" +
+          "}",
+        undefined,
+        { timeout: 5_000 },
+      );
+      const checked = await page.evaluate(
+        "Array.from(document.querySelectorAll('#question-options input[type=radio]')).filter((input) => input.checked).length",
+      );
+      expect(checked).toBe(1);
+      expect(await send.isDisabled()).toBe(true);
+
+      await page.locator("#grill-next").click();
+      await page.locator("#question-note").fill("Persist it across restarts.");
+      await page.waitForFunction(
+        "() => {\n" +
+          "  const button = document.querySelector('#grill-answer-button');\n" +
+          "  return button instanceof HTMLButtonElement && !button.disabled;\n" +
+          "}",
+        undefined,
+        { timeout: 5_000 },
+      );
+
+      await send.click();
+      const deadline = Date.now() + 5_000;
+      while (sent.length === 0 && Date.now() < deadline) {
+        await Bun.sleep(20);
+      }
+      expect(sent).toEqual([
+        "Recovery flow: Keep it explicit\nRetry budget: Persist it across restarts.",
+      ]);
+    } finally {
+      await page.close();
+      await browser.close();
+      await server.stop(true);
+    }
+  }, 120_000);
 });
