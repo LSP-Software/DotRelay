@@ -27,6 +27,7 @@ import urllib.request
 
 TERMINAL_OK = {"finished"}
 TERMINAL_BAD = {"failed", "canceled", "cancelled", "stopped"}
+IN_FLIGHT = {"in_progress"}  # Coolify's only non-terminal deployment status
 ENVIRONMENTS = {
     "dev": ["DotRelay API (Dev)", "DotRelay Web (Dev)"],
     "production": ["DotRelay API", "DotRelay Web"],

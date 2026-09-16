@@ -286,10 +286,15 @@ export const isSecureRequest = (
 ) => {
   if (!profile.isProduction) return true;
   if (new URL(request.url).protocol === "https:") return true;
-  return (
-    profile.trustProxy &&
-    ["https", "https:"].includes(request.headers.get("x-forwarded-proto") ?? "")
-  );
+  if (!profile.trustProxy) return false;
+  // The edge proxy (Cloudflare) records the client's protocol as the FIRST
+  // entry of X-Forwarded-Proto; downstream proxies only append to the end,
+  // where a trailing "http" is just the plaintext proxy->container hop. The
+  // first entry is the authoritative "did the client use TLS" signal, so
+  // trust the chain only when the client connected to the edge over TLS.
+  const header = request.headers.get("x-forwarded-proto") ?? "";
+  const first = (header.split(",")[0] ?? "").trim();
+  return first === "https" || first === "https:";
 };
 
 export const hasMixedCredentials = (request: Request) =>

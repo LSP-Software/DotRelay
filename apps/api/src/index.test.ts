@@ -33,6 +33,39 @@ describe("API foundation", () => {
     );
   });
 
+  test("keeps the health probe reachable in production, still gating real traffic", async () => {
+    const profile = loadServerProfileConfig({
+      NODE_ENV: "production",
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+      SERVER_PROFILE_ORIGIN: "https://relay.example",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+      GITHUB_CLIENT_ID: "github-client",
+      GITHUB_CLIENT_SECRET: "github-secret",
+    });
+    const testApp = createApi({
+      database: {} as never,
+      profile,
+      auth: createInMemoryAuth(profile),
+    });
+
+    // Plain-HTTP request with no proxy headers — exactly what the in-container
+    // health check sends.
+    const health = await testApp.request("http://relay.example/health");
+    const capabilities = await testApp.request(
+      "http://relay.example/api/v1/capabilities",
+    );
+    const session = await testApp.request(
+      "http://relay.example/api/v1/session",
+    );
+
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ status: "ok" });
+    expect(capabilities.status).toBe(403);
+    const problem = (await capabilities.json()) as Record<string, unknown>;
+    expect(problem).toMatchObject({ code: "forbidden" });
+    expect(session.status).toBe(403);
+  });
+
   test("keeps domain responses successful when the observability sink throws", async () => {
     const profile = loadServerProfileConfig({});
     const auth = createInMemoryAuth(profile);

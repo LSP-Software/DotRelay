@@ -421,6 +421,14 @@ const createApi = ({
   app.onError((_error, context) => jsonProblem(context, "service_unavailable"));
 
   app.use("*", async (context, next) => {
+    // Liveness probe: not a secure-request surface. Bypasses the TLS/proxy,
+    // origin, and credential gates so the in-container health check (plain
+    // HTTP, no proxy, no x-forwarded-proto) always gets a deterministic 200
+    // instead of the production secure-request 403.
+    if (context.req.path === "/health") {
+      await next();
+      return;
+    }
     if (!isSecureRequest(context.req.raw, profile))
       return jsonProblem(context, "forbidden");
     const requestOrigin = context.req.header("Origin") ?? null;

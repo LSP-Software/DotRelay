@@ -22,11 +22,14 @@ ENV NODE_ENV=production
 WORKDIR /app
 # Monorepo standalone layout: the standalone root mirrors the repository
 # (minimal traced node_modules at the root, the app under apps/web).
-COPY --from=builder /app/apps/web/.next/standalone ./
-COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=node:node /app/apps/web/.next/standalone ./
+COPY --from=builder --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
 # This repository has no apps/web/public directory, so there is no public
 # asset copy to make.
 
 WORKDIR /app/apps/web
+# Run as the non-root node user shipped with the image; the standalone tree is
+# chown'd above so the server has read (and any runtime cache) access.
+USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

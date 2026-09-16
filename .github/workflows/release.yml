@@ -32,6 +32,10 @@ jobs:
   build-images:
     name: build and push images
     needs: verify
+    # The mutable latest-stable tag is published in this job, so it must clear
+    # the same security-review gate as publish/deploy-prod before it can move
+    # the tag that production pulls.
+    environment: security-review
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -141,8 +145,12 @@ jobs:
       - name: smoke prod origins
         run: |
           set -euo pipefail
+          # /health is exempt from the API's secure-request gate, so probing
+          # it alone cannot catch a TRUST_PROXY / X-Forwarded-Proto
+          # misconfiguration that would 403 every real request. Probe
+          # /api/v1/capabilities (public GET, still gated) instead.
           for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 https://api.dotrelay.dev/health && curl -fsS --max-time 10 -o /dev/null https://dotrelay.dev; then
+            if curl -fsS --max-time 10 https://api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dotrelay.dev -o /dev/null; then
               echo "prod origins healthy"; exit 0
             fi
             echo "waiting for prod origins to come up (${i}/12)..."; sleep 15
