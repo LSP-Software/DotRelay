@@ -1,0 +1,19 @@
+# Local state and build outputs are regenerated inside the image.
+node_modules
+**/node_modules
+.turbo
+**/.next
+apps/api/dist
+coverage
+playwright-report
+test-results
+
+# VCS and local secrets (hosted/CI builds never ship a root .env).
+.git
+.env
+.env.*
+
+# This repository's documentation and CI metadata are not needed in images.
+docs
+.github
+PLAN-*.md
