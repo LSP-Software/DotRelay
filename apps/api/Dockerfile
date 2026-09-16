@@ -21,12 +21,12 @@ FROM oven/bun:1.4.0
 RUN groupadd --gid 10001 dotrelay && \
     useradd --uid 10001 --gid dotrelay --home-dir /app --no-create-home dotrelay
 
+# WORKDIR creates /app (useradd used --no-create-home, so nothing else does).
 # HOME is /app for the runtime user; own the directory itself as well (COPY
 # --chown covers the tree contents, not the workdir) so prisma/bun can write
 # a home cache when running unprivileged.
-RUN chown dotrelay:dotrelay /app
-
 WORKDIR /app
+RUN chown dotrelay:dotrelay /app
 COPY --from=builder --chown=dotrelay:dotrelay /app .
 
 # Entrypoint: apply committed Prisma migrations, then hand the process slot to
