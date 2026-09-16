@@ -5,9 +5,10 @@ Usage:
   scripts/coolify-deploy.py --environment dev  [app names...]
   scripts/coolify-deploy.py --environment production
 
-App selection: by name within the environment's project:
-  dev        -> project "DotRelay-Dev"    apps "DotRelay API (Dev)", "DotRelay Web (Dev)"
-  production -> project "DotRelay"        apps "DotRelay API", "DotRelay Web"
+App selection: by exact name (instance-unique); both environments live in the
+"DotRelay" project:
+  dev        -> environment "dev"          apps "DotRelay API (Dev)", "DotRelay Web (Dev)"
+  production -> environment "production"   apps "DotRelay API", "DotRelay Web"
 Passing explicit app names overrides the defaults for the environment.
 
 Required environment variables:
