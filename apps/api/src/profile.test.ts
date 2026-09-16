@@ -135,6 +135,43 @@ describe("Server Profile configuration", () => {
     ).toBe(true);
   });
 
+  test("trusts the edge hop of a forwarded-HTTPS list, not a downstream append", () => {
+    const trusted = loadServerProfileConfig({
+      ...githubOAuthEnvironment,
+      NODE_ENV: "production",
+      SERVER_PROFILE_ORIGIN: "https://relay.example",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+      SERVER_PROFILE_TRUST_PROXY: "true",
+      SERVER_PROFILE_TRUSTED_PROXIES: "192.0.2.10",
+    });
+    const untrusted = loadServerProfileConfig({
+      ...githubOAuthEnvironment,
+      NODE_ENV: "production",
+      SERVER_PROFILE_ORIGIN: "https://relay.example",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+    });
+    const forwarded = (value: string | null) =>
+      new Request("http://relay.example/api", {
+        headers: value === null ? {} : { "x-forwarded-proto": value },
+      });
+    // Cloudflare records the client's TLS protocol first; Coolify's Caddy then
+    // appends the plaintext hop it proxies over. The first entry is the client
+    // signal, so a trailing "http" must not veto a TLS client.
+    expect(isSecureRequest(forwarded("https, http"), trusted)).toBe(true);
+    expect(isSecureRequest(forwarded("https, https"), trusted)).toBe(true);
+    expect(isSecureRequest(forwarded("https"), trusted)).toBe(true);
+    // A client that reached the edge over plain http is not secure, even if a
+    // downstream hop later used TLS.
+    expect(isSecureRequest(forwarded("http, https"), trusted)).toBe(false);
+    expect(isSecureRequest(forwarded("http"), trusted)).toBe(false);
+    expect(isSecureRequest(forwarded(""), trusted)).toBe(false);
+    expect(isSecureRequest(forwarded(null), trusted)).toBe(false);
+    // Without trustProxy enabled, even a TLS client hop is not trusted.
+    expect(isSecureRequest(forwarded("https"), untrusted)).toBe(false);
+  });
+
   test("requires explicit proxy addresses for production forwarded headers", () => {
     expect(() =>
       loadServerProfileConfig({
