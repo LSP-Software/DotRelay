@@ -291,7 +291,13 @@ jobs:
           path: release-binaries
           merge-multiple: false
       - run: bun run package:cli:version -- "v0.0.0-dev.${{ github.sha }}"
-      - run: mkdir -p packages/dotrelay/dist && cp -R release-binaries/*/* packages/dotrelay/dist/
+      - run: |
+          mkdir -p packages/dotrelay/dist
+          cp -R release-binaries/*/* packages/dotrelay/dist/
+          # The artifact round-trip drops the executable bit off the staged
+          # native binaries; restore it so the npm tarball ships 755
+          # executables and the package smoke test can run them.
+          find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
       - run: bun scripts/test-cli-package.ts
       - run: npm pack --dry-run ./packages/dotrelay
       - name: publish npm dev selector
