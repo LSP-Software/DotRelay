@@ -5,6 +5,7 @@ import {
   isSecureRequest,
   loadServerProfileConfig,
   normalizeOrigin,
+  sharedCookieDomain,
 } from "./profile";
 
 const githubOAuthEnvironment = {
@@ -96,6 +97,39 @@ describe("Server Profile configuration", () => {
     expect(isAllowedOrigin("https://app.example", profile)).toBe(true);
     expect(isAllowedOrigin("https://api.example", profile)).toBe(true);
     expect(isAllowedOrigin("https://attacker.example", profile)).toBe(false);
+  });
+
+  test("derives a shared cookie domain only for same-domain split web and API hosts", () => {
+    const hosted = loadServerProfileConfig({
+      ...githubOAuthEnvironment,
+      NODE_ENV: "production",
+      SERVER_PROFILE_ORIGIN: "https://dev-api.dotrelay.dev",
+      WEB_ORIGIN: "https://dev.dotrelay.dev",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+    });
+    expect(sharedCookieDomain(hosted)).toBe("dotrelay.dev");
+
+    const splitDomains = loadServerProfileConfig({
+      SERVER_PROFILE_ORIGIN: "https://api.example",
+      WEB_ORIGIN: "https://web.other",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    });
+    expect(sharedCookieDomain(splitDomains)).toBeUndefined();
+
+    const sameHost = loadServerProfileConfig({
+      SERVER_PROFILE_ORIGIN: "https://relay.example",
+      WEB_ORIGIN: "https://relay.example",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    });
+    expect(sharedCookieDomain(sameHost)).toBeUndefined();
+
+    const loopback = loadServerProfileConfig({
+      SERVER_PROFILE_ORIGIN: "http://localhost:3001",
+      WEB_ORIGIN: "http://localhost:3000",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    });
+    expect(sharedCookieDomain(loopback)).toBeUndefined();
   });
 
   test("detects a request that attempts to combine cookie and bearer credentials", () => {

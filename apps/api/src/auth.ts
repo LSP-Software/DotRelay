@@ -1,15 +1,16 @@
 import type { BetterAuthDatabaseAdapter } from "@dotrelay/database";
 import { betterAuth, type DBAdapterInstance } from "better-auth";
 import { bearer, deviceAuthorization } from "better-auth/plugins";
-import type { ServerProfileConfig } from "./profile";
+import { type ServerProfileConfig, sharedCookieDomain } from "./profile";
 
 export const AUTH_CLIENT_ID = "dotrelay-cli";
 
 const createAuthWithAdapter = (
   database: DBAdapterInstance | undefined,
   profile: ServerProfileConfig,
-) =>
-  betterAuth({
+) => {
+  const cookieDomain = sharedCookieDomain(profile);
+  return betterAuth({
     appName: "DotRelay",
     baseURL: profile.origin,
     basePath: "/api/auth",
@@ -36,6 +37,9 @@ const createAuthWithAdapter = (
     },
     advanced: {
       useSecureCookies: profile.isProduction,
+      ...(cookieDomain
+        ? { crossSubDomainCookies: { enabled: true, domain: cookieDomain } }
+        : {}),
       ipAddress: profile.trustProxy
         ? {
             ipAddressHeaders: ["x-forwarded-for"],
@@ -74,6 +78,7 @@ const createAuthWithAdapter = (
       max: 10,
     },
   });
+};
 
 export const createAuth = (
   database: BetterAuthDatabaseAdapter,

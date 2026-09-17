@@ -37,7 +37,12 @@ API and suite values produce `unsupported_api_version` and `unsupported_crypto_s
 do not inspect secret material or reveal which cryptographic component failed.
 
 Browser sessions use secure HttpOnly same-site cookies and exact-origin credentialed CORS. State
-changing cookie requests must come from the configured web or Server Profile origin. CLI sessions
+changing cookie requests must come from the configured web or Server Profile origin. When the web
+app and the API are served from different hosts on the same registered domain (for example
+`dev.dotrelay.dev` and `dev-api.dotrelay.dev`), the cookies are additionally scoped to the shared
+parent domain so the browser presents the session cookie to both origins and the web app's
+server-side session relay can forward it to the API. When both origins share a host, cookies stay
+host-only. CLI sessions
 use a Better Auth bearer token returned by device authorization and should be stored in the operating
 system credential store. A request containing both a bearer token and a cookie is rejected.
 
@@ -73,6 +78,6 @@ Auth's cookie cache is disabled, so logout, expiry, and remote session deletion 
 next request instead of waiting for a signed-cookie cache to expire.
 
 The integration tests cover the exact GitHub callback, OAuth state rejection, secure cookie
-attributes, exact-origin CORS and CSRF failures, mixed credentials, device polling and expiry,
-endpoint limiting, logout, remote revocation, session expiry, capabilities ETags, profile rebinding,
-and suite or runtime refusal before credential access.
+attributes, cross-subdomain cookie scoping, exact-origin CORS and CSRF failures, mixed credentials,
+device polling and expiry, endpoint limiting, logout, remote revocation, session expiry,
+capabilities ETags, profile rebinding, and suite or runtime refusal before credential access.
