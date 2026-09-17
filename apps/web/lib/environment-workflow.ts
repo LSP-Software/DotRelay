@@ -774,7 +774,7 @@ export const nextSetupAction = (
     return {
       id: "pending-grants",
       title: "This Device doesn't have Project access yet",
-      body: "Run bun apps/cli/src/index.ts pull on this machine to share Project keys with this browser.",
+      body: "Run `bun apps/cli/src/index.ts pull` on this machine to share Project keys with this browser.",
       actionLabel: "Retry access",
     };
   if (!state.resourceActive)

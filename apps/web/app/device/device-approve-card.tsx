@@ -3,6 +3,7 @@
 import { Ban, Hourglass, ShieldOff, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GitHubSignInButton } from "@/app/sign-in/github-sign-in-button";
+import { CommandText } from "@/components/inline-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -127,8 +128,7 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
           <Hourglass aria-hidden="true" className="text-amber-300" />
           <AlertTitle>This code has expired</AlertTitle>
           <AlertDescription>
-            Return to the CLI and run <code>dotrelay login</code> or{" "}
-            <code>dotrelay setup</code> to get a new code.
+            <CommandText text="Return to the CLI and run `dotrelay login` or `dotrelay setup` to get a new code." />
           </AlertDescription>
         </Alert>
       );
@@ -141,8 +141,7 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
           <Ban aria-hidden="true" className="text-amber-300" />
           <AlertTitle>This code isn&apos;t valid</AlertTitle>
           <AlertDescription>
-            Return to the CLI and run <code>dotrelay login</code> or{" "}
-            <code>dotrelay setup</code> to get a new code.
+            <CommandText text="Return to the CLI and run `dotrelay login` or `dotrelay setup` to get a new code." />
           </AlertDescription>
         </Alert>
       );

@@ -14,6 +14,11 @@ trust/current state, amber for missing trust or Device requirements, and red onl
 lifecycle actions. Keyboard focus uses the same high-contrast green ring, and motion respects
 `prefers-reduced-motion`.
 
+Example commands (CLI setup, pull, or recovery instructions) are never shown as bare text. A
+command embedded in a sentence renders as an inline code chip; a command on its own line renders
+as a terminal line with a `$` prompt. Both offer click-to-copy with a hover tooltip and confirm
+the copy in place.
+
 The workspace presents information in this order:
 
 1. selected Server Profile and Team / Project / Environment context;

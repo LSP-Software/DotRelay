@@ -31,6 +31,7 @@ import {
   useState,
 } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
+import { CommandText } from "@/components/inline-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1656,10 +1657,16 @@ export const EnvironmentEditor = ({
               </h2>
             </CardTitle>
             <CardDescription>
-              {loading
-                ? "Fetching the latest verified state for this Environment."
-                : (action?.body ??
-                  "Enroll this browser to view and edit variables.")}
+              {loading ? (
+                "Fetching the latest verified state for this Environment."
+              ) : (
+                <CommandText
+                  text={
+                    action?.body ??
+                    "Enroll this browser to view and edit variables."
+                  }
+                />
+              )}
             </CardDescription>
           </CardHeader>
           {setupCommand || setupMessage ? (
@@ -1678,7 +1685,7 @@ export const EnvironmentEditor = ({
               ) : null}
               {setupMessage ? (
                 <p className="text-sm text-muted-foreground" role="status">
-                  {setupMessage}
+                  <CommandText text={setupMessage} />
                 </p>
               ) : null}
             </CardContent>
