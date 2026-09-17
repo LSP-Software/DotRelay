@@ -49,6 +49,7 @@ export type WorkspaceBoundary = Readonly<{
     readonly active: boolean;
     readonly userId?: string;
     readonly displayName?: string;
+    readonly image?: string;
   }>;
   readonly profile: Readonly<{
     readonly id: WorkspaceProfileId;
@@ -372,6 +373,7 @@ export const e2eWorkspaceBoundary = (
       active: true,
       userId: "00000000-0000-4000-8000-000000000061",
       displayName: "Ari Stone",
+      image: "https://avatars.githubusercontent.com/u/000000000061",
     },
     profile: {
       id: profileId,
@@ -441,6 +443,8 @@ const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
     typeof session === "object" &&
     !Array.isArray(session) &&
     typeof (session as { readonly active?: unknown }).active === "boolean" &&
+    ((session as { readonly image?: unknown }).image === undefined ||
+      typeof (session as { readonly image?: unknown }).image === "string") &&
     profile !== null &&
     typeof profile === "object" &&
     !Array.isArray(profile) &&
