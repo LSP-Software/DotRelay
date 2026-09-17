@@ -1,6 +1,7 @@
 import { Braces, MonitorSmartphone } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CommandText } from "@/components/inline-command";
 import {
   Card,
   CardContent,
@@ -54,8 +55,7 @@ const DevicePage = async ({
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Open this page from <code>dotrelay setup</code> or{" "}
-                <code>dotrelay login</code> so the code is included.
+                <CommandText text="Open this page from `dotrelay setup` or `dotrelay login` so the code is included." />
               </p>
             )}
           </CardContent>

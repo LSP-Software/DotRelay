@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
+import { CommandText, InlineCommand } from "@/components/inline-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -1573,7 +1574,7 @@ export const WorkspaceShell = ({
             setDeviceSetupMessage(
               nextBoundary.grantsReady
                 ? null
-                : "Project keys are not on this browser yet. Run bun apps/cli/src/index.ts pull, then retry.",
+                : "Project keys are not on this browser yet. Run `bun apps/cli/src/index.ts pull`, then retry.",
             );
           }
         } catch {
@@ -1942,7 +1943,7 @@ export const WorkspaceShell = ({
                         <CardTitle>No Projects yet</CardTitle>
                         <CardDescription>
                           Link a GitHub repository from the CLI with{" "}
-                          <code>dotrelay init</code>.
+                          <InlineCommand value="dotrelay init" />.
                         </CardDescription>
                       </CardHeader>
                     </Card>
@@ -2258,7 +2259,7 @@ export const WorkspaceShell = ({
                       />
                       {deviceSetupMessage ? (
                         <p className="mt-3 text-sm text-muted-foreground">
-                          {deviceSetupMessage}
+                          <CommandText text={deviceSetupMessage} />
                         </p>
                       ) : null}
                     </CardContent>
