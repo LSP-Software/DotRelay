@@ -970,6 +970,12 @@ export const panelHtml = `<!doctype html>
         }
         const optionRows = [];
         const optionInputs = [];
+        const recommendedRow =
+          question.recommended == null
+            ? -1
+            : question.options.findIndex(
+                (option) => option.sourceIndex === question.recommended,
+              );
         const syncOptionSelection = () => {
           const chosen = grillChoices.get(grillQuestionIndex) ?? new Set();
           optionRows.forEach((row, index) =>
@@ -982,7 +988,7 @@ export const panelHtml = `<!doctype html>
           const row = document.createElement("label");
           row.className =
             "option" +
-            (optionIndex === question.recommended ? " recommended" : "") +
+            (optionIndex === recommendedRow ? " recommended" : "") +
             (selected?.has(optionIndex) ? " selected" : "");
           const input = document.createElement("input");
           input.type = question.multiple ? "checkbox" : "radio";
@@ -1015,7 +1021,7 @@ export const panelHtml = `<!doctype html>
           label.className = "option-label";
           label.textContent = option.label;
           text.append(label);
-          if (optionIndex === question.recommended) {
+          if (optionIndex === recommendedRow) {
             const badge = document.createElement("span");
             badge.className = "badge";
             badge.textContent = "Recommended";
@@ -1176,7 +1182,7 @@ export const panelHtml = `<!doctype html>
             : structured
               ? composeGrillAnswer()
               : elements.grillAnswer.value;
-        if (action !== "reset" && structured && !answer) return;
+        if (action === "respond" && structured && !answer) return;
         if (action === "respond" && structured && !allGrillQuestionsAnswered())
           return;
         if (action === "reset") elements.grillConfirmOk.disabled = true;

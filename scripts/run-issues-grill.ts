@@ -54,6 +54,7 @@ const grillPrompt = (issue: number, title: string) =>
 export type GrillQuestionOption = {
   label: string;
   description: string | null;
+  sourceIndex: number;
 };
 
 export type GrillQuestion = {
@@ -90,22 +91,27 @@ const parseGrillQuestionRecords = (records: unknown): GrillQuestion[] => {
     const question =
       typeof entry.question === "string" ? entry.question.trim() : "";
     if (!question) return [];
-    const options = (Array.isArray(entry.options) ? entry.options : [])
+    const options: GrillQuestionOption[] = [];
+    (Array.isArray(entry.options) ? entry.options : [])
       .slice(0, MAX_OPTIONS)
-      .flatMap((option): GrillQuestionOption[] => {
-        if (!option || typeof option !== "object") return [];
+      .forEach((option, sourceIndex) => {
+        if (!option || typeof option !== "object") return;
         const label = (option as { label?: unknown }).label;
         const description = (option as { description?: unknown }).description;
-        if (typeof label !== "string" || !label.trim()) return [];
+        if (typeof label !== "string" || !label.trim()) return;
         const detail =
           typeof description === "string" ? description.trim() : "";
-        return [{ label: label.trim(), description: detail || null }];
+        options.push({
+          label: label.trim(),
+          description: detail || null,
+          sourceIndex,
+        });
       });
     const recommended =
       typeof entry.recommended === "number" &&
       Number.isInteger(entry.recommended) &&
       entry.recommended >= 0 &&
-      entry.recommended < options.length
+      options.some((option) => option.sourceIndex === entry.recommended)
         ? entry.recommended
         : null;
     const header = typeof entry.header === "string" ? entry.header.trim() : "";

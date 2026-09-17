@@ -169,8 +169,12 @@ describe("run issues panel", () => {
         question: "Keep the expired approval code distinction?",
         header: "Approval codes",
         options: [
-          { label: "Keep it", description: "Prevents silent sign-in loops." },
-          { label: "Drop it", description: "Simpler surface." },
+          {
+            label: "Keep it",
+            description: "Prevents silent sign-in loops.",
+            sourceIndex: 0,
+          },
+          { label: "Drop it", description: "Simpler surface.", sourceIndex: 1 },
         ],
         recommended: 0,
         multiple: false,
@@ -218,8 +222,41 @@ describe("run issues panel", () => {
       {
         question: "Real question",
         header: "Real",
-        options: [{ label: "Only", description: null }],
+        options: [{ label: "Only", description: null, sourceIndex: 0 }],
         recommended: null,
+        multiple: false,
+      },
+    ]);
+  });
+
+  test("keeps the recommended source index when earlier options are dropped", () => {
+    const parsed = parseGrillQuestions(
+      "```dotrelay-grill-questions\n" +
+        JSON.stringify({
+          questions: [
+            {
+              question: "Which recovery path?",
+              header: "Recovery",
+              options: [
+                { label: "Full replay" },
+                { label: "" },
+                { label: "Manual only" },
+              ],
+              recommended: 2,
+            },
+          ],
+        }) +
+        "\n```",
+    );
+    expect(parsed.questions).toEqual([
+      {
+        question: "Which recovery path?",
+        header: "Recovery",
+        options: [
+          { label: "Full replay", description: null, sourceIndex: 0 },
+          { label: "Manual only", description: null, sourceIndex: 2 },
+        ],
+        recommended: 2,
         multiple: false,
       },
     ]);
@@ -1008,6 +1045,145 @@ describe("run issues panel", () => {
       expect(sent).toEqual([
         "Recovery flow: Keep it explicit\nRetry budget: Persist it across restarts.",
       ]);
+    } finally {
+      await page.close();
+      await browser.close();
+      await server.stop(true);
+    }
+  }, 120_000);
+
+  test("marks the recommended row by its surviving source index", async () => {
+    const questionReply = [
+      "One decision is open.",
+      "```dotrelay-grill-questions",
+      JSON.stringify({
+        questions: [
+          {
+            question: "Which recovery path?",
+            header: "Recovery",
+            options: [
+              { label: "Full replay" },
+              { label: "" },
+              { label: "Manual only" },
+            ],
+            recommended: 2,
+          },
+        ],
+      }),
+      "```",
+    ].join("\n");
+    const { server } = createPanelServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      startRunner: async () => process.pid,
+      signalRunner: () => {},
+      grillManager: {
+        read: async () => ({}),
+        ensure: async () => ({
+          version: 1,
+          status: "awaiting-human",
+          issue: 79,
+          issueTitle: "Turn CLI failures into guided recovery",
+          issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+          priority: 1,
+          sessionId: "ses_test",
+          question: questionReply,
+          message: "The grill is waiting for your answer.",
+          startedAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          turn: 2,
+          lastTurnCompleting: false,
+        }),
+        respond: async () => {},
+        complete: async () => {},
+        retry: async () => {},
+        reset: async () => {},
+      } as unknown as ReturnType<typeof createGrillManager>,
+    });
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://127.0.0.1:${server.port}/`);
+      await page.waitForSelector("#grill-questions:not([hidden])", {
+        timeout: 15_000,
+      });
+      expect(await page.locator("#question-options .option").count()).toBe(2);
+      expect(
+        await page
+          .locator("#question-options .option.recommended .option-label")
+          .textContent(),
+      ).toBe("Manual only");
+    } finally {
+      await page.close();
+      await browser.close();
+      await server.stop(true);
+    }
+  }, 120_000);
+
+  test("completes the grill with an empty answer when the human finishes early", async () => {
+    let completions = 0;
+    const questionReply = [
+      "One decision is open.",
+      "```dotrelay-grill-questions",
+      JSON.stringify({
+        questions: [
+          {
+            question: "Which recovery path?",
+            header: "Recovery",
+            options: [{ label: "Full replay" }, { label: "Manual only" }],
+          },
+        ],
+      }),
+      "```",
+    ].join("\n");
+    const { server } = createPanelServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      startRunner: async () => process.pid,
+      signalRunner: () => {},
+      grillManager: {
+        read: async () => ({}),
+        ensure: async () => ({
+          version: 1,
+          status: "awaiting-human",
+          issue: 79,
+          issueTitle: "Turn CLI failures into guided recovery",
+          issueUrl: "https://github.com/LSP-Software/DotRelay/issues/79",
+          priority: 1,
+          sessionId: "ses_test",
+          question: questionReply,
+          message: "The grill is waiting for your answer.",
+          startedAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          turn: 2,
+          lastTurnCompleting: false,
+        }),
+        respond: async () => {},
+        complete: async () => {
+          completions++;
+        },
+        retry: async () => {},
+        reset: async () => {},
+      } as unknown as ReturnType<typeof createGrillManager>,
+    });
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://127.0.0.1:${server.port}/`);
+      await page.waitForFunction(
+        "() => {\n" +
+          "  const button = document.querySelector('#grill-finish');\n" +
+          "  return button instanceof HTMLButtonElement && !button.disabled;\n" +
+          "}",
+        undefined,
+        { timeout: 15_000 },
+      );
+      await page.locator("#grill-finish").click();
+      const deadline = Date.now() + 5_000;
+      while (completions === 0 && Date.now() < deadline) {
+        await Bun.sleep(20);
+      }
+      expect(completions).toBe(1);
     } finally {
       await page.close();
       await browser.close();
