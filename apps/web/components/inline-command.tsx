@@ -45,7 +45,7 @@ export const InlineCommand = ({ value, className }: InlineCommandProps) => {
             aria-label={copied ? "Copied" : `Copy ${value}`}
             onClick={() => void copy()}
             className={cn(
-              "group/chip inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-1.5 font-mono text-[0.85em] leading-5 text-foreground transition-all duration-200",
+              "group/chip inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-muted/50 px-1.5 font-mono text-[0.85em] leading-5 text-foreground transition-all duration-200",
               "hover:border-primary/40 hover:bg-primary/10 hover:text-primary",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
               copied && "border-primary/40 bg-primary/10 text-primary",
@@ -62,10 +62,8 @@ export const InlineCommand = ({ value, className }: InlineCommandProps) => {
         >
           <Copy
             className={cn(
-              "size-3 transition-all duration-200",
-              copied
-                ? "scale-0 opacity-0"
-                : "text-muted-foreground opacity-0 group-hover/chip:opacity-100 group-hover/chip:text-current",
+              "size-3 text-muted-foreground transition-all duration-200",
+              copied ? "scale-0 opacity-0" : "group-hover/chip:text-current",
             )}
           />
           {copied ? (
