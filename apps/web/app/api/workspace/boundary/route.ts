@@ -36,7 +36,7 @@ const fetchLiveBoundary = async (
   const sessionBody = sessionActive
     ? ((await sessionResponse.json().catch(() => undefined)) as
         | {
-            user?: { id?: string; name?: string };
+            user?: { id?: string; name?: string; image?: unknown };
           }
         | undefined)
     : undefined;
@@ -44,6 +44,9 @@ const fetchLiveBoundary = async (
     active: sessionActive,
     ...(sessionBody?.user?.name ? { displayName: sessionBody.user.name } : {}),
     ...(sessionBody?.user?.id ? { userId: sessionBody.user.id } : {}),
+    ...(typeof sessionBody?.user?.image === "string" && sessionBody.user.image
+      ? { image: sessionBody.user.image }
+      : {}),
   };
   const capabilitiesResponse = await fetch(`${apiOrigin}/api/v1/capabilities`, {
     cache: "no-store",

@@ -514,7 +514,14 @@ const createApi = ({
     });
     if (!user) return jsonProblem(context, "service_unavailable");
     return context.json(
-      { authenticated: true, user: { id: user.id, name: session.user.name } },
+      {
+        authenticated: true,
+        user: {
+          id: user.id,
+          name: session.user.name,
+          image: session.user.image ?? null,
+        },
+      },
       200,
       {
         "Cache-Control": "no-store",

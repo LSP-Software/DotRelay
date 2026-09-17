@@ -1,4 +1,57 @@
 import { expect, type Page, test } from "@playwright/test";
+import { e2eWorkspaceBoundary } from "../lib/workspace-boundary";
+
+for (const imageLoads of [true, false]) {
+  test(`the profile avatar ${imageLoads ? "shows the GitHub photo" : "falls back when the photo fails"}`, async ({
+    page,
+  }) => {
+    const image = "https://avatars.githubusercontent.com/u/123";
+    await page.route(image, (route) =>
+      imageLoads
+        ? route.fulfill({
+            contentType: "image/svg+xml",
+            body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="blue"/></svg>',
+          })
+        : route.abort(),
+    );
+    await page.route("**/api/workspace/boundary**", (route) => {
+      const boundary = e2eWorkspaceBoundary("hosted");
+      return route.fulfill({
+        json: { ...boundary, session: { ...boundary.session, image } },
+      });
+    });
+    await page.goto("/workspace");
+    const avatar = page.locator('[data-slot="avatar"]');
+    if (imageLoads) {
+      await expect(avatar.locator("img")).toBeVisible();
+      await expect(avatar.locator("img")).toHaveAttribute("src", image);
+      await expect(
+        avatar.locator('[data-slot="avatar-fallback"]'),
+      ).toBeHidden();
+    } else {
+      await expect(avatar.locator('[data-slot="avatar-fallback"]')).toHaveText(
+        "AR",
+      );
+      await expect(
+        avatar.locator('[data-slot="avatar-fallback"]'),
+      ).toBeVisible();
+    }
+  });
+}
+
+test("the profile avatar keeps initials when no photo is available", async ({
+  page,
+}) => {
+  await page.route("**/api/workspace/boundary**", (route) =>
+    route.fulfill({ json: e2eWorkspaceBoundary("hosted") }),
+  );
+  await page.goto("/workspace");
+  const avatar = page.locator('[data-slot="avatar"]');
+  await expect(avatar.locator('[data-slot="avatar-fallback"]')).toHaveText(
+    "AR",
+  );
+  await expect(avatar.locator("img")).toHaveCount(0);
+});
 
 const expectOfflineState = async (page: Page) => {
   await expect(page.getByTestId("workspace-offline")).toBeVisible();

@@ -123,6 +123,7 @@ test("the e2e boundary stays an explicit dev fixture", () => {
     active: true,
     userId: "00000000-0000-4000-8000-000000000061",
     displayName: "Ari Stone",
+    image: "https://avatars.githubusercontent.com/u/000000000061",
   });
   expect(boundary.device.active).toBe(false);
   expect(boundary.grantsReady).toBe(false);

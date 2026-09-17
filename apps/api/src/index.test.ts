@@ -23,6 +23,45 @@ const deviceTokenRequest = (
   });
 
 describe("API foundation", () => {
+  test.each(["https://avatars.githubusercontent.com/u/123", null, undefined])(
+    "returns the authenticated user's profile image %p",
+    async (image) => {
+      const profile = loadServerProfileConfig({});
+      const testApp = createApi({
+        profile,
+        database: {
+          authAccount: {
+            findFirst: async () => ({ accountId: "github-user" }),
+          },
+          user: { upsert: async () => ({ id: "user-1" }) },
+        } as never,
+        auth: {
+          api: {
+            getSession: async () => ({
+              user: { id: "auth-user", name: "Ari", image },
+            }),
+          },
+        } as never,
+      });
+      const response = await testApp.request(
+        `${profile.origin}/api/v1/session`,
+        {
+          headers: {
+            Origin: profile.origin,
+            Authorization: "Bearer session-token",
+          },
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(await response.json()).toEqual({
+        authenticated: true,
+        user: { id: "user-1", name: "Ari", image: image ?? null },
+      });
+    },
+  );
+
   test("exposes a health endpoint", async () => {
     const response = await app.request("http://localhost/health");
 
