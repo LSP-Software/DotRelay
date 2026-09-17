@@ -280,6 +280,47 @@ export const isAllowedOrigin = (
 ) =>
   origin === null || origin === profile.origin || origin === profile.webOrigin;
 
+// When the Server Profile and the web app are served from different hosts on
+// the same registered domain (e.g. dev-api.dotrelay.dev and dev.dotrelay.dev),
+// the browser only sends a session cookie to one origin unless the cookie is
+// scoped to the shared parent domain. The web app's server-side session relay
+// forwards the browser's Cookie header to the API, so the cookie must be
+// visible to both origins or the dashboard permanently reports signed-out.
+export const sharedCookieDomain = (
+  profile: ServerProfileConfig,
+): string | undefined => {
+  const apiHost = new URL(profile.origin).hostname;
+  const webHost = new URL(profile.webOrigin).hostname;
+  if (apiHost === webHost) return undefined;
+  const apiLabels = apiHost.split(".");
+  const webLabels = webHost.split(".");
+  const suffix: string[] = [];
+  let apiIndex = apiLabels.length - 1;
+  let webIndex = webLabels.length - 1;
+  while (apiIndex >= 0 && webIndex >= 0) {
+    const apiLabel = apiLabels[apiIndex];
+    const webLabel = webLabels[webIndex];
+    if (
+      apiLabel === undefined ||
+      webLabel === undefined ||
+      apiLabel !== webLabel
+    )
+      break;
+    suffix.unshift(apiLabel);
+    apiIndex -= 1;
+    webIndex -= 1;
+  }
+  const domain = suffix.join(".");
+  if (
+    !domain ||
+    !apiHost.endsWith(`.${domain}`) ||
+    !webHost.endsWith(`.${domain}`)
+  ) {
+    return undefined;
+  }
+  return domain;
+};
+
 export const isSecureRequest = (
   request: Request,
   profile: ServerProfileConfig,

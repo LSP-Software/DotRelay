@@ -462,6 +462,42 @@ describe("API foundation", () => {
     expect(await rejectedCallback.text()).not.toContain("state.mjs");
   });
 
+  test("scopes browser cookies to the shared parent domain when web and API hosts differ", async () => {
+    // The sign-in route rate-limits to 3 calls per 10s window in one shared
+    // in-process store, so this test makes exactly one sign-in/social request;
+    // same-host profiles are covered by the sharedCookieDomain unit tests.
+    const splitProfile = loadServerProfileConfig({
+      NODE_ENV: "production",
+      SERVER_PROFILE_ORIGIN: "https://api.example",
+      WEB_ORIGIN: "https://app.example",
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+      GITHUB_CLIENT_ID: "github-client",
+      GITHUB_CLIENT_SECRET: "github-secret",
+    });
+    const splitApp = createApi({
+      database: {} as never,
+      profile: splitProfile,
+      auth: createInMemoryAuth(splitProfile),
+    });
+    const splitResponse = await splitApp.request(
+      `${splitProfile.origin}/api/auth/sign-in/social`,
+      {
+        method: "POST",
+        headers: {
+          Origin: splitProfile.webOrigin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: "github",
+          callbackURL: `${splitProfile.webOrigin}/workspace`,
+        }),
+      },
+    );
+    expect(splitResponse.status).toBe(200);
+    expect(splitResponse.headers.get("set-cookie")).toContain("Domain=example");
+  });
+
   test("sanitizes Better Auth error responses", async () => {
     const profile = loadServerProfileConfig({});
     const auth = createInMemoryAuth(profile);
