@@ -1,5 +1,5 @@
-import { headers } from "next/headers";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { resolveLiveApiOrigin } from "@/lib/workspace-boundary";
 import { WorkspaceShell } from "./workspace-shell";
