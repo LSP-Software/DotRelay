@@ -24,11 +24,19 @@ ALTER TABLE "security_request_logs"
 
 REVOKE ALL ON TABLE "security_request_logs" FROM PUBLIC;
 
+-- The dedicated reader role is provisioned out-of-band on hosted instances
+-- (the unprivileged application roles cannot CREATE ROLE); the block still
+-- creates it when the executor may (superuser-driven test databases) and
+-- fails loudly when neither the role nor the privilege is present.
 DO $$
 BEGIN
-  CREATE ROLE dotrelay_security_response NOLOGIN;
+    CREATE ROLE dotrelay_security_response NOLOGIN;
 EXCEPTION
-  WHEN duplicate_object THEN NULL;
+    WHEN duplicate_object THEN NULL;
+    WHEN insufficient_privilege THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dotrelay_security_response') THEN
+            RAISE EXCEPTION 'role "dotrelay_security_response" is missing and the current role cannot create roles; provision it before applying migrations';
+        END IF;
 END;
 $$;
 GRANT SELECT ON TABLE "security_request_logs" TO dotrelay_security_response;
