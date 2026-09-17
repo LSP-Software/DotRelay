@@ -78,7 +78,7 @@ export const CopyableCommand = ({
           render={
             <Button
               aria-label={copied ? "Copied" : "Copy command"}
-              className="-mr-1 shrink-0"
+              className="-mr-1 shrink-0 cursor-pointer"
               onClick={() => void copy()}
               size="icon-xs"
               type="button"

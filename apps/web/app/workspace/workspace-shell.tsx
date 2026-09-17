@@ -537,6 +537,9 @@ export const WorkspaceShell = ({
   const teamProjects = displayBoundary.catalog.projects.filter(
     (project) => project.teamId === selectedTeam?.id,
   );
+  const teamsWithProjects = new Set(
+    displayBoundary.catalog.projects.map((project) => project.teamId),
+  );
   const selectedProject =
     teamProjects.find((project) => project.id === projectId) ?? null;
   const selectedEnvironment =
@@ -1696,7 +1699,9 @@ export const WorkspaceShell = ({
             >
               {teams.map((team) => (
                 <option key={team.id} value={team.id}>
-                  {team.name}
+                  {teamsWithProjects.has(team.id)
+                    ? team.name
+                    : `${team.name} (no Projects)`}
                 </option>
               ))}
             </select>
@@ -1769,7 +1774,9 @@ export const WorkspaceShell = ({
                   >
                     {teams.map((team) => (
                       <option key={team.id} value={team.id}>
-                        {team.name}
+                        {teamsWithProjects.has(team.id)
+                          ? team.name
+                          : `${team.name} (no Projects)`}
                       </option>
                     ))}
                   </select>
