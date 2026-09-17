@@ -21,6 +21,14 @@ FROM oven/bun:1.4.0
 RUN groupadd --gid 10001 dotrelay && \
     useradd --uid 10001 --gid dotrelay --home-dir /app --no-create-home dotrelay
 
+# curl: the orchestrator's container healthcheck probes /health with
+# `curl ... || wget ...`; this base image ships neither, so without it the
+# healthcheck can never pass, the container is reported unhealthy, and
+# Traefik's docker provider filters it out of routing entirely.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 # WORKDIR creates /app (useradd used --no-create-home, so nothing else does).
 # HOME is /app for the runtime user; own the directory itself as well (COPY
 # --chown covers the tree contents, not the workdir) so prisma/bun can write
