@@ -260,7 +260,11 @@ jobs:
       - run: bun install --frozen-lockfile
       # The dev build is cut from this main commit: it is stamped with the
       # dev API origin and a dev version recording the commit sha.
-      - run: bun run package:cli:version -- "v0.0.0-dev.${GITHUB_SHA}"
+      # Interpolate the sha with a GitHub expression instead of shell
+      # expansion: on Windows steps run in PowerShell, where ${GITHUB_SHA}
+      # resolves to an undefined PowerShell variable and the dev version
+      # arrives without the sha.
+      - run: bun run package:cli:version -- "v0.0.0-dev.${{ github.sha }}"
       - run: bun run --cwd apps/cli build
       - run: bun run package:cli
       - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
@@ -286,7 +290,7 @@ jobs:
           pattern: cli-dev-*
           path: release-binaries
           merge-multiple: false
-      - run: bun run package:cli:version -- "v0.0.0-dev.${GITHUB_SHA}"
+      - run: bun run package:cli:version -- "v0.0.0-dev.${{ github.sha }}"
       - run: mkdir -p packages/dotrelay/dist && cp -R release-binaries/*/* packages/dotrelay/dist/
       - run: bun scripts/test-cli-package.ts
       - run: npm pack --dry-run ./packages/dotrelay
