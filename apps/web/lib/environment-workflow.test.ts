@@ -25,8 +25,8 @@ import {
   revisionMutationLabel,
   roleLabel,
   rollbackValueDiffs,
-  settlePublishedDraft,
   seedEnvironmentVariables,
+  settlePublishedDraft,
   splitInlineValueDiff,
   summarizeConflict,
   updateVariableValue,
@@ -1199,6 +1199,8 @@ test("a Member cannot keep a deletion draft after losing admin rights", () => {
   });
   expect(asAdmin.droppedVariableNames).toEqual([]);
   expect(asAdmin.variables[0]?.tombstone).toBe(true);
+});
+
 test("new Environment labels must be valid and unique among active Environments", () => {
   expect(validateEnvironmentLabel("")).toContain("required");
   expect(validateEnvironmentLabel("staging env")).toContain("letters");

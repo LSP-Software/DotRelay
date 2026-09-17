@@ -593,11 +593,12 @@ export const WorkspaceShell = ({
     ) ??
     selectedProject?.environments[0] ??
     null;
-  const effectiveRole =
+  const teamRoleFor = (teamId: string | null): MembershipRole =>
     displayBoundary.source === "fixture" || preview === "admin"
       ? role
-      : (selectedTeam?.role ?? "MEMBER");
-  const canAdminister = effectiveRole === "OWNER" || effectiveRole === "ADMIN";
+      : (teams.find((team) => team.id === teamId)?.role ?? "MEMBER");
+  const effectiveRole = teamRoleFor(selectedTeam?.id ?? null);
+  const canAdminister = isPrivilegedRole(effectiveRole);
   const cliCommand = `dotrelay setup ${displayBoundary.profile.origin}`;
   const currentIdentity = environmentContextIdentity({
     profileId,
@@ -2483,6 +2484,7 @@ export const WorkspaceShell = ({
               >
                 {editorEntries.map((entry) => {
                   const entryKey = environmentContextKey(entry.identity);
+                  const entryEnvironmentId = entry.identity.environmentId;
                   const isCurrent =
                     selectedEntry !== null && entryKey === currentKey;
                   return (
@@ -2512,26 +2514,28 @@ export const WorkspaceShell = ({
                           });
                         }}
                         onSetupAction={handleSetupAction}
-                        onVariablesChange={(variables) =>
-                          handleVariablesChange(
-                            entry.identity.environmentId,
-                            variables,
-                          )
-                        }
+                        onVariablesChange={(variables) => {
+                          if (entryEnvironmentId)
+                            handleVariablesChange(
+                              entryEnvironmentId,
+                              variables,
+                            );
+                        }}
                         protocolSession={entry.session ?? protocolSession}
                         remoteHeadRevision={
-                          environmentHeadById.get(
-                            entry.identity.environmentId,
-                          ) ?? "empty-environment"
+                          (entryEnvironmentId
+                            ? environmentHeadById.get(entryEnvironmentId)
+                            : undefined) ?? "empty-environment"
                         }
                         setupAction={entry.setupAction}
                         setupBusy={isCurrent ? deviceSetupInProgress : false}
                         setupCommand={entry.setupCommand}
                         setupMessage={entry.setupMessage}
-                        {...(variablesByEnvironment[entry.identity.environmentId]
+                        {...(entryEnvironmentId &&
+                        variablesByEnvironment[entryEnvironmentId]
                           ? {
                               seedVariables:
-                                variablesByEnvironment[entry.identity.environmentId],
+                                variablesByEnvironment[entryEnvironmentId],
                             }
                           : {})}
                       />
