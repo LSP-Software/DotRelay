@@ -25,6 +25,43 @@ describe("CLI diagnostics", () => {
     expect(diagnostic.code).toBe("invocation");
   });
 
+  test("repository access denial gives recovery steps in human and JSON output", () => {
+    const errors = [
+      new ContractError("repository_access_denied"),
+      new ProtocolTransportError(createProblem("repository_access_denied")),
+    ];
+    for (const error of errors) {
+      const diagnostic = diagnosticForError(error);
+      expect(diagnostic).toMatchObject({
+        category: "authentication",
+        code: "repository_access_denied",
+        exitCode: EXIT_CODES.authentication,
+      });
+      expect(diagnostic.detail).toContain(
+        "Check the repository name and your GitHub access",
+      );
+      expect(diagnostic.detail).toContain(
+        "https://github.com/settings/applications",
+      );
+      expect(diagnostic.detail).toContain("organization owner");
+      expect(diagnostic.detail).toContain("SSO");
+      expect(diagnostic.detail).toContain("sign out of the DotRelay web app");
+      expect(diagnostic.detail).toContain("retry your command");
+      expect(diagnostic.detail.length).toBeLessThanOrEqual(512);
+      expect(humanDetailForError(error)).toBe(diagnostic.detail);
+      expect(
+        diagnosticForError(
+          new CliError(
+            "authentication",
+            diagnostic.detail,
+            {},
+            diagnostic.code,
+          ),
+        ).detail,
+      ).toBe(diagnostic.detail);
+    }
+  });
+
   test("keeps unknown errors opaque without --debug", () => {
     expect(diagnosticForError(new Error("bearer=secret")).detail).toBe(
       "The command could not complete.",
