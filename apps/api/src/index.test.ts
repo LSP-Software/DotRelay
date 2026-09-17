@@ -821,8 +821,10 @@ describe("Resolving a GitHub Repository's identity", () => {
         options: {},
         secretConfig: { secret: "test-secret" },
         internalAdapter: {
+          // better-auth keys accounts by the session user's ID (the
+          // authSubject), not by the DotRelay User table's ID.
           findAccounts: async (userId: string) =>
-            userId === "user-id" ? accounts : [],
+            userId === "auth-user" ? accounts : [],
         },
       }),
     } as never,

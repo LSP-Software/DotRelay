@@ -198,6 +198,9 @@ const timedFetch = async (
   }
 };
 
+/** `userId` is the acting user's better-auth user ID (authSubject); the
+ *  stored Delegated GitHub Access is keyed by it, not by the DotRelay User
+ *  table's ID. */
 export const resolveGitHubRepositoryIdentity = async (
   auth: DotRelayAuth,
   userId: string,

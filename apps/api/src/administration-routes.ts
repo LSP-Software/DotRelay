@@ -256,7 +256,9 @@ export const registerAdministrationRoutes = (
     const resolutionOptions = githubFetch ? { fetch: githubFetch } : {};
     const outcome = await resolveGitHubRepositoryIdentity(
       auth,
-      actor.userId,
+      // better-auth keys the stored Delegated GitHub Access by the
+      // session user's ID (authSubject), not the DotRelay User table's ID.
+      actor.authSubject,
       { owner, name },
       resolutionOptions,
     );

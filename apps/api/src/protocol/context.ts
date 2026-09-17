@@ -8,6 +8,8 @@ import type { ServerProfileConfig } from "../profile";
 export type ProtocolActor = Readonly<{
   readonly userId: string;
   readonly deviceId: string;
+  /** The session user's ID in the better-auth ID space (authSubject). */
+  readonly authSubject: string;
 }>;
 
 const serviceUnavailable = (context: Context) =>
@@ -51,7 +53,11 @@ export const requireProtocolActor = async (
         "Cache-Control": "no-store",
         "Content-Type": "application/problem+json",
       });
-    return Object.freeze({ userId: user.id, deviceId: device.id });
+    return Object.freeze({
+      userId: user.id,
+      deviceId: device.id,
+      authSubject: session.user.id,
+    });
   } catch {
     return serviceUnavailable(context);
   }
