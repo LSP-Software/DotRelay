@@ -42,9 +42,12 @@ for (const imageLoads of [true, false]) {
 test("the profile avatar keeps initials when no photo is available", async ({
   page,
 }) => {
-  await page.route("**/api/workspace/boundary**", (route) =>
-    route.fulfill({ json: e2eWorkspaceBoundary("hosted") }),
-  );
+  await page.route("**/api/workspace/boundary**", (route) => {
+    const boundary = e2eWorkspaceBoundary("hosted");
+    return route.fulfill({
+      json: { ...boundary, session: { ...boundary.session, image: null } },
+    });
+  });
   await page.goto("/workspace");
   const avatar = page.locator('[data-slot="avatar"]');
   await expect(avatar.locator('[data-slot="avatar-fallback"]')).toHaveText(
