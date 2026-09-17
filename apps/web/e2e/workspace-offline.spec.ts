@@ -51,7 +51,7 @@ test("the profile avatar keeps initials when no photo is available", async ({
   await page.goto("/workspace");
   const avatar = page.locator('[data-slot="avatar"]');
   await expect(avatar.locator('[data-slot="avatar-fallback"]')).toHaveText(
-    "AR",
+    "DR",
   );
   await expect(avatar.locator("img")).toHaveCount(0);
 });
