@@ -221,7 +221,7 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:latest
           build-args: |
             NEXT_PUBLIC_WEB_ORIGIN=https://dev.dotrelay.dev
-            NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://dev.api.dotrelay.dev
+            NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://dev-api.dotrelay.dev
       - name: deploy dev apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
@@ -235,7 +235,7 @@ jobs:
           # misconfiguration that would 403 every real request. Probe
           # /api/v1/capabilities (public GET, still gated) instead.
           for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 https://dev.api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dev.dotrelay.dev -o /dev/null; then
+            if curl -fsS --max-time 10 https://dev-api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dev.dotrelay.dev -o /dev/null; then
               echo "dev origins healthy"; exit 0
             fi
             echo "waiting for dev origins to come up (${i}/12)..."; sleep 15
