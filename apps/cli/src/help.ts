@@ -9,6 +9,7 @@ import {
   usageForLabel,
 } from "./args";
 import { CliInvocationError } from "./errors";
+import { defaultOrigin } from "./version";
 
 export type CommandHelpEntry = Readonly<{
   readonly about: string;
@@ -473,7 +474,7 @@ const commandDirectory = (
   });
 
 export const renderHelp = (): string => {
-  return [
+  const lines = [
     "Usage: dotrelay <command>",
     "",
     ...commandDirectory(EVERYDAY_COMMANDS),
@@ -482,7 +483,12 @@ export const renderHelp = (): string => {
     "Command help: dotrelay help <command> or dotrelay <command> --help",
     "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous",
     "Automation: --json  --no-input  --force  --debug",
-  ].join("\n");
+  ];
+  if (defaultOrigin)
+    lines.push(
+      `Default: with no Server Profile selected, this build uses ${defaultOrigin}`,
+    );
+  return lines.join("\n");
 };
 
 export const renderPowerHelp = (): string => {

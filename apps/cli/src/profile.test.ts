@@ -7,6 +7,7 @@ import {
   resolveServerProfile,
   useServerProfile,
 } from "./profile";
+import { defaultOrigin } from "./version";
 
 describe("CLI Server Profile catalog", () => {
   test("pins capabilities and selects the first saved profile", async () => {
@@ -116,6 +117,127 @@ describe("CLI Server Profile catalog", () => {
       "could not reach the Server Profile capabilities endpoint after 3 attempts",
     );
     expect(calls).toBe(3);
+  });
+
+  test("source builds ship no build-time default origin", () => {
+    // Release and source builds stamp no default origin, so a first use
+    // still requires an explicit `dotrelay setup <origin>` trust decision;
+    // only dev builds stamp the origin they target.
+    expect(defaultOrigin).toBeUndefined();
+  });
+
+  const devOrigin = "https://dev-api.dotrelay.dev";
+  const devProfileId = "00000000-0000-4000-8000-000000000077";
+
+  test("seeds and selects the build's default origin on first use", async () => {
+    const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
+    const store = createFileProfileCatalog(path);
+    const capabilities = createCapabilitiesDocument({
+      origin: devOrigin,
+      serverProfileId: devProfileId,
+    });
+    try {
+      // No confirmation is offered: the operator installed a build that
+      // already declared this destination, so first use trusts it as-is.
+      const profile = await resolveServerProfile(store, undefined, {
+        defaultOrigin: devOrigin,
+        fetch: async () => Response.json(capabilities),
+      });
+      expect(profile.origin).toBe(devOrigin);
+      expect(profile.name).toBe("dev-api.dotrelay.dev");
+      expect(profile.pin.serverProfileId).toBe(devProfileId);
+      const catalog = await store.read();
+      expect(catalog.selected).toBe("dev-api.dotrelay.dev");
+      expect(catalog.profiles.map((entry) => entry.origin)).toEqual([
+        devOrigin,
+      ]);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(path)
+        .catch(() => undefined);
+    }
+  });
+
+  test("selects a saved default-origin profile without re-fetching", async () => {
+    const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
+    const store = createFileProfileCatalog(path);
+    await (await import("node:fs/promises")).writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            name: "dev-api.dotrelay.dev",
+            origin: devOrigin,
+            pin: { origin: devOrigin, serverProfileId: devProfileId },
+          },
+        ],
+      }),
+    );
+    try {
+      const profile = await resolveServerProfile(store, undefined, {
+        defaultOrigin: devOrigin,
+        fetch: async () => {
+          throw new Error("a saved default profile must not be re-fetched");
+        },
+      });
+      expect(profile.origin).toBe(devOrigin);
+      expect((await store.read()).selected).toBe("dev-api.dotrelay.dev");
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(path)
+        .catch(() => undefined);
+    }
+  });
+
+  test("an explicit profile override still wins over the default origin", async () => {
+    const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
+    const store = createFileProfileCatalog(path);
+    await (await import("node:fs/promises")).writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            name: "work",
+            origin: "https://relay.example",
+            pin: {
+              origin: "https://relay.example",
+              serverProfileId: "00000000-0000-4000-8000-000000000042",
+            },
+          },
+        ],
+      }),
+    );
+    try {
+      const profile = await resolveServerProfile(store, "work", {
+        defaultOrigin: devOrigin,
+        fetch: async () => {
+          throw new Error("an override must not trigger default seeding");
+        },
+      });
+      expect(profile.name).toBe("work");
+      expect(profile.origin).toBe("https://relay.example");
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(path)
+        .catch(() => undefined);
+    }
+  });
+
+  test("a build without a default origin still requires setup", async () => {
+    const store = createFileProfileCatalog(
+      `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`,
+    );
+    await expect(
+      resolveServerProfile(store, undefined, {
+        fetch: async () => {
+          throw new Error("setup must not be skipped without a default origin");
+        },
+      }),
+    ).rejects.toThrow(
+      "No Server Profile selected; run dotrelay setup <origin>",
+    );
   });
 
   test("does not persist a newly trusted profile when confirmation is declined", async () => {

@@ -36,15 +36,46 @@ export const resolveCliReleaseVersion = async (): Promise<string> => {
   return "0.0.0-foundation";
 };
 
+// Only an exact HTTPS origin may be stamped as a build default, so a dev
+// binary can never be pointed at a path, credential, or non-HTTPS endpoint.
+const validateBuildOrigin = (value: string): string => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("DOTRELAY_CLI_ORIGIN must be an absolute URL");
+  }
+  if (url.protocol !== "https:")
+    throw new Error("DOTRELAY_CLI_ORIGIN must use HTTPS");
+  if (
+    url.origin !== value ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== "/" && url.pathname !== "")
+  )
+    throw new Error(
+      "DOTRELAY_CLI_ORIGIN must be an exact origin without a path",
+    );
+  return value;
+};
+
 // The release version is compiled into the binary, so `dotrelay --version`
 // agrees with the tagged/npm release the binary was cut from. An explicit
 // version overrides the environment/manifest resolution so release-shaped
-// builds can be tested without release tooling.
+// builds can be tested without release tooling. Setting DOTRELAY_CLI_ORIGIN
+// additionally stamps a default Server Profile origin (the dev channel
+// points its builds at the dev API); release builds stamp no origin.
 export const buildCli = async (
   version?: string,
   outfile = "dist/dotrelay",
-): Promise<string> => {
+): Promise<{ readonly version: string; readonly origin?: string }> => {
   const stampedVersion = version ?? (await resolveCliReleaseVersion());
+  const stampedOrigin =
+    process.env.DOTRELAY_CLI_ORIGIN !== undefined
+      ? validateBuildOrigin(process.env.DOTRELAY_CLI_ORIGIN)
+      : undefined;
   const child = Bun.spawn(
     [
       process.execPath,
@@ -55,16 +86,27 @@ export const buildCli = async (
       outfile,
       "--define",
       `__DOTRELAY_RELEASE_VERSION__=${JSON.stringify(stampedVersion)}`,
+      ...(stampedOrigin
+        ? [
+            "--define",
+            `__DOTRELAY_DEFAULT_ORIGIN__=${JSON.stringify(stampedOrigin)}`,
+          ]
+        : []),
     ],
     { cwd: cliDirectory, stdout: "inherit", stderr: "inherit" },
   );
   const exitCode = await child.exited;
   if (exitCode !== 0)
     throw new Error(`CLI build failed with exit code ${exitCode}`);
-  return stampedVersion;
+  return {
+    version: stampedVersion,
+    ...(stampedOrigin ? { origin: stampedOrigin } : {}),
+  };
 };
 
 if (import.meta.main) {
-  const version = await buildCli();
-  console.log(`built apps/cli/dist/dotrelay reporting ${version}`);
+  const { version, origin } = await buildCli();
+  console.log(
+    `built apps/cli/dist/dotrelay reporting ${version}${origin ? ` targeting ${origin}` : ""}`,
+  );
 }

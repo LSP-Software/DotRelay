@@ -9,6 +9,14 @@ run `bun run build` followed by `bun run package:cli` to stage the current platf
 testing or packing the package. `npx dotrelay --help` then uses the same command contract as the
 standalone binary.
 
+## Release channels
+
+`dotrelay@latest` is the stable selector published from release tags; its binary targets no
+Server Profile origin, so a new machine starts with `dotrelay setup <origin>`. `dotrelay@dev`
+is rebuilt from the most recent commit on `main` on every push (version
+`0.0.0-dev.<commit-sha>`); its binary targets the dev API and, when no Server Profile is
+selected, trusts and selects `https://dev-api.dotrelay.dev` on first use.
+
 ## Version and launch failures
 
 `dotrelay --version` reports the release version stamped into the native binary when the release

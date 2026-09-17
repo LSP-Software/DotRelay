@@ -14,6 +14,7 @@ import {
   transientResponseVerdict,
 } from "./network";
 import { atomicWriteProtectedFile } from "./output";
+import { defaultOrigin } from "./version";
 
 export type FetchFunction = (
   input: string | URL | Request,
@@ -218,6 +219,26 @@ const validateOrigin = (origin: string): string => {
   return origin;
 };
 
+// Derives the local profile name from the origin's host so an origin seeded
+// by a build-time default or added by the operator gets the same name a
+// manual `dotrelay setup <origin>` would choose for it.
+export const profileNameFromOrigin = (origin: string): string => {
+  let host = "default";
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    throw new CliInvocationError(
+      "Server Profile origin must be an absolute URL",
+    );
+  }
+  const normalized = host
+    .replace(/[^A-Za-z0-9._-]/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(normalized)
+    ? normalized
+    : "default";
+};
+
 export const addServerProfile = async (
   store: ProfileCatalogStore,
   name: string,
@@ -335,11 +356,49 @@ export const useServerProfile = async (
   return profile;
 };
 
+export type ResolveProfileOptions = Readonly<{
+  readonly fetch?: FetchFunction;
+  readonly networkPolicy?: NetworkPolicy;
+  readonly defaultOrigin?: string;
+}>;
+
+// Resolves the Server Profile a command runs against: an explicit --profile
+// override, then the globally selected profile, then the origin this build
+// ships targeting. When nothing is selected on a build with a stamped
+// default origin, that origin is trusted and selected on first use: the
+// operator already chose the destination by installing the build, and the
+// live capabilities pin still binds the actual service identity. Builds
+// without a stamped origin keep requiring an explicit `dotrelay setup`.
 export const resolveServerProfile = async (
   store: ProfileCatalogStore,
   override?: string,
+  options: ResolveProfileOptions = {},
 ): Promise<CliServerProfile> => {
   const catalog = await store.read();
+  if (!override) {
+    const builtIn = options.defaultOrigin ?? defaultOrigin;
+    if (builtIn && !catalog.selected) {
+      const existing = catalog.profiles.find(
+        (profile) => profile.origin === builtIn,
+      );
+      if (existing) {
+        await store.write(
+          Object.freeze({
+            version: 1,
+            profiles: catalog.profiles,
+            selected: existing.name,
+          }),
+        );
+        return existing;
+      }
+      return addServerProfile(store, profileNameFromOrigin(builtIn), builtIn, {
+        ...(options.fetch ? { fetch: options.fetch } : {}),
+        ...(options.networkPolicy
+          ? { networkPolicy: options.networkPolicy }
+          : {}),
+      });
+    }
+  }
   const name = override ?? catalog.selected;
   if (!name)
     throw new CliInvocationError(
