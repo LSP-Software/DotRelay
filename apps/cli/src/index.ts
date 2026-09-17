@@ -83,6 +83,7 @@ import {
   createFileProfileCatalog,
   type FetchFunction,
   profileCatalogPath,
+  profileNameFromOrigin,
   resolveServerProfile,
   useServerProfile,
 } from "./profile";
@@ -94,7 +95,7 @@ import {
   selectOption,
   writeNotice,
 } from "./ui";
-import { version } from "./version";
+import { defaultOrigin, version } from "./version";
 import {
   approveDeviceEnrollment,
   beginDeviceEnrollment,
@@ -384,22 +385,13 @@ const renderSuccess = (
     .join("\n")}\n`;
 };
 
-const profileNameFromOrigin = (origin: string): string => {
-  let host = "default";
-  try {
-    host = new URL(origin).hostname;
-  } catch {
-    throw new CliInvocationError(
-      "Server Profile origin must be an absolute URL",
-    );
-  }
-  const normalized = host
-    .replace(/[^A-Za-z0-9._-]/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(normalized)
-    ? normalized
-    : "default";
-};
+// The runtime's transport options flow into profile resolution so a
+// build-stamped default origin is established over the same fetch and
+// network policy the rest of the command uses.
+const profileOptions = (runtime: CliRuntime) => ({
+  ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+  ...(runtime.networkPolicy ? { networkPolicy: runtime.networkPolicy } : {}),
+});
 
 const confirmProfileTrust = async (
   parsed: ParsedArguments,
@@ -1054,27 +1046,43 @@ const execute = async (
       return {
         value: {
           profile: null,
-          origin: null,
+          // A build that ships a default origin names the service its
+          // commands will use; builds without one still require setup.
+          origin: defaultOrigin ?? null,
           service: "skipped",
           session: "not-stored",
           device: "not-enrolled",
-          nextAction: "run dotrelay setup <origin>",
+          nextAction: defaultOrigin
+            ? `this build targets ${defaultOrigin}; run dotrelay login`
+            : "run dotrelay setup <origin>",
         },
       };
     return { value: await verifyStatus(runtime, selected) };
   }
   if (parsed.command === "login") {
-    const profile = await resolveServerProfile(store, parsed.profile);
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
     return { value: await loginAndEnroll(parsed, runtime, profile) };
   }
   if (parsed.command === "logout") {
-    const profile = await resolveServerProfile(store, parsed.profile);
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
     const credentials = runtime.credentials ?? createNativeCredentialStore();
     await createSessionStore(credentials).remove(profile.pin);
     return { value: { profile: profile.name, loggedOut: true } };
   }
   if (parsed.command === "context") {
-    const profile = await resolveServerProfile(store, parsed.profile);
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readWorktreeContext(contextPath);
@@ -1176,7 +1184,11 @@ const execute = async (
     };
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {
-    const profile = await resolveServerProfile(store, parsed.profile);
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
     // parseArguments already rejects project link without --team; this only
     // narrows the parsed type, keeping the parser the single source of truth.
     const team =
@@ -1227,7 +1239,11 @@ const execute = async (
     };
   }
   if (parsed.command === "env" && parsed.subcommand === "use") {
-    const profile = await resolveServerProfile(store, parsed.profile);
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readWorktreeContext(contextPath);
@@ -1282,7 +1298,11 @@ const execute = async (
       throw new CliInvocationError(
         "--no-input requires explicit --profile for Device trust commands",
       );
-    const profile = await resolveServerProfile(store, parsed.profile);
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
     const credentials = runtime.credentials ?? createNativeCredentialStore();
     const stateDirectory =
       runtime.stateDirectory ??
@@ -1349,7 +1369,11 @@ const execute = async (
   if (protectedCommands.has(parsed.command)) {
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError("--no-input requires explicit --profile");
-    const profile = await resolveServerProfile(store, parsed.profile);
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const localContext = await readWorktreeContext(contextPath);

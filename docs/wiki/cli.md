@@ -24,6 +24,18 @@ repair: reinstall this release or the latest from npm (`npm install -g dotrelay@
 release. A `DOTRELAY_BINARY` override that points at a missing or unlaunchable binary is named
 in the same report.
 
+## Release channels
+
+The npm selector is published in two flavors. The `dev` flavor is rebuilt from the most recent
+commit on `main` on every push: its binary targets the dev API, and when no Server Profile is
+selected it trusts and selects `https://dev-api.dotrelay.dev` on first use — a fresh machine runs
+`npm install -g dotrelay@dev` and then `dotrelay login` without a `setup` step. Its version
+records the commit it was built from (`dotrelay@0.0.0-dev.<commit-sha>`), and
+`dotrelay --version` reporting a `0.0.0-dev` identifier names a dev build. Release tags publish
+the `latest` flavor instead: that binary targets no origin, so a new machine still begins with
+`dotrelay setup <origin>` (for the hosted service, `https://api.dotrelay.dev`). A dev build that
+also needs the hosted service adds it with `dotrelay profile add` and `dotrelay profile use`.
+
 ## First machine and sign-in
 
 The first invocation has no ambient Server Profile. `dotrelay setup <origin>` fetches and verifies
