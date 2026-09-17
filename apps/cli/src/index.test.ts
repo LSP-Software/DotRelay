@@ -4366,28 +4366,43 @@ describe("actionable error categories at the process boundary", () => {
     }
   });
 
-  test("a repository the delegated access cannot see is an authentication failure", async () => {
+  test("repository access denial gives init recovery steps in both output modes", async () => {
     const { state, cleanup } = await seededState();
     try {
-      const result = await run(
-        ["history", "--profile", "relay", "--no-input", "--json"],
-        {
+      for (const command of ["init", "history"]) {
+        const runtime = {
           ...runtimeForProtocolState(state),
           networkPolicy: instantNetworkPolicy,
-          fetch: resolveFetch((url) => {
-            void url;
-            return jsonResponse(createProblem("repository_access_denied"), 403);
-          }),
-        },
-      );
-      expect(result.exitCode).toBe(6);
-      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
-      expect(diagnostic).toMatchObject({
-        ok: false,
-        category: "authentication",
-        code: "repository_access_denied",
-        exitCode: 6,
-      });
+          fetch: resolveFetch(() =>
+            jsonResponse(createProblem("repository_access_denied"), 403),
+          ),
+        };
+        const result = await run(
+          [command, "--profile", "relay", "--no-input", "--json"],
+          runtime,
+        );
+        expect(result.exitCode).toBe(6);
+        const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+        expect(diagnostic).toMatchObject({
+          ok: false,
+          category: "authentication",
+          code: "repository_access_denied",
+          exitCode: 6,
+        });
+        expect(diagnostic.detail).toContain(
+          "https://github.com/settings/applications",
+        );
+        expect(diagnostic.detail).toContain("organization owner");
+        expect(diagnostic.detail).toContain("retry your command.");
+        const human = await run(
+          [command, "--profile", "relay", "--no-input"],
+          runtime,
+        );
+        expect(human.exitCode).toBe(6);
+        expect(human.stderr).toContain(diagnostic.detail as string);
+        expect(human.stdout).toBe("");
+        expect(result.stdout).toBe("");
+      }
     } finally {
       await cleanup();
     }
