@@ -1,4 +1,8 @@
 import {
+  confirmBox,
+  confirmHint,
+  confirmResult,
+  confirmRows,
   numberedHint,
   numberedRow,
   selectionHint,
@@ -187,6 +191,76 @@ export const selectOption = async (
   return chosen.id;
 };
 
+export const parseConfirmAnswer = (answer: string): boolean => {
+  const trimmed = answer.trim().toLowerCase();
+  return trimmed === "y" || trimmed === "yes";
+};
+
+const renderConfirm = (
+  question: string,
+  silent: boolean,
+  cursor: number,
+): string =>
+  silent
+    ? `${confirmRows(cursor)}\n${confirmHint()}`
+    : confirmBox(question, cursor);
+
+const runRawConfirm = async (
+  question: string,
+  terminal: TerminalIo,
+  options: Readonly<{
+    readonly silent?: boolean;
+    readonly default?: "yes" | "no";
+  }> = {},
+): Promise<boolean> => {
+  const input = terminal.input as ReadableRaw;
+  const output = terminal.output;
+  const silent = options.silent ?? false;
+  let cursor = options.default === "yes" ? 0 : 1;
+  input.setEncoding?.("utf8");
+  input.setRawMode?.(true);
+  input.resume?.();
+  output.write("\x1b[?25l");
+  let rendered = rewriteRegion(
+    output,
+    0,
+    renderConfirm(question, silent, cursor),
+  );
+  try {
+    for (;;) {
+      const key = await readRawKey(input);
+      if (key === "\u0003")
+        throw new CliInvocationError("confirmation cancelled");
+      const single = key.length === 1 ? key.toLowerCase() : key;
+      let decided: boolean | null = null;
+      if (single === "y") decided = true;
+      else if (single === "n") decided = false;
+      else if (key === "\u001b") decided = false;
+      else if (key === "\r" || key === "\n") decided = cursor === 0;
+      else if (
+        key === "\u001b[A" ||
+        key === "\u001b[B" ||
+        key === "j" ||
+        key === "k"
+      )
+        cursor = 1 - cursor;
+      if (decided !== null) {
+        rewriteRegion(output, rendered, confirmResult(question, decided));
+        return decided;
+      }
+      rendered = rewriteRegion(
+        output,
+        rendered,
+        renderConfirm(question, silent, cursor),
+      );
+    }
+  } finally {
+    output.write("\x1b[?25h");
+    input.setRawMode?.(false);
+    input.pause?.();
+  }
+};
+
 export const confirmAction = async (
   question: string,
   options: Readonly<{
@@ -194,6 +268,10 @@ export const confirmAction = async (
     readonly prompt?: (question: string) => Promise<string>;
     readonly confirm?: (question: string) => Promise<boolean>;
     readonly noInput?: boolean;
+    /** The question is already printed, for example inside a review frame. */
+    readonly silent?: boolean;
+    /** The choice a bare Enter approves; defaults to "no". */
+    readonly default?: "yes" | "no";
   }> = {},
 ): Promise<boolean> => {
   if (options.confirm) return options.confirm(question);
@@ -201,13 +279,22 @@ export const confirmAction = async (
     throw new CliInvocationError(
       "this command requires interactive input; remove --no-input to answer the prompt",
     );
-  const terminal = options.terminal;
-  const answer = options.prompt
-    ? await options.prompt(`${question} [y/N]`)
-    : await readTerminalLine(`${question} [y/N]`, terminal);
-  return (
-    answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes"
+  const terminal = options.terminal ?? {
+    input: process.stdin,
+    output: process.stderr,
+  };
+  if (options.prompt)
+    return parseConfirmAnswer(
+      await options.prompt(options.silent ? question : `${question} [y/N]`),
+    );
+  if (supportsRawMode(terminal.input))
+    return runRawConfirm(question, terminal, options);
+  const answer = await readTerminalLine(
+    options.silent ? question : `${question} [y/N]`,
+    terminal,
+    !options.silent,
   );
+  return parseConfirmAnswer(answer);
 };
 
 export type { TerminalIo } from "./terminal";

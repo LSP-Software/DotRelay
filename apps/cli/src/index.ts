@@ -101,7 +101,12 @@ import {
   withDefaultProtocol,
 } from "./profile";
 import type { TerminalIo } from "./terminal";
-import { rewriteRegion, selectOption } from "./ui";
+import {
+  confirmAction,
+  rewriteRegion,
+  selectOption,
+  supportsRawMode,
+} from "./ui";
 import { defaultOrigin, version } from "./version";
 import {
   approveDeviceEnrollment,
@@ -597,6 +602,15 @@ const confirmProfileTrust = async (
   output.write(`${frame}\n`);
   if (runtime.confirm)
     return await runtime.confirm(`Trust ${candidate.origin}? [Y/n]`);
+  if (
+    !runtime.prompt &&
+    supportsRawMode(runtime.terminal?.input ?? process.stdin)
+  )
+    return await confirmAction(`Trust ${candidate.origin}?`, {
+      ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+      silent: true,
+      default: "yes",
+    });
   const { readTerminalLine } = await import("./terminal");
   const answer = runtime.prompt
     ? await runtime.prompt(`Trust ${candidate.origin}? [Y/n]`)

@@ -6,7 +6,7 @@ import {
 } from "./classify-ui";
 import { CliInvocationError } from "./errors";
 import type { TerminalIo } from "./terminal";
-import { rewriteRegion, selectOption } from "./ui";
+import { confirmAction, rewriteRegion, selectOption } from "./ui";
 
 describe("CLI region rewrite", () => {
   test("never uses a full-screen clear", () => {
@@ -126,5 +126,149 @@ describe("selectOption raw TTY", () => {
     input.write("\r");
     input.end();
     expect(await pending).toBe("a");
+  });
+});
+
+describe("confirmAction line input", () => {
+  test("only y or yes approves", async () => {
+    const answer = async (line: string) =>
+      await confirmAction("Publish?", {
+        terminal: selectTerminal(),
+        prompt: async () => line,
+      });
+    expect(await answer("")).toBe(false);
+    expect(await answer("n")).toBe(false);
+    expect(await answer("no")).toBe(false);
+    expect(await answer("y")).toBe(true);
+    expect(await answer("YES")).toBe(true);
+  });
+
+  test("a non-silent prompt is shown with the typed-answer hint", async () => {
+    const seen: string[] = [];
+    const result = await confirmAction("Publish?", {
+      terminal: selectTerminal(),
+      prompt: async (question) => {
+        seen.push(question);
+        return "n";
+      },
+    });
+    expect(result).toBe(false);
+    expect(seen).toEqual(["Publish? [y/N]"]);
+  });
+
+  test("a silent prompt receives the already-printed question", async () => {
+    const seen: string[] = [];
+    const result = await confirmAction("Publish? [y/N]", {
+      terminal: selectTerminal(),
+      prompt: async (question) => {
+        seen.push(question);
+        return "y";
+      },
+      silent: true,
+    });
+    expect(result).toBe(true);
+    expect(seen).toEqual(["Publish? [y/N]"]);
+  });
+});
+
+const rawConfirmTerminal = () => {
+  const input = new PassThrough() as PassThrough & {
+    isTTY?: boolean;
+    setRawMode?: (enabled: boolean) => void;
+  };
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  let written = "";
+  output.on("data", (chunk: string | Buffer) => {
+    written += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  });
+  return {
+    terminal: { input, output } as unknown as TerminalIo,
+    input,
+    outputText: async (): Promise<string> => {
+      await tick();
+      return written;
+    },
+  };
+};
+
+describe("confirmAction raw TTY", () => {
+  test("a bare Enter confirms the default No choice", async () => {
+    const { terminal, input } = rawConfirmTerminal();
+    const pending = confirmAction("Publish?", { terminal });
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe(false);
+  });
+
+  test("a bare Enter confirms the default Yes choice when it is the default", async () => {
+    const { terminal, input } = rawConfirmTerminal();
+    const pending = confirmAction("Trust this Server Profile?", {
+      terminal,
+      default: "yes",
+    });
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe(true);
+  });
+
+  test("Enter confirms the highlighted choice after the cursor moves", async () => {
+    const { terminal, input } = rawConfirmTerminal();
+    const pending = confirmAction("Publish?", { terminal });
+    input.write("\u001b[B");
+    await tick();
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe(true);
+  });
+
+  test("y and n answer directly", async () => {
+    const first = rawConfirmTerminal();
+    const pending = confirmAction("Publish?", { terminal: first.terminal });
+    first.input.write("y");
+    first.input.end();
+    expect(await pending).toBe(true);
+    const second = rawConfirmTerminal();
+    const again = confirmAction("Publish?", { terminal: second.terminal });
+    second.input.write("n");
+    second.input.end();
+    expect(await again).toBe(false);
+  });
+
+  test("Esc declines", async () => {
+    const { terminal, input } = rawConfirmTerminal();
+    const pending = confirmAction("Publish?", { terminal });
+    input.write("\u001b");
+    input.end();
+    expect(await pending).toBe(false);
+  });
+
+  test("Ctrl+C cancels the confirmation", async () => {
+    const { terminal, input } = rawConfirmTerminal();
+    const pending = confirmAction("Publish?", { terminal });
+    input.write("\u0003");
+    input.end();
+    await expect(pending).rejects.toThrow(
+      new CliInvocationError("confirmation cancelled"),
+    );
+  });
+
+  test("renders the boxed choices and leaves a decision record", async () => {
+    const { terminal, input, outputText } = rawConfirmTerminal();
+    const pending = confirmAction("Publish?", { terminal });
+    input.write("\u001b[B");
+    await tick();
+    input.write("\r");
+    input.end();
+    await pending;
+    const shown = await outputText();
+    expect(shown).toContain("Publish?");
+    expect(shown).toContain("Yes");
+    expect(shown).toContain("No");
+    expect(shown).toContain("↑↓ navigate · Enter confirm · Esc decline");
+    expect(shown).toContain("Confirmed");
+    expect(shown).not.toContain("\x1b[2J");
+    expect(shown).not.toContain("\x1b[H");
   });
 });
