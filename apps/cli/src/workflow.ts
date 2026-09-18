@@ -29,6 +29,8 @@ import {
   type ProtocolTransport,
   type PublicationContext,
   parseDeviceEnrollmentTranscript,
+  type RevisionSigningTrust,
+  type RevisionSigningTrustEntry,
   reviewPublication,
   type SyncPageWire,
   verifySignedProtocolObject,
@@ -159,12 +161,23 @@ type Boundary = Readonly<{
   readonly cryptoAvailable: boolean;
   readonly epochGrant?: string;
   readonly signingTrustKeys: readonly string[];
+  readonly signingTrustDevices: readonly SigningTrustDevice[];
   readonly peerDevices: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
     readonly signingPublicKey: string;
     readonly hasEpochGrant: boolean;
   }>[];
+}>;
+
+type SigningTrustDevice = Readonly<{
+  readonly deviceId: string;
+  readonly userId: string;
+  readonly signingPublicKey: string;
+  readonly deviceActiveFromMs: number | null;
+  readonly deviceActiveUntilMs: number | null;
+  readonly memberSinceMs: number | null;
+  readonly memberUntilMs: number | null;
 }>;
 
 type WorkflowSession = Readonly<{
@@ -206,6 +219,7 @@ export const workspaceBoundaryFields = [
   "projectEpoch",
   "catalog",
   "signingTrustKeys",
+  "signingTrustDevices",
   "epochGrant",
   "peerDevices",
 ] as const;
@@ -269,6 +283,35 @@ const parseBoundary = (value: Record<string, unknown>): Boundary => {
           (key): key is string => typeof key === "string",
         )
       : [],
+    signingTrustDevices: Array.isArray(value.signingTrustDevices)
+      ? value.signingTrustDevices.flatMap((entry): SigningTrustDevice[] => {
+          if (!isRecord(entry)) return [];
+          const isMillis = (candidate: unknown): candidate is number | null =>
+            candidate === null ||
+            (typeof candidate === "number" && Number.isSafeInteger(candidate));
+          if (
+            typeof entry.deviceId !== "string" ||
+            typeof entry.userId !== "string" ||
+            typeof entry.signingPublicKey !== "string" ||
+            !isMillis(entry.deviceActiveFromMs) ||
+            !isMillis(entry.deviceActiveUntilMs) ||
+            !isMillis(entry.memberSinceMs) ||
+            !isMillis(entry.memberUntilMs)
+          )
+            return [];
+          return [
+            {
+              deviceId: entry.deviceId,
+              userId: entry.userId,
+              signingPublicKey: entry.signingPublicKey,
+              deviceActiveFromMs: entry.deviceActiveFromMs,
+              deviceActiveUntilMs: entry.deviceActiveUntilMs,
+              memberSinceMs: entry.memberSinceMs,
+              memberUntilMs: entry.memberUntilMs,
+            },
+          ];
+        })
+      : [],
     peerDevices: Array.isArray(value.peerDevices)
       ? value.peerDevices.flatMap((entry) => {
           if (!isRecord(entry)) return [];
@@ -312,10 +355,44 @@ const hexToBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
-const collectSigningTrustKeys = (
+// The boundary names the Team's authorized signing Devices with their Device
+// and Membership windows; that scoped set replaces the flat key list so a
+// Device revoked after it signed a legitimate Revision stays verifiable,
+// while a write made after the revocation is not. A boundary without the set
+// (an older service) falls back to the flat keys it does report.
+const collectSigningTrust = (
   boundary: Boundary,
   localSigningPublicKey: Uint8Array,
-): Uint8Array[] => {
+): RevisionSigningTrust => {
+  if (boundary.signingTrustDevices.length > 0) {
+    const entries: RevisionSigningTrustEntry[] = [];
+    const seen = new Set<string>();
+    for (const device of boundary.signingTrustDevices) {
+      let publicKey: Uint8Array;
+      try {
+        publicKey = hexToBytes(device.signingPublicKey);
+      } catch {
+        continue;
+      }
+      const hex = bytesToHex(publicKey);
+      if (seen.has(hex)) continue;
+      seen.add(hex);
+      entries.push({
+        publicKey,
+        deviceId: device.deviceId,
+        userId: device.userId,
+        deviceActiveFromMs: device.deviceActiveFromMs,
+        deviceActiveUntilMs: device.deviceActiveUntilMs,
+        memberSinceMs: device.memberSinceMs,
+        memberUntilMs: device.memberUntilMs,
+      });
+    }
+    // This installation's own key is the one fallback that needs no window:
+    // the service only ever accepted its writes while it was authorized.
+    const localHex = bytesToHex(localSigningPublicKey);
+    if (!seen.has(localHex)) entries.push({ publicKey: localSigningPublicKey });
+    return entries;
+  }
   const keys = [localSigningPublicKey];
   const seen = new Set([bytesToHex(localSigningPublicKey)]);
   const addHex = (value: string): void => {
@@ -2674,7 +2751,7 @@ const loadWorkflowSession = async (
     ...(options.fetch ? { fetch: options.fetch as never } : {}),
   });
   const signingPublicKey = await exportSigningPublicKey(deviceSigningPublicKey);
-  const signingTrustKeys = collectSigningTrustKeys(boundary, signingPublicKey);
+  const signingTrustKeys = collectSigningTrust(boundary, signingPublicKey);
   const publicationContext: PublicationContext = {
     serverProfileId: options.profile.pin.serverProfileId,
     teamId: boundary.environment.teamId,

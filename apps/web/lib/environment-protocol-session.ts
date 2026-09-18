@@ -2,6 +2,7 @@ import {
   createVerifiedEnvironmentSession,
   type ProtocolTransport,
   type PublicationContext,
+  type RevisionSigningTrust,
   type SyncPageWire,
 } from "@dotrelay/client";
 import type { EnvironmentVariable } from "./environment-workflow";
@@ -9,7 +10,7 @@ import type { EnvironmentVariable } from "./environment-workflow";
 export type EnvironmentProtocolSession = Readonly<{
   readonly context: PublicationContext;
   readonly transport: ProtocolTransport;
-  readonly signingTrustKeys: readonly Uint8Array[];
+  readonly signingTrustKeys: RevisionSigningTrust;
   readonly decodeVariables: (
     page: SyncPageWire,
     previousVariables: readonly EnvironmentVariable[],
@@ -25,7 +26,7 @@ export const createEnvironmentProtocolSession = (input: {
   readonly transport: ProtocolTransport;
   readonly sharedValuePrivateKey: CryptoKey;
   readonly userDefinedValuePrivateKey?: CryptoKey;
-  readonly signingTrustKeys?: readonly Uint8Array[];
+  readonly signingTrustKeys?: RevisionSigningTrust;
   readonly sharedValueSecret?: Uint8Array;
 }): EnvironmentProtocolSession => {
   const signingTrustKeys =

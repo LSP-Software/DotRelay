@@ -32,6 +32,19 @@ export type WorkspaceCatalog = Readonly<{
   readonly projects: readonly WorkspaceProject[];
 }>;
 
+// Each field is an independent constraint the client applies when verifying
+// a Revision: a named identity or window must match the Revision's recorded
+// author and authored-at instant. Omitted fields constrain nothing.
+export type WorkspaceSigningTrustDevice = Readonly<{
+  readonly deviceId?: string;
+  readonly userId?: string;
+  readonly signingPublicKey: string;
+  readonly deviceActiveFromMs: number | null;
+  readonly deviceActiveUntilMs: number | null;
+  readonly memberSinceMs: number | null;
+  readonly memberUntilMs: number | null;
+}>;
+
 export type WorkspaceBoundary = Readonly<{
   readonly source: "fixture" | "live";
   readonly connection: "online" | "offline";
@@ -68,6 +81,7 @@ export type WorkspaceBoundary = Readonly<{
   readonly epochCurrent: boolean;
   readonly rotationRequired: boolean;
   readonly signingTrustKeys?: readonly string[];
+  readonly signingTrustDevices?: readonly WorkspaceSigningTrustDevice[];
   readonly epochGrant?: string;
   readonly peerDevices?: readonly Readonly<{
     readonly id: string;
@@ -204,6 +218,40 @@ export const parsePeerDevices = (
         encryptionPublicKey,
         signingPublicKey: asString(entry.signingPublicKey) ?? "",
         hasEpochGrant: entry.hasEpochGrant === true,
+      },
+    ];
+  });
+};
+
+export const parseSigningTrustDevices = (
+  value: unknown,
+): readonly WorkspaceSigningTrustDevice[] => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const signingPublicKey = asString(entry.signingPublicKey);
+    if (!signingPublicKey) return [];
+    const isMillis = (candidate: unknown): candidate is number | null =>
+      candidate === null ||
+      (typeof candidate === "number" && Number.isSafeInteger(candidate));
+    if (
+      !isMillis(entry.deviceActiveFromMs) ||
+      !isMillis(entry.deviceActiveUntilMs) ||
+      !isMillis(entry.memberSinceMs) ||
+      !isMillis(entry.memberUntilMs)
+    )
+      return [];
+    const deviceId = asString(entry.deviceId);
+    const userId = asString(entry.userId);
+    return [
+      {
+        ...(deviceId ? { deviceId } : {}),
+        ...(userId ? { userId } : {}),
+        signingPublicKey,
+        deviceActiveFromMs: entry.deviceActiveFromMs,
+        deviceActiveUntilMs: entry.deviceActiveUntilMs,
+        memberSinceMs: entry.memberSinceMs,
+        memberUntilMs: entry.memberUntilMs,
       },
     ];
   });
@@ -405,6 +453,18 @@ export const e2eWorkspaceBoundary = (
     epochCurrent: true,
     rotationRequired: false,
     signingTrustKeys: [E2E_REVISION_SIGNING_TRUST_KEY],
+    signingTrustDevices: [
+      {
+        // The fixture's synthetic history is signed by one key under several
+        // authors, so the entry names no identity: the open window verifies
+        // the specs' pages like a live Team's history would.
+        signingPublicKey: E2E_REVISION_SIGNING_TRUST_KEY,
+        deviceActiveFromMs: 0,
+        deviceActiveUntilMs: null,
+        memberSinceMs: 0,
+        memberUntilMs: null,
+      },
+    ],
     crypto: { available: true },
   };
 };

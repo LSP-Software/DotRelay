@@ -9,6 +9,7 @@ import {
 import {
   createPublicationArtifacts,
   type PublicationVariable,
+  type RevisionSigningTrustEntry,
 } from "./publication";
 import { createVerifiedEnvironmentSession } from "./session";
 import type { ProtocolTransport } from "./transport";
@@ -188,6 +189,134 @@ describe("verified Environment session", () => {
         value: "postgres://example",
       }),
     ]);
+  });
+
+  // Builds a Genesis page signed by `author` and returns a session that
+  // trusts `entries`, so a test can assert how the scoped trust set admits or
+  // rejects that page.
+  const scopedSession = async (
+    author: Awaited<ReturnType<typeof generateSigningKeyPair>>,
+    entries: readonly RevisionSigningTrustEntry[],
+  ) => {
+    const encryption = await generateEncryptionKeyPair();
+    const local = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts([variable()], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: author.privateKey,
+      mutation: "GENESIS",
+    });
+    const page = await syncPageFor(artifacts);
+    const localKey = await exportSigningPublicKey(local.publicKey);
+    const context = {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: page.currentHeadId,
+      expectedHeadHash: page.currentHeadHash,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: local.privateKey,
+      revisionSigningPublicKey: localKey,
+    };
+    return createVerifiedEnvironmentSession({
+      context,
+      transport: transportFor(page),
+      sharedValuePrivateKey: encryption.privateKey,
+      signingTrustKeys: entries,
+    });
+  };
+
+  const syncRequest = {
+    environmentId: ids.environmentId,
+    deviceId: ids.deviceId,
+    request: {
+      trustedRevisionId: ids.environmentId,
+      trustedRevisionHash: new Uint8Array(48),
+    },
+  };
+
+  test("verifies a peer-signed Revision through its authorized Device and Membership windows", async () => {
+    const author = await generateSigningKeyPair();
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    const session = await scopedSession(author, [
+      {
+        publicKey: authorKey,
+        deviceId: ids.device,
+        userId: ids.user,
+        deviceActiveFromMs: 0,
+        deviceActiveUntilMs: null,
+        memberSinceMs: 0,
+        memberUntilMs: null,
+      },
+    ]);
+    const synced = await session.syncAndDecode(syncRequest);
+    expect(synced.variables).toEqual([
+      expect.objectContaining({
+        name: "DATABASE_URL",
+        value: "postgres://example",
+      }),
+    ]);
+  });
+
+  test("rejects a Revision authored after its signing Device was revoked", async () => {
+    const author = await generateSigningKeyPair();
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    const revokedAtMs = Date.now() - 60_000;
+    const session = await scopedSession(author, [
+      {
+        publicKey: authorKey,
+        deviceId: ids.device,
+        userId: ids.user,
+        deviceActiveFromMs: 0,
+        deviceActiveUntilMs: revokedAtMs,
+        memberSinceMs: 0,
+        memberUntilMs: null,
+      },
+    ]);
+    await expect(session.syncAndDecode(syncRequest)).rejects.toThrow(
+      "sync revision signature is not authorized",
+    );
+  });
+
+  test("rejects a Revision whose recorded signing Device is not the trusted Device", async () => {
+    const author = await generateSigningKeyPair();
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    const session = await scopedSession(author, [
+      {
+        publicKey: authorKey,
+        deviceId: "99999999-9999-4999-8999-999999999999",
+        userId: ids.user,
+        deviceActiveFromMs: 0,
+        deviceActiveUntilMs: null,
+        memberSinceMs: 0,
+        memberUntilMs: null,
+      },
+    ]);
+    await expect(session.syncAndDecode(syncRequest)).rejects.toThrow(
+      "sync revision signature is not authorized",
+    );
+  });
+
+  test("rejects a Revision authored after the author's Membership ended", async () => {
+    const author = await generateSigningKeyPair();
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    const removedAtMs = Date.now() - 60_000;
+    const session = await scopedSession(author, [
+      {
+        publicKey: authorKey,
+        deviceId: ids.device,
+        userId: ids.user,
+        deviceActiveFromMs: 0,
+        deviceActiveUntilMs: null,
+        memberSinceMs: 0,
+        memberUntilMs: removedAtMs,
+      },
+    ]);
+    await expect(session.syncAndDecode(syncRequest)).rejects.toThrow(
+      "sync revision signature is not authorized",
+    );
   });
 
   test("resolveRollbackValues omits a Variable verified absent from the target Revision", async () => {

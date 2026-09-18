@@ -167,9 +167,20 @@ const bytesToHex = (value: Uint8Array): string =>
 const rawSigningPublicKey = async (key: CryptoKey): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.exportKey("raw", key)).slice(0, 32);
 
+type TestSigningTrustDevice = Readonly<{
+  readonly signingPublicKey: string;
+  readonly deviceId?: string;
+  readonly userId?: string;
+  readonly deviceActiveFromMs?: number | null;
+  readonly deviceActiveUntilMs?: number | null;
+  readonly memberSinceMs?: number | null;
+  readonly memberUntilMs?: number | null;
+}>;
+
 const setup = async (
   options: Readonly<{
     readonly signingTrustKeys?: readonly string[];
+    readonly signingTrustDevices?: readonly TestSigningTrustDevice[];
     readonly revisions?: SyncPageWire["revisions"];
     readonly bootstrap?: Awaited<ReturnType<typeof createDeviceBootstrap>>;
     readonly withoutBoundaryEnvironment?: boolean;
@@ -228,6 +239,9 @@ const setup = async (
     },
     ...(options.signingTrustKeys
       ? { signingTrustKeys: options.signingTrustKeys }
+      : {}),
+    ...(options.signingTrustDevices
+      ? { signingTrustDevices: options.signingTrustDevices }
       : {}),
     ...(options.epochGrant ? { epochGrant: options.epochGrant } : {}),
     ...(options.peerDevices ? { peerDevices: options.peerDevices } : {}),
@@ -597,6 +611,213 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('DATABASE_URL="postgres://example"');
     expect(result.stderr).toBe("");
+  });
+
+  test("pulls Values signed by a peer Device through its trust entry windows", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const peer = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://example",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: peer.privateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    const parsedRevision = parseProtocolObject(revisionObject.bytes);
+    const digest = await sha384(revisionObject.bytes);
+    const runtime = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(peer.publicKey),
+          ),
+          deviceId: ids.device,
+          userId: ids.user,
+          deviceActiveFromMs: 0,
+          deviceActiveUntilMs: null,
+          memberSinceMs: 0,
+          memberUntilMs: null,
+        },
+      ],
+      revisions: [
+        {
+          id: artifacts.request.revision.id,
+          digest,
+          parentId: ids.environment,
+          parentHash: new Uint8Array(48),
+          mutation: parsedRevision.get(35) as number,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            artifacts.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+      ],
+    });
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+        "--no-input",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('DATABASE_URL="postgres://example"');
+    expect(result.stderr).toBe("");
+  });
+
+  test("rejects a Revision authored after its signing Device's window closed", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const peer = await generateSigningKeyPair();
+    const closedAtMs = Date.now() - 60_000;
+    const artifacts = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://example",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey: peer.privateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    const parsedRevision = parseProtocolObject(revisionObject.bytes);
+    const digest = await sha384(revisionObject.bytes);
+    const runtime = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(peer.publicKey),
+          ),
+          deviceId: ids.device,
+          userId: ids.user,
+          deviceActiveFromMs: 0,
+          deviceActiveUntilMs: closedAtMs,
+          memberSinceMs: 0,
+          memberUntilMs: null,
+        },
+      ],
+      revisions: [
+        {
+          id: artifacts.request.revision.id,
+          digest,
+          parentId: ids.environment,
+          parentHash: new Uint8Array(48),
+          mutation: parsedRevision.get(35) as number,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await Promise.all(
+            artifacts.stagedObjects.map(async (object) =>
+              Object.freeze({
+                objectId: object.objectId,
+                canonicalBytes: object.bytes,
+                digest: await sha384(object.bytes),
+              }),
+            ),
+          ),
+        },
+      ],
+    });
+    const outputPath = `${runtime.stateDirectory}/pull-output`;
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        outputPath,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(8);
+    let written = "";
+    try {
+      written = await Bun.file(outputPath).text();
+    } catch {
+      // A rejected pull must not materialize the Values file.
+    }
+    expect(written).not.toContain("postgres://example");
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      category: "local-io",
+      code: "unexpected_failure",
+    });
   });
 
   test("stages and finalizes an encrypted genesis publication", async () => {

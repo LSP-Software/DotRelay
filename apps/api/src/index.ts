@@ -239,6 +239,51 @@ const loadWorkspaceCatalog = async (
   };
 };
 
+// The Devices that may sign the Team's Revision history: every Device of a
+// Member, with the Device and Membership windows that were valid when a
+// Revision was authored. Windows let a legitimate historical Revision stay
+// verifiable after its signing Device is revoked or its Member leaves, while
+// a write made after the revocation or removal stays rejected.
+const loadTeamSigningTrustDevices = async (
+  database: DatabaseClient,
+  teamId: string,
+) => {
+  const memberships = await database.membership.findMany({
+    where: { teamId },
+    select: { userId: true, activatedAt: true, removedAt: true },
+  });
+  const membershipByUser = new Map(
+    memberships.map((membership) => [membership.userId, membership]),
+  );
+  const userIds = [...membershipByUser.keys()];
+  if (userIds.length === 0) return [];
+  const devices = await database.device.findMany({
+    where: { userId: { in: userIds } },
+    select: {
+      id: true,
+      userId: true,
+      ed25519PublicKey: true,
+      activatedAt: true,
+      revokedAt: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const toMillis = (value: Date | null): number | null =>
+    value === null ? null : value.getTime();
+  return devices.map((device) => {
+    const membership = membershipByUser.get(device.userId);
+    return {
+      deviceId: device.id,
+      userId: device.userId,
+      signingPublicKey: bytesToHex(new Uint8Array(device.ed25519PublicKey)),
+      deviceActiveFromMs: toMillis(device.activatedAt),
+      deviceActiveUntilMs: toMillis(device.revokedAt),
+      memberSinceMs: toMillis(membership?.activatedAt ?? null),
+      memberUntilMs: toMillis(membership?.removedAt ?? null),
+    };
+  });
+};
+
 const decodeHex = (
   value: unknown,
   length: number,
@@ -965,6 +1010,12 @@ const createApi = ({
           ).map((grant) => grant.recipientDeviceId),
         )
       : new Set<string>();
+    // With a resolved Project, the trust set spans the whole Team: Members'
+    // Devices, including Devices revoked after they signed. Without one, a
+    // client can sync nothing, so only its own Devices are reported.
+    const signingTrustDevices = project
+      ? await loadTeamSigningTrustDevices(database, project.teamId)
+      : [];
     return context.json(
       {
         session: {
@@ -1000,9 +1051,12 @@ const createApi = ({
               }
             : {}),
         },
-        signingTrustKeys: devices.map((candidate) =>
-          bytesToHex(new Uint8Array(candidate.ed25519PublicKey)),
-        ),
+        signingTrustKeys: project
+          ? signingTrustDevices.map((entry) => entry.signingPublicKey)
+          : devices.map((candidate) =>
+              bytesToHex(new Uint8Array(candidate.ed25519PublicKey)),
+            ),
+        signingTrustDevices,
         ...(epochGrant?.protocolObject.canonicalBytes
           ? {
               epochGrant: bytesToBase64(
