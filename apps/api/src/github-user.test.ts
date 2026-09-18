@@ -223,6 +223,24 @@ test("a rate limit is retried within budget and then resolved", async () => {
   expect(sleeps).toEqual([30_000, 30_000]);
 });
 
+test("a rejected credential is a definitive denial, not an outage", async () => {
+  let calls = 0;
+  const fetchImpl = (async (_input: string | URL | Request) => {
+    calls += 1;
+    return new Response("Bad credentials", { status: 401 });
+  }) as typeof fetch;
+
+  const outcome = await resolveGitHubUserIdentity(
+    delegatedAuth([{ providerId: "github", accessToken: "expired" }]),
+    "auth-user",
+    "octocat",
+    { fetch: fetchImpl, sleep: async () => undefined },
+  );
+
+  expect(outcome).toEqual({ code: "github_access_denied" });
+  expect(calls).toBe(1);
+});
+
 test("an exhausted rate limit reports the reset window from GitHub's headers", async () => {
   const now = () => 40_000;
   const fetchImpl = (async (_input: string | URL | Request) =>

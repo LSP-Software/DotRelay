@@ -1016,6 +1016,31 @@ describe("Resolving a GitHub Repository's identity", () => {
     });
   });
 
+  test("reports a rejected credential as a denial, not an outage", async () => {
+    const profile = loadServerProfileConfig({});
+    const { auth, database } = actorDependencies([
+      { providerId: "github", accessToken: "t" },
+    ]);
+    const testApp = createApi({
+      database,
+      profile,
+      auth,
+      githubFetch: (async (_input: string | URL | Request) =>
+        new Response("Bad credentials", { status: 401 })) as typeof fetch,
+    });
+
+    const response = await resolveRequest(
+      testApp,
+      profile,
+      "?host=github.com&owner=LSP-Software&name=DotRelay",
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      code: "repository_access_denied",
+    });
+  });
+
   test("rejects a descriptive name the GitHub API cannot take", async () => {
     const profile = loadServerProfileConfig({});
     const { auth, database } = actorDependencies([

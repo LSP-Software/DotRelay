@@ -251,9 +251,16 @@ export const resolveGitHubRepositoryIdentity = async (
       if (identity) return { code: "resolved", ...identity };
       return { code: "github_unavailable" };
     }
-    // 403 and 404 are conflated on purpose: the endpoint is not an
-    // existence oracle, so absence and denial answer identically.
-    if (response.status === 403 || response.status === 404)
+    // 401 answers the credential, not GitHub: an expired or revoked Delegated
+    // GitHub Access must be reported as a denial the User can repair by
+    // re-authorizing, never as an outage no retry will cure. 403 and 404 are
+    // conflated on purpose: the endpoint is not an existence oracle, so
+    // absence and denial answer identically.
+    if (
+      response.status === 401 ||
+      response.status === 403 ||
+      response.status === 404
+    )
       return { code: "repository_access_denied" };
     const transient = response.status === 429 || response.status >= 500;
     if (transient && attempt < RESOLVE_MAX_ATTEMPTS && now() < deadlineAt) {
