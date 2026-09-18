@@ -103,6 +103,7 @@ import {
   resolveApiOrigin,
   resolveWorkspaceProfileId,
   type WorkspaceBoundary,
+  type WorkspaceCatalog,
   type WorkspaceEnvironmentSummary,
   type WorkspaceProfileId,
   type WorkspaceProject,
@@ -579,6 +580,13 @@ export const WorkspaceShell = ({
       }),
     [createdEnvironments, displayBoundary.catalog.projects],
   );
+  const reconciledCatalog = useMemo(
+    (): WorkspaceCatalog => ({
+      teams: displayBoundary.catalog.teams,
+      projects: catalogProjects,
+    }),
+    [catalogProjects, displayBoundary.catalog.teams],
+  );
   const teamProjects = catalogProjects.filter(
     (project) => project.teamId === selectedTeam?.id,
   );
@@ -730,6 +738,7 @@ export const WorkspaceShell = ({
       setRetainedEditors(new Map());
       setSessionsByKey(new Map());
       draftStateRef.current.clear();
+      setVariablesByEnvironment({});
       pendingEnrollmentRef.current.clear();
       durableBrowserDeviceRef.current.clear();
       setContextStale(true);
@@ -742,6 +751,19 @@ export const WorkspaceShell = ({
           return next;
         });
         if (discard) draftStateRef.current.delete(currentKey);
+        if (discard && currentIdentity.environmentId) {
+          // A remounted editor reseeds from the last reported Variables;
+          // dropping a discarded draft must drop that seed too.
+          const discardedEnvironmentId = currentIdentity.environmentId;
+          setVariablesByEnvironment((prev) => {
+            const seeded = prev[discardedEnvironmentId] ?? [];
+            if (!seeded.some((variable) => variable.hasDraftChange))
+              return prev;
+            const next = { ...prev };
+            delete next[discardedEnvironmentId];
+            return next;
+          });
+        }
       }
       if (discard) removeSessionByKey(currentKey);
       removeSessionByKey(
@@ -999,7 +1021,7 @@ export const WorkspaceShell = ({
     if (teams.length === 0 && connection !== "online") return;
     const target = resolveWorkspaceLocation(
       { profileId, teamId, projectId, environmentId, view },
-      displayBoundary.catalog,
+      reconciledCatalog,
       viewFallback,
     );
     if (
@@ -1022,7 +1044,7 @@ export const WorkspaceShell = ({
       // A Project is already open, so the user's Team/Project/Environment
       // choice stands; never re-point it at the first Project.
       if (target.projectId) return;
-      const firstProject = displayBoundary.catalog.projects.find(
+      const firstProject = reconciledCatalog.projects.find(
         (project) => project.teamId === target.teamId,
       );
       if (!firstProject) return;
@@ -1039,7 +1061,7 @@ export const WorkspaceShell = ({
     }
     applySelectionRef.current(target, { push: false });
   }, [
-    displayBoundary.catalog,
+    reconciledCatalog,
     teams,
     connection,
     preview,
@@ -1272,6 +1294,24 @@ export const WorkspaceShell = ({
     const settleContext = () => {
       if (!cancelled) setContextStale(false);
     };
+    // Locally created Environments have no remote state in a fixture
+    // boundary; their seeded Variables are the Environment's state, so the
+    // context settles without a session. Live boundaries do learn about the
+    // created Environment on the next refresh and take the normal path.
+    const locallyCreated =
+      displayBoundary.source !== "live" &&
+      environmentId !== null &&
+      projectId !== null &&
+      (createdEnvironments[projectId] ?? []).some(
+        (environment) => environment.id === environmentId,
+      );
+    if (locallyCreated) {
+      removeSessionByKey(targetKey);
+      settleContext();
+      return () => {
+        cancelled = true;
+      };
+    }
     const loadSession = async () => {
       const environment = boundary.environment;
       const device = boundary.device;
@@ -1386,11 +1426,13 @@ export const WorkspaceShell = ({
     };
   }, [
     boundary,
+    displayBoundary,
     profileId,
     teamId,
     projectId,
     environmentId,
     removeSessionByKey,
+    createdEnvironments,
   ]);
 
   const provisionBrowserDevice = async () => {

@@ -354,14 +354,15 @@ test("owners can create an Environment from an existing one", async ({
   await page.getByRole("button", { name: "Create Environment" }).click();
 
   await expect(page.getByRole("tab", { name: "development" })).toBeVisible();
+  const activeEditor = page.getByTestId("editor-context-active");
   await expect(
-    page.getByTestId("environment-variable-API_ORIGIN"),
+    activeEditor.getByTestId("environment-variable-API_ORIGIN"),
   ).toBeVisible();
   await expect(
-    page.getByTestId("environment-variable-SIGNING_KEY"),
+    activeEditor.getByTestId("environment-variable-SIGNING_KEY"),
   ).toBeVisible();
   await expect(
-    page.getByTestId("environment-variable-FEATURE_GATE"),
+    activeEditor.getByTestId("environment-variable-FEATURE_GATE"),
   ).toHaveCount(0);
 });
 
