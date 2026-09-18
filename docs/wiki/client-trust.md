@@ -40,8 +40,10 @@ active Device and the signed protocol checks implemented in this package.
 ### CLI
 
 - The encrypted Device bundle record and the wrapping secret are stored separately.
-- Wrapping secrets belong in the **operating-system credential store** through the
-  `CredentialStore` adapter; unit tests use an in-memory adapter only.
+- Wrapping secrets belong in the **local credential store** through the
+  `CredentialStore` adapter; the CLI implements that adapter as AES-256-GCM
+  files (0600) under the CLI state directory, and unit tests use an in-memory
+  adapter only.
 - CLI adapters must not write private material or bearer tokens to tracked files.
 
 JavaScript cannot guarantee zeroization. Temporary byte arrays are cleared on a best-effort basis,

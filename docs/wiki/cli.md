@@ -57,8 +57,9 @@ code. `--no-open` suppresses opening the browser, and `--no-input` never attempt
 example over SSH); in both cases the same URL, code, and expiry are shown so the User can open the
 URL manually. When the browser launcher is unavailable, fails to start, or exits nonzero, the CLI
 shows that manual path instead of aborting and keeps polling for the authorization to complete.
-Session material and encrypted Device bundles belong in the operating-system credential store,
-scoped by Server Profile.
+Session material and Device wrapping keys belong in the local credential store — encrypted files
+in the CLI state directory (`DOTRELAY_CONFIG_DIR`) — scoped by Server Profile. The encrypted
+Device bundle itself is a protected local record.
 
 `logout` removes the local session. `--insecure`, certificate bypasses, and token/device-key flags
 are rejected.
@@ -241,7 +242,7 @@ are not supported.
 line or the next command to run. It never dumps key:value local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle
-in the native credential store, with a protected local record for its profile and Device id.
+in the local credential store, with a protected local record for its profile and Device id.
 The browser is a separate Device. Session bootstrap may enroll it after the CLI is already active.
 `device enroll` still begins the dual-control flow when adding a Device whose keys are generated on
 an already enrolled installation. The explicit form is `device begin --output <request>`. Move that

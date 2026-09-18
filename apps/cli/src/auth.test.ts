@@ -40,7 +40,7 @@ const accessTokenResponse = (): Response =>
   Response.json({ access_token: "bearer-secret", token_type: "Bearer" });
 
 describe("CLI device authorization", () => {
-  test("uses printable profile-scoped native credential accounts", async () => {
+  test("uses printable profile-scoped credential accounts", async () => {
     let account = "";
     const credentials = {
       get: async () => null,
@@ -52,25 +52,6 @@ describe("CLI device authorization", () => {
     await createSessionStore(credentials).save(profile, "session-token");
     expect(account).not.toContain("\0");
     expect(account).toContain("v1:");
-  });
-
-  test("migrates a legacy session account", async () => {
-    const secrets = new Map<string, Uint8Array>();
-    const legacy = `${profile.origin}\0${profile.serverProfileId}`;
-    secrets.set(legacy, new TextEncoder().encode("legacy-token"));
-    const credentials = {
-      get: async (_service: string, account: string) =>
-        secrets.get(account) ?? null,
-      set: async (_service: string, account: string, secret: Uint8Array) =>
-        void secrets.set(account, secret),
-      delete: async (_service: string, account: string) =>
-        void secrets.delete(account),
-    };
-    const sessions = createSessionStore(credentials);
-    expect(await sessions.get(profile)).toBe("legacy-token");
-    expect(
-      [...secrets.keys()].some((account) => account.startsWith("v1:")),
-    ).toBe(true);
   });
 
   test("uses the server polling interval and stores only the bearer session", async () => {

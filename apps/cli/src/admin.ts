@@ -6,7 +6,7 @@ import {
 } from "@dotrelay/contracts";
 import type { CommandName } from "./args";
 import { createSessionStore } from "./auth";
-import type { NativeCredentialStore } from "./credentials";
+import type { CredentialStore } from "./credentials";
 import {
   CliError,
   CliInvocationError,
@@ -641,7 +641,7 @@ const readResponse = async (response: Response): Promise<unknown> => {
 
 export const createStrictJsonClient = (
   profile: ServerProfilePin,
-  credentials: NativeCredentialStore,
+  credentials: CredentialStore,
   options: Readonly<{
     readonly fetch?: FetchFunction;
     readonly deviceId?: string;

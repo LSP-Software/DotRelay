@@ -25,7 +25,7 @@ import {
   sha384ToHex,
 } from "@dotrelay/contracts";
 import { createSessionStore } from "../apps/cli/src/auth";
-import { createNativeCredentialStore } from "../apps/cli/src/credentials";
+import { createFileCredentialStore } from "../apps/cli/src/credentials";
 import {
   createFileDeviceRecordStore,
   deviceMetadataPath,
@@ -664,9 +664,13 @@ await access(binary, process.platform === "win32" ? undefined : constants.X_OK);
 const server = Bun.serve({ port: 0, fetch: handle });
 const origin = `http://127.0.0.1:${server.port}`;
 const pin: ServerProfilePin = Object.freeze({ origin, serverProfileId });
-const credentials = createNativeCredentialStore();
-const sessions = createSessionStore(credentials);
 const isolatedDirectory = await mkdtemp(join(tmpdir(), "dotrelay-cli-live-"));
+// The packaged binary roots its credential store in DOTRELAY_CONFIG_DIR, so
+// the harness seeds the same directory to share session and device material.
+const credentials = createFileCredentialStore(
+  join(isolatedDirectory, "credentials"),
+);
+const sessions = createSessionStore(credentials);
 const environment = {
   ...process.env,
   DOTRELAY_CONFIG_DIR: isolatedDirectory,

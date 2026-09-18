@@ -66,7 +66,6 @@ const safeDiagnosticCodes = new Set([
   "credential_store_delete_failed",
   "credential_store_invalid",
   "credential_store_unavailable",
-  "credential_store_unsupported",
   "credential_store_write_failed",
   "crypto",
   "crypto_provider_unavailable",

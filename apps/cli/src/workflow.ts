@@ -59,7 +59,7 @@ import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
 import { classifyVariablesInteractively } from "./classify-ui";
 import { heading, kv, note, reviewFrame, stepDone } from "./components";
-import type { NativeCredentialStore } from "./credentials";
+import type { CredentialStore } from "./credentials";
 import {
   createFileDeviceRecordStore,
   deviceMetadataPath,
@@ -115,7 +115,7 @@ import {
 
 export type WorkflowOptions = Readonly<{
   readonly profile: CliServerProfile;
-  readonly credentials: NativeCredentialStore;
+  readonly credentials: CredentialStore;
   readonly fetch?: FetchFunction;
   readonly networkPolicy?: NetworkPolicy;
   readonly deviceStorage?: CliDeviceStorage;

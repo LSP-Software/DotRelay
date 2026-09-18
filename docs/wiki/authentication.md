@@ -43,8 +43,9 @@ app and the API are served from different hosts on the same registered domain (f
 parent domain so the browser presents the session cookie to both origins and the web app's
 server-side session relay can forward it to the API. When both origins share a host, cookies stay
 host-only. CLI sessions
-use a Better Auth bearer token returned by device authorization and should be stored in the operating
-system credential store. A request containing both a bearer token and a cookie is rejected.
+use a Better Auth bearer token returned by device authorization and should be stored in the CLI's
+local credential store (encrypted files in the CLI state directory). A request containing both a
+bearer token and a cookie is rejected.
 
 Authentication establishes only the server-local DotRelay User. It does not grant Membership,
 Device authority, decryption ability, or mutation permission. Encrypted operations still require an
