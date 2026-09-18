@@ -534,6 +534,9 @@ const createApi = ({
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
   app.use("/api/v1/operations/*", protocolCors(profile));
   app.use("/api/v1/environments/*", protocolCors(profile));
+  // The workspace's Project and Environment archive/restore controls call
+  // these cross-origin with the session cookie and the browser Device id.
+  app.use("/api/v1/projects/*", protocolCors(profile));
   // The Team membership and invitation surfaces are browser-reachable: the
   // workspace's Members table and invitation dialog call them cross-origin
   // with the session cookie and, for mutations, the browser Device id.

@@ -77,6 +77,7 @@ import {
   draftValueDiffs,
   type EditorActor,
   type EnvironmentVariable,
+  isPrivilegedRole,
   loadRollbackHistory,
   locallyPublishedRevision,
   mergeDraftVariablesOverRemote,
@@ -1699,7 +1700,12 @@ export const EnvironmentEditor = ({
                 </a>
               ) : (
                 <Button
-                  disabled={setupBusy}
+                  disabled={
+                    setupBusy ||
+                    ((action.id === "project-archived" ||
+                      action.id === "environment-archived") &&
+                      !isPrivilegedRole(role))
+                  }
                   onClick={onSetupAction}
                   type="button"
                 >

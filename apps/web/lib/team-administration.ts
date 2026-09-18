@@ -72,19 +72,32 @@ export type TeamAdminResult<T> =
   | Readonly<{ readonly ok: true; readonly data: T }>
   | Readonly<{ readonly ok: false; readonly message: string }>;
 
+export type LifecycleState = Readonly<{
+  readonly id: string;
+  readonly lifecycle: "active" | "archived";
+}>;
+
 const failure = <T>(message: string): TeamAdminResult<T> => ({
   ok: false,
   message,
 });
 
 // Maps the service's stable problem codes to a sentence a person can act on.
-// The raw code and any detail are deliberately not shown.
-const problemMessage = (code: unknown): string => {
+// The raw code and any detail are deliberately not shown. `subject` keeps the
+// sentence pointed at the resource the call addressed.
+const problemMessage = (
+  code: unknown,
+  subject: "team" | "project" | "environment" = "team",
+): string => {
   switch (code) {
     case "authentication_required":
-      return "Sign in again to manage this team.";
+      return subject === "team"
+        ? "Sign in again to manage this team."
+        : "Sign in again to continue.";
     case "device_not_active":
-      return "Set up this browser before managing team members.";
+      return subject === "team"
+        ? "Set up this browser before managing team members."
+        : "Set up this browser before managing projects and environments.";
     case "invalid_request":
       return "That value didn't look right. Check it and try again.";
     case "resource_not_found":
@@ -96,11 +109,18 @@ const problemMessage = (code: unknown): string => {
     case "github_unavailable":
       return "GitHub is unavailable right now. Try again in a moment.";
     case "forbidden":
-      return "You don't have permission to do that on this team.";
+      return subject === "team"
+        ? "You don't have permission to do that on this team."
+        : "You don't have permission to do that.";
     case "invitation_expired":
       return "That invitation expired or was already used.";
-    case "archived_resource":
-      return "This team is archived.";
+    case "archived_resource": {
+      // For an Environment this is the only archived_resource the service
+      // returns: its parent Project is archived.
+      if (subject === "environment")
+        return "The project this environment belongs to is archived. Restore the project first.";
+      return `This ${subject} is archived.`;
+    }
     case "operation_conflict":
     case "state_conflict":
       return "Something changed while you were working. Refresh and try again.";
@@ -127,6 +147,7 @@ const call = async (
   apiOrigin: string,
   path: string,
   init?: RequestInit,
+  subject: "team" | "project" | "environment" = "team",
 ): Promise<FetchOutcome> => {
   let response: Response;
   try {
@@ -151,7 +172,7 @@ const call = async (
   const body = (await response.json().catch(() => null)) as {
     readonly code?: unknown;
   } | null;
-  return { ok: false, message: problemMessage(body?.code) };
+  return { ok: false, message: problemMessage(body?.code, subject) };
 };
 
 const asArray = (value: unknown): unknown[] =>
@@ -255,6 +276,21 @@ const parseAcceptedInvitation = (body: unknown): AcceptedInvitation | null => {
   return { membershipId, teamId, lifecycle: "PENDING_KEY_GRANT" };
 };
 
+// The service's lifecycle mutations answer with the confirmed persisted
+// resource, so the browser can re-derive the control state from the reply.
+export const parseLifecycleState = (body: unknown): LifecycleState | null => {
+  if (!isRecord(body)) return null;
+  const id = asString(body.id);
+  const lifecycle =
+    body.lifecycle === "archived" || body.lifecycle === "ARCHIVED"
+      ? "archived"
+      : body.lifecycle === "active" || body.lifecycle === "ACTIVE"
+        ? "active"
+        : null;
+  if (!id || lifecycle === null) return null;
+  return { id, lifecycle };
+};
+
 const deviceHeaders = (deviceId?: string): HeadersInit =>
   deviceId ? { [BROWSER_DEVICE_ID_HEADER]: deviceId } : {};
 
@@ -337,3 +373,80 @@ export const acceptTeamInvitation = async (
   if (!accepted) return failure("The server returned a malformed reply.");
   return { ok: true, data: accepted };
 };
+
+// Sends the lifecycle mutation and resolves only with the confirmed
+// persisted state. A rejection never changes the caller's state; the
+// message is one a person can act on.
+const mutateLifecycleState = async (
+  apiOrigin: string,
+  path: string,
+  subject: "project" | "environment",
+  deviceId?: string,
+): Promise<TeamAdminResult<LifecycleState>> => {
+  const outcome = await call(
+    apiOrigin,
+    path,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+        ...deviceHeaders(deviceId),
+      },
+      body: "{}",
+    },
+    subject,
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const state = parseLifecycleState(outcome.body);
+  if (!state) return failure("The server returned a malformed reply.");
+  return { ok: true, data: state };
+};
+
+export const archiveProject = async (
+  apiOrigin: string,
+  projectId: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<LifecycleState>> =>
+  mutateLifecycleState(
+    apiOrigin,
+    `/api/v1/projects/${projectId}/archive`,
+    "project",
+    deviceId,
+  );
+
+export const restoreProject = async (
+  apiOrigin: string,
+  projectId: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<LifecycleState>> =>
+  mutateLifecycleState(
+    apiOrigin,
+    `/api/v1/projects/${projectId}/restore`,
+    "project",
+    deviceId,
+  );
+
+export const archiveEnvironment = async (
+  apiOrigin: string,
+  environmentId: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<LifecycleState>> =>
+  mutateLifecycleState(
+    apiOrigin,
+    `/api/v1/environments/${environmentId}/archive`,
+    "environment",
+    deviceId,
+  );
+
+export const restoreEnvironment = async (
+  apiOrigin: string,
+  environmentId: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<LifecycleState>> =>
+  mutateLifecycleState(
+    apiOrigin,
+    `/api/v1/environments/${environmentId}/restore`,
+    "environment",
+    deviceId,
+  );

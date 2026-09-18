@@ -717,7 +717,8 @@ export type ProtectedWorkflowState = Readonly<{
   readonly cryptoAvailable: boolean;
   readonly deviceActive: boolean;
   readonly grantsReady: boolean;
-  readonly resourceActive: boolean;
+  readonly projectActive: boolean;
+  readonly environmentActive: boolean;
   readonly epochCurrent: boolean;
   readonly rotationRequired: boolean;
 }>;
@@ -728,7 +729,8 @@ export type SetupActionId =
   | "crypto-unavailable"
   | "enroll-device"
   | "pending-grants"
-  | "archived"
+  | "project-archived"
+  | "environment-archived"
   | "stale-epoch"
   | "rotation";
 
@@ -777,9 +779,16 @@ export const nextSetupAction = (
       body: "Run `bun apps/cli/src/index.ts pull` on this machine to give this browser the project's keys.",
       actionLabel: "Retry access",
     };
-  if (!state.resourceActive)
+  if (!state.projectActive)
     return {
-      id: "archived",
+      id: "project-archived",
+      title: "This project is archived",
+      body: "History is kept. Restore the project to view and edit variables.",
+      actionLabel: "Restore project",
+    };
+  if (!state.environmentActive)
+    return {
+      id: "environment-archived",
       title: "This environment is archived",
       body: "History is kept. Restore it to view and edit variables.",
       actionLabel: "Restore environment",
