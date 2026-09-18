@@ -1255,12 +1255,23 @@ describe("Project resolution against a GitHub Repository", () => {
 
 describe("workspace boundary Device binding", () => {
   const userId = "22222222-2222-4222-8222-222222222222";
+  const peerUserId = "99999999-9999-4999-8999-999999999999";
   const teamId = "44444444-4444-4444-8444-444444444444";
   const projectId = "55555555-5555-4555-8555-555555555555";
   const environmentId = "66666666-6666-4666-8666-666666666666";
   // The first-created Device holds the epoch grant; the later Device does not.
   const olderDeviceId = "33333333-3333-4333-8333-333333333333";
   const newerDeviceId = "77777777-7777-4777-8777-777777777777";
+  // The peer Member's Device signed history before it was revoked.
+  const peerDeviceId = "88888888-8888-4888-8888-888888888888";
+
+  const membershipActivatedAt = new Date("2026-01-01T00:00:00Z");
+  const peerMembershipActivatedAt = new Date("2025-12-01T00:00:00Z");
+  const peerMembershipRemovedAt = new Date("2026-02-01T00:00:00Z");
+  const olderDeviceActivatedAt = new Date("2026-01-02T00:00:00Z");
+  const newerDeviceActivatedAt = new Date("2026-01-03T00:00:00Z");
+  const peerDeviceActivatedAt = new Date("2025-12-15T00:00:00Z");
+  const peerDeviceRevokedAt = new Date("2026-02-15T00:00:00Z");
 
   const matchGrant = (
     where: Record<string, unknown>,
@@ -1313,6 +1324,8 @@ describe("workspace boundary Device binding", () => {
         lifecycle: "ACTIVE",
         x25519PublicKey: new Uint8Array(32).fill(0x55),
         ed25519PublicKey: new Uint8Array(32).fill(0x22),
+        activatedAt: olderDeviceActivatedAt,
+        revokedAt: null,
       },
       {
         id: newerDeviceId,
@@ -1320,6 +1333,38 @@ describe("workspace boundary Device binding", () => {
         lifecycle: "ACTIVE",
         x25519PublicKey: new Uint8Array(32).fill(0x66),
         ed25519PublicKey: new Uint8Array(32).fill(0x77),
+        activatedAt: newerDeviceActivatedAt,
+        revokedAt: null,
+      },
+      {
+        id: peerDeviceId,
+        userId: peerUserId,
+        lifecycle: "REVOKED",
+        x25519PublicKey: new Uint8Array(32).fill(0x88),
+        ed25519PublicKey: new Uint8Array(32).fill(0x33),
+        activatedAt: peerDeviceActivatedAt,
+        revokedAt: peerDeviceRevokedAt,
+      },
+    ];
+    const team = { id: teamId, name: "Test Team" };
+    const memberships = [
+      {
+        userId,
+        teamId,
+        team,
+        lifecycle: "ACTIVE",
+        role: "OWNER",
+        activatedAt: membershipActivatedAt,
+        removedAt: null,
+      },
+      {
+        userId: peerUserId,
+        teamId,
+        team,
+        lifecycle: "REMOVED",
+        role: "MEMBER",
+        activatedAt: peerMembershipActivatedAt,
+        removedAt: peerMembershipRemovedAt,
       },
     ];
     const database = {
@@ -1331,17 +1376,38 @@ describe("workspace boundary Device binding", () => {
         findMany: async ({
           where,
         }: {
-          where: { userId?: string; id?: string };
+          where: {
+            userId?: string | { in: readonly string[] };
+            id?: string;
+            lifecycle?: string;
+          };
         }) =>
-          devices.filter(
-            (candidate) =>
-              candidate.userId === (where.userId ?? userId) &&
-              (where.id ? candidate.id === where.id : true),
-          ),
+          devices.filter((candidate) => {
+            const userId =
+              typeof where.userId === "object" ? where.userId.in : where.userId;
+            if (
+              userId !== undefined &&
+              !(Array.isArray(userId)
+                ? userId.includes(candidate.userId)
+                : candidate.userId === userId)
+            )
+              return false;
+            if (where.id && candidate.id !== where.id) return false;
+            return !where.lifecycle || candidate.lifecycle === where.lifecycle;
+          }),
       },
       membership: {
         findFirst: async () => ({ teamId }),
-        findMany: async () => [],
+        findMany: async ({
+          where,
+        }: {
+          where: { userId?: string; teamId?: string; lifecycle?: string };
+        }) =>
+          memberships.filter((candidate) => {
+            if (where.teamId) return candidate.teamId === where.teamId;
+            if (where.userId && candidate.userId !== where.userId) return false;
+            return !where.lifecycle || candidate.lifecycle === where.lifecycle;
+          }),
       },
       project: {
         findFirst: async () => ({
@@ -1349,6 +1415,7 @@ describe("workspace boundary Device binding", () => {
           teamId,
           currentEpoch: 1n,
         }),
+        findMany: async () => [],
       },
       environment: {
         findFirst: async () => ({
@@ -1484,5 +1551,48 @@ describe("workspace boundary Device binding", () => {
       expect(body).not.toHaveProperty("epochGrant");
       expect(body.activeDeviceCount).toBe(2);
     }
+  });
+
+  test("reports every authorized Device of the Team with its Device and Membership windows", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createTestApp();
+    const response = await boundaryRequest(testApp, profile, newerDeviceId);
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.signingTrustKeys).toEqual([
+      "22".repeat(32),
+      "77".repeat(32),
+      "33".repeat(32),
+    ]);
+    expect(body.signingTrustDevices).toEqual([
+      {
+        deviceId: olderDeviceId,
+        userId,
+        signingPublicKey: "22".repeat(32),
+        deviceActiveFromMs: olderDeviceActivatedAt.getTime(),
+        deviceActiveUntilMs: null,
+        memberSinceMs: membershipActivatedAt.getTime(),
+        memberUntilMs: null,
+      },
+      {
+        deviceId: newerDeviceId,
+        userId,
+        signingPublicKey: "77".repeat(32),
+        deviceActiveFromMs: newerDeviceActivatedAt.getTime(),
+        deviceActiveUntilMs: null,
+        memberSinceMs: membershipActivatedAt.getTime(),
+        memberUntilMs: null,
+      },
+      {
+        deviceId: peerDeviceId,
+        userId: peerUserId,
+        signingPublicKey: "33".repeat(32),
+        deviceActiveFromMs: peerDeviceActivatedAt.getTime(),
+        deviceActiveUntilMs: peerDeviceRevokedAt.getTime(),
+        memberSinceMs: peerMembershipActivatedAt.getTime(),
+        memberUntilMs: peerMembershipRemovedAt.getTime(),
+      },
+    ]);
   });
 });

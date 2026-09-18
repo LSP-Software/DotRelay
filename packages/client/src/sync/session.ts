@@ -3,6 +3,7 @@ import {
   type DecodedVariable,
   decodeSyncVariables,
   type PublicationContext,
+  type RevisionSigningTrust,
   verifySyncPage,
 } from "./publication";
 import type { ProtocolTransport, SyncInput } from "./transport";
@@ -54,13 +55,20 @@ export const createVerifiedEnvironmentSession = (input: {
   readonly sharedValuePrivateKey: CryptoKey;
   readonly userDefinedValuePrivateKey?: CryptoKey;
   readonly sharedValueSecret?: Uint8Array;
-  readonly signingTrustKeys?: readonly Uint8Array[];
+  /**
+   * The trust set Revision signatures are checked against. Plain keys carry
+   * no authorization window; entries name the signing Device and Member and
+   * the Device/Membership windows that were valid at the Revision's
+   * authored-at instant, so signatures from a Device revoked after a
+   * legitimate Revision stay verifiable while later writes stay rejected.
+   */
+  readonly signingTrustKeys?: RevisionSigningTrust;
 }): VerifiedEnvironmentSession => {
-  const revisionSigningPublicKey =
+  const signingTrust =
     input.signingTrustKeys && input.signingTrustKeys.length > 0
       ? input.signingTrustKeys
       : input.context.revisionSigningPublicKey;
-  if (!revisionSigningPublicKey)
+  if (!signingTrust)
     throw new Error("revision signing trust key is required for live sync");
   const snapshots = new Map<string, readonly DecodedVariable[]>();
   let cachedVariables: readonly DecodedVariable[] = [];
@@ -97,7 +105,7 @@ export const createVerifiedEnvironmentSession = (input: {
     decodeVariables,
     syncAndDecode: async (request) => {
       const page = await input.transport.syncAll(request);
-      await verifySyncPage(page, revisionSigningPublicKey, {
+      await verifySyncPage(page, signingTrust, {
         actorUserId: input.context.actorUserId,
       });
       const variables = await decodeVariables(page);

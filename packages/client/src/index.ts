@@ -129,6 +129,8 @@ export {
   type PublicationMutationKind,
   type PublicationReview,
   type PublicationVariable,
+  type RevisionSigningTrust,
+  type RevisionSigningTrustEntry,
   reviewPublication,
   type StagedPublicationObject,
   validatePublicationVariables,

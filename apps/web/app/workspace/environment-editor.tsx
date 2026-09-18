@@ -6,6 +6,7 @@ import {
   type ProtocolTransport,
   ProtocolTransportError,
   type PublicationContext,
+  type RevisionSigningTrust,
   type SyncPageWire,
   sha384,
   verifySyncPage,
@@ -123,7 +124,7 @@ type EnvironmentEditorProps = Readonly<{
     | Readonly<{
         readonly context: PublicationContext;
         readonly transport: ProtocolTransport;
-        readonly signingTrustKeys?: readonly Uint8Array[];
+        readonly signingTrustKeys?: RevisionSigningTrust;
         readonly decodeVariables?: (
           page: SyncPageWire,
           previousVariables: readonly EnvironmentVariable[],
@@ -180,9 +181,9 @@ const emptyVariableDraft: AddVariableState = {
 const ownershipLabel = (ownership: EnvironmentVariable["ownership"]): string =>
   ownership === "SHARED_VALUE" ? "Shared value" : "User-defined value";
 
-const sessionTrustKeys = (
+const sessionSigningTrust = (
   session: NonNullable<EnvironmentEditorProps["protocolSession"]>,
-): Uint8Array | readonly Uint8Array[] => {
+): RevisionSigningTrust => {
   if (session.signingTrustKeys && session.signingTrustKeys.length > 0)
     return session.signingTrustKeys;
   if (!session.context.revisionSigningPublicKey)
@@ -987,7 +988,7 @@ export const EnvironmentEditor = ({
             pagination: {},
           },
         });
-        await verifySyncPage(page, sessionTrustKeys(session), {
+        await verifySyncPage(page, sessionSigningTrust(session), {
           actorUserId: context.actorUserId,
         });
         if (cancelled) return;
@@ -1499,7 +1500,7 @@ export const EnvironmentEditor = ({
               pagination: {},
             },
           });
-          await verifySyncPage(page, sessionTrustKeys(publishSession), {
+          await verifySyncPage(page, sessionSigningTrust(publishSession), {
             actorUserId: context.actorUserId,
           });
           setVerifiedHistory((current) =>

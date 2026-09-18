@@ -123,6 +123,25 @@ export type SyncDisclosureOptions = Readonly<{
   readonly actorUserId?: string;
 }>;
 
+export type RevisionSigningTrustEntry = Readonly<{
+  readonly publicKey: Uint8Array;
+  readonly deviceId?: string;
+  readonly userId?: string;
+  /** When this Device became authorized to sign (Unix milliseconds); null if it never was. */
+  readonly deviceActiveFromMs?: number | null;
+  /** When this Device was revoked (Unix milliseconds); null if it was never revoked. */
+  readonly deviceActiveUntilMs?: number | null;
+  /** When the author's Membership became active (Unix milliseconds); null if it never was. */
+  readonly memberSinceMs?: number | null;
+  /** When the author's Membership was removed (Unix milliseconds); null while still a Member. */
+  readonly memberUntilMs?: number | null;
+}>;
+
+export type RevisionSigningTrust =
+  | Uint8Array
+  | readonly Uint8Array[]
+  | readonly RevisionSigningTrustEntry[];
+
 export type StagedPublicationObject = Readonly<{
   readonly objectId: string;
   readonly bytes: Uint8Array;
@@ -790,13 +809,6 @@ const scopeValueFromCommitment = (
         ? 4
         : 1;
 
-const signingTrustKeys = (
-  signingPublicKey: Uint8Array | readonly Uint8Array[],
-): readonly Uint8Array[] =>
-  signingPublicKey instanceof Uint8Array
-    ? [signingPublicKey]
-    : signingPublicKey;
-
 const verifySignedProtocolObjectWithKeys = async (
   canonicalBytes: Uint8Array,
   keys: readonly Uint8Array[],
@@ -816,12 +828,149 @@ const verifySignedProtocolObjectWithKeys = async (
   throw new ProtocolVerificationError("sync object signature is invalid");
 };
 
+type SigningTrustEntry = Readonly<{
+  readonly publicKey: Uint8Array;
+  readonly constrained: boolean;
+  readonly deviceId?: string;
+  readonly userId?: string;
+  readonly deviceActiveFromMs?: number | null;
+  readonly deviceActiveUntilMs?: number | null;
+  readonly memberSinceMs?: number | null;
+  readonly memberUntilMs?: number | null;
+}>;
+
+const normalizeSigningTrust = (
+  trust: RevisionSigningTrust,
+): SigningTrustEntry[] => {
+  if (trust instanceof Uint8Array)
+    return [{ publicKey: trust, constrained: false }];
+  if (!Array.isArray(trust))
+    throw new ProtocolVerificationError("signing trust is malformed");
+  return trust.map((item): SigningTrustEntry => {
+    if (item instanceof Uint8Array)
+      return { publicKey: item, constrained: false };
+    if (typeof item !== "object" || item === null)
+      throw new ProtocolVerificationError("signing trust entry is malformed");
+    if (!(item.publicKey instanceof Uint8Array))
+      throw new ProtocolVerificationError("signing trust entry is malformed");
+    const constrained =
+      item.deviceId !== undefined ||
+      item.userId !== undefined ||
+      item.deviceActiveFromMs !== undefined ||
+      item.deviceActiveUntilMs !== undefined ||
+      item.memberSinceMs !== undefined ||
+      item.memberUntilMs !== undefined;
+    return {
+      publicKey: item.publicKey,
+      constrained,
+      ...(item.deviceId !== undefined ? { deviceId: item.deviceId } : {}),
+      ...(item.userId !== undefined ? { userId: item.userId } : {}),
+      ...(item.deviceActiveFromMs !== undefined
+        ? { deviceActiveFromMs: item.deviceActiveFromMs }
+        : {}),
+      ...(item.deviceActiveUntilMs !== undefined
+        ? { deviceActiveUntilMs: item.deviceActiveUntilMs }
+        : {}),
+      ...(item.memberSinceMs !== undefined
+        ? { memberSinceMs: item.memberSinceMs }
+        : {}),
+      ...(item.memberUntilMs !== undefined
+        ? { memberUntilMs: item.memberUntilMs }
+        : {}),
+    };
+  });
+};
+
+// One half of a Device or Membership window: a `null` start means the
+// interval never opened (the Device or Membership never became active), an
+// absent bound means it is still open.
+const windowAdmits = (
+  fromMs: number | null | undefined,
+  untilMs: number | null | undefined,
+  authoredAtMs: bigint,
+): boolean => {
+  if (fromMs === null) return false;
+  if (typeof fromMs === "number" && authoredAtMs < BigInt(fromMs)) return false;
+  return !(typeof untilMs === "number" && authoredAtMs >= BigInt(untilMs));
+};
+
+// A Revision authorizes through an entry only when the entry's Device and
+// Membership were both authorized at the Revision's authored-at instant, so a
+// Device revoked after a legitimate Revision keep it verifiable while writes
+// made after the revocation stay rejected.
+const entryAuthorizesRevision = (
+  entry: SigningTrustEntry,
+  signingDeviceId: unknown,
+  authorUserId: unknown,
+  authoredAtMs: bigint,
+): boolean => {
+  if (
+    !windowAdmits(
+      entry.deviceActiveFromMs,
+      entry.deviceActiveUntilMs,
+      authoredAtMs,
+    ) ||
+    !windowAdmits(entry.memberSinceMs, entry.memberUntilMs, authoredAtMs)
+  )
+    return false;
+  if (entry.deviceId !== undefined) {
+    if (
+      !(signingDeviceId instanceof Uint8Array) ||
+      signingDeviceId.length !== 16
+    )
+      return false;
+    if (bytesToUuid(signingDeviceId) !== entry.deviceId) return false;
+  }
+  if (entry.userId !== undefined) {
+    if (!(authorUserId instanceof Uint8Array) || authorUserId.length !== 16)
+      return false;
+    if (bytesToUuid(authorUserId) !== entry.userId) return false;
+  }
+  return true;
+};
+
+const authorizeRevisionSignature = async (
+  canonicalBytes: Uint8Array,
+  entries: readonly SigningTrustEntry[],
+  parsedRevision: ProtocolObject,
+  authoredAtMs: bigint,
+): Promise<Uint8Array[]> => {
+  const signingDeviceId = parsedRevision.get(23);
+  const authorUserId = parsedRevision.get(22);
+  const authorizing: Uint8Array[] = [];
+  let lastError: unknown;
+  for (const entry of entries) {
+    if (
+      !entryAuthorizesRevision(
+        entry,
+        signingDeviceId,
+        authorUserId,
+        authoredAtMs,
+      )
+    )
+      continue;
+    try {
+      await verifySignedProtocolObject(canonicalBytes, entry.publicKey);
+      authorizing.push(entry.publicKey);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (authorizing.length > 0) return authorizing;
+  if (lastError instanceof ProtocolVerificationError) throw lastError;
+  throw new ProtocolVerificationError(
+    "sync revision signature is not authorized",
+  );
+};
+
 export const verifySyncPage = async (
   page: SyncPageWire,
-  signingPublicKey: Uint8Array | readonly Uint8Array[],
+  signingTrust: RevisionSigningTrust,
   options: SyncDisclosureOptions = {},
 ): Promise<void> => {
-  const trustKeys = signingTrustKeys(signingPublicKey);
+  const trustEntries = normalizeSigningTrust(signingTrust);
+  const trustKeys = trustEntries.map((entry) => entry.publicKey);
+  const scopedTrust = trustEntries.some((entry) => entry.constrained);
   let environmentId: Uint8Array;
   let trustedRevisionId: Uint8Array;
   try {
@@ -872,10 +1021,20 @@ export const verifySyncPage = async (
     const actualRevisionDigest = await sha384(revisionObject.canonicalBytes);
     if (!bytesEqual(actualRevisionDigest, revision.digest))
       throw new ProtocolVerificationError("revision digest mismatch");
-    await verifySignedProtocolObjectWithKeys(
-      revisionObject.canonicalBytes,
-      trustKeys,
-    );
+    let revisionTrustKeys = trustKeys;
+    if (scopedTrust) {
+      revisionTrustKeys = await authorizeRevisionSignature(
+        revisionObject.canonicalBytes,
+        trustEntries,
+        parsedRevision,
+        revision.authoredAtMs,
+      );
+    } else {
+      await verifySignedProtocolObjectWithKeys(
+        revisionObject.canonicalBytes,
+        trustKeys,
+      );
+    }
     if (revision.parentId !== null) {
       const parentId = parsedRevision.get(19);
       const parentHash = parsedRevision.get(20);
@@ -972,7 +1131,7 @@ export const verifySyncPage = async (
       if ([13, 15, 16].includes(parsed.get(1) as number))
         await verifySignedProtocolObjectWithKeys(
           object.canonicalBytes,
-          trustKeys,
+          revisionTrustKeys,
         );
       const objectEnvironmentId = parsed.get(14);
       if (

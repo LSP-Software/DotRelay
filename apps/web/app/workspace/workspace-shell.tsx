@@ -11,6 +11,7 @@ import {
   loadDeviceKeyMaterial,
   openProjectEpochGrant,
   probeBrowserDeviceStorage,
+  type RevisionSigningTrustEntry,
   uuidToBytes,
 } from "@dotrelay/client";
 import {
@@ -1558,6 +1559,28 @@ export const WorkspaceShell = ({
             }
           })
           .filter((key): key is Uint8Array => key !== null);
+        const signingTrustDevices: (RevisionSigningTrustEntry | null)[] = (
+          boundary.signingTrustDevices ?? []
+        ).map((device) => {
+          let publicKey: Uint8Array;
+          try {
+            publicKey = hexToBytes(device.signingPublicKey);
+          } catch {
+            return null;
+          }
+          return {
+            publicKey,
+            ...(device.deviceId ? { deviceId: device.deviceId } : {}),
+            ...(device.userId ? { userId: device.userId } : {}),
+            deviceActiveFromMs: device.deviceActiveFromMs,
+            deviceActiveUntilMs: device.deviceActiveUntilMs,
+            memberSinceMs: device.memberSinceMs,
+            memberUntilMs: device.memberUntilMs,
+          };
+        });
+        const scopedSigningTrustDevices = signingTrustDevices.filter(
+          (device): device is RevisionSigningTrustEntry => device !== null,
+        );
         let sharedValueSecret: Uint8Array | undefined;
         if (boundary.epochGrant) {
           try {
@@ -1575,9 +1598,11 @@ export const WorkspaceShell = ({
           sharedValuePrivateKey: keyMaterial.encryptionPrivateKey,
           userDefinedValuePrivateKey: keyMaterial.encryptionPrivateKey,
           signingTrustKeys:
-            signingTrustKeys.length > 0
-              ? signingTrustKeys
-              : [hexToBytes(device.signingPublicKey)],
+            scopedSigningTrustDevices.length > 0
+              ? scopedSigningTrustDevices
+              : signingTrustKeys.length > 0
+                ? signingTrustKeys
+                : [hexToBytes(device.signingPublicKey)],
           ...(sharedValueSecret ? { sharedValueSecret } : {}),
         });
         if (cancelled) return;

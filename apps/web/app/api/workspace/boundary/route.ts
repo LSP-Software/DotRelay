@@ -3,6 +3,7 @@ import {
   e2eWorkspaceBoundary,
   emptyWorkspaceBoundary,
   parsePeerDevices,
+  parseSigningTrustDevices,
   parseWorkspaceCatalog,
   resolveLiveApiOrigin,
   resolveWorkspaceProfileId,
@@ -99,6 +100,7 @@ const fetchLiveBoundary = async (
             rotationRequired?: unknown;
             catalog?: unknown;
             signingTrustKeys?: unknown;
+            signingTrustDevices?: unknown;
             epochGrant?: unknown;
             peerDevices?: unknown;
           }
@@ -173,6 +175,9 @@ const fetchLiveBoundary = async (
           ),
         }
       : {}),
+    signingTrustDevices: parseSigningTrustDevices(
+      workspaceBody.signingTrustDevices,
+    ),
     ...(typeof workspaceBody.epochGrant === "string"
       ? { epochGrant: workspaceBody.epochGrant }
       : {}),
