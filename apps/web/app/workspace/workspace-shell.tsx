@@ -27,7 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { CommandText, InlineCommand } from "@/components/inline-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -1731,6 +1731,13 @@ export const WorkspaceShell = ({
         <div className="mt-auto border-t p-4">
           <div className="flex items-center gap-3">
             <Avatar size="sm">
+              {displayBoundary.session.image && (
+                <AvatarImage
+                  alt=""
+                  referrerPolicy="no-referrer"
+                  src={displayBoundary.session.image}
+                />
+              )}
               <AvatarFallback>
                 {(displayBoundary.session.displayName ?? "DR")
                   .slice(0, 2)

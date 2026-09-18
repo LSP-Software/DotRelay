@@ -231,7 +231,12 @@ export const detailForProblem = (code: string): string => {
   if (code === "genesis_exists")
     return "this Environment already has a genesis Revision";
   if (code === "repository_access_denied")
-    return "the Server Profile could not see this GitHub Repository with your delegated access; sign in again to authorize it, and check that your account can access the Repository";
+    return [
+      "DotRelay could not access this GitHub repository.",
+      "1. Check the repository name and your GitHub access.",
+      "2. Open https://github.com/settings/applications and check this server's GitHub app. For a GitHub App, include the repository in its installation; for an OAuth App, grant organization access. Ask an organization owner to approve access if needed; check SSO too.",
+      "3. If access expired, sign out of the DotRelay web app and sign in with GitHub again. Then retry your command.",
+    ].join("\n");
   if (code === "github_rate_limited")
     return "GitHub rate-limited the Server Profile's repository lookup; wait for the stated retry window and retry";
   if (code === "github_unavailable")

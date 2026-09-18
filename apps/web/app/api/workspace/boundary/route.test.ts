@@ -8,6 +8,7 @@ type BoundaryBody = {
   session?: {
     readonly active?: unknown;
     readonly displayName?: unknown;
+    readonly image?: unknown;
     readonly userId?: unknown;
   };
   profile?: {
@@ -133,6 +134,38 @@ test("a failed workspace endpoint keeps a verified session but no resources", as
     restoreEnv();
   }
 });
+
+test.each([
+  "https://avatars.githubusercontent.com/u/123",
+  null,
+  undefined,
+  "",
+  123,
+])(
+  "passes through only a non-empty profile image string: %p",
+  async (image) => {
+    const restoreEnv = withoutWorkspaceEnv();
+    const restoreFetch = stubUpstream((url) => {
+      if (url.includes("/api/v1/session"))
+        return Response.json({ user: { id: "user-1", name: "Ari", image } });
+      if (url.includes("/api/v1/capabilities"))
+        return Response.json({ serverProfileId: "profile-1" });
+      if (url.includes("/api/v1/workspace/boundary")) return Response.json({});
+      return undefined;
+    });
+    try {
+      const response = await GET(boundaryRequest());
+      const body = (await response.json()) as BoundaryBody;
+      expect(body.session?.image).toBe(
+        typeof image === "string" && image ? image : undefined,
+      );
+      expect(body.session?.active).toBe(true);
+    } finally {
+      restoreFetch();
+      restoreEnv();
+    }
+  },
+);
 
 test("a malformed workspace endpoint body is treated as unavailable", async () => {
   const restoreEnv = withoutWorkspaceEnv();
