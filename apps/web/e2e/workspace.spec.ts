@@ -75,28 +75,107 @@ test("the Team menu shows the current Team and lets you switch", async ({
   ).toBeVisible();
 });
 
-test("role-aware administration and invitations expose pending key grants", async ({
+test("role-aware administration reflects the persisted Team record", async ({
   page,
 }) => {
+  // The Team's membership record is served by the API, so the workspace
+  // renders whatever the service returns rather than a local fixture.
+  await page.route("**/api/v1/teams/*/memberships", (route) =>
+    route.fulfill({
+      json: {
+        memberships: [
+          {
+            membershipId: "00000000-0000-4000-8000-000000000081",
+            userId: "00000000-0000-4000-8000-000000000061",
+            name: "Ari Stone",
+            image: null,
+            githubSubject: "18473192",
+            role: "OWNER",
+            lifecycle: "ACTIVE",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            activatedAt: "2026-01-01T00:00:00.000Z",
+            removedAt: null,
+          },
+          {
+            membershipId: "00000000-0000-4000-8000-000000000082",
+            userId: "00000000-0000-4000-8000-000000000071",
+            name: null,
+            image: null,
+            githubSubject: "240949",
+            role: "MEMBER",
+            lifecycle: "PENDING_KEY_GRANT",
+            createdAt: "2026-01-02T00:00:00.000Z",
+            activatedAt: null,
+            removedAt: null,
+          },
+        ],
+        invitations: [
+          {
+            invitationId: "00000000-0000-4000-8000-000000000083",
+            providerSubject: "583231",
+            createdAt: "2026-01-03T00:00:00.000Z",
+            expiresAt: "2026-01-10T00:00:00.000Z",
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/v1/invitations", (route) =>
+    route.fulfill({ json: { invitations: [], pendingMemberships: [] } }),
+  );
+  await page.route("**/api/v1/github-users/resolve", (route) =>
+    route.fulfill({ json: { login: "octocat", githubUserId: "583231" } }),
+  );
+  let invitationCreates = 0;
+  await page.route("**/api/v1/teams/*/invitations", (route) => {
+    if (route.request().method() === "POST") invitationCreates += 1;
+    return route.fulfill({
+      status: 201,
+      json: {
+        invitationId: "00000000-0000-4000-8000-000000000084",
+        teamId: "00000000-0000-4000-8000-000000000011",
+        providerSubject: "583231",
+        createdAt: "2026-01-03T00:00:00.000Z",
+        expiresAt: "2026-01-10T00:00:00.000Z",
+      },
+    });
+  });
+
   await page.goto("/workspace");
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
 
+  const membersCard = page.getByTestId("members-card");
   await page
     .getByRole("combobox", { name: "Preview role" })
     .selectOption("OWNER");
+  // The owner view shows roles, the pending member, and the pending
+  // invitation exactly as the service recorded them.
+  await expect(membersCard.getByText("Owner", { exact: true })).toBeVisible();
+  await expect(
+    membersCard.getByText("Waiting for encryption keys"),
+  ).toBeVisible();
+  await expect(membersCard.getByText("Invitation pending")).toBeVisible();
+
+  // Inviting resolves a familiar login and only reports the invitation once
+  // the service confirms it.
   await page.getByRole("button", { name: "Invite member" }).click();
-  await page.getByLabel("GitHub user ID").fill("github:18473192");
+  await page.getByLabel("GitHub login").fill("octocat");
+  await page.getByRole("button", { name: "Resolve" }).click();
+  await expect(page.getByText("GitHub ID 583231")).toBeVisible();
   await page.getByRole("button", { name: "Create invitation" }).click();
+  await expect(page.getByTestId("invitation-dialog")).toBeHidden();
+  expect(invitationCreates).toBe(1);
+  await expect(membersCard.getByText("Invitation pending")).toBeVisible();
 
-  await expect(page.getByText("github:18473192")).toBeVisible();
-  await expect(page.getByText("Waiting for encryption keys")).toBeVisible();
-
+  // A plain Member loses the invitation controls and the role column, but
+  // still sees the active members the service reported.
   await page
     .getByRole("combobox", { name: "Preview role" })
     .selectOption("MEMBER");
   await expect(
     page.getByRole("button", { name: "Invite member" }),
   ).toBeDisabled();
+  await expect(membersCard.getByText("Owner", { exact: true })).toHaveCount(0);
   await expect(
     page
       .getByRole("alert")

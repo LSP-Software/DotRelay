@@ -32,6 +32,7 @@ import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
 import { registerDeviceRoutes } from "./device-routes";
 import { lookupGitHubRepositoryDisplay } from "./github-repository";
+import { registerMembershipRoutes } from "./membership-routes";
 import {
   API_CORRELATION_HEADER,
   type ApiObservability,
@@ -533,6 +534,13 @@ const createApi = ({
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
   app.use("/api/v1/operations/*", protocolCors(profile));
   app.use("/api/v1/environments/*", protocolCors(profile));
+  // The Team membership and invitation surfaces are browser-reachable: the
+  // workspace's Members table and invitation dialog call them cross-origin
+  // with the session cookie and, for mutations, the browser Device id.
+  app.use("/api/v1/teams/*", protocolCors(profile));
+  app.use("/api/v1/invitations", protocolCors(profile));
+  app.use("/api/v1/invitations/*", protocolCors(profile));
+  app.use("/api/v1/github-users/*", protocolCors(profile));
   app.post(
     "/api/v1/devices/bootstrap",
     bodyLimit({
@@ -1038,6 +1046,12 @@ const createApi = ({
   });
 
   registerAdministrationRoutes(app, {
+    database,
+    profile,
+    auth,
+    ...(githubFetch ? { githubFetch } : {}),
+  });
+  registerMembershipRoutes(app, {
     database,
     profile,
     auth,
