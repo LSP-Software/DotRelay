@@ -18,6 +18,7 @@ import {
   mergeVerifiedHistory,
   nextSetupAction,
   prepareEncryptedPublication,
+  protectedWorkflowBlockers,
   publicationMutationForHead,
   publishedBaseline,
   readOnlyReason,
@@ -993,6 +994,64 @@ test("setup reports only the next action the person can take", () => {
   expect(displayedSetupAction(null, { localDeviceBlockers: true })?.id).toBe(
     "enroll-device",
   );
+});
+
+test("setup gates surface missing grants, then archived and stale-project states", () => {
+  const signedIn = {
+    ...blockedSetup,
+    sessionActive: true,
+    profileTrusted: true,
+    cryptoAvailable: true,
+  };
+  expect(nextSetupAction({ ...signedIn, deviceActive: true })?.id).toBe(
+    "pending-grants",
+  );
+  expect(
+    nextSetupAction({ ...signedIn, deviceActive: true, grantsReady: true })?.id,
+  ).toBe("archived");
+  expect(
+    nextSetupAction({
+      ...signedIn,
+      deviceActive: true,
+      grantsReady: true,
+      resourceActive: true,
+    })?.id,
+  ).toBe("stale-epoch");
+});
+
+test("a stale project epoch offers the in-browser key recovery", () => {
+  const readyExceptEpoch = {
+    sessionActive: true,
+    profileTrusted: true,
+    cryptoAvailable: true,
+    deviceActive: true,
+    grantsReady: true,
+    resourceActive: true,
+    rotationRequired: false,
+  };
+  const action = nextSetupAction({
+    ...readyExceptEpoch,
+    epochCurrent: false,
+  });
+  expect(action?.id).toBe("stale-epoch");
+  expect(action?.title).toBe("This project's keys were rotated");
+  expect(action?.actionLabel).toBe("Recover keys");
+  expect(action?.body).toContain("approval");
+  // An in-flight rotation still reads as a stale epoch: the recovery reports
+  // its progress instead of racing the rotation.
+  expect(
+    nextSetupAction({
+      ...readyExceptEpoch,
+      epochCurrent: false,
+      rotationRequired: true,
+    })?.id,
+  ).toBe("stale-epoch");
+  expect(
+    nextSetupAction({ ...readyExceptEpoch, epochCurrent: true }),
+  ).toBeNull();
+  expect(
+    protectedWorkflowBlockers({ ...readyExceptEpoch, epochCurrent: false }),
+  ).toEqual(["This project's keys were rotated"]);
 });
 
 test("privileged Team roles may change every Value and the Manifest definition", () => {

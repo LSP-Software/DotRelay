@@ -101,6 +101,16 @@ re-runs the approved publication against the re-anchored head rather than only r
  cryptographic artifact builder but is explicitly local and never reports a service publication.
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
+A stale Project epoch offers key recovery behind its gate action: the repair re-verifies the
+boundary first, so a current grant provisioned by another of the User's Devices or by the CLI
+is reused without a new bootstrap. If the keys are still missing, the stored Device keys sign
+a fresh grant for the current epoch addressed to the same Device, discarding nothing local;
+the restored editor is the reported result. A Device replacement is proposed only when the
+stored keys are unusable or the service deactivated the Device, and because replacing the
+Device discards the stored keys it requires explicit approval before a new Device is enrolled.
+When this browser cannot complete the repair, the gate reports the actions that unblock it:
+hand the keys over from another of the User's Devices with the CLI, restore a Device from a
+Recovery Kit, or have the Team's Owners and Admins rotate the Project's keys.
 
 Unpublished drafts are retained per Environment while moving among workspace views and across
 Projects and Environments within a Server Profile. Any action that would discard unpublished
@@ -197,6 +207,14 @@ control only when the session is genuinely absent, an expired or invalid code fi
 return-to-CLI instruction without re-offering sign-in, an already-approved code finishes as
 completed, and a transient check or approval failure preserves the code and recovers through an
 explicit retry, including a lapsed session that returns to the sign-in control.
+`apps/web/e2e/workspace-stale-epoch.spec.ts` covers recovery after a Project key rotation:
+the stale-epoch gate's action recovers the current keys in place with the stored Device keys —
+a fresh current-epoch grant signed by the enrolled Device, with no replacement Device and no
+approval asked — and the verified read works again from the same session; a current grant
+provisioned elsewhere is reused without bootstrapping; a repair the service rejects reports the
+owner/admin rotation and CLI hand-off actions that unblock it, naming a rotation still in
+progress as its own retryable state; and a deactivated Device proposes a replacement that is
+enrolled only after the user approves it, discarding the stored keys for the old Device.
 `apps/web/e2e/workspace-small-viewport.spec.ts` covers small-viewport and zoom reachability:
 the Add Variable dialog stays inside the viewport on short phone heights and at 200% zoom,
 its body scrolls, a focused field — including the last field — scrolls into view above the
