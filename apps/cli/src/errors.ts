@@ -234,7 +234,7 @@ export const detailForProblem = (code: string): string => {
     return [
       "DotRelay could not access this GitHub repository.",
       "1. Check the repository name and your GitHub access.",
-      "2. Open https://github.com/settings/applications and check this server's GitHub app. For a GitHub App, include the repository in its installation; for an OAuth App, grant organization access. Ask an organization owner to approve access if needed; check SSO too.",
+      "2. Open https://github.com/settings/applications and check the DotRelay GitHub app. For a GitHub App, include the repository in its installation; for an OAuth App, grant organization access. Ask an organization owner to approve access if needed; check SSO too.",
       "3. If access expired, sign out of the DotRelay web app and sign in with GitHub again. Then retry your command.",
     ].join("\n");
   if (code === "github_rate_limited")
@@ -250,6 +250,112 @@ export const detailForProblem = (code: string): string => {
   if (categoryForProblem(code) === "crypto")
     return "the Server Profile rejected the cryptographic request";
   return "the Server Profile could not complete the request";
+};
+
+const capitalize = (text: string): string =>
+  text.length === 0 ? text : `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+
+export type ErrorPresentation = Readonly<{
+  readonly title: string;
+  readonly detail: string;
+  readonly fixes: readonly string[];
+}>;
+
+const errorTitles: Record<string, string> = {
+  authentication_required: "Login required",
+  device_not_active: "Device not active",
+  device_bundle_missing: "No Device enrolled",
+  device_enrollment_failed: "Device enrollment failed",
+  device_enrollment_unavailable: "Device enrollment unavailable",
+  device_authorization_denied: "Sign-in denied",
+  device_authorization_expired: "Sign-in expired",
+  device_authorization_timeout: "Sign-in timed out",
+  device_authorization_failed: "Sign-in failed",
+  forbidden: "Access denied",
+  profile_mismatch: "Profile mismatch",
+  user_mismatch: "User mismatch",
+  repository_access_denied: "GitHub access",
+  github_rate_limited: "GitHub rate limit",
+  github_unavailable: "GitHub unreachable",
+  service_unavailable: "Service unreachable",
+  request_failed: "Service error",
+  rate_limited: "Rate limited",
+  rate_limit_unavailable: "Rate limiter unavailable",
+  response_invalid: "Invalid service response",
+  response_too_large: "Response too large",
+  genesis_exists: "Environment already published",
+  output_conflict: "Output file differs",
+  output_tracked: "Output is Git-tracked",
+  output_write_failed: "Could not write output",
+  input_read_failed: "Could not read input",
+  deletion_requires_approval: "Approval required",
+  unsafe_stdout: "Unsafe output",
+  staging_expired: "Staged request expired",
+  staged_object_missing: "Staged request missing",
+  invitation_expired: "Invitation expired",
+  rollback_target_unavailable: "Rollback target unavailable",
+  rollback_variable_absent: "Rollback target missing Variables",
+  recovery_kit_invalid: "Recovery Kit invalid",
+  recovery_requires_no_active_device: "Recovery requires no active Device",
+  project_ambiguous: "Multiple Projects match",
+  environment_ambiguous: "Ambiguous Environment",
+  environment_not_found: "Environment not found",
+  environment_context_missing: "Environment context missing",
+  repository_ambiguous: "Ambiguous repository",
+  repository_missing: "No GitHub remote",
+  repository_renamed: "Repository renamed",
+  command_unavailable: "Command unavailable",
+};
+
+const categoryTitles: Record<CliErrorCategory, string> = {
+  invocation: "Invalid invocation",
+  "incomplete-export": "Incomplete export",
+  conflict: "Conflict",
+  crypto: "Cryptographic error",
+  authentication: "Authentication error",
+  transient: "Service error",
+  "local-io": "Local error",
+};
+
+const remediationPattern = /;\s*(re-)?run dotrelay [^\n]*$/s;
+
+export const presentationForError = (
+  error: unknown,
+  options: Readonly<{ readonly debug?: boolean }> = {},
+): ErrorPresentation => {
+  const diagnostic = diagnosticForError(error, options);
+  const lines = diagnostic.detail.split("\n");
+  const first = lines[0] ?? "";
+  const rest = lines.slice(1);
+  const title =
+    errorTitles[diagnostic.code] ?? categoryTitles[diagnostic.category];
+  let detail = first;
+  let fixes = rest;
+  if (fixes.length === 0) {
+    const match = remediationPattern.exec(detail);
+    if (match?.index !== undefined) {
+      const command = match[0]
+        .replace(/^;\s*/, "")
+        .replace(/^run /, "run ")
+        .replace(/^re-run /, "Re-run ");
+      const verb = command.startsWith("run ")
+        ? "Run"
+        : command.startsWith("Re-run ")
+          ? "Re-run"
+          : "Run";
+      const target = command
+        .replace(/^(run |Re-run )/, "")
+        .replace(/\s*to .*/, "")
+        .trim();
+      detail = capitalize(detail.slice(0, match.index).trimEnd());
+      fixes = [`${verb} ${target}`];
+    } else {
+      detail = capitalize(detail);
+    }
+  } else {
+    detail = capitalize(detail);
+  }
+  return { title, detail, fixes: fixes.map((fix) => capitalize(fix)) };
 };
 
 // A failure that is unmistakably cryptographic even though the caller did not

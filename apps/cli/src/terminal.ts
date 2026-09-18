@@ -8,10 +8,11 @@ const leftovers = new WeakMap<NodeJS.ReadableStream, string>();
 export const readTerminalLine = async (
   question: string,
   terminal?: TerminalIo,
+  echo = true,
 ): Promise<string> => {
   const input = terminal?.input ?? process.stdin;
   const output = terminal?.output ?? process.stderr;
-  output.write(`${question}: `);
+  if (echo) output.write(`${question}: `);
 
   let buffer = leftovers.get(input) ?? "";
   const lineBreak = (): string | null => {

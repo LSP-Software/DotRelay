@@ -1,7 +1,8 @@
 import { type InlineValueHunk, splitInlineValueDiff } from "@dotrelay/client";
+import { glyph, heading, type KvRow, kv, paint, table } from "./components";
 import type { DotenvDiffChange, ValueOwnership } from "./dotenv";
 import { sanitizeCliText } from "./errors";
-import { type ColorRole, paint } from "./ui";
+import type { Tone } from "./theme";
 
 export type { ValueOwnership } from "./dotenv";
 
@@ -29,24 +30,24 @@ const truncateDiffValue = (value: string): string =>
 
 const formatWholeValue = (value: string | null | undefined): string | null => {
   if (value === undefined) return null;
-  if (value === null) return "not set";
-  if (value === "") return "empty";
+  if (value === null) return paint("not set", "faint");
+  if (value === "") return paint("empty", "faint");
   return truncateDiffValue(flattenDiffValue(value));
 };
 
 const paintHunk = (hunk: InlineValueHunk, side: "from" | "to"): string => {
   const changed = side === "from" ? hunk.removed : hunk.added;
-  const tone: ColorRole = side === "from" ? "wax" : "ok";
-  return `${hunk.prefix ? paint(hunk.prefix, "dim") : ""}${
+  const tone: Tone = side === "from" ? "danger" : "brand";
+  return `${hunk.prefix ? paint(hunk.prefix, "faint") : ""}${
     changed ? paint(changed, tone) : ""
-  }${hunk.suffix ? paint(hunk.suffix, "dim") : ""}`;
+  }${hunk.suffix ? paint(hunk.suffix, "faint") : ""}`;
 };
 
 const markerLine = (
   indent: string,
   marker: "-" | "+",
   body: string,
-  tone: ColorRole,
+  tone: Tone,
 ): string => `${indent}${paint(marker, tone)}  ${body}`;
 
 export type RenderDiffOptions = Readonly<{
@@ -56,16 +57,16 @@ export type RenderDiffOptions = Readonly<{
 }>;
 
 const ownershipSuffix = (ownership: ValueDiff["ownership"]): string =>
-  ownership ? `  ${paint(ownership, "dim")}` : "";
+  ownership ? `  ${paint(ownership, "muted")}` : "";
 
-const kindTone = (kind: PublicationChange["kind"]): ColorRole =>
-  kind === "added" ? "ok" : kind === "removed" ? "wax" : "paper";
+const kindTone = (kind: PublicationChange["kind"]): Tone =>
+  kind === "added" ? "brand" : kind === "removed" ? "danger" : "fg";
 
 export const renderMaskedChange = (
   change: Pick<PublicationChange, "name" | "kind" | "ownership">,
   options: Readonly<{ readonly indent?: string }> = {},
 ): string =>
-  `${options.indent ?? "     "}${paint(sanitizeCliText(change.name), "paper")}${ownershipSuffix(
+  `${options.indent ?? ""}${paint(sanitizeCliText(change.name), "fg")}${ownershipSuffix(
     change.ownership,
   )}  ${paint(change.kind, kindTone(change.kind))}`;
 
@@ -73,9 +74,9 @@ export const renderValueDiff = (
   diff: ValueDiff,
   options: RenderDiffOptions = {},
 ): readonly string[] => {
-  const indent = options.indent ?? "     ";
+  const indent = options.indent ?? "";
   const rows = [
-    `${indent}${paint(sanitizeCliText(diff.name), "paper")}${ownershipSuffix(
+    `${indent}${paint(sanitizeCliText(diff.name), "fg")}${ownershipSuffix(
       diff.ownership,
     )}`,
   ];
@@ -88,17 +89,16 @@ export const renderValueDiff = (
       const showFrom = hunk.removed.length > 0;
       const showTo = hunk.added.length > 0 || !showFrom;
       if (showFrom)
-        rows.push(markerLine(indent, "-", paintHunk(hunk, "from"), "wax"));
+        rows.push(markerLine(indent, "-", paintHunk(hunk, "from"), "danger"));
       if (showTo)
-        rows.push(markerLine(indent, "+", paintHunk(hunk, "to"), "ok"));
+        rows.push(markerLine(indent, "+", paintHunk(hunk, "to"), "brand"));
       return rows;
     }
   }
   const from = formatWholeValue(diff.from);
   const to = formatWholeValue(diff.to);
-  if (from !== null)
-    rows.push(markerLine(indent, "-", paint(from, "wax"), "wax"));
-  if (to !== null) rows.push(markerLine(indent, "+", paint(to, "ok"), "ok"));
+  if (from !== null) rows.push(markerLine(indent, "-", from, "danger"));
+  if (to !== null) rows.push(markerLine(indent, "+", to, "brand"));
   return rows;
 };
 
@@ -122,8 +122,8 @@ const joinDiffBlocks = (blocks: readonly (readonly string[])[]): string[] => {
   return lines;
 };
 
-const shortSummary = (
-  changes: readonly Pick<PublicationChange, "kind">[],
+export const diffSummary = (
+  changes: readonly Pick<PublicationChange, "kind" | "ownership">[],
 ): string => {
   const added = changes.filter((change) => change.kind === "added").length;
   const updated = changes.filter((change) => change.kind === "updated").length;
@@ -135,36 +135,55 @@ const shortSummary = (
   ].join(", ");
 };
 
+const diffTable = (
+  changes: readonly Pick<PublicationChange, "name" | "kind" | "ownership">[],
+): string =>
+  table(
+    ["Variable", "Ownership", "Change"],
+    changes.map((change) => [
+      sanitizeCliText(change.name),
+      change.ownership ?? null,
+      change.kind,
+    ]),
+    changes.map((change) => ["fg", "muted", kindTone(change.kind)]),
+  );
+
+const revealedBlocks = (
+  changes: readonly PublicationChange[],
+  indent: string,
+): string =>
+  joinDiffBlocks(
+    changes.map((change) => renderValueDiff(change, { indent, reveal: true })),
+  ).join("\n");
+
 export const renderEnvDiff = (
   changes: readonly DotenvDiffChange[],
   reveal: boolean = false,
 ): string => {
+  const headingLine = heading("diff");
   if (changes.length === 0)
     return [
-      `  ${paint("·", "wax")}  ${paint("Local .env matches the Environment", "paper")}`,
+      headingLine,
+      "",
+      `  ${glyph("ok")}  ${paint("Your .env matches the Environment", "brand")}`,
       "",
     ].join("\n");
   const body = reveal
-    ? joinDiffBlocks(
-        changes.map((change) =>
+    ? changes
+        .map((change) =>
           renderValueDiff(valueDiffFromDotenvChange(change), {
             reveal: true,
-          }),
-        ),
-      )
-    : changes.map((change) =>
-        renderMaskedChange({
+          }).join("\n"),
+        )
+        .join("\n\n")
+    : diffTable(
+        changes.map((change) => ({
           name: change.name,
           kind: change.kind,
           ownership: change.ownership,
-        }),
+        })),
       );
-  return [
-    `  ${paint("·", "wax")}  ${paint(shortSummary(changes), "paper")}`,
-    "",
-    ...body,
-    "",
-  ].join("\n");
+  return [headingLine, "", `${diffSummary(changes)}`, "", body, ""].join("\n");
 };
 
 export type PublicationDestination = Readonly<{
@@ -174,53 +193,31 @@ export type PublicationDestination = Readonly<{
   readonly environment: string;
 }>;
 
-export const renderDestinationLines = (
+export const destinationRows = (
   destination: PublicationDestination,
-): string[] => [
-  `Profile: ${sanitizeCliText(destination.profile)}`,
-  `Team: ${sanitizeCliText(destination.team)}`,
-  `Project: ${sanitizeCliText(destination.project)}`,
-  `Environment: ${sanitizeCliText(destination.environment)}`,
+): KvRow[] => [
+  { key: "Profile", value: sanitizeCliText(destination.profile) },
+  {
+    key: "Environment",
+    value: sanitizeCliText(destination.environment),
+  },
 ];
 
-const countLabel = (count: number, action: string): string =>
-  `${count} ${count === 1 ? "variable" : "variables"} being ${action}`;
-
-const confirmQuestionWithDiff = (
+export const reviewBody = (
   changes: readonly PublicationChange[] | null,
   destination: PublicationDestination,
-  prompt: string,
-  reveal: boolean = false,
+  reveal: boolean,
+  extra: readonly string[] = [],
 ): string => {
   const lines: string[] = [];
   if (changes !== null && changes.length > 0) {
-    const added = changes.filter((change) => change.kind === "added").length;
-    const updated = changes.filter(
-      (change) => change.kind === "updated",
-    ).length;
-    const removed = changes.filter(
-      (change) => change.kind === "removed",
-    ).length;
-    const summary = [
-      ...(added > 0 ? [countLabel(added, "added")] : []),
-      ...(updated > 0 ? [countLabel(updated, "updated")] : []),
-      ...(removed > 0 ? [countLabel(removed, "removed")] : []),
-    ].join(", ");
-    if (summary.length > 0) lines.push(summary);
-    const body = reveal
-      ? joinDiffBlocks(
-          changes.map((change) =>
-            renderValueDiff(change, { indent: "  ", reveal: true }),
-          ),
-        ).join("\n")
-      : changes
-          .map((change) => renderMaskedChange(change, { indent: "  " }))
-          .join("\n");
-    if (body.length > 0) lines.push(body);
+    lines.push(diffSummary(changes));
+    lines.push("");
+    lines.push(reveal ? revealedBlocks(changes, "  ") : diffTable(changes));
+    lines.push("");
   }
-  if (lines.length > 0) lines.push("");
-  lines.push(...renderDestinationLines(destination));
-  lines.push(prompt);
+  lines.push(...extra);
+  lines.push(kv(destinationRows(destination), 14));
   return lines.join("\n");
 };
 
@@ -255,33 +252,13 @@ export const valueDiffsForPull = (
     }),
   );
 
-export const publicationConfirmQuestion = (
-  changes: readonly PublicationChange[],
-  destination: PublicationDestination,
-  reveal: boolean = false,
-): string => confirmQuestionWithDiff(changes, destination, "Publish?", reveal);
+export const publicationConfirmQuestion = (): string => "Publish? [y/N]";
 
-export const rollbackConfirmQuestion = (
-  changes: readonly PublicationChange[],
-  destination: PublicationDestination,
-  reveal: boolean = false,
-): string =>
-  confirmQuestionWithDiff(
-    changes,
-    destination,
-    "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
-    reveal,
-  );
+export const rollbackConfirmQuestion = (): string =>
+  "Roll back the selected Variables? [y/N]";
 
-export const pullConfirmQuestion = (
-  path: string,
-  changes: readonly PublicationChange[] | null,
-  destination: PublicationDestination,
-  reveal: boolean = false,
-): string =>
-  confirmQuestionWithDiff(
-    changes,
-    destination,
-    `Replace ${path} with decrypted Values?`,
-    reveal,
-  );
+export const pullConfirmQuestion = (path: string): string =>
+  `Replace ${path} with decrypted values? [y/N]`;
+
+export const ROLLBACK_NOTE =
+  "This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.";

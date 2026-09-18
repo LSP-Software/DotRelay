@@ -65,13 +65,6 @@ const boundary = {
   crypto: { available: true },
 } as const;
 
-const destinationLines = [
-  `Profile: ${profile.name}`,
-  "Team: Platform",
-  `Project: ${ids.project}`,
-  "Environment: development",
-];
-
 // The test checkout's own Git state must never steer a pull; these probes pin
 // the repository state each scenario asserts on.
 const gitOutside: GitTrackingProbe = async () => ({ state: "outside" });
@@ -963,9 +956,10 @@ describe("protected CLI workflows", () => {
     expect(result.stdout).toContain('"ok":true');
     expect(result.stdout).not.toContain("postgres://secret");
     const rendered = renderedChunks.join("");
-    expect(rendered).toContain("variable from .env");
+    expect(rendered).toContain("Classify 1 Variable from .env");
     expect(rendered).toContain("DATABASE_URL");
     expect(rendered).toContain("Team");
+    expect(rendered).toContain("Publish? [y/N]");
   });
 
   test("toggles Variable ownership from the classification board", async () => {
@@ -1237,9 +1231,9 @@ describe("protected CLI workflows", () => {
     );
     expect(namesOnly.exitCode).toBe(0);
     expect(namesOnly.stdout).toContain("1 added, 1 updated, 1 removed");
-    expect(namesOnly.stdout).toContain("NEW  added");
-    expect(namesOnly.stdout).toContain("CHANGED  shared  updated");
-    expect(namesOnly.stdout).toContain("GONE  shared  removed");
+    expect(namesOnly.stdout).toContain("NEW");
+    expect(namesOnly.stdout).toContain("CHANGED");
+    expect(namesOnly.stdout).toContain("GONE");
     expect(namesOnly.stdout).not.toContain("KEEP");
     expect(namesOnly.stdout).not.toContain("fresh");
     expect(namesOnly.stdout).not.toContain("next");
@@ -1301,7 +1295,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(unchanged.exitCode).toBe(0);
-    expect(unchanged.stdout).toContain("Local .env matches the Environment");
+    expect(unchanged.stdout).toContain("Your .env matches the Environment");
   });
 
   test("push confirmation describes the changed Variable instead of the live count", async () => {
@@ -1349,15 +1343,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(pushed.exitCode).toBe(0);
-    expect(questions).toEqual([
-      [
-        "1 variable being updated",
-        "  DATABASE_URL  shared  updated",
-        "",
-        ...destinationLines,
-        "Publish?",
-      ].join("\n"),
-    ]);
+    expect(questions).toEqual(["Publish? [y/N]"]);
     expect(questions[0]).not.toContain("abc123x");
     expect(questions[0]).not.toContain("postgres://secret");
     expect(pushed.stdout).not.toContain("abc123x");
@@ -1410,17 +1396,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(revealed.exitCode).toBe(0);
-    expect(questions).toEqual([
-      [
-        "1 variable being updated",
-        "  DATABASE_URL  shared",
-        "  -  postgres://secret",
-        "  +  abc123x",
-        "",
-        ...destinationLines,
-        "Publish?",
-      ].join("\n"),
-    ]);
+    expect(questions).toEqual(["Publish? [y/N]"]);
     expect(revealed.stdout).not.toContain("abc123x");
     expect(revealed.stdout).not.toContain("postgres://secret");
     // The next review goes back to the masked default: reveal is scoped to
@@ -1495,7 +1471,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(declined.exitCode).toBe(2);
-    expect(declined.stderr).toContain("publication confirmation was declined");
+    expect(declined.stderr).toContain("Publication confirmation was declined");
     expect(declined.stderr).not.toContain("abc123x");
     expect(declined.stderr).not.toContain("postgres://secret");
     expect(declined.stdout).not.toContain("abc123x");
@@ -1548,16 +1524,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(pushed.exitCode).toBe(0);
-    expect(questions).toEqual([
-      [
-        "1 variable being added, 1 variable being removed",
-        "  NEW_TOKEN  shared  added",
-        "  API_KEY  user-defined  removed",
-        "",
-        ...destinationLines,
-        "Publish?",
-      ].join("\n"),
-    ]);
+    expect(questions).toEqual(["Publish? [y/N]"]);
     expect(questions[0]).not.toContain("fresh");
     expect(questions[0]).not.toContain("tok");
     expect(pushed.stdout).not.toContain("fresh");
@@ -1611,15 +1578,7 @@ describe("protected CLI workflows", () => {
     );
     expect(pulled.exitCode).toBe(0);
     expect(questions).toEqual([
-      [
-        "1 variable being added, 1 variable being updated, 1 variable being removed",
-        "  DATABASE_URL  shared  updated",
-        "  GONE  removed",
-        "  API_KEY  user-defined  added",
-        "",
-        ...destinationLines,
-        `Replace ${input} with decrypted Values?`,
-      ].join("\n"),
+      `Replace ${input} with decrypted values? [y/N]`,
     ]);
     expect(questions[0]).not.toContain("postgres://local");
     expect(questions[0]).not.toContain("postgres://secret");
@@ -1676,21 +1635,7 @@ describe("protected CLI workflows", () => {
     );
     expect(pulled.exitCode).toBe(0);
     expect(questions).toEqual([
-      [
-        "1 variable being added, 1 variable being updated, 1 variable being removed",
-        "  DATABASE_URL  shared",
-        "  -  postgres://local",
-        "  +  postgres://secret",
-        "",
-        "  GONE",
-        "  -  old",
-        "",
-        "  API_KEY  user-defined",
-        "  +  tok",
-        "",
-        ...destinationLines,
-        `Replace ${input} with decrypted Values?`,
-      ].join("\n"),
+      `Replace ${input} with decrypted values? [y/N]`,
     ]);
     expect(pulled.stdout).not.toContain("postgres://local");
     expect(pulled.stdout).not.toContain("postgres://secret");
@@ -2560,21 +2505,11 @@ describe("protected CLI workflows", () => {
     );
     expect(revealedDeclined.exitCode).toBe(2);
     expect(revealedDeclined.stderr).toContain(
-      "rollback confirmation was declined",
+      "Rollback confirmation was declined",
     );
     expect(revealedDeclined.stderr).not.toContain("abc123x");
     expect(revealedDeclined.stderr).not.toContain("postgres://secret");
-    expect(questions).toEqual([
-      [
-        "1 variable being updated",
-        "  DATABASE_URL  shared",
-        "  -  abc123x",
-        "  +  postgres://secret",
-        "",
-        ...destinationLines,
-        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
-      ].join("\n"),
-    ]);
+    expect(questions).toEqual(["Roll back the selected Variables? [y/N]"]);
     const rolled = await run(
       [
         "rollback",
@@ -2596,15 +2531,7 @@ describe("protected CLI workflows", () => {
       },
     );
     expect(rolled.exitCode).toBe(0);
-    expect(questions[1]).toBe(
-      [
-        "1 variable being updated",
-        "  DATABASE_URL  shared  updated",
-        "",
-        ...destinationLines,
-        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
-      ].join("\n"),
-    );
+    expect(questions[1]).toBe("Roll back the selected Variables? [y/N]");
     expect(questions[1]).not.toContain("abc123x");
     expect(questions[1]).not.toContain("postgres://secret");
     const history = await run(
@@ -2734,7 +2661,6 @@ describe("protected CLI workflows", () => {
     );
     expect(history.exitCode).toBe(0);
     expect(history.stdout).toContain(`Environment ${ids.environment}`);
-    expect(history.stdout).toContain("2 Revision");
     expect(history.stdout).toContain("#1");
     expect(history.stdout).toContain("#2");
     expect(history.stdout).toContain("Genesis");
@@ -2742,8 +2668,8 @@ describe("protected CLI workflows", () => {
     expect(history.stdout).toContain(genesis.request.revision.id);
     expect(history.stdout).toContain("DATABASE_URL");
     expect(history.stdout).toContain("shared");
-    expect(history.stdout).toContain("Value changed");
-    expect(history.stdout).toContain("(current)");
+    expect(history.stdout).toContain("value changed");
+    expect(history.stdout).toContain("current");
     expect(history.stdout).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
     // History output never carries Values, even the ones this Device can read.
     expect(history.stdout).not.toContain("postgres://secret");
@@ -2769,7 +2695,7 @@ describe("protected CLI workflows", () => {
     expect(rolled.exitCode).toBe(0);
     const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
     expect(body.ok).toBe(true);
-    expect(body.message).toBe("Published");
+    expect(body.message).toBe("Rollback published");
     const history = await run(
       [
         "history",
@@ -2816,7 +2742,7 @@ describe("protected CLI workflows", () => {
     expect(rolled.exitCode).toBe(0);
     const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
     expect(body.ok).toBe(true);
-    expect(body.message).toBe("Published");
+    expect(body.message).toBe("Rollback published");
   });
 
   test("a bare rollback chooses the target and Variables from the rendered history", async () => {
@@ -2850,7 +2776,7 @@ describe("protected CLI workflows", () => {
     expect(rolled.exitCode).toBe(0);
     const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
     expect(body.ok).toBe(true);
-    expect(body.message).toBe("Published");
+    expect(body.message).toBe("Rollback published");
     // The rendered history carried the readable selection context: the
     // operator picked a target from it without touching a JSON dump.
     const terminalText = rendered.join("");

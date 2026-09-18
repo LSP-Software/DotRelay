@@ -151,7 +151,8 @@ removes Variables, `--no-input` alone is refused and the operator must additiona
 `--force` to publish the removals. Publications that only add or update Variables proceed under
 `--no-input` without it.
 
-Publication progress is Encrypting, Uploading, then Published. The CLI reviews the publication
+Publication progress is Encrypting values, Uploading, then Uploaded, followed by a Published
+summary. The CLI reviews the publication
 summary before beginning staging. It then uploads the signed command and encrypted protocol
 objects, finalizes the operation with the expected head and epoch, and cancels a failed operation
 when the Server Profile permits cancellation.
@@ -236,8 +237,8 @@ previously authenticated, enrolled persistent Device with explicit profile conte
 Portable plaintext or environment-variable credential bundles and auto-approved ephemeral Devices
 are not supported.
 
-`status` prints a short card: profile, origin, signed-in, Device enrolled. It never dumps key:value
-local state.
+`status` prints a short card: Server Profile, Origin, Session, and Device, ending with a state
+line or the next command to run. It never dumps key:value local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle
 in the native credential store, with a protected local record for its profile and Device id.

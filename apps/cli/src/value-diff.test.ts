@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { reviewFrame } from "./components";
 import {
+  destinationRows,
   publicationConfirmQuestion,
   pullConfirmQuestion,
   renderEnvDiff,
   renderMaskedChange,
   renderValueDiff,
+  reviewBody,
   rollbackConfirmQuestion,
   valueDiffsForPull,
 } from "./value-diff";
@@ -15,11 +18,9 @@ const destination = {
   project: "55555555-5555-4555-8555-555555555555",
   environment: "development",
 };
-const destinationLines = [
-  `Profile: ${destination.profile}`,
-  `Team: ${destination.team}`,
-  `Project: ${destination.project}`,
-  `Environment: ${destination.environment}`,
+const destinationKv = [
+  "  Profile        relay",
+  "  Environment    development",
 ];
 
 describe("CLI value diffs", () => {
@@ -138,11 +139,14 @@ describe("CLI value diffs", () => {
       ]),
     ).toBe(
       [
-        "  ·  1 added, 1 updated, 1 removed",
+        "  dotrelay diff",
         "",
-        "     CHANGED  shared  updated",
-        "     NEW  added",
-        "     GONE  user-defined  removed",
+        "1 added, 1 updated, 1 removed",
+        "",
+        "Variable  Ownership     Change",
+        "  CHANGED   shared        updated",
+        "  NEW       —             added",
+        "  GONE      user-defined  removed",
         "",
       ].join("\n"),
     );
@@ -177,17 +181,30 @@ describe("CLI value diffs", () => {
       ),
     ).toBe(
       [
-        "  ·  1 added, 1 updated, 1 removed",
+        "  dotrelay diff",
         "",
-        "     CHANGED  shared",
-        "     -  prev",
-        "     +  next",
+        "1 added, 1 updated, 1 removed",
         "",
-        "     NEW",
-        "     +  fresh",
+        "CHANGED  shared",
+        "-  prev",
+        "+  next",
         "",
-        "     GONE  user-defined",
-        "     -  old",
+        "NEW",
+        "+  fresh",
+        "",
+        "GONE  user-defined",
+        "-  old",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("diff with no changes reports an exact match", () => {
+    expect(renderEnvDiff([])).toBe(
+      [
+        "  dotrelay diff",
+        "",
+        "  ✓  Your .env matches the Environment",
         "",
       ].join("\n"),
     );
@@ -203,28 +220,53 @@ describe("CLI value diffs", () => {
         ownership: "shared" as const,
       },
     ];
-    expect(publicationConfirmQuestion(changes, destination)).toBe(
+    expect(publicationConfirmQuestion()).toBe("Publish? [y/N]");
+    expect(reviewBody(changes, destination, false)).toBe(
       [
-        "1 variable being updated",
-        "  DATABASE_URL  shared  updated",
+        "1 updated",
         "",
-        ...destinationLines,
-        "Publish?",
+        "Variable      Ownership  Change",
+        "  DATABASE_URL  shared     updated",
+        "",
+        ...destinationKv,
       ].join("\n"),
     );
-    expect(publicationConfirmQuestion(changes, destination, true)).toBe(
+    expect(reviewBody(changes, destination, true)).toBe(
       [
-        "1 variable being updated",
+        "1 updated",
+        "",
         "  DATABASE_URL  shared",
         "  -  postgres://secret",
         "  +  abc",
         "",
-        ...destinationLines,
-        "Publish?",
+        ...destinationKv,
       ].join("\n"),
     );
     expect(
-      publicationConfirmQuestion(
+      reviewFrame({
+        title: `Review — publish to ${destination.environment}`,
+        body: reviewBody(changes, destination, false),
+        question: publicationConfirmQuestion(),
+      }),
+    ).toBe(
+      [
+        "─".repeat(40),
+        `  Review — publish to ${destination.environment}`,
+        "",
+        "  1 updated",
+        "",
+        "  Variable      Ownership  Change",
+        "    DATABASE_URL  shared     updated",
+        "",
+        "    Profile        relay",
+        "    Environment    development",
+        "",
+        "  Publish? [y/N]",
+        "─".repeat(40),
+      ].join("\n"),
+    );
+    expect(
+      reviewBody(
         [
           {
             kind: "added",
@@ -242,15 +284,17 @@ describe("CLI value diffs", () => {
           },
         ],
         destination,
+        false,
       ),
     ).toBe(
       [
-        "1 variable being added, 1 variable being removed",
-        "  NEW_TOKEN  shared  added",
-        "  API_KEY  user-defined  removed",
+        "1 added, 1 removed",
         "",
-        ...destinationLines,
-        "Publish?",
+        "Variable   Ownership     Change",
+        "  NEW_TOKEN  shared        added",
+        "  API_KEY    user-defined  removed",
+        "",
+        ...destinationKv,
       ].join("\n"),
     );
   });
@@ -265,24 +309,28 @@ describe("CLI value diffs", () => {
         ownership: "shared" as const,
       },
     ];
-    expect(rollbackConfirmQuestion(changes, destination)).toBe(
+    expect(rollbackConfirmQuestion()).toBe(
+      "Roll back the selected Variables? [y/N]",
+    );
+    expect(reviewBody(changes, destination, false)).toBe(
       [
-        "1 variable being updated",
-        "  DATABASE_URL  shared  updated",
+        "1 updated",
         "",
-        ...destinationLines,
-        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
+        "Variable      Ownership  Change",
+        "  DATABASE_URL  shared     updated",
+        "",
+        ...destinationKv,
       ].join("\n"),
     );
-    expect(rollbackConfirmQuestion(changes, destination, true)).toBe(
+    expect(reviewBody(changes, destination, true)).toBe(
       [
-        "1 variable being updated",
+        "1 updated",
+        "",
         "  DATABASE_URL  shared",
         "  -  postgres://secret",
         "  +  abc",
         "",
-        ...destinationLines,
-        "Roll back the selected Variables? This appends a new signed Rollback Revision; earlier Revisions are never rewritten or removed.",
+        ...destinationKv,
       ].join("\n"),
     );
   });
@@ -294,39 +342,23 @@ describe("CLI value diffs", () => {
       project: "55555555\u0000",
       environment: "development\u001b[2J",
     };
-    expect(
-      publicationConfirmQuestion(
-        [
-          {
-            kind: "updated",
-            name: "DATABASE_URL",
-            from: "postgres://secret",
-            to: "abc",
-            ownership: "shared",
-          },
-        ],
-        hostile,
-        true,
+    expect(reviewBody(null, hostile, true)).toBe(
+      ["  Profile        relay[31m", "  Environment    development[2J"].join(
+        "\n",
       ),
-    ).toBe(
-      [
-        "1 variable being updated",
-        "  DATABASE_URL  shared",
-        "  -  postgres://secret",
-        "  +  abc",
-        "",
-        "Profile: relay[31m",
-        "Team: Platform]0;evil",
-        "Project: 55555555",
-        "Environment: development[2J",
-        "Publish?",
-      ].join("\n"),
     );
   });
 
+  test("destination rows drop internal identifiers", () => {
+    expect(destinationRows(destination)).toEqual([
+      { key: "Profile", value: destination.profile, tone: undefined },
+      { key: "Environment", value: destination.environment, tone: undefined },
+    ]);
+  });
+
   test("confirmation without a diff still identifies the destination", () => {
-    expect(pullConfirmQuestion(".env", null, destination)).toBe(
-      [...destinationLines, "Replace .env with decrypted Values?"].join("\n"),
+    expect(pullConfirmQuestion(".env")).toBe(
+      "Replace .env with decrypted values? [y/N]",
     );
   });
 
@@ -370,20 +402,22 @@ describe("CLI value diffs", () => {
         ownership: "user-defined",
       },
     ]);
-    expect(pullConfirmQuestion(".env", changes, destination)).toBe(
+    expect(reviewBody(changes, destination, false)).toBe(
       [
-        "1 variable being added, 1 variable being updated, 1 variable being removed",
-        "  DATABASE_URL  shared  updated",
-        "  GONE  removed",
-        "  API_KEY  user-defined  added",
+        "1 added, 1 updated, 1 removed",
         "",
-        ...destinationLines,
-        "Replace .env with decrypted Values?",
+        "Variable      Ownership     Change",
+        "  DATABASE_URL  shared        updated",
+        "  GONE          —             removed",
+        "  API_KEY       user-defined  added",
+        "",
+        ...destinationKv,
       ].join("\n"),
     );
-    expect(pullConfirmQuestion(".env", changes, destination, true)).toBe(
+    expect(reviewBody(changes, destination, true)).toBe(
       [
-        "1 variable being added, 1 variable being updated, 1 variable being removed",
+        "1 added, 1 updated, 1 removed",
+        "",
         "  DATABASE_URL  shared",
         "  -  postgres://local",
         "  +  postgres://secret",
@@ -394,8 +428,7 @@ describe("CLI value diffs", () => {
         "  API_KEY  user-defined",
         "  +  tok",
         "",
-        ...destinationLines,
-        "Replace .env with decrypted Values?",
+        ...destinationKv,
       ].join("\n"),
     );
   });
