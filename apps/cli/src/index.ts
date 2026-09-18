@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   type CliDeviceStorage,
   createCliDeviceStorage,
@@ -61,10 +61,7 @@ import {
   worktreeConfigPath,
   writeWorktreeContext,
 } from "./context";
-import {
-  createNativeCredentialStore,
-  type NativeCredentialStore,
-} from "./credentials";
+import { type CredentialStore, createFileCredentialStore } from "./credentials";
 import {
   createFileDeviceRecordStore,
   deviceMetadataPath,
@@ -131,7 +128,7 @@ export const main = (args: string[]): string => {
 
 export type CliRuntime = Readonly<{
   readonly profilePath?: string;
-  readonly credentials?: NativeCredentialStore;
+  readonly credentials?: CredentialStore;
   readonly fetch?: FetchFunction;
   readonly networkPolicy?: NetworkPolicy;
   readonly deviceId?: string;
@@ -153,6 +150,16 @@ export type CliRunResult = Readonly<{
   readonly stdout: string;
   readonly stderr: string;
 }>;
+
+// The default credential store is the local file store rooted in the Server
+// Profile catalog's state directory, so DOTRELAY_CONFIG_DIR moves it with the
+// rest of the CLI's state. Embeds may supply their own store through
+// CliRuntime.credentials.
+const localCredentials = (runtime: CliRuntime): CredentialStore =>
+  runtime.credentials ??
+  createFileCredentialStore(
+    join(dirname(runtime.profilePath ?? profileCatalogPath()), "credentials"),
+  );
 
 const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
   try {
@@ -606,7 +613,7 @@ const deviceWorkflowOptions = (
   parsed: ParsedArguments,
   runtime: CliRuntime,
   profile: Awaited<ReturnType<typeof resolveServerProfile>>,
-  credentials: NativeCredentialStore,
+  credentials: CredentialStore,
 ) => {
   const stateDirectory =
     runtime.stateDirectory ??
@@ -643,7 +650,7 @@ const requireEnrolledDevice = (deviceId: string | null): string => {
 const createAdminClient = async (
   runtime: CliRuntime,
   profile: Awaited<ReturnType<typeof resolveServerProfile>>,
-  credentials: NativeCredentialStore,
+  credentials: CredentialStore,
 ): Promise<StrictJsonClient> => {
   if (runtime.admin) return runtime.admin;
   const stateDirectory =
@@ -687,7 +694,7 @@ const loginAndEnroll = async (
   runtime: CliRuntime,
   profile: Awaited<ReturnType<typeof resolveServerProfile>>,
 ): Promise<Record<string, unknown>> => {
-  const credentials = runtime.credentials ?? createNativeCredentialStore();
+  const credentials = localCredentials(runtime);
   const output = runtime.terminal?.output ?? process.stderr;
   const policy = runtime.networkPolicy ?? defaultNetworkPolicy;
   const outputIsTty =
@@ -903,7 +910,7 @@ const verifyStatus = async (
   runtime: CliRuntime,
   selected: CliServerProfile,
 ): Promise<Record<string, unknown>> => {
-  const credentials = runtime.credentials ?? createNativeCredentialStore();
+  const credentials = localCredentials(runtime);
   const stateDirectory =
     runtime.stateDirectory ??
     dirname(runtime.profilePath ?? profileCatalogPath());
@@ -1287,7 +1294,7 @@ const execute = async (
       parsed.profile,
       profileOptions(runtime),
     );
-    const credentials = runtime.credentials ?? createNativeCredentialStore();
+    const credentials = localCredentials(runtime);
     await createSessionStore(credentials).remove(profile.pin);
     return { value: { profile: profile.name, loggedOut: true } };
   }
@@ -1334,7 +1341,7 @@ const execute = async (
         })
       ).identity;
     } else {
-      const credentials = runtime.credentials ?? createNativeCredentialStore();
+      const credentials = localCredentials(runtime);
       const sessionToken = await createSessionStore(credentials).get(
         profile.pin,
       );
@@ -1419,7 +1426,7 @@ const execute = async (
       await (runtime.readGitRemotes ?? readGitRemotes)(),
       repositorySelectionOptions(parsed, runtime, context),
     );
-    const credentials = runtime.credentials ?? createNativeCredentialStore();
+    const credentials = localCredentials(runtime);
     const admin = await createAdminClient(runtime, profile, credentials);
     const resolved = await resolveSelectedRepository(admin, context, selection);
     const project = await linkProject(admin, {
@@ -1472,7 +1479,7 @@ const execute = async (
     const environmentReference = parsed.environment ?? parsed.positionals[0];
     if (!environmentReference)
       throw new Error("env use requires an Environment id or label");
-    const credentials = runtime.credentials ?? createNativeCredentialStore();
+    const credentials = localCredentials(runtime);
     const admin = await createAdminClient(runtime, profile, credentials);
     const environment = await resolveEnvironmentReference(
       admin,
@@ -1517,7 +1524,7 @@ const execute = async (
       parsed.profile,
       profileOptions(runtime),
     );
-    const credentials = runtime.credentials ?? createNativeCredentialStore();
+    const credentials = localCredentials(runtime);
     const stateDirectory =
       runtime.stateDirectory ??
       dirname(runtime.profilePath ?? profileCatalogPath());
@@ -1627,7 +1634,7 @@ const execute = async (
         await (runtime.readGitRemotes ?? readGitRemotes)(),
         repositorySelectionOptions(parsed, runtime, localContext),
       );
-      const credentials = runtime.credentials ?? createNativeCredentialStore();
+      const credentials = localCredentials(runtime);
       const admin =
         runtime.admin ??
         createStrictJsonClient(profile.pin, credentials, {
@@ -1834,7 +1841,7 @@ const execute = async (
     const workflowResult = await runProtectedWorkflow(
       {
         profile,
-        credentials: runtime.credentials ?? createNativeCredentialStore(),
+        credentials: localCredentials(runtime),
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
         ...(runtime.networkPolicy
           ? { networkPolicy: runtime.networkPolicy }

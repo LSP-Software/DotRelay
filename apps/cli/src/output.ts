@@ -32,7 +32,13 @@ const writeProtected = async (path: string, data: string | Uint8Array) => {
     `.${basename(path)}.${crypto.randomUUID()}.tmp`,
   );
   try {
-    await writeFile(temporary, data, { encoding: "utf8", mode: 0o600 });
+    await writeFile(
+      temporary,
+      data,
+      typeof data === "string"
+        ? { encoding: "utf8", mode: 0o600 }
+        : { mode: 0o600 },
+    );
     await chmod(temporary, 0o600);
     await rename(temporary, path);
     if (process.platform !== "win32") await chmod(path, 0o600);
@@ -83,7 +89,7 @@ const retainPreviousFile = async (path: string): Promise<void> => {
 
 export const atomicWriteProtectedFile = async (
   path: string,
-  contents: string,
+  contents: string | Uint8Array,
   options: Readonly<{ readonly retainPrevious?: boolean }> = {},
 ): Promise<void> => {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });

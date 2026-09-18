@@ -20,7 +20,7 @@ import {
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
-import type { NativeCredentialStore } from "./credentials";
+import type { CredentialStore } from "./credentials";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { main, renderHelp, run, version } from "./index";
 import type { NetworkPolicy } from "./network";
@@ -684,7 +684,7 @@ const seedCommandState = async (
   profilePath: string;
   stateDirectory: string;
   contextPath: string;
-  credentials: NativeCredentialStore;
+  credentials: CredentialStore;
   cleanup: () => Promise<void>;
 }> => {
   const stateDirectory = await mkdtemp(join(tmpdir(), "dotrelay-admin-http-"));
@@ -713,7 +713,7 @@ const seedCommandState = async (
       fixture.pin,
       deviceId,
     );
-  const credentials: NativeCredentialStore = Object.freeze({
+  const credentials: CredentialStore = Object.freeze({
     get: async () => new TextEncoder().encode(sessionToken),
     set: async () => undefined,
     delete: async () => undefined,
@@ -737,7 +737,7 @@ const runtimeForCommandState = (state: {
   profilePath: string;
   stateDirectory: string;
   contextPath: string;
-  credentials: NativeCredentialStore;
+  credentials: CredentialStore;
 }) => ({
   profilePath: state.profilePath,
   stateDirectory: state.stateDirectory,
@@ -1064,7 +1064,7 @@ const seedProtocolCommandState = async (
   profilePath: string;
   stateDirectory: string;
   contextPath: string;
-  credentials: NativeCredentialStore;
+  credentials: CredentialStore;
   deviceStorage: ReturnType<typeof createCliDeviceStorage>;
   cleanup: () => Promise<void>;
 }> => {
@@ -1094,7 +1094,7 @@ const seedProtocolCommandState = async (
     deviceId,
   );
   const secrets = new Map<string, Uint8Array>();
-  const credentials: NativeCredentialStore = Object.freeze({
+  const credentials: CredentialStore = Object.freeze({
     get: async (_service, account) => {
       const value = secrets.get(account);
       return value ? new Uint8Array(value) : null;
@@ -1133,7 +1133,7 @@ const runtimeForProtocolState = (state: {
   profilePath: string;
   stateDirectory: string;
   contextPath: string;
-  credentials: NativeCredentialStore;
+  credentials: CredentialStore;
   deviceStorage: ReturnType<typeof createCliDeviceStorage>;
 }) => ({
   profilePath: state.profilePath,
@@ -2886,13 +2886,13 @@ const createLoginFixture = async (
   Readonly<{
     readonly profilePath: string;
     readonly stateDirectory: string;
-    readonly credentials: NativeCredentialStore;
+    readonly credentials: CredentialStore;
     readonly deviceStorage: ReturnType<typeof createCliDeviceStorage>;
     readonly fetch: FetchFunction;
     readonly runtime: Readonly<{
       readonly profilePath: string;
       readonly stateDirectory: string;
-      readonly credentials: NativeCredentialStore;
+      readonly credentials: CredentialStore;
       readonly deviceStorage: ReturnType<typeof createCliDeviceStorage>;
       readonly fetch: FetchFunction;
     }>;
@@ -2919,7 +2919,7 @@ const createLoginFixture = async (
       };
   await Bun.write(profilePath, JSON.stringify(catalog));
   const secrets = new Map<string, Uint8Array>();
-  const credentials: NativeCredentialStore = Object.freeze({
+  const credentials: CredentialStore = Object.freeze({
     get: async (_service, account) => {
       const value = secrets.get(account);
       return value ? new Uint8Array(value) : null;
@@ -3722,7 +3722,7 @@ const seedStatusState = async (
   profilePath: string;
   stateDirectory: string;
   contextPath: string;
-  credentials: NativeCredentialStore;
+  credentials: CredentialStore;
   deviceStorage: ReturnType<typeof createCliDeviceStorage> | null;
   cleanup: () => Promise<void>;
 }> => {
@@ -3747,7 +3747,7 @@ const seedStatusState = async (
     }),
   );
   const secrets = new Map<string, Uint8Array>();
-  const credentials: NativeCredentialStore = Object.freeze({
+  const credentials: CredentialStore = Object.freeze({
     get: async (_service, account) => {
       const value = secrets.get(account);
       return value ? new Uint8Array(value) : null;
@@ -3805,7 +3805,7 @@ const statusRuntime = (state: {
   profilePath: string;
   stateDirectory: string;
   contextPath: string;
-  credentials: NativeCredentialStore;
+  credentials: CredentialStore;
   deviceStorage: ReturnType<typeof createCliDeviceStorage> | null;
 }) => ({
   profilePath: state.profilePath,

@@ -24,7 +24,7 @@ import {
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
-import type { NativeCredentialStore } from "./credentials";
+import type { CredentialStore } from "./credentials";
 import { CliError } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
@@ -181,7 +181,7 @@ const setup = async (
     }>[];
   }> = {},
 ): Promise<{
-  credentials: NativeCredentialStore;
+  credentials: CredentialStore;
   deviceStorage: ReturnType<typeof createCliDeviceStorage>;
   admin: StrictJsonClient;
   fetch: FetchFunction;
