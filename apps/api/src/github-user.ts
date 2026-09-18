@@ -192,14 +192,26 @@ export const resolveGitHubUserIdentity = async (
       return { code: "github_unavailable" };
     }
     // 403 and 404 are conflated on purpose: the endpoint is not an
-    // existence oracle, so absence and denial answer identically.
-    if (response.status === 403 || response.status === 404)
+    // existence oracle, so absence and denial answer identically. A 403
+    // that carries GitHub's rate-limit signals (a Retry-After, or an
+    // exhausted x-ratelimit-remaining) is a secondary rate limit, and
+    // answering it "not found" would send the owner to retype the login
+    // instead of waiting out the window.
+    const retryAfterHeader =
+      response.headers.get("Retry-After") ??
+      response.headers.get("X-Retry-After");
+    const secondaryRateLimited =
+      response.status === 403 &&
+      (retryAfterHeader !== null ||
+        response.headers.get("x-ratelimit-remaining") === "0");
+    if (
+      (response.status === 403 && !secondaryRateLimited) ||
+      response.status === 404
+    )
       return { code: "github_identity_not_found" };
-    const transient = response.status === 429 || response.status >= 500;
+    const transient =
+      secondaryRateLimited || response.status === 429 || response.status >= 500;
     if (transient && attempt < USER_MAX_ATTEMPTS && now() < deadlineAt) {
-      const retryAfterHeader =
-        response.headers.get("Retry-After") ??
-        response.headers.get("X-Retry-After");
       const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader, now);
       const retryAfterMs =
         retryAfterSeconds !== undefined
@@ -211,13 +223,9 @@ export const resolveGitHubUserIdentity = async (
       await sleep(Math.min(retryAfterMs, Math.max(0, deadlineAt - now())));
       continue;
     }
-    if (response.status === 429) {
+    if (secondaryRateLimited || response.status === 429) {
       const retryAfterSeconds =
-        parseRetryAfterSeconds(
-          response.headers.get("Retry-After") ??
-            response.headers.get("X-Retry-After"),
-          now,
-        ) ??
+        parseRetryAfterSeconds(retryAfterHeader, now) ??
         parseRateResetSeconds(response.headers.get("x-ratelimit-reset"), now);
       return {
         code: "github_rate_limited",

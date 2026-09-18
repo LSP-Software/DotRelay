@@ -117,6 +117,59 @@ test("GitHub denial and absence answer identically and never retry", async () =>
   }
 });
 
+test("a secondary rate limit 403 is rate-limited, not a missing login", async () => {
+  const sleeps: number[] = [];
+  let calls = 0;
+  const fetchImpl = (async (_input: string | URL | Request) => {
+    calls += 1;
+    return new Response("secondary rate limited", {
+      status: 403,
+      headers: { "Retry-After": "7" },
+    });
+  }) as typeof fetch;
+
+  const outcome = await resolveGitHubUserIdentity(
+    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    "auth-user",
+    "octocat",
+    {
+      fetch: fetchImpl,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      now: () => 0,
+    },
+  );
+
+  expect(outcome).toEqual({
+    code: "github_rate_limited",
+    retryAfterSeconds: 7,
+  });
+  expect(calls).toBe(3);
+  expect(sleeps).toEqual([7000, 7000]);
+});
+
+test("a 403 with an exhausted rate budget is treated as a rate limit", async () => {
+  let calls = 0;
+  const fetchImpl = (async (_input: string | URL | Request) => {
+    calls += 1;
+    return new Response("rate limited", {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0" },
+    });
+  }) as typeof fetch;
+
+  const outcome = await resolveGitHubUserIdentity(
+    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    "auth-user",
+    "octocat",
+    { fetch: fetchImpl, sleep: async () => undefined, now: () => 40_000 },
+  );
+
+  expect(outcome).toEqual({ code: "github_rate_limited" });
+  expect(calls).toBe(3);
+});
+
 test("an invalid login is never sent to GitHub", async () => {
   let calls = 0;
   const fetchImpl = (async (_input: string | URL | Request) => {

@@ -197,5 +197,12 @@ pinned footer, and its Cancel/Add actions stay visible, including while the visi
 viewport shrinks as an on-screen keyboard raises (Playwright cannot shrink only the visual
 viewport, so the keyboard is simulated by resizing the viewport), whether before or after
 the field is focused. Desktop and mobile navigation keep Devices and Recovery reachable
-with a long Project list. Tests observe browser-visible behavior and never
+with a long Project list. `apps/web/e2e/workspace-invitations.spec.ts` covers the Team
+invitation lifecycle against the service's API: a failed GitHub login resolution keeps the
+form on the login field with an actionable explanation and never creates an invitation, a
+rejected creation keeps the resolved identity and the service's error ready to retry, the
+Members table reads the Team's persisted record and survives reloads and Team switching,
+and an invitee who has not joined a Team sees the invitation addressed to them and, after
+the service confirms acceptance, the record moves to the pending key-grant state.
+Tests observe browser-visible behavior and never
 reach into component state.
