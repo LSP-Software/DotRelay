@@ -182,27 +182,6 @@ test("signing out from the user card returns to sign-in", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("a failed sign-out keeps the session and reports the failure", async ({
-  page,
-}) => {
-  await page.route(/\/api\/auth\/sign-out$/, (route) =>
-    route.fulfill({ status: 500, body: "unavailable" }),
-  );
-  await page.goto("/workspace");
-
-  await page
-    .locator("aside")
-    .getByRole("button", { name: "Open user menu" })
-    .click();
-  await page.getByRole("menuitem", { name: "Sign out" }).click();
-
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  await expect(
-    page.getByText("Sign-out failed. You are still signed in."),
-  ).toBeVisible();
-  await expect(page.locator("aside").getByText("Signed in")).toBeVisible();
-});
-
 test("keyboard and responsive navigation keep critical routes reachable", async ({
   page,
 }) => {

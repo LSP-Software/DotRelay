@@ -49,7 +49,7 @@ export const UserSessionCard = ({
           {image ? (
             <AvatarImage alt="" referrerPolicy="no-referrer" src={image} />
           ) : null}
-          <AvatarFallback>{initialsFor(label)}</AvatarFallback>
+          <AvatarFallback>{initialsFor(displayName ?? "DR")}</AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{label}</p>
