@@ -14,3 +14,5 @@ apps/web/next-env.d.ts
 apps/web/AGENTS.md
 apps/web/CLAUDE.md
 __pycache__/
+# UX tooling: per-machine launcher binary (re-downloaded on first run elsewhere)
+.agents/skills/impeccable/scripts/bin/
