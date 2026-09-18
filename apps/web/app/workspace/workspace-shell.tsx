@@ -89,6 +89,16 @@ import {
   nextSetupAction,
   type SetupAction,
 } from "@/lib/environment-workflow";
+import {
+  acceptTeamInvitation,
+  createTeamInvitation,
+  fetchMyInvitations,
+  fetchTeamMemberships,
+  type MyInvitations,
+  type ResolvedGitHubUser,
+  resolveGitHubLogin,
+  type TeamMembershipState,
+} from "@/lib/team-administration";
 import { cn } from "@/lib/utils";
 import {
   emptyWorkspaceBoundary,
@@ -207,6 +217,22 @@ const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
     "Admins can invite members and manage projects and environments. They cannot change owners or other admins.",
   MEMBER:
     "Members can view this team's projects, read shared values, and manage their own values.",
+};
+
+const roleLabel = (role: MembershipRole | undefined): string =>
+  role === "OWNER" ? "Owner" : role === "ADMIN" ? "Admin" : "Member";
+
+// Invitation and expiry timestamps are absolute, so a human-readable date is
+// shown rather than a raw offset.
+const formatDate = (iso: string | undefined): string => {
+  if (!iso) return "unknown";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 };
 
 const missingResourceCopy: Readonly<
@@ -464,8 +490,28 @@ export const WorkspaceShell = ({
   const [projectLifecycle, setProjectLifecycle] =
     useState<ResourceLifecycle>("ACTIVE");
   const [invitationOpen, setInvitationOpen] = useState(false);
-  const [githubSubject, setGithubSubject] = useState("");
-  const [invitations, setInvitations] = useState<string[]>([]);
+  // The invitation dialog is a two-step flow: resolve a GitHub login to its
+  // stable subject, then create the invitation. The resolved identity is
+  // retained so a failed create keeps everything the user already confirmed.
+  const [inviteLogin, setInviteLogin] = useState("");
+  const [inviteStep, setInviteStep] = useState<"form" | "confirmed">("form");
+  const [inviteResolved, setInviteResolved] =
+    useState<ResolvedGitHubUser | null>(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  // The Team's persisted membership record, fetched from the service so it
+  // survives reloads and Team switches. Null while loading or unavailable.
+  const [membershipState, setMembershipState] =
+    useState<TeamMembershipState | null>(null);
+  const [membershipError, setMembershipError] = useState<string | null>(null);
+  const [membershipTick, setMembershipTick] = useState(0);
+  const [myInvitations, setMyInvitations] = useState<MyInvitations | null>(
+    null,
+  );
+  const [acceptingInvitationId, setAcceptingInvitationId] = useState<
+    string | null
+  >(null);
+  const [acceptError, setAcceptError] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sessionsByKey, setSessionsByKey] = useState<
     ReadonlyMap<string, EnvironmentProtocolSession>
@@ -583,6 +629,141 @@ export const WorkspaceShell = ({
   const enrolledDevices = enrolledDeviceRows(displayBoundary, {
     thisBrowserEnrolled,
   });
+
+  // The membership and invitation surfaces are reached straight from the
+  // browser at the Server Profile's API origin. A deployment that never
+  // declares that origin has no live Team record to show, so the fetches are
+  // skipped rather than pointed at an unrelated server.
+  const apiOrigin = resolveApiOrigin();
+  const browserDeviceId =
+    displayBoundary.device.active && !protectedPreview
+      ? displayBoundary.device.id
+      : undefined;
+  const sessionActive = displayBoundary.session.active;
+
+  // Keep the selected Team's persisted membership record current: refetch on
+  // Team or session change, on reconnecting, and after a mutation (tick).
+  useEffect(() => {
+    const selectedTeamId = selectedTeam?.id;
+    if (!apiOrigin || !selectedTeamId || !sessionActive) {
+      setMembershipState(null);
+      setMembershipError(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      setMembershipError(null);
+      const result = await fetchTeamMemberships(apiOrigin, selectedTeamId);
+      if (cancelled) return;
+      if (result.ok) setMembershipState(result.data);
+      else {
+        setMembershipState(null);
+        setMembershipError(result.message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    apiOrigin,
+    selectedTeam?.id,
+    sessionActive,
+    membershipTick,
+    displayBoundary.connection,
+  ]);
+
+  // Keep the invitations addressed to the signed-in User current, so an
+  // invitee who has not yet joined a Team still sees the invitation they hold.
+  useEffect(() => {
+    if (!apiOrigin || !sessionActive) {
+      setMyInvitations(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const result = await fetchMyInvitations(apiOrigin);
+      if (cancelled) return;
+      setMyInvitations(result.ok ? result.data : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiOrigin, sessionActive, membershipTick, displayBoundary.connection]);
+
+  const refreshTeamAdministration = () => {
+    setMembershipTick((tick) => tick + 1);
+  };
+
+  const resetInvitationDialog = () => {
+    setInviteLogin("");
+    setInviteStep("form");
+    setInviteResolved(null);
+    setInviteBusy(false);
+    setInviteError(null);
+  };
+
+  const openInvitationDialog = () => {
+    resetInvitationDialog();
+    setInvitationOpen(true);
+  };
+
+  // Resolve a familiar GitHub login to its stable subject on the acting
+  // User's behalf. A failure keeps the dialog open on the form the user was
+  // filling in, with an explanation of what to fix.
+  const resolveInvitation = async () => {
+    const login = inviteLogin.trim();
+    if (!login || !apiOrigin || inviteBusy) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    const result = await resolveGitHubLogin(apiOrigin, login, browserDeviceId);
+    setInviteBusy(false);
+    if (result.ok) {
+      setInviteResolved(result.data);
+      setInviteStep("confirmed");
+    } else {
+      setInviteError(result.message);
+    }
+  };
+
+  // Create the invitation only after the login has resolved. "Invitation
+  // created" is never shown until the service confirms it, and a failure
+  // keeps the resolved identity so the user can retry without re-resolving.
+  const createInvitation = async () => {
+    const resolved = inviteResolved;
+    const selectedTeamId = selectedTeam?.id;
+    if (!apiOrigin || !resolved || !selectedTeamId || inviteBusy) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    const result = await createTeamInvitation(
+      apiOrigin,
+      selectedTeamId,
+      resolved.githubUserId,
+      browserDeviceId,
+    );
+    setInviteBusy(false);
+    if (result.ok) {
+      setInvitationOpen(false);
+      resetInvitationDialog();
+      refreshTeamAdministration();
+    } else {
+      setInviteError(result.message);
+    }
+  };
+
+  // Accepting an invitation creates the User's pending Membership; no Device
+  // is required, since the member has not finished key provisioning yet.
+  const acceptInvitation = async (invitationId: string) => {
+    if (!apiOrigin || acceptingInvitationId) return;
+    setAcceptingInvitationId(invitationId);
+    setAcceptError(null);
+    const result = await acceptTeamInvitation(apiOrigin, invitationId);
+    setAcceptingInvitationId(null);
+    if (result.ok) {
+      refreshTeamAdministration();
+    } else {
+      setAcceptError(result.message);
+    }
+  };
 
   const setupAction = nextSetupAction({
     sessionActive: displayBoundary.session.active,
@@ -1619,11 +1800,13 @@ export const WorkspaceShell = ({
   };
 
   const resetWorkspaceContext = () => {
-    setInvitations([]);
     setEnvironmentLifecycle("ACTIVE");
     setProjectLifecycle("ACTIVE");
     setInvitationOpen(false);
-    setGithubSubject("");
+    resetInvitationDialog();
+    setMembershipState(null);
+    setMembershipError(null);
+    setAcceptError(null);
     setTrustedOverride(false);
     setProjectId(null);
     setEnvironmentId(null);
@@ -1648,14 +1831,6 @@ export const WorkspaceShell = ({
       environmentId: null,
       view: "projects",
     });
-  };
-
-  const createInvitation = () => {
-    const subject = githubSubject.trim();
-    if (!subject) return;
-    setInvitations((current) => [...current, subject]);
-    setGithubSubject("");
-    setInvitationOpen(false);
   };
 
   const closeMobile = () => setMobileOpen(false);
@@ -1943,6 +2118,80 @@ export const WorkspaceShell = ({
                   </AlertDescription>
                 </Alert>
               ) : null}
+              {apiOrigin &&
+              sessionActive &&
+              myInvitations &&
+              (myInvitations.invitations.length > 0 ||
+                myInvitations.pendingMemberships.length > 0) ? (
+                <Card
+                  className="mb-4 border-primary/30"
+                  data-testid="my-invitations-card"
+                >
+                  <CardHeader>
+                    <CardTitle>Invitations for you</CardTitle>
+                    <CardDescription>
+                      Teams that invited you by your GitHub account. Accepting
+                      keeps you pending until you receive the encryption keys
+                      your device needs.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {myInvitations.invitations.map((invitation) => (
+                      <div
+                        key={invitation.invitationId}
+                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div>
+                          <div className="font-medium">
+                            {invitation.teamName}
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            Invitation to join {invitation.teamName} · expires{" "}
+                            {formatDate(invitation.expiresAt)}
+                          </div>
+                        </div>
+                        <Button
+                          disabled={
+                            acceptingInvitationId === invitation.invitationId
+                          }
+                          onClick={() =>
+                            acceptInvitation(invitation.invitationId)
+                          }
+                        >
+                          {acceptingInvitationId === invitation.invitationId
+                            ? "Accepting…"
+                            : "Accept invitation"}
+                        </Button>
+                      </div>
+                    ))}
+                    {myInvitations.pendingMemberships.map((pending) => (
+                      <div
+                        key={pending.teamId}
+                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div>
+                          <div className="font-medium">{pending.teamName}</div>
+                          <div className="text-sm text-muted-foreground">
+                            You accepted this team's invitation.
+                          </div>
+                        </div>
+                        <Badge
+                          className="border-amber-300/25 text-amber-200"
+                          variant="outline"
+                        >
+                          Waiting for encryption keys
+                        </Badge>
+                      </div>
+                    ))}
+                    {acceptError ? (
+                      <Alert className="border-destructive/30 bg-destructive/10">
+                        <AlertTitle>Couldn't accept that invitation</AlertTitle>
+                        <AlertDescription>{acceptError}</AlertDescription>
+                      </Alert>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              ) : null}
               {view === "projects" ? (
                 <section>
                   <div className="mb-6">
@@ -2098,72 +2347,119 @@ export const WorkspaceShell = ({
                       {roleDisclosure[effectiveRole]}
                     </AlertDescription>
                   </Alert>
-                  <Card>
+                  <Card data-testid="members-card">
                     <CardHeader>
                       <CardTitle>Members</CardTitle>
                       <CardDescription>
-                        Invitations go to a GitHub user id and expire after
-                        seven days.
+                        The team's members and pending invitations, straight
+                        from its record. Invitations go to a GitHub account and
+                        expire after seven days.
                       </CardDescription>
                       <CardAction>
                         <Button
+                          data-testid="invite-member"
                           disabled={!canAdminister}
-                          onClick={() => setInvitationOpen(true)}
+                          onClick={openInvitationDialog}
                         >
                           <Users aria-hidden="true" /> Invite member
                         </Button>
                       </CardAction>
                     </CardHeader>
                     <CardContent>
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>User</TableHead>
-                            <TableHead>Role</TableHead>
-                            <TableHead>Status</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          <TableRow>
-                            <TableCell>
-                              <div className="font-medium">
-                                {displayBoundary.session.displayName ?? "You"}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              {effectiveRole === "OWNER"
-                                ? "Owner"
-                                : effectiveRole === "ADMIN"
-                                  ? "Admin"
-                                  : "Member"}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="outline">Active</Badge>
-                            </TableCell>
-                          </TableRow>
-                          {invitations.map((subject) => (
-                            <TableRow key={subject}>
-                              <TableCell>
-                                <div className="font-medium">
-                                  Invitation sent
-                                </div>
-                                <div className="font-mono text-[10px] text-muted-foreground">
-                                  {subject}
-                                </div>
-                              </TableCell>
-                              <TableCell>Member</TableCell>
-                              <TableCell>
-                                <Badge
-                                  className="border-amber-300/25 text-amber-200"
-                                  variant="outline"
-                                >
-                                  Waiting for encryption keys
-                                </Badge>
-                              </TableCell>
+                      {!apiOrigin ? (
+                        <Alert className="bg-card/60">
+                          <AlertTitle>Team data unavailable</AlertTitle>
+                          <AlertDescription>
+                            This deployment doesn't expose a team service, so
+                            the member list can't be loaded.
+                          </AlertDescription>
+                        </Alert>
+                      ) : membershipError ? (
+                        <Alert className="border-destructive/30 bg-destructive/10">
+                          <AlertTitle>Couldn't load team members</AlertTitle>
+                          <AlertDescription>{membershipError}</AlertDescription>
+                        </Alert>
+                      ) : membershipState === null ? (
+                        <p className="py-6 text-center text-sm text-muted-foreground">
+                          Loading members…
+                        </p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>User</TableHead>
+                              {canAdminister ? (
+                                <TableHead>Role</TableHead>
+                              ) : null}
+                              <TableHead>Status</TableHead>
                             </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                          </TableHeader>
+                          <TableBody>
+                            {membershipState.memberships.map((member) => (
+                              <TableRow key={member.membershipId}>
+                                <TableCell>
+                                  <div className="font-medium">
+                                    {member.name ??
+                                      `GitHub ${member.githubSubject}`}
+                                  </div>
+                                </TableCell>
+                                {canAdminister ? (
+                                  <TableCell>
+                                    {roleLabel(member.role)}
+                                  </TableCell>
+                                ) : null}
+                                <TableCell>
+                                  {member.lifecycle === "ACTIVE" ? (
+                                    <Badge variant="outline">Active</Badge>
+                                  ) : member.lifecycle === "REMOVED" ? (
+                                    <Badge variant="secondary">Removed</Badge>
+                                  ) : (
+                                    <Badge
+                                      className="border-amber-300/25 text-amber-200"
+                                      variant="outline"
+                                    >
+                                      Waiting for encryption keys
+                                    </Badge>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                            {membershipState.invitations.map((invitation) => (
+                              <TableRow key={invitation.invitationId}>
+                                <TableCell>
+                                  <div className="font-medium">Invitation</div>
+                                  <div className="font-mono text-[10px] text-muted-foreground">
+                                    GitHub {invitation.providerSubject}
+                                  </div>
+                                </TableCell>
+                                {canAdminister ? (
+                                  <TableCell>Member</TableCell>
+                                ) : null}
+                                <TableCell>
+                                  <Badge
+                                    className="border-amber-300/25 text-amber-200"
+                                    variant="outline"
+                                  >
+                                    Invitation pending · expires{" "}
+                                    {formatDate(invitation.expiresAt)}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                            {membershipState.memberships.length === 0 &&
+                            membershipState.invitations.length === 0 ? (
+                              <TableRow>
+                                <TableCell
+                                  colSpan={canAdminister ? 3 : 2}
+                                  className="text-muted-foreground"
+                                >
+                                  No members yet.
+                                </TableCell>
+                              </TableRow>
+                            ) : null}
+                          </TableBody>
+                        </Table>
+                      )}
                     </CardContent>
                   </Card>
                   {selectedProject ? (
@@ -2387,40 +2683,97 @@ export const WorkspaceShell = ({
         </main>
       </div>
 
-      <Dialog onOpenChange={setInvitationOpen} open={invitationOpen}>
-        <DialogContent>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) resetInvitationDialog();
+          setInvitationOpen(open);
+        }}
+        open={invitationOpen}
+      >
+        <DialogContent data-testid="invitation-dialog">
           <DialogHeader>
             <DialogTitle>Invite a member</DialogTitle>
             <DialogDescription>
-              Invitations go to a GitHub user ID, not an email address. Each
+              Invitations go to a GitHub account, not an email address. Each
               invitation works once and expires after seven days.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="github-subject">GitHub user ID</Label>
-            <Input
-              autoComplete="off"
-              id="github-subject"
-              onChange={(event) => setGithubSubject(event.target.value)}
-              placeholder="github:18473192"
-              value={githubSubject}
-            />
-          </div>
-          <Alert className="bg-muted/30">
-            <AlertTitle>Pending after acceptance</AlertTitle>
-            <AlertDescription>
-              New members stay pending until they've received the encryption
-              keys their device needs.
-            </AlertDescription>
-          </Alert>
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>
-              Cancel
-            </DialogClose>
-            <Button disabled={!githubSubject.trim()} onClick={createInvitation}>
-              Create invitation
-            </Button>
-          </DialogFooter>
+          {inviteError ? (
+            <Alert className="border-destructive/30 bg-destructive/10">
+              <AlertTitle>
+                {inviteStep === "confirmed"
+                  ? "Couldn't create the invitation"
+                  : "Couldn't resolve that login"}
+              </AlertTitle>
+              <AlertDescription>{inviteError}</AlertDescription>
+            </Alert>
+          ) : null}
+          {inviteStep === "form" ? (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="github-login">GitHub login</Label>
+                <Input
+                  autoComplete="off"
+                  disabled={inviteBusy}
+                  id="github-login"
+                  onChange={(event) => setInviteLogin(event.target.value)}
+                  placeholder="octocat"
+                  value={inviteLogin}
+                />
+              </div>
+              <Alert className="bg-muted/30">
+                <AlertTitle>Pending after acceptance</AlertTitle>
+                <AlertDescription>
+                  New members stay pending until they've received the encryption
+                  keys their device needs.
+                </AlertDescription>
+              </Alert>
+              <DialogFooter>
+                <DialogClose render={<Button variant="outline" />}>
+                  Cancel
+                </DialogClose>
+                <Button
+                  data-testid="resolve-login"
+                  disabled={!inviteLogin.trim() || inviteBusy}
+                  onClick={() => void resolveInvitation()}
+                >
+                  {inviteBusy ? "Resolving…" : "Resolve"}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <div className="rounded-lg border border-input bg-input/30 p-3">
+                <div className="font-medium">@{inviteResolved?.login}</div>
+                <div className="font-mono text-[10px] text-muted-foreground">
+                  GitHub ID {inviteResolved?.githubUserId}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  This invitation expires in seven days.
+                </div>
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  disabled={inviteBusy}
+                  onClick={() => {
+                    setInviteStep("form");
+                    setInviteResolved(null);
+                    setInviteError(null);
+                  }}
+                >
+                  Back
+                </Button>
+                <Button
+                  data-testid="create-invitation"
+                  disabled={inviteBusy}
+                  onClick={() => void createInvitation()}
+                >
+                  {inviteBusy ? "Creating…" : "Create invitation"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
