@@ -33,6 +33,7 @@ import {
   type RevisionSigningTrustEntry,
   reviewPublication,
   type SyncPageWire,
+  UnreadableLaneError,
   verifySignedProtocolObject,
 } from "@dotrelay/client";
 import {
@@ -2807,15 +2808,28 @@ const syncWorkflow = async (
   // creating a plaintext cache.
   const trustedRevisionId = environmentId;
   const trustedRevisionHash = zeros(48);
-  const synced = await workflow.session.syncAndDecode({
-    environmentId,
-    deviceId: workflow.deviceId,
-    request: {
-      trustedRevisionId,
-      trustedRevisionHash,
-      pagination: { ...(parsed.limit ? { limit: parsed.limit } : {}) },
-    },
-  });
+  let synced: Awaited<ReturnType<typeof workflow.session.syncAndDecode>>;
+  try {
+    synced = await workflow.session.syncAndDecode({
+      environmentId,
+      deviceId: workflow.deviceId,
+      request: {
+        trustedRevisionId,
+        trustedRevisionHash,
+        pagination: { ...(parsed.limit ? { limit: parsed.limit } : {}) },
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof UnreadableLaneError)) throw error;
+    // The verified history says the Manifest changed but this Device cannot
+    // read it: failing here keeps the local file and the trusted head
+    // untouched and names the grant that must be repaired.
+    const detail =
+      error.laneKind === "USER_DEFINED_VALUE"
+        ? "the Environment's User-defined Values cannot be decrypted with this Device's key grant; run dotrelay device enroll or dotrelay device recover, then re-publish the affected Values"
+        : "the Environment's Manifest cannot be decrypted with this Device's Project key grant; run dotrelay pull after an owner or admin re-shares it from their own Device";
+    throw new CliError("incomplete-export", detail, {}, "unreadable_manifest");
+  }
   const page = synced.page;
   const localHead = await readTrustedHead(
     statePath(options.stateDirectory, environmentId),
