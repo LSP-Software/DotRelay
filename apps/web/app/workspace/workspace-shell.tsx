@@ -627,12 +627,19 @@ export const WorkspaceShell = ({
   const currentPinKey = boundary.profile.serverProfileId
     ? `${boundary.profile.origin}\u0000${boundary.profile.serverProfileId}`
     : null;
-  const serverPin = boundary.profile.serverProfileId
-    ? {
-        origin: boundary.profile.origin,
-        serverProfileId: boundary.profile.serverProfileId,
-      }
-    : null;
+  // Stable identity while the verified pair is unchanged, so the lookup
+  // below re-runs only when the origin or server identity changes, not on
+  // every render.
+  const serverPin = useMemo(
+    () =>
+      boundary.profile.serverProfileId
+        ? {
+            origin: boundary.profile.origin,
+            serverProfileId: boundary.profile.serverProfileId,
+          }
+        : null,
+    [boundary.profile.origin, boundary.profile.serverProfileId],
+  );
   const thisBrowserEnrolled =
     protectedPreview ||
     Boolean(protocolSession) ||
@@ -655,13 +662,13 @@ export const WorkspaceShell = ({
 
   // Recover the trust decision this browser recorded for the pair the
   // boundary just verified. The lookup keys on the pair, so a pin recorded
-  // for another origin or server identity is never read, and a pair that
-  // changes starts untrusted until it is confirmed again.
+  // for another origin or server identity is never read. The state resets
+  // to "unknown" the moment the pair changes, so a changed origin or server
+  // identity is never shown trusted on the strength of a decision recorded
+  // for a different pair while the lookup for the new pair is in flight.
   useEffect(() => {
-    if (currentPinKey === null || serverPin === null) {
-      setProfileTrust("unknown");
-      return;
-    }
+    setProfileTrust("unknown");
+    if (currentPinKey === null || serverPin === null) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -674,7 +681,7 @@ export const WorkspaceShell = ({
     return () => {
       cancelled = true;
     };
-  }, [currentPinKey, pinStore]);
+  }, [currentPinKey, pinStore, serverPin]);
 
   // Record the trust decision after the user has seen the exact origin and
   // server identity. A decision that cannot be kept durably is not claimed:
