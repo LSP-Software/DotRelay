@@ -19,6 +19,7 @@ import {
   KeyRound,
   Menu,
   MonitorSmartphone,
+  Plus,
   RotateCcw,
   Users,
   WifiOff,
@@ -85,12 +86,14 @@ import {
 } from "@/lib/environment-protocol-session";
 import {
   displayedSetupAction,
+  type EnvironmentVariable,
   isPrivilegedRole,
   nextSetupAction,
   type SetupAction,
 } from "@/lib/environment-workflow";
 import { cn } from "@/lib/utils";
 import {
+  createRemoteEnvironment,
   emptyWorkspaceBoundary,
   enrolledDeviceRows,
   fetchWorkspaceBoundary,
@@ -100,6 +103,8 @@ import {
   resolveApiOrigin,
   resolveWorkspaceProfileId,
   type WorkspaceBoundary,
+  type WorkspaceCatalog,
+  type WorkspaceEnvironmentSummary,
   type WorkspaceProfileId,
   type WorkspaceProject,
   workspaceProfileCatalog,
@@ -113,7 +118,11 @@ import {
   type WorkspaceMissingResource,
   type WorkspaceView,
 } from "@/lib/workspace-location";
-import { EnvironmentEditor } from "./environment-editor";
+import { CreateEnvironmentDialog } from "./create-environment-dialog";
+import {
+  EnvironmentEditor,
+  fixtureEnvironmentVariables,
+} from "./environment-editor";
 
 type ProfileId = WorkspaceProfileId;
 type ConnectionState = "loading" | "online" | "offline";
@@ -503,6 +512,17 @@ export const WorkspaceShell = ({
   // the dialog's close handler can run; a stale prompt must not pull the
   // browser back to the entry the user just left.
   const promptRestoreRef = useRef<number | null>(null);
+  const [createEnvironmentOpen, setCreateEnvironmentOpen] = useState(false);
+  const [createEnvironmentError, setCreateEnvironmentError] = useState<
+    string | null
+  >(null);
+  const [creatingEnvironment, setCreatingEnvironment] = useState(false);
+  const [createdEnvironments, setCreatedEnvironments] = useState<
+    Readonly<Record<string, readonly WorkspaceEnvironmentSummary[]>>
+  >({});
+  const [variablesByEnvironment, setVariablesByEnvironment] = useState<
+    Readonly<Record<string, readonly EnvironmentVariable[]>>
+  >({});
 
   const protectedPreview = preview === "protected";
   const noCryptoPreview = preview === "no-crypto";
@@ -542,7 +562,32 @@ export const WorkspaceShell = ({
   const teams = displayBoundary.catalog.teams;
   const selectedTeam =
     teams.find((team) => team.id === teamId) ?? teams[0] ?? null;
-  const teamProjects = displayBoundary.catalog.projects.filter(
+  const catalogProjects = useMemo(
+    () =>
+      displayBoundary.catalog.projects.map((project) => {
+        const extras = createdEnvironments[project.id] ?? [];
+        if (extras.length === 0) return project;
+        const seen = new Set(
+          project.environments.map((environment) => environment.id),
+        );
+        return {
+          ...project,
+          environments: [
+            ...project.environments,
+            ...extras.filter((environment) => !seen.has(environment.id)),
+          ],
+        };
+      }),
+    [createdEnvironments, displayBoundary.catalog.projects],
+  );
+  const reconciledCatalog = useMemo(
+    (): WorkspaceCatalog => ({
+      teams: displayBoundary.catalog.teams,
+      projects: catalogProjects,
+    }),
+    [catalogProjects, displayBoundary.catalog.teams],
+  );
+  const teamProjects = catalogProjects.filter(
     (project) => project.teamId === selectedTeam?.id,
   );
   const teamsWithProjects = new Set(
@@ -693,6 +738,7 @@ export const WorkspaceShell = ({
       setRetainedEditors(new Map());
       setSessionsByKey(new Map());
       draftStateRef.current.clear();
+      setVariablesByEnvironment({});
       pendingEnrollmentRef.current.clear();
       durableBrowserDeviceRef.current.clear();
       setContextStale(true);
@@ -705,6 +751,19 @@ export const WorkspaceShell = ({
           return next;
         });
         if (discard) draftStateRef.current.delete(currentKey);
+        if (discard && currentIdentity.environmentId) {
+          // A remounted editor reseeds from the last reported Variables;
+          // dropping a discarded draft must drop that seed too.
+          const discardedEnvironmentId = currentIdentity.environmentId;
+          setVariablesByEnvironment((prev) => {
+            const seeded = prev[discardedEnvironmentId] ?? [];
+            if (!seeded.some((variable) => variable.hasDraftChange))
+              return prev;
+            const next = { ...prev };
+            delete next[discardedEnvironmentId];
+            return next;
+          });
+        }
       }
       if (discard) removeSessionByKey(currentKey);
       removeSessionByKey(
@@ -962,7 +1021,7 @@ export const WorkspaceShell = ({
     if (teams.length === 0 && connection !== "online") return;
     const target = resolveWorkspaceLocation(
       { profileId, teamId, projectId, environmentId, view },
-      displayBoundary.catalog,
+      reconciledCatalog,
       viewFallback,
     );
     if (
@@ -985,7 +1044,7 @@ export const WorkspaceShell = ({
       // A Project is already open, so the user's Team/Project/Environment
       // choice stands; never re-point it at the first Project.
       if (target.projectId) return;
-      const firstProject = displayBoundary.catalog.projects.find(
+      const firstProject = reconciledCatalog.projects.find(
         (project) => project.teamId === target.teamId,
       );
       if (!firstProject) return;
@@ -1002,7 +1061,7 @@ export const WorkspaceShell = ({
     }
     applySelectionRef.current(target, { push: false });
   }, [
-    displayBoundary.catalog,
+    reconciledCatalog,
     teams,
     connection,
     preview,
@@ -1235,6 +1294,24 @@ export const WorkspaceShell = ({
     const settleContext = () => {
       if (!cancelled) setContextStale(false);
     };
+    // Locally created Environments have no remote state in a fixture
+    // boundary; their seeded Variables are the Environment's state, so the
+    // context settles without a session. Live boundaries do learn about the
+    // created Environment on the next refresh and take the normal path.
+    const locallyCreated =
+      displayBoundary.source !== "live" &&
+      environmentId !== null &&
+      projectId !== null &&
+      (createdEnvironments[projectId] ?? []).some(
+        (environment) => environment.id === environmentId,
+      );
+    if (locallyCreated) {
+      removeSessionByKey(targetKey);
+      settleContext();
+      return () => {
+        cancelled = true;
+      };
+    }
     const loadSession = async () => {
       const environment = boundary.environment;
       const device = boundary.device;
@@ -1349,11 +1426,13 @@ export const WorkspaceShell = ({
     };
   }, [
     boundary,
+    displayBoundary,
     profileId,
     teamId,
     projectId,
     environmentId,
     removeSessionByKey,
+    createdEnvironments,
   ]);
 
   const provisionBrowserDevice = async () => {
@@ -1658,6 +1737,90 @@ export const WorkspaceShell = ({
     setInvitationOpen(false);
   };
 
+  const handleVariablesChange = useCallback(
+    (environmentId: string, variables: readonly EnvironmentVariable[]) => {
+      setVariablesByEnvironment((current) => {
+        const previous = current[environmentId];
+        if (
+          previous &&
+          previous.length === variables.length &&
+          previous.every((variable, index) => variable === variables[index])
+        )
+          return current;
+        return { ...current, [environmentId]: variables };
+      });
+    },
+    [],
+  );
+
+  const createEnvironment = async (input: {
+    readonly label: string;
+    readonly sourceEnvironmentId: string | null;
+    readonly variables: readonly EnvironmentVariable[];
+  }) => {
+    if (!selectedProject || !canAdminister) return;
+    setCreatingEnvironment(true);
+    setCreateEnvironmentError(null);
+    try {
+      let created: WorkspaceEnvironmentSummary = {
+        id: globalThis.crypto.randomUUID(),
+        label: input.label,
+        lifecycle: "ACTIVE",
+        currentHeadId: null,
+      };
+      if (displayBoundary.source === "live") {
+        const deviceId =
+          displayBoundary.device.id ??
+          (displayBoundary.profile.serverProfileId
+            ? readStoredBrowserDeviceId(
+                displayBoundary.profile.origin,
+                displayBoundary.profile.serverProfileId,
+              )
+            : null);
+        if (!deviceId)
+          throw new Error(
+            "Enroll this browser before creating an Environment.",
+          );
+        created = await createRemoteEnvironment({
+          origin: resolveApiOrigin() ?? displayBoundary.profile.origin,
+          projectId: selectedProject.id,
+          label: input.label,
+          deviceId,
+        });
+        if (
+          selectedProject.environments.some(
+            (environment) => environment.id === created.id,
+          )
+        )
+          throw new Error(`Environment label "${input.label}" already exists.`);
+      }
+      setCreatedEnvironments((current) => ({
+        ...current,
+        [selectedProject.id]: [...(current[selectedProject.id] ?? []), created],
+      }));
+      setVariablesByEnvironment((current) => ({
+        ...current,
+        [created.id]: input.variables,
+      }));
+      setCreateEnvironmentOpen(false);
+      setEnvironmentLifecycle("ACTIVE");
+      requestSelection({
+        teamId: selectedTeam?.id ?? selectedProject.teamId,
+        projectId: selectedProject.id,
+        environmentId: created.id,
+        view: "environment",
+      });
+    } catch (error) {
+      setCreateEnvironmentError(
+        error instanceof Error
+          ? error.message
+          : "Could not create this Environment.",
+      );
+    } finally {
+      setCreatingEnvironment(false);
+    }
+  };
+
   const closeMobile = () => setMobileOpen(false);
 
   const restoreHistoryEntry = (delta: number) => {
@@ -1680,6 +1843,14 @@ export const WorkspaceShell = ({
         ),
       ]
     : [...retainedEditors.values()];
+  const environmentHeadById = new Map(
+    catalogProjects.flatMap((project) =>
+      project.environments.map((environment) => [
+        environment.id,
+        environment.currentHeadId ?? null,
+      ]),
+    ),
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -2033,30 +2204,42 @@ export const WorkspaceShell = ({
                       resource="Environment"
                     />
                   </div>
-                  <Tabs
-                    className="mb-6"
-                    onValueChange={(nextId) => {
-                      if (typeof nextId !== "string") return;
-                      requestSelection({
-                        teamId: selectedTeam?.id ?? null,
-                        projectId: selectedProject.id,
-                        environmentId: nextId,
-                        view: "environment",
-                      });
-                    }}
-                    value={selectedEnvironment.id}
-                  >
-                    <TabsList aria-label="Environments">
-                      {selectedProject.environments.map((environment) => (
-                        <TabsTrigger
-                          key={environment.id}
-                          value={environment.id}
-                        >
-                          {environment.label}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                  </Tabs>
+                  <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <Tabs
+                      onValueChange={(nextId) => {
+                        if (typeof nextId !== "string") return;
+                        requestSelection({
+                          teamId: selectedTeam?.id ?? null,
+                          projectId: selectedProject.id,
+                          environmentId: nextId,
+                          view: "environment",
+                        });
+                      }}
+                      value={selectedEnvironment.id}
+                    >
+                      <TabsList aria-label="Environments">
+                        {selectedProject.environments.map((environment) => (
+                          <TabsTrigger
+                            key={environment.id}
+                            value={environment.id}
+                          >
+                            {environment.label}
+                          </TabsTrigger>
+                        ))}
+                      </TabsList>
+                    </Tabs>
+                    <Button
+                      disabled={!canAdminister}
+                      onClick={() => {
+                        setCreateEnvironmentError(null);
+                        setCreateEnvironmentOpen(true);
+                      }}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <Plus aria-hidden="true" /> New Environment
+                    </Button>
+                  </div>
                 </section>
               ) : null}
 
@@ -2343,6 +2526,7 @@ export const WorkspaceShell = ({
               >
                 {editorEntries.map((entry) => {
                   const entryKey = environmentContextKey(entry.identity);
+                  const entryEnvironmentId = entry.identity.environmentId;
                   const isCurrent =
                     selectedEntry !== null && entryKey === currentKey;
                   return (
@@ -2372,11 +2556,30 @@ export const WorkspaceShell = ({
                           });
                         }}
                         onSetupAction={handleSetupAction}
+                        onVariablesChange={(variables) => {
+                          if (entryEnvironmentId)
+                            handleVariablesChange(
+                              entryEnvironmentId,
+                              variables,
+                            );
+                        }}
                         protocolSession={entry.session ?? protocolSession}
+                        remoteHeadRevision={
+                          (entryEnvironmentId
+                            ? environmentHeadById.get(entryEnvironmentId)
+                            : undefined) ?? "empty-environment"
+                        }
                         setupAction={entry.setupAction}
                         setupBusy={isCurrent ? deviceSetupInProgress : false}
                         setupCommand={entry.setupCommand}
                         setupMessage={entry.setupMessage}
+                        {...(entryEnvironmentId &&
+                        variablesByEnvironment[entryEnvironmentId]
+                          ? {
+                              seedVariables:
+                                variablesByEnvironment[entryEnvironmentId],
+                            }
+                          : {})}
                       />
                     </div>
                   );
@@ -2387,6 +2590,29 @@ export const WorkspaceShell = ({
         </main>
       </div>
 
+      <CreateEnvironmentDialog
+        creating={creatingEnvironment}
+        defaultSourceId={selectedEnvironment?.id ?? null}
+        environments={selectedProject?.environments ?? []}
+        error={createEnvironmentError}
+        existingLabels={(selectedProject?.environments ?? [])
+          .filter((environment) => environment.lifecycle === "ACTIVE")
+          .map((environment) => environment.label)}
+        fallbackVariables={
+          displayBoundary.source === "fixture"
+            ? fixtureEnvironmentVariables
+            : []
+        }
+        onCreate={(input) => {
+          void createEnvironment(input);
+        }}
+        onOpenChange={(open) => {
+          setCreateEnvironmentOpen(open);
+          if (!open) setCreateEnvironmentError(null);
+        }}
+        open={createEnvironmentOpen}
+        variablesByEnvironment={variablesByEnvironment}
+      />
       <Dialog onOpenChange={setInvitationOpen} open={invitationOpen}>
         <DialogContent>
           <DialogHeader>
