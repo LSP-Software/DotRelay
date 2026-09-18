@@ -138,6 +138,24 @@ test("GitHub denial and absence answer identically and never retry", async () =>
   }
 });
 
+test("a rejected credential is a definitive denial, not an outage", async () => {
+  let calls = 0;
+  const fetchImpl = (async (_input: string | URL | Request) => {
+    calls += 1;
+    return new Response("Bad credentials", { status: 401 });
+  }) as typeof fetch;
+
+  const outcome = await resolveGitHubRepositoryIdentity(
+    delegatedAuth([{ providerId: "github", accessToken: "expired" }]),
+    "auth-user",
+    { owner: "LSP-Software", name: "DotRelay" },
+    { fetch: fetchImpl, sleep: async () => undefined },
+  );
+
+  expect(outcome).toEqual({ code: "repository_access_denied" });
+  expect(calls).toBe(1);
+});
+
 test("a rate limit is retried within budget and then resolved", async () => {
   const sleeps: number[] = [];
   let calls = 0;

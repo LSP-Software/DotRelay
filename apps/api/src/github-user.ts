@@ -197,6 +197,10 @@ export const resolveGitHubUserIdentity = async (
     // exhausted x-ratelimit-remaining) is a secondary rate limit, and
     // answering it "not found" would send the owner to retype the login
     // instead of waiting out the window.
+    // 401 answers the credential, not GitHub: an expired or revoked Delegated
+    // GitHub Access must be reported as a denial the User can repair by
+    // re-authorizing, never as an outage no retry will cure.
+    if (response.status === 401) return { code: "github_access_denied" };
     const retryAfterHeader =
       response.headers.get("Retry-After") ??
       response.headers.get("X-Retry-After");
