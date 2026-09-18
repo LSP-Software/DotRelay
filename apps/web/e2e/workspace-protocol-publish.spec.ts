@@ -179,7 +179,7 @@ test("edits made while a publication is in flight stay unpublished after it succ
   await openFirstProject(page);
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await page
     .locator("aside")
     .getByRole("button", { name: "LSP-Software / DotRelay" })
@@ -202,7 +202,9 @@ test("edits made while a publication is in flight stay unpublished after it succ
   await expect(
     editor.getByText("Author unavailable", { exact: true }),
   ).toBeVisible();
-  await expect(editor.getByText("Genesis", { exact: true })).toBeVisible();
+  await expect(
+    editor.getByText("First publish", { exact: true }),
+  ).toBeVisible();
 
   await editor.getByLabel("OPTIONAL_FLAG Value").fill("submitted-value");
   await expect(optionalRow()).toContainText("Draft change");
@@ -241,9 +243,7 @@ test("edits made while a publication is in flight stay unpublished after it succ
   );
   await expect(publishedRow).toBeVisible();
   await expect(publishedRow.getByText("You", { exact: true })).toBeVisible();
-  await expect(
-    publishedRow.getByText("Manifest update", { exact: true }),
-  ).toBeVisible();
+  await expect(publishedRow.getByText("Update", { exact: true })).toBeVisible();
 
   // The submitted lane is published and no longer a draft; the newer edit made
   // while the publication was in flight remains visibly unpublished.

@@ -77,8 +77,8 @@ export const readOnlyReason = (
 ): string | null => {
   if (canActorChangeVariableValue(actor, variable)) return null;
   if (variable.ownership === "SHARED_VALUE")
-    return "Only the provider or a Team admin can change this Shared Value.";
-  return "This User-defined Value belongs to another User.";
+    return "Only the person who provided it, or a team admin, can change it.";
+  return "This value belongs to another user's account.";
 };
 
 export const reconcileDraftWithPermissions = (
@@ -170,7 +170,7 @@ export const validateVariableDraft = (
     return "Use letters, numbers, and underscores; the first character must be a letter or underscore.";
   if (utf8ByteLength(draft.name) > VARIABLE_NAME_MAX_BYTES)
     return "Variable name exceeds the 256-byte limit.";
-  if (!draft.ownership) return "Choose Shared Value or User-defined Value.";
+  if (!draft.ownership) return "Choose who can read the value.";
   if (utf8ByteLength(draft.description) > DESCRIPTION_MAX_BYTES)
     return "Description exceeds the 16 KiB limit.";
   if (
@@ -179,7 +179,7 @@ export const validateVariableDraft = (
   )
     return "Value exceeds the 1 MiB limit.";
   if (draft.required && draft.valuePresent === false)
-    return "Required Variables must have a Value.";
+    return "A required variable can't be left unset.";
   if (
     existingVariables.some(
       (variable) => !variable.tombstone && variable.name === draft.name,
@@ -576,11 +576,11 @@ export type VerifiedRevision = Readonly<{
 
 const REVISION_MUTATION_LABELS: Readonly<Record<number, string>> =
   Object.freeze({
-    1: "Genesis",
-    2: "Manifest update",
+    1: "First publish",
+    2: "Update",
     3: "Rollback",
-    4: "Epoch transition",
-    5: "User-key rotation",
+    4: "Project keys rotated",
+    5: "Keys rotated",
   });
 
 const PUBLICATION_MUTATION_KINDS: Readonly<
@@ -746,15 +746,15 @@ export const nextSetupAction = (
     return {
       id: "sign-in",
       title: "Sign in",
-      body: "GitHub only identifies you. Sign in to see your Teams.",
+      body: "GitHub only identifies you. Sign in to see your teams.",
       actionLabel: "Sign in",
     };
   if (!state.profileTrusted)
     return {
       id: "trust-profile",
-      title: "Trust this Server Profile",
-      body: "Confirm this origin is the Server Profile you meant to use.",
-      actionLabel: "Trust this profile",
+      title: "Trust this server",
+      body: "Make sure this is the DotRelay server you meant to use.",
+      actionLabel: "Trust this server",
     };
   if (!state.cryptoAvailable)
     return {
@@ -766,30 +766,30 @@ export const nextSetupAction = (
   if (!state.deviceActive)
     return {
       id: "enroll-device",
-      title: "Enroll this browser",
-      body: "A Device is this browser's key pair. The CLI is a different Device, so setup there does not enroll this page. Keys stay on this machine.",
-      actionLabel: "Enroll browser",
+      title: "Set up this browser",
+      body: "This browser needs its own keys before it can read your values. The CLI on this machine is a separate device, so setting it up won't read variables here. Keys stay on this machine.",
+      actionLabel: "Set up browser",
     };
   if (!state.grantsReady)
     return {
       id: "pending-grants",
-      title: "This Device doesn't have Project access yet",
-      body: "Run `bun apps/cli/src/index.ts pull` on this machine to share Project keys with this browser.",
+      title: "This browser doesn't have the project's keys yet",
+      body: "Run `bun apps/cli/src/index.ts pull` on this machine to give this browser the project's keys.",
       actionLabel: "Retry access",
     };
   if (!state.resourceActive)
     return {
       id: "archived",
-      title: "This Environment is archived",
+      title: "This environment is archived",
       body: "History is kept. Restore it to view and edit variables.",
-      actionLabel: "Restore Environment",
+      actionLabel: "Restore environment",
     };
   if (!state.epochCurrent)
     return {
       id: "stale-epoch",
-      title: "This Project's keys were rotated",
-      body: "Enroll again, or use a Device that already has the current keys.",
-      actionLabel: "Enroll browser",
+      title: "This project's keys were rotated",
+      body: "Set this browser up again, or use a machine that already has the current keys.",
+      actionLabel: "Set up browser",
     };
   if (state.rotationRequired)
     return {
@@ -812,8 +812,8 @@ export const displayedSetupAction = (
   return {
     id: "enroll-device",
     title: "Unlock variables on this browser",
-    body: "A Device is this browser's key pair. The CLI is a different Device. Enroll this browser to read variables here.",
-    actionLabel: options.inProgress ? "Enrolling…" : "Enroll browser",
+    body: "This browser's keys are missing, so its values stay hidden. Set it up again to read variables here.",
+    actionLabel: options.inProgress ? "Setting up…" : "Set up browser",
   };
 };
 

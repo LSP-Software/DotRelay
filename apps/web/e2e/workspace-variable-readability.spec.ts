@@ -14,8 +14,8 @@ const addLongVariable = async (page: Page) => {
   await page.getByRole("button", { name: "Add Variable" }).click();
   await page.getByLabel("Variable name").fill(LONG_NAME);
   await page.getByLabel("Description (optional)").fill(LONG_DESCRIPTION);
-  await page.getByText("Shared Value", { exact: true }).last().click();
-  await page.getByLabel("Initial Value").fill("wrap-check-value");
+  await page.getByText("Shared value", { exact: true }).last().click();
+  await page.getByLabel("Initial value").fill("wrap-check-value");
   await page.getByRole("button", { name: "Add Variable" }).last().click();
 };
 
@@ -96,7 +96,7 @@ const assertRowReadable = async (row: Locator) => {
   await assertReadableWithoutHover(
     row.getByText(LONG_DESCRIPTION, { exact: true }),
   );
-  const ownership = row.getByText("Shared Value", { exact: true });
+  const ownership = row.getByText("Shared value", { exact: true });
   const draft = row.getByText("Draft change", { exact: true });
   await expect(ownership).toBeVisible();
   await expect(draft).toBeVisible();

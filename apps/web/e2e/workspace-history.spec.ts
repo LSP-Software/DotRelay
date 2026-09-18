@@ -19,7 +19,7 @@ test("back and forward traverse workspace views", async ({ page }) => {
 
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  await expect(page.getByText("Your team permissions")).toBeVisible();
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
   await expectUrl(page, "view=devices");
@@ -27,7 +27,7 @@ test("back and forward traverse workspace views", async ({ page }) => {
 
   await page.goBack();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  await expect(page.getByText("Your team permissions")).toBeVisible();
 
   await page.goBack();
   await expectUrl(page, "view=projects");
@@ -37,7 +37,7 @@ test("back and forward traverse workspace views", async ({ page }) => {
 
   await page.goForward();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  await expect(page.getByText("Your team permissions")).toBeVisible();
 });
 
 test("switching Teams is a history entry that Back and Forward traverse", async ({
@@ -102,7 +102,7 @@ test("opening Projects and switching Environments are history entries", async ({
   );
 });
 
-test("reload and shared links reopen the visible view and Server Profile", async ({
+test("reload and shared links reopen the visible view and server", async ({
   page,
 }) => {
   await page.goto("/workspace");
@@ -117,7 +117,7 @@ test("reload and shared links reopen the visible view and Server Profile", async
   await expect(page.getByRole("heading", { name: "Recovery" })).toBeVisible();
 
   await page
-    .getByRole("combobox", { name: "Server Profile" })
+    .getByRole("combobox", { name: "Server" })
     .selectOption("self-hosted");
   await expectUrl(page, "profile=self-hosted");
   await expect(
@@ -134,9 +134,9 @@ test("reload and shared links reopen the visible view and Server Profile", async
   const profileUrl = page.url();
 
   await page.goto(profileUrl);
-  await expect(
-    page.getByRole("combobox", { name: "Server Profile" }),
-  ).toHaveValue("self-hosted");
+  await expect(page.getByRole("combobox", { name: "Server" })).toHaveValue(
+    "self-hosted",
+  );
   await expect(
     page.getByRole("heading", { name: "LSP Software" }),
   ).toBeVisible();
@@ -149,12 +149,12 @@ test("reloading Team with a selected Project reopens the Team view", async ({
   await openFirstProject(page);
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  await expect(page.getByText("Your team permissions")).toBeVisible();
   const teamUrl = page.url();
 
   await page.goto(teamUrl);
   await expectUrl(page, "view=team");
-  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  await expect(page.getByText("Your team permissions")).toBeVisible();
   // The selected Project survives the reload; the URL keeps naming it.
   await expect
     .poll(() => new URL(page.url()).searchParams.has("project"))
@@ -178,7 +178,7 @@ test("reloading the Projects, Team, and Devices views reopens them", async ({
   const teamUrl = page.url();
   await page.goto(teamUrl);
   await expectUrl(page, "view=team");
-  await expect(page.getByText("OWNER Membership")).toBeVisible();
+  await expect(page.getByText("Your team permissions")).toBeVisible();
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
   await expectUrl(page, "view=devices");
@@ -196,7 +196,7 @@ test("links to deleted resources recover instead of blanking the page", async ({
   );
   await expect(page.getByTestId("workspace-missing-resource")).toBeVisible();
   await expect(page.getByTestId("workspace-missing-resource")).toContainText(
-    "That Project is no longer available",
+    "That project is no longer available",
   );
   await expect(
     page.getByRole("heading", { name: "LSP-Software / DotRelay" }),
@@ -207,7 +207,7 @@ test("links to deleted resources recover instead of blanking the page", async ({
   );
   await expect(page.getByTestId("workspace-missing-resource")).toBeVisible();
   await expect(page.getByTestId("workspace-missing-resource")).toContainText(
-    "That Environment is no longer available",
+    "That environment is no longer available",
   );
   await expect(page.getByRole("tab", { name: "production" })).toHaveAttribute(
     "aria-selected",
@@ -221,7 +221,7 @@ test("deleted teams recover to the first team", async ({ page }) => {
   );
   await expect(page.getByTestId("workspace-missing-resource")).toBeVisible();
   await expect(page.getByTestId("workspace-missing-resource")).toContainText(
-    "That Team is no longer available",
+    "That team is no longer available",
   );
   await expect(
     page.getByRole("heading", { name: "LSP-Software / DotRelay" }),
@@ -277,7 +277,7 @@ test("a history rebind with a dirty draft prompts and Stay returns to the entry 
 }) => {
   await page.goto("/workspace?preview=protected");
   await page
-    .getByRole("combobox", { name: "Server Profile" })
+    .getByRole("combobox", { name: "Server" })
     .selectOption("self-hosted");
   // The protected preview reopens the first Project after the rebind; wait
   // for it so the draft lands in a stable Environment.
@@ -295,12 +295,12 @@ test("a history rebind with a dirty draft prompts and Stay returns to the entry 
   await page.goBack();
   const prompt = page.getByTestId("switch-draft-prompt");
   await expect(prompt).toBeVisible();
-  await expect(prompt).toContainText("Switch Server Profile?");
+  await expect(prompt).toContainText("Switch servers?");
 
   await page.getByRole("button", { name: "Stay" }).click();
-  await expect(
-    page.getByRole("combobox", { name: "Server Profile" }),
-  ).toHaveValue("self-hosted");
+  await expect(page.getByRole("combobox", { name: "Server" })).toHaveValue(
+    "self-hosted",
+  );
   await expectUrl(page, "profile=self-hosted");
 
   await page.goForward();
@@ -316,7 +316,7 @@ test("discarding from a history rebind prompt commits the rebind", async ({
 }) => {
   await page.goto("/workspace?preview=protected");
   await page
-    .getByRole("combobox", { name: "Server Profile" })
+    .getByRole("combobox", { name: "Server" })
     .selectOption("self-hosted");
   await expect(page.getByRole("tab", { name: "production" })).toBeVisible();
   await openFirstProject(page);
@@ -333,9 +333,9 @@ test("discarding from a history rebind prompt commits the rebind", async ({
   await expect(prompt).toBeVisible();
   await page.getByTestId("switch-discard-draft").click();
 
-  await expect(
-    page.getByRole("combobox", { name: "Server Profile" }),
-  ).toHaveValue("hosted");
+  await expect(page.getByRole("combobox", { name: "Server" })).toHaveValue(
+    "hosted",
+  );
   await expectUrl(page, "profile=hosted");
   await expectUrl(page, "view=environment");
   await expect(

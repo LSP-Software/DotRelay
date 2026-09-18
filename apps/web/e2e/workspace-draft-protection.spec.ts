@@ -156,7 +156,7 @@ test("staying on the profile keeps an unpublished draft", async ({ page }) => {
   await startDraft(page);
 
   await page
-    .getByRole("combobox", { name: "Server Profile" })
+    .getByRole("combobox", { name: "Server" })
     .selectOption("self-hosted");
   const prompt = page.getByTestId("switch-draft-prompt");
   await expect(prompt).toBeVisible();
@@ -183,7 +183,7 @@ test("switching profiles with drafts names them and discards on explicit choice"
   await staging.getByLabel("API_ORIGIN Value").fill("staging-draft");
 
   await page
-    .getByRole("combobox", { name: "Server Profile" })
+    .getByRole("combobox", { name: "Server" })
     .selectOption("self-hosted");
   const prompt = page.getByTestId("switch-draft-prompt");
   await expect(prompt).toBeVisible();
@@ -192,9 +192,9 @@ test("switching profiles with drafts names them and discards on explicit choice"
 
   await page.getByTestId("switch-discard-draft").click();
 
-  await expect(
-    page.getByRole("combobox", { name: "Server Profile" }),
-  ).toHaveValue("self-hosted");
+  await expect(page.getByRole("combobox", { name: "Server" })).toHaveValue(
+    "self-hosted",
+  );
   const editor = activeEditor(page);
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
@@ -215,7 +215,7 @@ test("a profile switch warns even when only a retained draft is dirty", async ({
   await page.getByTestId("switch-keep-draft").click();
 
   await page
-    .getByRole("combobox", { name: "Server Profile" })
+    .getByRole("combobox", { name: "Server" })
     .selectOption("self-hosted");
   const prompt = page.getByTestId("switch-draft-prompt");
   await expect(prompt).toBeVisible();

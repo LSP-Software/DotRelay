@@ -6,7 +6,7 @@ const openFirstProject = async (page: Page) => {
 
 const expectEmptyClaimAbsent = async (page: Page) => {
   await expect(
-    page.getByText("Add a Variable to start this Manifest."),
+    page.getByText("Add a variable to save your first secrets here."),
   ).toHaveCount(0);
 };
 
@@ -22,7 +22,9 @@ const expectMutationControlsBlocked = async (page: Page) => {
 const expectFailedRead = async (page: Page) => {
   await expect(page.getByTestId("environment-read-failed")).toBeVisible();
   await expect(
-    page.getByText("This Device could not read the current Environment."),
+    page.getByText(
+      "This browser couldn't read the current environment. Try reading it again.",
+    ),
   ).toBeVisible();
   await expectEmptyClaimAbsent(page);
   await expectMutationControlsBlocked(page);
@@ -43,7 +45,7 @@ test("a slow or failed Environment read never presents an editable empty Manifes
   await openFirstProject(page);
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await page
     .locator("aside")
     .getByRole("button", { name: "LSP-Software / DotRelay" })
@@ -60,7 +62,7 @@ test("a slow or failed Environment read never presents an editable empty Manifes
 
   await page.getByTestId("environment-retry-read").click();
   await expect(
-    page.getByText("Loading Environment…", { exact: true }),
+    page.getByText("Loading environment…", { exact: true }),
   ).toBeVisible({
     timeout: 10_000,
   });

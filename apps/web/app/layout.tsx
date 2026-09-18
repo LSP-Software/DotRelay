@@ -10,10 +10,11 @@ const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
   title: {
-    default: "DotRelay — client-encrypted configuration",
+    default: "DotRelay — shared .env files for your team",
     template: "%s · DotRelay",
   },
-  description: "Client-encrypted collaboration context",
+  description:
+    "DotRelay shares your project's .env files with your team and your other machines. Values are encrypted on your device before they leave it, so only your team can read them.",
 };
 
 const RootLayout = ({ children }: Readonly<{ children: ReactNode }>) => {

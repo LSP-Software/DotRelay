@@ -142,7 +142,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
   {
     id: "00000000-0000-4000-8000-000000000001",
     name: "API_ORIGIN",
-    description: "Shared service origin used by the Team.",
+    description: "Shared service origin used by the team.",
     ownership: "SHARED_VALUE",
     value: "",
     required: true,
@@ -151,7 +151,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
   {
     id: "00000000-0000-4000-8000-000000000002",
     name: "SIGNING_KEY",
-    description: "User-defined signing material for this Device.",
+    description: "Your own signing material for this browser.",
     ownership: "USER_DEFINED_VALUE",
     value: "",
     required: true,
@@ -160,7 +160,7 @@ const initialVariables: readonly EnvironmentVariable[] = [
   {
     id: "00000000-0000-4000-8000-000000000003",
     name: "FEATURE_GATE",
-    description: "Optional Team feature flag.",
+    description: "Optional team feature flag.",
     ownership: "SHARED_VALUE",
     value: null,
     required: false,
@@ -178,7 +178,7 @@ const emptyVariableDraft: AddVariableState = {
 };
 
 const ownershipLabel = (ownership: EnvironmentVariable["ownership"]): string =>
-  ownership === "SHARED_VALUE" ? "Shared Value" : "User-defined Value";
+  ownership === "SHARED_VALUE" ? "Shared value" : "User-defined value";
 
 const sessionTrustKeys = (
   session: NonNullable<EnvironmentEditorProps["protocolSession"]>,
@@ -362,12 +362,7 @@ const ValueDiffLines = ({
 };
 
 const conflictKindLabel = (kind: ConflictChangeKind): string =>
-  kind === "value"
-    ? "Value"
-    : kind === "definition"
-      ? "Definition"
-      : "Deletion";
-
+  kind === "value" ? "Value" : kind === "definition" ? "Settings" : "Deletion";
 const resolutionLabel = (choice: ConflictResolution): string =>
   choice === "local"
     ? "Keep mine"
@@ -377,12 +372,12 @@ const resolutionLabel = (choice: ConflictResolution): string =>
 
 const resolutionConsequence = (choice: ConflictResolution | null): string => {
   if (choice === null)
-    return "Review both sides, then choose which to keep for this Variable.";
+    return "Compare both versions, then choose what to keep for this variable.";
   if (choice === "local")
-    return "Your definition and Value are kept; their change is discarded.";
+    return "Keep your version of this variable, including its value. Discard their changes.";
   if (choice === "remote")
-    return "Their definition and Value are adopted; your change is discarded.";
-  return "Your Value is kept; their definition (ownership and description) is adopted.";
+    return "Use their version of this variable, including its value. Discard your changes.";
+  return "Keep your value. Use their name, description, sharing setting, and value requirement.";
 };
 
 const MaskedValue = ({
@@ -411,14 +406,14 @@ const ConflictSides = ({
       <div className="grid gap-1 text-xs">
         <p className="text-muted-foreground">
           <span className="font-medium text-foreground">Yours</span>{" "}
-          {local.tombstone ? "is deleted" : "keeps the Variable"}
+          {local.tombstone ? "was deleted" : "still has this variable"}
         </p>
         <p className="text-muted-foreground">
           <span className="font-medium text-foreground">Theirs</span>{" "}
           {remote
             ? remote.tombstone
-              ? "deletes it"
-              : "keeps it"
+              ? "deleted it"
+              : "still has it"
             : "could not be read"}
         </p>
       </div>
@@ -481,11 +476,11 @@ const ConflictDefinitionLines = ({
   const lines: string[] = [];
   if (local.ownership !== remote.ownership)
     lines.push(
-      `Ownership: yours ${ownershipLabel(local.ownership)}, theirs ${ownershipLabel(remote.ownership)}`,
+      `Sharing: yours is ${ownershipLabel(local.ownership).toLowerCase()}, theirs is ${ownershipLabel(remote.ownership).toLowerCase()}`,
     );
   if (local.description !== remote.description)
     lines.push(
-      `Description: yours “${local.description || "none"}”, theirs “${remote.description || "none"}”`,
+      `Description: yours "${local.description || "none"}", theirs "${remote.description || "none"}"`,
     );
   if (local.required !== remote.required)
     lines.push(
@@ -494,7 +489,7 @@ const ConflictDefinitionLines = ({
   if (lines.length === 0) return null;
   return (
     <div className="grid gap-0.5 text-xs text-muted-foreground">
-      <p className="text-[11px] uppercase tracking-wide">Definition</p>
+      <p className="text-[11px] uppercase tracking-wide">Other settings</p>
       {lines.map((line) => (
         <p key={line}>{line}</p>
       ))}
@@ -538,7 +533,7 @@ const ConflictLane = ({
             className="h-4 text-[10px] font-medium uppercase tracking-wide"
             variant="outline"
           >
-            Remote unavailable
+            Their version unavailable
           </Badge>
         ) : null}
       </div>
@@ -549,8 +544,8 @@ const ConflictLane = ({
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">
-          The remote side could not be read, so only your change is shown. Keep
-          your change, or retry reading to compare both sides.
+          We couldn't read their version, so only your change is shown. You can
+          still keep your change, or retry reading to compare both sides.
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -663,7 +658,7 @@ const VariableRow = ({
         {variable.tombstone ? (
           <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
             <span className="text-xs text-muted-foreground">
-              This Variable is marked for deletion.
+              This variable is marked for deletion.
             </span>
             {variable.hasDraftChange && canUndoDelete ? (
               <Button
@@ -679,7 +674,7 @@ const VariableRow = ({
         ) : (
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Label className="sr-only" htmlFor={`value-${variable.id}`}>
-              {variable.name} Value
+              {variable.name} value
             </Label>
             <Input
               aria-readonly={!canEdit}
@@ -688,7 +683,7 @@ const VariableRow = ({
               disabled={editingDisabled || !canEdit}
               id={`value-${variable.id}`}
               onChange={(event) => onValueChange(event.target.value)}
-              placeholder={variable.value === null ? "Absent" : "Empty Value"}
+              placeholder={variable.value === null ? "Not set" : "Empty value"}
               type={revealed ? "text" : "password"}
               value={variable.value ?? ""}
             />
@@ -717,7 +712,7 @@ const VariableRow = ({
                 size="xs"
                 variant="ghost"
               >
-                Set absent
+                Unset value
               </Button>
             ) : null}
             <Button
@@ -755,9 +750,9 @@ const AddVariableDialog = ({
   <Dialog onOpenChange={onOpenChange} open={open}>
     <DialogContent>
       <DialogHeader>
-        <DialogTitle>Add Variable</DialogTitle>
+        <DialogTitle>Add variable</DialogTitle>
         <DialogDescription>
-          Name it, choose who can read it, and set the first value.
+          Choose who can read the value. Add it to your draft before publishing.
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4">
@@ -784,12 +779,14 @@ const AddVariableDialog = ({
             onChange={(event) =>
               onDraftChange({ ...draft, description: event.target.value })
             }
-            placeholder="What this Variable is used for"
+            placeholder="What this variable is used for"
             value={draft.description}
           />
         </div>
         <fieldset className="grid gap-2">
-          <legend className="text-sm font-medium">Value ownership</legend>
+          <legend className="text-sm font-medium">
+            Who can read the value
+          </legend>
           <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5">
             <input
               checked={draft.ownership === "SHARED_VALUE"}
@@ -800,9 +797,10 @@ const AddVariableDialog = ({
               type="radio"
             />
             <span>
-              <span className="block text-sm font-medium">Shared Value</span>
+              <span className="block text-sm font-medium">Shared value</span>
               <span className="block text-xs text-muted-foreground">
-                Everyone in the Team can read this. Admins can change it.
+                Teammates with project keys can read it. You, owners, and admins
+                can edit it.
               </span>
             </span>
           </label>
@@ -817,23 +815,23 @@ const AddVariableDialog = ({
             />
             <span>
               <span className="block text-sm font-medium">
-                User-defined Value
+                User-defined value
               </span>
               <span className="block text-xs text-muted-foreground">
-                Only this User&apos;s Devices can read it.
+                Only the devices you have set up can read it.
               </span>
             </span>
           </label>
         </fieldset>
         <div className="grid gap-2">
-          <Label htmlFor="new-variable-value">Initial Value</Label>
+          <Label htmlFor="new-variable-value">Initial value</Label>
           <Input
             autoComplete="off"
             id="new-variable-value"
             onChange={(event) =>
               onDraftChange({ ...draft, value: event.target.value })
             }
-            placeholder="Leave blank for an intentional empty Value"
+            placeholder="Leave blank to save an empty string"
             type="password"
             value={draft.value}
           />
@@ -850,7 +848,7 @@ const AddVariableDialog = ({
               }
               type="checkbox"
             />
-            Create without a Value (absent, not an empty Value)
+            Leave the value unset, rather than save an empty string
           </label>
         ) : null}
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -865,7 +863,7 @@ const AddVariableDialog = ({
             }
             type="checkbox"
           />
-          This Variable requires a Value
+          Require a value
         </label>
       </div>
       {error ? (
@@ -876,7 +874,7 @@ const AddVariableDialog = ({
       <DialogFooter>
         <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
         <Button onClick={onCreate}>
-          <Plus aria-hidden="true" /> Add Variable
+          <Plus aria-hidden="true" /> Add variable
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -999,7 +997,7 @@ export const EnvironmentEditor = ({
         if (cancelled) return;
         if (!decoded) {
           setPublishMessage(
-            "This Device could not read the current Environment.",
+            "This browser couldn't read the current environment. Try reading it again.",
           );
           setLoadPhase("failed");
           return;
@@ -1024,7 +1022,7 @@ export const EnvironmentEditor = ({
       } catch {
         if (!cancelled) {
           setPublishMessage(
-            "This Device could not read the current Environment.",
+            "This browser couldn't read the current environment. Try reading it again.",
           );
           setLoadPhase("failed");
         }
@@ -1081,8 +1079,8 @@ export const EnvironmentEditor = ({
     const names = reconciled.droppedVariableNames.join(" and ");
     const cause =
       previous.role !== role
-        ? `Your Membership role changed to ${roleLabel(role)}.`
-        : "This Environment is now signed in as a different User.";
+        ? `Your team role changed to ${roleLabel(role)}.`
+        : "This environment is now signed in as a different user.";
     setPublishMessage(
       `${cause} We removed ${names} from your draft because your current permissions no longer cover it. Other changes are kept.`,
     );
@@ -1317,7 +1315,7 @@ export const EnvironmentEditor = ({
       history.unresolvedVariableIds.length === requestedVariableIds.length
     ) {
       setRollbackHistoryError(
-        "This Device could not read this Revision's Values, so it cannot be compared. Nothing was staged.",
+        "This device couldn't read this revision's values, so the comparison isn't possible. Nothing was staged.",
       );
       return;
     }
@@ -1539,12 +1537,12 @@ export const EnvironmentEditor = ({
           setReviewOpen(false);
           setPublishMessage(
             conflictingVariableIds.length > 0
-              ? "Publish did not go through because someone else changed the same Variables. Review both sides, pick which to keep, then retry."
-              : "Someone else published other Variables. Your draft is still ready to publish.",
+              ? "Publish did not go through because someone else changed the same variables. Compare both versions, pick what to keep, then retry."
+              : "Someone else published changes to other variables. Your draft is still ready to publish.",
           );
         } catch {
           setPublishMessage(
-            "Publish stopped after someone else updated this Environment. Refresh and try again.",
+            "Publish stopped because someone else updated this environment first. Refresh and try again.",
           );
         }
         return;
@@ -1631,14 +1629,14 @@ export const EnvironmentEditor = ({
       setVariables(nextVariables.map(withDraftFlag));
     } catch {
       setPublishMessage(
-        "Rollback stopped because this revision's values could not be read.",
+        "Rollback stopped because this revision's values couldn't be read.",
       );
       return;
     }
     setRollbackTarget(null);
     setRollbackMutationTarget(rollbackTarget);
     setPublishMessage(
-      `Rollback from ${rollbackTarget} is staged as a new revision.`,
+      `Values from ${rollbackTarget} are in your draft. Review and publish to save the rollback as a new revision.`,
     );
   };
 
@@ -1652,18 +1650,18 @@ export const EnvironmentEditor = ({
               <LockKeyhole className="size-5 text-amber-300" />
               <h2>
                 {loading
-                  ? "Loading Environment…"
+                  ? "Loading environment…"
                   : (action?.title ?? "Variables are hidden")}
               </h2>
             </CardTitle>
             <CardDescription>
               {loading ? (
-                "Fetching the latest verified state for this Environment."
+                "Fetching the latest verified state for this environment."
               ) : (
                 <CommandText
                   text={
                     action?.body ??
-                    "Enroll this browser to view and edit variables."
+                    "Set up this browser to view and edit its variables."
                   }
                 />
               )}
@@ -1730,8 +1728,8 @@ export const EnvironmentEditor = ({
           <CardHeader>
             <CardTitle>Someone else published these</CardTitle>
             <CardDescription>
-              Compare your change with the verified remote change, pick which to
-              keep for each Variable, then retry the publish.
+              Compare your draft with the verified changes from the server.
+              Choose what to keep for each variable, then retry publishing.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
@@ -1810,7 +1808,7 @@ export const EnvironmentEditor = ({
               size="sm"
               variant="outline"
             >
-              <Plus aria-hidden="true" /> Add Variable
+              <Plus aria-hidden="true" /> Add variable
             </Button>
             <Button
               disabled={!canPublish}
@@ -1835,10 +1833,10 @@ export const EnvironmentEditor = ({
           </CardAction>
           {!canChangeDefinitions ? (
             <CardDescription data-testid="member-permissions-note">
-              As a {roleLabel(role)}, you can read every Variable. You can edit
-              the User-defined Values you own and the Shared Values you
-              provided. Owners and Admins can change the rest, and can add and
-              delete Variables.
+              As a {roleLabel(role).toLowerCase()}, you can read every variable.
+              You can edit the user-defined values you own and the shared values
+              you originally provided. Owners and admins can edit other values,
+              and add or delete variables.
             </CardDescription>
           ) : null}
         </CardHeader>
@@ -1849,7 +1847,7 @@ export const EnvironmentEditor = ({
                 className="px-4 py-6 text-sm text-muted-foreground"
                 role="status"
               >
-                Loading Environment…
+                Loading environment…
               </p>
             ) : loadPhase === "failed" ? (
               <p
@@ -1857,12 +1855,12 @@ export const EnvironmentEditor = ({
                 data-testid="environment-read-failed"
                 role="status"
               >
-                This Environment could not be read, so its Variables are hidden.
+                This environment couldn't be read, so its variables are hidden.
                 Use Retry reading to try again.
               </p>
             ) : (
               <p className="px-4 py-6 text-sm text-muted-foreground">
-                Add a Variable to start this Manifest.
+                Add a variable to save your first secrets here.
               </p>
             )
           ) : (
@@ -1903,9 +1901,9 @@ export const EnvironmentEditor = ({
             <GitBranch className="size-4" /> History
           </CardTitle>
           <CardDescription>
-            Verified Revisions of this Environment. Rollback restores the
-            selected Variables from an earlier Revision as a new Revision; it
-            does not delete the current one.
+            Verified revisions of this environment. Choose an earlier revision
+            to restore selected values. Publishing a rollback creates a new
+            revision and keeps the existing history.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2">
@@ -1927,7 +1925,7 @@ export const EnvironmentEditor = ({
                     lineSuffix={
                       <>
                         {rollbackTargetId !== null
-                          ? ` · Rollback of ${rollbackTargetKnown ? displayRevisionId(rollbackTargetId) : "an earlier Revision"}`
+                          ? ` · Rollback of ${rollbackTargetKnown ? displayRevisionId(rollbackTargetId) : "an earlier revision"}`
                           : null}
                         {!isCurrent ? " · Earlier revision" : null}
                       </>
@@ -1978,7 +1976,9 @@ export const EnvironmentEditor = ({
           <DialogHeader>
             <DialogTitle>Save changes</DialogTitle>
             <DialogDescription>
-              These Variables will be published as a new revision.
+              Publish to save these changes as a new revision. Shared values are
+              available to your team. User-defined values remain private to
+              their owner.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end">
@@ -2024,8 +2024,9 @@ export const EnvironmentEditor = ({
           <DialogHeader>
             <DialogTitle>Rollback</DialogTitle>
             <DialogDescription>
-              Restore these variables from an earlier revision. This writes a
-              new revision. It does not delete the current one.
+              Choose which values to restore from this revision. Nothing is
+              saved until you publish the draft. Publishing creates a new
+              revision without deleting the current one.
             </DialogDescription>
           </DialogHeader>
           {rollbackTargetEntry ? (
@@ -2036,9 +2037,9 @@ export const EnvironmentEditor = ({
                 revision={rollbackTargetEntry}
               />
               <p className="text-xs text-muted-foreground">
-                Staging publishes a new Rollback revision that becomes the new
-                head: the selected Variables take this Revision&apos;s Values,
-                earlier history is kept, and unselected Variables are untouched.
+                Staging puts the selected values in your draft. Review and
+                publish the draft to save a new revision. Earlier history and
+                unselected variables stay unchanged.
               </p>
             </div>
           ) : null}
@@ -2048,7 +2049,7 @@ export const EnvironmentEditor = ({
               data-testid="rollback-history-loading"
               role="status"
             >
-              Reading this Revision&rsquo;s Values…
+              Reading this revision's values…
             </p>
           ) : rollbackHistoryError !== null ? (
             <Alert
@@ -2087,7 +2088,7 @@ export const EnvironmentEditor = ({
                 >
                   <AlertTitle>Partial comparison</AlertTitle>
                   <AlertDescription>
-                    {`The historical Values for ${unresolvedRollbackNames.join(", ")} could not be read from this Revision, so this comparison is partial. Staging applies only to the Variables verified from it.`}
+                    {`The values for ${unresolvedRollbackNames.join(", ")} couldn't be read from this revision, so the comparison is incomplete. Only values this browser could read and verify can go into the rollback draft.`}
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -2096,7 +2097,7 @@ export const EnvironmentEditor = ({
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs text-muted-foreground">
                       {rollbackLanes.size} of {pendingRollbackDiffs.length}{" "}
-                      Variables selected
+                      variables selected
                     </p>
                     <Button
                       aria-pressed={rollbackValuesRevealed}
@@ -2151,7 +2152,7 @@ export const EnvironmentEditor = ({
                                 {rollbackVariable
                                   ? (readOnlyReason(actor, rollbackVariable) ??
                                     (rollbackVariable.tombstone
-                                      ? "This Variable is marked for deletion in your draft."
+                                      ? "This variable is marked for deletion in your draft."
                                       : null))
                                   : null}
                               </span>
