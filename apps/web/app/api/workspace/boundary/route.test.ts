@@ -11,7 +11,11 @@ type BoundaryBody = {
     readonly image?: unknown;
     readonly userId?: unknown;
   };
-  profile?: { readonly origin?: unknown; readonly serverProfileId?: unknown };
+  profile?: {
+    readonly id?: unknown;
+    readonly origin?: unknown;
+    readonly serverProfileId?: unknown;
+  };
   device?: { readonly active?: unknown };
 };
 
@@ -44,11 +48,13 @@ const withoutWorkspaceEnv = (): (() => void) => {
     nextPublic: process.env.NEXT_PUBLIC_DOTRELAY_API_ORIGIN,
     api: process.env.DOTRELAY_API_ORIGIN,
     profile: process.env.SERVER_PROFILE_ORIGIN,
+    webProfile: process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE,
   };
   delete process.env.DOTRELAY_WORKSPACE_FIXTURE;
   delete process.env.NEXT_PUBLIC_DOTRELAY_API_ORIGIN;
   delete process.env.DOTRELAY_API_ORIGIN;
   delete process.env.SERVER_PROFILE_ORIGIN;
+  delete process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
   return () => {
     if (previous.fixture === undefined)
       delete process.env.DOTRELAY_WORKSPACE_FIXTURE;
@@ -61,6 +67,9 @@ const withoutWorkspaceEnv = (): (() => void) => {
     if (previous.profile === undefined)
       delete process.env.SERVER_PROFILE_ORIGIN;
     else process.env.SERVER_PROFILE_ORIGIN = previous.profile;
+    if (previous.webProfile === undefined)
+      delete process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
+    else process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE = previous.webProfile;
   };
 };
 
@@ -180,6 +189,51 @@ test("a malformed workspace endpoint body is treated as unavailable", async () =
     expect(body.session?.displayName).toBe("Real Person");
   } finally {
     restoreFetch();
+    restoreEnv();
+  }
+});
+
+test("a live deployment declaring hosted ignores a request for another profile", async () => {
+  const restoreEnv = withoutWorkspaceEnv();
+  process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE = "hosted";
+  const restoreFetch = stubUpstream(() => undefined);
+  try {
+    const response = await GET(boundaryRequest("self-hosted"));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as BoundaryBody;
+    expect(body.source).toBe("live");
+    expect(body.profile?.id).toBe("hosted");
+  } finally {
+    restoreFetch();
+    restoreEnv();
+  }
+});
+
+test("an undeclared live deployment stays self-hosted despite the request", async () => {
+  const restoreEnv = withoutWorkspaceEnv();
+  const restoreFetch = stubUpstream(() => undefined);
+  try {
+    const response = await GET(boundaryRequest("hosted"));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as BoundaryBody;
+    expect(body.source).toBe("live");
+    expect(body.profile?.id).toBe("self-hosted");
+  } finally {
+    restoreFetch();
+    restoreEnv();
+  }
+});
+
+test("the development fixture keeps honoring the profile parameter", async () => {
+  const restoreEnv = withoutWorkspaceEnv();
+  process.env.DOTRELAY_WORKSPACE_FIXTURE = "1";
+  try {
+    const response = await GET(boundaryRequest("self-hosted"));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as BoundaryBody;
+    expect(body.source).toBe("fixture");
+    expect(body.profile?.id).toBe("self-hosted");
+  } finally {
     restoreEnv();
   }
 });

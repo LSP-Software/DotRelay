@@ -1,4 +1,5 @@
 import {
+  resolveWorkspaceProfileId,
   type WorkspaceCatalog,
   type WorkspaceProfileId,
   workspaceProfileCatalog,
@@ -14,12 +15,11 @@ export const WORKSPACE_VIEWS = [
 
 export type WorkspaceView = (typeof WORKSPACE_VIEWS)[number];
 
-export const WORKSPACE_DEFAULT_PROFILE_ID: WorkspaceProfileId = "hosted";
-
 /**
  * Raw location parsed from the page URL. Profile and view are validated
- * immediately; team, project, and environment ids are validated later, once
- * the workspace catalog is known.
+ * immediately; a profile the URL does not name falls back to the profile the
+ * deployment is, and team, project, and environment ids are validated later,
+ * once the workspace catalog is known.
  */
 export type ParsedWorkspaceLocation = Readonly<{
   readonly profileId: WorkspaceProfileId;
@@ -65,7 +65,7 @@ export const parseWorkspaceLocation = (
     profileId:
       profileId && knownProfiles.includes(profileId)
         ? (profileId as WorkspaceProfileId)
-        : WORKSPACE_DEFAULT_PROFILE_ID,
+        : resolveWorkspaceProfileId(),
     teamId: search.get("team"),
     projectId: search.get("project"),
     environmentId: search.get("environment"),

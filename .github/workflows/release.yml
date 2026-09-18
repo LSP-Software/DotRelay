@@ -65,6 +65,7 @@ jobs:
           build-args: |
             NEXT_PUBLIC_WEB_ORIGIN=https://dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://api.dotrelay.dev
+            NEXT_PUBLIC_DOTRELAY_WEB_PROFILE=hosted
 
   build-cli:
     name: build CLI (${{ matrix.os }})
