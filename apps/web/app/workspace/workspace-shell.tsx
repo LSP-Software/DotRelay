@@ -17,9 +17,11 @@ import {
 import {
   Archive,
   Braces,
+  ChevronDown,
   ChevronRight,
   FolderGit2,
   KeyRound,
+  LogOut,
   Menu,
   MonitorSmartphone,
   RotateCcw,
@@ -52,6 +54,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -769,6 +777,28 @@ export const WorkspaceShell = ({
 
   const refreshTeamAdministration = () => {
     setMembershipTick((tick) => tick + 1);
+  };
+
+  // Sign out the account session. The session cookie is scoped to the API
+  // origin (see apps/api/src/auth.ts), so the request goes there with
+  // credentials, mirroring the sign-in button. The workspace's local state
+  // (device keys, trust decisions) is left intact, exactly as it would be
+  // if the tab were closed, so the next sign-in restores the same browser
+  // without re-enrolling.
+  const signOut = async () => {
+    const origin = resolveApiOrigin() ?? displayBoundary.profile.origin;
+    try {
+      const response = await fetch(`${origin}/api/auth/sign-out`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch {
+      // The API is unreachable or rejected the request; the page that
+      // follows offers sign-in either way.
+    } finally {
+      window.location.assign("/sign-in");
+    }
   };
 
   const resetInvitationDialog = () => {
@@ -2189,32 +2219,73 @@ export const WorkspaceShell = ({
           />
         </div>
         <div className="mt-auto border-t p-4">
-          <div className="flex items-center gap-3">
-            <Avatar size="sm">
-              {displayBoundary.session.image && (
-                <AvatarImage
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  src={displayBoundary.session.image}
+          {displayBoundary.session.active ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    aria-label={`Account menu: ${displayBoundary.session.displayName ?? "Account"}`}
+                    className="h-auto w-full justify-start gap-3 rounded-lg px-2 py-1.5"
+                    variant="ghost"
+                  />
+                }
+              >
+                <Avatar size="sm">
+                  {displayBoundary.session.image && (
+                    <AvatarImage
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      src={displayBoundary.session.image}
+                    />
+                  )}
+                  <AvatarFallback>
+                    {(displayBoundary.session.displayName ?? "DR")
+                      .slice(0, 2)
+                      .toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block truncate text-sm font-medium">
+                    {displayBoundary.session.displayName ?? "Signed out"}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    Signed in
+                  </span>
+                </span>
+                <ChevronDown
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-muted-foreground"
                 />
-              )}
-              <AvatarFallback>
-                {(displayBoundary.session.displayName ?? "DR")
-                  .slice(0, 2)
-                  .toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">
-                {displayBoundary.session.displayName ?? "Signed out"}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {displayBoundary.session.active
-                  ? "Signed in"
-                  : "Sign in required"}
-              </p>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem
+                  data-testid="account-sign-out"
+                  onClick={() => void signOut()}
+                >
+                  <LogOut aria-hidden="true" />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <div className="flex items-center gap-3">
+              <Avatar size="sm">
+                <AvatarFallback>
+                  {(displayBoundary.session.displayName ?? "DR")
+                    .slice(0, 2)
+                    .toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">
+                  {displayBoundary.session.displayName ?? "Signed out"}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  Sign in required
+                </p>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </aside>
 
@@ -2270,6 +2341,19 @@ export const WorkspaceShell = ({
                     view={view}
                   />
                 </div>
+                {displayBoundary.session.active ? (
+                  <div className="mt-auto border-t p-3">
+                    <Button
+                      data-testid="mobile-sign-out"
+                      onClick={() => void signOut()}
+                      className="w-full justify-start gap-2"
+                      variant="ghost"
+                    >
+                      <LogOut aria-hidden="true" />
+                      Sign out
+                    </Button>
+                  </div>
+                ) : null}
               </SheetContent>
             </Sheet>
 
