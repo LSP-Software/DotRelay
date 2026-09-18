@@ -643,6 +643,7 @@ export const WorkspaceShell = ({
 
   // Keep the selected Team's persisted membership record current: refetch on
   // Team or session change, on reconnecting, and after a mutation (tick).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: membershipTick and displayBoundary.connection are refetch triggers (post-mutation and reconnect) whose values are intentionally not read inside the effect
   useEffect(() => {
     const selectedTeamId = selectedTeam?.id;
     if (!apiOrigin || !selectedTeamId || !sessionActive) {
@@ -674,6 +675,7 @@ export const WorkspaceShell = ({
 
   // Keep the invitations addressed to the signed-in User current, so an
   // invitee who has not yet joined a Team still sees the invitation they hold.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: membershipTick and displayBoundary.connection are refetch triggers whose values are intentionally not read inside the effect
   useEffect(() => {
     if (!apiOrigin || !sessionActive) {
       setMyInvitations(null);
