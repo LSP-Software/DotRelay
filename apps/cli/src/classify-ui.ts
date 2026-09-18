@@ -1,6 +1,7 @@
 import { CliInvocationError, sanitizeCliText } from "./errors";
 import { readTerminalLine, type TerminalIo } from "./terminal";
 import {
+  bold,
   paint,
   type ReadableRaw,
   readRawKey,
@@ -51,6 +52,10 @@ export const createClassificationBoard = (
 const labelWidth = (drafts: readonly ClassificationDraft[]): number =>
   Math.max(...drafts.map((draft) => draft.name.length), 8);
 
+const ownerTone = (
+  classification: VariableClassification,
+): "info" | "accent" => (classification === "shared" ? "info" : "accent");
+
 export const renderClassificationBoard = (
   state: ClassificationBoardState,
   options: Readonly<{ readonly interactive: boolean }> = {
@@ -58,32 +63,33 @@ export const renderClassificationBoard = (
   },
 ): string => {
   const width = labelWidth(state.drafts);
-  const title =
-    state.drafts.length === 1
-      ? "1 variable from .env"
-      : `${state.drafts.length} variables from .env`;
+  const count = state.drafts.length;
+  const title = `Classify ${count} Variable${count === 1 ? "" : "s"} from .env`;
   const rows = state.drafts.map((draft, index) => {
     const selected = options.interactive && index === state.cursor;
     const marker = options.interactive
       ? selected
-        ? paint("·", "wax")
+        ? paint("▸", "brand")
         : " "
-      : `${index + 1}.`;
+      : paint(`${index + 1}.`, "muted");
     const name = sanitizeCliText(draft.name).padEnd(width, " ");
     const owner = ownershipCopy(draft.classification);
-    const namePaint = selected ? paint(name, "paper") : paint(name, "graphite");
-    const ownerPaint = selected ? paint(owner, "wax") : paint(owner, "dim");
+    const namePaint = selected ? bold(name, "fg") : paint(name, "muted");
+    const ownerPaint = paint(
+      owner,
+      selected ? ownerTone(draft.classification) : "faint",
+    );
     return `     ${marker}  ${namePaint}  ${ownerPaint}`;
   });
   const hint = options.interactive
-    ? "Space changes who can read it. Enter publishes."
+    ? "Space toggles who can read a Variable. Enter publishes."
     : "Enter a number to toggle, or press Enter to publish";
   return [
-    `  ${paint("·", "wax")}  ${paint(title, "paper")}`,
+    `  ${paint("●", "brand")}  ${paint(title, "fg")}`,
     "",
     ...rows,
     "",
-    `     ${paint(hint, "dim")}`,
+    `     ${paint(hint, "faint")}`,
     "",
   ].join("\n");
 };

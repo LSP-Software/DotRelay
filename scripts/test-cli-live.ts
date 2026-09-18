@@ -841,7 +841,7 @@ try {
     const terminalOutput = terminal.stdout + terminal.stderr;
     if (
       terminal.exitCode !== 2 ||
-      !terminalOutput.includes("refusing to write Values to terminal stdout") ||
+      !terminalOutput.includes("Refusing to write Values to terminal stdout") ||
       terminalOutput.includes('USER_VALUE="secret"') ||
       terminalOutput.includes('SHARED_VALUE="two"')
     )

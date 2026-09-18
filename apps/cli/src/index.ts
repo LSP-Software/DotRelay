@@ -33,6 +33,21 @@ import {
   openVerificationPage,
 } from "./auth";
 import {
+  bold,
+  epilogue,
+  errorCard,
+  glyph,
+  heading,
+  type KvRow,
+  kv,
+  note,
+  paint,
+  reviewFrame,
+  statusCard,
+  stepDone,
+  type Tone,
+} from "./components";
+import {
   type GitHubRepositorySelection,
   type GitRemote,
   readStoredWorktreeContext,
@@ -60,7 +75,7 @@ import {
   CliInvocationError,
   diagnosticForError,
   EXIT_CODES,
-  humanDetailForError,
+  presentationForError,
   sanitizeCliText,
 } from "./errors";
 import { createGitTrackingProbe, type GitTrackingProbe } from "./git-tracking";
@@ -88,13 +103,7 @@ import {
   useServerProfile,
 } from "./profile";
 import type { TerminalIo } from "./terminal";
-import {
-  paint,
-  renderStep,
-  rewriteRegion,
-  selectOption,
-  writeNotice,
-} from "./ui";
+import { rewriteRegion, selectOption } from "./ui";
 import { defaultOrigin, version } from "./version";
 import {
   approveDeviceEnrollment,
@@ -275,21 +284,35 @@ const resolveSelectedRepository = async (
 
 const json = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
-// Stored-local state is labelled as such; only the service-verified lines
-// may claim a session or Device as current.
-const statusSessionLine = (session: string): string => {
-  if (session === "verified") return "Signed in (verified)";
-  if (session === "expired") return "Session expired or revoked";
-  if (session === "unverified") return "Signed in (last known; not verified)";
-  return "Not signed in";
+const abbreviateId = (id: string): string => {
+  const match =
+    /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-([0-9a-f]{12})$/i.exec(
+      id,
+    );
+  return match ? `${match[1]}-${match[5]?.slice(0, 4)}` : id.slice(0, 12);
 };
 
-const statusDeviceLine = (device: string): string => {
-  if (device === "active") return "Device active (verified)";
-  if (device === "not-active") return "Device not active on the Server Profile";
-  if (device === "unusable") return "Device keys are not usable locally";
-  if (device === "unverified") return "Device (last known; not verified)";
-  return "No Device";
+type StatusLine = Readonly<{ readonly text: string; readonly tone: Tone }>;
+
+// Stored-local state is labelled as such; only the service-verified lines
+// may claim a session or Device as current.
+const statusSessionLine = (session: string): StatusLine => {
+  if (session === "verified")
+    return { text: "signed in · verified", tone: "brand" };
+  if (session === "expired")
+    return { text: "expired or revoked", tone: "danger" };
+  if (session === "unverified")
+    return { text: "signed in · not verified", tone: "warn" };
+  return { text: "not signed in", tone: "muted" };
+};
+
+const statusDeviceLine = (device: string): StatusLine => {
+  if (device === "active") return { text: "active · verified", tone: "brand" };
+  if (device === "not-active") return { text: "not active", tone: "danger" };
+  if (device === "unusable") return { text: "keys unusable", tone: "danger" };
+  if (device === "unverified")
+    return { text: "last known · not verified", tone: "warn" };
+  return { text: "not enrolled", tone: "muted" };
 };
 
 // The note names the stage that could not complete; once the service has
@@ -297,8 +320,8 @@ const statusDeviceLine = (device: string): string => {
 const statusServiceNote = (service: string, session: string): string | null => {
   if (service === "offline")
     return session === "verified"
-      ? "Offline: the Device check could not be completed"
-      : "Offline: could not reach the Server Profile";
+      ? "The Server Profile could not be reached"
+      : "The Server Profile could not be reached";
   if (service === "unavailable")
     return session === "verified"
       ? "The Server Profile could not complete the Device check"
@@ -306,62 +329,198 @@ const statusServiceNote = (service: string, session: string): string | null => {
   return null;
 };
 
+const statusNextAction = (value: Record<string, unknown>): string | null => {
+  const next = typeof value.nextAction === "string" ? value.nextAction : "none";
+  if (next === "none") return null;
+  if (next === "run dotrelay login") return "dotrelay login";
+  if (next === "run dotrelay device enroll") return "dotrelay device enroll";
+  if (next === "run dotrelay device recover") return "dotrelay device recover";
+  if (next.startsWith("run dotrelay env use"))
+    return "dotrelay env use <environment-id-or-label>";
+  if (next.startsWith("run dotrelay setup")) return "dotrelay setup <origin>";
+  if (next === "retry when the Server Profile is reachable")
+    return "retry dotrelay status";
+  if (next === "retry dotrelay status") return "retry dotrelay status";
+  if (next.startsWith("this build targets")) return "dotrelay login";
+  return next;
+};
+
 const renderStatusCard = (value: Record<string, unknown>): string => {
-  const profile =
-    typeof value.profile === "string" ? value.profile : "No Server Profile";
+  const profile = typeof value.profile === "string" ? value.profile : "";
+  const origin = typeof value.origin === "string" ? value.origin : "";
   const session =
     typeof value.session === "string" ? value.session : "not-stored";
   const device =
     typeof value.device === "string" ? value.device : "not-enrolled";
   const service = typeof value.service === "string" ? value.service : "skipped";
-  const lines: string[] = [
-    `  ${paint("·", "wax")}  ${paint(profile, "paper")}`,
+  const sessionLine = statusSessionLine(session);
+  const deviceLine = statusDeviceLine(device);
+  const rows: KvRow[] = [
+    { key: "Server Profile", value: profile || undefined },
+    { key: "Origin", value: origin || undefined, tone: "muted" },
+    { key: "Session", value: sessionLine.text, tone: sessionLine.tone },
+    { key: "Device", value: deviceLine.text, tone: deviceLine.tone },
   ];
-  if (typeof value.origin === "string")
-    lines.push(`     ${paint(value.origin, "graphite")}`);
-  lines.push(
-    `     ${paint(
-      statusSessionLine(session),
-      session === "verified" ? "ok" : "dim",
-    )}`,
-  );
-  lines.push(
-    `     ${paint(
-      statusDeviceLine(device),
-      device === "active" ? "ok" : "dim",
-    )}`,
-  );
-  const note = statusServiceNote(service, session);
-  if (note) lines.push(`     ${paint(note, "wax")}`);
   if (typeof value.projectId === "string")
-    lines.push(`     ${paint(`Project ${value.projectId}`, "graphite")}`);
+    rows.push({
+      key: "Project",
+      value: `${abbreviateId(sanitizeCliText(String(value.projectId)))}`,
+      tone: "fg",
+    });
   const environment =
     typeof value.environment === "string"
       ? value.environment
       : typeof value.environmentId === "string"
         ? value.environmentId
-        : null;
+        : "";
   if (environment) {
+    const flagged =
+      value.environmentActive === false || value.environmentUnverified === true;
     const marker =
       value.environmentActive === false
-        ? " (not active)"
+        ? " · not active"
         : value.environmentUnverified === true
-          ? " (not verified)"
+          ? " · not verified"
           : "";
-    lines.push(
-      `     ${paint(
-        `Environment ${environment}${marker}`,
-        value.environmentActive === false ||
-          value.environmentUnverified === true
-          ? "dim"
-          : "graphite",
-      )}`,
-    );
+    rows.push({
+      key: "Environment",
+      value: `${environment}${marker}`,
+      tone: flagged ? "warn" : "fg",
+    });
   }
-  const next = typeof value.nextAction === "string" ? value.nextAction : "none";
-  lines.push(`     ${paint(`Next: ${next}`, "dim")}`);
-  lines.push("");
-  return lines.join("\n");
+  const serviceNote = statusServiceNote(service, session);
+  const next = statusNextAction(value);
+  const footers: string[] = [];
+  if (serviceNote) footers.push(`  ${glyph("warn")}  ${serviceNote}`);
+  if (value.environmentUnverified === true)
+    footers.push(
+      `  ${glyph("warn")}  The stored Environment could not be verified`,
+    );
+  if (next !== null) footers.push(`  ${glyph("info")}  Next: ${next}`);
+  if (footers.length === 0)
+    footers.push(`  ${glyph("ok")}  ${paint("Fully connected", "brand")}`);
+  return `${statusCard(rows)}
+${footers.join("\n")}
+`;
+};
+
+const renderProfileList = (value: Record<string, unknown>): string => {
+  const profiles = Array.isArray(value.profiles) ? value.profiles : [];
+  if (profiles.length === 0)
+    return `${note("No Server Profiles saved. Run dotrelay setup <origin> to add one.")}\n`;
+  const rows = profiles.map((entry) => {
+    const record = entry as Record<string, unknown>;
+    return {
+      name: typeof record.name === "string" ? record.name : "",
+      origin: typeof record.origin === "string" ? record.origin : "",
+      selected: value.selected === record.name,
+    };
+  });
+  const lines = rows.map((row) => {
+    const marker = row.selected ? paint("▸", "brand") : paint("·", "ghost");
+    const name = row.selected ? bold(row.name) : paint(row.name, "muted");
+    return `  ${marker}  ${name}  ${paint(row.origin, "faint")}`;
+  });
+  return `${lines.join("\n")}\n`;
+};
+
+const renderContextCard = (value: Record<string, unknown>): string => {
+  const rows: KvRow[] = [
+    {
+      key: "Repository",
+      value:
+        typeof value.repository === "string"
+          ? String(value.repository)
+          : undefined,
+    },
+  ];
+  if (Array.isArray(value.remoteNames)) {
+    rows.push({
+      key: "Remotes",
+      value: (value.remoteNames as readonly string[]).join(", "),
+      tone: "muted",
+    });
+  }
+  if (typeof value.githubRepositoryId === "string")
+    rows.push({
+      key: "GitHub id",
+      value: `verified (${abbreviateId(value.githubRepositoryId)})`,
+      tone: "brand",
+    });
+  if (typeof value.projectId === "string")
+    rows.push({
+      key: "Project",
+      value: abbreviateId(value.projectId),
+      tone: "fg",
+    });
+  if (typeof value.environment === "string")
+    rows.push({ key: "Environment", value: value.environment, tone: "fg" });
+  else if (typeof value.environmentId === "string")
+    rows.push({
+      key: "Environment",
+      value: abbreviateId(value.environmentId),
+      tone: "muted",
+    });
+  const next =
+    typeof value.nextAction === "string" ? String(value.nextAction) : "";
+  const footers: string[] = [];
+  if (next.length > 0) footers.push(`  ${glyph("info")}  ${next}`);
+  else footers.push(`  ${glyph("ok")}  ${paint("Context recorded", "brand")}`);
+  return `${kv(rows)}\n\n${footers.join("\n")}\n`;
+};
+
+const renderDeviceResult = (
+  command: string,
+  value: Record<string, unknown>,
+): string => {
+  const rows: KvRow[] = [];
+  if (typeof value.deviceId === "string")
+    rows.push({ key: "Device", value: abbreviateId(value.deviceId) });
+  if (typeof value.enrollmentId === "string")
+    rows.push({
+      key: "Enrollment",
+      value: abbreviateId(value.enrollmentId),
+      tone: "accent",
+    });
+  if (typeof value.request === "string")
+    rows.push({ key: "Handoff", value: value.request, tone: "muted" });
+  if (typeof value.active === "boolean" && command !== "backup")
+    rows.push({
+      key: "State",
+      value: value.active ? "active · verified" : "pending approval",
+      tone: value.active ? "brand" : "warn",
+    });
+  if (typeof value.recoveryGeneration === "number")
+    rows.push({
+      key: "Generation",
+      value: String(value.recoveryGeneration),
+      tone: "accent",
+    });
+  const message =
+    typeof value.message === "string" ? sanitizeCliText(value.message) : "";
+  const epilogues: string[] = [];
+  if (rows.length > 0) epilogues.push(kv(rows));
+  if (message.length > 0) epilogues.push(`  ${message}`);
+  if (epilogues.length === 0)
+    epilogues.push(`  ${glyph("ok")}  ${paint("Complete", "brand")}`);
+  return `${heading(`device ${command}`)}\n\n${epilogues.join("\n")}\n`;
+};
+
+const renderGenericResult = (value: Record<string, unknown>): string => {
+  const rows: KvRow[] = Object.entries(value)
+    .filter(([, entry]) => typeof entry !== "object")
+    .map(([key, entry]) => ({
+      key,
+      value:
+        typeof entry === "string"
+          ? entry
+          : entry === null
+            ? undefined
+            : String(entry),
+      tone: "fg",
+    }));
+  if (rows.length === 0) return `${"  "}${"Complete"}\n`;
+  return `${kv(rows)}\n`;
 };
 
 const renderSuccess = (
@@ -369,20 +528,29 @@ const renderSuccess = (
   value: Record<string, unknown>,
 ): string => {
   if (parsed.json) return json({ ok: true, ...value });
+  if ("stdout" in value && typeof value.stdout === "string")
+    return value.stdout;
   if (parsed.command === "status") return renderStatusCard(value);
-  if (typeof value.message === "string")
-    return `${sanitizeCliText(value.message)}\n`;
-  return `${Object.entries(value)
-    .map(([key, entry]) => {
-      const rendered =
-        typeof entry === "string"
-          ? entry
-          : entry !== null && typeof entry === "object"
-            ? JSON.stringify(entry)
-            : String(entry);
-      return `${sanitizeCliText(key)}: ${sanitizeCliText(rendered ?? "")}`;
-    })
-    .join("\n")}\n`;
+  if (parsed.command === "profile" && parsed.subcommand === "list")
+    return renderProfileList(value);
+  if (parsed.command === "context") return renderContextCard(value);
+  if (parsed.command === "device" && parsed.subcommand)
+    return renderDeviceResult(parsed.subcommand, value);
+  if (typeof value.message === "string") {
+    const message = sanitizeCliText(value.message);
+    if (parsed.command === "logout")
+      return `${epilogue(`Signed out of ${String(value.profile ?? "the Server Profile")}.`)}\n`;
+    if (parsed.command === "profile" && parsed.subcommand === "use")
+      return `${epilogue(`Selected ${String(value.profile)}.`)}\n`;
+    if (parsed.command === "env" && parsed.subcommand === "use")
+      return `${epilogue(
+        `Environment set to ${String(value.environmentId ?? value.environment ?? "the selection")}.`,
+      )}\n`;
+    if (parsed.command === "project" && parsed.subcommand === "link")
+      return `${epilogue(`Linked ${String(value.repository ?? "the Repository")} to this worktree.`)}\n`;
+    return `${message}\n`;
+  }
+  return `${renderGenericResult(value)}\n`;
 };
 
 // The runtime's transport options flow into profile resolution so a
@@ -404,19 +572,30 @@ const confirmProfileTrust = async (
   if (parsed.acceptProfile === candidate.pin.serverProfileId) return true;
   if (parsed.noInput) return false;
   const output = runtime.terminal?.output ?? process.stderr;
-  output.write(
-    renderStep("Trust this Server Profile?", [
-      candidate.origin,
-      candidate.pin.serverProfileId,
-    ]),
-  );
-  if (runtime.confirm) return runtime.confirm(`Trust ${candidate.origin}?`);
+  const frame = reviewFrame({
+    title: "Trust this Server Profile",
+    body: [
+      kv([
+        { key: "Origin", value: candidate.origin },
+        {
+          key: "Id",
+          value: abbreviateId(candidate.pin.serverProfileId),
+          tone: "faint",
+        },
+      ]),
+    ].join("\n"),
+    question: "Trust this Server Profile? [Y/n]",
+  });
+  output.write(`${frame}\n`);
+  if (runtime.confirm)
+    return await runtime.confirm(`Trust ${candidate.origin}? [Y/n]`);
   const { readTerminalLine } = await import("./terminal");
   const answer = runtime.prompt
     ? await runtime.prompt(`Trust ${candidate.origin}? [Y/n]`)
     : await readTerminalLine(
         `Trust ${candidate.origin}? [Y/n]`,
         runtime.terminal,
+        false,
       );
   const trimmed = answer.trim().toLowerCase();
   return trimmed === "" || trimmed === "y" || trimmed === "yes";
@@ -529,14 +708,27 @@ const loginAndEnroll = async (
     progress: Extract<LoginProgress, { readonly kind: "retry" }>,
   ): string =>
     `${retryReasonPhrase[progress.reason]}; ${progress.maxAttempts !== undefined ? `retry ${progress.attempt} of ${progress.maxAttempts}` : `retry ${progress.attempt}`} — next in ${Math.max(1, Math.ceil(progress.nextDelayMs / 1000))}s`;
+  const renderLoginCard = (hint: string): string => {
+    const [url, code, expiry] = waitingBody;
+    const lines = [
+      `  ${bold(`Sign in to ${profile.name}`)}`,
+      "",
+      `    ${paint("▸", "brand")}  ${paint(url ?? "", "info")}`,
+    ];
+    if (code) lines.push(`     ${paint("Code", "faint")}   ${bold(code)}`);
+    if (expiry)
+      lines.push(
+        `     ${paint("Expires", "faint")}  ${paint(`in ${expiry}`, "muted")}`,
+      );
+    if (openFailed)
+      lines.push(
+        "",
+        `     ${paint("Could not open a browser automatically; open the URL above in any browser.", "warn")}`,
+      );
+    lines.push("", `     ${paint(hint, "muted")}`, "");
+    return lines.join("\n");
+  };
   const renderWaiting = (): void => {
-    const body = openFailed
-      ? [
-          ...waitingBody,
-          "",
-          "Could not open a browser automatically; open the URL above in any browser.",
-        ]
-      : waitingBody;
     const elapsed = elapsedSeconds();
     const hint =
       retryState !== null && retryState.kind === "retry"
@@ -544,11 +736,7 @@ const loginAndEnroll = async (
         : manualPath
           ? "Open the URL above to complete sign-in"
           : `Waiting for the browser${elapsed >= 1 ? ` — ${describeDuration(elapsed)}` : ""}`;
-    waitLines = rewriteRegion(
-      output,
-      waitLines,
-      renderStep("Allow this CLI?", body, hint),
-    );
+    waitLines = rewriteRegion(output, waitLines, renderLoginCard(hint));
   };
   const stopTicker = (): void => {
     if (tickTimer !== null) {
@@ -645,8 +833,8 @@ const loginAndEnroll = async (
           }
           waitingBody = [
             verificationUrl,
-            `Code: ${authorization.userCode}`,
-            `Expires in ${describeExpiry(authorization.expiresInSeconds)}`,
+            authorization.userCode,
+            describeExpiry(authorization.expiresInSeconds),
           ];
           renderWaiting();
           startTicker();
@@ -678,13 +866,12 @@ const loginAndEnroll = async (
     if (!parsed.json && waitLines > 0)
       waitLines = rewriteRegion(output, waitLines, "");
   }
-  if (!parsed.json) writeNotice(output, "Signed in");
+  if (!parsed.json) stepDone(`Signed in to ${profile.name}`);
   const enrollment = await enrollFirstDevice(
     deviceWorkflowOptions(parsed, runtime, profile, credentials),
   );
   if (!parsed.json)
-    writeNotice(
-      output,
+    stepDone(
       enrollment.existing ? "Device already enrolled" : "Device enrolled",
     );
   return {
@@ -694,8 +881,8 @@ const loginAndEnroll = async (
     deviceId: enrollment.deviceId,
     device: enrollment.active ? "enrolled" : "not enrolled",
     message: enrollment.existing
-      ? "Signed in. Device already enrolled."
-      : "Signed in. Device enrolled.",
+      ? `Signed in to ${profile.name}. Device already enrolled.`
+      : `Signed in to ${profile.name}. Device enrolled.`,
   };
 };
 
@@ -946,6 +1133,21 @@ const verifyStatus = async (
   };
 };
 
+const HUMAN_HEADING_COMMANDS = new Set([
+  "setup",
+  "login",
+  "logout",
+  "init",
+  "push",
+  "pull",
+  "rollback",
+  "context",
+  "profile",
+  "device",
+  "project",
+  "env",
+]);
+
 const execute = async (
   args: readonly string[],
   runtime: CliRuntime,
@@ -958,6 +1160,16 @@ const execute = async (
       ? {}
       : { stdoutIsTerminal: runtime.stdoutIsTerminal },
   );
+  if (!parsed.json && HUMAN_HEADING_COMMANDS.has(parsed.command)) {
+    const output = runtime.terminal?.output ?? process.stderr;
+    output.write(
+      `${heading(
+        parsed.subcommand
+          ? `${parsed.command} ${parsed.subcommand}`
+          : parsed.command,
+      )}\n\n`,
+    );
+  }
   const store = createFileProfileCatalog(
     runtime.profilePath ?? profileCatalogPath(),
   );
@@ -1707,9 +1919,11 @@ export const run = async (
       stdout: "",
       stderr: parsed
         ? json(diagnostic)
-        : `${humanDetailForError(error, {
-            debug: args.includes("--debug"),
-          })}\n`,
+        : `${errorCard(
+            presentationForError(error, {
+              debug: args.includes("--debug"),
+            }),
+          )}\n`,
     };
   }
 };

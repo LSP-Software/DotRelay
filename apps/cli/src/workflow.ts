@@ -58,6 +58,7 @@ import {
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
 import { classifyVariablesInteractively } from "./classify-ui";
+import { heading, kv, note, reviewFrame, stepDone } from "./components";
 import type { NativeCredentialStore } from "./credentials";
 import {
   createFileDeviceRecordStore,
@@ -94,15 +95,19 @@ import {
 } from "./network";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
+import { createProgress, type Progress } from "./progress";
 import { readTerminalLine, type TerminalIo } from "./terminal";
-import { type ColorRole, paint, writeNotice } from "./ui";
+import { pad, type Tone, visibleWidth } from "./theme";
+import { paint } from "./ui";
 import {
+  destinationRows,
   type PublicationChange,
   type PublicationDestination,
   publicationConfirmQuestion,
   pullConfirmQuestion,
-  renderDestinationLines,
+  ROLLBACK_NOTE,
   renderEnvDiff,
+  reviewBody,
   rollbackConfirmQuestion,
   type ValueOwnership,
   valueDiffsForPull,
@@ -439,6 +444,37 @@ const confirm = async (
 ): Promise<boolean> => {
   if (options.confirm) return options.confirm(question);
   const answer = await ask(options, `${question} [y/N]`);
+  return (
+    answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes"
+  );
+};
+
+// The review frame has already printed the question, so the terminal read
+// must not echo it a second time.
+const askSilent = async (
+  options: WorkflowOptions,
+  question: string,
+): Promise<string> => {
+  if (options.prompt) return options.prompt(question);
+  if (options.noInput)
+    throw new CliInvocationError(
+      "this command requires interactive input; remove --no-input to answer the prompt",
+    );
+  try {
+    return await readTerminalLine(question, options.terminal, false);
+  } catch {
+    throw new CliInvocationError(
+      "the terminal could not be read, so the interactive prompt went unanswered",
+    );
+  }
+};
+
+const confirmSilent = async (
+  options: WorkflowOptions,
+  question: string,
+): Promise<boolean> => {
+  if (options.confirm) return options.confirm(question);
+  const answer = await askSilent(options, question);
   return (
     answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes"
   );
@@ -2630,7 +2666,7 @@ const loadWorkflowSession = async (
   if (pendingActions.length > 0 && !parsed.json) {
     const output = options.terminal?.output ?? process.stderr;
     for (const action of pendingActions)
-      writeNotice(output, action, undefined, "wax");
+      output.write(`${note(action, "warn")}\n`);
   }
   const transport = createProtocolTransport({
     origin: options.profile.origin,
@@ -2969,29 +3005,45 @@ const publish = async (
       options,
       synced.workflow.publicationContext,
     );
-    // The rollback review names the append-only consequence: the operator
-    // approves adding a Rollback Revision, not rewriting earlier ones.
-    const review =
-      mutation === "ROLLBACK"
-        ? rollbackConfirmQuestion(changes, destination, parsed.reveal)
-        : publicationConfirmQuestion(changes, destination, parsed.reveal);
-    if (!(await confirm(options, review)))
-      throw new CliInvocationError(
-        mutation === "ROLLBACK"
-          ? "rollback confirmation was declined"
-          : "publication confirmation was declined",
-      );
+    const output = options.terminal?.output ?? process.stderr;
+    const environment = destination.environment;
+    if (mutation === "ROLLBACK") {
+      // The rollback review names the append-only consequence: the operator
+      // approves adding a Rollback Revision, not rewriting earlier ones.
+      const frame = reviewFrame({
+        title: `Review — roll back in ${environment}`,
+        danger: true,
+        body: reviewBody(changes, destination, parsed.reveal, [
+          `  ${paint(ROLLBACK_NOTE, "faint")}`,
+        ]),
+        question: rollbackConfirmQuestion(),
+      });
+      output.write(`${frame}\n`);
+      if (!(await confirmSilent(options, rollbackConfirmQuestion())))
+        throw new CliInvocationError("rollback confirmation was declined");
+    } else {
+      const frame = reviewFrame({
+        title: `Review — publish to ${environment}`,
+        body: reviewBody(changes, destination, parsed.reveal),
+        question: publicationConfirmQuestion(),
+      });
+      output.write(`${frame}\n`);
+      if (!(await confirmSilent(options, publicationConfirmQuestion())))
+        throw new CliInvocationError("publication confirmation was declined");
+    }
   }
-  const progress = (title: string): void => {
-    if (options.noInput || parsed.json) return;
-    writeNotice(options.terminal?.output ?? process.stderr, title);
-  };
-  progress("Encrypting");
+  const progress: Progress = createProgress({
+    output: options.terminal?.output ?? process.stderr,
+    live: (options.terminal?.output as { isTTY?: boolean })?.isTTY === true,
+    quiet: options.noInput || parsed.json,
+  });
+  progress.start("Encrypting values");
   let artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>;
   try {
     artifacts = await createPublicationArtifacts(draftVariables, context);
     assertPublicationAccepted(reviewPublication(artifacts.commandBytes));
   } catch (error) {
+    progress.fail("Encrypting values");
     if (error instanceof CliError) throw error;
     throw new CliError(
       "invocation",
@@ -3004,8 +3056,14 @@ const publish = async (
       "publication_invalid",
     );
   }
+  const changedCount = draftVariables.filter(
+    (variable) => variable.hasDraftChange,
+  ).length;
+  progress.done(
+    `Encrypted ${changedCount} Variable${changedCount === 1 ? "" : "s"}`,
+  );
   const operationId = crypto.randomUUID();
-  progress("Uploading");
+  progress.start("Uploading");
   try {
     await synced.workflow.transport.begin({
       operationId,
@@ -3030,6 +3088,7 @@ const publish = async (
     await synced.workflow.transport
       .cancel({ operationId, deviceId: synced.workflow.deviceId })
       .catch(() => undefined);
+    progress.fail("Uploading");
     if (error instanceof CliError) throw error;
     const problem = error as { problem?: { code?: string } };
     const code = problem.problem?.code ?? "service_unavailable";
@@ -3057,12 +3116,18 @@ const publish = async (
       code,
     );
   }
-  progress("Published");
+  progress.done("Uploaded");
+  if (!options.noInput && !parsed.json)
+    stepDone(
+      mutation === "ROLLBACK"
+        ? "Rollback published"
+        : `Published ${changedCount} Variable${changedCount === 1 ? "" : "s"}`,
+    );
   return {
     revision: artifacts.request.revision.id,
     lanes: artifacts.encryptedLaneCount,
     tombstones: artifacts.tombstoneLaneCount,
-    message: "Published",
+    message: mutation === "ROLLBACK" ? "Rollback published" : "Published",
     ...pendingActionsField(synced.workflow.pendingActions),
   };
 };
@@ -3389,6 +3454,9 @@ const mutationLabel = (mutation: number): string =>
             ? "User-key rotation"
             : `Mutation ${mutation}`;
 
+const mutationTone = (mutation: number): Tone =>
+  mutation === 3 ? "warn" : mutation === 1 ? "accent" : "fg";
+
 const revisionDate = (authoredAtMs: bigint): string => {
   const date = new Date(Number(authoredAtMs));
   const pad = (value: number): string => String(value).padStart(2, "0");
@@ -3404,22 +3472,21 @@ const renderRevisionHistory = (
   environmentId: string,
   rows: readonly RevisionHistoryRow[],
 ): string => {
+  const headingLine = heading("history");
   if (rows.length === 0)
     return [
-      `${paint("Environment", "graphite")} ${sanitizeCliText(environmentId)}`,
-      paint("No Revisions have been published yet.", "dim"),
+      headingLine,
+      `  ${paint("Environment", "faint")} ${paint(
+        sanitizeCliText(environmentId),
+        "muted",
+      )}`,
+      `  ${paint("No Revisions have been published yet.", "muted")}`,
       "",
     ].join("\n");
   const ordinalById = new Map(
     rows.map((row) => [row.revision.id, row.ordinal]),
   );
-  const lines: string[] = [
-    `${paint("Environment", "graphite")} ${paint(
-      sanitizeCliText(environmentId),
-      "dim",
-    )}  ${paint(`— ${rows.length} Revision${rows.length === 1 ? "" : "s"}`, "dim")}`,
-  ];
-  for (const row of rows) {
+  const summaryFor = (row: RevisionHistoryRow): string => {
     let label = mutationLabel(row.revision.mutation);
     if (row.revision.rollbackTargetId) {
       const targetOrdinal = ordinalById.get(row.revision.rollbackTargetId);
@@ -3427,29 +3494,54 @@ const renderRevisionHistory = (
         ? ` of #${targetOrdinal}`
         : ` of ${row.revision.rollbackTargetId}`;
     }
+    const changes = row.changes;
+    if (changes.length > 0) {
+      const counts = new Map<string, number>();
+      for (const change of changes)
+        counts.set(change.kind, (counts.get(change.kind) ?? 0) + 1);
+      const parts = [
+        counts.get("added") ? `${counts.get("added")} added` : "",
+        counts.get("changed") ? `${counts.get("changed")} changed` : "",
+        counts.get("removed") ? `${counts.get("removed")} removed` : "",
+      ].filter((part) => part.length > 0);
+      label = parts.length > 0 ? `${parts.join(", ")} — ${label}` : label;
+    }
+    return label;
+  };
+  const lines: string[] = [
+    headingLine,
+    "",
+    `  ${paint("Environment", "faint")} ${paint(
+      sanitizeCliText(environmentId),
+      "muted",
+    )}`,
+    "",
+  ];
+  for (const row of rows) {
+    const marker = row.current ? paint("  current", "brand") : "         ";
     lines.push(
-      `  ${paint(`#${row.ordinal}`, "graphite")}  ${paint(
+      `  ${paint(`#${row.ordinal}`, "muted")}  ${paint(
         revisionDate(row.revision.authoredAtMs),
-        "paper",
-      )}  ${paint(label, labelTone(row.revision.mutation))}${
-        row.current ? paint("  (current)", "ok") : ""
-      }`,
+        "fg",
+      )}  ${paint(row.revision.id, "faint")}  ${paint(
+        summaryFor(row),
+        mutationTone(row.revision.mutation),
+      )}${marker}`,
     );
-    lines.push(`     ${paint(row.revision.id, "dim")}`);
     for (const change of row.changes) {
-      const ownership = paint(change.ownership, "dim");
+      const ownership = paint(change.ownership, "muted");
       if (change.kind === "added")
         lines.push(
-          `     ${paint("+", "ok")}  ${paint(change.name, "paper")}  ${ownership}`,
+          `     ${paint("+", "brand")}  ${paint(change.name, "fg")}  ${ownership}`,
         );
       else if (change.kind === "removed")
         lines.push(
-          `     ${paint("-", "wax")}  ${paint(change.name, "paper")}  ${ownership}`,
+          `     ${paint("-", "danger")}  ${paint(change.name, "fg")}  ${ownership}`,
         );
       else
         lines.push(
-          `     ${paint("~", "wax")}  ${paint(change.name, "paper")}${
-            change.valueChanged ? `  ${paint("Value changed", "dim")}` : ""
+          `     ${paint("~", "warn")}  ${paint(change.name, "fg")}${
+            change.valueChanged ? `  ${paint("value changed", "faint")}` : ""
           }`,
         );
     }
@@ -3457,9 +3549,6 @@ const renderRevisionHistory = (
   lines.push("");
   return lines.join("\n");
 };
-
-const labelTone = (mutation: number): ColorRole =>
-  mutation === 3 ? "wax" : "paper";
 
 const renderSyncedHistory = (
   synced: Awaited<ReturnType<typeof syncWorkflow>>,
@@ -3588,11 +3677,21 @@ export const runProtectedWorkflow = async (
         options,
         synced.workflow.publicationContext,
       );
-      const question = [
-        ...renderDestinationLines(destination),
-        `Reveal ${entries.length} decrypted Values to stdout?`,
-      ].join("\n");
-      if (!(await confirm(options, question)))
+      const question = `Reveal ${entries.length} decrypted Values to stdout? [y/N]`;
+      const frame = reviewFrame({
+        title: `Review — reveal values to stdout`,
+        danger: true,
+        body: [
+          kv(destinationRows(destination), 14),
+          `  ${paint(
+            "The decrypted Values will be printed to this terminal.",
+            "faint",
+          )}`,
+        ].join("\n"),
+        question,
+      });
+      (options.terminal?.output ?? process.stderr).write(`${frame}\n`);
+      if (!(await confirmSilent(options, question)))
         throw new CliInvocationError("Value reveal confirmation was declined");
     }
     let replaceExisting = false;
@@ -3629,17 +3728,20 @@ export const runProtectedWorkflow = async (
             options,
             synced.workflow.publicationContext,
           );
-          if (
-            !(await confirm(
-              options,
-              pullConfirmQuestion(
-                outputPath,
-                changes,
-                destination,
-                parsed.reveal,
-              ),
-            ))
-          )
+          const question = pullConfirmQuestion(outputPath);
+          const frame = reviewFrame({
+            title: `Review — replace ${outputPath}`,
+            danger: true,
+            body: reviewBody(changes, destination, parsed.reveal, [
+              `  ${paint(
+                `The current file is retained at ${outputPath}.previous`,
+                "faint",
+              )}`,
+            ]),
+            question,
+          });
+          (options.terminal?.output ?? process.stderr).write(`${frame}\n`);
+          if (!(await confirmSilent(options, question)))
             throw new CliInvocationError("pull confirmation was declined");
         }
         replaceExisting = true;
@@ -3741,13 +3843,19 @@ export const runProtectedWorkflow = async (
     const live = synced.variables.filter((variable) => !variable.tombstone);
     let references = parsed.variableReferences;
     if (references.length === 0 && !options.noInput) {
+      const maxName = live.reduce(
+        (width, variable) =>
+          Math.max(width, visibleWidth(sanitizeCliText(variable.name))),
+        0,
+      );
       terminalOutput.write(
         [
-          paint("Variables in the live Manifest:", "paper"),
+          paint("Variables in the live Manifest:", "fg"),
           ...live.map(
             (variable) =>
-              `  ${variable.name}  ${classificationFromOwnership(
-                variable.ownership,
+              `  ${pad(sanitizeCliText(variable.name), maxName)}  ${paint(
+                classificationFromOwnership(variable.ownership),
+                "muted",
               )}`,
           ),
           "",

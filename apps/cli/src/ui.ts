@@ -1,48 +1,21 @@
+import {
+  numberedHint,
+  numberedRow,
+  selectionHint,
+  selectionRow,
+  selectionTitle,
+} from "./components";
 import { CliInvocationError } from "./errors";
 import { readTerminalLine, type TerminalIo } from "./terminal";
 
-export type ColorRole = "graphite" | "paper" | "wax" | "dim" | "ok";
-
-const RESET = "\x1b[0m";
-
-const palette: Record<
-  ColorRole,
-  Readonly<{ readonly truecolor: string; readonly indexed: string }>
-> = {
-  graphite: { truecolor: "\x1b[38;2;138;134;128m", indexed: "\x1b[38;5;245m" },
-  paper: { truecolor: "\x1b[38;2;244;241;236m", indexed: "\x1b[97m" },
-  wax: { truecolor: "\x1b[38;2;196;92;74m", indexed: "\x1b[38;5;167m" },
-  dim: { truecolor: "\x1b[38;2;92;88;84m", indexed: "\x1b[2m" },
-  ok: { truecolor: "\x1b[38;2;111;143;106m", indexed: "\x1b[38;5;107m" },
-};
-
-const supportsTruecolor = (): boolean => {
-  const term = process.env.COLORTERM ?? "";
-  return term.includes("truecolor") || term.includes("24bit");
-};
-
-export const paint = (text: string, role: ColorRole): string => {
-  if (!process.stderr.isTTY && !process.stdout.isTTY) return text;
-  const color = supportsTruecolor()
-    ? palette[role].truecolor
-    : palette[role].indexed;
-  return `${color}${text}${RESET}`;
-};
-
-export const renderStep = (
-  title: string,
-  body: readonly string[] = [],
-  hint?: string,
-): string => {
-  const lines = [`  ${paint("·", "wax")}  ${paint(title, "paper")}`, ""];
-  for (const row of body) lines.push(row.length === 0 ? "" : `     ${row}`);
-  if (hint) {
-    lines.push("");
-    lines.push(`     ${paint(hint, "dim")}`);
-  }
-  lines.push("");
-  return lines.join("\n");
-};
+export {
+  bold,
+  paint,
+  type Tone,
+  terminalWidth,
+  truncate,
+  visibleWidth,
+} from "./theme";
 
 type WritableTty = NodeJS.WritableStream & Partial<{ readonly isTTY: boolean }>;
 
@@ -97,6 +70,7 @@ const readRawKey = async (input: ReadableRaw): Promise<string> =>
 export type SelectOption = Readonly<{
   readonly id: string;
   readonly label: string;
+  readonly detail?: string | undefined;
 }>;
 
 const renderSelect = (
@@ -106,27 +80,21 @@ const renderSelect = (
   interactive: boolean,
   defaultToFirst = true,
 ): string => {
-  const header = `  ${paint("·", "wax")}  ${paint(title, "paper")}\n\n`;
   const rows = options
-    .map((option, index) => {
-      const marker = interactive
-        ? index === cursor
-          ? paint("·", "wax")
-          : " "
-        : `${index + 1}.`;
-      const label =
-        interactive && index === cursor
-          ? paint(option.label, "paper")
-          : paint(option.label, "graphite");
-      return `     ${marker}  ${label}`;
-    })
+    .map((option, index) =>
+      interactive
+        ? selectionRow(
+            { label: option.label, detail: option.detail },
+            index === cursor,
+          )
+        : numberedRow(index + 1, {
+            label: option.label,
+            detail: option.detail,
+          }),
+    )
     .join("\n");
-  const hint = interactive
-    ? "↑/↓ move · enter select"
-    : defaultToFirst
-      ? "Enter a number, or press Enter for the first option"
-      : "Enter a number";
-  return `${header}${rows}\n\n     ${paint(hint, "dim")}\n`;
+  const hint = interactive ? selectionHint(true) : numberedHint(defaultToFirst);
+  return `${selectionTitle(title)}\n\n${rows}\n\n${hint}\n`;
 };
 
 export const selectOption = async (
@@ -141,7 +109,11 @@ export const selectOption = async (
 ): Promise<string> => {
   if (choices.length === 0)
     throw new CliInvocationError("there is nothing to select");
-  if (choices.length === 1) return choices[0]!.id;
+  if (choices.length === 1) {
+    const only = choices[0];
+    if (!only) throw new CliInvocationError("there is nothing to select");
+    return only.id;
+  }
   if (options.noInput)
     throw new CliInvocationError(`${title} requires an explicit choice`);
   const terminal = options.terminal ?? {
@@ -152,9 +124,6 @@ export const selectOption = async (
     const input = terminal.input as ReadableRaw;
     const output = terminal.output;
     let cursor = 0;
-    // A bare Enter only confirms the highlighted option once the operator
-    // has moved the cursor; otherwise it is an empty answer and must not
-    // steer the choice to the first item in list order.
     let moved = false;
     input.setEncoding?.("utf8");
     input.setRawMode?.(true);
@@ -173,7 +142,10 @@ export const selectOption = async (
         if (key === "\r" || key === "\n") {
           if (options.defaultToFirst === false && !moved)
             throw new CliInvocationError("choose an option from the list");
-          return choices[cursor]!.id;
+          const chosen = choices[cursor];
+          if (!chosen)
+            throw new CliInvocationError("choose an option from the list");
+          return chosen.id;
         }
         if (key === "\u001b[A" || key === "k") {
           moved = true;
@@ -238,16 +210,6 @@ export const confirmAction = async (
   );
 };
 
-export const writeNotice = (
-  output: NodeJS.WritableStream,
-  title: string,
-  detail?: string,
-  tone: ColorRole = "ok",
-): void => {
-  const line = detail
-    ? `  ${paint("·", tone)}  ${paint(title, "paper")}  ${paint(detail, "graphite")}\n`
-    : `  ${paint("·", tone)}  ${paint(title, "paper")}\n`;
-  output.write(line);
-};
-
-export { type ReadableRaw, readRawKey };
+export type { TerminalIo } from "./terminal";
+export type { ReadableRaw };
+export { readRawKey };

@@ -8,6 +8,7 @@ import {
   SUBCOMMANDS,
   usageForLabel,
 } from "./args";
+import { banner, bold, paint, section } from "./components";
 import { CliInvocationError } from "./errors";
 import { defaultOrigin } from "./version";
 
@@ -379,49 +380,105 @@ export const helpLabelFor = (topic: readonly string[]): string | null => {
   return topic.length === 1 ? command : null;
 };
 
+const wrapLines = (text: string, width: number, indent: string): string[] => {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (current.length === 0) {
+      current = word;
+    } else if (current.length + 1 + word.length <= width) {
+      current = `${current} ${word}`;
+    } else {
+      lines.push(`${indent}${current}`);
+      current = word;
+    }
+  }
+  if (current.length > 0) lines.push(`${indent}${current}`);
+  return lines;
+};
+
+const wrapped = (text: string, width: number, indent: string): string =>
+  wrapLines(text, width, indent).join("\n");
+
 const renderLeafHelp = (label: string): string => {
   const entry = COMMAND_HELP[label];
   if (!entry)
     throw new CliInvocationError(
       `no help is available for ${label}; usage: dotrelay help [<command>]`,
     );
-  const lines = [`Usage: ${usageForLabel(label)}`, "", entry.about];
+  const lines = [
+    `${bold("Usage:")} ${usageForLabel(label)}`,
+    "",
+    ...wrapLines(entry.about, 64, "  ").map((line) => paint(line, "muted")),
+  ];
   if (entry.positional?.length) {
-    lines.push("", "Arguments:");
-    for (const line of entry.positional) lines.push(`  ${line}`);
+    lines.push("", paint("Arguments:", "info"));
+    for (const line of entry.positional)
+      lines.push(wrapped(`  ${line}`, 72, "  "));
   }
-  lines.push("", "Options:");
+  lines.push("", paint("Options:", "info"));
   const allowed = FLAG_PERMISSIONS[label] ?? [];
-  for (const key of FLAG_KEYS) {
-    if (!allowed.includes(key)) continue;
-    const summary = entry.options?.[key] ?? SHARED_FLAG_SUMMARIES[key] ?? "";
+  const signatures = FLAG_KEYS.filter((key) => allowed.includes(key)).map(
+    (key) => {
+      const summary = entry.options?.[key] ?? SHARED_FLAG_SUMMARIES[key] ?? "";
+      return `  ${FLAG_TOKENS[key]}${FLAG_SIGNATURES[key] ?? ""}  ${summary}`;
+    },
+  );
+  signatures.push("  --debug  include sanitized detail in error diagnostics");
+  const parsed = signatures.map((line) => {
+    const body = line.slice(2);
+    const index = body.indexOf("  ");
+    return {
+      flag: index === -1 ? body : body.slice(0, index),
+      summary: index === -1 ? "" : body.slice(index + 2),
+    };
+  });
+  const flagWidth = Math.max(...parsed.map((row) => row.flag.length), 4);
+  for (const { flag, summary } of parsed) {
     lines.push(
-      `  ${FLAG_TOKENS[key]}${FLAG_SIGNATURES[key] ?? ""}  ${summary}`,
+      `  ${bold(flag.padEnd(flagWidth))}${
+        summary.length > 0 ? `  ${paint(summary, "muted")}` : ""
+      }`,
     );
   }
-  lines.push("  --debug  include sanitized detail in error diagnostics");
   if (entry.notes?.length) {
-    lines.push("", "Notes:");
-    for (const note of entry.notes) lines.push(`  ${note}`);
+    lines.push("", paint("Notes:", "info"));
+    for (const note of entry.notes) lines.push(wrapped(`  ${note}`, 72, "  "));
   }
-  lines.push("", "Examples:");
-  for (const example of entry.examples) lines.push(`  ${example}`);
+  lines.push("", paint("Examples:", "info"));
+  for (const example of entry.examples)
+    lines.push(`  ${paint(">", "ghost")} ${example}`);
   return lines.join("\n");
 };
 
 const renderGroupHelp = (command: CommandName): string => {
   const subcommands = SUBCOMMANDS[command] ?? [];
-  const lines = [`Usage: dotrelay ${command} <subcommand>`, ""];
+  const lines = [`${bold("Usage:")} dotrelay ${command} <subcommand>`, ""];
   const about = GROUP_ABOUT[command];
-  if (about) lines.push(about);
-  lines.push("", "Subcommands:");
-  for (const sub of subcommands) {
-    const entry = COMMAND_HELP[`${command} ${sub}`];
-    lines.push(`  ${sub}  ${entry?.about ?? ""}`);
-  }
+  if (about)
+    lines.push(
+      ...wrapLines(about, 64, "  ").map((line) => paint(line, "muted")),
+      "",
+    );
+  lines.push(paint("Subcommands:", "info"));
+  const subs = subcommands.map((sub) => ({
+    sub,
+    about: COMMAND_HELP[`${command} ${sub}`]?.about ?? "",
+  }));
+  const nameWidth = Math.max(...subs.map((row) => row.sub.length), 4);
+  for (const { sub, about } of subs)
+    lines.push(
+      `  ${bold(sub.padEnd(nameWidth))}${
+        about.length > 0 ? `  ${paint(about, "muted")}` : ""
+      }`,
+    );
   lines.push(
     "",
-    `Run dotrelay help ${command} <subcommand> for the full help of one subcommand.`,
+    paint(
+      `Run dotrelay help ${command} <subcommand> for the full help of one subcommand.`,
+      "faint",
+    ),
   );
   return lines.join("\n");
 };
@@ -437,11 +494,11 @@ export const renderCommandHelp = (label: string): string => {
 // usage table (the primary form, before any " | " alternative) so the
 // directory can never drift from what the parser accepts.
 const EVERYDAY_COMMANDS: ReadonlyArray<readonly [string, string]> = [
-  ["setup", "Trust this Server Profile, sign in, enroll this machine"],
+  ["setup", "Trust a Server Profile, sign in, and enroll this machine"],
   ["login", "Sign in and enroll this machine"],
-  ["init", "Publish this repo's .env for the first time"],
+  ["init", "Publish this repository's .env for the first time"],
   ["push", "Publish changes from .env"],
-  ["pull", "Write decrypted Values to .env"],
+  ["pull", "Write decrypted values to .env"],
   ["diff", "Compare .env with the Environment"],
   ["status", "Show this machine's connection"],
 ];
@@ -467,53 +524,85 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
 
 const commandDirectory = (
   items: ReadonlyArray<readonly [string, string]>,
-): string[] =>
-  items.map(([label, summary]) => {
-    const usage = usageForLabel(label).replace(/^dotrelay /, "");
-    return `  ${usage.split(" | ")[0]}  ${summary}`;
+): string[] => {
+  const usages = items.map(([label]) => {
+    const usage = usageForLabel(label)
+      .replace(/^dotrelay /, "")
+      .split(" | ")[0];
+    return usage ?? "";
   });
+  const width = Math.max(...usages.map((usage) => usage.length), 4);
+  return items.map(
+    ([, summary], index) =>
+      `  ${bold((usages[index] ?? "").padEnd(width))}  ${paint(summary, "muted")}`,
+  );
+};
 
 export const renderHelp = (): string => {
   const lines = [
-    "Usage: dotrelay <command>",
+    banner(),
     "",
+    `${bold("Usage:")} dotrelay <command>`,
+    "",
+    section("Everyday"),
     ...commandDirectory(EVERYDAY_COMMANDS),
     "",
-    "More commands: dotrelay help",
-    "Command help: dotrelay help <command> or dotrelay <command> --help",
-    "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous",
-    "Automation: --json  --no-input  --force  --debug",
+    section("More"),
+    `  ${bold("dotrelay help".padEnd(14))}  ${paint("Every command, with flags and examples", "muted")}`,
+    `  ${bold("dotrelay help <command>")}  ${paint("Full help for one command", "muted")}`,
+    "",
+    section("Flags"),
+    `  ${bold("--profile <name>".padEnd(14))}  ${paint("Choose the Server Profile", "muted")}`,
+    `  ${bold("--environment".padEnd(14))}  ${paint("Choose the Environment by id or label", "muted")}`,
+    `  ${bold("--json".padEnd(14))}  ${paint("Machine-readable output; values never appear", "muted")}`,
+    `  ${bold("--no-input".padEnd(14))}  ${paint("Never prompt, guess, or approve", "muted")}`,
+    `  ${bold("--debug".padEnd(14))}  ${paint("Include sanitized detail in error diagnostics", "muted")}`,
   ];
   if (defaultOrigin)
     lines.push(
-      `Default: with no Server Profile selected, this build uses ${defaultOrigin}`,
+      "",
+      paint(
+        `Default: with no Server Profile selected, this build uses ${defaultOrigin}`,
+        "faint",
+      ),
     );
   return lines.join("\n");
 };
 
 export const renderPowerHelp = (): string => {
   return [
-    "Usage: dotrelay <command> [subcommand]",
+    banner(),
     "",
-    "Everyday:",
+    `${bold("Usage:")} dotrelay <command> [subcommand]`,
+    "",
+    section("Everyday"),
     ...commandDirectory(EVERYDAY_COMMANDS),
     "",
-    "Power:",
+    section("Power"),
     ...commandDirectory(POWER_COMMANDS),
     "",
-    "Run dotrelay help <command> or dotrelay <command> --help for the full help, arguments, and examples of one command.",
+    paint(
+      "Run dotrelay help <command> or dotrelay <command> --help for the full help, arguments, and examples of one command.",
+      "faint",
+    ),
     "",
-    "Shared: --profile  --environment  --team <id>  --json  --debug  --no-input",
-    "(each is scoped to the commands that consume it; unsupported options, unexpected positionals, and conflicting output flags are rejected before work starts)",
-    "Repository: --remote <name>  Choose the GitHub Repository when remotes are ambiguous, such as a fork origin and a source upstream; the choice is saved in the worktree context and re-used until that remote stops pointing at the same repository",
-    "Publish: --classify NAME=shared|user-defined  --from <file>  --force",
-    "Pull: --output <file>  --stdout  --reveal  --force",
-    "Diff: --from <file>  --reveal",
-    "History and rollback: history renders readable dates, per-Revision change context, and a #ordinal per Revision; `rollback <revision-id-or-ordinal>` takes that ordinal or a Revision id, and --variable <name-or-id> names the Variables to roll back (ids keep working for automation). Run rollback bare to choose the target Revision and Variables from the rendered history, then review the masked changes. A rollback never rewrites or removes earlier history: it appends a new signed Rollback Revision for the selected Variables only. history --json keeps the documented revision metadata for automation.",
-    "Pull checks the output's Git tracking state before writing: untracked outputs get a repository-local exclusion (.git/info/exclude), and a Git-tracked output is refused — untrack it (git rm --cached <path>) or choose another --output path.",
-    "Change previews show names, ownership, and change type only; --reveal shows plaintext Values for that one review, never in JSON or diagnostics.",
-    "Profile trust: setup and profile add accept --accept-profile <id> under --no-input.",
-    "Destructive approval: --force is the only way to approve, under --no-input, replacing a differing pull output file, publishing removed Variables, or rotating an existing Recovery Kit.",
-    "Values are never diagnostic data. --insecure and credential flags are not supported.",
+    section("Shared flags"),
+    `  ${bold("--profile <name>".padEnd(18))}  ${paint("Server Profile to use", "muted")}`,
+    `  ${bold("--environment".padEnd(18))}  ${paint("Environment id or label", "muted")}`,
+    `  ${bold("--team <id>".padEnd(18))}  ${paint("Team that scopes the Project lookup", "muted")}`,
+    `  ${bold("--json  --no-input".padEnd(18))}  ${paint("Automation mode; no prompts, no guesses", "muted")}`,
+    `  ${bold("--force".padEnd(18))}  ${paint("Approve the documented destructive effect", "muted")}`,
+    "",
+    section("Notes"),
+    "  Pull writes decrypted values; untracked outputs get a repository-local",
+    "  Git exclusion, and Git-tracked outputs are refused. Change previews",
+    "  show names and change types only; --reveal shows plaintext values",
+    "  for one human review, never in JSON or diagnostics.",
+    "",
+    "  Rollback appends a signed Rollback Revision for the selected Variables;",
+    "  earlier Revisions are never rewritten or removed.",
+    "",
+    "  Values are never diagnostic data. --insecure and credential flags are",
+    "  not supported.",
   ].join("\n");
 };

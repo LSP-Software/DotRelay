@@ -172,7 +172,9 @@ describe("CLI foundation", () => {
   test("rejects forbidden flags even when help is requested", async () => {
     const result = await run(["--insecure", "--help"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toBe("--insecure is not supported\n");
+    expect(result.stderr).toBe(
+      "  ✖  Invalid invocation\n\n     --insecure is not supported\n\n",
+    );
   });
 
   test("maps an empty Git remote result to repository_missing", async () => {
@@ -842,7 +844,10 @@ describe("command-to-HTTP administration", () => {
       );
       expect(human.exitCode).toBe(6);
       expect(human.stderr).toContain(
-        "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
+        "No Device is enrolled for this Server Profile",
+      );
+      expect(human.stderr).toContain(
+        "Run dotrelay login or dotrelay device enroll",
       );
       expect(fixture.requests).toHaveLength(0);
     } finally {
@@ -1226,7 +1231,7 @@ describe("protected command Environment selection", () => {
         terminal: { input, output },
       });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("choose an option from the list");
+      expect(result.stderr).toContain("Choose an option from the list");
       expect(
         fixture.requests.some((request) =>
           request.path.includes("/workspace/boundary"),
@@ -1269,7 +1274,7 @@ describe("protected command Environment selection", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("\n");
-      expect(renderedChunks.join("")).toBe("");
+      expect(renderedChunks.join("")).toBe("  dotrelay pull\n\n");
       expect(
         fixture.requests.some(
           (request) =>
@@ -1441,7 +1446,7 @@ describe("protected command Environment selection", () => {
       );
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain(
-        "multiple Environments are available; pass --environment",
+        "Multiple Environments are available; pass --environment",
       );
       expect(
         fixture.requests.some((request) =>
@@ -1488,7 +1493,7 @@ describe("protected command Environment selection", () => {
         { ...runtimeForProtocolState(state), confirm: async () => false },
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("pull confirmation was declined");
+      expect(result.stderr).toContain("Pull confirmation was declined");
       expect(JSON.parse(await Bun.file(state.contextPath).text())).toEqual({
         serverProfileId,
         projectId,
@@ -3085,10 +3090,10 @@ describe("CLI sign-in display", () => {
       expect(opened).toEqual([]);
       const output = captured.text();
       expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
-      expect(output).toContain("Code: KITE-MOSS");
-      expect(output).toContain("Expires in 10 minutes");
+      expect(output).toContain("Code   KITE-MOSS");
+      expect(output).toContain("in 10 minutes");
       expect(output).toContain("Open the URL above to complete sign-in");
-      expect(result.stdout).toContain("Signed in. Device enrolled.");
+      expect(result.stdout).toContain("Signed in to relay. Device enrolled.");
       expect(fixture.bootstrapCount()).toBe(1);
     } finally {
       await fixture.cleanup();
@@ -3112,7 +3117,7 @@ describe("CLI sign-in display", () => {
         },
       );
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Signed in. Device enrolled.");
+      expect(result.stdout).toContain("Signed in to relay. Device enrolled.");
       expect(fixture.bootstrapCount()).toBe(1);
       const enrolled = fixture.enrolledDeviceId();
       expect(enrolled).not.toBe(loginDeviceId);
@@ -3147,7 +3152,9 @@ describe("CLI sign-in display", () => {
         runtime,
       );
       expect(second.exitCode).toBe(0);
-      expect(second.stdout).toContain("Signed in. Device already enrolled.");
+      expect(second.stdout).toContain(
+        "Signed in to relay. Device already enrolled.",
+      );
       expect(fixture.bootstrapCount()).toBe(1);
       expect(fixture.enrolledDeviceId()).toBe(firstDeviceId);
     } finally {
@@ -3181,7 +3188,7 @@ describe("CLI sign-in display", () => {
         runtime,
       );
       expect(second.exitCode).toBe(0);
-      expect(second.stdout).toContain("Signed in. Device enrolled.");
+      expect(second.stdout).toContain("Signed in to relay. Device enrolled.");
       expect(fixture.bootstrapCount()).toBe(2);
       const replacementDeviceId = fixture.enrolledDeviceId();
       expect(replacementDeviceId).not.toBe(firstDeviceId);
@@ -3243,7 +3250,7 @@ describe("CLI sign-in display", () => {
       expect(result.exitCode).toBe(0);
       const output = captured.text();
       expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
-      expect(output).toContain("Code: KITE-MOSS");
+      expect(output).toContain("Code   KITE-MOSS");
       expect(output).toContain(
         "Could not open a browser automatically; open the URL above in any browser.",
       );
@@ -3302,7 +3309,7 @@ describe("CLI sign-in display", () => {
       expect(opened).toEqual([]);
       const output = captured.text();
       expect(output).toContain(`${loginOrigin}/device?user_code=KITE-MOSS`);
-      expect(output).toContain("Code: KITE-MOSS");
+      expect(output).toContain("Code   KITE-MOSS");
       expect(output).toContain("Open the URL above to complete sign-in");
     } finally {
       await fixture.cleanup();
@@ -3364,7 +3371,7 @@ describe("CLI sign-in display", () => {
         },
       );
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Signed in. Device enrolled.");
+      expect(result.stdout).toContain("Signed in to relay. Device enrolled.");
       const output = captured.text();
       expect(output).toContain(
         "The Server Profile is unreachable; retry 1 — next in 1s",
@@ -3545,7 +3552,7 @@ describe("CLI sign-in display", () => {
         },
       );
       expect(result.exitCode).toBe(6);
-      expect(captured.text()).toContain("Allow this CLI?");
+      expect(captured.text()).toContain("Sign in to relay");
       // The last write to the terminal is the region clear, not a stale
       // card: nothing of the waiting state survives after the failure.
       expect(captured.text().endsWith("\x1b[0J\n")).toBe(true);
@@ -3879,9 +3886,9 @@ describe("status verifies the session and this Device", () => {
     try {
       const result = await run(["status"], statusRuntime(state));
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Session expired or revoked");
+      expect(result.stdout).toContain("expired or revoked");
       expect(result.stdout).not.toContain("Signed in");
-      expect(result.stdout).toContain("Next: run dotrelay login");
+      expect(result.stdout).toContain("Next: dotrelay login");
       expect(fixture.requests).toHaveLength(1);
       expect(fixture.requests[0]?.path).toBe("/api/v1/session");
     } finally {
@@ -3908,13 +3915,11 @@ describe("status verifies the session and this Device", () => {
       expect(result.exitCode).toBe(0);
       expect(attempts).toBeGreaterThan(0);
       expect(result.stdout).toContain(
-        "Offline: could not reach the Server Profile",
+        "The Server Profile could not be reached",
       );
-      expect(result.stdout).toContain("Signed in (last known; not verified)");
-      expect(result.stdout).toContain("Device (last known; not verified)");
-      expect(result.stdout).toContain(
-        "Next: retry when the Server Profile is reachable",
-      );
+      expect(result.stdout).toContain("signed in · not verified");
+      expect(result.stdout).toContain("last known · not verified");
+      expect(result.stdout).toContain("Next: retry dotrelay status");
       const json = await run(["status", "--json"], {
         ...statusRuntime(state),
         fetch: async () => {
@@ -4113,7 +4118,7 @@ describe("status verifies the session and this Device", () => {
         fetch: fetchUnreadableBoundary,
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Signed in (verified)");
+      expect(result.stdout).toContain("signed in · verified");
       expect(result.stdout).toContain(
         "The Server Profile could not complete the Device check",
       );
@@ -4154,14 +4159,12 @@ describe("status verifies the session and this Device", () => {
         fetch: fetchBoundaryOffline,
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Signed in (verified)");
+      expect(result.stdout).toContain("signed in · verified");
       expect(result.stdout).toContain(
-        "Offline: the Device check could not be completed",
+        "The Server Profile could not be reached",
       );
-      expect(result.stdout).toContain("Device (last known; not verified)");
-      expect(result.stdout).toContain(
-        "Next: retry when the Server Profile is reachable",
-      );
+      expect(result.stdout).toContain("last known · not verified");
+      expect(result.stdout).toContain("Next: retry dotrelay status");
       const json = await run(["status", "--json"], {
         ...statusRuntime(state),
         fetch: fetchBoundaryOffline,
@@ -4214,7 +4217,7 @@ describe("status verifies the session and this Device", () => {
       );
       expect(boundaryProbe?.path).toBe("/api/v1/workspace/boundary");
       const card = await run(["status"], statusRuntime(state));
-      expect(card.stdout).toContain("Environment legacy-env (not verified)");
+      expect(card.stdout).toContain("legacy-env · not verified");
     } finally {
       fixture.stop();
       await state.cleanup();
@@ -4301,7 +4304,7 @@ describe("actionable error categories at the process boundary", () => {
       });
       expect(human.exitCode).toBe(5);
       expect(human.stderr).toContain(
-        "the Server Profile rejected the cryptographic request",
+        "The Server Profile rejected the cryptographic request",
       );
     } finally {
       await cleanup();
@@ -4399,7 +4402,8 @@ describe("actionable error categories at the process boundary", () => {
           runtime,
         );
         expect(human.exitCode).toBe(6);
-        expect(human.stderr).toContain(diagnostic.detail as string);
+        for (const line of (diagnostic.detail as string).split("\n"))
+          expect(human.stderr).toContain(line);
         expect(human.stdout).toBe("");
         expect(result.stdout).toBe("");
       }
