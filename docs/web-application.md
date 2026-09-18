@@ -37,17 +37,19 @@ These states must not be collapsed into one signed-in indicator:
 
 | State | Meaning | Permitted surface |
 | --- | --- | --- |
-| Server Profile pinned | The hosted profile is trusted by default; a self-hosted profile was explicitly trusted for this browser session | Credentials may be considered for that profile |
+| Server Profile pinned | This browser recorded a verified trust decision naming the server's canonical origin and stable identity; the decision is stored for that origin-and-identity pair and is never reused for a different one | Credentials may be considered for that profile |
 | Session active | Better Auth resolved one server-local User | Non-secret identity and eligible administration only |
 | Active Device | This client installation is authorized for that User | Protected operations may proceed if all other gates pass |
 | v3 cryptography available | The closed v3 WebCrypto suite is supported | Protected bytes may be requested and processed locally |
 
 A session never implies an active Device. A GitHub identity never implies a DotRelay Membership.
 A web deployment is bound to the Server Profile behind it, and the browser offers no choice of
-server. DotRelay's own hosted profile is trusted by default; a self-hosted profile requires an
-explicit trust decision before protected content becomes available. Only the development fixture
-keeps a Server Profile preview selector, so hosted and self-hosted behavior can both be
-exercised locally.
+server. No deployment is trusted by default: before protected content becomes available, the
+browser asks the user to confirm the canonical origin and the server's stable identity, and
+records that decision for the pair in the browser's durable storage. A recorded decision
+survives reloads, is never carried over to a different origin or identity, and a change to
+either asks the user to confirm again. Only the development fixture keeps a Server Profile
+preview selector, so hosted and self-hosted behavior can both be exercised locally.
 
 When the v3 runtime or provider is unavailable, the shell reports the stable
 `unsupported_crypto_runtime` or `crypto_provider_unavailable` problem and does not request or
@@ -168,7 +170,12 @@ covers unpublished draft protection: drafts survive subview navigation and retur
 warns only while a draft is dirty and keeps or discards it on the user's choice, discard
 prompts name the affected Environments and, within a Server Profile, the changed Variables, a
 Server Profile preview switch in the development fixture with a dirty draft requires an explicit
-discard, and draft Values never appear in browser storage. `apps/web/e2e/workspace-history.spec.ts`
+discard, and draft Values never appear in browser storage. `apps/web/e2e/workspace-server-trust.spec.ts`
+covers the Server Profile trust decision: the confirmation names the canonical origin and the
+server's stable identity before the user decides, declining leaves the profile untrusted with no
+pin recorded, a recorded decision survives a reload and carries across the development
+fixture's previews that share the destination, and a pin is never applied to a different
+origin or identity (the pairing itself is covered by the client's storage unit tests). `apps/web/e2e/workspace-history.spec.ts`
 keeps the workspace location, URL, and browser history in sync: Back/Forward traverses the
 workspace views and the selected Environment, a reload or shared link reopens the visible view
 and Server Profile, a link to a deleted Team, Project, or Environment shows a recovery notice

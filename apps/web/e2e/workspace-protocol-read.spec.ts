@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { trustWorkspaceServer } from "./trust-server";
 
 const openFirstProject = async (page: Page) => {
   await page.getByRole("heading", { name: "LSP-Software / DotRelay" }).click();
@@ -42,6 +43,7 @@ test("a slow or failed Environment read never presents an editable empty Manifes
     await route.abort();
   });
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await openFirstProject(page);
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();

@@ -9,6 +9,7 @@ import {
   sha384,
 } from "@dotrelay/contracts";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { trustWorkspaceServer } from "./trust-server";
 
 // Private key paired with E2E_REVISION_SIGNING_TRUST_KEY in
 // apps/web/lib/workspace-boundary.ts. It signs the synthetic sync page below
@@ -251,6 +252,7 @@ test("a Member reads every Value but edits only the Values they provided or own"
   test.setTimeout(90_000);
   await installRoutes(page);
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   // Setting the preview role switches the main view to the Team page, which
   // hides the Projects list heading, so open the project from the sidebar
   // navigation instead of the Projects view.
@@ -324,6 +326,7 @@ test("demoting to Member mid-draft removes the Values the new role cannot publis
   test.setTimeout(90_000);
   await installRoutes(page);
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await openFirstProject(page);
   await enrollBrowserAndReturn(page);
   const editor = await editorReady(page);
@@ -381,6 +384,7 @@ test("an Owner edits every Value, adds Variables, and may roll back any Value", 
   test.setTimeout(90_000);
   await installRoutes(page);
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await openFirstProject(page);
   await enrollBrowserAndReturn(page);
   const editor = await editorReady(page);

@@ -55,7 +55,6 @@ export type WorkspaceBoundary = Readonly<{
     readonly id: WorkspaceProfileId;
     readonly name: string;
     readonly origin: string;
-    readonly pinned: boolean;
     readonly serverProfileId?: string;
   }>;
   readonly device: Readonly<{
@@ -84,21 +83,20 @@ export type WorkspaceBoundary = Readonly<{
   }>;
 }>;
 
+// Display labels and fallback destinations for the development fixture's
+// profile preview. A live deployment's boundary always reports the origin it
+// actually serves, and whether a browser trusts that origin and server
+// identity is decided and stored by the browser, never by this catalog.
 const profileCatalog: Readonly<
-  Record<
-    WorkspaceProfileId,
-    Readonly<{ name: string; origin: string; pinned: boolean }>
-  >
+  Record<WorkspaceProfileId, Readonly<{ name: string; origin: string }>>
 > = {
   hosted: {
-    name: "Hosted / London",
+    name: "Hosted",
     origin: "https://relay.dotrelay.dev",
-    pinned: true,
   },
   "self-hosted": {
-    name: "Self-hosted / eu-1",
+    name: "Self-hosted",
     origin: "https://relay.acme.internal",
-    pinned: false,
   },
 };
 

@@ -187,8 +187,8 @@ test("switching profiles with drafts names them and discards on explicit choice"
     .selectOption("self-hosted");
   const prompt = page.getByTestId("switch-draft-prompt");
   await expect(prompt).toBeVisible();
-  await expect(prompt).toContainText("Hosted / London");
-  await expect(prompt).toContainText("Self-hosted / eu-1");
+  await expect(prompt).toContainText("Hosted");
+  await expect(prompt).toContainText("Self-hosted");
 
   await page.getByTestId("switch-discard-draft").click();
 

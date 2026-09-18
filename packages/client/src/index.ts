@@ -84,6 +84,13 @@ export {
   resetMemoryCredentialStore,
 } from "./storage/cli";
 export {
+  type BrowserProfilePinStore,
+  createBrowserProfilePinStore,
+  type ProfilePinRecordStore,
+  profilePinKey,
+  resetMemoryProfilePinStore,
+} from "./storage/profile-pin";
+export {
   type CredentialStore,
   credentialAccount,
   type DeviceRecordStore,

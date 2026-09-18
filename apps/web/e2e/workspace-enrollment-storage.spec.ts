@@ -11,6 +11,7 @@ import {
   sha384,
 } from "@dotrelay/contracts";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { trustWorkspaceServer } from "./trust-server";
 
 // Private key paired with E2E_REVISION_SIGNING_TRUST_KEY in
 // apps/web/lib/workspace-boundary.ts. It signs the synthetic sync page below
@@ -311,6 +312,7 @@ test("a successful enrollment survives a reload and a fresh storage instance", a
   });
 
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await openFirstProject(page);
   await openDevicesView(page);
   await page.getByRole("button", { name: "Set up browser" }).click();
