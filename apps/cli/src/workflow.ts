@@ -101,7 +101,7 @@ import type { CliServerProfile, FetchFunction } from "./profile";
 import { createProgress, type Progress } from "./progress";
 import { readTerminalLine, type TerminalIo } from "./terminal";
 import { pad, type Tone, visibleWidth } from "./theme";
-import { paint } from "./ui";
+import { confirmAction, paint, parseConfirmAnswer } from "./ui";
 import {
   destinationRows,
   type PublicationChange,
@@ -516,46 +516,55 @@ const ask = async (
   }
 };
 
-const confirm = async (
+// On a raw terminal the question is answered in the boxed Yes/No selector:
+// Enter approves the highlighted choice, Esc declines. Every other input
+// (injected prompt, piped stdin, --no-input) keeps the typed y/N answer.
+const terminalConfirm = async (
   options: WorkflowOptions,
   question: string,
+  silent: boolean,
 ): Promise<boolean> => {
-  if (options.confirm) return options.confirm(question);
-  const answer = await ask(options, `${question} [y/N]`);
-  return (
-    answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes"
-  );
-};
-
-// The review frame has already printed the question, so the terminal read
-// must not echo it a second time.
-const askSilent = async (
-  options: WorkflowOptions,
-  question: string,
-): Promise<string> => {
-  if (options.prompt) return options.prompt(question);
-  if (options.noInput)
-    throw new CliInvocationError(
-      "this command requires interactive input; remove --no-input to answer the prompt",
-    );
   try {
-    return await readTerminalLine(question, options.terminal, false);
-  } catch {
+    return await confirmAction(question, {
+      ...(options.terminal ? { terminal: options.terminal } : {}),
+      ...(silent ? { silent: true } : {}),
+      default: "no",
+    });
+  } catch (error) {
+    if (error instanceof CliInvocationError) throw error;
     throw new CliInvocationError(
       "the terminal could not be read, so the interactive prompt went unanswered",
     );
   }
 };
 
+const confirm = async (
+  options: WorkflowOptions,
+  question: string,
+): Promise<boolean> => {
+  if (options.confirm) return options.confirm(question);
+  if (options.noInput)
+    throw new CliInvocationError(
+      "this command requires interactive input; remove --no-input to answer the prompt",
+    );
+  if (options.prompt)
+    return parseConfirmAnswer(await options.prompt(`${question} [y/N]`));
+  return terminalConfirm(options, question, false);
+};
+
+// The review frame has already printed the question, so the terminal read
+// must not echo it a second time.
 const confirmSilent = async (
   options: WorkflowOptions,
   question: string,
 ): Promise<boolean> => {
   if (options.confirm) return options.confirm(question);
-  const answer = await askSilent(options, question);
-  return (
-    answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes"
-  );
+  if (options.noInput)
+    throw new CliInvocationError(
+      "this command requires interactive input; remove --no-input to answer the prompt",
+    );
+  if (options.prompt) return parseConfirmAnswer(await options.prompt(question));
+  return terminalConfirm(options, question, true);
 };
 
 const resolveDeviceStorage = (options: WorkflowOptions): CliDeviceStorage =>

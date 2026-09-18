@@ -147,6 +147,10 @@ JSON, progress, and diagnostics never contain Values regardless of `--reveal`. U
 Variables are omitted. The review names the destination Server Profile, Team, Project, and
 Environment before asking, so a publication is never directed at an Environment the operator did
 not choose.
+On an interactive terminal the question is answered with a Yes/No selector: the highlighted
+choice (No by default) is confirmed with Enter, ↑↓ or j/k moves the highlight, Esc declines, and
+`y`/`n` answer directly. When stdin is not a terminal the typed `y/N` line answer is used
+instead, so scripts and `--no-input` behave exactly as before.
 `--no-input` skips the prompt but never approves a destructive publication: when the change
 removes Variables, `--no-input` alone is refused and the operator must additionally pass
 `--force` to publish the removals. Publications that only add or update Variables proceed under

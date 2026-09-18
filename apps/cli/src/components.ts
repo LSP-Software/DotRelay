@@ -270,3 +270,47 @@ export const numberedHint = (allowsDefault: boolean): string =>
       : "Enter a number",
     "faint",
   )}`;
+
+// A confirmation question may carry the typed-answer hint ("Publish? [y/N]");
+// the boxed Yes/No choice replaces that hint, so it is stripped for display.
+export const stripConfirmSuffix = (question: string): string =>
+  question.replace(/\s*\[[yY]\/[nN]\]\s*$/, "").trimEnd();
+
+export const confirmHint = (): string =>
+  `     ${paint("↑↓ navigate · Enter confirm · Esc decline", "faint")}`;
+
+export const confirmRows = (cursor: number): string =>
+  [
+    selectionRow({ label: "Yes" }, cursor === 0),
+    selectionRow({ label: "No" }, cursor === 1),
+  ].join("\n");
+
+export const confirmBox = (
+  question: string,
+  cursor: number,
+  width = terminalWidth(),
+): string => {
+  const lines = stripConfirmSuffix(question)
+    .split("\n")
+    .map((line) => (line.length > 0 ? `  ${bold(line)}` : ""));
+  const rows = confirmRows(cursor);
+  const longest = Math.max(
+    ...lines.map((line) => visibleWidth(line)),
+    visibleWidth(rows),
+  );
+  const ruleLength = Math.max(24, Math.min(width - 4, longest + 2));
+  return [
+    rule("ghost", ruleLength),
+    ...lines,
+    "",
+    rows,
+    "",
+    rule("ghost", ruleLength),
+    confirmHint(),
+  ].join("\n");
+};
+
+export const confirmResult = (question: string, accepted: boolean): string =>
+  `  ${glyph(accepted ? "ok" : "danger")}  ${
+    accepted ? paint("Confirmed", "brand") : paint("Declined", "danger")
+  }  ${paint(stripConfirmSuffix(question), "muted")}`;
