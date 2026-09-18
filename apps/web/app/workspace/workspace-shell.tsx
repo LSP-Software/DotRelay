@@ -7,6 +7,7 @@ import {
   createProjectEpochGrantBootstrap,
   createProtocolTransport,
   type DeviceBootstrap,
+  type DeviceKeyMaterial,
   loadDeviceKeyMaterial,
   openProjectEpochGrant,
   probeBrowserDeviceStorage,
@@ -540,6 +541,10 @@ export const WorkspaceShell = ({
   const [trustDialogOpen, setTrustDialogOpen] = useState(false);
   const [trustDialogBusy, setTrustDialogBusy] = useState(false);
   const [trustBlocked, setTrustBlocked] = useState<string | null>(null);
+  // Approval gate for a Device replacement: replacing the Device discards the
+  // keys this browser holds for the current Device, so it is proposed only
+  // after the in-place key repairs have been ruled out.
+  const [replacementDialogOpen, setReplacementDialogOpen] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [browserCrypto, setBrowserCrypto] = useState(true);
   // Pending enrollment identity (keys + operation id) retained across retries
@@ -1808,8 +1813,185 @@ export const WorkspaceShell = ({
     }
   };
 
+  // The stale-epoch repair reuses what this browser already holds before it
+  // proposes a Device replacement. It re-verifies the boundary first: the
+  // current grant may have been provisioned in the meantime by another of
+  // the User's Devices or by a CLI run. If the keys are still missing, the
+  // stored Device keys sign a fresh grant for the current epoch, which
+  // discards nothing local. Only when the stored keys are unusable, or the
+  // service deactivated the Device, is a replacement Device proposed, and
+  // that discards the browser's stored keys, so it asks for approval first.
+  const recoveredProjectAccess = (candidate: WorkspaceBoundary): boolean =>
+    candidate.device.active && candidate.grantsReady && candidate.epochCurrent;
+  const repairStaleEpoch = async () => {
+    const profile = boundary.profile;
+    const device = boundary.device;
+    const apiOrigin = resolveApiOrigin() ?? profile.origin;
+    if (!boundary.session.userId) {
+      setDeviceSetupMessage("Sign in before restoring this browser's keys.");
+      return;
+    }
+    if (!profile.serverProfileId || !device.active || !device.id) {
+      setReplacementDialogOpen(true);
+      return;
+    }
+    const pin = {
+      serverProfileId: profile.serverProfileId,
+      origin: profile.origin,
+    };
+    setDeviceSetupInProgress(true);
+    setDeviceSetupMessage(null);
+    try {
+      const storedId = readStoredBrowserDeviceId(
+        pin.origin,
+        pin.serverProfileId,
+      );
+      const nextBoundary = await fetchWorkspaceBoundary(profileId, {
+        ...(storedId ? { deviceId: storedId } : {}),
+        ...(selectedEnvironment?.id
+          ? { environmentId: selectedEnvironment.id }
+          : environmentId
+            ? { environmentId }
+            : {}),
+      });
+      if (nextBoundary.connection !== "online") {
+        setConnection("offline");
+        setDeviceSetupMessage(
+          "Couldn't reach the server, so the keys couldn't be restored. Try again.",
+        );
+        return;
+      }
+      commitBoundary(nextBoundary);
+      if (recoveredProjectAccess(nextBoundary)) {
+        // The unblocked editor is the result report: nothing needs saying.
+        return;
+      }
+      // The stored Device keys sign the fresh grant; a mismatch between the
+      // stored public key and the service's record means these keys belong
+      // to a different Device and cannot be used.
+      let keyMaterial: DeviceKeyMaterial | null = null;
+      let x25519PublicKey: Uint8Array | null = null;
+      if (storedId === device.id && device.encryptionPublicKey) {
+        try {
+          const storage = createBrowserDeviceStorage(pin);
+          const bundle = await storage.load({
+            pin,
+            deviceId: uuidToBytes(device.id),
+          });
+          const material = await loadDeviceKeyMaterial(bundle);
+          if (material.encryptionPublicKey) {
+            const exported = new Uint8Array(
+              await globalThis.crypto.subtle.exportKey(
+                "raw",
+                material.encryptionPublicKey,
+              ),
+            );
+            if (bytesToHex(exported) === device.encryptionPublicKey) {
+              keyMaterial = material;
+              x25519PublicKey = exported;
+            }
+          }
+        } catch {
+          keyMaterial = null;
+        }
+      }
+      const teamId = nextBoundary.environment.teamId ?? null;
+      const projectId = nextBoundary.environment.projectId ?? null;
+      const projectEpoch = Number(nextBoundary.environment.projectEpoch);
+      if (
+        keyMaterial?.encryptionPublicKey &&
+        x25519PublicKey &&
+        teamId &&
+        projectId &&
+        Number.isSafeInteger(projectEpoch) &&
+        projectEpoch >= 1
+      ) {
+        const grant = await createProjectEpochGrantBootstrap({
+          serverProfileId: profile.serverProfileId,
+          teamId,
+          projectId,
+          projectEpoch,
+          senderDeviceId: device.id,
+          recipientDeviceId: device.id,
+          recipientX25519PublicKey: x25519PublicKey,
+          recipientEncryptionPublicKey: keyMaterial.encryptionPublicKey,
+          signingPrivateKey: keyMaterial.signingPrivateKey,
+        });
+        const response = await fetch(`${apiOrigin}/api/v1/grants/bootstrap`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-DotRelay-Device-Id": device.id,
+          },
+          body: JSON.stringify({
+            operationId: globalThis.crypto.randomUUID(),
+            objectId: grant.objectId,
+            projectId,
+            teamId,
+            digest: toBase64(grant.digest),
+            grant: toBase64(grant.canonicalBytes),
+          }),
+        });
+        if (response.ok) {
+          const refreshed = await fetchWorkspaceBoundary(profileId, {
+            deviceId: device.id,
+            ...(selectedEnvironment?.id
+              ? { environmentId: selectedEnvironment.id }
+              : environmentId
+                ? { environmentId }
+                : {}),
+          });
+          if (refreshed.connection === "online") commitBoundary(refreshed);
+          else setConnection("offline");
+          setDeviceSetupMessage(
+            recoveredProjectAccess(refreshed)
+              ? null
+              : "The server accepted the new keys, but project access is still pending. Try again.",
+          );
+          return;
+        }
+        const body = (await response.json().catch(() => null)) as {
+          readonly code?: unknown;
+        } | null;
+        const code = typeof body?.code === "string" ? body.code : null;
+        if (code === "device_not_active") {
+          // The service deactivated the Device, so its keys can no longer
+          // sign; only a replacement Device recovers this browser.
+          setReplacementDialogOpen(true);
+          return;
+        }
+        if (code === "stale_epoch") {
+          setDeviceSetupMessage(
+            "Key rotation is still in progress on this project. Wait for it to finish, then try again.",
+          );
+          return;
+        }
+        const teamName =
+          nextBoundary.catalog.teams.find((team) => team.id === teamId)?.name ??
+          selectedTeam?.name ??
+          "your team";
+        setDeviceSetupMessage(
+          `This browser can't recover the project's current keys on its own. Run \`bun apps/cli/src/index.ts pull\` on another of your devices to hand the keys over, or restore a Device from a Recovery Kit. ${teamName}'s Owners and Admins can also rotate the project's keys.`,
+        );
+        return;
+      }
+      // No usable local keys for this Device: the only repair is a
+      // replacement Device, which discards the browser's stored keys.
+      setReplacementDialogOpen(true);
+    } catch {
+      setDeviceSetupMessage("Couldn't restore the project's keys. Try again.");
+    } finally {
+      setDeviceSetupInProgress(false);
+    }
+  };
+
   const handleSetupAction = () => {
     if (!editorSetupAction) return;
+    if (editorSetupAction.id === "stale-epoch") {
+      void repairStaleEpoch();
+      return;
+    }
     if (editorSetupAction.id === "trust-profile") {
       // Trusting is a deliberate decision: the dialog names the exact origin
       // and stable server identity before the user confirms.
@@ -1884,6 +2066,7 @@ export const WorkspaceShell = ({
     setProfileTrust("unknown");
     setTrustDialogOpen(false);
     setTrustBlocked(null);
+    setReplacementDialogOpen(false);
     setProjectId(null);
     setEnvironmentId(null);
     setView("projects");
@@ -2985,6 +3168,38 @@ export const WorkspaceShell = ({
               onClick={() => void confirmTrust()}
             >
               {trustDialogBusy ? "Saving…" : "Confirm trust"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        onOpenChange={(open) => setReplacementDialogOpen(open)}
+        open={replacementDialogOpen}
+      >
+        <DialogContent data-testid="replace-device-dialog" role="alertdialog">
+          <DialogHeader>
+            <DialogTitle>Replace this browser's device?</DialogTitle>
+            <DialogDescription>
+              This browser's stored keys can't restore the project's current
+              keys. Replacing the Device creates a new set of keys on this
+              machine and discards the stored keys for the current Device. The
+              current Device stays active on the server.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              Cancel
+            </DialogClose>
+            <Button
+              data-testid="replace-device-confirm"
+              disabled={deviceSetupInProgress}
+              onClick={() => {
+                setReplacementDialogOpen(false);
+                void provisionBrowserDevice();
+              }}
+            >
+              {deviceSetupInProgress ? "Setting up…" : "Replace device"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -788,8 +788,8 @@ export const nextSetupAction = (
     return {
       id: "stale-epoch",
       title: "This project's keys were rotated",
-      body: "Set this browser up again, or use a machine that already has the current keys.",
-      actionLabel: "Set up browser",
+      body: "Recover the current keys on this browser. The recovery reuses the keys this browser already holds and asks for approval only before it replaces the browser's Device.",
+      actionLabel: "Recover keys",
     };
   if (state.rotationRequired)
     return {
