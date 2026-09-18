@@ -297,7 +297,7 @@ test("a history rebind with a dirty draft prompts and Stay returns to the entry 
   // The prompt renders after the popstate handler plans the switch; slow
   // runners need a wider window than the default 5s.
   await expect(prompt).toBeVisible({ timeout: 15_000 });
-  await expect(prompt).toContainText("Switch servers?");
+  await expect(prompt).toContainText("Switch servers?", { timeout: 15_000 });
 
   await page.getByRole("button", { name: "Stay" }).click();
   await expect(page.getByRole("combobox", { name: "Server" })).toHaveValue(

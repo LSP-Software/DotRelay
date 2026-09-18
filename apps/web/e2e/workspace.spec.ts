@@ -178,7 +178,7 @@ test("signing out from the user card returns to sign-in", async ({ page }) => {
   await page.getByRole("menuitem", { name: "Sign out" }).click();
 
   await expect(
-    page.getByRole("heading", { name: "Sign in to your Server Profile" }),
+    page.getByRole("heading", { name: "Sign in", exact: true }),
   ).toBeVisible();
 });
 
