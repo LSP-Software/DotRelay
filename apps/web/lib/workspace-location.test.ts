@@ -186,6 +186,17 @@ test("resolve validates a full chain against the catalog", () => {
   expect(resolved.missing).toBe(null);
 });
 
+test("resolve keeps an explicit settings view without a Project", () => {
+  const resolved = resolveWorkspaceLocation(
+    parseWorkspaceLocation(new URLSearchParams("profile=hosted&view=settings")),
+    catalogFixture(),
+    viewFallback,
+  );
+  expect(resolved.view).toBe("settings");
+  expect(resolved.projectId).toBe(null);
+  expect(resolved.missing).toBe(null);
+});
+
 test("resolve picks the first environment for a project deep link", () => {
   const resolved = resolveWorkspaceLocation(
     parseWorkspaceLocation(

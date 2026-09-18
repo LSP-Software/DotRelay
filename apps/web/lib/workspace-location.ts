@@ -11,6 +11,7 @@ export const WORKSPACE_VIEWS = [
   "team",
   "devices",
   "recovery",
+  "settings",
 ] as const;
 
 export type WorkspaceView = (typeof WORKSPACE_VIEWS)[number];
