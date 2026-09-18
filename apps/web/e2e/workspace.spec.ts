@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { trustWorkspaceServer } from "./trust-server";
 
 const openFirstProject = async (page: Page) => {
   await page.getByRole("heading", { name: "LSP-Software / DotRelay" }).click();
@@ -210,16 +211,21 @@ test("Environment archive and restore require explicit confirmation", async ({
   ).toBeVisible();
 });
 
-test("switching servers asks to trust the new server", async ({ page }) => {
+test("a recorded trust decision follows the destination across previews", async ({
+  page,
+}) => {
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
 
+  // The development fixture's hosted and self-hosted previews share the
+  // deployment's origin and server identity, so the recorded decision
+  // follows the destination, not the preview label.
   await page
     .getByRole("combobox", { name: "Server" })
     .selectOption("self-hosted");
   await expect(
-    page.getByRole("heading", { name: "Trust this server" }),
+    page.getByRole("heading", { name: "LSP Software" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Trust this server" }).click();
   await expect(
     page.getByRole("heading", { name: "Trust this server" }),
   ).toHaveCount(0);
@@ -228,6 +234,9 @@ test("switching servers asks to trust the new server", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "LSP Software" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Trust this server" }),
+  ).toHaveCount(0);
 });
 
 test("keyboard and responsive navigation keep critical routes reachable", async ({
@@ -253,6 +262,7 @@ test("missing Device setup has one action and does not dump problem codes", asyn
   page,
 }) => {
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await openFirstProject(page);
 
   await expect(
@@ -278,6 +288,7 @@ test("missing Device setup has one action and does not dump problem codes", asyn
 
 test("unsupported cryptography explains how to continue", async ({ page }) => {
   await page.goto("/workspace?preview=no-crypto");
+  await trustWorkspaceServer(page);
   await expect(
     page.getByRole("heading", { name: "This browser can't decrypt variables" }),
   ).toBeVisible();
