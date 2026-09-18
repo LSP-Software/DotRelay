@@ -1,7 +1,80 @@
 import { expect, type Page, test } from "@playwright/test";
+import { e2eWorkspaceBoundary } from "../lib/workspace-boundary";
 
 const openFirstProject = async (page: Page) => {
   await page.getByRole("heading", { name: "LSP-Software / DotRelay" }).click();
+};
+
+const PRODUCTION_ENVIRONMENT_ID = "00000000-0000-4000-8000-000000000031";
+const DOTRELAY_PROJECT_ID = "00000000-0000-4000-8000-000000000021";
+
+type LifecycleResource = "environment" | "project";
+
+// Serves the fixture boundary with the resource's lifecycle driven by the
+// intercepted service mutations, so every boundary read — the first load, a
+// reload, or another Device's read — reports the persisted record instead of
+// a static fixture.
+const installBoundaryLifecycleRoutes = async (
+  page: Page,
+  resource: LifecycleResource,
+) => {
+  let archived = false;
+  await page.route("**/api/workspace/boundary**", (route) => {
+    const boundary = e2eWorkspaceBoundary("hosted");
+    const catalog = {
+      teams: boundary.catalog.teams,
+      projects: boundary.catalog.projects.map((project) => {
+        if (project.id !== DOTRELAY_PROJECT_ID) return project;
+        if (resource === "project") {
+          return archived
+            ? { ...project, lifecycle: "ARCHIVED" as const }
+            : project;
+        }
+        return {
+          ...project,
+          environments: project.environments.map((environment) =>
+            environment.id === PRODUCTION_ENVIRONMENT_ID && archived
+              ? { ...environment, lifecycle: "ARCHIVED" as const }
+              : environment,
+          ),
+        };
+      }),
+    };
+    return route.fulfill({ json: { ...boundary, catalog } });
+  });
+  const resourceId =
+    resource === "environment"
+      ? PRODUCTION_ENVIRONMENT_ID
+      : DOTRELAY_PROJECT_ID;
+  let archiveCalls = 0;
+  await page.route(`**/api/v1/${resource}s/*\/archive`, (route) => {
+    if (route.request().method() === "POST") {
+      archiveCalls += 1;
+      archived = true;
+    }
+    return route.fulfill({
+      status: 201,
+      json: { id: resourceId, lifecycle: "archived" },
+    });
+  });
+  let restoreCalls = 0;
+  await page.route(`**/api/v1/${resource}s/*\/restore`, (route) => {
+    if (route.request().method() === "POST") {
+      restoreCalls += 1;
+      archived = false;
+    }
+    return route.fulfill({
+      status: 201,
+      json: { id: resourceId, lifecycle: "active" },
+    });
+  });
+  return {
+    archiveCalls: () => archiveCalls,
+    restoreCalls: () => restoreCalls,
+    setArchived: (value: boolean) => {
+      archived = value;
+    },
+  };
 };
 
 test("workspace shows a copyable CLI setup command after opening Devices", async ({
@@ -185,26 +258,102 @@ test("role-aware administration reflects the persisted Team record", async ({
   ).toBeVisible();
 });
 
-test("Environment archive and restore require explicit confirmation", async ({
+test("Environment archive and restore are confirmed by the service before the UI changes", async ({
   page,
 }) => {
+  const { archiveCalls, restoreCalls } = await installBoundaryLifecycleRoutes(
+    page,
+    "environment",
+  );
   await page.goto("/workspace");
   await openFirstProject(page);
 
+  // Archiving asks for explicit confirmation and only flips the control once
+  // the service confirms the mutation.
   await page.getByRole("button", { name: "Archive environment" }).click();
   await expect(page.getByRole("alertdialog")).toContainText(
     "Archiving hides this environment's variables but keeps its history. Restore it to access the variables again.",
   );
   await page.getByRole("button", { name: "Confirm archive" }).click();
+  expect(archiveCalls()).toBe(1);
   await expect(
     page.getByRole("button", { name: "Restore environment" }),
   ).toBeVisible();
 
+  // A reload re-derives the lifecycle from the persisted boundary, so the
+  // archived state survives instead of reverting to a local flip.
+  await page.reload();
+  await openFirstProject(page);
+  await expect(
+    page.getByRole("button", { name: "Restore environment" }),
+  ).toBeVisible();
+
+  // Restoring sends the authorized mutation and, once the service confirms
+  // it, the control returns to Archive.
   await page.getByRole("button", { name: "Restore environment" }).click();
   await expect(page.getByRole("alertdialog")).toContainText(
     "Restoring lets devices with the required keys access this environment again. It does not grant new permissions.",
   );
   await page.getByRole("button", { name: "Confirm restore" }).click();
+  expect(restoreCalls()).toBe(1);
+  await expect(
+    page.getByRole("button", { name: "Archive environment" }),
+  ).toBeVisible();
+});
+
+test("a rejected Environment archive keeps the prior state with the service's advice", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/environments/*/archive", (route) =>
+    route.fulfill({
+      status: 409,
+      json: { code: "state_conflict", title: "State conflict" },
+    }),
+  );
+  await page.goto("/workspace");
+  await openFirstProject(page);
+
+  await page.getByRole("button", { name: "Archive environment" }).click();
+  await page.getByRole("button", { name: "Confirm archive" }).click();
+
+  // The dialog stays open with an actionable error, and the Environment is
+  // still active because the service rejected the mutation.
+  await expect(page.getByRole("alertdialog")).toContainText(
+    "Something changed while you were working. Refresh and try again.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Archive environment" }),
+  ).toBeVisible();
+});
+
+test("a blocked editor under an archived Project confirms a Project restore", async ({
+  page,
+}) => {
+  const { restoreCalls, setArchived } = await installBoundaryLifecycleRoutes(
+    page,
+    "project",
+  );
+  // The persisted boundary reports the Project as archived while its
+  // Environment stays active, so the blocked editor must name the Project
+  // and confirm a Project restore — not an Environment mutation.
+  setArchived(true);
+  await page.goto("/workspace?preview=protected");
+  await expect(
+    page.getByRole("heading", { name: "LSP-Software / DotRelay" }),
+  ).toBeVisible();
+
+  const editorRestore = page
+    .locator("#environment")
+    .getByRole("button", { name: "Restore project" });
+  await expect(editorRestore).toBeVisible();
+  await editorRestore.click();
+  await expect(page.getByRole("alertdialog")).toContainText(
+    "You can restore this project only if no other active project uses this GitHub repository.",
+  );
+  await page.getByRole("button", { name: "Confirm restore" }).click();
+  expect(restoreCalls()).toBe(1);
+  // With the Project active again the header offers the Environment's
+  // lifecycle control.
   await expect(
     page.getByRole("button", { name: "Archive environment" }),
   ).toBeVisible();

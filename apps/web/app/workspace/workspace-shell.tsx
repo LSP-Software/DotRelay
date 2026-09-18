@@ -91,12 +91,16 @@ import {
 } from "@/lib/environment-workflow";
 import {
   acceptTeamInvitation,
+  archiveEnvironment,
+  archiveProject,
   createTeamInvitation,
   fetchMyInvitations,
   fetchTeamMemberships,
   type MyInvitations,
   type ResolvedGitHubUser,
   resolveGitHubLogin,
+  restoreEnvironment,
+  restoreProject,
   type TeamMembershipState,
 } from "@/lib/team-administration";
 import { cn } from "@/lib/utils";
@@ -290,26 +294,39 @@ const replaceHistoryEntry = (search: string) => {
   window.history.replaceState(null, "", urlForSearch(search));
 };
 
+// The lifecycle control only reports a change once the service confirms it.
+// The dialog stays open while the mutation is in flight and on rejection,
+// where it keeps the prior state on display with the service's actionable
+// error; on confirmation the caller re-derives the state from the persisted
+// reply and closes it.
 const LifecycleDialog = ({
   resource,
   lifecycle,
   disabled,
+  busy,
+  error,
+  open,
+  onOpenChange,
   onConfirm,
 }: {
   readonly resource: "Project" | "Environment";
   readonly lifecycle: ResourceLifecycle;
   readonly disabled: boolean;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
   readonly onConfirm: () => void;
 }) => {
   const isActive = lifecycle === "ACTIVE";
   const verb = isActive ? "archive" : "restore";
 
   return (
-    <Dialog>
+    <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogTrigger
         render={
           <Button
-            disabled={disabled}
+            disabled={disabled || busy}
             variant={isActive ? "destructive" : "outline"}
           />
         }
@@ -336,20 +353,26 @@ const LifecycleDialog = ({
                 : "You can restore this project only if no other active project uses this GitHub repository."}
           </DialogDescription>
         </DialogHeader>
+        {error ? (
+          <Alert className="border-destructive/30 bg-destructive/10">
+            <AlertTitle>
+              Couldn't {verb} this {resource.toLowerCase()}
+            </AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
         <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>
+          <DialogClose render={<Button disabled={busy} variant="outline" />}>
             Cancel
           </DialogClose>
-          <DialogClose
-            render={
-              <Button
-                onClick={onConfirm}
-                variant={isActive ? "destructive" : "default"}
-              />
-            }
+          <Button
+            disabled={busy}
+            onClick={onConfirm}
+            type="button"
+            variant={isActive ? "destructive" : "default"}
           >
             Confirm {verb}
-          </DialogClose>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -485,10 +508,28 @@ export const WorkspaceShell = ({
   const [projectId, setProjectId] = useState<string | null>(null);
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
   const [view, setView] = useState<WorkspaceView>("projects");
+  // The persisted lifecycle of the selected Project and Environment: the
+  // value the loaded boundary catalog reports, or the state a confirmed
+  // service mutation returned while the next boundary read is in flight.
+  // Nothing local ever flips these on its own.
   const [environmentLifecycle, setEnvironmentLifecycle] =
     useState<ResourceLifecycle>("ACTIVE");
   const [projectLifecycle, setProjectLifecycle] =
     useState<ResourceLifecycle>("ACTIVE");
+  // One lifecycle mutation runs at a time; while it is in flight the
+  // controls disable themselves, and a rejection keeps the prior state with
+  // the service's actionable error ready to retry.
+  const [lifecycleBusy, setLifecycleBusy] = useState<
+    "project" | "environment" | null
+  >(null);
+  const [environmentDialogOpen, setEnvironmentDialogOpen] = useState(false);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [environmentLifecycleError, setEnvironmentLifecycleError] = useState<
+    string | null
+  >(null);
+  const [projectLifecycleError, setProjectLifecycleError] = useState<
+    string | null
+  >(null);
   const [invitationOpen, setInvitationOpen] = useState(false);
   // The invitation dialog is a two-step flow: resolve a GitHub login to its
   // stable subject, then create the invitation. The resolved identity is
@@ -696,6 +737,78 @@ export const WorkspaceShell = ({
     setMembershipTick((tick) => tick + 1);
   };
 
+  const environmentDialogOpenChange = (open: boolean) => {
+    if (!open && lifecycleBusy === "environment") return;
+    setEnvironmentDialogOpen(open);
+    if (!open) setEnvironmentLifecycleError(null);
+  };
+  const projectDialogOpenChange = (open: boolean) => {
+    if (!open && lifecycleBusy === "project") return;
+    setProjectDialogOpen(open);
+    if (!open) setProjectLifecycleError(null);
+  };
+
+  // Sends the archive/restore mutation and settles the UI only from what the
+  // service confirms: on success the state re-derives from the persisted
+  // reply and the boundary is re-read so reloads and other Devices see the
+  // same record; on rejection the prior state stands with the service's
+  // actionable error.
+  const runLifecycleMutation = (resource: "project" | "environment") => {
+    void (async () => {
+      const targetId =
+        resource === "project"
+          ? (selectedProject?.id ?? null)
+          : (selectedEnvironment?.id ?? null);
+      if (targetId === null || lifecycleBusy !== null) return;
+      if (resource === "project") setProjectLifecycleError(null);
+      else setEnvironmentLifecycleError(null);
+      if (!apiOrigin) {
+        const message =
+          "This deployment doesn't expose a team service, so the change can't be saved.";
+        if (resource === "project") setProjectLifecycleError(message);
+        else setEnvironmentLifecycleError(message);
+        return;
+      }
+      const active =
+        resource === "project"
+          ? projectLifecycle === "ACTIVE"
+          : environmentLifecycle === "ACTIVE";
+      const mutate =
+        resource === "project"
+          ? active
+            ? (origin: string) =>
+                archiveProject(origin, targetId, browserDeviceId)
+            : (origin: string) =>
+                restoreProject(origin, targetId, browserDeviceId)
+          : active
+            ? (origin: string) =>
+                archiveEnvironment(origin, targetId, browserDeviceId)
+            : (origin: string) =>
+                restoreEnvironment(origin, targetId, browserDeviceId);
+      setLifecycleBusy(resource);
+      const result = await mutate(apiOrigin);
+      setLifecycleBusy(null);
+      if (result.ok) {
+        const next: ResourceLifecycle =
+          result.data.lifecycle === "archived" ? "ARCHIVED" : "ACTIVE";
+        if (resource === "project") {
+          setProjectLifecycle(next);
+          setProjectDialogOpen(false);
+        } else {
+          setEnvironmentLifecycle(next);
+          setEnvironmentDialogOpen(false);
+        }
+        // Re-read the boundary so the persisted catalog — and every view
+        // derived from it — agrees with the confirmed mutation.
+        requestRetry();
+      } else if (resource === "project") {
+        setProjectLifecycleError(result.message);
+      } else {
+        setEnvironmentLifecycleError(result.message);
+      }
+    })();
+  };
+
   const resetInvitationDialog = () => {
     setInviteLogin("");
     setInviteStep("form");
@@ -773,8 +886,8 @@ export const WorkspaceShell = ({
     cryptoAvailable: displayBoundary.crypto.available,
     deviceActive: displayBoundary.device.active,
     grantsReady: displayBoundary.grantsReady,
-    resourceActive:
-      projectLifecycle === "ACTIVE" && environmentLifecycle === "ACTIVE",
+    projectActive: projectLifecycle === "ACTIVE",
+    environmentActive: environmentLifecycle === "ACTIVE",
     epochCurrent: displayBoundary.epochCurrent,
     rotationRequired: displayBoundary.rotationRequired,
   });
@@ -1792,8 +1905,23 @@ export const WorkspaceShell = ({
       );
       return;
     }
-    if (editorSetupAction.id === "archived") {
-      setEnvironmentLifecycle("ACTIVE");
+    if (
+      editorSetupAction.id === "project-archived" ||
+      editorSetupAction.id === "environment-archived"
+    ) {
+      // Restoring a blocked resource takes the same confirmation dialog and
+      // role gate as the ordinary archive/restore control; the editor's
+      // button stays disabled for roles that can't administer. The dialog
+      // follows the resource that is actually archived, so a blocked editor
+      // under an archived Project confirms a Project restore.
+      if (!canAdminister || lifecycleBusy !== null) return;
+      if (editorSetupAction.id === "project-archived") {
+        setEnvironmentDialogOpen(false);
+        setProjectDialogOpen(true);
+      } else {
+        setProjectDialogOpen(false);
+        setEnvironmentDialogOpen(true);
+      }
       return;
     }
     if (editorSetupAction.id === "rotation") {
@@ -1804,6 +1932,11 @@ export const WorkspaceShell = ({
   const resetWorkspaceContext = () => {
     setEnvironmentLifecycle("ACTIVE");
     setProjectLifecycle("ACTIVE");
+    setLifecycleBusy(null);
+    setEnvironmentDialogOpen(false);
+    setProjectDialogOpen(false);
+    setEnvironmentLifecycleError(null);
+    setProjectLifecycleError(null);
     setInvitationOpen(false);
     resetInvitationDialog();
     setMembershipState(null);
@@ -2273,16 +2406,32 @@ export const WorkspaceShell = ({
                         {projectDisplayName(selectedProject)}
                       </h1>
                     </div>
-                    <LifecycleDialog
-                      disabled={!canAdminister}
-                      lifecycle={environmentLifecycle}
-                      onConfirm={() =>
-                        setEnvironmentLifecycle((value) =>
-                          value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
-                        )
-                      }
-                      resource="Environment"
-                    />
+                    {projectLifecycle === "ARCHIVED" ? (
+                      // An archived Project blocks every Environment under
+                      // it, so the header offers the Project's own
+                      // lifecycle control while it stays archived.
+                      <LifecycleDialog
+                        busy={lifecycleBusy === "project"}
+                        disabled={!canAdminister || lifecycleBusy !== null}
+                        error={projectLifecycleError}
+                        lifecycle={projectLifecycle}
+                        onConfirm={() => runLifecycleMutation("project")}
+                        onOpenChange={projectDialogOpenChange}
+                        open={projectDialogOpen}
+                        resource="Project"
+                      />
+                    ) : (
+                      <LifecycleDialog
+                        busy={lifecycleBusy === "environment"}
+                        disabled={!canAdminister || lifecycleBusy !== null}
+                        error={environmentLifecycleError}
+                        lifecycle={environmentLifecycle}
+                        onConfirm={() => runLifecycleMutation("environment")}
+                        onOpenChange={environmentDialogOpenChange}
+                        open={environmentDialogOpen}
+                        resource="Environment"
+                      />
+                    )}
                   </div>
                   <Tabs
                     className="mb-6"
@@ -2489,13 +2638,13 @@ export const WorkspaceShell = ({
                             : "Archived"}
                         </Badge>
                         <LifecycleDialog
-                          disabled={!canAdminister}
+                          busy={lifecycleBusy === "project"}
+                          disabled={!canAdminister || lifecycleBusy !== null}
+                          error={projectLifecycleError}
                           lifecycle={projectLifecycle}
-                          onConfirm={() =>
-                            setProjectLifecycle((value) =>
-                              value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
-                            )
-                          }
+                          onConfirm={() => runLifecycleMutation("project")}
+                          onOpenChange={projectDialogOpenChange}
+                          open={projectDialogOpen}
                           resource="Project"
                         />
                       </CardContent>

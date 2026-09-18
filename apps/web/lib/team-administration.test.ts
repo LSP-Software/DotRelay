@@ -1,11 +1,16 @@
 import { expect, test } from "bun:test";
 import {
+  archiveEnvironment,
+  archiveProject,
   createTeamInvitation,
   fetchMyInvitations,
   fetchTeamMemberships,
+  parseLifecycleState,
   parseMyInvitations,
   parseTeamMembershipState,
   resolveGitHubLogin,
+  restoreEnvironment,
+  restoreProject,
 } from "./team-administration";
 
 const privilegedBody = {
@@ -214,5 +219,90 @@ test("fetchMyInvitations reports a network failure actionably", async () => {
     expect(result.message).toContain("reach the server");
   } finally {
     globalThis.fetch = previous;
+  }
+});
+
+test("parseLifecycleState reads the confirmed persisted state", () => {
+  expect(parseLifecycleState({ id: "e1", lifecycle: "archived" })).toEqual({
+    id: "e1",
+    lifecycle: "archived",
+  });
+  expect(parseLifecycleState({ id: "p1", lifecycle: "ACTIVE" })).toEqual({
+    id: "p1",
+    lifecycle: "active",
+  });
+  expect(parseLifecycleState({ id: "p1", lifecycle: "PAUSED" })).toBeNull();
+  expect(parseLifecycleState({ lifecycle: "active" })).toBeNull();
+  expect(parseLifecycleState(null)).toBeNull();
+  expect(parseLifecycleState("nope")).toBeNull();
+});
+
+test("archiveProject sends an idempotent mutation with the device id", async () => {
+  const captured = { url: "", headers: new Headers() };
+  const restore = stubFetch((url, init) => {
+    captured.url = url;
+    captured.headers = new Headers(init?.headers);
+    return Response.json(
+      {
+        id: "p1",
+        teamId: "t1",
+        githubRepositoryId: "884193201",
+        lifecycle: "archived",
+      },
+      { status: 201 },
+    );
+  });
+  try {
+    const result = await archiveProject("http://api.test", "p1", "device-1");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data).toEqual({ id: "p1", lifecycle: "archived" });
+    expect(captured.url).toBe("http://api.test/api/v1/projects/p1/archive");
+    expect(captured.headers.get("X-DotRelay-Device-Id")).toBe("device-1");
+    expect(captured.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+  } finally {
+    restore();
+  }
+});
+
+test("restoreEnvironment keeps the prior state with an actionable error when rejected", async () => {
+  const restore = stubFetch(() =>
+    Response.json(
+      { code: "state_conflict", title: "State conflict" },
+      {
+        status: 409,
+      },
+    ),
+  );
+  try {
+    const result = await restoreEnvironment("http://api.test", "e1");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe(
+      "Something changed while you were working. Refresh and try again.",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("an archived parent Project names the blocked Environment restore", async () => {
+  const restore = stubFetch(() =>
+    Response.json(
+      { code: "archived_resource", title: "Archived resource" },
+      {
+        status: 409,
+      },
+    ),
+  );
+  try {
+    const result = await restoreEnvironment("http://api.test", "e1");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe(
+      "The project this environment belongs to is archived. Restore the project first.",
+    );
+  } finally {
+    restore();
   }
 });

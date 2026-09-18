@@ -945,7 +945,8 @@ const blockedSetup = {
   cryptoAvailable: false,
   deviceActive: false,
   grantsReady: false,
-  resourceActive: false,
+  projectActive: false,
+  environmentActive: false,
   epochCurrent: false,
   rotationRequired: true,
 } as const;
@@ -985,11 +986,43 @@ test("setup reports only the next action the person can take", () => {
       cryptoAvailable: true,
       deviceActive: true,
       grantsReady: true,
-      resourceActive: true,
+      projectActive: true,
+      environmentActive: true,
       epochCurrent: true,
       rotationRequired: false,
     }),
   ).toBeNull();
+  // An archived Project blocks its Environments before an archived
+  // Environment does, so the restore route names the Project.
+  expect(
+    nextSetupAction({
+      sessionActive: true,
+      profileTrusted: true,
+      cryptoAvailable: true,
+      deviceActive: true,
+      grantsReady: true,
+      projectActive: false,
+      environmentActive: true,
+      epochCurrent: true,
+      rotationRequired: false,
+    }),
+  ).toMatchObject({ id: "project-archived", actionLabel: "Restore project" });
+  expect(
+    nextSetupAction({
+      sessionActive: true,
+      profileTrusted: true,
+      cryptoAvailable: true,
+      deviceActive: true,
+      grantsReady: true,
+      projectActive: true,
+      environmentActive: false,
+      epochCurrent: true,
+      rotationRequired: false,
+    }),
+  ).toMatchObject({
+    id: "environment-archived",
+    actionLabel: "Restore environment",
+  });
   expect(displayedSetupAction(null, { localDeviceBlockers: true })?.id).toBe(
     "enroll-device",
   );

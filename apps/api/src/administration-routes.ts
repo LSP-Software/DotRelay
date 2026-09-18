@@ -12,6 +12,7 @@ import {
   EnvironmentRepository,
   normalizeEnvironmentLabel,
   OperationConflictError,
+  OperationNotFoundError,
   ProjectRepository,
   sha384Digest,
 } from "@dotrelay/database";
@@ -57,6 +58,26 @@ const mapAdministrationError = (error: unknown): ProblemCode => {
     return "invalid_request";
   return "state_conflict";
 };
+
+// Lifecycle rejections name the resource state, not a Device or request
+// defect, so the generic persistence heuristics ("not active" → device,
+// "archived" → archived_resource) would misreport them.
+const mapLifecycleError = (error: unknown): ProblemCode => {
+  if (error instanceof ContractError) return error.code;
+  if (error instanceof OperationConflictError) return "operation_conflict";
+  if (error instanceof OperationNotFoundError) return "resource_not_found";
+  if (!(error instanceof Error)) return "service_unavailable";
+  const message = error.message;
+  if (message.includes("device")) return "device_not_active";
+  if (message.includes("not authorized")) return "forbidden";
+  if (message.includes("not found")) return "resource_not_found";
+  if (message === "Project is archived") return "archived_resource";
+  return "state_conflict";
+};
+
+const sameDigest = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.length === right.length &&
+  left.every((byte, index) => byte === right[index]);
 
 const readJsonBody = async (
   context: Context,
@@ -483,4 +504,140 @@ export const registerAdministrationRoutes = (
       return responseProblem(context, mapAdministrationError(error));
     }
   });
+
+  // Archive/restore commit the lifecycle through the persisted role policy
+  // (active Membership plus active Device) and answer with the confirmed
+  // persisted row, so a browser can only claim a lifecycle the service
+  // recorded. A replay of an operation the actor already committed is
+  // answered from the persisted row without re-running the mutation, since
+  // the resource no longer satisfies the mutation's state precondition.
+  const lifecycleRoute = (
+    path: string,
+    resource: "project" | "environment",
+    action: "archive" | "restore",
+  ) => {
+    app.post(path, async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      try {
+        const param = resource === "project" ? "projectId" : "environmentId";
+        const resourceId = parseUuid(context.req.param(param), param);
+        const operationId = parseIdempotencyKey(
+          context.req.header("Idempotency-Key"),
+        );
+        const commandBytes = new TextEncoder().encode(
+          JSON.stringify({
+            action: `${resource}.${action}`,
+            [param]: resourceId,
+          }),
+        );
+        const commandDigest = await sha384Digest(commandBytes);
+        const prior = await database.operation.findUnique({
+          where: { id: operationId },
+          select: {
+            actorUserId: true,
+            actorDeviceId: true,
+            commandDigest: true,
+            status: true,
+          },
+        });
+        // A committed key addressed at a different command is a conflict, not
+        // a replay: the client must use a fresh key for a new mutation.
+        const replay =
+          prior !== null &&
+          prior.status === "COMMITTED" &&
+          prior.actorUserId === actor.userId &&
+          prior.actorDeviceId === actor.deviceId &&
+          sameDigest(prior.commandDigest, commandDigest);
+        if (prior !== null && !replay && prior.status === "COMMITTED")
+          throw new OperationConflictError();
+        if (!replay) {
+          // A prior staging for this key that never committed (a client that
+          // died mid-mutation) resumes the same operation instead of
+          // starting a second one.
+          const operation = {
+            id: operationId,
+            actorUserId: actor.userId,
+            actorDeviceId: actor.deviceId,
+            kind: "ADMINISTRATION" as const,
+            commandBytes,
+            commandDigest,
+          };
+          if (resource === "project") {
+            if (action === "archive")
+              await administration.archiveProject(database, {
+                projectId: resourceId,
+                operation,
+              });
+            else
+              await administration.restoreProject(database, {
+                projectId: resourceId,
+                operation,
+              });
+          } else if (action === "archive") {
+            await administration.archiveEnvironment(database, {
+              environmentId: resourceId,
+              operation,
+            });
+          } else {
+            await administration.restoreEnvironment(database, {
+              environmentId: resourceId,
+              operation,
+            });
+          }
+        }
+        if (resource === "project") {
+          const project = await database.project.findUnique({
+            where: { id: resourceId },
+            select: {
+              id: true,
+              teamId: true,
+              githubRepositoryId: true,
+              lifecycle: true,
+            },
+          });
+          if (!project) return responseProblem(context, "resource_not_found");
+          return context.json(projectResponse(project), replay ? 200 : 201, {
+            "Cache-Control": "no-store",
+          });
+        }
+        const environment = await database.environment.findUnique({
+          where: { id: resourceId },
+          select: {
+            id: true,
+            projectId: true,
+            label: true,
+            lifecycle: true,
+            currentHeadId: true,
+          },
+        });
+        if (!environment) return responseProblem(context, "resource_not_found");
+        return context.json(
+          environmentResponse(environment),
+          replay ? 200 : 201,
+          { "Cache-Control": "no-store" },
+        );
+      } catch (error) {
+        return responseProblem(context, mapLifecycleError(error));
+      }
+    });
+  };
+
+  lifecycleRoute("/api/v1/projects/:projectId/archive", "project", "archive");
+  lifecycleRoute("/api/v1/projects/:projectId/restore", "project", "restore");
+  lifecycleRoute(
+    "/api/v1/environments/:environmentId/archive",
+    "environment",
+    "archive",
+  );
+  lifecycleRoute(
+    "/api/v1/environments/:environmentId/restore",
+    "environment",
+    "restore",
+  );
 };

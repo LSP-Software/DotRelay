@@ -46,9 +46,12 @@ this Team's Projects.
 Membership Invitations target a stable GitHub subject and expire after seven days. An accepted
 invitation stays **Pending key grant** until all required grants activate the Membership.
 
-Archive and restore operations require confirmation. Archiving an Environment keeps immutable
-Revision history but hides Variables until restore. Restoring a Project fails closed if another
-active Project holds the same stable GitHub Repository linkage.
+Archive and restore operations require confirmation. The workspace sends the operation to the
+service and updates its controls only after the service confirms the persisted state, so the
+result survives a reload and is visible from other Devices. If the service rejects the
+operation, the previous state stays in effect and the message explains what to fix. Archiving an
+Environment keeps immutable Revision history but hides Variables until restore. Restoring a
+Project fails closed if another active Project holds the same stable GitHub Repository linkage.
 
 ## Environment editor
 

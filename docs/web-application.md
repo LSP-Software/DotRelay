@@ -120,9 +120,16 @@ Invitation creation accepts a stable GitHub provider subject, never an email or 
 Acceptance is shown as `PENDING_KEY_GRANT` until the complete grant set activates the Membership.
 GitHub Repository names and stable ids are descriptive and explicitly do not grant authority.
 
-Project and Environment archive/restore actions require confirmation. The Environment confirmation
+Project and Environment archive/restore actions require confirmation and are performed only
+through the service: the workspace sends the mutation its session and Device are authorized to
+make, and updates its controls only after the service confirms the persisted state, so the result
+survives a reload and is visible from other Devices. The Environment confirmation
 states that archiving retains immutable Revision history while preventing Manifest disclosure.
 Project restoration states that a conflicting active stable GitHub Repository linkage fails closed.
+If the service rejects the mutation, the dialog stays open, the previous lifecycle remains in
+effect, and the service's problem is surfaced as actionable advice. Restoring an Environment from
+the blocked editor state requires the same confirmation and is offered only to the acting roles
+that can administer it.
 
 ## Workspace availability and offline state
 
@@ -158,7 +165,9 @@ problem response, and no Better Auth detail text is ever exposed.
 ## Browser quality boundary
 
 Playwright coverage in `apps/web/e2e/workspace.spec.ts` exercises the public landing/sign-in flow,
-role-aware invitation controls, pending key grants, Environment archive/restore confirmation, the
+role-aware invitation controls, pending key grants, Environment archive/restore (explicit
+confirmation, service-confirmed state, persistence across reload, a rejection that keeps the
+prior state, and the blocked editor's restore route for an archived Project), the
 development fixture's Server Profile preview, keyboard and responsive navigation, Revision
 history, enrolled Device listing, and the blocked secret-access state. `apps/web/e2e/workspace-offline.spec.ts` adds the
 offline and stale connection states: an unreachable, malformed, or non-200 boundary response on
