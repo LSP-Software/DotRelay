@@ -28,16 +28,19 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   setup: {
     about:
       "Trust this Server Profile, sign in, and enroll this machine. The capabilities document is fetched from the origin and verified before the profile is trusted, saved, and selected.",
-    positional: ["<origin>  Absolute https URL of the Server Profile."],
+    positional: [
+      "<origin>  The Server Profile origin; a missing scheme defaults to https.",
+    ],
     options: {
       noInput: "never prompt; requires --accept-profile <server-profile-id>",
       noOpen: "do not open the verification page in a browser",
     },
     notes: [
       "A changed profile identity or origin is never re-trusted silently; it requires a new trust decision.",
+      "On a loopback host, an HTTPS endpoint that cannot be reached is retried once over plain HTTP.",
     ],
     examples: [
-      "dotrelay setup https://relay.example",
+      "dotrelay setup relay.example",
       "dotrelay setup https://relay.example --no-input --accept-profile <server-profile-id>",
     ],
   },
@@ -196,7 +199,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Trust and save a Server Profile. Its capabilities document is fetched from the origin and verified before the profile is trusted.",
     positional: [
       "<name>  Local name for the profile.",
-      "<origin>  Absolute https URL of the Server Profile.",
+      "<origin>  The Server Profile origin; a missing scheme defaults to https.",
     ],
     options: {
       noInput: "never prompt; requires --accept-profile <server-profile-id>",

@@ -50,11 +50,21 @@ const emptyCatalog = (): ProfileCatalog =>
 const profileName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const serverProfileId =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const loopbackHosts = ["localhost", "127.0.0.1", "[::1]"];
+const explicitHttpScheme = /^https?:\/\//i;
+
+const isLoopbackHost = (origin: string): boolean => {
+  try {
+    return loopbackHosts.includes(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+};
 
 const isCanonicalStoredOrigin = (value: string): boolean => {
   try {
     const url = new URL(value);
-    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    const loopback = loopbackHosts.includes(url.hostname);
     return (
       url.origin === value &&
       (url.protocol === "https:" || (url.protocol === "http:" && loopback)) &&
@@ -193,6 +203,15 @@ export const createFileProfileCatalog = (path: string): ProfileCatalogStore =>
     },
   });
 
+// Operators type bare hostnames; a profile is an origin, so a missing scheme
+// is completed as HTTPS. addServerProfile then probes HTTPS first and, on
+// loopback hosts where the origin policy already allows plain HTTP, retries
+// an unreachable HTTPS endpoint over HTTP.
+export const withDefaultProtocol = (origin: string): string => {
+  const trimmed = origin.trim();
+  return explicitHttpScheme.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
+
 const validateOrigin = (origin: string): string => {
   let url: URL;
   try {
@@ -202,7 +221,7 @@ const validateOrigin = (origin: string): string => {
       "Server Profile origin must be an absolute URL",
     );
   }
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  const loopback = loopbackHosts.includes(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
     throw new CliInvocationError("Server Profile origin must use HTTPS");
   if (
@@ -254,16 +273,22 @@ export const addServerProfile = async (
     throw new CliInvocationError(
       "profile name must contain only letters, digits, ., _, or -",
     );
-  const origin = validateOrigin(requestedOrigin);
+  const origin = validateOrigin(withDefaultProtocol(requestedOrigin));
+  // Only a bare host typed by the operator may fall back to plain HTTP: an
+  // explicit scheme is honored exactly as typed.
+  const schemeWasImplicit = !explicitHttpScheme.test(requestedOrigin.trim());
   const catalog = await store.read();
   const existing = catalog.profiles.find((profile) => profile.name === name);
   const policy = options.networkPolicy ?? defaultNetworkPolicy;
-  let response: Response;
-  try {
-    response = (
+  const fetcher = options.fetch ?? fetch;
+
+  const attempt = async (
+    profileOrigin: string,
+  ): Promise<Readonly<{ origin: string; pin: ServerProfilePin }>> => {
+    const response = (
       await fetchWithinBudget(
-        options.fetch ?? fetch,
-        `${origin}/api/v1/capabilities`,
+        fetcher,
+        `${profileOrigin}/api/v1/capabilities`,
         {
           method: "GET",
           redirect: "error",
@@ -278,53 +303,82 @@ export const addServerProfile = async (
         },
       )
     ).response;
-  } catch (error) {
-    if (!(error instanceof NetworkAttemptError)) throw error;
-    throw networkFailureCliError(
-      error,
-      "the Server Profile capabilities endpoint",
-      "capabilities_unavailable",
-    );
-  }
-  if (!response.ok)
-    throw new CliError(
-      "transient",
-      "could not read Server Profile capabilities",
-      {},
-      "capabilities_unavailable",
-    );
-  let body: unknown;
+    if (!response.ok)
+      throw new CliError(
+        "transient",
+        "could not read Server Profile capabilities",
+        {},
+        "capabilities_unavailable",
+      );
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new CliError(
+        "crypto",
+        "Server Profile capabilities were not valid JSON",
+        {},
+        "capabilities_invalid",
+      );
+    }
+    let trusted: Awaited<ReturnType<typeof establishServerProfileTrust>>;
+    try {
+      trusted = await establishServerProfileTrust(body, {
+        requestedOrigin: profileOrigin,
+        ...(existing ? { pinned: existing.pin } : {}),
+        ...(options.runtime ? { runtime: options.runtime } : {}),
+      });
+    } catch (error) {
+      if (error instanceof CliError) throw error;
+      const code =
+        error instanceof Error && "code" in error
+          ? String(error.code)
+          : "trust_failed";
+      throw new CliError(
+        "crypto",
+        "Server Profile trust could not be established",
+        {},
+        code,
+      );
+    }
+    return Object.freeze({ origin: profileOrigin, pin: trusted.pin });
+  };
+
+  const loopbackHttpFallback =
+    schemeWasImplicit && origin.startsWith("https://") && isLoopbackHost(origin)
+      ? `http://${new URL(origin).host}`
+      : undefined;
+  let chosen: Readonly<{ origin: string; pin: ServerProfilePin }>;
   try {
-    body = await response.json();
-  } catch {
-    throw new CliError(
-      "crypto",
-      "Server Profile capabilities were not valid JSON",
-      {},
-      "capabilities_invalid",
-    );
-  }
-  let trusted: Awaited<ReturnType<typeof establishServerProfileTrust>>;
-  try {
-    trusted = await establishServerProfileTrust(body, {
-      requestedOrigin: origin,
-      ...(existing ? { pinned: existing.pin } : {}),
-      ...(options.runtime ? { runtime: options.runtime } : {}),
-    });
+    chosen = await attempt(origin);
   } catch (error) {
-    if (error instanceof CliError) throw error;
-    const code =
-      error instanceof Error && "code" in error
-        ? String(error.code)
-        : "trust_failed";
-    throw new CliError(
-      "crypto",
-      "Server Profile trust could not be established",
-      {},
-      code,
-    );
+    if (error instanceof NetworkAttemptError && loopbackHttpFallback) {
+      try {
+        chosen = await attempt(loopbackHttpFallback);
+      } catch (fallbackError) {
+        if (fallbackError instanceof NetworkAttemptError)
+          throw networkFailureCliError(
+            fallbackError,
+            "the Server Profile capabilities endpoint",
+            "capabilities_unavailable",
+          );
+        throw fallbackError;
+      }
+    } else if (error instanceof NetworkAttemptError) {
+      throw networkFailureCliError(
+        error,
+        "the Server Profile capabilities endpoint",
+        "capabilities_unavailable",
+      );
+    } else {
+      throw error;
+    }
   }
-  const profile = Object.freeze({ name, origin, pin: trusted.pin });
+  const profile = Object.freeze({
+    name,
+    origin: chosen.origin,
+    pin: chosen.pin,
+  });
   if (options.confirm && !(await options.confirm(profile)))
     throw new CliInvocationError(
       "Server Profile trust confirmation was declined; nothing was saved",

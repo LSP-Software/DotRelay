@@ -101,6 +101,7 @@ import {
   profileNameFromOrigin,
   resolveServerProfile,
   useServerProfile,
+  withDefaultProtocol,
 } from "./profile";
 import type { TerminalIo } from "./terminal";
 import { rewriteRegion, selectOption } from "./ui";
@@ -1185,8 +1186,9 @@ const execute = async (
     return { value: { stdout: `${renderCommandHelp(label)}\n` } };
   }
   if (parsed.command === "setup") {
-    const origin = parsed.positionals[0];
-    if (!origin) throw new CliInvocationError("setup requires an origin");
+    const rawOrigin = parsed.positionals[0];
+    if (!rawOrigin) throw new CliInvocationError("setup requires an origin");
+    const origin = withDefaultProtocol(rawOrigin);
     const catalog = await store.read();
     const existing = catalog.profiles.find(
       (profile) => profile.origin === origin,

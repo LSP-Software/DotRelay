@@ -119,6 +119,111 @@ describe("CLI Server Profile catalog", () => {
     expect(calls).toBe(3);
   });
 
+  test("completes a bare host as an https origin", async () => {
+    const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
+    const store = createFileProfileCatalog(path);
+    const capabilities = createCapabilitiesDocument({
+      origin: "https://relay.example",
+      serverProfileId: "00000000-0000-4000-8000-000000000042",
+    });
+    const seen: string[] = [];
+    try {
+      const profile = await addServerProfile(store, "work", "relay.example", {
+        fetch: (input) => {
+          seen.push(String(input));
+          return Promise.resolve(Response.json(capabilities));
+        },
+      });
+      expect(profile.origin).toBe("https://relay.example");
+      expect(seen).toEqual(["https://relay.example/api/v1/capabilities"]);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(path)
+        .catch(() => undefined);
+    }
+  });
+
+  test("falls back to plain HTTP on loopback when HTTPS is unreachable", async () => {
+    const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
+    const store = createFileProfileCatalog(path);
+    const capabilities = createCapabilitiesDocument({
+      origin: "http://127.0.0.1:8443",
+      serverProfileId: "00000000-0000-4000-8000-000000000042",
+    });
+    const seen: string[] = [];
+    try {
+      const profile = await addServerProfile(store, "lab", "127.0.0.1:8443", {
+        networkPolicy: fastPolicy,
+        fetch: (input) => {
+          const url = String(input);
+          seen.push(url);
+          if (url.startsWith("https://"))
+            return Promise.reject(new TypeError("fetch failed"));
+          return Promise.resolve(Response.json(capabilities));
+        },
+      });
+      expect(profile.origin).toBe("http://127.0.0.1:8443");
+      expect(seen.filter((url) => url.startsWith("https://"))).toEqual(
+        Array.from(
+          { length: fastPolicy.maxAttempts },
+          () => "https://127.0.0.1:8443/api/v1/capabilities",
+        ),
+      );
+      expect(seen.filter((url) => url.startsWith("http://"))).toEqual([
+        "http://127.0.0.1:8443/api/v1/capabilities",
+      ]);
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(path)
+        .catch(() => undefined);
+    }
+  });
+
+  test("an explicit https origin is never retried over plain HTTP", async () => {
+    const store = createFileProfileCatalog(
+      `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`,
+    );
+    const seen: string[] = [];
+    const error = await addServerProfile(
+      store,
+      "work",
+      "https://relay.example",
+      {
+        networkPolicy: fastPolicy,
+        fetch: (input) => {
+          seen.push(String(input));
+          return Promise.reject(new TypeError("fetch failed"));
+        },
+      },
+    ).catch((caught) => caught);
+    expect(error).toMatchObject({
+      category: "transient",
+      code: "capabilities_unavailable",
+    });
+    expect(seen.length).toBe(fastPolicy.maxAttempts);
+    expect(seen.every((url) => url.startsWith("https://"))).toBe(true);
+  });
+
+  test("a non-loopback origin is never retried over plain HTTP", async () => {
+    const store = createFileProfileCatalog(
+      `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`,
+    );
+    const seen: string[] = [];
+    const error = await addServerProfile(store, "work", "relay.example", {
+      networkPolicy: fastPolicy,
+      fetch: (input) => {
+        seen.push(String(input));
+        return Promise.reject(new TypeError("fetch failed"));
+      },
+    }).catch((caught) => caught);
+    expect(error).toMatchObject({
+      category: "transient",
+      code: "capabilities_unavailable",
+    });
+    expect(seen.length).toBe(fastPolicy.maxAttempts);
+    expect(seen.every((url) => url.startsWith("https://"))).toBe(true);
+  });
+
   test("source builds ship no build-time default origin", () => {
     // Release and source builds stamp no default origin, so a first use
     // still requires an explicit `dotrelay setup <origin>` trust decision;
