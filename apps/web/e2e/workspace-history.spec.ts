@@ -294,7 +294,9 @@ test("a history rebind with a dirty draft prompts and Stay returns to the entry 
   // step would leave the workspace.
   await page.goBack();
   const prompt = page.getByTestId("switch-draft-prompt");
-  await expect(prompt).toBeVisible();
+  // The prompt renders after the popstate handler plans the switch; slow
+  // runners need a wider window than the default 5s.
+  await expect(prompt).toBeVisible({ timeout: 15_000 });
   await expect(prompt).toContainText("Switch servers?");
 
   await page.getByRole("button", { name: "Stay" }).click();
@@ -330,7 +332,9 @@ test("discarding from a history rebind prompt commits the rebind", async ({
   // preview then reopens the first Project for it.
   await page.goBack();
   const prompt = page.getByTestId("switch-draft-prompt");
-  await expect(prompt).toBeVisible();
+  // The prompt renders after the popstate handler plans the switch; slow
+  // runners need a wider window than the default 5s.
+  await expect(prompt).toBeVisible({ timeout: 15_000 });
   await page.getByTestId("switch-discard-draft").click();
 
   await expect(page.getByRole("combobox", { name: "Server" })).toHaveValue(
