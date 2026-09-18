@@ -222,6 +222,7 @@ jobs:
           build-args: |
             NEXT_PUBLIC_WEB_ORIGIN=https://dev.dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://dev-api.dotrelay.dev
+            NEXT_PUBLIC_DOTRELAY_WEB_PROFILE=hosted
       - name: deploy dev apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}

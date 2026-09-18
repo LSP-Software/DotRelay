@@ -19,6 +19,9 @@ export default defineConfig({
       // can intercept its auth requests without cross-origin handling.
       NEXT_PUBLIC_DOTRELAY_API_ORIGIN: origin,
       NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS: "1500",
+      // Specs that exercise the self-hosted flow preview it explicitly;
+      // plain URLs behave like DotRelay's own hosted deployments.
+      NEXT_PUBLIC_DOTRELAY_WEB_PROFILE: "hosted",
     },
   },
   use: {

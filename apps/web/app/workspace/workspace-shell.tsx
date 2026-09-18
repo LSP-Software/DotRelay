@@ -98,6 +98,7 @@ import {
   projectDisplayName,
   type ResourceLifecycle,
   resolveApiOrigin,
+  resolveWorkspaceProfileId,
   type WorkspaceBoundary,
   type WorkspaceProfileId,
   type WorkspaceProject,
@@ -108,7 +109,6 @@ import {
   resolveWorkspaceLocation,
   sameWorkspaceLocation,
   serializeWorkspaceLocation,
-  WORKSPACE_DEFAULT_PROFILE_ID,
   type WorkspaceLocation,
   type WorkspaceMissingResource,
   type WorkspaceView,
@@ -170,6 +170,13 @@ const WORKSPACE_REFRESH_MS = Math.max(
 );
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
+
+// The deployment decides which Server Profile this shell is bound to. Only
+// the explicit development fixture keeps the URL-driven preview selector, so
+// a live deployment can never be pointed at another backend from the browser.
+const DEPLOYMENT_PROFILE_ID: WorkspaceProfileId = resolveWorkspaceProfileId();
+const WORKSPACE_FIXTURE =
+  process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_FIXTURE === "1";
 
 const bytesToHex = (value: Uint8Array): string =>
   [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -437,15 +444,15 @@ export const WorkspaceShell = ({
   readonly protocolSession?: EnvironmentProtocolSession;
 }>) => {
   const [role, setRole] = useState<MembershipRole>("OWNER");
-  const [profileId, setProfileId] = useState<ProfileId>("hosted");
+  const [profileId, setProfileId] = useState<ProfileId>(DEPLOYMENT_PROFILE_ID);
   const [boundary, setBoundary] = useState<WorkspaceBoundary>(() =>
-    emptyWorkspaceBoundary("hosted"),
+    emptyWorkspaceBoundary(DEPLOYMENT_PROFILE_ID),
   );
   const [connection, setConnection] = useState<ConnectionState>("loading");
   const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
   const reconnectNowRef = useRef<(() => void) | null>(null);
   const boundaryJsonRef = useRef(
-    JSON.stringify(emptyWorkspaceBoundary("hosted")),
+    JSON.stringify(emptyWorkspaceBoundary(DEPLOYMENT_PROFILE_ID)),
   );
   const [teamId, setTeamId] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -867,7 +874,9 @@ export const WorkspaceShell = ({
 
   // Hydrate the location the URL names. Profile and view are validated up
   // front; team/project/environment ids are validated against the catalog by
-  // the reconciliation effect once the boundary loads.
+  // the reconciliation effect once the boundary loads. A live deployment is
+  // bound to its own Server Profile, so the URL's profile parameter only
+  // takes effect in the development fixture.
   useEffect(() => {
     setBrowserCrypto(
       typeof globalThis.crypto?.subtle?.importKey === "function",
@@ -876,9 +885,12 @@ export const WorkspaceShell = ({
     const nextPreview = params.get("preview");
     setPreview(nextPreview);
     const parsed = parseWorkspaceLocation(params);
-    if (parsed.profileId !== WORKSPACE_DEFAULT_PROFILE_ID) {
-      setProfileId(parsed.profileId);
-      const placeholder = emptyWorkspaceBoundary(parsed.profileId);
+    const initialProfileId = WORKSPACE_FIXTURE
+      ? parsed.profileId
+      : DEPLOYMENT_PROFILE_ID;
+    if (initialProfileId !== DEPLOYMENT_PROFILE_ID) {
+      setProfileId(initialProfileId);
+      const placeholder = emptyWorkspaceBoundary(initialProfileId);
       setBoundary(placeholder);
       boundaryJsonRef.current = JSON.stringify(placeholder);
     }
@@ -893,7 +905,7 @@ export const WorkspaceShell = ({
     setView(initialView);
     const search = serializeWorkspaceLocation(
       {
-        profileId: parsed.profileId,
+        profileId: initialProfileId,
         teamId: parsed.teamId,
         projectId: parsed.projectId,
         environmentId: parsed.environmentId,
@@ -1043,19 +1055,21 @@ export const WorkspaceShell = ({
     const parsed = parseWorkspaceLocation(
       new URLSearchParams(window.location.search),
     );
+    // A live deployment's history entries all belong to its own Server
+    // Profile; the entry's profile parameter is authoritative only in the
+    // development fixture.
+    const entry = WORKSPACE_FIXTURE
+      ? parsed
+      : { ...parsed, profileId: DEPLOYMENT_PROFILE_ID };
     const target =
       teams.length > 0 || connection === "online"
-        ? resolveWorkspaceLocation(
-            parsed,
-            displayBoundary.catalog,
-            viewFallback,
-          )
+        ? resolveWorkspaceLocation(entry, displayBoundary.catalog, viewFallback)
         : {
-            profileId: parsed.profileId,
-            teamId: parsed.teamId,
-            projectId: parsed.projectId,
-            environmentId: parsed.environmentId,
-            view: parsed.view ?? viewFallback(parsed.projectId !== null),
+            profileId: entry.profileId,
+            teamId: entry.teamId,
+            projectId: entry.projectId,
+            environmentId: entry.environmentId,
+            view: entry.view ?? viewFallback(entry.projectId !== null),
             missing: null,
           };
     if (
@@ -1816,28 +1830,34 @@ export const WorkspaceShell = ({
               ) : null}
             </div>
 
-            <div className="ml-auto flex items-center gap-2">
-              <Label className="sr-only" htmlFor="server-profile">
-                Server Profile
-              </Label>
-              <select
-                aria-label="Server Profile"
-                className="h-9 max-w-44 rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                id="server-profile"
-                onChange={(event) =>
-                  requestProfileChange(event.target.value as ProfileId)
-                }
-                value={profileId}
-              >
-                {(Object.keys(workspaceProfileCatalog) as ProfileId[]).map(
-                  (id) => (
-                    <option key={id} value={id}>
-                      {workspaceProfileCatalog[id].name}
-                    </option>
-                  ),
-                )}
-              </select>
-            </div>
+            {/* The header offers a Server Profile switch only in the
+                development fixture, where it previews hosted and self-hosted
+                deployments. A live deployment is bound to the backend it is
+                served from, so the browser offers no choice of server. */}
+            {WORKSPACE_FIXTURE ? (
+              <div className="ml-auto flex items-center gap-2">
+                <Label className="sr-only" htmlFor="server-profile">
+                  Server Profile
+                </Label>
+                <select
+                  aria-label="Server Profile"
+                  className="h-9 max-w-44 rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  id="server-profile"
+                  onChange={(event) =>
+                    requestProfileChange(event.target.value as ProfileId)
+                  }
+                  value={profileId}
+                >
+                  {(Object.keys(workspaceProfileCatalog) as ProfileId[]).map(
+                    (id) => (
+                      <option key={id} value={id}>
+                        {workspaceProfileCatalog[id].name}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </div>
+            ) : null}
           </div>
         </header>
 

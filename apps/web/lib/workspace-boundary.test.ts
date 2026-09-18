@@ -8,6 +8,7 @@ import {
   parseWorkspaceCatalog,
   projectDisplayName,
   resolveLiveApiOrigin,
+  resolveWorkspaceProfileId,
 } from "./workspace-boundary";
 
 test("local workspace talks to the loopback API when no origin env is set", () => {
@@ -36,6 +37,30 @@ test("local workspace talks to the loopback API when no origin env is set", () =
     if (previous.profile === undefined)
       delete process.env.SERVER_PROFILE_ORIGIN;
     else process.env.SERVER_PROFILE_ORIGIN = previous.profile;
+  }
+});
+
+test("the deployment profile is declared explicitly or fails closed", () => {
+  const previous = process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
+  const restore = () => {
+    if (previous === undefined)
+      delete process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
+    else process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE = previous;
+  };
+  try {
+    delete process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
+    expect(resolveWorkspaceProfileId()).toBe("self-hosted");
+
+    process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE = "self-hosted";
+    expect(resolveWorkspaceProfileId()).toBe("self-hosted");
+
+    process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE = "hosted";
+    expect(resolveWorkspaceProfileId()).toBe("hosted");
+
+    process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE = "rogue";
+    expect(resolveWorkspaceProfileId()).toBe("self-hosted");
+  } finally {
+    restore();
   }
 });
 
