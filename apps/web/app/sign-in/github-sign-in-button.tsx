@@ -1,17 +1,20 @@
 "use client";
 
-import { GitBranch } from "lucide-react";
+import { GitBranch, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type GitHubSignInButtonProps = Readonly<{
   readonly apiOrigin: string;
   readonly callbackUrl: string;
+  readonly className?: string;
 }>;
 
 export const GitHubSignInButton = ({
   apiOrigin,
   callbackUrl,
+  className,
 }: GitHubSignInButtonProps) => {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -52,13 +55,21 @@ export const GitHubSignInButton = ({
   return (
     <div className="space-y-3">
       <Button
-        className="w-full"
+        className={cn("w-full", className)}
         disabled={pending}
         onClick={() => void continueWithGitHub()}
         size="lg"
         type="button"
       >
-        <GitBranch aria-hidden="true" /> Continue with GitHub
+        {pending ? (
+          <LoaderCircle
+            aria-hidden="true"
+            className="size-4 motion-safe:animate-spin"
+          />
+        ) : (
+          <GitBranch aria-hidden="true" />
+        )}
+        Continue with GitHub
       </Button>
       {error ? (
         <p className="text-sm text-destructive" role="alert">

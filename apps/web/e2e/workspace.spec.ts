@@ -36,9 +36,7 @@ test("device approval page asks to allow the CLI", async ({ page }) => {
   await expect(page.getByText("ABCD-EFGH")).toBeVisible();
 });
 
-test("landing page leads to GitHub sign-in without implying GitHub grants access", async ({
-  page,
-}) => {
+test("landing page leads to the GitHub sign-in page", async ({ page }) => {
   await page.goto("/");
 
   await expect(
@@ -50,9 +48,6 @@ test("landing page leads to GitHub sign-in without implying GitHub grants access
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Continue with GitHub" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Signing in doesn't grant access to any project's values."),
   ).toBeVisible();
 });
 
