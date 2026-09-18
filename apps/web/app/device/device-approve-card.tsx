@@ -156,8 +156,8 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
             This code can&apos;t be allowed from this sign-in
           </AlertTitle>
           <AlertDescription>
-            It was claimed by a different User. Return to the CLI and check the
-            code it shows.
+            It was claimed by a different account. Return to the CLI and check
+            the code it shows.
           </AlertDescription>
         </Alert>
       );
@@ -168,9 +168,9 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
             <WifiOff aria-hidden="true" />
             <AlertTitle>Couldn&apos;t check this code</AlertTitle>
             <AlertDescription>
-              The Server Profile could not be reached, so this code&apos;s state
-              is unknown. The code above is preserved — try again once the
-              connection is back.
+              We couldn&apos;t reach the server, so we don&apos;t know this
+              code&apos;s state. The code above is kept. Try again once
+              you&apos;re connected.
             </AlertDescription>
           </Alert>
           <Button

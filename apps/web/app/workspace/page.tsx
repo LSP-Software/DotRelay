@@ -6,7 +6,7 @@ import { WorkspaceShell } from "./workspace-shell";
 
 export const metadata: Metadata = {
   title: "Workspace",
-  description: "Choose a Team and Project, then view Variables",
+  description: "Manage environment variables and share secrets with your team.",
 };
 
 // Signed-out visitors are sent to the sign-in page instead of the workspace.

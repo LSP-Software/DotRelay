@@ -219,7 +219,7 @@ const openFirstProject = async (page: Page) => {
 
 const enrollBrowserAndReturn = async (page: Page) => {
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await page
     .locator("aside")
     .getByRole("button", { name: "LSP-Software / DotRelay" })
@@ -228,7 +228,7 @@ const enrollBrowserAndReturn = async (page: Page) => {
 
 const setPreviewRole = async (page: Page, value: string) => {
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
-  await page.getByLabel("Preview Membership role").selectOption(value);
+  await page.getByLabel("Preview role").selectOption(value);
 };
 
 const activeEditor = (page: Page): Locator =>
@@ -304,12 +304,12 @@ test("a Member reads every Value but edits only the Values they provided or own"
   const rollbackDialog = page.getByRole("dialog", { name: "Rollback" });
   await expect(rollbackDialog).toBeVisible();
   await expect(
-    rollbackDialog.getByText("0 of 1 Variables selected"),
+    rollbackDialog.getByText("0 of 1 variables selected"),
   ).toBeVisible();
   await expect(rollbackDialog.getByRole("checkbox")).toBeDisabled();
   await expect(
     rollbackDialog.getByText(
-      "Only the provider or a Team admin can change this Shared Value.",
+      "Only the person who provided it, or a team admin, can change it.",
     ),
   ).toBeVisible();
   await expect(
@@ -399,7 +399,7 @@ test("an Owner edits every Value, adds Variables, and may roll back any Value", 
   const rollbackDialog = page.getByRole("dialog", { name: "Rollback" });
   await expect(rollbackDialog).toBeVisible();
   await expect(
-    rollbackDialog.getByText("1 of 1 Variables selected"),
+    rollbackDialog.getByText("1 of 1 variables selected"),
   ).toBeVisible();
   await expect(rollbackDialog.getByRole("checkbox")).toBeEnabled();
   await rollbackDialog.getByRole("button", { name: "Cancel" }).click();

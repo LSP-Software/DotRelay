@@ -169,15 +169,15 @@ test("enrollment is blocked before a Device is created when IndexedDB is unavail
   });
   await page.goto("/workspace");
   await openDevicesView(page);
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await expect(
-    page.getByText("use persistent storage (IndexedDB)"),
+    page.getByText("can't save keys in persistent storage"),
   ).toBeVisible({ timeout: 15_000 });
   await expect(
-    page.locator("#devices").getByText("Enroll this browser", { exact: true }),
+    page.locator("#devices").getByText("Set up this browser", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.locator("#devices").getByText("This browser is enrolled", {
+    page.locator("#devices").getByText("This browser is set up", {
       exact: true,
     }),
   ).toHaveCount(0);
@@ -199,15 +199,15 @@ test("enrollment is blocked before a Device is created when local storage is den
   });
   await page.goto("/workspace");
   await openDevicesView(page);
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await expect(page.getByText("blocks local storage")).toBeVisible({
     timeout: 15_000,
   });
   await expect(
-    page.locator("#devices").getByText("Enroll this browser", { exact: true }),
+    page.locator("#devices").getByText("Set up this browser", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.locator("#devices").getByText("This browser is enrolled", {
+    page.locator("#devices").getByText("This browser is set up", {
       exact: true,
     }),
   ).toHaveCount(0);
@@ -234,14 +234,14 @@ test("a storage rejection after server creation keeps the pending Device for ret
   await page.goto("/workspace");
   await openDevicesView(page);
 
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   // The Device was created on the Server Profile, but the fake backend
   // aborts the record write, so durable enrollment cannot be claimed.
-  await expect(page.getByText(/will not survive a reload/)).toBeVisible({
+  await expect(page.getByText(/won't survive a reload/)).toBeVisible({
     timeout: 15_000,
   });
   await expect(
-    page.locator("#devices").getByText("This browser is enrolled", {
+    page.locator("#devices").getByText("This browser is set up", {
       exact: true,
     }),
   ).toHaveCount(0);
@@ -249,8 +249,8 @@ test("a storage rejection after server creation keeps the pending Device for ret
 
   // Retrying replays the same keys and operation identity instead of
   // creating a duplicate remote Device.
-  await page.getByRole("button", { name: "Enroll browser" }).click();
-  await expect(page.getByText(/will not survive a reload/)).toBeVisible();
+  await page.getByRole("button", { name: "Set up browser" }).click();
+  await expect(page.getByText(/won't survive a reload/)).toBeVisible();
   expect(seen.bodies).toHaveLength(2);
   for (const field of ["operationId", "deviceId", "certificate"]) {
     expect(seen.bodies[1]?.[field]).toBe(seen.bodies[0]?.[field]);
@@ -266,11 +266,13 @@ test("a storage rejection after server creation keeps the pending Device for ret
     ).__fakeIndexedDb;
     handle?.setMode(next);
   }, "healthy");
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await expect(
     page
       .locator("#devices")
-      .getByText("This browser is enrolled. Keys stay on this machine."),
+      .getByText(
+        "This browser is set up. Its private keys stay on this machine.",
+      ),
   ).toBeVisible({ timeout: 15_000 });
   expect(seen.bodies).toHaveLength(3);
   for (const field of ["operationId", "deviceId", "certificate"]) {
@@ -311,11 +313,13 @@ test("a successful enrollment survives a reload and a fresh storage instance", a
   await page.goto("/workspace");
   await openFirstProject(page);
   await openDevicesView(page);
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await expect(
     page
       .locator("#devices")
-      .getByText("This browser is enrolled. Keys stay on this machine."),
+      .getByText(
+        "This browser is set up. Its private keys stay on this machine.",
+      ),
   ).toBeVisible({ timeout: 15_000 });
 
   // The enrolled session can verify and decrypt the Environment. With a
@@ -348,7 +352,7 @@ test("a successful enrollment survives a reload and a fresh storage instance", a
   ).toBeVisible({ timeout: 30_000 });
   await openDevicesView(page);
   await expect(
-    page.locator("#devices").getByText("This browser is enrolled", {
+    page.locator("#devices").getByText("This browser is set up", {
       exact: true,
     }),
   ).toBeVisible();

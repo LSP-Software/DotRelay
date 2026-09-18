@@ -133,16 +133,13 @@ test("the Add Variable form stays reachable on a short phone viewport", async ({
   await expectInViewport(page, dialog.getByLabel("Description (optional)"));
   await expectInViewport(
     page,
-    dialog.getByText("Shared Value", { exact: true }),
+    dialog.getByText("Shared value", { exact: true }),
   );
 
   await setDialogScroll(dialog, Number.MAX_SAFE_INTEGER);
-  const initial = dialog.getByLabel("Initial Value");
+  const initial = dialog.getByLabel("Initial value");
   await expectInViewport(page, initial);
-  await expectInViewport(
-    page,
-    dialog.getByText("This Variable requires a Value"),
-  );
+  await expectInViewport(page, dialog.getByText("Require a value"));
   await expectInViewport(page, add);
   await expectInViewport(page, cancel);
 
@@ -168,7 +165,7 @@ test("the Add Variable form stays reachable at 200% zoom", async ({ page }) => {
 
   // The pinned footer never covers a focused field: focusing the Initial
   // Value field scrolls it fully above the footer actions.
-  const initial = dialog.getByLabel("Initial Value");
+  const initial = dialog.getByLabel("Initial value");
   await initial.focus();
   await expectInViewport(page, initial);
   await expectAboveDialogFooter(dialog, initial);
@@ -196,7 +193,7 @@ test("a focused field and the submit action stay visible over the keyboard", asy
 
   // Focusing a mid-form field keeps both the field and the submit action on
   // screen, with the field clear of the pinned footer.
-  const initial = dialog.getByLabel("Initial Value");
+  const initial = dialog.getByLabel("Initial value");
   await initial.focus();
   await expectInViewport(page, initial);
   await expectAboveDialogFooter(dialog, initial);
@@ -208,7 +205,7 @@ test("a focused field and the submit action stay visible over the keyboard", asy
   // approximated by resizing the layout viewport, which dvh-based dialog
   // constraints track; the focused field must stay visible above the pinned
   // footer and the submit action must stay on screen.
-  const requiresValue = dialog.getByLabel("This Variable requires a Value");
+  const requiresValue = dialog.getByLabel("Require a value");
   await requiresValue.focus();
   await expectInViewport(page, requiresValue);
   await expectAboveDialogFooter(dialog, requiresValue);

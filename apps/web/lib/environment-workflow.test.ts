@@ -50,7 +50,7 @@ test("new Variables require a valid name and explicit ownership", () => {
     validateVariableDraft({ ...sharedDraft, name: "not valid" }),
   ).toContain("letters");
   expect(validateVariableDraft({ ...sharedDraft, ownership: "" })).toContain(
-    "Shared Value",
+    "Choose who can read the value.",
   );
   expect(validateVariableDraft(sharedDraft)).toBeNull();
 });
@@ -829,11 +829,11 @@ test("a locally published Revision is authored by the acting User", () => {
 });
 
 test("revision mutation kinds map to readable labels", () => {
-  expect(revisionMutationLabel(1)).toBe("Genesis");
-  expect(revisionMutationLabel(2)).toBe("Manifest update");
+  expect(revisionMutationLabel(1)).toBe("First publish");
+  expect(revisionMutationLabel(2)).toBe("Update");
   expect(revisionMutationLabel(3)).toBe("Rollback");
-  expect(revisionMutationLabel(4)).toBe("Epoch transition");
-  expect(revisionMutationLabel(5)).toBe("User-key rotation");
+  expect(revisionMutationLabel(4)).toBe("Project keys rotated");
+  expect(revisionMutationLabel(5)).toBe("Keys rotated");
   expect(revisionMutationLabel(null)).toBeNull();
   expect(revisionMutationLabel(99)).toBeNull();
 });
@@ -977,7 +977,7 @@ test("setup reports only the next action the person can take", () => {
       profileTrusted: true,
       cryptoAvailable: true,
     })?.body,
-  ).toContain("CLI is a different Device");
+  ).toContain("separate device");
   expect(
     nextSetupAction({
       sessionActive: true,
@@ -1096,10 +1096,10 @@ test("read-only Variables carry a reason for their locked controls", () => {
 
   expect(readOnlyReason(member, provided)).toBeNull();
   expect(readOnlyReason(member, foreignShared)).toBe(
-    "Only the provider or a Team admin can change this Shared Value.",
+    "Only the person who provided it, or a team admin, can change it.",
   );
   expect(readOnlyReason(member, foreignToken)).toBe(
-    "This User-defined Value belongs to another User.",
+    "This value belongs to another user's account.",
   );
   expect(
     readOnlyReason({ role: "ADMIN", actorUserId: null }, foreignShared),

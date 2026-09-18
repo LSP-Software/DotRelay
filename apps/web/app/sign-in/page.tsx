@@ -34,16 +34,16 @@ const SignInPage = () => {
               <Server aria-hidden="true" />
             </div>
             <CardTitle className="text-2xl">
-              <h1>Sign in to your Server Profile</h1>
+              <h1>Sign in</h1>
             </CardTitle>
             <CardDescription>
-              Authentication establishes your server-local User. Membership and
-              Device authority remain separate.
+              Use your GitHub account to identify yourself on this DotRelay
+              server.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="profile-origin">Server Profile</Label>
+              <Label htmlFor="profile-origin">Server</Label>
               <div
                 className="rounded-lg border bg-background/60 px-3 py-2 font-mono text-xs"
                 id="profile-origin"
@@ -57,9 +57,10 @@ const SignInPage = () => {
             />
             <Alert className="border-amber-300/20 bg-amber-300/5">
               <LockKeyhole aria-hidden="true" className="text-amber-300" />
-              <AlertTitle>Identity is not access</AlertTitle>
+              <AlertTitle>GitHub only identifies you</AlertTitle>
               <AlertDescription>
-                GitHub identifies you; it does not grant DotRelay access.
+                Signing in doesn&apos;t grant access to any project&apos;s
+                values. Each machine you use still has to be set up separately.
               </AlertDescription>
             </Alert>
           </CardContent>

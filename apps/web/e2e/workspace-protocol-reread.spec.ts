@@ -136,7 +136,7 @@ const expectLockedEditor = async (editor: Locator) => {
     editor.getByRole("button", { name: "Reveal OPTIONAL_FLAG" }),
   ).toBeDisabled();
   await expect(
-    editor.getByRole("button", { name: "Set absent" }),
+    editor.getByRole("button", { name: "Unset value" }),
   ).toBeDisabled();
   await expect(
     editor.getByRole("button", { name: "Delete OPTIONAL_FLAG" }),
@@ -144,7 +144,7 @@ const expectLockedEditor = async (editor: Locator) => {
   await expect(
     editor
       .getByTestId("environment-variable-FEATURE_GATE")
-      .getByText("This Variable is marked for deletion."),
+      .getByText("This variable is marked for deletion."),
   ).toBeVisible();
   await expect(
     editor.getByRole("button", { name: "Undo delete" }),
@@ -187,7 +187,7 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
   await openFirstProject(page);
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
-  await page.getByRole("button", { name: "Enroll browser" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
   await page
     .locator("aside")
     .getByRole("button", { name: "LSP-Software / DotRelay" })
@@ -206,14 +206,14 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
   await expect(optionalRow()).toBeVisible({ timeout: 30_000 });
   await expect(featureRow()).toBeVisible();
   await expect(
-    editor().getByText("Add a Variable to start this Manifest."),
+    editor().getByText("Add a variable to save your first secrets here."),
   ).toHaveCount(0);
   await expect(editor().getByLabel("OPTIONAL_FLAG Value")).toBeEnabled();
 
   await editor().getByLabel("OPTIONAL_FLAG Value").fill("local-edit");
   await editor().getByRole("button", { name: "Delete FEATURE_GATE" }).click();
   await expect(
-    featureRow().getByText("This Variable is marked for deletion."),
+    featureRow().getByText("This variable is marked for deletion."),
   ).toBeVisible();
 
   // A later read fails: switch away (keeping the draft) and back, which
@@ -225,7 +225,9 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
   await page.getByRole("tab", { name: "production" }).click();
 
   await expect(
-    editor().getByText("This Device could not read the current Environment."),
+    editor().getByText(
+      "This browser couldn't read the current environment. Try reading it again.",
+    ),
   ).toBeVisible({
     timeout: 30_000,
   });
@@ -233,7 +235,7 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
   await expect(optionalRow()).toBeVisible();
   await expect(featureRow()).toBeVisible();
   await expect(
-    editor().getByText("Add a Variable to start this Manifest."),
+    editor().getByText("Add a variable to save your first secrets here."),
   ).toHaveCount(0);
   await expectLockedEditor(editor());
 });

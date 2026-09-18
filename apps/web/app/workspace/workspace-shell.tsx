@@ -162,7 +162,7 @@ const environmentDisplayLabel = (
 ): string =>
   environment && project
     ? `${environment.label} · ${projectDisplayName(project)}`
-    : (environment?.label ?? "an Environment");
+    : (environment?.label ?? "an environment");
 
 const WORKSPACE_REFRESH_MS = Math.max(
   Number(process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS ?? 0) || 30_000,
@@ -202,10 +202,11 @@ const fromBase64 = (value: string): Uint8Array => {
 };
 
 const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
-  OWNER: "Owners can manage Members, Projects, and Environments.",
+  OWNER: "Owners can manage team members, projects, and environments.",
   ADMIN:
-    "Admins can invite Members and manage Projects and Environments. They cannot change owners or other admins.",
-  MEMBER: "Members can view this Team's Projects.",
+    "Admins can invite members and manage projects and environments. They cannot change owners or other admins.",
+  MEMBER:
+    "Members can view this team's projects, read shared values, and manage their own values.",
 };
 
 const missingResourceCopy: Readonly<
@@ -215,19 +216,19 @@ const missingResourceCopy: Readonly<
   >
 > = {
   team: {
-    title: "That Team is no longer available",
+    title: "That team is no longer available",
     description:
-      "It may have been deleted, or you may have lost access. The first Team is shown instead.",
+      "It may have been deleted, or you may have lost access. You're now viewing the first available team.",
   },
   project: {
-    title: "That Project is no longer available",
+    title: "That project is no longer available",
     description:
-      "It may have been archived or deleted, or you may have lost access. Choose a Project to continue.",
+      "It may have been archived or deleted, or you may have lost access. Choose another project to continue.",
   },
   environment: {
-    title: "That Environment is no longer available",
+    title: "That environment is no longer available",
     description:
-      "It may have been deleted, or you may have lost access. The first Environment of the Project is shown instead.",
+      "It may have been deleted, or you may have lost access. You're now viewing the project's first available environment.",
   },
 };
 
@@ -292,21 +293,21 @@ const LifecycleDialog = ({
         ) : (
           <RotateCcw aria-hidden="true" />
         )}
-        {isActive ? "Archive" : "Restore"} {resource}
+        {isActive ? "Archive" : "Restore"} {resource.toLowerCase()}
       </DialogTrigger>
       <DialogContent role="alertdialog">
         <DialogHeader>
           <DialogTitle>
-            {isActive ? "Archive" : "Restore"} {resource}?
+            {isActive ? "Archive" : "Restore"} {resource.toLowerCase()}?
           </DialogTitle>
           <DialogDescription>
             {isActive
               ? resource === "Environment"
-                ? "History is kept. Variables stay hidden until you restore it."
-                : "Another Project can then use this GitHub repository."
+                ? "Archiving hides this environment's variables but keeps its history. Restore it to access the variables again."
+                : "Archiving frees this GitHub repository for another project to use."
               : resource === "Environment"
-                ? "Restoring makes this Environment eligible for protected access again."
-                : "Restore fails if another active Project already uses this GitHub repository."}
+                ? "Restoring lets devices with the required keys access this environment again. It does not grant new permissions."
+                : "You can restore this project only if no other active project uses this GitHub repository."}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -518,7 +519,7 @@ export const WorkspaceShell = ({
         pinned: trustedOverride || boundary.profile.pinned || protectedPreview,
       },
       device: protectedPreview
-        ? { active: true, label: "Active Device" }
+        ? { active: true, label: "Active device" }
         : boundary.device,
       grantsReady: protectedPreview ? true : boundary.grantsReady,
       epochCurrent: protectedPreview ? true : boundary.epochCurrent,
@@ -835,7 +836,7 @@ export const WorkspaceShell = ({
           ? workspaceProfileCatalog[profileId].name
           : selectedEnvironment
             ? environmentDisplayLabel(selectedEnvironment, selectedProject)
-            : (selectedTeam?.name ?? "this Team"),
+            : (selectedTeam?.name ?? "this team"),
         targetLabel:
           rebinding && request.profileId
             ? workspaceProfileCatalog[request.profileId].name
@@ -1358,7 +1359,7 @@ export const WorkspaceShell = ({
   const provisionBrowserDevice = async () => {
     const apiOrigin = resolveApiOrigin() ?? boundary.profile.origin;
     if (!boundary.session.userId || !boundary.profile.serverProfileId) {
-      setDeviceSetupMessage("Sign in before enrolling a Device.");
+      setDeviceSetupMessage("Sign in before setting up this browser.");
       return;
     }
     const pin = {
@@ -1375,13 +1376,13 @@ export const WorkspaceShell = ({
       const recordsProbe = await probeBrowserDeviceStorage();
       if (!recordsProbe.durable) {
         setDeviceSetupMessage(
-          "This browser can't use persistent storage (IndexedDB), so Device keys would not survive a reload. No Device was created.",
+          "This browser can't save keys in persistent storage. Reloading would lose them, so we haven't set this browser up. Allow site storage, then try again.",
         );
         return;
       }
       if (!probeBrowserLocalStorage()) {
         setDeviceSetupMessage(
-          "This browser blocks local storage, so the Device id would not survive a reload. No Device was created.",
+          "This browser blocks local storage and can't remember its device ID after a reload. We haven't set it up. Allow local storage, then try again.",
         );
         return;
       }
@@ -1422,10 +1423,10 @@ export const WorkspaceShell = ({
           readonly code?: unknown;
         } | null;
         if (body?.code === "authentication_required")
-          throw new Error("Sign in before enrolling a Device.");
+          throw new Error("Sign in before setting up this browser.");
         if (body?.code === "state_conflict")
-          throw new Error("This Device could not be enrolled. Try again.");
-        throw new Error("the Server Profile rejected this Device");
+          throw new Error("We couldn't set up this browser. Try again.");
+        throw new Error("The server rejected this browser.");
       }
       const persistDeviceLocally = async (): Promise<
         "complete" | "records" | "device-id"
@@ -1512,7 +1513,7 @@ export const WorkspaceShell = ({
           );
           if (!grantResponse.ok)
             setDeviceSetupMessage(
-              "This browser is enrolled. Project access is still pending.",
+              "This browser is set up. Access to this project's secrets is still pending.",
             );
         }
       }
@@ -1533,22 +1534,22 @@ export const WorkspaceShell = ({
         setDeviceSetupMessage((current) =>
           current?.includes("pending")
             ? current
-            : "This browser is enrolled. Keys stay on this machine.",
+            : "This browser is set up. Its private keys stay on this machine.",
         );
       } else if (persistence === "records") {
         setDeviceSetupMessage(
-          "This Device was created, but this browser could not keep its keys durably, so it will not survive a reload. Retry enrollment to save them again.",
+          "The server set this browser up, but the browser couldn't save its keys. Access won't survive a reload. Retry setup to save the keys.",
         );
       } else {
         setDeviceSetupMessage(
-          "This Device was created, but this browser cannot remember its Device id, so it will not survive a reload. Retry enrollment to store it again.",
+          "The server set this browser up, but the browser couldn't save its device ID. Access won't survive a reload. Retry setup to save the ID.",
         );
       }
     } catch (error) {
       setDeviceSetupMessage(
         error instanceof Error
           ? error.message
-          : "Device enrollment could not be completed.",
+          : "We couldn't finish setting up this browser.",
       );
     } finally {
       setDeviceSetupInProgress(false);
@@ -1585,17 +1586,17 @@ export const WorkspaceShell = ({
           });
           if (nextBoundary.connection !== "online") {
             setConnection("offline");
-            setDeviceSetupMessage("Could not refresh Project access.");
+            setDeviceSetupMessage("Couldn't refresh project access.");
           } else {
             commitBoundary(nextBoundary);
             setDeviceSetupMessage(
               nextBoundary.grantsReady
                 ? null
-                : "Project keys are not on this browser yet. Run `bun apps/cli/src/index.ts pull`, then retry.",
+                : "This browser doesn't have the project's keys yet. Run `bun apps/cli/src/index.ts pull` on this machine, then retry.",
             );
           }
         } catch {
-          setDeviceSetupMessage("Could not refresh Project access.");
+          setDeviceSetupMessage("Couldn't refresh project access.");
         } finally {
           setDeviceSetupInProgress(false);
         }
@@ -1604,7 +1605,7 @@ export const WorkspaceShell = ({
     }
     if (editorSetupAction.id === "crypto-unavailable") {
       void copyText(cliCommand).then(() =>
-        setDeviceSetupMessage("Copied the CLI command."),
+        setDeviceSetupMessage("Copied the setup command."),
       );
       return;
     }
@@ -1715,7 +1716,7 @@ export const WorkspaceShell = ({
                 <option key={team.id} value={team.id}>
                   {teamsWithProjects.has(team.id)
                     ? team.name
-                    : `${team.name} (no Projects)`}
+                    : `${team.name} (no projects)`}
                 </option>
               ))}
             </select>
@@ -1797,7 +1798,7 @@ export const WorkspaceShell = ({
                       <option key={team.id} value={team.id}>
                         {teamsWithProjects.has(team.id)
                           ? team.name
-                          : `${team.name} (no Projects)`}
+                          : `${team.name} (no projects)`}
                       </option>
                     ))}
                   </select>
@@ -1837,17 +1838,17 @@ export const WorkspaceShell = ({
               ) : null}
             </div>
 
-            {/* The header offers a Server Profile switch only in the
-                development fixture, where it previews hosted and self-hosted
-                deployments. A live deployment is bound to the backend it is
-                served from, so the browser offers no choice of server. */}
+            {/* The header offers a server switch only in the development
+                fixture, where it previews hosted and self-hosted deployments.
+                A live deployment is bound to the backend it is served from,
+                so the browser offers no choice of server. */}
             {WORKSPACE_FIXTURE ? (
               <div className="ml-auto flex items-center gap-2">
                 <Label className="sr-only" htmlFor="server-profile">
-                  Server Profile
+                  Server
                 </Label>
                 <select
-                  aria-label="Server Profile"
+                  aria-label="Server"
                   className="h-9 max-w-44 rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   id="server-profile"
                   onChange={(event) =>
@@ -1888,11 +1889,11 @@ export const WorkspaceShell = ({
             >
               <Alert className="border-destructive/40">
                 <WifiOff aria-hidden="true" />
-                <AlertTitle>Couldn't reach your Server Profile</AlertTitle>
+                <AlertTitle>Couldn't reach your server</AlertTitle>
                 <AlertDescription>
-                  The workspace request failed, so this page shows no identity,
-                  Teams, or Projects until the connection is verified. We keep
-                  trying automatically, or try again now.
+                  We couldn't verify your account, teams, or projects, so we
+                  haven't shown any of them. We'll keep trying to connect. You
+                  can also try again now.
                 </AlertDescription>
               </Alert>
               <div className="mt-4">
@@ -1911,12 +1912,12 @@ export const WorkspaceShell = ({
                   >
                     <WifiOff aria-hidden="true" className="text-amber-300" />
                     <AlertTitle>
-                      Connection lost — showing stale data
+                      Connection lost. This data may be out of date.
                     </AlertTitle>
                     <AlertDescription>
                       Last verified at{" "}
-                      {new Date(verifiedAt).toLocaleTimeString()}. We keep
-                      trying to reconnect, or try again now.
+                      {new Date(verifiedAt).toLocaleTimeString()}. We'll keep
+                      trying to reconnect. You can also try again now.
                     </AlertDescription>
                   </Alert>
                   <Button
@@ -1947,11 +1948,11 @@ export const WorkspaceShell = ({
                   <div className="mb-6">
                     <p className="text-sm text-muted-foreground">Team</p>
                     <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                      {selectedTeam?.name ?? "Choose a Team"}
+                      {selectedTeam?.name ?? "Choose a team"}
                     </h1>
                     <p className="mt-2 max-w-2xl text-muted-foreground">
-                      Pick a Project to view its Environments and Variables. Use
-                      the Team menu to switch.
+                      Open a project to manage its environment variables and
+                      secrets. Switch teams using the team menu.
                     </p>
                   </div>
                   {setupAction &&
@@ -1974,10 +1975,10 @@ export const WorkspaceShell = ({
                   {teamProjects.length === 0 ? (
                     <Card>
                       <CardHeader>
-                        <CardTitle>No Projects yet</CardTitle>
+                        <CardTitle>No projects yet</CardTitle>
                         <CardDescription>
-                          Link a GitHub repository from the CLI with{" "}
-                          <InlineCommand value="dotrelay init" />.
+                          Run this in your GitHub repository to create a
+                          project: <InlineCommand value="dotrelay init" />.
                         </CardDescription>
                       </CardHeader>
                     </Card>
@@ -1999,7 +2000,7 @@ export const WorkspaceShell = ({
                           <p className="mt-2 text-sm text-muted-foreground">
                             {project.environments
                               .map((environment) => environment.label)
-                              .join(", ") || "No Environments"}
+                              .join(", ") || "No environments yet"}
                           </p>
                         </button>
                       ))}
@@ -2075,7 +2076,7 @@ export const WorkspaceShell = ({
                       <div className="flex items-center gap-2">
                         <Label htmlFor="preview-role">Preview role</Label>
                         <select
-                          aria-label="Preview Membership role"
+                          aria-label="Preview role"
                           className="h-9 rounded-lg border border-input bg-input/30 px-3 text-sm"
                           id="preview-role"
                           onChange={(event) =>
@@ -2092,7 +2093,7 @@ export const WorkspaceShell = ({
                   </div>
                   <Alert className="mb-4 bg-card/60">
                     <Users aria-hidden="true" className="text-primary" />
-                    <AlertTitle>{effectiveRole} Membership</AlertTitle>
+                    <AlertTitle>Your team permissions</AlertTitle>
                     <AlertDescription>
                       {roleDisclosure[effectiveRole]}
                     </AlertDescription>
@@ -2156,7 +2157,7 @@ export const WorkspaceShell = ({
                                   className="border-amber-300/25 text-amber-200"
                                   variant="outline"
                                 >
-                                  Pending key grant
+                                  Waiting for encryption keys
                                 </Badge>
                               </TableCell>
                             </TableRow>
@@ -2172,8 +2173,8 @@ export const WorkspaceShell = ({
                           {projectDisplayName(selectedProject)}
                         </CardTitle>
                         <CardDescription>
-                          Archive the Project if this repository should be free
-                          for another active Project.
+                          Archive this project to let another project use its
+                          GitHub repository.
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="flex items-center justify-between gap-4">
@@ -2211,20 +2212,20 @@ export const WorkspaceShell = ({
                     Devices
                   </h1>
                   <p className="mt-2 max-w-2xl text-muted-foreground">
-                    A Device is this browser, or the CLI on a machine. Signing
-                    in is not enough to read variables.
+                    A device is this browser, or the CLI on one of your
+                    machines. Signing in alone doesn't let you read secrets.
                   </p>
                   {enrolledDevices.length > 0 ? (
                     <Card className="mt-6">
                       <CardHeader>
-                        <CardTitle>Enrolled Devices</CardTitle>
+                        <CardTitle>Your devices</CardTitle>
                         <CardDescription>
-                          Active Devices that can decrypt variables for your
-                          User.
+                          Devices set up on your account. A device also needs
+                          the project's keys to read its secrets.
                         </CardDescription>
                       </CardHeader>
                       <CardContent>
-                        <Table aria-label="Enrolled Devices">
+                        <Table aria-label="Your devices">
                           <TableHeader>
                             <TableRow>
                               <TableHead>Device</TableHead>
@@ -2239,9 +2240,7 @@ export const WorkspaceShell = ({
                               >
                                 <TableCell>
                                   <div className="font-medium">
-                                    {device.current
-                                      ? "This browser"
-                                      : "Enrolled Device"}
+                                    {device.current ? "This browser" : "Device"}
                                   </div>
                                   <div className="font-mono text-[10px] text-muted-foreground">
                                     {device.id}
@@ -2257,8 +2256,8 @@ export const WorkspaceShell = ({
                                     variant="outline"
                                   >
                                     {device.hasEpochGrant
-                                      ? "Has Project access"
-                                      : "Pending Project access"}
+                                      ? "Has project access"
+                                      : "Waiting for project keys"}
                                   </Badge>
                                 </TableCell>
                               </TableRow>
@@ -2274,18 +2273,19 @@ export const WorkspaceShell = ({
                     <CardHeader>
                       <CardTitle>
                         {thisBrowserEnrolled
-                          ? "This browser is enrolled"
-                          : "Enroll this browser"}
+                          ? "This browser is set up"
+                          : "Set up this browser"}
                       </CardTitle>
                       <CardDescription>
                         {thisBrowserEnrolled
-                          ? "This Device can decrypt variables for your User."
-                          : "Create a key pair in this browser. The CLI on this machine is a separate Device."}
+                          ? "This browser has saved its device keys. It also needs the project's keys to read its secrets."
+                          : "This creates a key pair in this browser. The CLI on this machine is a separate device."}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <p className="text-sm text-muted-foreground">
-                        Prefer the CLI? That enrolls the CLI, not this browser.
+                        Prefer the CLI? It sets up the CLI on this machine, not
+                        this browser.
                       </p>
                       <CopyableCommand
                         data-testid="cli-setup-command"
@@ -2304,8 +2304,8 @@ export const WorkspaceShell = ({
                           onClick={() => void provisionBrowserDevice()}
                         >
                           {deviceSetupInProgress
-                            ? "Enrolling…"
-                            : "Enroll browser"}
+                            ? "Setting up…"
+                            : "Set up browser"}
                         </Button>
                       </CardFooter>
                     ) : null}
@@ -2319,15 +2319,15 @@ export const WorkspaceShell = ({
                     Recovery
                   </h1>
                   <p className="mt-2 max-w-2xl text-muted-foreground">
-                    A Recovery Kit can authorize a replacement Device when none
-                    of yours are available.
+                    Use a recovery kit to authorize a replacement device when
+                    none of your devices are available.
                   </p>
                   <Card className="mt-6">
                     <CardHeader>
                       <CardTitle>Use the CLI</CardTitle>
                       <CardDescription>
-                        Recovery runs locally after you trust this Server
-                        Profile.
+                        Recovery runs on your machine. Run it after you've
+                        trusted this server.
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
@@ -2390,14 +2390,14 @@ export const WorkspaceShell = ({
       <Dialog onOpenChange={setInvitationOpen} open={invitationOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Invite a Member</DialogTitle>
+            <DialogTitle>Invite a member</DialogTitle>
             <DialogDescription>
-              Address this single-use, seven-day invitation to a GitHub user id,
-              not an email.
+              Invitations go to a GitHub user ID, not an email address. Each
+              invitation works once and expires after seven days.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="github-subject">GitHub subject</Label>
+            <Label htmlFor="github-subject">GitHub user ID</Label>
             <Input
               autoComplete="off"
               id="github-subject"
@@ -2409,7 +2409,8 @@ export const WorkspaceShell = ({
           <Alert className="bg-muted/30">
             <AlertTitle>Pending after acceptance</AlertTitle>
             <AlertDescription>
-              They stay pending until the required key grants are in place.
+              New members stay pending until they've received the encryption
+              keys their device needs.
             </AlertDescription>
           </Alert>
           <DialogFooter>
@@ -2438,9 +2439,7 @@ export const WorkspaceShell = ({
         <DialogContent data-testid="switch-draft-prompt">
           <DialogHeader>
             <DialogTitle>
-              {switchRebinding
-                ? "Switch Server Profile?"
-                : "Keep unsaved changes?"}
+              {switchRebinding ? "Switch servers?" : "Keep unsaved changes?"}
             </DialogTitle>
             <DialogDescription>
               {pendingSwitch
@@ -2448,10 +2447,10 @@ export const WorkspaceShell = ({
                   ? `You have unsaved changes in ${
                       pendingSwitch.details.length === 1
                         ? pendingSwitch.details[0]
-                        : `${pendingSwitch.details.length} Environments in ${pendingSwitch.leavingLabel}`
-                    }. Switching to ${pendingSwitch.targetLabel ?? "another Server Profile"} discards them and cancels any in-flight operations.`
-                  : `You have unsaved changes in ${pendingSwitch.leavingLabel}${pendingSwitch.details.length > 0 ? ` (${pendingSwitch.details.join(", ")})` : ""}. Keep them to find the draft again when you return, or discard them. Discarding throws away those changes and cancels any in-flight operations for this Environment.`
-                : "You have unsaved changes in the current Environment."}
+                        : `${pendingSwitch.details.length} environments in ${pendingSwitch.leavingLabel}`
+                    }. Switching to ${pendingSwitch.targetLabel ?? "another server"} discards them and cancels any operations still in progress.`
+                  : `You have unsaved changes in ${pendingSwitch.leavingLabel}${pendingSwitch.details.length > 0 ? ` (${pendingSwitch.details.join(", ")})` : ""}. Keep them to find the draft again when you return, or discard them. Discarding throws away those changes and cancels any operations still in progress for this environment.`
+                : "You have unsaved changes in the current environment."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -4,7 +4,6 @@ import {
   Fingerprint,
   GitBranch,
   KeyRound,
-  LockKeyhole,
 } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -57,14 +56,16 @@ const HomePage = () => {
       <section className="relative mx-auto grid max-w-7xl gap-16 px-5 pb-20 pt-16 lg:grid-cols-[1.15fr_0.85fr] lg:px-8 lg:pb-32 lg:pt-28">
         <div className="relative z-10">
           <h1 className="max-w-3xl font-heading text-5xl font-semibold leading-[0.98] tracking-[-0.045em] sm:text-7xl">
-            Team .env files,{" "}
-            <span className="text-primary">without the headache.</span>
+            Share your .env files,{" "}
+            <span className="text-primary">
+              with your team and your machines.
+            </span>
           </h1>
           <p className="mt-7 max-w-2xl text-balance text-lg leading-8 text-muted-foreground sm:text-xl">
-            DotRelay keeps your local development environment files organized
-            and shared with the people who need them. New machine, new teammate,
-            same setup. Secrets stay encrypted on your devices, so we never see
-            them.
+            DotRelay keeps your project's environment variables in one place.
+            Edit them in the browser or push changes with the CLI, and every
+            machine you have set up gets the same values. You choose which
+            teammates can access them.
           </p>
           <div className="mt-10 flex flex-wrap gap-3">
             <Link
@@ -84,7 +85,7 @@ const HomePage = () => {
             </a>
           </div>
           <div className="mt-12 flex flex-wrap gap-x-8 gap-y-3 font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            <span>Encrypted on device</span>
+            <span>CLI and browser</span>
             <span>Shared with your team</span>
             <span>Full change history</span>
           </div>
@@ -101,9 +102,7 @@ const HomePage = () => {
                 </span>
               </div>
               <CardTitle className="mt-3 text-xl">local</CardTitle>
-              <CardDescription>
-                Shared with your team · encrypted on your device
-              </CardDescription>
+              <CardDescription>Shared with your team</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-2 font-mono text-xs">
               {[
@@ -121,15 +120,15 @@ const HomePage = () => {
               ))}
             </CardContent>
           </Card>
-          <Card className="absolute bottom-4 right-0 w-[72%] border-amber-400/20 bg-card/90 backdrop-blur">
+          <Card className="absolute bottom-4 right-0 w-[72%] border-primary/20 bg-card/90 backdrop-blur">
             <CardHeader>
-              <div className="mb-2 flex size-9 items-center justify-center rounded-lg bg-amber-400/10 text-amber-300">
-                <LockKeyhole aria-hidden="true" />
+              <div className="mb-2 flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <GitBranch aria-hidden="true" />
               </div>
-              <CardTitle>We never see your secrets</CardTitle>
+              <CardTitle>Every change is kept</CardTitle>
               <CardDescription>
-                Everything is encrypted on your device before it leaves. We only
-                store the encrypted form. That&apos;s it.
+                Each change is saved as a new revision. Roll back from the
+                browser or the CLI when a value breaks something.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -141,21 +140,21 @@ const HomePage = () => {
           {[
             {
               icon: Fingerprint,
-              step: "01 / TEAM",
-              title: "Share with the people who need it",
-              body: "Sign in with GitHub, then invite your teammates. You decide who can pull the environment files for each project.",
+              step: "01 / SHARE",
+              title: "Start on any machine",
+              body: "Set up each machine once: sign in to the browser, or install the DotRelay CLI. After that, the machine can read and update your project's values.",
             },
             {
               icon: KeyRound,
-              step: "02 / ENCRYPTION",
-              title: "Secrets stay on your devices",
-              body: "Your secrets are encrypted on device before anything is uploaded. We never get readable copies, and neither does anyone outside your team.",
+              step: "02 / PRIVACY",
+              title: "Values are encrypted on your device",
+              body: "Your machine encrypts every value before it leaves, with keys that never leave it. The server stores only the encrypted form, so not even we can read your secrets.",
             },
             {
               icon: GitBranch,
               step: "03 / HISTORY",
-              title: "Every change is saved",
-              body: "When someone updates a value, you get a full history. Roll back if a change breaks local setup, without digging through old Slack threads.",
+              title: "Roll back when something breaks",
+              body: "Publishing a change saves a new revision. When a value breaks your local setup, roll back to an earlier revision from the browser or the CLI.",
             },
           ].map((feature, index) => (
             <article className="p-8 lg:p-10" key={feature.title}>
