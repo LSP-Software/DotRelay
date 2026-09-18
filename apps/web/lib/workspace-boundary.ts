@@ -548,7 +548,6 @@ export const createRemoteEnvironment = async (input: {
       typeof body?.currentHeadId === "string" ? body.currentHeadId : null,
   };
 };
->>>>>>> 84c23b75 (Let owners and admins create a Project Environment in the website, optionally seeded from another Environment.)
 
 export const resolveWebOrigin = (): string =>
   process.env.NEXT_PUBLIC_WEB_ORIGIN ??
