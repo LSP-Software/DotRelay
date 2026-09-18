@@ -1,7 +1,7 @@
 import type { SyncPageWire } from "@dotrelay/contracts";
 import {
   type DecodedVariable,
-  decodeSyncVariables,
+  decodeSyncManifest,
   type PublicationContext,
   type RevisionSigningTrust,
   verifySyncPage,
@@ -41,7 +41,8 @@ export type VerifiedEnvironmentSession = Readonly<{
    * The decoded Manifest snapshot at each verified Revision of the last
    * sync, keyed by Revision id. Snapshots accumulate from the previous
    * one, so a snapshot is the complete Variable set the Environment held at
-   * that Revision; Values this Device cannot read stay null.
+   * that Revision; a Value this Device cannot read stays null, never an
+   * earlier Value.
    */
   readonly revisionSnapshots: () => ReadonlyMap<
     string,
@@ -85,18 +86,21 @@ export const createVerifiedEnvironmentSession = (input: {
     page: SyncPageWire,
     previousVariables: readonly DecodedVariable[] = cachedVariables,
   ): Promise<readonly DecodedVariable[]> => {
-    let snapshot = previousVariables;
-    for (const revision of page.revisions) {
-      snapshot = await decodeSyncVariables(
-        { ...page, revisions: [revision] },
-        resolvePrivateKey,
-        snapshot,
-        input.sharedValueSecret,
-      );
-      snapshots.set(revision.id, snapshot);
-    }
-    cachedVariables = snapshot;
-    return snapshot;
+    // The whole verified page decodes as one Manifest fold so a Revision
+    // that re-publishes a lane readably clears an earlier unreadable one;
+    // a required lane unreadable at the head rejects the sync instead of
+    // yielding an empty or stale Manifest.
+    const decoded = await decodeSyncManifest(
+      page,
+      resolvePrivateKey,
+      previousVariables,
+      input.sharedValueSecret,
+      input.context.actorUserId,
+    );
+    for (const [revisionId, snapshot] of decoded.snapshots)
+      snapshots.set(revisionId, snapshot);
+    cachedVariables = decoded.variables;
+    return decoded.variables;
   };
 
   return Object.freeze({

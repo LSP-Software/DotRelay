@@ -169,6 +169,43 @@ export type DecodedVariable = Readonly<{
   readonly ownerUserId?: string | null;
 }>;
 
+export type UnreadableLaneKind =
+  | "VARIABLE_DEFINITION"
+  | "SHARED_VALUE"
+  | "USER_DEFINED_VALUE";
+
+/**
+ * A lane the verified page covers but this Device cannot decrypt: the
+ * Variable's definition, a Shared Value, or a User-defined Value the actor
+ * owns (or whose owner cannot be established). Callers must stop exporting
+ * or publishing instead of falling back to an empty or earlier Value.
+ */
+export class UnreadableLaneError extends Error {
+  readonly variableId: string;
+  readonly laneKind: UnreadableLaneKind;
+  readonly ownerUserId: string | null;
+
+  constructor(
+    input: Readonly<{
+      readonly variableId: string;
+      readonly laneKind: UnreadableLaneKind;
+      readonly ownerUserId?: string | null;
+    }>,
+  ) {
+    super(
+      input.laneKind === "VARIABLE_DEFINITION"
+        ? `Variable ${input.variableId}: its definition cannot be decrypted with this Device's Project key grant`
+        : input.laneKind === "SHARED_VALUE"
+          ? `Variable ${input.variableId}: its Shared Value cannot be decrypted with this Device's Project key grant`
+          : `Variable ${input.variableId}: its User-defined Value cannot be decrypted with this Device's key grant`,
+    );
+    this.name = "UnreadableLaneError";
+    this.variableId = input.variableId;
+    this.laneKind = input.laneKind;
+    this.ownerUserId = input.ownerUserId ?? null;
+  }
+}
+
 const zeroBytes = (length: number): Uint8Array => new Uint8Array(length);
 
 const VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -637,27 +674,84 @@ const laneUserId = (lane: ProtocolObject, field: 26 | 27): string | null => {
   return bytesToUuid(value);
 };
 
-export const decodeSyncVariables = async (
+const commitmentUserId = (
+  commitment: Map<number, CborValue>,
+  field: 26 | 27,
+): string | null => {
+  const value = commitment.get(field);
+  if (!(value instanceof Uint8Array) || value.length !== 16) return null;
+  return bytesToUuid(value);
+};
+
+type DecodedVariableState = {
+  name: string;
+  description: string;
+  ownership: "SHARED_VALUE" | "USER_DEFINED_VALUE";
+  value: string | null;
+  required: boolean;
+  tombstone: boolean;
+  originalProviderUserId: string | null;
+  ownerUserId: string | null;
+};
+
+// How the newest lane of one kind for a Variable decoded: READ means the
+// head state is verified, REQUIRED_UNREADABLE means this Device must be able
+// to read it and cannot, and OTHER_UNREADABLE means a User-defined Value
+// another User owns withheld it from this Device.
+type LaneReadState = "READ" | "REQUIRED_UNREADABLE" | "OTHER_UNREADABLE";
+
+type ValueLaneState = Readonly<{
+  readonly state: LaneReadState;
+  readonly scope: 3 | 4;
+  readonly ownerUserId: string | null;
+}>;
+
+export type SyncManifestDecode = Readonly<{
+  /** The Manifest at the page's final Revision. */
+  readonly variables: readonly DecodedVariable[];
+  /**
+   * The decoded Manifest at each Revision of the page, in page order; a
+   * Value this Device cannot read is null, never an earlier Value.
+   */
+  readonly snapshots: ReadonlyMap<string, readonly DecodedVariable[]>;
+}>;
+
+const decodedVariables = (
+  variables: ReadonlyMap<string, DecodedVariableState>,
+): readonly DecodedVariable[] =>
+  Object.freeze(
+    [...variables.entries()].map(([id, variable]) =>
+      Object.freeze({ id, ...variable }),
+    ),
+  );
+
+/**
+ * Decodes the Variables a verified sync page proves, folding each Revision
+ * over `existingVariables`, and records the Manifest at every Revision.
+ * The caller must verify the page (verifySyncPage) first so only service-
+ * disclosed lanes are decoded.
+ *
+ * At the head Revision, a lane this Device cannot decrypt fails the decode
+ * with UnreadableLaneError instead of yielding an empty Manifest or
+ * presenting an earlier Value as current: Variable definitions and Shared
+ * Values every Member must read, and User-defined Values the `actorUserId`
+ * owns (or whose owner cannot be established). A lane an earlier Revision
+ * sealed unreadably does not fail the decode when a later Revision
+ * re-publishes it readably: only the head state must be verified. A User-defined Value another User owns is legitimately
+ * undisclosed to this Device: it stays null rather than a stale earlier
+ * Value, whether the lane is disclosed but unreadable or omitted from the
+ * page.
+ */
+export const decodeSyncManifest = async (
   page: SyncPageWire,
   resolvePrivateKey: (
     scope: "SHARED_VALUE" | "USER_DEFINED_VALUE",
   ) => CryptoKey,
   existingVariables: readonly DecodedVariable[] = [],
   sharedValueSecret?: Uint8Array,
-): Promise<readonly DecodedVariable[]> => {
-  const variables = new Map<
-    string,
-    {
-      name: string;
-      description: string;
-      ownership: "SHARED_VALUE" | "USER_DEFINED_VALUE";
-      value: string | null;
-      required: boolean;
-      tombstone: boolean;
-      originalProviderUserId: string | null;
-      ownerUserId: string | null;
-    }
-  >();
+  actorUserId?: string,
+): Promise<SyncManifestDecode> => {
+  const variables = new Map<string, DecodedVariableState>();
   for (const variable of existingVariables)
     variables.set(variable.id, {
       name: variable.name,
@@ -669,6 +763,11 @@ export const decodeSyncVariables = async (
       originalProviderUserId: variable.originalProviderUserId ?? null,
       ownerUserId: variable.ownerUserId ?? null,
     });
+  // Newest lane state per Variable, so a Revision that re-publishes a lane
+  // readably clears an earlier Revision's unreadable one.
+  const definitionStates = new Map<string, LaneReadState>();
+  const valueStates = new Map<string, ValueLaneState>();
+  const snapshots = new Map<string, readonly DecodedVariable[]>();
   for (const revision of page.revisions) {
     const laneObjects = revision.objects.filter((object) => {
       const lane = parseProtocolObject(object.canonicalBytes);
@@ -683,6 +782,7 @@ export const decodeSyncVariables = async (
         return scope === 3 || scope === 4;
       }),
     ];
+    const disclosedValueLaneVariableIds = new Set<string>();
     for (const object of orderedLaneObjects) {
       const lane = parseProtocolObject(object.canonicalBytes);
       if (lane.get(1) !== 13) continue;
@@ -697,7 +797,13 @@ export const decodeSyncVariables = async (
           resolvePrivateKey("SHARED_VALUE"),
           sharedValueSecret,
         );
-        if (!plaintext) continue;
+        if (!plaintext) {
+          // The head definition of this Variable is unverified; whether that
+          // fails the decode is decided once the whole page is folded.
+          definitionStates.set(id, "REQUIRED_UNREADABLE");
+          continue;
+        }
+        definitionStates.set(id, "READ");
         const definition = JSON.parse(new TextDecoder().decode(plaintext)) as {
           name: string;
           description: string;
@@ -745,6 +851,7 @@ export const decodeSyncVariables = async (
           existing.ownerUserId = laneUserId(lane, 26);
           existing.originalProviderUserId = null;
         }
+        disclosedValueLaneVariableIds.add(id);
         const plaintext = await openReadableLane(
           object.canonicalBytes,
           resolvePrivateKey(
@@ -752,17 +859,164 @@ export const decodeSyncVariables = async (
           ),
           scope === 3 ? sharedValueSecret : undefined,
         );
-        if (!plaintext) continue;
-        existing.value = new TextDecoder().decode(plaintext);
+        if (!plaintext) {
+          // Never carry an earlier Value across a lane this Device cannot
+          // verify: until a later Revision re-publishes it readably the
+          // Value is unknown.
+          existing.value = null;
+          const ownerUserId = existing.ownerUserId;
+          const otherUserValue =
+            scope === 4 &&
+            ownerUserId !== null &&
+            (actorUserId === undefined || ownerUserId !== actorUserId);
+          if (otherUserValue) {
+            valueStates.set(id, {
+              state: "OTHER_UNREADABLE",
+              scope: 4,
+              ownerUserId,
+            });
+          } else {
+            valueStates.set(id, {
+              state: "REQUIRED_UNREADABLE",
+              scope,
+              ownerUserId: scope === 4 ? ownerUserId : null,
+            });
+          }
+        } else {
+          valueStates.set(id, {
+            state: "READ",
+            scope,
+            ownerUserId: scope === 4 ? existing.ownerUserId : null,
+          });
+          existing.value = new TextDecoder().decode(plaintext);
+        }
       }
     }
+    // The page may omit a lane only when it holds another User's
+    // User-defined Value (verifySyncPage enforces this); the descriptor's
+    // commitments name the omitted lane but not its Variable, so the
+    // Variable is only attributable when the Revision changed exactly the
+    // Variables that lack a disclosed Value lane.
+    const descriptorObject = revision.objects.find((object) => {
+      const object_ = parseProtocolObject(object.canonicalBytes);
+      return object_.get(1) === 15;
+    });
+    const hiddenOtherUserValueLaneOwners: string[] = [];
+    if (descriptorObject) {
+      const commitments = parseProtocolObject(
+        descriptorObject.canonicalBytes,
+      ).get(53);
+      const disclosedLaneIds = new Set<string>();
+      for (const object of laneObjects) {
+        const lane = parseProtocolObject(object.canonicalBytes);
+        const laneId = lane.get(18);
+        if (laneId instanceof Uint8Array && laneId.length === 16)
+          disclosedLaneIds.add(bytesToUuid(laneId));
+      }
+      if (Array.isArray(commitments)) {
+        for (const commitment of commitments) {
+          if (!(commitment instanceof Map)) continue;
+          const laneId = commitment.get(18);
+          if (
+            !(laneId instanceof Uint8Array) ||
+            laneId.length !== 16 ||
+            disclosedLaneIds.has(bytesToUuid(laneId))
+          )
+            continue;
+          const scope = commitment.get(36);
+          const ownerId = commitmentUserId(commitment, 26);
+          if (
+            scope === 4 &&
+            ownerId !== null &&
+            (actorUserId === undefined || ownerId !== actorUserId)
+          )
+            hiddenOtherUserValueLaneOwners.push(ownerId);
+        }
+      }
+    }
+    if (hiddenOtherUserValueLaneOwners.length > 0) {
+      let changedVariableIds: ReadonlySet<string> = new Set([
+        ...disclosedValueLaneVariableIds,
+      ]);
+      try {
+        changedVariableIds = changedVariableIdsFromRevision(revision);
+      } catch {
+        // A page that cannot name the changed Variables cannot attribute an
+        // omitted lane, so the Value states stay as the lanes recorded them.
+      }
+      const candidates = [...changedVariableIds].filter((id) => {
+        const candidate = variables.get(id);
+        return (
+          candidate !== undefined &&
+          !candidate.tombstone &&
+          candidate.ownership === "USER_DEFINED_VALUE" &&
+          !disclosedValueLaneVariableIds.has(id)
+        );
+      });
+      if (candidates.length === hiddenOtherUserValueLaneOwners.length) {
+        // The commitments name each omitted lane's owner, though not its
+        // Variable; when every omitted lane has one owner the head state can
+        // attribute it so the UI can say whose Value is withheld.
+        const owners = new Set(hiddenOtherUserValueLaneOwners);
+        const owner = owners.size === 1 ? ([...owners][0] ?? null) : null;
+        for (const id of candidates) {
+          const candidate = variables.get(id);
+          if (!candidate) continue;
+          candidate.value = null;
+          if (owner !== null) candidate.ownerUserId = owner;
+          valueStates.set(id, {
+            state: "OTHER_UNREADABLE",
+            scope: 4,
+            ownerUserId: candidate.ownerUserId,
+          });
+        }
+      }
+    }
+    snapshots.set(revision.id, decodedVariables(variables));
   }
-  return Object.freeze(
-    [...variables.entries()].map(([id, variable]) =>
-      Object.freeze({ id, ...variable }),
-    ),
-  );
+  for (const [id, state] of definitionStates)
+    if (state === "REQUIRED_UNREADABLE")
+      throw new UnreadableLaneError({
+        variableId: id,
+        laneKind: "VARIABLE_DEFINITION",
+      });
+  for (const [id, state] of valueStates)
+    if (state.state === "REQUIRED_UNREADABLE")
+      throw new UnreadableLaneError({
+        variableId: id,
+        laneKind: state.scope === 3 ? "SHARED_VALUE" : "USER_DEFINED_VALUE",
+        ownerUserId: state.ownerUserId,
+      });
+  return Object.freeze({
+    variables: decodedVariables(variables),
+    snapshots,
+  });
 };
+
+/**
+ * Decodes the Manifest at the head Revision of a verified sync page. A
+ * required lane this Device cannot decrypt rejects with UnreadableLaneError
+ * instead of returning an empty Manifest or presenting an earlier Value as
+ * current; see decodeSyncManifest for the full contract.
+ */
+export const decodeSyncVariables = async (
+  page: SyncPageWire,
+  resolvePrivateKey: (
+    scope: "SHARED_VALUE" | "USER_DEFINED_VALUE",
+  ) => CryptoKey,
+  existingVariables: readonly DecodedVariable[] = [],
+  sharedValueSecret?: Uint8Array,
+  actorUserId?: string,
+): Promise<readonly DecodedVariable[]> =>
+  (
+    await decodeSyncManifest(
+      page,
+      resolvePrivateKey,
+      existingVariables,
+      sharedValueSecret,
+      actorUserId,
+    )
+  ).variables;
 
 export const changedVariableIdsFromRevision = (
   revision: SyncRevisionWire,

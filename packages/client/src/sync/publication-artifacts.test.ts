@@ -14,6 +14,7 @@ import {
   openLane,
   type PublicationVariable,
   reviewPublication,
+  UnreadableLaneError,
   verifySyncPage,
 } from "./publication";
 
@@ -769,6 +770,301 @@ describe("publication artifacts", () => {
       expect.objectContaining({
         name: "DATABASE_URL",
         value: "postgres://example",
+      }),
+    ]);
+  });
+});
+
+describe("unreadable Manifest lanes", () => {
+  const otherActor = "99999999-9999-4999-8999-999999999999";
+
+  // Two Revisions on the same Variable: the first Revision's lanes are sealed
+  // with `firstKey`, the head's with `headKey`, so a Device holding only
+  // `firstKey` reads the older Value but not the newer one.
+  const staleValuePage = async (
+    input: Readonly<{
+      readonly firstKey: Uint8Array;
+      readonly headKey: Uint8Array;
+      readonly signing: Awaited<ReturnType<typeof generateSigningKeyPair>>;
+      readonly recipientPublicKey: CryptoKey;
+    }>,
+  ) => {
+    const older = await createPublicationArtifacts([variable()], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: ids.environmentId,
+      expectedHeadHash: new Uint8Array(48),
+      valueRecipientPublicKey: input.recipientPublicKey,
+      signingPrivateKey: input.signing.privateKey,
+      sharedValueSecret: input.firstKey,
+    });
+    const olderRevision = older.stagedObjects.find(
+      (object) => object.objectId === older.request.revision.protocolObjectId,
+    );
+    if (!olderRevision) throw new Error("revision object is missing");
+    const newer = await createPublicationArtifacts(
+      [variable({ value: "postgres://rotated", hasDraftChange: true })],
+      {
+        ...ids,
+        projectEpoch: 1,
+        expectedHeadId: older.request.revision.id,
+        expectedHeadHash: await sha384(olderRevision.bytes),
+        valueRecipientPublicKey: input.recipientPublicKey,
+        signingPrivateKey: input.signing.privateKey,
+        sharedValueSecret: input.headKey,
+        mutation: "MANIFEST_UPDATE",
+      },
+    );
+    const objectsFor = async (
+      artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
+    ) =>
+      Promise.all(
+        artifacts.stagedObjects.map(async (object) => ({
+          objectId: object.objectId,
+          canonicalBytes: object.bytes,
+          digest: await sha384(object.bytes),
+        })),
+      );
+    const olderDigest = await sha384(olderRevision.bytes);
+    const newerRevision = newer.stagedObjects.find(
+      (object) => object.objectId === newer.request.revision.protocolObjectId,
+    );
+    if (!newerRevision) throw new Error("revision object is missing");
+    const newerDigest = await sha384(newerRevision.bytes);
+    return {
+      environmentId: ids.environmentId,
+      trustedRevisionId: ids.environmentId,
+      trustedRevisionHash: new Uint8Array(48),
+      currentHeadId: newer.request.revision.id,
+      currentHeadHash: newerDigest,
+      projectEpoch: 1n,
+      revisions: [
+        {
+          id: older.request.revision.id,
+          digest: olderDigest,
+          parentId: ids.environmentId,
+          parentHash: new Uint8Array(48),
+          mutation: 2,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(older.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await objectsFor(older),
+        },
+        {
+          id: newer.request.revision.id,
+          digest: newerDigest,
+          parentId: older.request.revision.id,
+          parentHash: olderDigest,
+          mutation: 2,
+          projectEpoch: 1n,
+          authoredAtMs: BigInt(newer.request.revision.authoredAtMs),
+          rollbackTargetId: null,
+          objects: await objectsFor(newer),
+        },
+      ],
+      nextCursor: null,
+    };
+  };
+
+  test("a wrong Project key fails the decode instead of returning an empty Manifest", async () => {
+    const device = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const wrongKey = crypto.getRandomValues(new Uint8Array(32));
+    const artifacts = await createPublicationArtifacts([variable()], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: ids.environmentId,
+      expectedHeadHash: new Uint8Array(48),
+      valueRecipientPublicKey: device.publicKey,
+      signingPrivateKey: signing.privateKey,
+      sharedValueSecret: wrongKey,
+    });
+    await expect(
+      decodeSyncVariables(
+        await syncPageFor(artifacts),
+        () => device.privateKey,
+        [],
+        // The Device holds no Project key grant at all.
+        undefined,
+        ids.actorUserId,
+      ),
+    ).rejects.toMatchObject({
+      name: "UnreadableLaneError",
+      variableId: variable().id,
+    });
+    // The same page decodes with the Project key it was sealed with.
+    const decoded = await decodeSyncVariables(
+      await syncPageFor(artifacts),
+      () => device.privateKey,
+      [],
+      wrongKey,
+      ids.actorUserId,
+    );
+    expect(decoded).toEqual([
+      expect.objectContaining({
+        name: "DATABASE_URL",
+        value: "postgres://example",
+      }),
+    ]);
+  });
+
+  test("an unreadable newer Shared Value is never reported as the older verified Value", async () => {
+    const device = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const firstKey = crypto.getRandomValues(new Uint8Array(32));
+    const headKey = crypto.getRandomValues(new Uint8Array(32));
+    const page = await staleValuePage({
+      firstKey,
+      headKey,
+      signing,
+      recipientPublicKey: device.publicKey,
+    });
+    // The Device's grant opens the older Revision but not the head's
+    // Shared Value; the older Value must not be exported as current.
+    await expect(
+      decodeSyncVariables(
+        page,
+        () => device.privateKey,
+        [],
+        firstKey,
+        ids.actorUserId,
+      ),
+    ).rejects.toBeInstanceOf(UnreadableLaneError);
+  });
+
+  test("a User-defined Value another User owns stays null without failing the decode", async () => {
+    const actor = await generateEncryptionKeyPair();
+    const other = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts(
+      [
+        variable({
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+          name: "TEAMMATE_TOKEN",
+          description: "Owned by another User.",
+          ownership: "USER_DEFINED_VALUE",
+          value: "teammate-secret",
+        }),
+      ],
+      {
+        ...ids,
+        actorUserId: otherActor,
+        projectEpoch: 1,
+        expectedHeadId: ids.environmentId,
+        expectedHeadHash: new Uint8Array(48),
+        valueRecipientPublicKey: actor.publicKey,
+        userDefinedValueRecipientPublicKey: other.publicKey,
+        signingPrivateKey: signing.privateKey,
+      },
+    );
+    const decoded = await decodeSyncVariables(
+      await syncPageFor(artifacts),
+      () => actor.privateKey,
+      [],
+      undefined,
+      ids.actorUserId,
+    );
+    expect(decoded).toEqual([
+      expect.objectContaining({
+        name: "TEAMMATE_TOKEN",
+        value: null,
+        ownerUserId: otherActor,
+      }),
+    ]);
+  });
+
+  test("a User-defined Value the actor owns that cannot be read fails the decode", async () => {
+    const actor = await generateEncryptionKeyPair();
+    const stale = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts(
+      [
+        variable({
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+          name: "MY_TOKEN",
+          description: "Owned by this User.",
+          ownership: "USER_DEFINED_VALUE",
+          value: "actor-secret",
+        }),
+      ],
+      {
+        ...ids,
+        projectEpoch: 1,
+        expectedHeadId: ids.environmentId,
+        expectedHeadHash: new Uint8Array(48),
+        valueRecipientPublicKey: actor.publicKey,
+        userDefinedValueRecipientPublicKey: stale.publicKey,
+        signingPrivateKey: signing.privateKey,
+      },
+    );
+    await expect(
+      decodeSyncVariables(
+        await syncPageFor(artifacts),
+        () => actor.privateKey,
+        [],
+        undefined,
+        ids.actorUserId,
+      ),
+    ).rejects.toMatchObject({
+      name: "UnreadableLaneError",
+      laneKind: "USER_DEFINED_VALUE",
+    });
+  });
+
+  test("an omitted lane holding another User's Value keeps the decode complete with a null Value", async () => {
+    const actor = await generateEncryptionKeyPair();
+    const other = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts(
+      [
+        variable({
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
+          name: "TEAMMATE_TOKEN",
+          description: "Owned by another User.",
+          ownership: "USER_DEFINED_VALUE",
+          value: "teammate-secret",
+        }),
+      ],
+      {
+        ...ids,
+        actorUserId: otherActor,
+        projectEpoch: 1,
+        expectedHeadId: ids.environmentId,
+        expectedHeadHash: new Uint8Array(48),
+        valueRecipientPublicKey: actor.publicKey,
+        userDefinedValueRecipientPublicKey: other.publicKey,
+        signingPrivateKey: signing.privateKey,
+      },
+    );
+    const page = await syncPageFor(artifacts);
+    const revision = page.revisions[0];
+    if (!revision) throw new Error("revision is missing");
+    // The service withholds the lane itself: only the descriptor still
+    // commits to it, which is the page's only evidence the Value exists.
+    const withheld = {
+      ...page,
+      revisions: [
+        {
+          ...revision,
+          objects: revision.objects.filter((object) => {
+            const lane = parseProtocolObject(object.canonicalBytes);
+            return lane.get(1) !== 13 || lane.get(36) !== 4;
+          }),
+        },
+      ],
+    };
+    const decoded = await decodeSyncVariables(
+      withheld,
+      () => actor.privateKey,
+      [],
+      undefined,
+      ids.actorUserId,
+    );
+    expect(decoded).toEqual([
+      expect.objectContaining({
+        name: "TEAMMATE_TOKEN",
+        value: null,
+        ownerUserId: otherActor,
       }),
     ]);
   });

@@ -10,6 +10,7 @@ import {
   createPublicationArtifacts,
   type PublicationVariable,
   type RevisionSigningTrustEntry,
+  UnreadableLaneError,
 } from "./publication";
 import { createVerifiedEnvironmentSession } from "./session";
 import type { ProtocolTransport } from "./transport";
@@ -317,6 +318,53 @@ describe("verified Environment session", () => {
     await expect(session.syncAndDecode(syncRequest)).rejects.toThrow(
       "sync revision signature is not authorized",
     );
+  });
+
+  test("syncAndDecode rejects a Manifest this Device cannot decrypt", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const local = await generateSigningKeyPair();
+    const author = await generateSigningKeyPair();
+    const epochKey = crypto.getRandomValues(new Uint8Array(32));
+    const artifacts = await createPublicationArtifacts([variable()], {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: author.privateKey,
+      sharedValueSecret: epochKey,
+      mutation: "GENESIS",
+    });
+    const page = await syncPageFor(artifacts);
+    const localKey = await exportSigningPublicKey(local.publicKey);
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    const context = {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: page.currentHeadId,
+      expectedHeadHash: page.currentHeadHash,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: local.privateKey,
+      revisionSigningPublicKey: localKey,
+    };
+    // The Device's Project key grant is missing or stale: it holds no key
+    // that opens the page's lanes.
+    const session = createVerifiedEnvironmentSession({
+      context,
+      transport: transportFor(page),
+      sharedValuePrivateKey: encryption.privateKey,
+      signingTrustKeys: [localKey, authorKey],
+    });
+    await expect(
+      session.syncAndDecode({
+        environmentId: ids.environmentId,
+        deviceId: ids.actorDeviceId,
+        request: {
+          trustedRevisionId: ids.environmentId,
+          trustedRevisionHash: new Uint8Array(48),
+        },
+      }),
+    ).rejects.toBeInstanceOf(UnreadableLaneError);
   });
 
   test("resolveRollbackValues omits a Variable verified absent from the target Revision", async () => {

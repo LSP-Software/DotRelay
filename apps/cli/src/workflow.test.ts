@@ -5122,3 +5122,389 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(secondScripted.calls).toHaveLength(0);
   });
 });
+
+describe("pull against an unreadable Manifest", () => {
+  // Seals a known Project epoch key into the grant the service returns for
+  // the presented Device, so the CLI's held key differs from the key the
+  // page's lanes were sealed with.
+  const sealEpochGrant = async (
+    bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
+    plaintextKey: Uint8Array,
+  ): Promise<string> => {
+    const publicKey = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!publicKey) throw new Error("Device encryption public key is missing");
+    const grant = await createProjectEpochGrantBootstrap({
+      serverProfileId: profile.pin.serverProfileId,
+      teamId: ids.team,
+      projectId: ids.project,
+      projectEpoch: 1,
+      senderDeviceId: ids.device,
+      recipientDeviceId: ids.device,
+      recipientX25519PublicKey: new Uint8Array(
+        await crypto.subtle.exportKey("raw", publicKey),
+      ),
+      recipientEncryptionPublicKey: publicKey,
+      signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+      plaintextKey,
+    });
+    return Buffer.from(grant.canonicalBytes).toString("base64");
+  };
+
+  const revisionWireFor = async (
+    artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
+    parentId: string | null,
+    parentHash: Uint8Array | null,
+  ) => {
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    const parsedRevision = parseProtocolObject(revisionObject.bytes);
+    const digest = await sha384(revisionObject.bytes);
+    return {
+      id: artifacts.request.revision.id,
+      digest,
+      parentId,
+      parentHash,
+      mutation: parsedRevision.get(35) as number,
+      projectEpoch: 1n,
+      authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
+      rollbackTargetId: null,
+      objects: await Promise.all(
+        artifacts.stagedObjects.map(async (object) => ({
+          objectId: object.objectId,
+          canonicalBytes: object.bytes,
+          digest: await sha384(object.bytes),
+        })),
+      ),
+    };
+  };
+
+  // Serves one scripted sync page for the next invocation, mirroring how a
+  // later Revision reaches a Device that already verified earlier ones.
+  const scriptSyncPage = (
+    runtime: Awaited<ReturnType<typeof setup>>,
+    page: Parameters<typeof encodeSyncPage>[0],
+  ) => {
+    const fetcher: FetchFunction = async (input, init) => {
+      const request = new Request(input as never, init);
+      if (new URL(request.url).pathname.endsWith("/sync"))
+        return new Response(encodeSyncPage(page));
+      return runtime.fetch(input, init);
+    };
+    return fetcher;
+  };
+
+  test("a wrong Project key grant fails the pull instead of exporting an empty Manifest", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const encryption = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!encryption) throw new Error("Device encryption public key is missing");
+    const signing = await generateSigningKeyPair();
+    const heldKey = crypto.getRandomValues(new Uint8Array(32));
+    const laneKey = crypto.getRandomValues(new Uint8Array(32));
+    const artifacts = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://example",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: ids.environment,
+        expectedHeadHash: new Uint8Array(48),
+        valueRecipientPublicKey: encryption,
+        signingPrivateKey: signing.privateKey,
+        sharedValueSecret: laneKey,
+      },
+    );
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    await Bun.write(output, "DATABASE_URL=postgres://local\n");
+    const runtime = await setup({
+      bootstrap,
+      signingTrustKeys: [
+        bytesToHex(await rawSigningPublicKey(signing.publicKey)),
+      ],
+      epochGrant: await sealEpochGrant(bootstrap, heldKey),
+      revisions: [
+        await revisionWireFor(artifacts, ids.environment, new Uint8Array(48)),
+      ],
+    });
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(result.exitCode).toBe(3);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "incomplete-export",
+      code: "unreadable_manifest",
+    });
+    expect(String(diagnostic.detail)).toContain("Project key grant");
+    expect(result.stdout).not.toContain("postgres://example");
+    // The local file and the trusted head are preserved.
+    expect(await Bun.file(output).text()).toBe(
+      "DATABASE_URL=postgres://local\n",
+    );
+    expect(await Bun.file(`${output}.previous`).exists()).toBe(false);
+    expect(
+      await Bun.file(
+        `${runtime.stateDirectory}/head-${ids.environment}.json`,
+      ).exists(),
+    ).toBe(false);
+  });
+
+  test("an unreadable newer Value is not exported as the verified older Value", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const encryption = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!encryption) throw new Error("Device encryption public key is missing");
+    const signing = await generateSigningKeyPair();
+    const heldKey = crypto.getRandomValues(new Uint8Array(32));
+    const laneKey = crypto.getRandomValues(new Uint8Array(32));
+    const first = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://old",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: ids.environment,
+        expectedHeadHash: new Uint8Array(48),
+        valueRecipientPublicKey: encryption,
+        signingPrivateKey: signing.privateKey,
+        sharedValueSecret: heldKey,
+      },
+    );
+    const firstWire = await revisionWireFor(
+      first,
+      ids.environment,
+      new Uint8Array(48),
+    );
+    const firstRevision = first.stagedObjects.find(
+      (object) => object.objectId === first.request.revision.protocolObjectId,
+    );
+    if (!firstRevision) throw new Error("revision object is missing");
+    // The newer Revision the Device cannot decrypt, sealed with a key it
+    // does not hold, chained against the verified first Revision.
+    const chained = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://new",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: first.request.revision.id,
+        expectedHeadHash: await sha384(firstRevision.bytes),
+        valueRecipientPublicKey: encryption,
+        signingPrivateKey: signing.privateKey,
+        sharedValueSecret: laneKey,
+        mutation: "MANIFEST_UPDATE",
+      },
+    );
+    const secondWire = await revisionWireFor(
+      chained,
+      first.request.revision.id,
+      firstWire.digest,
+    );
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    // No local file yet: the first pull exports the verified older Value.
+    const runtime = await setup({
+      bootstrap,
+      signingTrustKeys: [
+        bytesToHex(await rawSigningPublicKey(signing.publicKey)),
+      ],
+      epochGrant: await sealEpochGrant(bootstrap, heldKey),
+      revisions: [firstWire],
+    });
+    const ok = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(ok.exitCode).toBe(0);
+    expect(await Bun.file(output).text()).toContain(
+      'DATABASE_URL="postgres://old"',
+    );
+    const headAfterFirst = await Bun.file(
+      `${runtime.stateDirectory}/head-${ids.environment}.json`,
+    ).text();
+    // The head Revision the Device cannot decrypt arrives next.
+    const fetcher = scriptSyncPage(runtime, {
+      environmentId: ids.environment,
+      trustedRevisionId: ids.environment,
+      trustedRevisionHash: new Uint8Array(48),
+      currentHeadId: secondWire.id,
+      currentHeadHash: secondWire.digest,
+      projectEpoch: 1n,
+      revisions: [firstWire, secondWire],
+      nextCursor: null,
+    });
+    const blocked = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, fetch: fetcher, gitTrackingProbe: gitOutside },
+    );
+    expect(blocked.exitCode).toBe(3);
+    const diagnostic = JSON.parse(blocked.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "incomplete-export",
+      code: "unreadable_manifest",
+    });
+    // The file keeps the verified older Value and the trusted head does not
+    // advance past the last Revision this Device could verify.
+    expect(await Bun.file(output).text()).toContain(
+      'DATABASE_URL="postgres://old"',
+    );
+    expect(await Bun.file(output).text()).not.toContain("postgres://new");
+    expect(
+      await Bun.file(
+        `${runtime.stateDirectory}/head-${ids.environment}.json`,
+      ).text(),
+    ).toBe(headAfterFirst);
+  });
+
+  test("an unreadable own User-defined Value names the Device key repair", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const encryption = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!encryption) throw new Error("Device encryption public key is missing");
+    const stale = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const artifacts = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "MY_TOKEN",
+          description: "Owned by this User.",
+          ownership: "USER_DEFINED_VALUE",
+          value: "actor-secret",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: ids.environment,
+        expectedHeadHash: new Uint8Array(48),
+        valueRecipientPublicKey: encryption,
+        userDefinedValueRecipientPublicKey: stale.publicKey,
+        signingPrivateKey: signing.privateKey,
+      },
+    );
+    const runtime = await setup({
+      bootstrap,
+      signingTrustKeys: [
+        bytesToHex(await rawSigningPublicKey(signing.publicKey)),
+      ],
+      revisions: [
+        await revisionWireFor(artifacts, ids.environment, new Uint8Array(48)),
+      ],
+    });
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(result.exitCode).toBe(3);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "incomplete-export",
+      code: "unreadable_manifest",
+    });
+    expect(String(diagnostic.detail)).toContain("device enroll");
+    expect(result.stdout).not.toContain("actor-secret");
+  });
+});

@@ -9,6 +9,7 @@ import {
   type RevisionSigningTrust,
   type SyncPageWire,
   sha384,
+  UnreadableLaneError,
   verifySyncPage,
 } from "@dotrelay/client";
 import {
@@ -1020,10 +1021,12 @@ export const EnvironmentEditor = ({
           setHeadRevision(page.currentHeadId);
         }
         if (!cancelled) setLoadPhase("ready");
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setPublishMessage(
-            "This browser couldn't read the current environment. Try reading it again.",
+            error instanceof UnreadableLaneError
+              ? "This browser's keys can't decrypt the environment's latest values. Run dotrelay pull in the CLI on this machine to re-share the project's keys, then use Retry reading."
+              : "This browser couldn't read the current environment. Try reading it again.",
           );
           setLoadPhase("failed");
         }

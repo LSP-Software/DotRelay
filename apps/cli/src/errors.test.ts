@@ -139,6 +139,7 @@ describe("CLI diagnostics", () => {
       ["conflict", "rollback_target_unavailable"],
       ["conflict", "rollback_variable_absent"],
       ["incomplete-export", "missing_values"],
+      ["incomplete-export", "unreadable_manifest"],
       ["invocation", "invalid_id"],
       ["invocation", "payload_too_large"],
       ["invocation", "publication_invalid"],
