@@ -11,6 +11,17 @@ import {
 const viewFallback = (hasProject: boolean): WorkspaceView =>
   hasProject ? "environment" : "projects";
 
+// Pin the deployment profile so fallback behavior is deterministic.
+const withoutProfileEnv = (): (() => void) => {
+  const previous = process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
+  delete process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
+  return () => {
+    if (previous === undefined)
+      delete process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE;
+    else process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE = previous;
+  };
+};
+
 const catalogFixture = (): WorkspaceCatalog => ({
   teams: [
     {
@@ -63,34 +74,45 @@ const catalogFixture = (): WorkspaceCatalog => ({
 });
 
 test("parse keeps valid profile and view and defaults invalid ones", () => {
-  const parsed = parseWorkspaceLocation(
-    new URLSearchParams(
-      "profile=self-hosted&team=t1&project=p1&environment=e1&view=team&preview=protected",
-    ),
-  );
-  expect(parsed.profileId).toBe("self-hosted");
-  expect(parsed.teamId).toBe("t1");
-  expect(parsed.projectId).toBe("p1");
-  expect(parsed.environmentId).toBe("e1");
-  expect(parsed.view).toBe("team");
+  const restoreProfileEnv = withoutProfileEnv();
+  try {
+    const parsed = parseWorkspaceLocation(
+      new URLSearchParams(
+        "profile=self-hosted&team=t1&project=p1&environment=e1&view=team&preview=protected",
+      ),
+    );
+    expect(parsed.profileId).toBe("self-hosted");
+    expect(parsed.teamId).toBe("t1");
+    expect(parsed.projectId).toBe("p1");
+    expect(parsed.environmentId).toBe("e1");
+    expect(parsed.view).toBe("team");
 
-  const invalid = parseWorkspaceLocation(
-    new URLSearchParams("profile=rogue&view=nowhere&team=t1"),
-  );
-  expect(invalid.profileId).toBe("hosted");
-  expect(invalid.view).toBe(null);
-  expect(invalid.teamId).toBe("t1");
+    const invalid = parseWorkspaceLocation(
+      new URLSearchParams("profile=rogue&view=nowhere&team=t1"),
+    );
+    // An undeclared deployment fails closed to self-hosted.
+    expect(invalid.profileId).toBe("self-hosted");
+    expect(invalid.view).toBe(null);
+    expect(invalid.teamId).toBe("t1");
+  } finally {
+    restoreProfileEnv();
+  }
 });
 
-test("parse defaults to the hosted profile and omits ids", () => {
-  const parsed = parseWorkspaceLocation(new URLSearchParams(""));
-  expect(parsed).toEqual({
-    profileId: "hosted",
-    teamId: null,
-    projectId: null,
-    environmentId: null,
-    view: null,
-  });
+test("parse defaults to the deployment profile and omits ids", () => {
+  const restoreProfileEnv = withoutProfileEnv();
+  try {
+    const parsed = parseWorkspaceLocation(new URLSearchParams(""));
+    expect(parsed).toEqual({
+      profileId: "self-hosted",
+      teamId: null,
+      projectId: null,
+      environmentId: null,
+      view: null,
+    });
+  } finally {
+    restoreProfileEnv();
+  }
 });
 
 test("serialize writes profile and view and drops null ids", () => {

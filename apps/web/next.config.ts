@@ -27,6 +27,15 @@ const loadRootEnv = () => {
 
 loadRootEnv();
 
+// The browser shell can only read NEXT_PUBLIC_* values, so mirror the
+// server-side fixture switch into a public twin for the client bundle.
+if (
+  process.env.DOTRELAY_WORKSPACE_FIXTURE === "1" &&
+  process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_FIXTURE === undefined
+) {
+  process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_FIXTURE = "1";
+}
+
 const nextConfig: NextConfig = {
   output: "standalone",
 };

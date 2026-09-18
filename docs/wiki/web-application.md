@@ -20,6 +20,10 @@ installations, and whether this browser is one of them.
 
 ## One next action
 
+The workspace is bound to the Server Profile behind its deployment: the browser never offers a
+choice of server. A hosted profile is trusted by default; a self-hosted profile asks you to trust
+it before protected content becomes available.
+
 The interface still tracks four independent gates: Server Profile trust, session, Device, and
 cryptography. Being signed in does not authorize a Device. Being known to GitHub does not create a
 Membership.

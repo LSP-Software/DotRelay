@@ -5,6 +5,7 @@ import {
   parsePeerDevices,
   parseWorkspaceCatalog,
   resolveLiveApiOrigin,
+  resolveWorkspaceProfileId,
   type WorkspaceBoundary,
   type WorkspaceProfileId,
   workspaceProfileCatalog,
@@ -182,8 +183,16 @@ const fetchLiveBoundary = async (
 
 export const GET = async (request: Request) => {
   const url = new URL(request.url);
+  // A live deployment is bound to the Server Profile behind it, so the
+  // request's profile parameter is honored only by the development fixture.
+  const deploymentProfileId = resolveWorkspaceProfileId();
   const profileParam = url.searchParams.get("profile");
-  const profileId = isProfileId(profileParam) ? profileParam : "hosted";
+  const profileId =
+    process.env.DOTRELAY_WORKSPACE_FIXTURE === "1"
+      ? isProfileId(profileParam)
+        ? profileParam
+        : deploymentProfileId
+      : deploymentProfileId;
   const apiOrigin = resolveLiveApiOrigin();
   const environmentParam = url.searchParams.get("environment");
   const deviceId = request.headers.get(BROWSER_DEVICE_ID_HEADER);

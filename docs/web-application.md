@@ -1,9 +1,9 @@
 # Web application surface
 
-The Next.js application is a dark-only browser client for one selected Server Profile. It provides
-the public landing and GitHub sign-in routes plus a workspace-first shell for Team, Project, and
-Environment context. It does not move authentication, authorization, cryptography, or persistence
-authority into the web process.
+The Next.js application is a dark-only browser client for the one Server Profile its deployment
+is bound to. It provides the public landing and GitHub sign-in routes plus a workspace-first shell
+for Team, Project, and Environment context. It does not move authentication, authorization,
+cryptography, or persistence authority into the web process.
 
 ## Visual system and information hierarchy
 
@@ -21,7 +21,7 @@ the copy in place.
 
 The workspace presents information in this order:
 
-1. selected Server Profile and Team / Project / Environment context;
+1. the deployment's Server Profile and Team / Project / Environment context;
 2. Server Profile trust, browser session, and Device state as three separate signals;
 3. protected-content availability and a stable API problem code when unavailable;
 4. Revision continuity metadata;
@@ -37,19 +37,22 @@ These states must not be collapsed into one signed-in indicator:
 
 | State | Meaning | Permitted surface |
 | --- | --- | --- |
-| Server Profile pinned | Profile id and canonical origin were explicitly trusted | Credentials may be considered for that profile |
+| Server Profile pinned | The hosted profile is trusted by default; a self-hosted profile was explicitly trusted for this browser session | Credentials may be considered for that profile |
 | Session active | Better Auth resolved one server-local User | Non-secret identity and eligible administration only |
 | Active Device | This client installation is authorized for that User | Protected operations may proceed if all other gates pass |
 | v3 cryptography available | The closed v3 WebCrypto suite is supported | Protected bytes may be requested and processed locally |
 
 A session never implies an active Device. A GitHub identity never implies a DotRelay Membership.
-Changing Server Profile selection surfaces a new trust decision instead of carrying ambient trust
-across profiles.
+A web deployment is bound to the Server Profile behind it, and the browser offers no choice of
+server. DotRelay's own hosted profile is trusted by default; a self-hosted profile requires an
+explicit trust decision before protected content becomes available. Only the development fixture
+keeps a Server Profile preview selector, so hosted and self-hosted behavior can both be
+exercised locally.
 
 When the v3 runtime or provider is unavailable, the shell reports the stable
 `unsupported_crypto_runtime` or `crypto_provider_unavailable` problem and does not request or
 render Manifest lanes, Variable names, Shared Values, or User-defined Values. The permitted surface
-is limited to sign-in/out, profile selection and trust explanation, non-secret Team/Membership and
+is limited to sign-in/out and trust explanation, non-secret Team/Membership and
 resource lifecycle metadata, invitation administration, Device authorization, Recovery Kit entry,
 and stable problem guidance.
 
@@ -99,11 +102,11 @@ untrusted profiles keep the live workflow locked and disclose only actionable ga
 
 Unpublished drafts are retained per Environment while moving among workspace views and across
 Projects and Environments within a Server Profile. Any action that would discard unpublished
-work — including a Server Profile switch — warns first and offers an explicit discard choice
-that names the affected Environments and, for a switch that stays within a Server Profile, the
-changed Variables. Reloading or closing the page with a dirty draft raises a `beforeunload`
-warning; the draft is discarded only if the user confirms. Draft content stays in memory and is
-never written to unprotected browser storage in plaintext.
+work — including a Server Profile preview switch in the development fixture — warns first and
+offers an explicit discard choice that names the affected Environments and, for a switch that
+stays within a Server Profile, the changed Variables. Reloading or closing the page with a dirty
+draft raises a `beforeunload` warning; the draft is discarded only if the user confirms. Draft
+content stays in memory and is never written to unprotected browser storage in plaintext.
 
 ## Role and lifecycle disclosure
 
@@ -128,7 +131,7 @@ request. Outside an explicit development fixture (`DOTRELAY_WORKSPACE_FIXTURE=1`
 never substitute development fixture identity, Teams, Projects, or a signed-in session for a
 failed request. A fresh visit that cannot verify the boundary renders a loading state first and
 then a recoverable connection error; it shows no identity, Membership, Team, Project, or Device
-data until a live or explicitly selected fixture boundary is verified.
+data until a live or explicitly enabled fixture boundary is verified.
 
 When a previously verified boundary can no longer be refreshed, the shell keeps the last verified
 metadata visibly stale, offers a retry action, and reconnects automatically with capped
@@ -155,22 +158,22 @@ problem response, and no Better Auth detail text is ever exposed.
 ## Browser quality boundary
 
 Playwright coverage in `apps/web/e2e/workspace.spec.ts` exercises the public landing/sign-in flow,
-role-aware invitation controls, pending key grants, Environment archive/restore confirmation,
-Server Profile switching, keyboard and responsive navigation, Revision history, enrolled Device
-listing, and the blocked secret-access state. `apps/web/e2e/workspace-offline.spec.ts` adds the
+role-aware invitation controls, pending key grants, Environment archive/restore confirmation, the
+development fixture's Server Profile preview, keyboard and responsive navigation, Revision
+history, enrolled Device listing, and the blocked secret-access state. `apps/web/e2e/workspace-offline.spec.ts` adds the
 offline and stale connection states: an unreachable, malformed, or non-200 boundary response on
 a fresh visit, and a failed refresh that keeps last verified data stale until automatic
 reconnection or an explicit retry succeeds. `apps/web/e2e/workspace-draft-protection.spec.ts`
 covers unpublished draft protection: drafts survive subview navigation and return, reload/close
 warns only while a draft is dirty and keeps or discards it on the user's choice, discard
 prompts name the affected Environments and, within a Server Profile, the changed Variables, a
-Server Profile switch with a dirty draft requires an explicit discard, and draft Values never
-appear in browser storage. `apps/web/e2e/workspace-history.spec.ts` keeps the workspace
-location, URL, and browser history in sync: Back/Forward traverses the workspace views and the
-selected Environment, a reload or shared link reopens the visible view and Server Profile, a
-link to a deleted Team, Project, or Environment shows a recovery notice instead of a blank
-page, and history navigation preserves dirty drafts or, for a Server Profile rebind, prompts so
-dismissing it returns to the entry left behind. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
+Server Profile preview switch in the development fixture with a dirty draft requires an explicit
+discard, and draft Values never appear in browser storage. `apps/web/e2e/workspace-history.spec.ts`
+keeps the workspace location, URL, and browser history in sync: Back/Forward traverses the
+workspace views and the selected Environment, a reload or shared link reopens the visible view
+and Server Profile, a link to a deleted Team, Project, or Environment shows a recovery notice
+instead of a blank page, and history navigation preserves dirty drafts or, for a Server Profile
+rebind in the development fixture, prompts so dismissing it returns to the entry left behind. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
 read states with a live protocol session: a slow initial read shows the loading state instead of
 the empty-claim, and a failed read discloses the failure with a retry action while Add Variable,
 Save changes, and per-Variable edits stay blocked; retry re-enters the loading state.

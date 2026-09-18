@@ -487,6 +487,17 @@ export const fetchWorkspaceBoundary = async (
   return body;
 };
 
+/**
+ * The Server Profile this deployment is. DotRelay's own dev and production
+ * web images declare "hosted"; any other value (or none) marks a self-hosted
+ * instance, so a deployment that never declares itself is treated as
+ * untrusted.
+ */
+export const resolveWorkspaceProfileId = (): WorkspaceProfileId =>
+  process.env.NEXT_PUBLIC_DOTRELAY_WEB_PROFILE === "hosted"
+    ? "hosted"
+    : "self-hosted";
+
 export const resolveWebOrigin = (): string =>
   process.env.NEXT_PUBLIC_WEB_ORIGIN ??
   process.env.WEB_ORIGIN ??

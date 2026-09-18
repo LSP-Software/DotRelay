@@ -161,7 +161,9 @@ the Draft's state, the remote state, or a merge of them.
 _Avoid_: Collision, merge conflict, stale head
 
 **Server Profile**:
-A named hosted or self-hosted DotRelay service selected by a client.
+A named hosted or self-hosted DotRelay service selected by a client. A web deployment is bound to
+the Server Profile behind it and never lets a visitor choose another; only the CLI selects among
+Server Profiles.
 _Avoid_: Instance, endpoint
 
 **History Trust Reset**:
