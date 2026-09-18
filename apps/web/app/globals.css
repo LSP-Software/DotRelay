@@ -97,6 +97,19 @@
     @apply bg-background text-foreground antialiased;
   }
 
+  /* Tailwind v4's preflight no longer gives controls a pointer cursor. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  input:not(:disabled)::file-selector-button {
+    cursor: pointer;
+  }
+
   ::selection {
     @apply bg-primary/25 text-foreground;
   }
