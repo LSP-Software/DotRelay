@@ -2187,29 +2187,31 @@ export const WorkspaceShell = ({
           <span className="font-heading font-semibold">DotRelay</span>
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
-          <div>
-            <Label
-              className="px-3 text-xs text-muted-foreground"
-              htmlFor="team-switcher"
-            >
-              Team
-            </Label>
-            <select
-              aria-label="Team"
-              className="mt-1 h-9 w-full rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              id="team-switcher"
-              onChange={(event) => handleTeamChange(event.target.value)}
-              value={selectedTeam?.id ?? ""}
-            >
-              {teams.map((team) => (
-                <option key={team.id} value={team.id}>
-                  {teamsWithProjects.has(team.id)
-                    ? team.name
-                    : `${team.name} (no projects)`}
-                </option>
-              ))}
-            </select>
-          </div>
+          {teams.length > 0 ? (
+            <div>
+              <Label
+                className="px-3 text-xs text-muted-foreground"
+                htmlFor="team-switcher"
+              >
+                Team
+              </Label>
+              <select
+                aria-label="Team"
+                className="mt-1 h-9 w-full rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                id="team-switcher"
+                onChange={(event) => handleTeamChange(event.target.value)}
+                value={selectedTeam?.id ?? ""}
+              >
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {teamsWithProjects.has(team.id)
+                      ? team.name
+                      : `${team.name} (no projects)`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <NavLinks
             onOpenProject={openProject}
             onSetView={openWorkspaceView}
@@ -2313,25 +2315,29 @@ export const WorkspaceShell = ({
                   <SheetDescription>Workspace navigation</SheetDescription>
                 </SheetHeader>
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
-                  <Label htmlFor="team-switcher-mobile">Team</Label>
-                  <select
-                    aria-label="Team"
-                    className="h-9 w-full rounded-lg border border-input bg-input/30 px-3 text-sm"
-                    id="team-switcher-mobile"
-                    onChange={(event) => {
-                      handleTeamChange(event.target.value);
-                      closeMobile();
-                    }}
-                    value={selectedTeam?.id ?? ""}
-                  >
-                    {teams.map((team) => (
-                      <option key={team.id} value={team.id}>
-                        {teamsWithProjects.has(team.id)
-                          ? team.name
-                          : `${team.name} (no projects)`}
-                      </option>
-                    ))}
-                  </select>
+                  {teams.length > 0 ? (
+                    <>
+                      <Label htmlFor="team-switcher-mobile">Team</Label>
+                      <select
+                        aria-label="Team"
+                        className="h-9 w-full rounded-lg border border-input bg-input/30 px-3 text-sm"
+                        id="team-switcher-mobile"
+                        onChange={(event) => {
+                          handleTeamChange(event.target.value);
+                          closeMobile();
+                        }}
+                        value={selectedTeam?.id ?? ""}
+                      >
+                        {teams.map((team) => (
+                          <option key={team.id} value={team.id}>
+                            {teamsWithProjects.has(team.id)
+                              ? team.name
+                              : `${team.name} (no projects)`}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : null}
                   <NavLinks
                     onNavigate={closeMobile}
                     onOpenProject={openProject}
@@ -2357,29 +2363,31 @@ export const WorkspaceShell = ({
               </SheetContent>
             </Sheet>
 
-            <div className="hidden min-w-0 items-center gap-2 text-sm sm:flex">
-              <span className="truncate">{selectedTeam?.name ?? "Team"}</span>
-              {selectedProject ? (
-                <>
-                  <ChevronRight
-                    aria-hidden="true"
-                    className="size-3 text-muted-foreground"
-                  />
-                  <span className="truncate">
-                    {projectDisplayName(selectedProject)}
-                  </span>
-                </>
-              ) : null}
-              {selectedEnvironment && view === "environment" ? (
-                <>
-                  <ChevronRight
-                    aria-hidden="true"
-                    className="size-3 text-muted-foreground"
-                  />
-                  <span>{selectedEnvironment.label}</span>
-                </>
-              ) : null}
-            </div>
+            {selectedTeam ? (
+              <div className="hidden min-w-0 items-center gap-2 text-sm sm:flex">
+                <span className="truncate">{selectedTeam.name}</span>
+                {selectedProject ? (
+                  <>
+                    <ChevronRight
+                      aria-hidden="true"
+                      className="size-3 text-muted-foreground"
+                    />
+                    <span className="truncate">
+                      {projectDisplayName(selectedProject)}
+                    </span>
+                  </>
+                ) : null}
+                {selectedEnvironment && view === "environment" ? (
+                  <>
+                    <ChevronRight
+                      aria-hidden="true"
+                      className="size-3 text-muted-foreground"
+                    />
+                    <span>{selectedEnvironment.label}</span>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
 
             {/* The header offers a server switch only in the development
                 fixture, where it previews hosted and self-hosted deployments.
@@ -2562,66 +2570,82 @@ export const WorkspaceShell = ({
               ) : null}
               {view === "projects" ? (
                 <section>
-                  <div className="mb-6">
-                    <p className="text-sm text-muted-foreground">Team</p>
-                    <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                      {selectedTeam?.name ?? "Choose a team"}
-                    </h1>
-                    <p className="mt-2 max-w-2xl text-muted-foreground">
-                      Open a project to manage its environment variables and
-                      secrets. Switch teams using the team menu.
-                    </p>
-                  </div>
-                  {setupAction &&
-                  (setupAction.id === "sign-in" ||
-                    setupAction.id === "trust-profile" ||
-                    setupAction.id === "crypto-unavailable") ? (
-                    <div className="mb-6">
-                      <EnvironmentEditor
-                        available={false}
-                        contextIdentity={currentIdentity}
-                        onSetupAction={handleSetupAction}
-                        role={teamRoleFor(currentIdentity.teamId)}
-                        setupAction={setupAction}
-                        setupBusy={deviceSetupInProgress}
-                        setupCommand={cliSetupCommand}
-                        setupMessage={deviceSetupMessage}
-                      />
+                  {teams.length === 0 ? (
+                    <div className="mb-6" data-testid="no-teams-empty">
+                      <h1 className="font-heading text-3xl font-semibold tracking-tight">
+                        No teams yet
+                      </h1>
+                      <p className="mt-2 max-w-2xl text-muted-foreground">
+                        A Team is where the projects that share your environment
+                        variables live. Run this in a GitHub repository to
+                        create your first Team, Project, and Environment:{" "}
+                        <InlineCommand value="dotrelay init" />.
+                      </p>
                     </div>
-                  ) : null}
-                  {teamProjects.length === 0 ? (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>No projects yet</CardTitle>
-                        <CardDescription>
-                          Run this in your GitHub repository to create a
-                          project: <InlineCommand value="dotrelay init" />.
-                        </CardDescription>
-                      </CardHeader>
-                    </Card>
                   ) : (
-                    <div className="grid gap-4 md:grid-cols-2">
-                      {teamProjects.map((project) => (
-                        <button
-                          className="rounded-xl border bg-card p-5 text-left ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
-                          key={project.id}
-                          onClick={() => openProject(project)}
-                          type="button"
-                        >
-                          <p className="text-xs text-muted-foreground">
-                            Project
-                          </p>
-                          <h2 className="mt-1 font-heading text-xl font-medium">
-                            {projectDisplayName(project)}
-                          </h2>
-                          <p className="mt-2 text-sm text-muted-foreground">
-                            {project.environments
-                              .map((environment) => environment.label)
-                              .join(", ") || "No environments yet"}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
+                    <>
+                      <div className="mb-6">
+                        <p className="text-sm text-muted-foreground">Team</p>
+                        <h1 className="font-heading text-3xl font-semibold tracking-tight">
+                          {selectedTeam?.name ?? "Choose a team"}
+                        </h1>
+                        <p className="mt-2 max-w-2xl text-muted-foreground">
+                          Open a project to manage its environment variables and
+                          secrets. Switch teams using the team menu.
+                        </p>
+                      </div>
+                      {setupAction &&
+                      (setupAction.id === "sign-in" ||
+                        setupAction.id === "trust-profile" ||
+                        setupAction.id === "crypto-unavailable") ? (
+                        <div className="mb-6">
+                          <EnvironmentEditor
+                            available={false}
+                            contextIdentity={currentIdentity}
+                            onSetupAction={handleSetupAction}
+                            role={teamRoleFor(currentIdentity.teamId)}
+                            setupAction={setupAction}
+                            setupBusy={deviceSetupInProgress}
+                            setupCommand={cliSetupCommand}
+                            setupMessage={deviceSetupMessage}
+                          />
+                        </div>
+                      ) : null}
+                      {teamProjects.length === 0 ? (
+                        <Card>
+                          <CardHeader>
+                            <CardTitle>No projects yet</CardTitle>
+                            <CardDescription>
+                              Run this in your GitHub repository to create a
+                              project: <InlineCommand value="dotrelay init" />.
+                            </CardDescription>
+                          </CardHeader>
+                        </Card>
+                      ) : (
+                        <div className="grid gap-4 md:grid-cols-2">
+                          {teamProjects.map((project) => (
+                            <button
+                              className="rounded-xl border bg-card p-5 text-left ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
+                              key={project.id}
+                              onClick={() => openProject(project)}
+                              type="button"
+                            >
+                              <p className="text-xs text-muted-foreground">
+                                Project
+                              </p>
+                              <h2 className="mt-1 font-heading text-xl font-medium">
+                                {projectDisplayName(project)}
+                              </h2>
+                              <p className="mt-2 text-sm text-muted-foreground">
+                                {project.environments
+                                  .map((environment) => environment.label)
+                                  .join(", ") || "No environments yet"}
+                              </p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
                   )}
                 </section>
               ) : null}

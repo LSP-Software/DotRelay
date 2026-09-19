@@ -76,3 +76,42 @@ Status:
 OPEN - needs reproduction with a real (non-fixture) boundary and a fresh
 profile before changing the shell's loading logic. Tracked so the next audit
 session starts from here instead of re-deriving it.
+
+## UX-003 - Signed-in user with zero Teams is shown a dead "Choose a team" selector
+Journey:
+FIRST USE - sign in, zero teams.
+State:
+Signed in (any profile), belonging to no Team yet - e.g. a new user who
+signed in through the web app before running any CLI command. The boundary
+reports `session.active: true` and `catalog.teams: []`.
+Severity:
+HIGH
+Observed:
+The workspace renders the team view with a "Choose a team" heading, an empty
+"Team" `<select>` in the sidebar (and again in the mobile navigation sheet),
+and a dead "No projects yet / run dotrelay init" card. The heading implies the
+user should choose a team, but the selector is empty and offers nothing to
+choose. The two screens contradict each other: the heading says "choose", the
+body says "there is nothing here, run the CLI".
+User consequence:
+A brand-new user who signed in via the web (the most obvious first action) is
+stuck at a screen that tells them to choose a team that does not exist, while
+the actual next step - running `dotrelay init` in a repository - is buried in
+a subordinate card. This is the exact "empty Choose-a-team selector" trap the
+audit brief calls out.
+Expected:
+When there are no Teams, the workspace stops pretending the user is choosing
+among Teams: it hides the empty team selector (sidebar, mobile sheet, header
+crumb) and shows one clear next action - create your first Team/Project/
+Environment by running `dotrelay init`. The CLI, not a web form, is where Teams
+and Projects are created; the web UI manages variables of existing Projects.
+Evidence:
+Reproduced in e2e by intercepting `/api/workspace/boundary` to return the
+fixture boundary with `catalog` zeroed (a signed-in, online, zero-Teams state);
+the page previously rendered the dead selector. See
+`apps/web/e2e/workspace-zero-teams.spec.ts`.
+Status:
+FIXED - the zero-Teams state now hides every "choose a team" control and shows
+a single "No teams yet" empty state pointing at `dotrelay init`. Verified in
+e2e (the zero-Teams state points at the CLI and shows no team selector; a
+user with Teams keeps the selector). Committed on main. See DECISIONS.md (D-002).

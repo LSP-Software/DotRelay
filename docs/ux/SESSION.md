@@ -2,6 +2,49 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-18 - Zero-Teams empty state (UX-003)
+
+Skills: ux-audit (journey scoping + evidence), impeccable (empty-state
+writing and hierarchy). The running app remained the source of truth.
+
+Scope:
+- Walked the FIRST USE journey up to "zero teams". The web app has no
+  team-creation surface, so the realistic zero-Teams state is a signed-in
+  user who has not run the CLI yet. Reproduced it in e2e by intercepting
+  `/api/workspace/boundary` to zero the fixture's `catalog` (keeping session,
+  profile, device, environment intact so the client stays online).
+- Found the dead state: a "Choose a team" heading plus an empty "Team"
+  selector in the sidebar and the mobile sheet, contradicting the
+  "No projects yet / run dotrelay init" card below.
+
+Changed:
+- `apps/web/app/workspace/workspace-shell.tsx`:
+  - The zero-Teams projects view now renders a single "No teams yet" empty
+    state pointing at `dotrelay init` (the one real next action), instead of
+    the "Choose a team" heading + "No projects yet" card.
+  - The sidebar team `<select>`, the mobile-sheet team `<select>`, and the
+    header team crumb are hidden when there are no Teams, so no dead selector
+    remains on desktop or mobile.
+  - The one-or-more-Teams view is byte-for-byte unchanged.
+- `apps/web/e2e/workspace-zero-teams.spec.ts` (new): a zero-Teams boundary
+  shows no team selector and a "No teams yet" state with `dotrelay init`; a
+  boundary with Teams keeps the selector.
+- `docs/ux/BACKLOG.md` (UX-003), `docs/ux/DECISIONS.md` (D-002),
+  `docs/ux/JOURNEYS.md`, and this file.
+
+Verified:
+- `bun x biome check` clean on the touched files; repo-wide lint baseline
+  unchanged (184 errors, all pre-existing).
+- `bun run typecheck` green (6/6 tasks).
+- `bun run test:e2e`: 90 passed, 1 failed. The one failure
+  (`workspace-small-viewport.spec.ts:182`) fails identically on a clean tree
+  (verified by stashing this change) and is unrelated.
+
+Decision recorded (D-002): no web "Create team" form. Teams and Projects are
+created by the CLI (`dotrelay init`); the web UI manages variables of existing
+Projects. A bare web-created Team (no repository) would not be useful, and a
+second creation surface would diverge from the CLI.
+
 ## 2026-09-18 - Sign out for signed-in accounts (UX-001)
 
 Skills: ux-audit (journey scoping), impeccable (menu component + copy).

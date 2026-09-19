@@ -36,3 +36,37 @@ Rejected options:
   a dialog adds friction for a one-step action.
 Verification: `apps/web/e2e/workspace-account.spec.ts` covers the desktop menu
 and the mobile sheet; both sign out and land on `/sign-in`.
+
+## D-002 - Zero-Teams state hides the selector and points at the CLI (no web team-creation)
+Date: 2026-09-18
+Problem: A signed-in user with zero Teams saw a dead empty "Choose a team"
+selector and a misleading heading (UX-003).
+Chosen:
+- When `catalog.teams` is empty, the workspace removes every "choose a team"
+  control (the sidebar team `<select>`, the mobile-sheet team `<select>`, and
+  the header team crumb) and shows a single "No teams yet" empty state whose
+  one action is to run `dotrelay init`.
+- The normal (one-or-more-Teams) view is unchanged.
+Why not a web "Create team" form:
+- By DotRelay's product model, Teams and Projects are created by the CLI:
+  `dotrelay init` "creates the missing Team, Project, and Environment" (CLI
+  help). The web UI is the surface for managing the environment variables of
+  existing Projects - it has no "create project" either; its empty state also
+  says "run dotrelay init".
+- The API does expose `POST /api/v1/teams`, but a bare Team (no Project, no
+  repository link) is not a useful thing to create from the browser - the
+  value of a Team is the projects inside it, and those require a repository.
+  A web "create team" form would create a Team the user then still has to
+  leave the browser to populate, splitting one workflow across two surfaces.
+- Adding web team-creation would also make the web and CLI diverge as two
+  sources of truth for Team creation.
+Tradeoffs considered:
+- A "Create team" dialog in the web UI (the API supports it). Rejected for the
+  reasons above; revisit only if the product adds a browser project-creation
+  flow that makes a bare web-created Team useful.
+- Rewording the heading to "No teams" while keeping the empty selector.
+  Rejected: the empty selector is still a dead control; the structural fix is
+  to remove it, not to relabel it.
+Verification: `apps/web/e2e/workspace-zero-teams.spec.ts` - a zero-Teams
+boundary shows no team selector and a "No teams yet" state pointing at
+`dotrelay init`; a boundary with Teams keeps the selector.

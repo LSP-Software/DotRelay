@@ -10,7 +10,9 @@ issues.
 - First sign in - UNREVIEWED (GitHub OAuth only reachable via a real account;
   the sign-in page itself was reviewed and reduced to a single button in
   #225)
-- Zero teams - UNREVIEWED
+- Zero teams - CLEAN-PASS-1 (UX-003 fixed: the dead empty "Choose a team"
+  selector is gone; a signed-in, zero-Teams user sees one "No teams yet" action
+  pointing at `dotrelay init`)
 - Create first team - UNREVIEWED
 - Zero projects - UNREVIEWED
 - Create/connect first project - UNREVIEWED
