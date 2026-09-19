@@ -40,7 +40,11 @@ issues.
   teams and projects is e2e-covered)
 - Switch project - CLEAN-PASS-1
 - Switch team - CLEAN-PASS-1 (team combobox in the sidebar and the sheet)
-- Inspect variables - UNREVIEWED
+- Inspect variables - CLEAN-PASS-1 (environment page audited in the browser:
+  the prominent full-width red "Archive environment" bar below `lg` is fixed
+  as UX-005; the setup card's browser-vs-CLI contradiction is fixed as UX-004.
+  Primary actions Add variable / Save changes and the empty/loading/failed
+  states are sound)
 - Add variable - UNREVIEWED (dialog is e2e-covered, incl. small viewports)
 - Edit variable - UNREVIEWED
 - Delete variable - UNREVIEWED

@@ -2654,7 +2654,7 @@ export const WorkspaceShell = ({
               selectedProject &&
               selectedEnvironment ? (
                 <section>
-                  <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                  <div className="mb-5 flex flex-col items-start gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                       <p className="text-sm text-muted-foreground">
                         {selectedTeam?.name}

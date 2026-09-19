@@ -2,6 +2,38 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-19 - Environment page: full-width "Archive environment" bar (UX-005)
+
+Skills: ux-audit (evidence + severity), impeccable (visual hierarchy). The
+running app remained the source of truth.
+
+Scope:
+- Re-walked the environment page (the core screen for managing variables) in a
+  fresh profile: trusted the server, opened LSP-Software/DotRelay, production
+  environment. At this width the header is a column (`flex-col` below the `lg`
+  1024px breakpoint) and the default `align-items: stretch` stretched the
+  `destructive`-variant "Archive environment" trigger into a full-width red
+  bar between the project title and the environment tabs - the dominant element
+  on the screen, above the Variables card.
+
+Changed:
+- `apps/web/app/workspace/workspace-shell.tsx`: the environment page header
+  gained `items-start` for the sub-`lg` column (overridden by the existing
+  `lg:items-end lg:justify-between` on desktop), so the archive/restore trigger
+  keeps its natural width at every breakpoint. No change to the control's
+  role, label, confirm dialog, or the desktop layout.
+- `docs/ux/BACKLOG.md` (UX-005), `docs/ux/JOURNEYS.md` (Inspect variables),
+  and this file.
+
+Verified:
+- `bun run typecheck` green; `bun run lint` clean.
+- Playwright measurement (throwaway spec, deleted after): at an 800px viewport
+  the button is 178px wide and left-aligned (a full-width bar would be ~700px
+  of an 800px column); at 1440px it is 178px wide and right-aligned, i.e. the
+  desktop layout is unchanged.
+- `playwright test` on the workspace, publish, read, re-read, and
+  role-permissions specs: 20 passed.
+
 ## 2026-09-19 - Environment setup card: browser vs CLI contradiction (UX-004)
 
 Skills: ux-audit (journey + evidence), impeccable (hierarchy + copy). The
@@ -35,6 +67,10 @@ Verified:
   …not this browser." → `dotrelay setup` → "Set up browser"; no contradiction.
 - `playwright test` on the environment, server-trust, and enrollment specs:
   22 passed.
+- Full web e2e suite: 90 passed, 1 failed. The one failure
+  (`workspace-small-viewport.spec.ts:182`, "a focused field and the submit
+  action stay visible over the keyboard") reproduces identically with the
+  change stashed, i.e. it is pre-existing and unrelated to this copy change.
 
 Environment notes (for the next session):
 - A fresh browser profile (the cmux relay profile) has no stored trust decision,

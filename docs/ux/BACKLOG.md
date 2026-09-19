@@ -155,3 +155,48 @@ the CLI on this machine, not this browser." (same as the Devices view), removing
 the contradiction. The `#cli-setup-command` test id and the button are unchanged,
 so the CLI escape hatch still works. Verified by browser observation and the
 environment/trust/enrollment e2e specs. Committed on main.
+
+## UX-005 - Environment page: "Archive environment" renders as a full-width red bar
+Journey:
+NORMAL USE - open a project environment (the core screen for managing variables).
+State:
+Signed in, server trusted, a project with one or more environments is open.
+Reproduces on any viewport below the `lg` (1024px) breakpoint - i.e. phones,
+tablets, and narrow laptops (the workspace sidebar collapses under `lg` too).
+Severity:
+MEDIUM
+Observed:
+The environment page header is a `flex-col` layout below `lg` (it switches to a
+row at `lg`). The "Archive environment" trigger is a `destructive`-variant
+button that, in the column layout, stretches to full width (the container's
+default `align-items: stretch`), rendering as a full-width red bar wedged
+between the project title and the environment tabs - above the Variables card
+where the user's actual task (view / add / edit / save variables) lives. It is
+the most visually prominent control on the screen. At `lg+` the same control is
+a normal-width button aligned to the right, so the full-width bar is a layout
+artifact of the sub-`lg` breakpoint, not an intentional design.
+User consequence:
+On the product's core screen, a rare, reversible admin action (archive this
+environment) visually dominates the user's primary task of managing variables.
+A user skimming the screen meets a big red destructive control before anything
+useful for what they came to do. This inverts the intended priority.
+Expected:
+The environment lifecycle control is a contained secondary control at every
+breakpoint (its natural width, not a full-width bar), so it cannot out-shout the
+user's core task. The confirm dialog that guards the actual archive/restore
+action is unchanged.
+Evidence:
+Browser observation at an ~899px viewport on the production environment of
+LSP-Software/DotRelay: a full-width red "Archive environment" bar sits directly
+below the project title and above the production/staging tabs and the
+set-up/variables card. At `lg+` the same control is a normal right-aligned
+button.
+Status:
+FIXED - the environment page header now uses `items-start` for its sub-`lg`
+column (overridden by the existing `lg:items-end lg:justify-between` on
+desktop), so the archive/restore trigger keeps its natural width at every
+breakpoint instead of stretching to a full-width bar below `lg`. The confirm
+dialog and the button's role/label are unchanged. Verified with a Playwright
+measurement at an 800px viewport (178px-wide button, left-aligned, not a
+full-width bar) and at 1440px (right-aligned row, unchanged), plus the
+environment/permissions e2e specs (20 passed). Committed on main.
