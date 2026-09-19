@@ -249,3 +249,54 @@ FIXED - the dialog's value field gains a `Reveal initial value` /
 and the value is stored exactly as typed either way. Verified in the browser
 (toggle switches the input between dots and plain text and announces both
 states) and by the add-variable e2e specs. Committed on main.
+
+## UX-007 - Opening a project with no environments silently reverts to the projects list
+Journey:
+FIRST USE - create/connect first project (a Project linked without any Environment yet).
+State:
+Signed in, server trusted, a project with `environments: []` is open (the
+catalog can report this: `dotrelay init` links the repository as a Project and
+creates its first Environment separately, so the window in between is real and
+the API's project catalog reports whatever Environments exist).
+Severity:
+HIGH
+Observed:
+Clicking the project card (which navigates to the environment view) or loading
+a deep link with `view=environment` for such a project appears to do nothing:
+the location resolver silently downgrades the view to the projects list and the
+environment view renders nothing, so the user is left on the list with no
+feedback and no next action. The one state that exists for this case — the
+"No environments yet" line in the project card — is on the card they just
+clicked.
+User consequence:
+A brand-new user whose first project has no environment yet (exactly the FIRST
+USE moment after `dotrelay init` has linked the repo but before any
+environment is published) clicks their project and the UI does not visibly
+acknowledge the choice; there is no explanation of what an environment is or
+what to do next. By the backlog's own order this is "no obvious next action" —
+the most consequential category after a blocked user.
+Expected:
+Opening such a project keeps the environment view (the project header is shown)
+and presents a single "No environments yet" state with the one real next
+action (`dotrelay init`), mirroring the zero-teams and zero-projects states. A
+deep link naming an environment of such a project recovers to this state with
+the missing-resource notice adapted to the fact that the project has none at
+all.
+Evidence:
+Reproduced in a real browser with a boundary whose catalog is a team plus one
+project with `environments: []`: clicking the card left the projects list on
+screen (verified in the DOM); `resolveWorkspaceLocation`
+(`apps/web/lib/workspace-location.ts`) downgraded `view: "environment"` to
+`"projects"` whenever `environmentId` was null, and the shell's environment
+branch rendered `null` without a `selectedEnvironment`.
+Status:
+FIXED - `resolveWorkspaceLocation` now only drops the environment view when
+there is no Project (a dropped Project still goes to the projects list, as
+before); a valid Project with no Environments keeps the environment view. The
+shell renders a "No environments yet" state (test id `no-environments-empty`)
+with the `dotrelay init` next action, and the missing-environment alert copy
+is adapted when the project has no environments at all so it cannot
+contradict the card. Verified in the browser (card click and deep link both
+land on the project's no-environments state with `view=environment` in the
+URL) and by `apps/web/e2e/workspace-no-environments.spec.ts` plus the
+`resolveWorkspaceLocation` unit tests. Committed on main.

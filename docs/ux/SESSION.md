@@ -2,6 +2,82 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-19 - Zero-environment project dead end (UX-007)
+
+Skills: ux-audit (journey scoping + evidence), impeccable (empty-state
+writing). The running app remained the source of truth (Playwright DOM/ARIA
+walk; the cmux relay was down, so no screenshots were surfaced to the
+model).
+
+Scope:
+- Continued the FIRST USE walk: zero teams (UX-003, fixed earlier) and
+  zero projects were sound, so the next state was the one in between: a
+  Project that exists but has no Environments. That state is real and
+  reachable - `dotrelay init` links the repository as a Project and creates
+  its first Environment as a separate operation (the API's
+  `POST /api/v1/projects` and `POST /api/v1/projects/:id/environments` are
+  distinct), and the live boundary reports whatever Environments exist, so
+  the window between the two is a genuine FIRST USE moment.
+- Reproduced in a real browser by intercepting the fixture boundary with a
+  catalog of one team plus one project with `environments: []`: clicking
+  the project card left the user on the projects list with no feedback.
+  Mechanism: `resolveWorkspaceLocation` downgraded `view: "environment"`
+  to `"projects"` whenever the resolved `environmentId` was null, and the
+  shell's environment view branch rendered `null` without a
+  `selectedEnvironment`. A deep link with `view=environment` did the same.
+
+Changed:
+- `apps/web/lib/workspace-location.ts`: the view downgrade now only applies
+  when there is no Project (`projectId === null`); a valid Project with no
+  Environments keeps the environment view. The resolver's doc comment was
+  updated to match.
+- `apps/web/lib/workspace-location.test.ts`: the old
+  "drops the environment view when the project has no environments" test
+  (which pinned the dead-end behaviour) was replaced by two tests: the
+  environment view is kept for a project with no environments, and a
+  deep link naming one of its nonexistent environments reports
+  `missing: { kind: "environment" }` while still keeping the view.
+- `apps/web/app/workspace/workspace-shell.tsx`:
+  - The environment view now renders a "No environments yet" state (test
+    id `no-environments-empty`) under the project header: one next action,
+    `dotrelay init`, mirroring the zero-teams and zero-projects states.
+  - The missing-environment alert copy is adapted when the selected
+    project has no environments at all ("The project has no environments.
+    Run this in the project's repository to create the first one:
+    dotrelay init.") instead of claiming the user is "viewing the
+    project's first available environment".
+- `apps/web/e2e/workspace-no-environments.spec.ts` (new): a boundary with a
+  zero-environment project, opened via the card click, shows the
+  "No environments yet" state with `dotrelay init` and keeps
+  `view=environment` in the URL; a deep link with `view=environment` lands
+  on the same state; a project with environments is unaffected (tabs show,
+  no empty state).
+- `docs/ux/BACKLOG.md` (UX-007), `docs/ux/JOURNEYS.md` (zero projects,
+  create/connect first project), and this file.
+
+Verified:
+- `bun run typecheck` green (6/6 tasks); `bun x biome check` clean on the
+  touched files (the one `useExhaustiveDependencies` complaint in
+  workspace-shell.tsx exists on the clean tree too - pre-existing).
+- `bun test` on `lib/workspace-location.test.ts`: 16 pass.
+- `bun run test:e2e`: 94 passed, 1 failed - the one failure
+  (`workspace-small-viewport.spec.ts:182`) is the known pre-existing
+  keyboard-visibility failure. One full-run of the history spec
+  (`workspace-history.spec.ts:275`, the rebind-with-dirty-draft test)
+  failed once in a full-suite run and passed both in isolation (12/12) and
+  in a re-run of the full suite (94 passed), i.e. a flake, not a
+  regression: that test's flow never leaves a project without
+  environments.
+- Browser walk (Playwright DOM/ARIA): the card click and the deep link
+  both land on the project header plus "No environments yet ... dotrelay
+  init"; the zero-projects state is unchanged.
+
+Remaining:
+- FIRST USE publish first environment / first pull / first push are still
+  UNREVIEWED; then NORMAL USE edit/delete/pull/push variables, and the
+  remaining FAILURE STATES journeys.
+
+
 ## 2026-09-19 - "Add variable" dialog: masked value with no reveal, fixed from a reset working tree (UX-006)
 
 Skills: ux-audit (evidence + consistency), impeccable (affordance parity).

@@ -2531,7 +2531,11 @@ export const WorkspaceShell = ({
                     {missingResourceCopy[missingResource.kind].title}
                   </AlertTitle>
                   <AlertDescription>
-                    {missingResourceCopy[missingResource.kind].description}
+                    {missingResource.kind === "environment" &&
+                    selectedProject &&
+                    selectedProject.environments.length === 0
+                      ? "The project has no environments. Run this in the project's repository to create the first one: dotrelay init."
+                      : missingResourceCopy[missingResource.kind].description}
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -2739,6 +2743,31 @@ export const WorkspaceShell = ({
                       ))}
                     </TabsList>
                   </Tabs>
+                </section>
+              ) : null}
+
+              {view === "environment" &&
+              selectedProject &&
+              !selectedEnvironment ? (
+                <section>
+                  <div className="mb-5">
+                    <p className="text-sm text-muted-foreground">
+                      {selectedTeam?.name}
+                    </p>
+                    <h1 className="font-heading text-3xl font-semibold tracking-tight">
+                      {projectDisplayName(selectedProject)}
+                    </h1>
+                  </div>
+                  <Card data-testid="no-environments-empty">
+                    <CardHeader>
+                      <CardTitle>No environments yet</CardTitle>
+                      <CardDescription>
+                        A project starts without an environment. Run{" "}
+                        <InlineCommand value="dotrelay init" /> in this
+                        repository to create its first environment.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
                 </section>
               ) : null}
 

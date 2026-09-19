@@ -14,8 +14,12 @@ issues.
   selector is gone; a signed-in, zero-Teams user sees one "No teams yet" action
   pointing at `dotrelay init`)
 - Create first team - UNREVIEWED
-- Zero projects - UNREVIEWED
-- Create/connect first project - UNREVIEWED
+- Zero projects - CLEAN-PASS-1 (a signed-in team with no projects shows the
+  "No projects yet" card pointing at `dotrelay init`)
+- Create/connect first project - CLEAN-PASS-1 (the state after a repository is
+  linked but has no Environment yet was audited in the browser: opening such a
+  project now shows "No environments yet" with `dotrelay init` instead of
+  silently reverting to the projects list, UX-007)
 - CLI setup - UNREVIEWED (the Devices view shows the copyable `dotrelay setup`
   command; e2e-covered)
 - Publish first environment - UNREVIEWED

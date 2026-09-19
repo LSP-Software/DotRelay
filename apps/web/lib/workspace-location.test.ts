@@ -307,7 +307,32 @@ test("resolve uses the view fallback when the URL names no view", () => {
   expect(resolved.missing).toBe(null);
 });
 
-test("resolve drops the environment view when the project has no environments", () => {
+test("resolve keeps the environment view for a project with no environments", () => {
+  const catalog = {
+    teams: [{ id: "t1", name: "One", role: "OWNER" as const }],
+    projects: [
+      {
+        id: "p1",
+        teamId: "t1",
+        githubRepositoryId: "1",
+        lifecycle: "ACTIVE" as const,
+        environments: [],
+      },
+    ],
+  };
+  const resolved = resolveWorkspaceLocation(
+    parseWorkspaceLocation(
+      new URLSearchParams("profile=hosted&team=t1&project=p1&view=environment"),
+    ),
+    catalog,
+    viewFallback,
+  );
+  expect(resolved.environmentId).toBe(null);
+  expect(resolved.view).toBe("environment");
+  expect(resolved.missing).toBe(null);
+});
+
+test("resolve reports a missing environment on a project with no environments", () => {
   const catalog = {
     teams: [{ id: "t1", name: "One", role: "OWNER" as const }],
     projects: [
@@ -330,6 +355,6 @@ test("resolve drops the environment view when the project has no environments", 
     viewFallback,
   );
   expect(resolved.environmentId).toBe(null);
-  expect(resolved.view).toBe("projects");
+  expect(resolved.view).toBe("environment");
   expect(resolved.missing).toEqual({ kind: "environment" });
 });

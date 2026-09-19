@@ -108,9 +108,12 @@ export const sameWorkspaceLocation = (
  * without a Team is accepted from any Team and selects that Team; otherwise
  * a missing Team falls back to the first Team, a missing Project drops the
  * Project and Environment, and a missing Environment falls back to the
- * Project's first Environment. `missing` names the first resource, from the
- * top down, that the caller asked for and the catalog could not provide, so
- * the shell can offer a recovery path instead of a blank page.
+ * Project's first Environment. A Project that exists but has no Environments
+ * keeps the environment view: the shell shows the project's
+ * no-environments state with its next action instead of an empty page.
+ * `missing` names the first resource, from the top down, that the caller
+ * asked for and the catalog could not provide, so the shell can offer a
+ * recovery path instead of a blank page.
  */
 export const resolveWorkspaceLocation = (
   parsed: ParsedWorkspaceLocation,
@@ -161,8 +164,7 @@ export const resolveWorkspaceLocation = (
     }
   }
   let view = parsed.view ?? viewFallback(projectId !== null);
-  if (view === "environment" && (projectId === null || environmentId === null))
-    view = "projects";
+  if (view === "environment" && projectId === null) view = "projects";
   return {
     profileId: parsed.profileId,
     teamId,
