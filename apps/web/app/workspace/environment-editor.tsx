@@ -1675,9 +1675,10 @@ export const EnvironmentEditor = ({
             <CardContent className="space-y-3">
               {setupCommand ? (
                 <>
-                  <p className="text-sm text-muted-foreground">
-                    Use the CLI on this machine instead of this browser:
-                  </p>
+                <p className="text-sm text-muted-foreground">
+                  Prefer the CLI? It sets up the CLI on this machine, not this
+                  browser.
+                </p>
                   <CopyableCommand
                     className="mt-2"
                     data-testid="cli-setup-command"

@@ -2,6 +2,48 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-19 - Environment setup card: browser vs CLI contradiction (UX-004)
+
+Skills: ux-audit (journey + evidence), impeccable (hierarchy + copy). The
+running app remained the source of truth.
+
+Scope:
+- Re-walked FIRST USE / NORMAL USE in a fresh browser profile (no stored trust
+  or device). Trusted the server, opened the LSP-Software/DotRelay project
+  environment. The environment is locked until this browser enrolls a device,
+  so the "Set up this browser" card is shown.
+- Found the contradiction: the card is titled "Set up this browser" and its
+  button says "Set up browser", but the label above the visible command said
+  "Use the CLI on this machine instead of this browser:" then showed
+  `dotrelay setup …`. Three conflicting signals on the single most important
+  first-use step. The shell's Devices view framed the CLI correctly ("Prefer
+  the CLI? It sets up the CLI on this machine, not this browser."), so the two
+  surfaces disagreed.
+
+Changed:
+- `apps/web/app/workspace/environment-editor.tsx`: the locked-environment card's
+  CLI label now reads "Prefer the CLI? It sets up the CLI on this machine, not
+  this browser." (matching the Devices view), so the command is an optional
+  alternative for the same machine rather than something to do "instead of"
+  this browser. The `#cli-setup-command` test id and the "Set up browser" button
+  are unchanged; the CLI escape hatch still works.
+- `docs/ux/BACKLOG.md` (UX-004) and this file.
+
+Verified:
+- `bun run typecheck` green; `bun run lint` clean (72 files).
+- Browser: the card now reads "Set up this browser" → body → "Prefer the CLI?
+  …not this browser." → `dotrelay setup` → "Set up browser"; no contradiction.
+- `playwright test` on the environment, server-trust, and enrollment specs:
+  22 passed.
+
+Environment notes (for the next session):
+- A fresh browser profile (the cmux relay profile) has no stored trust decision,
+  so the workspace shows a "Trust this server" gate first; confirm it before
+  walking the project environment. The gate is well designed (shows origin +
+  identity, explains per-origin/per-identity scoping).
+- Playwright's `webServer` owns port 3000; stop any hub-launched dev server
+  before running `test:e2e` or it fails to start its own.
+
 ## 2026-09-18 - Zero-Teams empty state (UX-003)
 
 Skills: ux-audit (journey scoping + evidence), impeccable (empty-state

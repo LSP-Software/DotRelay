@@ -115,3 +115,43 @@ FIXED - the zero-Teams state now hides every "choose a team" control and shows
 a single "No teams yet" empty state pointing at `dotrelay init`. Verified in
 e2e (the zero-Teams state points at the CLI and shows no team selector; a
 user with Teams keeps the selector). Committed on main. See DECISIONS.md (D-002).
+
+## UX-004 - Environment view's setup card contradicts itself (browser vs CLI)
+Journey:
+FIRST USE / NORMAL USE - open a project's environment before this browser has
+enrolled a device.
+State:
+Signed in, server trusted, on a project environment, with no device enrolled in
+this browser (fresh profile, or a browser that hasn't run the CLI). The
+environment is locked (variables hidden) and the setup card is shown.
+Severity:
+MEDIUM
+Observed:
+The locked-environment card is titled "Set up this browser" and its button says
+"Set up browser", but the label above the visible command said "Use the CLI on
+this machine instead of this browser:" followed by `dotrelay setup …`. Three
+signals pointed in different directions: the card is about setting up *this
+browser*, yet its body told the user to use the CLI *instead of* this browser.
+The shell's Devices view framed the same CLI alternative correctly ("Prefer the
+CLI? It sets up the CLI on this machine, not this browser."), so the two
+surfaces were inconsistent.
+User consequence:
+A fresh user trying to unlock their variables can't tell whether to click
+"Set up browser" or run the CLI command. Following the title/button and then
+reading the body yields two opposite instructions, which stalls the single most
+important first-use step (getting this browser to read its values).
+Expected:
+The primary action (enrol this browser) is unambiguous, and the CLI command is
+presented as an optional alternative for the same machine — not as something to
+do "instead of" this browser. The environment view should match the Devices view
+framing.
+Evidence:
+Browser observation: the environment card showed title "Set up this browser",
+label "Use the CLI on this machine instead of this browser:", the
+`dotrelay setup` command, and a "Set up browser" button simultaneously.
+Status:
+FIXED - the environment view's CLI label now reads "Prefer the CLI? It sets up
+the CLI on this machine, not this browser." (same as the Devices view), removing
+the contradiction. The `#cli-setup-command` test id and the button are unchanged,
+so the CLI escape hatch still works. Verified by browser observation and the
+environment/trust/enrollment e2e specs. Committed on main.
