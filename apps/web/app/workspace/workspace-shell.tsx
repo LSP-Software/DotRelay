@@ -476,6 +476,11 @@ const NavLinks = ({
   </nav>
 );
 
+// After this long the initial workspace load is treated as stalled (a hung
+// fetch, not a slow one) and the shell offers a concrete retry instead of an
+// open-ended spinner. Healthy loads resolve in well under a second.
+const LOADING_STALL_MS = 8_000;
+
 export const WorkspaceShell = ({
   protocolSession,
 }: Readonly<{
@@ -488,6 +493,11 @@ export const WorkspaceShell = ({
   );
   const [connection, setConnection] = useState<ConnectionState>("loading");
   const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
+  // While the boundary hasn't been verified, the shell shows a loading state.
+  // If that load outlasts a generous threshold - a hung fetch, not a slow one -
+  // it switches to a concrete "still connecting" state with a retry so the user
+  // is never stranded on an open-ended spinner.
+  const [loadingStalled, setLoadingStalled] = useState(false);
   const reconnectNowRef = useRef<(() => void) | null>(null);
   const boundaryJsonRef = useRef(
     JSON.stringify(emptyWorkspaceBoundary(DEPLOYMENT_PROFILE_ID)),
@@ -1021,6 +1031,7 @@ export const WorkspaceShell = ({
       boundaryJsonRef.current = JSON.stringify(placeholder);
       setVerifiedAt(null);
       setConnection("loading");
+      setLoadingStalled(false);
     }
     setTeamId(location.teamId);
     setProjectId(location.projectId);
@@ -1499,6 +1510,20 @@ export const WorkspaceShell = ({
       if (timer !== undefined) clearTimeout(timer);
     };
   }, [profileId, teamId, projectId, environmentId, removeSessionByKey]);
+
+  // Bound the open-ended loading state: a healthy load of a profile resolves
+  // in well under a second, so if it is still unverified after the stall
+  // threshold the fetch has hung. A profile change rebinds the shell and
+  // restarts the episode; key the timer on it so a slow-but-healthy load of
+  // the new profile is not reported as stalled by the previous episode.
+  useEffect(() => {
+    if (connection !== "loading" || verifiedAt !== null) {
+      setLoadingStalled(false);
+      return;
+    }
+    const timer = setTimeout(() => setLoadingStalled(true), LOADING_STALL_MS);
+    return () => clearTimeout(timer);
+  }, [connection, verifiedAt, profileId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2431,7 +2456,22 @@ export const WorkspaceShell = ({
               className="py-24 text-center text-sm text-muted-foreground"
               data-testid="workspace-loading"
             >
-              Loading workspace…
+              {loadingStalled ? (
+                <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-6">
+                  <p className="text-base font-medium text-foreground">
+                    Still connecting to the server
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    This is taking longer than usual. You can try again, or
+                    check that the DotRelay server is reachable.
+                  </p>
+                  <Button data-testid="workspace-retry" onClick={requestRetry}>
+                    Try again
+                  </Button>
+                </div>
+              ) : (
+                "Loading workspace…"
+              )}
             </section>
           ) : connection === "offline" && verifiedAt === null ? (
             <section

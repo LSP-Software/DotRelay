@@ -2,6 +2,81 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-19 - Bounded initial loading state with a retry (UX-002)
+
+Skills: ux-audit (failure states + evidence), impeccable (copy). The running
+app remained the source of truth; this session resumed from the audit state
+reconstructed from Git, which left a corrupted half-applied version of this
+fix in the working tree (a duplicated JSX fragment in the connection
+branches) - the orphan was removed and the rest of the feature recovered.
+
+Scope:
+- The workspace shell shows "Loading workspace…" while the initial boundary
+  fetch is in flight. If that fetch hangs (device provisioning stuck, a hung
+  request, a server that accepts connections but never answers), the user was
+  stranded on an open-ended spinner: no progress signal, no retry. UX-002 had
+  recorded a stuck variant of this in the audit environment and was tracked
+  as the next candidate.
+- This session gave the finding a deterministic reproduction that does not
+  depend on the audit environment: in a real browser, the first two
+  `/api/workspace/boundary` fetches were intercepted and held pending
+  (Playwright `page.route`, never fulfilled).
+
+Changed:
+- `apps/web/app/workspace/workspace-shell.tsx`:
+  - A `LOADING_STALL_MS` (8s) threshold - generous: a healthy load of a
+    profile resolves in well under a second (the boundary is a single
+    no-store fetch, no bootstrap work).
+  - While `connection === "loading"` and the boundary is unverified, a timer
+    starts; if it fires, the loading state switches from the bare
+    "Loading workspace…" line to "Still connecting to the server" with an
+    explanation and a "Try again" button wired to the existing reconnect
+    path (`requestRetry`).
+  - A profile rebind restarts the stall episode (the flag resets and the
+    effect is keyed on the profile), so a slow-but-healthy load of a newly
+    selected profile is never reported as stalled.
+  - The healthy path is unchanged: the moment the boundary verifies (or the
+    fetch fails and the shell goes offline) the loading state leaves and the
+    stall flag resets.
+- `docs/ux/BACKLOG.md` (UX-002 closed), `docs/ux/JOURNEYS.md` (Loading →
+  CLEAN-PASS-1), and this file.
+
+Verified:
+- `bun run typecheck` green; `bun x biome check` clean on the touched file.
+- Real browser (Playwright against the running app, `DOTRELAY_WORKSPACE_FIXTURE=1`):
+  - Hung fetch: reload with the first two boundary fetches held pending →
+    the "Still connecting to the server" state with its "Try again" button
+    appeared ~8s after reload; clicking it completed the next (unintercepted)
+    fetch and the workspace settled to the signed-in view (team crumb,
+    trust gate, project).
+  - Healthy load: reload with no interception → the workspace settles within
+    ~2s, well under the stall threshold; no false stalled state after 12s.
+- `bun run test:e2e`: 90 passed, 1 failed. The one failure
+  (`workspace-small-viewport.spec.ts:182`, "a focused field and the submit
+  action stay visible over the keyboard") fails identically with this change
+  stashed, i.e. it is pre-existing and unrelated (same failure recorded in
+  the UX-003 and UX-004 sessions).
+
+Environment notes (for the next session):
+- The cmux browser relay was down in this session (`open` failed with
+  "did not return a surface_id"); verification used Playwright directly,
+  including a throwaway script (`page.route` hang) that was deleted after
+  use. The OMP `browser` prelude attached to a manually launched
+  `chromium-1234` CDP endpoint fine, but its page handle detaches across
+  `page.reload()`, so multi-step reload scenarios need a standalone
+  Playwright script instead.
+- A long-lived browser tab that accumulates reloads can still enter a stuck
+  "Loading workspace…" state in the fixture environment; the new stall
+  state at least gives such a tab a retry button instead of an open-ended
+  spinner.
+
+Remaining:
+- Every other journey in JOURNEYS.md is still UNREVIEWED; FIRST USE
+  (create first team / zero projects / first publish) is the next priority
+  per the audit brief, followed by NORMAL USE variable editing (add / edit /
+  delete / pull / push).
+
+
 ## 2026-09-19 - Environment page: full-width "Archive environment" bar (UX-005)
 
 Skills: ux-audit (evidence + severity), impeccable (visual hierarchy). The

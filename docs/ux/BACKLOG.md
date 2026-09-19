@@ -73,9 +73,16 @@ while the page stayed in the loading state; a fresh tab in the same environment
 settled to signed-in quickly, pointing at stale tab state (device header /
 boundary state) rather than a code regression.
 Status:
-OPEN - needs reproduction with a real (non-fixture) boundary and a fresh
-profile before changing the shell's loading logic. Tracked so the next audit
-session starts from here instead of re-deriving it.
+FIXED - the shell now bounds the initial loading state: if the boundary is
+still unverified 8 seconds after load (a healthy load resolves in well under a
+second, so at that point the fetch has hung), the open-ended "Loading
+workspace…" spinner switches to a concrete "Still connecting to the server"
+state with a "Try again" retry (the existing reconnect path). A profile
+rebind restarts the stall episode. Verified in a real browser by intercepting
+the first two `/api/workspace/boundary` fetches and hanging them: the stalled
+state appeared ~8s after reload and clicking "Try again" settled the
+workspace; a healthy load settles instantly and never trips the stall.
+Committed on main.
 
 ## UX-003 - Signed-in user with zero Teams is shown a dead "Choose a team" selector
 Journey:

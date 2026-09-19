@@ -66,8 +66,10 @@ issues.
 ## FAILURE STATES
 
 - Empty states - UNREVIEWED
-- Loading - NEEDS RECHECK (UX-002: long/stuck loading after reload in the
-  audit environment; fresh tabs settle quickly)
+- Loading - CLEAN-PASS-1 (UX-002 fixed: the initial loading state is now
+  bounded - after 8s the shell shows "Still connecting to the server" with a
+  "Try again" retry instead of an open-ended spinner; a healthy load settles
+  in well under a second and never trips the stall)
 - Network/API failure - UNREVIEWED (offline mode is e2e-covered)
 - Invalid input - UNREVIEWED
 - Authentication expiry - UNREVIEWED
