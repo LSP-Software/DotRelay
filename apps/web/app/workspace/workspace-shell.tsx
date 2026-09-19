@@ -1516,6 +1516,7 @@ export const WorkspaceShell = ({
   // threshold the fetch has hung. A profile change rebinds the shell and
   // restarts the episode; key the timer on it so a slow-but-healthy load of
   // the new profile is not reported as stalled by the previous episode.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: profileId re-keys the stall timer on profile change and is intentionally not read inside the effect
   useEffect(() => {
     if (connection !== "loading" || verifiedAt !== null) {
       setLoadingStalled(false);
