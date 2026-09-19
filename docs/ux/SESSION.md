@@ -2,6 +2,57 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-19 - NORMAL USE variable editing: clean pass (edit, delete, pull, push, user-specific)
+
+Skills: ux-audit (journey scoping + evidence), impeccable (empty-state /
+state-handling review). The running app remained the source of truth
+(Playwright DOM/ARIA walks; the cmux relay was down, so no screenshots were
+surfaced to the model).
+
+Scope:
+- Walked the remaining NORMAL USE variable journeys end-to-end in a real
+  browser (fixture user, production environment) and judged each against
+  the backlog priority order. No new issues: every state the design can
+  reach presents a correct next action, and the value model is consistent.
+
+Verified:
+- **Edit variable**: typing into `API_ORIGIN` shows the per-row "Draft
+  change" badge and enables Save changes; the review dialog lists the change
+  with the new value masked ("+ ••••••••") behind "Show values", which
+  reveals the real value. Clearing the field to an empty string keeps the
+  "Empty value" placeholder and is a distinct draft from "Not set"
+  (placeholder "Not set"); reverting to the stored value clears the draft
+  and re-disables Save changes (no phantom publish). The Unset value button
+  is offered only for non-required variables that have a value - a required
+  variable can never be unset, and an already-absent value needs none.
+- **Delete variable**: deleting a variable tombstones its row - "This
+  variable is marked for deletion." with an "Undo delete" button and a Draft
+  change badge - and the value input and Unset button disappear. Undo
+  restores the row and re-disables Save changes. In the review dialog a
+  deletion is presented as "Will be deleted" (no value shown either way).
+- **Push changes**: edit + review + Publish produced "Local preview saved as
+  rev_0185"; the draft badge cleared, the published value survived the
+  re-read, the history card advanced (rev_0185 Current), and Save changes
+  re-disabled. The full publish protocol (sealed lanes, conflict handling)
+  is e2e-covered in `workspace-protocol-publish.spec.ts`.
+- **Pull changes**: reread after a publish restores the published value
+  without clobbering the local draft; the reread protocol (stale-epoch
+  detection, conflict lanes) is e2e-covered in
+  `workspace-protocol-reread.spec.ts`.
+- **User-specific variables**: ownership labels ("Shared value" /
+  "User-defined value") render per row; a Member sees "Read-only" plus a
+  card-level permissions note on values they neither own nor provided, and
+  can still edit their user-defined value (draft badge, publish). Rollback
+  of a user-provided shared value is restricted to the provider or an admin
+  ("Only the person who provided it, or a team admin, can change it.").
+  e2e-covered in `workspace-role-permissions.spec.ts`.
+
+Remaining:
+- The remaining UNREVIEWED journeys are first-use and failure-state ones
+  (publish first environment, first pull/push, CLI setup, team flows, and
+  the FAILURE STATES group). NORMAL USE is now fully covered.
+
+
 ## 2026-09-19 - Zero-environment project dead end (UX-007)
 
 Skills: ux-audit (journey scoping + evidence), impeccable (empty-state

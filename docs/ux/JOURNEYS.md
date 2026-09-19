@@ -53,11 +53,30 @@ issues.
   "Initial value" field gains a reveal toggle matching the variable rows
   (UX-006), so a value typed in the dialog can be checked before it is added;
   ownership choices, unset checkbox, and validation are e2e-covered)
-- Edit variable - UNREVIEWED
-- Delete variable - UNREVIEWED
-- Pull changes - UNREVIEWED
-- Push changes - UNREVIEWED
-- User-specific variables - UNREVIEWED
+- Edit variable - CLEAN-PASS-1 (walked in the browser: typing shows the per-row
+  "Draft change" badge and enables Save changes; the review dialog masks
+  values behind "Show values"; clearing to an empty string is distinct from
+  "Not set" and from no change; Unset is offered only on non-required
+  variables; reveal and delete affordances and the member's read-only rows
+  (with the card-level permissions note) are e2e-covered)
+- Delete variable - CLEAN-PASS-1 (walked in the browser: deleting tombstones the
+  row - "This variable is marked for deletion" with an Undo delete button and
+  a Draft change badge; undo restores the row and re-disables Save changes;
+  the review dialog labels a deletion "Will be deleted"; the Unset button is
+  hidden on tombstoned rows)
+- Pull changes - CLEAN-PASS-1 (reread protocol is e2e-covered in
+  workspace-protocol-reread.spec.ts; the browser walk confirmed a reread after
+  a publish restores the published value and the history card shows
+  rev_0185 as Current)
+- Push changes - CLEAN-PASS-1 (walked in the browser: edit, review dialog
+  masking values until "Show values", Publish -> "Local preview saved as
+  rev_0185", draft badge clears, Save changes re-disables; publish protocol
+  is e2e-covered in workspace-protocol-publish.spec.ts)
+- User-specific variables - CLEAN-PASS-1 (role e2e covers it: a member sees
+  "Read-only" on values they don't own and the card-level permissions note,
+  edits their user-defined value with a Draft change badge, and rollbacks are
+  restricted to the provider or an admin; ownership labels render per row in
+  the browser)
 
 ## ACCOUNT / SECURITY
 
