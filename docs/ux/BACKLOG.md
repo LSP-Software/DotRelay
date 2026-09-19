@@ -207,3 +207,45 @@ dialog and the button's role/label are unchanged. Verified with a Playwright
 measurement at an 800px viewport (178px-wide button, left-aligned, not a
 full-width bar) and at 1440px (right-aligned row, unchanged), plus the
 environment/permissions e2e specs (20 passed). Committed on main.
+
+## UX-006 - "Add variable" dialog masks the value with no way to check what was typed
+Journey:
+NORMAL USE - Add variable (dialog).
+State:
+Any editable environment, the "Add variable" dialog open; any value type
+(shared or user-defined).
+Severity:
+MEDIUM
+Observed:
+The dialog's "Initial value" field is always `type="password"`, so whatever the
+user types is rendered as dots with no reveal control. Every variable row in the
+Variables card has an eye / eye-off reveal toggle (and a global "Reveal values"
+control in the header), but the one place a value is *created* has none: the
+user is typing a secret blind and cannot verify a character, a pasted token, or
+a typo before the row is added to the draft. The placeholder also claims an
+empty input saves "an empty string", which is true only while "Require a value"
+is unchecked, so the placeholder and the checkbox below it can disagree.
+User consequence:
+On a product whose job is managing secrets, the creation surface gives the
+least confidence of any value surface: a mistyped key or a mis-pasted token is
+added to the draft, saved, and only discoverable after publishing, on a device
+that actually consumes it. The affordance is inconsistent with the rest of the
+same screen, which implies revealing values is something you do not get to do
+here.
+Expected:
+The "Initial value" field keeps its masked default but offers the same
+eye / eye-off reveal toggle the variable rows have, so a value typed in the
+dialog can be checked before it is added to the draft. Masked-by-default is
+correct for a shared-machine browser and is kept.
+Evidence:
+`apps/web/app/workspace/environment-editor.tsx` — the dialog's value `Input`
+had a hard-coded `type="password"` with no sibling control, while
+`VariableRow` renders a `Button` toggling `Eye` / `EyeOff` (aria-label
+"Reveal <name>" / "Hide <name>") for the identical concept.
+Status:
+FIXED - the dialog's value field gains a `Reveal initial value` /
+`Hide initial value` ghost toggle (`aria-pressed`, test id
+`add-variable-reveal`) matching the rows; the field stays masked by default
+and the value is stored exactly as typed either way. Verified in the browser
+(toggle switches the input between dots and plain text and announces both
+states) and by the add-variable e2e specs. Committed on main.

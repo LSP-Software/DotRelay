@@ -137,7 +137,7 @@ test("the Add Variable form stays reachable on a short phone viewport", async ({
   );
 
   await setDialogScroll(dialog, Number.MAX_SAFE_INTEGER);
-  const initial = dialog.getByLabel("Initial value");
+  const initial = dialog.getByRole("textbox", { name: "Initial value" });
   await expectInViewport(page, initial);
   await expectInViewport(page, dialog.getByText("Require a value"));
   await expectInViewport(page, add);
@@ -165,7 +165,7 @@ test("the Add Variable form stays reachable at 200% zoom", async ({ page }) => {
 
   // The pinned footer never covers a focused field: focusing the Initial
   // Value field scrolls it fully above the footer actions.
-  const initial = dialog.getByLabel("Initial value");
+  const initial = dialog.getByRole("textbox", { name: "Initial value" });
   await initial.focus();
   await expectInViewport(page, initial);
   await expectAboveDialogFooter(dialog, initial);
@@ -193,7 +193,7 @@ test("a focused field and the submit action stay visible over the keyboard", asy
 
   // Focusing a mid-form field keeps both the field and the submit action on
   // screen, with the field clear of the pinned footer.
-  const initial = dialog.getByLabel("Initial value");
+  const initial = dialog.getByRole("textbox", { name: "Initial value" });
   await initial.focus();
   await expectInViewport(page, initial);
   await expectAboveDialogFooter(dialog, initial);

@@ -332,7 +332,9 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await page.getByLabel("Variable name").fill("DATABASE_URL");
   await page.getByLabel("Description (optional)").fill("Database connection.");
   await page.getByText("User-defined value", { exact: true }).last().click();
-  await page.getByLabel("Initial value").fill("local-only-value");
+  await page
+    .getByRole("textbox", { name: "Initial value" })
+    .fill("local-only-value");
   await page.getByRole("button", { name: "Add variable" }).last().click();
 
   const value = page.getByLabel("DATABASE_URL value");

@@ -748,140 +748,167 @@ const AddVariableDialog = ({
   readonly onOpenChange: (open: boolean) => void;
   readonly onDraftChange: (draft: AddVariableState) => void;
   readonly onCreate: () => void;
-}) => (
-  <Dialog onOpenChange={onOpenChange} open={open}>
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>Add variable</DialogTitle>
-        <DialogDescription>
-          Choose who can read the value. Add it to your draft before publishing.
-        </DialogDescription>
-      </DialogHeader>
-      <div className="grid gap-4">
-        <div className="grid gap-2">
-          <Label htmlFor="new-variable-name">Variable name</Label>
-          <Input
-            autoComplete="off"
-            id="new-variable-name"
-            onChange={(event) =>
-              onDraftChange({ ...draft, name: event.target.value })
-            }
-            placeholder="DATABASE_URL"
-            value={draft.name}
-          />
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="new-variable-description">
-            Description{" "}
-            <span className="text-muted-foreground">(optional)</span>
-          </Label>
-          <textarea
-            className="min-h-20 rounded-lg border border-input bg-input/20 px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            id="new-variable-description"
-            onChange={(event) =>
-              onDraftChange({ ...draft, description: event.target.value })
-            }
-            placeholder="What this variable is used for"
-            value={draft.description}
-          />
-        </div>
-        <fieldset className="grid gap-2">
-          <legend className="text-sm font-medium">
-            Who can read the value
-          </legend>
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5">
-            <input
-              checked={draft.ownership === "SHARED_VALUE"}
-              name="new-variable-ownership"
-              onChange={() =>
-                onDraftChange({ ...draft, ownership: "SHARED_VALUE" })
+}) => {
+  // The value field is masked by default; the toggle mirrors the reveal
+  // affordance on each variable row so a value typed here can be checked
+  // before the variable is added to the draft.
+  const [valueRevealed, setValueRevealed] = useState(false);
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add variable</DialogTitle>
+          <DialogDescription>
+            Choose who can read the value. Add it to your draft before
+            publishing.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="new-variable-name">Variable name</Label>
+            <Input
+              autoComplete="off"
+              id="new-variable-name"
+              onChange={(event) =>
+                onDraftChange({ ...draft, name: event.target.value })
               }
-              type="radio"
+              placeholder="DATABASE_URL"
+              value={draft.name}
             />
-            <span>
-              <span className="block text-sm font-medium">Shared value</span>
-              <span className="block text-xs text-muted-foreground">
-                Teammates with project keys can read it. You, owners, and admins
-                can edit it.
-              </span>
-            </span>
-          </label>
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5">
-            <input
-              checked={draft.ownership === "USER_DEFINED_VALUE"}
-              name="new-variable-ownership"
-              onChange={() =>
-                onDraftChange({ ...draft, ownership: "USER_DEFINED_VALUE" })
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="new-variable-description">
+              Description{" "}
+              <span className="text-muted-foreground">(optional)</span>
+            </Label>
+            <textarea
+              className="min-h-20 rounded-lg border border-input bg-input/20 px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              id="new-variable-description"
+              onChange={(event) =>
+                onDraftChange({ ...draft, description: event.target.value })
               }
-              type="radio"
+              placeholder="What this variable is used for"
+              value={draft.description}
             />
-            <span>
-              <span className="block text-sm font-medium">
-                User-defined value
+          </div>
+          <fieldset className="grid gap-2">
+            <legend className="text-sm font-medium">
+              Who can read the value
+            </legend>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5">
+              <input
+                checked={draft.ownership === "SHARED_VALUE"}
+                name="new-variable-ownership"
+                onChange={() =>
+                  onDraftChange({ ...draft, ownership: "SHARED_VALUE" })
+                }
+                type="radio"
+              />
+              <span>
+                <span className="block text-sm font-medium">Shared value</span>
+                <span className="block text-xs text-muted-foreground">
+                  Teammates with project keys can read it. You, owners, and
+                  admins can edit it.
+                </span>
               </span>
-              <span className="block text-xs text-muted-foreground">
-                Only the devices you have set up can read it.
+            </label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5">
+              <input
+                checked={draft.ownership === "USER_DEFINED_VALUE"}
+                name="new-variable-ownership"
+                onChange={() =>
+                  onDraftChange({ ...draft, ownership: "USER_DEFINED_VALUE" })
+                }
+                type="radio"
+              />
+              <span>
+                <span className="block text-sm font-medium">
+                  User-defined value
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Only the devices you have set up can read it.
+                </span>
               </span>
-            </span>
-          </label>
-        </fieldset>
-        <div className="grid gap-2">
-          <Label htmlFor="new-variable-value">Initial value</Label>
-          <Input
-            autoComplete="off"
-            id="new-variable-value"
-            onChange={(event) =>
-              onDraftChange({ ...draft, value: event.target.value })
-            }
-            placeholder="Leave blank to save an empty string"
-            type="password"
-            value={draft.value}
-          />
-        </div>
-        {!draft.required ? (
+            </label>
+          </fieldset>
+          <div className="grid gap-2">
+            <Label htmlFor="new-variable-value">Initial value</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                autoComplete="off"
+                className="font-mono"
+                id="new-variable-value"
+                onChange={(event) =>
+                  onDraftChange({ ...draft, value: event.target.value })
+                }
+                placeholder="Leave blank to save an empty string"
+                type={valueRevealed ? "text" : "password"}
+                value={draft.value}
+              />
+              <Button
+                aria-label={`${valueRevealed ? "Hide" : "Reveal"} initial value`}
+                aria-pressed={valueRevealed}
+                data-testid="add-variable-reveal"
+                onClick={() => setValueRevealed((current) => !current)}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                {valueRevealed ? (
+                  <EyeOff aria-hidden="true" />
+                ) : (
+                  <Eye aria-hidden="true" />
+                )}
+              </Button>
+            </div>
+          </div>
+          {!draft.required ? (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                checked={draft.valuePresent === false}
+                onChange={(event) =>
+                  onDraftChange({
+                    ...draft,
+                    valuePresent: !event.target.checked,
+                  })
+                }
+                type="checkbox"
+              />
+              Leave the value unset, rather than save an empty string
+            </label>
+          ) : null}
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <input
-              checked={draft.valuePresent === false}
+              checked={draft.required}
               onChange={(event) =>
                 onDraftChange({
                   ...draft,
-                  valuePresent: !event.target.checked,
+                  required: event.target.checked,
+                  ...(event.target.checked ? { valuePresent: true } : {}),
                 })
               }
               type="checkbox"
             />
-            Leave the value unset, rather than save an empty string
+            Require a value
           </label>
+        </div>
+        {error ? (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
         ) : null}
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            checked={draft.required}
-            onChange={(event) =>
-              onDraftChange({
-                ...draft,
-                required: event.target.checked,
-                ...(event.target.checked ? { valuePresent: true } : {}),
-              })
-            }
-            type="checkbox"
-          />
-          Require a value
-        </label>
-      </div>
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-      <DialogFooter>
-        <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
-        <Button onClick={onCreate}>
-          <Plus aria-hidden="true" /> Add variable
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>
-);
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" />}>
+            Cancel
+          </DialogClose>
+          <Button onClick={onCreate}>
+            <Plus aria-hidden="true" /> Add variable
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
 
 export const EnvironmentEditor = ({
   available,
@@ -1675,10 +1702,10 @@ export const EnvironmentEditor = ({
             <CardContent className="space-y-3">
               {setupCommand ? (
                 <>
-                <p className="text-sm text-muted-foreground">
-                  Prefer the CLI? It sets up the CLI on this machine, not this
-                  browser.
-                </p>
+                  <p className="text-sm text-muted-foreground">
+                    Prefer the CLI? It sets up the CLI on this machine, not this
+                    browser.
+                  </p>
                   <CopyableCommand
                     className="mt-2"
                     data-testid="cli-setup-command"

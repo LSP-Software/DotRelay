@@ -45,7 +45,10 @@ issues.
   as UX-005; the setup card's browser-vs-CLI contradiction is fixed as UX-004.
   Primary actions Add variable / Save changes and the empty/loading/failed
   states are sound)
-- Add variable - UNREVIEWED (dialog is e2e-covered, incl. small viewports)
+- Add variable - CLEAN-PASS-1 (dialog audited in the browser: the masked
+  "Initial value" field gains a reveal toggle matching the variable rows
+  (UX-006), so a value typed in the dialog can be checked before it is added;
+  ownership choices, unset checkbox, and validation are e2e-covered)
 - Edit variable - UNREVIEWED
 - Delete variable - UNREVIEWED
 - Pull changes - UNREVIEWED

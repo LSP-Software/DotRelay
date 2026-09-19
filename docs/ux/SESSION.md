@@ -2,6 +2,67 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-19 - "Add variable" dialog: masked value with no reveal, fixed from a reset working tree (UX-006)
+
+Skills: ux-audit (evidence + consistency), impeccable (affordance parity).
+The running app remained the source of truth.
+
+Scope:
+- This session resumed from Git after a context reset. The working tree
+  already held an in-progress version of this fix from the previous session:
+  the "Add variable" dialog's "Initial value" field gained a reveal toggle,
+  but the component had been converted to a named `function` (against the
+  repo's arrow-function convention) and a stray over-indented `<p>` had been
+  left in the setup card's CLI block. Both were repaired before committing.
+- Finding: every value surface on the environment screen — each variable
+  row, the diff and conflict views — offers an eye / eye-off reveal toggle,
+  but the one place a value is *created* (the dialog's `type="password"`
+  field) had none. A user types a secret blind and can only discover a
+  mis-typed or mis-pasted value after publishing, on a device that consumes
+  it. The reveal button's `aria-label` ("Reveal initial value") also
+  collided with the field's label for `getByLabel("Initial value")`, which
+  five existing e2e locators used; they now scope to the input by role.
+
+Changed:
+- `apps/web/app/workspace/environment-editor.tsx`:
+  - `AddVariableDialog` (arrow function, per convention) keeps the value
+    masked by default (correct for a shared machine); the field gains a
+    ghost eye / eye-off toggle (`aria-pressed`, `aria-label` "Reveal
+    initial value" / "Hide initial value", test id `add-variable-reveal`,
+    `font-mono` input) that switches the input between `password` and
+    `text`, mirroring the per-row reveal affordance so a value typed in the
+    dialog can be checked before it is added to the draft. The value is
+    stored exactly as typed whether or not it was revealed; the toggle
+    state lives in the dialog and resets on remount.
+- `apps/web/e2e/workspace-add-variable-reveal.spec.ts` (new, permanent):
+  the dialog masks by default, the toggle switches to plain text with the
+  value visible and back, and a value typed while masked is stored exactly
+  as typed on the resulting row.
+- `apps/web/e2e/workspace.spec.ts`, `workspace-small-viewport.spec.ts`,
+  `workspace-variable-readability.spec.ts`: the five
+  `getByLabel("Initial value")` locators now use
+  `getByRole("textbox", { name: "Initial value" })` so the reveal button's
+  aria-label no longer makes them resolve to two elements.
+- `docs/ux/BACKLOG.md` (UX-006), `docs/ux/JOURNEYS.md` (Add variable), and
+  this file.
+
+Verified:
+- `bun run typecheck` green (6/6 tasks); `bun x biome check` clean on the
+  touched files.
+- `bun run test:e2e` (full web suite): 91 passed, 1 failed. The one failure
+  (`workspace-small-viewport.spec.ts:182`, "a focused field and the submit
+  action stay visible over the keyboard") fails identically with this change
+  stashed (verified against the clean tree in this session), so it is
+  pre-existing and unrelated.
+- Browser verification was DOM/ARIA-based (input `type`, `aria-pressed`,
+  labels); no screenshots were surfaced to the model.
+
+Remaining:
+- FIRST USE: create first team / zero projects / first publish are the next
+  priority per the audit brief; then NORMAL USE edit/delete/pull/push
+  variables.
+
+
 ## 2026-09-19 - Bounded initial loading state with a retry (UX-002)
 
 Skills: ux-audit (failure states + evidence), impeccable (copy). The running
