@@ -21,6 +21,7 @@ import {
   ChevronRight,
   FolderGit2,
   KeyRound,
+  LockKeyhole,
   LogOut,
   Menu,
   MonitorSmartphone,
@@ -2522,7 +2523,7 @@ export const WorkspaceShell = ({
                   </Button>
                 </div>
               ) : null}
-              {missingResource ? (
+              {missingResource && sessionActive ? (
                 <Alert
                   className="mb-4 border-amber-300/30 bg-amber-300/5"
                   data-testid="workspace-missing-resource"
@@ -2615,7 +2616,38 @@ export const WorkspaceShell = ({
               ) : null}
               {view === "projects" ? (
                 <section>
-                  {teams.length === 0 ? (
+                  {!sessionActive ? (
+                    <section
+                      className="mx-auto max-w-xl py-24"
+                      data-testid="sign-in-required"
+                    >
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <LockKeyhole
+                              className="size-5 text-amber-300"
+                              aria-hidden="true"
+                            />
+                            <h1 className="font-heading text-3xl font-semibold tracking-tight">
+                              Sign in
+                            </h1>
+                          </CardTitle>
+                          <CardDescription>
+                            GitHub only identifies you. Sign in to see your
+                            teams, projects, and environments.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardFooter>
+                          <a
+                            className="inline-flex h-8 items-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
+                            href="/sign-in"
+                          >
+                            Sign in
+                          </a>
+                        </CardFooter>
+                      </Card>
+                    </section>
+                  ) : teams.length === 0 ? (
                     <div className="mb-6" data-testid="no-teams-empty">
                       <h1 className="font-heading text-3xl font-semibold tracking-tight">
                         No teams yet

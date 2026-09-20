@@ -300,3 +300,59 @@ contradict the card. Verified in the browser (card click and deep link both
 land on the project's no-environments state with `view=environment` in the
 URL) and by `apps/web/e2e/workspace-no-environments.spec.ts` plus the
 `resolveWorkspaceLocation` unit tests. Committed on main.
+
+## UX-008 - Signed-out state on a real deployment dead-ends on "No teams yet"
+Journey:
+FAILURE STATES - Authentication expiry; also FIRST USE - First sign in (a
+returning user whose session expired).
+State:
+A real (non-fixture) deployment where the session expires - or was never
+established - while the workspace is open or on a deep link: the boundary
+relay stays online (it is served by the web app itself) but the API's
+`authentication_required` shape comes back, so the catalog is empty
+(`{ teams: [], projects: [] }`) and `session.active` is false.
+Severity:
+HIGH
+Observed:
+In a real deployment the signed-out projects view rendered the signed-in
+"No teams yet" state - "Run this in a GitHub repository to create your
+first Team, Project, and Environment: dotrelay init" - because the zero-
+teams branch only tests `teams.length === 0` and never the session. A
+signed-out deep link to a formerly-open project additionally stacked a
+"That project is no longer available" missing-resource alert on top, which
+is a false diagnosis: the project is available, the user is just signed
+out. The only sign-in affordance was a static "Sign in required" line in
+the sidebar with no button.
+User consequence:
+The one state a blocked user hits after their OAuth session expires - the
+most consequential moment in the product (a team member suddenly loses
+access to their team's secret-management UI) - is told to run `dotrelay
+init` in a repository, which a signed-out user cannot do, and offers no
+working sign-in action in the main content. By the backlog's own order
+this is a blocked user: no obvious next action, and the shown next action
+is wrong. The gap is invisible in the development fixture because the
+fixture session never expires and always carries a populated catalog.
+Expected:
+When the verified boundary reports an online connection with an inactive
+session, the projects view presents the sign-in state (the same state the
+editor and sign-in page use) with a working link to `/sign-in`, and the
+missing-resource alerts are suppressed because their premise - a signed-in
+user whose resource disappeared - is false.
+Evidence:
+Reproduced in a real browser against the running app by intercepting the
+boundary with the relay's signed-out shape (online, empty catalog,
+`session.active: false`): a fresh load rendered "No teams yet ... dotrelay
+init" and a deep link added "That project is no longer available". The
+code path: the shell's projects view branched on `teams.length === 0`
+alone (no session check), and the missing-resource alert render did not
+gate on `sessionActive` either.
+Status:
+FIXED - the projects view now checks the session first: an online,
+signed-out user sees the "Sign in" state (test id `sign-in-required`)
+with a link to `/sign-in` instead of any signed-in empty state, and the
+missing-resource alerts only render while a session is active, so an
+expired session can no longer be misdiagnosed as a deleted resource.
+Verified in the browser (fresh load, signed-out deep link, and an in-
+flight expiry while an environment was open) and by the permanent
+`apps/web/e2e/workspace-signed-out.spec.ts`; the signed-in zero-teams
+spec still passes unchanged. Committed on main.

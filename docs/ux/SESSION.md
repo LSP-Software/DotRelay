@@ -2,6 +2,71 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-20 - Signed-out dead end on a real deployment (UX-008)
+
+Skills: ux-audit (journey scoping + evidence), impeccable (state-handling
+review). The running app remained the source of truth (Playwright DOM/ARIA
+walks; the cmux relay was down, so no screenshots were surfaced to the
+model).
+
+Scope:
+- Audited the remaining FIRST USE / FAILURE STATES journeys. Invalid input,
+  deleted/missing resources, and the clean parts of authentication expiry
+  passed (details in JOURNEYS.md). One HIGH finding remained: the signed-
+  out state as a real deployment serves it.
+- Mechanism found: a real deployment's boundary relay (`apps/web/app/api/
+  workspace/boundary/route.ts`) keeps answering online, but when the API
+  session is gone it returns the API's `authentication_required` shape via
+  `emptyWorkspaceBoundary` - an empty catalog and `session.active: false`.
+  The shell's projects view branched on `teams.length === 0` alone, so a
+  signed-out user landed on the signed-in "No teams yet ... dotrelay init"
+  state - an action they cannot take - and a deep link to a formerly-open
+  project additionally stacked a false "That project is no longer
+  available" alert. The only sign-in affordance was a static "Sign in
+  required" line in the sidebar with no button. The gap is invisible in
+  fixture mode, where the session never expires and the catalog is always
+  populated.
+
+Changed:
+- `apps/web/app/workspace/workspace-shell.tsx`:
+  - The projects view now checks the session first: an online, signed-out
+    user sees a "Sign in" state (test id `sign-in-required`) with a
+    working link to `/sign-in`, reusing the same copy and affordance the
+    editor's setup card already renders for the sign-in action.
+  - The missing-resource alerts only render while a session is active, so
+    an expired session can no longer be misdiagnosed as a deleted
+    resource.
+  - Added the `LockKeyhole` icon import used by the new state.
+- `apps/web/e2e/workspace-signed-out.spec.ts` (new): three tests - a fresh
+  signed-out load shows the sign-in card (not `no-teams-empty`, no
+  missing-resource alert); a signed-out deep link to a project resolves to
+  sign-in with no false "no longer available" alert; and a session that
+  expires while an environment is open resolves to sign-in on the next
+  poll.
+- `docs/ux/BACKLOG.md` (UX-008), `docs/ux/JOURNEYS.md` (First sign in,
+  Sign in, Invalid input, Authentication expiry, Deleted/missing
+  resources), and this file.
+
+Verified:
+- `bun run typecheck` green; `bun x biome check` clean on the touched
+  files; `bun run test:e2e`: 97 passed, 1 failed - the one failure
+  (`workspace-small-viewport.spec.ts:182`) is the known pre-existing
+  keyboard-visibility failure.
+- Browser walks (DOM/ARIA): a fresh signed-out load and a signed-out deep
+  link both show the Sign in state with the `/sign-in` link and no mixed-
+  in signed-in empty states or alerts; the in-flight expiry scenario
+  (verified pre-fix by forcing the relay's signed-out shape on the next
+  poll) resolves to the same state; the signed-in zero-teams state is
+  unchanged (its e2e passes).
+
+Remaining:
+- UNREVIEWED journeys left: Create first team, CLI setup, Publish first
+  environment, First pull/push (the fixture-side half of FIRST USE); the
+  TEAM USE group; ACCOUNT/SECURITY Recovery; and the FAILURE STATES group
+  (Empty states, Network/API failure, Forbidden access, Server
+  unavailable, Stale state).
+
+
 ## 2026-09-19 - NORMAL USE variable editing: clean pass (edit, delete, pull, push, user-specific)
 
 Skills: ux-audit (journey scoping + evidence), impeccable (empty-state /

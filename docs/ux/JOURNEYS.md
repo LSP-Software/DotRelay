@@ -7,9 +7,9 @@ issues.
 
 ## FIRST USE
 
-- First sign in - UNREVIEWED (GitHub OAuth only reachable via a real account;
-  the sign-in page itself was reviewed and reduced to a single button in
-  #225)
+- First sign in - CLEAN-PASS-1 (GitHub OAuth itself needs a real account; the
+  sign-in page was reviewed in #225 and the signed-out state it lands on now
+  presents the Sign in action with a working link, UX-008)
 - Zero teams - CLEAN-PASS-1 (UX-003 fixed: the dead empty "Choose a team"
   selector is gone; a signed-in, zero-Teams user sees one "No teams yet" action
   pointing at `dotrelay init`)
@@ -38,8 +38,10 @@ issues.
 
 ## NORMAL USE
 
-- Sign in - NEEDS RECHECK (covered by the audit below; re-verify on the
-  hosted profile, which this environment cannot reach)
+- Sign in - CLEAN-PASS-1 (the sign-in page is a single button, #225; the
+  signed-out workspace state it lands on is e2e-covered in
+  workspace-signed-out.spec.ts, UX-008; the hosted OAuth round-trip still
+  needs a real account)
 - Find project - CLEAN-PASS-1 (workspace lists projects per team; switching
   teams and projects is e2e-covered)
 - Switch project - CLEAN-PASS-1
@@ -97,11 +99,23 @@ issues.
   "Try again" retry instead of an open-ended spinner; a healthy load settles
   in well under a second and never trips the stall)
 - Network/API failure - UNREVIEWED (offline mode is e2e-covered)
-- Invalid input - UNREVIEWED
-- Authentication expiry - UNREVIEWED
+- Invalid input - CLEAN-PASS-1 (the Add variable dialog audited in the
+  browser: empty submit, invalid name, duplicate name, and required-with-
+  unset each show the specific validation alert in a role=alert; a valid add
+  closes the dialog and the reopened one starts clean with no stale error;
+  the 1 MiB value limit is enforced at the same choke point)
+- Authentication expiry - CLEAN-PASS-1 (walked in the browser and e2e: an
+  online session that expires resolves the projects view to the Sign in
+  state with a working link instead of the signed-in empty states, and
+  signed-out deep links no longer misdiagnose the signed-in selection as a
+  deleted resource, UX-008)
 - Forbidden access - UNREVIEWED
 - Server unavailable - UNREVIEWED
-- Deleted/missing resources - UNREVIEWED
+- Deleted/missing resources - CLEAN-PASS-1 (a deep link to a deleted
+  project or environment was walked in the browser: the shell resolves to
+  the first available selection and explains it with one alert - "That
+  project is no longer available ... Choose another project to continue" -
+  instead of dead-ending on the lost resource)
 - Stale state - UNREVIEWED (stale-epoch handling is e2e-covered)
 
 ## RESPONSIVE
