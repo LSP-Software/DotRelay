@@ -2,6 +2,55 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-20 - Remaining journeys audited; team-management gap found (UX-009)
+
+Skills: ux-audit (journey scoping + evidence), impeccable (state-handling
+review). The running app remained the source of truth (repo-local
+Playwright DOM/ARIA walks; the cmux relay was down, so no screenshots
+were surfaced to the model).
+
+Scope:
+- Every UNREVIEWED journey left after UX-008 was walked or otherwise
+  adjudicated, so JOURNEYS.md has no UNREVIEWED line left:
+  - FIRST USE: Create first team, CLI setup, Publish first environment,
+    First successful pull, First successful push/update.
+  - TEAM USE: Invite teammate, Accept invitation, Teammate first login,
+    Teammate first successful pull, Change permissions, Remove teammate,
+    Leave team.
+  - ACCOUNT: Recovery. FAILURE STATES: Empty states, Network/API failure,
+    Forbidden access, Server unavailable, Stale state.
+  - RESPONSIVE: Onboarding, Project workflow, Team workflow (mobile
+    context, 390x844).
+
+Changed:
+- No code changed this session. `docs/ux/BACKLOG.md` (UX-009, new OPEN
+  finding), `docs/ux/JOURNEYS.md` (all remaining lines flipped with
+  evidence), and this file.
+
+Verified:
+- Browser walks (DOM/ARIA only): mobile sheet + onboarding/project/team
+  views on a 390x844 mobile context; Team view as OWNER, ADMIN, and
+  MEMBER (Invite gating, Role-column hiding, no management controls at
+  any role); Recovery view (CLI-side by design); Devices view (setup
+  card + device table). Protocol review: `verifySyncPage`
+  (publication.ts) explicitly accepts the zero-revision genesis page
+  (`currentHeadId === null`) as valid, so a never-published environment
+  decodes to zero variables and shows the "Add a variable to save your
+  first secrets here." state pinned by workspace-protocol-read.spec.ts.
+- The members table's only control is "Invite member" at every role; the
+  API route registration (apps/api/src) has no PUT/DELETE/PATCH route,
+  so remove / role-change / leave are not implementable from any client
+  today.
+
+Remaining:
+- UX-009 is OPEN and needs a product decision: implement the
+  documented management operations (remove member, change role, leave
+  team) per `docs/administration.md`, or re-scope the `roleDisclosure`
+  copy and the docs to the invite-only reality.
+- No UNREVIEWED journeys remain; CLEAN-PASS-2 sweeps or a revisit of any
+  journey can start on demand.
+
+
 ## 2026-09-20 - Signed-out dead end on a real deployment (UX-008)
 
 Skills: ux-audit (journey scoping + evidence), impeccable (state-handling

@@ -356,3 +356,43 @@ Verified in the browser (fresh load, signed-out deep link, and an in-
 flight expiry while an environment was open) and by the permanent
 `apps/web/e2e/workspace-signed-out.spec.ts`; the signed-in zero-teams
 spec still passes unchanged. Committed on main.
+
+## UX-009 - Team view promises member management it does not offer
+Journey:
+TEAM USE - Change permissions, Remove teammate, Leave team where supported.
+State:
+The Team view of any signed-in user, at any role, desktop or mobile.
+Severity:
+HIGH (misleading stated capability, and it is the only way an owner can
+repair a wrong invitation or remove a departed member).
+Observed:
+The Members card is a read-only table (User | Role | Status) whose only
+action is "Invite member". No role - not even Owner, whom the view
+discloses can "manage team members, projects, and environments"
+(`roleDisclosure` in workspace-shell.tsx) - can remove a Member, change a
+Member's role, or leave the team. `docs/administration.md` promises
+"Remove a Member: Owner yes, Admin yes" and "Change Member/Admin/owner
+roles: Owner yes", and the API exposes no such operations:
+`membership-routes.ts` registers only resolve / create-invitation /
+list-invitations / list-memberships / my-invitations / accept, and the
+whole API has no PUT, DELETE, or PATCH route.
+User consequence:
+An owner who invited the wrong GitHub account, or whose teammate left the
+company, has no path in the product to fix it; the UI states that owners
+manage team members but offers only an add. Durable `REMOVED` records can
+never be created.
+Expected:
+Either the product exposes remove / role-change / leave operations (API +
+UI, per the `docs/administration.md` policy matrix), or the role
+disclosure and the docs say team membership management is not available
+in the web UI - the UI cannot promise management it cannot perform.
+Evidence:
+Browser walks (desktop and mobile): the members card's only control is
+"Invite member"; no remove / dismiss / leave control exists anywhere in
+the app; a Member's Invite button is correctly disabled. The API route
+registration was checked directly: no member-mutation endpoint exists, so
+no client could offer these operations.
+Status:
+OPEN - needs a product decision: implement the missing management
+operations per the documented policy, or re-scope the disclosure copy
+and `docs/administration.md` to the invite-only reality.

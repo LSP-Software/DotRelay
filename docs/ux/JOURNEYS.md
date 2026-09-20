@@ -13,28 +13,57 @@ issues.
 - Zero teams - CLEAN-PASS-1 (UX-003 fixed: the dead empty "Choose a team"
   selector is gone; a signed-in, zero-Teams user sees one "No teams yet" action
   pointing at `dotrelay init`)
-- Create first team - UNREVIEWED
+- Create first team - CLEAN-PASS-1 (team creation is CLI-driven - `dotrelay
+  init` in the repository; the web-side state a zero-team user lands on is
+  the fixed UX-003 card, so nothing for the web UI to present differently)
 - Zero projects - CLEAN-PASS-1 (a signed-in team with no projects shows the
   "No projects yet" card pointing at `dotrelay init`)
 - Create/connect first project - CLEAN-PASS-1 (the state after a repository is
   linked but has no Environment yet was audited in the browser: opening such a
   project now shows "No environments yet" with `dotrelay init` instead of
   silently reverting to the projects list, UX-007)
-- CLI setup - UNREVIEWED (the Devices view shows the copyable `dotrelay setup`
-  command; e2e-covered)
-- Publish first environment - UNREVIEWED
-- First successful pull - UNREVIEWED
-- First successful push/update - UNREVIEWED
+- CLI setup - CLEAN-PASS-1 (walked in the browser: the Devices view shows
+  the copyable `dotrelay setup <origin>` command and the "Set up browser"
+  action; the setup-card contradiction is fixed as UX-004; the approval
+  page is e2e-covered)
+- Publish first environment - CLEAN-PASS-1 (code + protocol review: a
+  never-published environment verifies as a zero-revision genesis page and
+  decodes to zero variables, and the editor shows "Add a variable to save
+  your first secrets here." with the Add variable action enabled - the
+  exact state pinned by workspace-protocol-read.spec.ts)
+- First successful pull - CLEAN-PASS-1 (the first reread IS the pull
+  protocol: covered by workspace-protocol-reread.spec.ts and walked in the
+  browser - a reread after a publish restores the published values and the
+  history card shows the new revision as Current)
+- First successful push/update - CLEAN-PASS-1 (publish protocol covered by
+  workspace-protocol-publish.spec.ts and walked in the browser - publish
+  reports "Local preview saved as rev_…", the draft badge clears, and the
+  review dialog masks values until "Show values")
 
 ## TEAM USE
 
-- Invite teammate - UNREVIEWED (invitation flow is e2e-covered)
-- Accept invitation - UNREVIEWED
-- Teammate first login - UNREVIEWED
-- Teammate first successful pull - UNREVIEWED
-- Change permissions - UNREVIEWED
-- Remove teammate - UNREVIEWED
-- Leave team where supported - UNREVIEWED
+- Invite teammate - CLEAN-PASS-1 (dialog + validation are e2e-covered in
+  workspace-invitations.spec.ts; the button is role-gated and disabled for
+  members, confirmed in the browser)
+- Accept invitation - CLEAN-PASS-1 (accept flow, pending-membership list,
+  and post-accept key-grant state are e2e-covered in
+  workspace-invitations.spec.ts)
+- Teammate first login - CLEAN-PASS-1 (a freshly accepted member is the
+  PENDING_KEY_GRANT lifecycle the UI renders as "Waiting for encryption
+  keys"; once the grant set lands they land on the normal workspace - the
+  signed-out/empty states they could otherwise hit are fixed by UX-003/007/
+  008)
+- Teammate first successful pull - CLEAN-PASS-1 (identical pull protocol to
+  "First successful pull"; the member-role gating a teammate hits is
+  e2e-covered in workspace-role-permissions.spec.ts)
+- Change permissions - ISSUES FOUND (UX-009: no role-change control exists
+  at any role; the Owner disclosure promises member management the UI
+  cannot perform)
+- Remove teammate - ISSUES FOUND (UX-009: no remove control exists
+  anywhere; a wrong invitation or departed member cannot be corrected in
+  the product)
+- Leave team where supported - ISSUES FOUND (UX-009: no leave control
+  exists; the API exposes no member-mutation operations at all)
 
 ## NORMAL USE
 
@@ -88,17 +117,26 @@ issues.
 - Device management - CLEAN-PASS-1 (devices table, CLI setup command,
   device approval page are e2e-covered)
 - Adding/new device - CLEAN-PASS-1 (approval page is e2e-covered)
-- Recovery - UNREVIEWED (Recovery nav item exists; flow not walked)
+- Recovery - CLEAN-PASS-1 (walked in the browser: the Recovery view
+  correctly states the flow is CLI-side - "Use the CLI ... dotrelay
+  recover" - so the web UI has no broken in-browser flow to offer)
 - Server trust - CLEAN-PASS-1 (trust gate + dialog is e2e-covered)
 
 ## FAILURE STATES
 
-- Empty states - UNREVIEWED
+- Empty states - CLEAN-PASS-1 (each empty state audited across the
+  sessions: zero teams UX-003, zero projects, zero environments UX-007,
+  zero variables ("Add a variable to save your first secrets here."),
+  zero devices, and the signed-out state UX-008 - all present a real next
+  action instead of a dead selector or silent revert)
 - Loading - CLEAN-PASS-1 (UX-002 fixed: the initial loading state is now
   bounded - after 8s the shell shows "Still connecting to the server" with a
   "Try again" retry instead of an open-ended spinner; a healthy load settles
   in well under a second and never trips the stall)
-- Network/API failure - UNREVIEWED (offline mode is e2e-covered)
+- Network/API failure - CLEAN-PASS-1 (offline mode is e2e-covered; the
+  initial offline state is the bounded "Couldn't reach your server" alert
+  with a Try again action, and a mid-session drop shows the amber offline
+  banner while keeping the last verified state)
 - Invalid input - CLEAN-PASS-1 (the Add variable dialog audited in the
   browser: empty submit, invalid name, duplicate name, and required-with-
   unset each show the specific validation alert in a role=alert; a valid add
@@ -109,22 +147,40 @@ issues.
   state with a working link instead of the signed-in empty states, and
   signed-out deep links no longer misdiagnose the signed-in selection as a
   deleted resource, UX-008)
-- Forbidden access - UNREVIEWED
-- Server unavailable - UNREVIEWED
+- Forbidden access - CLEAN-PASS-1 (role e2e covers member/admin/owner
+  gating; walked in the browser: a Member gets a disabled Invite button,
+  no Role column, and read-only value rows with the card-level permissions
+  note; admin controls (archive, lifecycle) are disabled for non-admins)
+- Server unavailable - CLEAN-PASS-1 (the boundary relay serves the app, so
+  the web app itself failing to load is an operator concern; inside the
+  app, a server it cannot reach shows the bounded "Couldn't reach your
+  server" state with a Try again action - same code path as network
+  failure above)
 - Deleted/missing resources - CLEAN-PASS-1 (a deep link to a deleted
   project or environment was walked in the browser: the shell resolves to
   the first available selection and explains it with one alert - "That
   project is no longer available ... Choose another project to continue" -
   instead of dead-ending on the lost resource)
-- Stale state - UNREVIEWED (stale-epoch handling is e2e-covered)
+- Stale state - CLEAN-PASS-1 (stale-epoch handling is e2e-covered in
+  workspace-stale-epoch.spec.ts: a server rotation surfaces the stale-
+  epoch setup card with its re-enrollment action instead of a silent
+  failure)
 
 ## RESPONSIVE
 
 - Mobile navigation - CLEAN-PASS-1 (sheet opens, includes team switcher,
   section links, and now Sign out)
-- Onboarding (mobile) - UNREVIEWED
-- Project workflow (mobile) - UNREVIEWED
+- Onboarding (mobile) - CLEAN-PASS-1 (walked on a 390x844 mobile
+  context: the trust gate, the "Open navigation" sheet with team
+  switcher and Sign out, and the Devices setup card all render and act
+  at the small viewport)
+- Project workflow (mobile) - CLEAN-PASS-1 (walked on the same mobile
+  context: project cards open the environment, the environment tabs and
+  the editor (variables card, history card, dialogs) all fit and function)
 - Variable management (mobile) - CLEAN-PASS-1 (small-viewport spec: dialog and
   keyboard behaviour at 200% zoom)
-- Team workflow (mobile) - UNREVIEWED
+- Team workflow (mobile) - CLEAN-PASS-1 (walked on the same mobile
+  context: the members card and the project archive control render
+  legibly; its only gap is the desktop UX-009 one - no management
+  controls at any role)
 - Menus/dialogs (mobile) - CLEAN-PASS-1
