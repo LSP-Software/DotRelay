@@ -10,6 +10,8 @@ const USER_OWNER = "33333333-3333-4333-8333-333333333333";
 const USER_MEMBER = "44444444-4444-4444-8444-444444444444";
 const USER_PENDING = "55555555-5555-4555-8555-555555555555";
 const USER_INVITEE = "66666666-6666-4666-8666-666666666666";
+const USER_ADMIN = "76666666-7666-4766-8766-767676767676";
+const USER_OWNER_TWO = "87777777-8777-4877-8877-878787878787";
 const USER_OLD = "77777777-7777-4777-8777-777777777777";
 const DEVICE_OWNER = "88888888-8888-4888-8888-888888888888";
 const INV_ACTIVE = "99999999-9999-4999-8999-999999999999";
@@ -76,19 +78,32 @@ const users = [
     githubSubject: "583231",
   },
   {
+    id: USER_ADMIN,
+    serverProfileId: profile.id,
+    authSubject: "auth-admin",
+    githubSubject: "6006",
+  },
+  {
+    id: USER_OWNER_TWO,
+    serverProfileId: profile.id,
+    authSubject: "auth-owner-two",
+    githubSubject: "7007",
+  },
+  {
     id: USER_OLD,
     serverProfileId: profile.id,
     authSubject: "auth-old",
     githubSubject: "4004",
   },
 ];
-
 const authAccounts = [
   { userId: "auth-owner", providerId: "github", accountId: "1001" },
   { userId: "auth-member", providerId: "github", accountId: "2002" },
   { userId: "auth-pending", providerId: "github", accountId: "3003" },
   { userId: "auth-invitee", providerId: "github", accountId: "583231" },
   { userId: "auth-old", providerId: "github", accountId: "4004" },
+  { userId: "auth-admin", providerId: "github", accountId: "6006" },
+  { userId: "auth-owner-two", providerId: "github", accountId: "7007" },
 ];
 
 const authUsers = [
@@ -96,6 +111,8 @@ const authUsers = [
   { id: "auth-member", name: "Member Person", image: "https://a/1.png" },
   { id: "auth-pending", name: null, image: null },
   { id: "auth-invitee", name: "Invitee Person", image: null },
+  { id: "auth-admin", name: "Admin Person", image: null },
+  { id: "auth-owner-two", name: "Second Owner", image: null },
 ];
 
 const teams = [
@@ -120,14 +137,26 @@ const teams = [
 ];
 
 const DEVICE_MEMBER = "a9999999-a999-4a99-8a99-a999a999a999";
+const DEVICE_ADMIN = "b9999999-b999-4b99-8b99-b9b9b9b9b9b9";
+const DEVICE_OWNER_TWO = "c9999999-c999-4c99-8c99-c9c9c9c9c9c9";
+const MEMBER_M1 = "8b5a507c-0567-412b-9634-f778f4cb00bb";
+const MEMBER_M2 = "dd4bf153-c982-4ead-b856-c22c9de5f4f7";
+const MEMBER_M3 = "3e11ba80-862f-40f3-aae0-51d22bb79380";
+const MEMBER_M4 = "16f3a76c-cca1-4845-9616-3416f9fe9bd3";
+const MEMBER_M5 = "60b2306b-4076-40d1-a827-8dc69937fde1";
+const MEMBER_M6 = "fa336ad6-0f87-4c8a-a261-a7504656503c";
+const MEMBER_M7 = "6f186f71-26dd-4b03-bc7b-e386fc63df04";
+const MEMBER_M8 = "9be61968-a622-4aa0-8a6b-01ed5d2dad43";
 const devices = [
   { id: DEVICE_OWNER, userId: USER_OWNER, lifecycle: "ACTIVE" },
   { id: DEVICE_MEMBER, userId: USER_MEMBER, lifecycle: "ACTIVE" },
+  { id: DEVICE_ADMIN, userId: USER_ADMIN, lifecycle: "ACTIVE" },
+  { id: DEVICE_OWNER_TWO, userId: USER_OWNER_TWO, lifecycle: "ACTIVE" },
 ];
 
 const memberships: StubMembership[] = [
   {
-    id: "m1",
+    id: MEMBER_M1,
     teamId: TEAM_A,
     userId: USER_OWNER,
     role: "OWNER",
@@ -138,7 +167,7 @@ const memberships: StubMembership[] = [
     invitationId: null,
   },
   {
-    id: "m2",
+    id: MEMBER_M2,
     teamId: TEAM_A,
     userId: USER_MEMBER,
     role: "MEMBER",
@@ -149,7 +178,7 @@ const memberships: StubMembership[] = [
     invitationId: null,
   },
   {
-    id: "m3",
+    id: MEMBER_M3,
     teamId: TEAM_A,
     userId: USER_PENDING,
     role: "MEMBER",
@@ -160,7 +189,7 @@ const memberships: StubMembership[] = [
     invitationId: INV_ACCEPTED,
   },
   {
-    id: "m4",
+    id: MEMBER_M4,
     teamId: TEAM_A,
     userId: USER_OLD,
     role: "MEMBER",
@@ -171,7 +200,7 @@ const memberships: StubMembership[] = [
     invitationId: null,
   },
   {
-    id: "m5",
+    id: MEMBER_M5,
     teamId: TEAM_B,
     userId: USER_OWNER,
     role: "OWNER",
@@ -182,7 +211,7 @@ const memberships: StubMembership[] = [
     invitationId: null,
   },
   {
-    id: "m6",
+    id: MEMBER_M6,
     teamId: TEAM_B,
     userId: USER_INVITEE,
     role: "MEMBER",
@@ -191,6 +220,28 @@ const memberships: StubMembership[] = [
     activatedAt: null,
     removedAt: null,
     invitationId: INV_B,
+  },
+  {
+    id: MEMBER_M7,
+    teamId: TEAM_A,
+    userId: USER_ADMIN,
+    role: "ADMIN",
+    lifecycle: "ACTIVE",
+    createdAt: t(-18),
+    activatedAt: t(-18),
+    removedAt: null,
+    invitationId: null,
+  },
+  {
+    id: MEMBER_M8,
+    teamId: TEAM_A,
+    userId: USER_OWNER_TWO,
+    role: "OWNER",
+    lifecycle: "ACTIVE",
+    createdAt: t(-12),
+    activatedAt: t(-12),
+    removedAt: null,
+    invitationId: null,
   },
 ];
 
@@ -247,6 +298,8 @@ const sessions = new Map<string, string>([
   ["member-token", "auth-member"],
   ["pending-token", "auth-pending"],
   ["invitee-token", "auth-invitee"],
+  ["admin-token", "auth-admin"],
+  ["owner-two-token", "auth-owner-two"],
 ]);
 
 const createAuthStub = (): DotRelayAuth =>
@@ -282,6 +335,7 @@ const createDatabaseStub = () => {
   // Each stub clones the invitation rows: acceptance mutates them, and one
   // test's acceptance must never leak into another test's dataset.
   const localInvitations = invitations.map((invitation) => ({ ...invitation }));
+  const localMemberships = memberships.map((membership) => ({ ...membership }));
   const operations = new Map<
     string,
     {
@@ -359,7 +413,7 @@ const createDatabaseStub = () => {
       }: {
         where: { teamId?: string; userId?: string; invitationId?: string };
       }) =>
-        memberships
+        localMemberships
           .concat(createdMemberships)
           .find((membership) =>
             where.invitationId !== undefined
@@ -382,7 +436,7 @@ const createDatabaseStub = () => {
           }>;
         };
       }) =>
-        memberships
+        localMemberships
           .concat(createdMemberships)
           .filter((membership) => {
             const team = teams.find((entry) => entry.id === membership.teamId);
@@ -426,6 +480,53 @@ const createDatabaseStub = () => {
           invitationId: data.invitationId,
         };
         createdMemberships.push(membership);
+        return membership;
+      },
+      findUnique: async ({ where }: { where: { id: string } }) =>
+        localMemberships
+          .concat(createdMemberships)
+          .find((membership) => membership.id === where.id) ?? null,
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: {
+          role?: MembershipRole;
+          lifecycle?: MembershipLifecycle;
+          removedAt?: Date;
+        };
+      }) => {
+        const membership = localMemberships
+          .concat(createdMemberships)
+          .find((entry) => entry.id === where.id);
+        if (!membership) throw new Error("Membership not found");
+        // The persistence layer keeps every Team's last active owner in place
+        // with a database trigger; the stub mirrors it so route tests exercise
+        // the same guard.
+        const nextLifecycle = data.lifecycle ?? membership.lifecycle;
+        const nextRole = data.role ?? membership.role;
+        const stillActiveOwner =
+          nextLifecycle === "ACTIVE" && nextRole === "OWNER";
+        const remainingOwners = localMemberships
+          .concat(createdMemberships)
+          .filter(
+            (entry) =>
+              entry.teamId === membership.teamId &&
+              entry.lifecycle === "ACTIVE" &&
+              entry.role === "OWNER" &&
+              (entry.id !== membership.id || stillActiveOwner),
+          ).length;
+        if (
+          membership.lifecycle === "ACTIVE" &&
+          membership.role === "OWNER" &&
+          !stillActiveOwner &&
+          remainingOwners < 1
+        )
+          throw new Error("a Team must retain one active owner");
+        if (data.role !== undefined) membership.role = data.role;
+        if (data.lifecycle !== undefined) membership.lifecycle = data.lifecycle;
+        if (data.removedAt !== undefined) membership.removedAt = data.removedAt;
         return membership;
       },
     },
@@ -658,7 +759,7 @@ describe("Team membership and invitation routes", () => {
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.memberships).toEqual([
       {
-        membershipId: "m1",
+        membershipId: MEMBER_M1,
         userId: USER_OWNER,
         name: "Owner Person",
         image: null,
@@ -670,7 +771,7 @@ describe("Team membership and invitation routes", () => {
         removedAt: null,
       },
       {
-        membershipId: "m2",
+        membershipId: MEMBER_M2,
         userId: USER_MEMBER,
         name: "Member Person",
         image: "https://a/1.png",
@@ -682,7 +783,31 @@ describe("Team membership and invitation routes", () => {
         removedAt: null,
       },
       {
-        membershipId: "m3",
+        membershipId: MEMBER_M7,
+        userId: USER_ADMIN,
+        name: "Admin Person",
+        image: null,
+        githubSubject: "6006",
+        role: "ADMIN",
+        lifecycle: "ACTIVE",
+        createdAt: t(-18).toISOString(),
+        activatedAt: t(-18).toISOString(),
+        removedAt: null,
+      },
+      {
+        membershipId: MEMBER_M8,
+        userId: USER_OWNER_TWO,
+        name: "Second Owner",
+        image: null,
+        githubSubject: "7007",
+        role: "OWNER",
+        lifecycle: "ACTIVE",
+        createdAt: t(-12).toISOString(),
+        activatedAt: t(-12).toISOString(),
+        removedAt: null,
+      },
+      {
+        membershipId: MEMBER_M3,
         userId: USER_PENDING,
         name: null,
         image: null,
@@ -694,7 +819,7 @@ describe("Team membership and invitation routes", () => {
         removedAt: null,
       },
       {
-        membershipId: "m4",
+        membershipId: MEMBER_M4,
         userId: USER_OLD,
         name: null,
         image: null,
@@ -729,7 +854,7 @@ describe("Team membership and invitation routes", () => {
     expect(body).toEqual({
       memberships: [
         {
-          membershipId: "m1",
+          membershipId: MEMBER_M1,
           userId: USER_OWNER,
           name: "Owner Person",
           image: null,
@@ -737,11 +862,27 @@ describe("Team membership and invitation routes", () => {
           lifecycle: "ACTIVE",
         },
         {
-          membershipId: "m2",
+          membershipId: MEMBER_M2,
           userId: USER_MEMBER,
           name: "Member Person",
           image: "https://a/1.png",
           githubSubject: "2002",
+          lifecycle: "ACTIVE",
+        },
+        {
+          membershipId: MEMBER_M7,
+          userId: USER_ADMIN,
+          name: "Admin Person",
+          image: null,
+          githubSubject: "6006",
+          lifecycle: "ACTIVE",
+        },
+        {
+          membershipId: MEMBER_M8,
+          userId: USER_OWNER_TWO,
+          name: "Second Owner",
+          image: null,
+          githubSubject: "7007",
           lifecycle: "ACTIVE",
         },
       ],
@@ -763,7 +904,7 @@ describe("Team membership and invitation routes", () => {
       (body.memberships as Array<Record<string, unknown>>).map(
         (row) => row.membershipId,
       ),
-    ).toEqual(["m1", "m2"]);
+    ).toEqual([MEMBER_M1, MEMBER_M2, MEMBER_M7, MEMBER_M8]);
     expect(body.invitations).toEqual([]);
   });
 
@@ -1142,5 +1283,424 @@ describe("Team membership and invitation routes", () => {
     const replayBody = (await replay.json()) as Record<string, unknown>;
     expect(replayBody.membershipId).toBe(firstBody.membershipId);
     expect(createdMemberships).toHaveLength(1);
+  });
+});
+describe("Team membership role and removal routes", () => {
+  test("an owner changes a member's role and the record persists", async () => {
+    const { testApp, auditEvents } = createTestApp();
+    const response = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "b0000000-0000-4000-8000-000000000001",
+        body: { role: "ADMIN" },
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({
+      membershipId: MEMBER_M2,
+      teamId: TEAM_A,
+      role: "ADMIN",
+      lifecycle: "ACTIVE",
+    });
+    expect(auditEvents).toEqual([
+      expect.objectContaining({
+        kind: "MEMBERSHIP_ROLE_CHANGED",
+        actorUserId: USER_OWNER,
+        actorDeviceId: DEVICE_OWNER,
+        entityKind: "MEMBERSHIP",
+        entityId: MEMBER_M2,
+      }),
+    ]);
+    // The change is the Team's record: a fresh privileged read sees it.
+    const refetch = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships`,
+      { token: "owner-token" },
+    );
+    const refetchBody = (await refetch.json()) as {
+      memberships: Array<Record<string, unknown>>;
+    };
+    expect(
+      refetchBody.memberships.find((row) => row.membershipId === MEMBER_M2)
+        ?.role,
+    ).toBe("ADMIN");
+  });
+
+  test("an owner may demote a second owner while one stays active", async () => {
+    const { testApp } = createTestApp();
+    const response = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M8}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "b0000000-0000-4000-8000-000000000002",
+        body: { role: "ADMIN" },
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      membershipId: MEMBER_M8,
+      role: "ADMIN",
+    });
+  });
+
+  test("replaying a role change reports the membership's current state", async () => {
+    const { testApp } = createTestApp();
+    const first = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "b0000000-0000-4000-8000-000000000003",
+        body: { role: "ADMIN" },
+      },
+    );
+    const replay = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "b0000000-0000-4000-8000-000000000003",
+        body: { role: "ADMIN" },
+      },
+    );
+
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual({
+      membershipId: MEMBER_M2,
+      teamId: TEAM_A,
+      role: "ADMIN",
+      lifecycle: "ACTIVE",
+    });
+  });
+
+  test("an owner cannot demote a Team's last active owner", async () => {
+    const { testApp } = createTestApp();
+    const response = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_B}/memberships/${MEMBER_M5}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "b0000000-0000-4000-8000-000000000004",
+        body: { role: "ADMIN" },
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: "last_owner_protection",
+    });
+  });
+
+  test("an owner removes a member and the removal is the Team's record", async () => {
+    const { testApp, auditEvents } = createTestApp();
+    const response = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "c0000000-0000-4000-8000-000000000001",
+        body: {},
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({
+      membershipId: MEMBER_M2,
+      teamId: TEAM_A,
+      lifecycle: "REMOVED",
+    });
+    expect(auditEvents).toEqual([
+      expect.objectContaining({
+        kind: "MEMBERSHIP_REMOVED",
+        actorUserId: USER_OWNER,
+        actorDeviceId: DEVICE_OWNER,
+        entityKind: "MEMBERSHIP",
+        entityId: MEMBER_M2,
+      }),
+    ]);
+    const refetch = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships`,
+      { token: "owner-token" },
+    );
+    const refetchBody = (await refetch.json()) as {
+      memberships: Array<Record<string, unknown>>;
+    };
+    const removed = refetchBody.memberships.find(
+      (row) => row.membershipId === MEMBER_M2,
+    );
+    expect(removed?.lifecycle).toBe("REMOVED");
+  });
+
+  test("an owner may remove a second owner while one stays active", async () => {
+    const { testApp } = createTestApp();
+    const response = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M8}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "c0000000-0000-4000-8000-000000000002",
+        body: {},
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      membershipId: MEMBER_M8,
+      lifecycle: "REMOVED",
+    });
+  });
+
+  test("an owner cannot remove a Team's last active owner", async () => {
+    const { testApp } = createTestApp();
+    const response = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_B}/memberships/${MEMBER_M5}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "c0000000-0000-4000-8000-000000000003",
+        body: {},
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: "last_owner_protection",
+    });
+  });
+
+  test("replaying a removal reports the state conflict", async () => {
+    const { testApp } = createTestApp();
+    const first = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "c0000000-0000-4000-8000-000000000004",
+        body: {},
+      },
+    );
+    const replay = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "c0000000-0000-4000-8000-000000000004",
+        body: {},
+      },
+    );
+    // The removal is the Team's record: the persistence layer checks the
+    // membership's lifecycle before its idempotency key, so the replay of a
+    // removal the membership already completed reports the conflict.
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toMatchObject({ code: "state_conflict" });
+  });
+
+  test("an admin removes a member but cannot change roles", async () => {
+    const { testApp } = createTestApp();
+    // The re-role is attempted first, while the Membership is still active:
+    // it must be refused by the policy before the removal makes it moot.
+    const promotion = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+      {
+        method: "POST",
+        token: "admin-token",
+        deviceId: DEVICE_ADMIN,
+        idempotencyKey: "d0000000-0000-4000-8000-000000000002",
+        body: { role: "ADMIN" },
+      },
+    );
+    const removal = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      {
+        method: "POST",
+        token: "admin-token",
+        deviceId: DEVICE_ADMIN,
+        idempotencyKey: "d0000000-0000-4000-8000-000000000001",
+        body: {},
+      },
+    );
+
+    expect(promotion.status).toBe(403);
+    expect(await promotion.json()).toMatchObject({ code: "forbidden" });
+    expect(removal.status).toBe(201);
+    expect(await removal.json()).toMatchObject({ lifecycle: "REMOVED" });
+  });
+
+  test("an admin cannot remove or re-role owners", async () => {
+    const { testApp } = createTestApp();
+    const removal = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M1}/remove`,
+      {
+        method: "POST",
+        token: "admin-token",
+        deviceId: DEVICE_ADMIN,
+        idempotencyKey: "d0000000-0000-4000-8000-000000000003",
+        body: {},
+      },
+    );
+    const reRole = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M1}/role`,
+      {
+        method: "POST",
+        token: "admin-token",
+        deviceId: DEVICE_ADMIN,
+        idempotencyKey: "d0000000-0000-4000-8000-000000000004",
+        body: { role: "MEMBER" },
+      },
+    );
+
+    expect(removal.status).toBe(403);
+    expect(await removal.json()).toMatchObject({ code: "forbidden" });
+    expect(reRole.status).toBe(403);
+    expect(await reRole.json()).toMatchObject({ code: "forbidden" });
+  });
+
+  test("a plain member cannot change roles or remove members", async () => {
+    const { testApp } = createTestApp();
+    const reRole = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+      {
+        method: "POST",
+        token: "member-token",
+        deviceId: DEVICE_MEMBER,
+        idempotencyKey: "e0000000-0000-4000-8000-000000000001",
+        body: { role: "ADMIN" },
+      },
+    );
+    const removal = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      {
+        method: "POST",
+        token: "member-token",
+        deviceId: DEVICE_MEMBER,
+        idempotencyKey: "e0000000-0000-4000-8000-000000000002",
+        body: {},
+      },
+    );
+
+    expect(reRole.status).toBe(403);
+    expect(await reRole.json()).toMatchObject({ code: "forbidden" });
+    expect(removal.status).toBe(403);
+    expect(await removal.json()).toMatchObject({ code: "forbidden" });
+  });
+
+  test("unknown memberships answer as not found on both routes", async () => {
+    const { testApp } = createTestApp();
+    const unknown = "e0f1a2b3-c4d5-4e6f-8a7b-9c0d1e2f3a4b";
+    const reRole = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${unknown}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "f0000000-0000-4000-8000-000000000001",
+        body: { role: "ADMIN" },
+      },
+    );
+    const removal = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${unknown}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "f0000000-0000-4000-8000-000000000002",
+        body: {},
+      },
+    );
+
+    expect(reRole.status).toBe(404);
+    expect(await reRole.json()).toMatchObject({ code: "resource_not_found" });
+    expect(removal.status).toBe(404);
+    expect(await removal.json()).toMatchObject({ code: "resource_not_found" });
+  });
+
+  test("membership mutations require the browser Device, not just the session", async () => {
+    const { testApp } = createTestApp();
+    const reRole = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        idempotencyKey: "f0000000-0000-4000-8000-000000000003",
+        body: { role: "ADMIN" },
+      },
+    );
+    const removal = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        idempotencyKey: "f0000000-0000-4000-8000-000000000004",
+        body: {},
+      },
+    );
+
+    expect(reRole.status).toBe(400);
+    expect(await reRole.json()).toMatchObject({ code: "invalid_request" });
+    expect(removal.status).toBe(400);
+    expect(await removal.json()).toMatchObject({ code: "invalid_request" });
+  });
+
+  test("role changes validate the requested role and removals need a JSON body", async () => {
+    const { testApp } = createTestApp();
+    const badRole = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "f0000000-0000-4000-8000-000000000005",
+        body: { role: "SUPERUSER" },
+      },
+    );
+    const noBody = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      { method: "POST", token: "owner-token", deviceId: DEVICE_OWNER },
+    );
+
+    expect(badRole.status).toBe(400);
+    expect(await badRole.json()).toMatchObject({ code: "invalid_request" });
+    expect(noBody.status).toBe(400);
+    expect(await noBody.json()).toMatchObject({ code: "invalid_request" });
   });
 });

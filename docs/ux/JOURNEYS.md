@@ -56,14 +56,18 @@ issues.
 - Teammate first successful pull - CLEAN-PASS-1 (identical pull protocol to
   "First successful pull"; the member-role gating a teammate hits is
   e2e-covered in workspace-role-permissions.spec.ts)
-- Change permissions - ISSUES FOUND (UX-009: no role-change control exists
-  at any role; the Owner disclosure promises member management the UI
-  cannot perform)
-- Remove teammate - ISSUES FOUND (UX-009: no remove control exists
-  anywhere; a wrong invitation or departed member cannot be corrected in
-  the product)
-- Leave team where supported - ISSUES FOUND (UX-009: no leave control
-  exists; the API exposes no member-mutation operations at all)
+- Change permissions - CLEAN-PASS-1 (UX-009 fixed: an Owner changes a
+  Member's role from the Members card's Actions column; the Owner-only
+  authorisation is e2e- and API-test-covered, and the e2e confirms the
+  refreshed record reports the new role)
+- Remove teammate - CLEAN-PASS-1 (UX-009 fixed: an Owner or Admin removes
+  a member from the same Actions column - Admins on plain Member rows
+  only - and the refreshed record marks the membership Removed; the
+  last-owner guard and the Owner/Admin/Member matrix are
+  API-test-covered)
+- Leave team where supported - NOT A CAPABILITY (docs/administration.md
+  defines no leave operation, so there is no product behaviour to audit;
+  a departing member is removed by an Owner or Admin instead)
 
 ## NORMAL USE
 
@@ -181,6 +185,6 @@ issues.
   keyboard behaviour at 200% zoom)
 - Team workflow (mobile) - CLEAN-PASS-1 (walked on the same mobile
   context: the members card and the project archive control render
-  legibly; its only gap is the desktop UX-009 one - no management
-  controls at any role)
+  legibly; the UX-009 management controls live in the same members
+  table, so nothing mobile-specific is added by the fix)
 - Menus/dialogs (mobile) - CLEAN-PASS-1

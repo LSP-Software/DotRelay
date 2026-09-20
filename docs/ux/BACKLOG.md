@@ -393,6 +393,21 @@ the app; a Member's Invite button is correctly disabled. The API route
 registration was checked directly: no member-mutation endpoint exists, so
 no client could offer these operations.
 Status:
-OPEN - needs a product decision: implement the missing management
-operations per the documented policy, or re-scope the disclosure copy
-and `docs/administration.md` to the invite-only reality.
+FIXED - the Team view now performs the member management its disclosure
+promises, and the API exposes it: POST
+`/api/v1/teams/:teamId/memberships/:membershipId/role` (Owners only) and
+POST `.../remove` (Owners and Admins, members only), both with an
+Idempotency-Key like the invitation routes. The Members card gains an
+Actions column: an Owner sees a role select and a "Remove member" button on
+every active Member row that is not their own; an Admin sees the remove
+button on plain Member rows only; a Member sees no controls, and no one
+ever sees controls on their own row or on a removed row. The service keeps
+a Team's last active owner in place (the database trigger) and the UI
+reports the refusal as "This team needs at least one active owner."
+Verified by `apps/api/src/membership-routes.test.ts` (role change,
+removal, replays, the last-owner guard, and the Owner/Admin/Member
+authorisation matrix) and by
+`apps/web/e2e/workspace-team-management.spec.ts` (owner, admin, and member
+views). Leaving a team is not a product capability (the policy matrix has
+no such operation), so it stays unimplemented. Committed on main. See
+DECISIONS.md (D-003).

@@ -2,6 +2,62 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-20 - UX-009 implemented: change role and remove a member
+
+Skills: none (implementation session against the finding from the previous
+session; Playwright e2e plus the API unit suite as the verification
+surface).
+
+Scope:
+- Built the two Team operations `docs/administration.md` already promised
+  and the web UI withheld: change a Member's role (Owner only) and remove
+  a Member (Owner and Admin, members only), per the D-003 decision.
+
+Changed:
+- `packages/contracts`: new stable problem code `last_owner_protection`
+  (409) - the service keeps a Team's last active owner in place with a
+  database trigger, and the UI needed a message it can act on rather than
+  the generic conflict wording.
+- `apps/api/src/membership-routes.ts`: two new protocol routes,
+  `POST .../memberships/:membershipId/role` and `.../remove`, both
+  `requireProtocolActor` (session + active browser Device) + Idempotency-Key
+  + `MEMBERSHIP_CHANGE` operations, reusing the existing repository's
+  `changeRole`/`remove` (authorisation, idempotency, audit already
+  implemented there). Their error mapper reports the trigger as
+  `last_owner_protection`.
+- `apps/api/src/membership-routes.test.ts`: the fixture Team A now has a
+  second active Owner (TEAM_B keeps its single owner) so the guard is
+  testable; the stub mirrors the trigger; the new describe covers role
+  change, removal, replays, the last-owner guard, and the
+  Owner/Admin/Member authorisation matrix.
+- `apps/web/lib/team-administration.ts`: `changeTeamMemberRole` /
+  `removeTeamMember` client functions and the `last_owner_protection`
+  message.
+- `apps/web/app/workspace/workspace-shell.tsx`: an Actions column on the
+  Members card - Owners get a role select + "Remove member" on every
+  active row that is not their own, Admins get "Remove member" on plain
+  Member rows only, Members see nothing; row-level busy state and the
+  service's refusal shown on the acted-on row; the admin disclosure copy
+  now says what an Admin can do (invite/remove members, manage projects
+  and environments - not owners or other admins).
+- `apps/web/e2e/workspace-team-management.spec.ts` (new): owner / admin /
+  member views of the Actions column, own-row and removed-row exclusion,
+  and the post-mutation record reflecting the change.
+- `docs/ux/BACKLOG.md` (UX-009 → FIXED), `docs/ux/JOURNEYS.md` (Change
+  permissions and Remove teammate → CLEAN-PASS-1; Leave team recorded as
+  not a product capability), `docs/ux/DECISIONS.md` (D-003), this file.
+
+Verified:
+- `bun x biome check` clean and `tsc` clean in both apps;
+  `apps/web && bun run test:e2e`: 100 passed, 1 failed - the pre-existing
+  `workspace-small-viewport.spec.ts:182` failure that predates this work
+  (expected 97→100 passed);
+  `apps/api && bun test`: 121 passed, 0 failed; contracts suite 121 passed.
+
+Remaining:
+- UX-009 is closed. Leaving a team stays out of scope by design (D-003):
+  the policy matrix has no such operation.
+
 ## 2026-09-20 - Remaining journeys audited; team-management gap found (UX-009)
 
 Skills: ux-audit (journey scoping + evidence), impeccable (state-handling

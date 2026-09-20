@@ -103,11 +103,13 @@ import {
 } from "@/lib/environment-workflow";
 import {
   acceptTeamInvitation,
+  changeTeamMemberRole,
   createTeamInvitation,
   fetchMyInvitations,
   fetchTeamMemberships,
   type MyInvitations,
   type ResolvedGitHubUser,
+  removeTeamMember,
   resolveGitHubLogin,
   type TeamMembershipState,
 } from "@/lib/team-administration";
@@ -226,7 +228,7 @@ const fromBase64 = (value: string): Uint8Array => {
 const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
   OWNER: "Owners can manage team members, projects, and environments.",
   ADMIN:
-    "Admins can invite members and manage projects and environments. They cannot change owners or other admins.",
+    "Admins can invite and remove members and manage projects and environments. They cannot change owners or other admins.",
   MEMBER:
     "Members can view this team's projects, read shared values, and manage their own values.",
 };
@@ -527,6 +529,16 @@ export const WorkspaceShell = ({
     useState<TeamMembershipState | null>(null);
   const [membershipError, setMembershipError] = useState<string | null>(null);
   const [membershipTick, setMembershipTick] = useState(0);
+  // The in-flight role or removal mutation, one at a time, keyed by
+  // Membership so the row's controls can stay busy while it runs.
+  const [memberMutation, setMemberMutation] = useState<{
+    readonly membershipId: string;
+    readonly kind: "role" | "remove";
+  } | null>(null);
+  const [memberMutationError, setMemberMutationError] = useState<{
+    readonly membershipId: string;
+    readonly message: string;
+  } | null>(null);
   const [myInvitations, setMyInvitations] = useState<MyInvitations | null>(
     null,
   );
@@ -880,6 +892,53 @@ export const WorkspaceShell = ({
       refreshTeamAdministration();
     } else {
       setAcceptError(result.message);
+    }
+  };
+  // Changes the Member's role in the Team. The server withholds the owner
+  // and admin rows from admins and enforces the last-owner guard, so the
+  // row's controls mirror those bounds and a refusal stays visible on the
+  // row the user acted on.
+  const changeMemberRole = async (
+    membershipId: string,
+    role: MembershipRole,
+  ) => {
+    const selectedTeamId = selectedTeam?.id;
+    if (!apiOrigin || !selectedTeamId || memberMutation) return;
+    setMemberMutation({ membershipId, kind: "role" });
+    setMemberMutationError(null);
+    const result = await changeTeamMemberRole(
+      apiOrigin,
+      selectedTeamId,
+      membershipId,
+      role,
+      browserDeviceId,
+    );
+    setMemberMutation(null);
+    if (result.ok) {
+      refreshTeamAdministration();
+    } else {
+      setMemberMutationError({ membershipId, message: result.message });
+    }
+  };
+
+  // Removes the Member from the Team. A failure leaves the Membership in
+  // place and shows the service's explanation on the row.
+  const removeMember = async (membershipId: string) => {
+    const selectedTeamId = selectedTeam?.id;
+    if (!apiOrigin || !selectedTeamId || memberMutation) return;
+    setMemberMutation({ membershipId, kind: "remove" });
+    setMemberMutationError(null);
+    const result = await removeTeamMember(
+      apiOrigin,
+      selectedTeamId,
+      membershipId,
+      browserDeviceId,
+    );
+    setMemberMutation(null);
+    if (result.ok) {
+      refreshTeamAdministration();
+    } else {
+      setMemberMutationError({ membershipId, message: result.message });
     }
   };
 
@@ -2886,11 +2945,17 @@ export const WorkspaceShell = ({
                                 <TableHead>Role</TableHead>
                               ) : null}
                               <TableHead>Status</TableHead>
+                              {canAdminister ? (
+                                <TableHead>Actions</TableHead>
+                              ) : null}
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {membershipState.memberships.map((member) => (
-                              <TableRow key={member.membershipId}>
+                              <TableRow
+                                key={member.membershipId}
+                                data-testid={`member-row-${member.membershipId}`}
+                              >
                                 <TableCell>
                                   <div className="font-medium">
                                     {member.name ??
@@ -2916,6 +2981,66 @@ export const WorkspaceShell = ({
                                     </Badge>
                                   )}
                                 </TableCell>
+                                {canAdminister ? (
+                                  <TableCell>
+                                    {member.lifecycle === "ACTIVE" &&
+                                    member.userId !==
+                                      displayBoundary.session.userId &&
+                                    (effectiveRole === "OWNER" ||
+                                      member.role === "MEMBER") ? (
+                                      <div className="flex flex-col gap-2">
+                                        <div className="flex items-center gap-2">
+                                          {effectiveRole === "OWNER" ? (
+                                            <select
+                                              aria-label={`Role for ${
+                                                member.name ??
+                                                `GitHub ${member.githubSubject}`
+                                              }`}
+                                              className="h-8 rounded-lg border border-input bg-input/30 px-2 text-sm"
+                                              disabled={memberMutation !== null}
+                                              value={member.role ?? "MEMBER"}
+                                              onChange={(event) =>
+                                                void changeMemberRole(
+                                                  member.membershipId,
+                                                  event.target
+                                                    .value as MembershipRole,
+                                                )
+                                              }
+                                            >
+                                              <option value="OWNER">
+                                                Owner
+                                              </option>
+                                              <option value="ADMIN">
+                                                Admin
+                                              </option>
+                                              <option value="MEMBER">
+                                                Member
+                                              </option>
+                                            </select>
+                                          ) : null}
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={memberMutation !== null}
+                                            onClick={() =>
+                                              void removeMember(
+                                                member.membershipId,
+                                              )
+                                            }
+                                          >
+                                            Remove member
+                                          </Button>
+                                        </div>
+                                        {memberMutationError?.membershipId ===
+                                        member.membershipId ? (
+                                          <p className="text-xs text-destructive">
+                                            {memberMutationError.message}
+                                          </p>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </TableCell>
+                                ) : null}
                               </TableRow>
                             ))}
                             {membershipState.invitations.map((invitation) => (
@@ -2929,6 +3054,7 @@ export const WorkspaceShell = ({
                                 {canAdminister ? (
                                   <TableCell>Member</TableCell>
                                 ) : null}
+                                {canAdminister ? <TableCell /> : null}
                                 <TableCell>
                                   <Badge
                                     className="border-amber-300/25 text-amber-200"
@@ -2944,7 +3070,7 @@ export const WorkspaceShell = ({
                             membershipState.invitations.length === 0 ? (
                               <TableRow>
                                 <TableCell
-                                  colSpan={canAdminister ? 3 : 2}
+                                  colSpan={canAdminister ? 4 : 2}
                                   className="text-muted-foreground"
                                 >
                                   No members yet.

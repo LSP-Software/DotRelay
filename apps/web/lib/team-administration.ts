@@ -102,6 +102,9 @@ const problemMessage = (code: unknown): string => {
     case "archived_resource":
       return "This team is archived.";
     case "operation_conflict":
+      return "Something changed while you were working. Refresh and try again.";
+    case "last_owner_protection":
+      return "This team needs at least one active owner. Promote another owner first.";
     case "state_conflict":
       return "Something changed while you were working. Refresh and try again.";
     case "payload_too_large":
@@ -334,6 +337,114 @@ export const acceptTeamInvitation = async (
   );
   if (!outcome.ok) return failure(outcome.message);
   const accepted = parseAcceptedInvitation(outcome.body);
+
   if (!accepted) return failure("The server returned a malformed reply.");
   return { ok: true, data: accepted };
+};
+export type MemberRoleChange = Readonly<{
+  readonly membershipId: string;
+  readonly teamId: string;
+  readonly role: MembershipRole;
+  readonly lifecycle: MembershipLifecycle;
+}>;
+
+export type MemberRemoval = Readonly<{
+  readonly membershipId: string;
+  readonly teamId: string;
+  readonly lifecycle: MembershipLifecycle;
+}>;
+
+const parseMemberRoleChange = (body: unknown): MemberRoleChange | null => {
+  if (!isRecord(body)) return null;
+  const membershipId = asString(body.membershipId);
+  const teamId = asString(body.teamId);
+  const lifecycle = asString(body.lifecycle);
+  const role = body.role;
+  if (
+    !membershipId ||
+    !teamId ||
+    (lifecycle !== "ACTIVE" &&
+      lifecycle !== "PENDING_KEY_GRANT" &&
+      lifecycle !== "REMOVED") ||
+    (role !== "OWNER" && role !== "ADMIN" && role !== "MEMBER")
+  )
+    return null;
+  return {
+    membershipId,
+    teamId,
+    role,
+    lifecycle: lifecycle as MembershipLifecycle,
+  };
+};
+
+const parseMemberRemoval = (body: unknown): MemberRemoval | null => {
+  if (!isRecord(body)) return null;
+  const membershipId = asString(body.membershipId);
+  const teamId = asString(body.teamId);
+  const lifecycle = asString(body.lifecycle);
+  if (
+    !membershipId ||
+    !teamId ||
+    (lifecycle !== "ACTIVE" &&
+      lifecycle !== "PENDING_KEY_GRANT" &&
+      lifecycle !== "REMOVED")
+  )
+    return null;
+  return { membershipId, teamId, lifecycle: lifecycle as MembershipLifecycle };
+};
+
+// Changes a Member's role in the Team. Owners may change any role; the
+// server withholds the owner and admin rows from admins and enforces the
+// last-owner guard.
+export const changeTeamMemberRole = async (
+  apiOrigin: string,
+  teamId: string,
+  membershipId: string,
+  role: MembershipRole,
+  deviceId?: string,
+): Promise<TeamAdminResult<MemberRoleChange>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/teams/${teamId}/memberships/${membershipId}/role`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+        ...deviceHeaders(deviceId),
+      },
+      body: JSON.stringify({ role }),
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const changed = parseMemberRoleChange(outcome.body);
+  if (!changed) return failure("The server returned a malformed reply.");
+  return { ok: true, data: changed };
+};
+
+// Removes a Member from the Team. The server keeps the Team's last active
+// owner in place, so a Team never loses every owner.
+export const removeTeamMember = async (
+  apiOrigin: string,
+  teamId: string,
+  membershipId: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<MemberRemoval>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/teams/${teamId}/memberships/${membershipId}/remove`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+        ...deviceHeaders(deviceId),
+      },
+      body: "{}",
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const removed = parseMemberRemoval(outcome.body);
+  if (!removed) return failure("The server returned a malformed reply.");
+  return { ok: true, data: removed };
 };

@@ -46,6 +46,13 @@ const mapMembershipError = (error: unknown): ProblemCode => {
     error.message.includes("expired or already used")
   )
     return "invitation_expired";
+  // Checked before the generic mapper: its "must " rule would otherwise
+  // surface the database's last-owner guard as a malformed request.
+  if (
+    error instanceof Error &&
+    error.message.includes("retain one active owner")
+  )
+    return "last_owner_protection";
   const mapped = mapPersistenceError(error);
   if (mapped) return mapped.code;
   if (!(error instanceof Error)) return "service_unavailable";
@@ -491,6 +498,166 @@ export const registerMembershipRoutes = (
       return responseProblem(context, mapMembershipError(error));
     }
   });
+
+  // Changes a Member's role within the Team. Only an active Owner may
+  // change roles: the policy withholds owner and admin administration from
+  // admins. The database's last-owner guard still applies, so the Team
+  // keeps at least one active owner.
+  app.post(
+    "/api/v1/teams/:teamId/memberships/:membershipId/role",
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      try {
+        const teamId = parseUuid(context.req.param("teamId"), "teamId");
+        const membershipId = parseUuid(
+          context.req.param("membershipId"),
+          "membershipId",
+        );
+        const body = await readJsonBody(context, ["role"]);
+        const role = body.role;
+        if (role !== "OWNER" && role !== "ADMIN" && role !== "MEMBER")
+          throw new Error("role must be OWNER, ADMIN, or MEMBER");
+        const operationId = parseIdempotencyKey(
+          context.req.header("Idempotency-Key"),
+        );
+        const commandBytes = new TextEncoder().encode(
+          JSON.stringify({
+            action: "membership.change_role",
+            teamId,
+            membershipId,
+            role,
+          }),
+        );
+        const result = await memberships.changeRole(database, {
+          teamId,
+          membershipId,
+          role,
+          operation: {
+            id: operationId,
+            actorUserId: actor.userId,
+            actorDeviceId: actor.deviceId,
+            kind: "MEMBERSHIP_CHANGE",
+            commandBytes,
+            commandDigest: await sha384Digest(commandBytes),
+          },
+        });
+        if ("membership" in result) {
+          const membership = result.membership;
+          return context.json(
+            {
+              membershipId: membership.id,
+              teamId,
+              role: membership.role,
+              lifecycle: membership.lifecycle,
+            },
+            201,
+            { "Cache-Control": "no-store" },
+          );
+        }
+        if (result.idempotent) {
+          // A replay names the same Membership: report its current state
+          // instead of a second command.
+          const existing = await database.membership.findUnique({
+            where: { id: membershipId },
+            select: { id: true, role: true, lifecycle: true },
+          });
+          if (!existing) return responseProblem(context, "state_conflict");
+          return context.json(
+            {
+              membershipId: existing.id,
+              teamId,
+              role: existing.role,
+              lifecycle: existing.lifecycle,
+            },
+            200,
+            { "Cache-Control": "no-store" },
+          );
+        }
+        return responseProblem(context, "state_conflict");
+      } catch (error) {
+        return responseProblem(context, mapMembershipError(error));
+      }
+    },
+  );
+
+  // Removes a Member from the Team. Active owners and admins may remove
+  // members they can manage; the database's last-owner guard keeps the Team
+  // from losing its last active owner.
+  app.post(
+    "/api/v1/teams/:teamId/memberships/:membershipId/remove",
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      try {
+        const teamId = parseUuid(context.req.param("teamId"), "teamId");
+        const membershipId = parseUuid(
+          context.req.param("membershipId"),
+          "membershipId",
+        );
+        await readJsonBody(context, []);
+        const operationId = parseIdempotencyKey(
+          context.req.header("Idempotency-Key"),
+        );
+        const commandBytes = new TextEncoder().encode(
+          JSON.stringify({ action: "membership.remove", teamId, membershipId }),
+        );
+        const result = await memberships.remove(database, {
+          teamId,
+          membershipId,
+          operation: {
+            id: operationId,
+            actorUserId: actor.userId,
+            actorDeviceId: actor.deviceId,
+            kind: "MEMBERSHIP_CHANGE",
+            commandBytes,
+            commandDigest: await sha384Digest(commandBytes),
+          },
+        });
+        if ("membership" in result) {
+          const membership = result.membership;
+          return context.json(
+            {
+              membershipId: membership.id,
+              teamId,
+              lifecycle: membership.lifecycle,
+            },
+            201,
+            { "Cache-Control": "no-store" },
+          );
+        }
+        if (result.idempotent) {
+          const existing = await database.membership.findUnique({
+            where: { id: membershipId },
+            select: { id: true, lifecycle: true },
+          });
+          if (!existing) return responseProblem(context, "state_conflict");
+          return context.json(
+            {
+              membershipId: existing.id,
+              teamId,
+              lifecycle: existing.lifecycle,
+            },
+            200,
+            { "Cache-Control": "no-store" },
+          );
+        }
+        return responseProblem(context, "state_conflict");
+      } catch (error) {
+        return responseProblem(context, mapMembershipError(error));
+      }
+    },
+  );
 
   // The Membership Invitations addressed to the acting User's stable GitHub
   // subject, plus the Teams whose Membership the User accepted but has not

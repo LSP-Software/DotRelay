@@ -70,3 +70,56 @@ Tradeoffs considered:
 Verification: `apps/web/e2e/workspace-zero-teams.spec.ts` - a zero-Teams
 boundary shows no team selector and a "No teams yet" state pointing at
 `dotrelay init`; a boundary with Teams keeps the selector.
+
+## D-003 - Member management is Owner/Admin API mutations; no self-leave
+
+Context:
+- UX-009 found the Team view promised member management (its disclosure
+  says owners "manage team members") while the API exposed none of it:
+  only resolve / create-invitation / list-invitations / list-memberships /
+  my-invitations / accept.
+- `docs/administration.md`'s policy matrix already promises it: "Remove a
+  Member: Owner yes, Admin yes" and "Change Member/Admin/owner roles:
+  Owner yes". The product decision behind UX-009 was to implement the
+  documented operations rather than re-scope the docs down to invite-only.
+
+Decision:
+- Two new protocol routes under the Team, POST + Idempotency-Key (the
+  convention every other Team mutation in this codebase uses - the API
+  has zero PUT/DELETE/PATCH):
+  - `POST /api/v1/teams/:teamId/memberships/:membershipId/role`
+    `{"role": "OWNER" | "ADMIN" | "MEMBER"}` - Owners only.
+  - `POST /api/v1/teams/:teamId/memberships/:membershipId/remove` `{}` -
+    Owners and Admins (Admins on plain Member rows only).
+- Both require a signed-in session AND an active browser Device
+  (`requireProtocolActor`, like the invitation mutations) and reuse the
+  existing `MembershipAdministrationRepository.changeRole` / `.remove`
+  code paths: same authorisation (`managedRoleAction`), same idempotency
+  (`OperationRepository.begin`), same audit (`MEMBERSHIP_ROLE_CHANGED` /
+  `MEMBERSHIP_REMOVED`), and the database's last-owner trigger still
+  applies, so a Team never loses its final active owner. A refusal
+  surfaces as the new stable problem code `last_owner_protection` (409),
+  not a generic conflict.
+- The web Members card gains an Actions column mirroring the server's
+  authorisation exactly: an Owner sees a role select plus "Remove member"
+  on every active row that is not their own; an Admin sees only "Remove
+  member", and only on plain Member rows; a Member sees nothing. No row -
+  including the actor's own - ever offers controls over itself, and
+  removed rows keep none.
+- "Leave team" is NOT built: the policy matrix defines no such operation,
+  so it is not a product capability and is recorded as such in
+  JOURNEYS.md rather than shipped or documented as a feature.
+
+Rejected:
+- PUT/DELETE verbs. Rejected: the whole API is POST + Idempotency-Key;
+  introducing a first PUT/DELETE would create a second, unreferenced
+  convention for the same class of mutation.
+- A "Leave team" self-serve. Rejected: it is absent from the documented
+  policy, and shipping a capability the docs do not promise would invert
+  the product's deliberate owners-manage-members model.
+
+Verification: `apps/api/src/membership-routes.test.ts` (role change,
+removal, replays, the last-owner guard, and the Owner/Admin/Member
+authorisation matrix) and `apps/web/e2e/workspace-team-management.spec.ts`
+(owner, admin, and member views of the Actions column, including the
+own-row and removed-row cases).
