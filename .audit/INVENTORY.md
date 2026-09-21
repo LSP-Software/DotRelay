@@ -153,3 +153,7 @@ Legend: category prefixes
 | F-012 Local `test:integration` silently skipped every test (false green) | FIXED_AND_VERIFIED (this campaign; fresh 19 pass / 0 fail run, `0 cached`) | TEST-INTEG-001 |
 | F-013 e2e invitations spec races the trust settle on cold server start | FIXED_AND_VERIFIED (this campaign; 4/4 + full suite 102 pass on cold start) | TEST-E2E-001 |
 | F-014 No surface provisions member key grants / activates PENDING_KEY_GRANT | BLOCKED (product decision — existing issue #133 → spec #209; recorded in this ledger 2026-09-21) | API-MEMBERSHIP-002, SEC-AUTHZ-001/002 |
+| F-015 CLI re-mints the publication operation on an uncertain finalize (no publication record / status consult) | BLOCKED (tracked — existing issue #137 → spec #209 decision 11; recorded in this ledger 2026-09-21 by the second-pass CLI sweep) | PROTO-PUB-001, CLI-PUBLISH-001 |
+| Test pin: cross-User device-approval rejection (643600c, this session) | TEST PIN (evidence only; no code change) | API-AUTH-001, SEC-AUTHZ-001, SEC-COOKIE-001 |
+| Test pin: cross-tenant membership scoping (aaa6fcf, this session) | TEST PIN (evidence only; no code change) | SEC-AUTHZ-001, API-MEMBERSHIP-001 |
+| Test pin: lane ownership re-derivation from the signed object (f27c468, this session) | TEST PIN (evidence only; no code change) | SEC-CRYPTO-002, PROTO-PUB-001, PROTO-SIGN-001 |

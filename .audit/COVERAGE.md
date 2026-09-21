@@ -8,6 +8,15 @@ Campaign close-out 2026-09-21: the final `bun run verify` (after the last code c
 is green and every INVENTORY.md surface is in a terminal state (PASS / BLOCKED /
 NOT_APPLICABLE), with all ten findings resolved or deliberately blocked on product
 decisions (F-010 → GitHub issue #229).
+Second-pass session close-out 2026-09-21: a fresh adversarial pass re-proved the
+device-approval, cross-tenant membership, and lane-ownership invariants sound and pinned
+each with a regression test (643600c cross-User device-approval rejection, aaa6fcf
+cross-tenant membership scoping, f27c468 lane-ownership re-derivation); the CLI sweep
+proved 6 of 7 invariants and disproved decision 11 for the CLI publication path (re-mint
+on a lost finalize, no publication record) — already tracked as F-015 / GitHub issue #137
+(`ready-for-agent`, settled to spec #209 decision 11), not a new defect; and the final
+`bun run verify` against these commits is green (API 132 pass / 0 fail, integration 19,
+e2e 102, CLI + live CLI round trips, docs, tracked tree).
 
 ## WEB (browser, live self-hosted)
 - Sign-out landing, sign-in (OAuth redirect with PKCE + correct scope), session
@@ -64,6 +73,11 @@ decisions (F-010 → GitHub issue #229).
   120/60s per-actor → 429 at the 121st request (Retry-After: 60), actor-keyed (user A's
   counter unaffected); better-auth 10/60s limit unit-covered (index.test.ts 11-request
   loop).
+- Regression pins added this session (unit, API suite): a foreign user's session cannot
+  approve another user's device code (403 `access_denied`, code unmutated; 643600c) and a
+  membership valid in another Team answers `resource_not_found` on this Team's membership
+  routes even for an owner of both Teams (aaa6fcf) — the cross-tenant membership scope is
+  now pinned for a maximally-privileged actor, not just a nonexistent id.
 
 ## PROTO (live, via CLI + curl)
 - Device bootstrap (first device) 201 — live (CLI setup + manual client).
@@ -86,6 +100,17 @@ decisions (F-010 → GitHub issue #229).
   decision (GitHub issue #229 / F-010), not a defect.
 - Full recovery restore happy-path (replacement device via challenge proof) — unit
   covered; not run live for the same device-stranding reason (Residuals).
+- Lane-ownership re-derivation (this session, unit pin f27c468, apps/api/src/protocol/
+  staging.test.ts): the finalize route re-verifies only the Revision's Ed25519 signature;
+  lane objects are parsed/projected but their signatures are never re-verified, so a
+  structurally valid lane object whose owner (USER_DEFINED_VALUE, field 26) or original
+  provider (SHARED_VALUE, field 27) names another User — with a recomputed body digest
+  and a valid signature — is rejected solely by `validateLaneOwnership` (staging.ts:257-290),
+  which binds the signed object's identity to the actor. The pin builds a genuinely
+  tampered object (parse-accepted, digest + signature consistent) and asserts
+  `buildPublicationInput` rejects it as `invalid_crypto_object`, plus the positive
+  owner/provider cases. Catches a future refactor that would trust the lane projection
+  (which checks only owner presence, validation.ts:299-315) or reorder the checks.
 
 ## CLI (live, DOTRELAY_CONFIG_DIR=/tmp/cli-audit, profile live)
 - Pull output contract (F-011, this campaign): every `dotrelay pull` output variant —
@@ -108,6 +133,22 @@ decisions (F-010 → GitHub issue #229).
 - `dotrelay admin` subcommands (CLI-ADMIN-001): NOT_APPLICABLE (D-014) — no such
   command exists in the code or docs; membership operations are proven across the
   CLI/API/WEB surfaces above.
+- Second-pass adversarial CLI sweep (this session, static + spec read of workflow.ts
+  4047 lines, args/output/credentials/device-storage/auth/profile/admin/context, packages/client
+  transport/storage, and both CLI e2e pipelines): PROVEN — no plaintext values reach stdout
+  without explicit `--reveal` (TTY `--stdout` refused at parse, args.ts:560-563; non-TTY pipe
+  is the documented automation path, pinned by test-e2e-full.ts:981-1017 and test-cli-live.ts:
+  840-852); `.env`/output replaced only on complete decode (fail-closed `syncAndDecode`,
+  `missing_values` guard workflow.ts:3767-3776, atomic 0600 write + `.previous` retention
+  output.ts:33-80); secrets at rest AES-GCM in 0600 AAD-scoped store with per-device
+  bundle pin checks (credentials.ts, storage/cli.ts); no cross-profile/cross-host config
+  bleed (sessions AAD-bound to origin+serverProfileId, device storage re-verifies the stored
+  pin, trust requires explicit accept-profile match); RFC 8628 polling renders only
+  user_code + origin-pinned verification URL, token saved on success only; idempotency
+  keys are fresh random values never derived from secrets. DISPROVEN (tracked, not fixed):
+  decision 11 (uncertain publication reconciled, never re-minted) fails on the CLI
+  publication path — F-015, GitHub issue #137 `ready-for-agent` (the CLI's own recovery
+  surfaces already implement the pattern, workflow.ts:2030-2105 / 2476-2520).
 
 ## SEC (live)
 - Values never stored in plaintext: the live head's lane columns are ciphertext; the
@@ -251,7 +292,11 @@ decisions (F-010 → GitHub issue #229).
    pending-key-grant/pending-invitation affordance is a product decision, not a defect. The
    deeper reason B is stranded — no shipped surface provisions the required key grants or
    commits the PENDING_KEY_GRANT→ACTIVE transition — is F-014 / GitHub issue #133 (spec
-   #209); it is fail-closed, not a privilege boundary.
+   #209); it is fail-closed, not a privilege boundary. The cross-tenant boundary is now
+   pinned for a maximally-privileged actor too: a membership valid in another Team answers
+   `resource_not_found` on this Team's membership routes even for an owner of both Teams
+   (unit pin aaa6fcf), and a foreign session cannot approve another user's device code
+   (unit pin 643600c).
 5. **OAuth callback round trip** is unit-covered, not live (real GitHub credentials
    required, D-005). Everything downstream of an established session is live-verified.
 6. **No owner-initiated epoch-rotation trigger exists** (F-010, GitHub issue #229,

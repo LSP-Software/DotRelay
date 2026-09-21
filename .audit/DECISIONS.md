@@ -195,3 +195,23 @@ Assumptions made during the audit so later work can inspect/override them.
   duplicate issue is filed — the ledger simply records the cross-reference it was missing.
 - **Impact:** a PENDING_KEY_GRANT Member is fail-closed (no cross-tenant access; proven live as
   user B). The workflow gap is tracked, not fixed, in this campaign.
+
+## D-021 CLI uncertain-publication re-mint is tracked by issue #137, not fixed here
+- **Decision:** this campaign does not change the CLI publication retry path (F-015). On a lost
+  finalize response, `dotrelay init`/`push`/`rollback` cancel the operation, throw, and the next
+  invocation mints a fresh operation id (workflow.ts:3175-3220) — no persisted publication record,
+  no idempotent re-finalize, no operation-status consult. The gap is already tracked as open issue
+  #137 (`bug`, `ready-for-agent`), whose design was settled 2026-09-17 in spec #209 decision 11
+  (persisted per-attempt record keyed by Environment + input, re-finalize of the same operation
+  and/or a read-only operation-status endpoint, no cancellation of possibly-committed operations).
+- **Rationale:** the fix spans CLI state storage, the shared protocol transport
+  (`packages/client/src/sync/transport.ts`), and a new service endpoint named by decision 11 — a
+  cross-package change with its own failure modes, i.e. the scope of #137's implementing ticket.
+  The CLI already implements the decision-11 pattern on its two recovery surfaces (backup
+  `.pending` reconciliation workflow.ts:2030-2105; restore pending-operation resume
+  workflow.ts:2476-2520), so #137 is a pattern extension for the publication path, not a new
+  design. No duplicate issue is filed — the ledger records the cross-reference it was missing.
+- **Impact:** a lost finalize can yield a duplicated Revision the operator can see in `history`
+  and a client-side "failed" claim on a possibly-committed publication. No cross-tenant or
+  crypto-boundary consequence: the re-minted operation still carries the same signed command
+  bytes, digest, and actor device. Tracked, not fixed, in this campaign.

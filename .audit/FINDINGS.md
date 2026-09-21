@@ -449,3 +449,38 @@ Each entry: status, evidence, impact.
 - **Disposition:** cross-referenced to the existing open issue #133 (`ready-for-agent`) and spec
   #209; no duplicate filed. The prior campaign recorded the analogous epoch-rotation gap as
   F-010/#229 but left this member-provisioning gap unrecorded.
+
+## F-015 (RECORD, TRACED IN #137) CLI re-mints the publication operation on an uncertain finalize
+- **Status:** BLOCKED (tracked — open GitHub issue #137 "Reconcile uncertain publication outcomes before
+  asking users to publish again", `bug` + `ready-for-agent`, design settled in spec #209 decision 11;
+  recorded in this ledger 2026-09-21 by the second-pass CLI sweep; no code change in this audit)
+- **Symptom:** `dotrelay init`/`push`/`rollback` generate a fresh `operationId` per attempt
+  (`apps/cli/src/workflow.ts:3175-3218`); when the finalize response is lost after the service
+  committed the Revision, the catch at :3197-3220 cancels the operation (silently swallowing the
+  outcome) and throws. The next invocation mints a fresh operation id — the retry re-mints a
+  publication the user believes failed, and there is no persisted publication record and no
+  operation-status consult anywhere in the CLI or `packages/client/src/sync/transport.ts`
+  (single-shot begin/stage/finalize/cancel; `Idempotency-Key` only on begin). `push`'s peer
+  re-share (`shareEnvironmentWithinPeerDevices`, workflow.ts:3284-3315) has the same pattern.
+- **Why it is a defect but not fixed here:** spec #209 decision 11 (settled 2026-09-17) prescribes
+  the fix — a persisted per-attempt publication record (operation id, expected head, attempt
+  count) keyed by Environment + input, idempotent re-finalize of the same operation, and/or a
+  read-only operation-status endpoint, with cancellation of possibly-committed operations
+  removed. The implementing surface spans CLI state storage + a protocol transport change + a
+  new service endpoint (decision 11 names the endpoint); that is the scope of #137, not a
+  surgical audit fix.
+- **Consistency note:** the same codebase already implements decision 11 on the two recovery
+  surfaces — `createRecoveryBackup` stages a `.pending` kit and reconciles against the
+  service's current envelope on uncertain failure (workflow.ts:2030-2105, pinned by
+  workflow.test.ts:3943) and `restoreRecoveryKit` persists the full pending operation before
+  posting and resumes with the same operationId (workflow.ts:2476-2520, pinned by
+  workflow.test.ts:4540-4544) — so the publication path is the lone straggler, which makes the
+  #137 implementation a pattern extension rather than a new design.
+- **Not exploitable:** the re-mint cannot create unauthorized state — the re-finalized operation
+  is still bound to the same signed command bytes, digest, and actor device; worst case is a
+  duplicated Revision the operator can see in `history` (the service serializes publications and
+  records each as a distinct Revision), plus a user-facing "failed" claim on an outcome that may
+  have committed. No cross-tenant or crypto-boundary consequence.
+- **Disposition:** cross-referenced to the existing open issue #137 (`bug`, `ready-for-agent`)
+  and spec #209 decision 11; no duplicate filed. The prior campaign's ledger never recorded the
+  CLI sweep's finding because the sweep is new to this session (2026-09-21).
