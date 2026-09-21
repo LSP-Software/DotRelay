@@ -1941,8 +1941,17 @@ export const WorkspaceShell = ({
         const otherDeviceExists =
           Boolean(boundary.device.active) &&
           boundary.device.id !== bootstrap.deviceId;
+        // A peer that already holds the current epoch grant owns the real key;
+        // self-minting here would seal this Device to a fresh random key that
+        // can never decrypt pre-existing content and would permanently block a
+        // peer re-share, so the grant must be handed over by a Device that
+        // holds the key (or restored from a Recovery Kit).
+        const peerHoldsEpochKey = (boundary.peerDevices ?? []).some(
+          (peer) => peer.hasEpochGrant,
+        );
         if (
           !otherDeviceExists &&
+          !peerHoldsEpochKey &&
           environment.projectId &&
           environment.teamId &&
           environment.projectEpoch &&

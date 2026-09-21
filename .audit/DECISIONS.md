@@ -113,3 +113,30 @@ Assumptions made during the audit so later work can inspect/override them.
   fallback never targets a server the user has not explicitly trusted.
 - **Impact:** self-hosted browser archive/restore now persists instead of silently no-oping
   (F-007). Hosted deployments (which inline an API origin) are unaffected.
+
+## D-011 Newly enrolling Device must not self-mint an epoch grant while a peer holds the real key
+- **Decision:** a newly enrolling Device (web browser or CLI) MUST NOT self-mint a
+  `CURRENT_PROJECT_EPOCH` grant when any peer Device of the same user already holds a
+  `CURRENT_PROJECT_EPOCH` grant for the project's current epoch. Self-mint stays as the only
+  way to create the key when no Device holds one (first Device on a fresh project). Gate
+  client-side (web enrollment + CLI pull flow); the service keeps accepting validly signed
+  self-issued grants.
+- **Rationale:** a self-minted grant contains a fresh random key (grant-bootstrap.ts
+  `plaintextKey ?? getRandomValues(32)`) that can never decrypt content sealed with the
+  publisher's real key, so it is useless to the enrolling Device. It also permanently blocks
+  the legitimate repair: `grantsReady` becomes true (a current-epoch grant exists),
+  suppressing the pending-grants repair, and `wrapEpochKeyToPeers` skips peers with
+  `hasEpochGrant` — so the key-holder's `dotrelay pull` re-share never reaches the Device
+  (F-009). The service cannot distinguish a spurious grant from a real one (the grant is
+  E2EE-sealed to the recipient; both are validly signed and epoch-consistent), so a server
+  rule would either break first-Device bootstrap or require key provenance the protocol does
+  not carry. The client knows exactly when it would be minting a key it cannot possibly
+  possess (a peer already holds the real one).
+- **Impact:** a second Device on an existing project enrolls with no grant; the boundary
+  reports `grantsReady: false`, the pending-grants action is offered, and a key-holder's
+  `dotrelay pull` provisions the real key to it. Fresh projects (no grants anywhere) are
+  unchanged: the first Device self-mints and later peers get provisioned by `pull`. The web
+  `repairStaleEpoch` self-mint is deliberately left un-gated: it is only reached when the
+  boundary is stale-epoch, and it mints a grant for the *new* epoch (where no peer can hold
+  a grant yet), which is the correct first-device recovery; gating it would break in-place
+  key recovery after a rotation.

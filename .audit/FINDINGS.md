@@ -197,9 +197,12 @@ Each entry: status, evidence, impact.
   real Project epoch key — see F-009), so the pull-remedy branch rendered there; the
   user-defined branch is exercised by the two owner-A User-defined Value lanes at the head,
   which stay sealed to the CLI publisher Device's per-device key for the browser Device.
+  After the F-009 fix was deployed and the browser was re-enrolled and re-shared the real
+  epoch key (documented in F-009 below), the live browser rendered this user-defined-branch
+  alert verbatim for the two owner-A lanes — live proof of the branch, not just code review.
 
-## F-009 (OPEN) Newly enrolling Device self-mints a spurious Project epoch grant that can never decrypt pre-existing content and permanently blocks peer re-share
-- **Status:** ROOT_CAUSED (this campaign; live self-hosted browser pass; fix pending)
+## F-009 (FIXED) Newly enrolling Device self-mints a spurious Project epoch grant that can never decrypt pre-existing content and permanently blocks peer re-share
+- **Status:** FIXED_AND_VERIFIED (this campaign; live self-hosted browser re-enrollment pass after the fix)
 - **Symptom:** A freshly enrolled browser Device that already has a *different* Device
   (e.g. a CLI) holding the Project's real epoch key cannot read the environment's
   definitions or Shared Values, while the boundary reports `grantsReady: true` so no
@@ -223,9 +226,38 @@ Each entry: status, evidence, impact.
   bootstrap and seal the *same* epoch key into the scripted grant
   (`workspace-stale-epoch.spec.ts` et al.), so the key mismatch — which requires a real
   publisher key plus a real second Device — cannot occur in fixtures.
-- **Fix (planned, D-011):** a newly enrolling Device must not self-mint an epoch grant
+- **Fix (this campaign, D-011):** a newly enrolling Device must not self-mint an epoch grant
   when any peer Device already holds a `CURRENT_PROJECT_EPOCH` grant for the current
-  epoch (web: gate on `boundary.peerDevices[].hasEpochGrant`; CLI: same gate in the pull
-  flow). With no spurious grant, `grantsReady` is false, the `pending-grants` action is
-  offered, and a key-holder's `dotrelay pull` actually provisions the browser.
+  epoch. The web enrollment gate (`workspace-shell.tsx`) skips the self-issued
+  `grants/bootstrap` POST whenever a peer reports `hasEpochGrant`; the CLI `pull` gate
+  (`workflow.ts`) skips the bootstrap and instead reports a pending action telling an owner
+  or admin to run `dotrelay pull` from their own Device. The web `repairStaleEpoch`
+  self-mint is deliberately left un-gated (D-011): it is only reached on a stale-epoch
+  boundary and mints for the *new* epoch, which is the correct first-device recovery after
+  a rotation.
+- **Verification (live, this campaign):** on the live self-hosted deployment the stuck
+  browser Device's local key storage was cleared and the browser re-enrolled a fresh Device
+  (`d926aba4`). With the fix in effect the new Device did **not** self-mint: the boundary
+  reported `grantsReady: false`, no `grants/bootstrap` POST was made, and the UI showed
+  "Waiting for project keys" (no `grant_objects` row for the new Device). A key-holder's
+  `dotrelay pull` (CLI Device `5211775b`, which holds the real epoch-1 key) then wrote 12
+  values and provisioned the real key to the browser (grant `b99f4d28`, sender = the CLI
+  Device). Post-repair the browser's boundary reports `grantsReady: true` with
+  `epochGrant` present, and the editor reads the head: the 12 Variable definitions and 10
+  Shared Values decrypt via the re-shared key, while the 2 owner-A User-defined Values stay
+  sealed to the CLI publisher Device's per-device key and surface the F-008
+  user-defined-branch alert — the correct E2EE residual, not a defect.
+- **Regressions:** CLI unit `pull does not mint a spurious key when a peer holds the epoch
+  key` (workflow.test.ts: served boundary `grantsReady: false` plus a peer with
+  `hasEpochGrant: true` → zero grant-bootstrap calls, pending action surfaced); web e2e
+  `enrollment skips the self-issued epoch grant when a peer holds the key`
+  (workspace-enrollment-storage.spec.ts: intercepts `grants/bootstrap`, asserts zero POSTs
+  during enrollment). The four stale-epoch e2e tests still pass, confirming the un-gated
+  `repairStaleEpoch` self-mint (first-device recovery after a rotation) is intact.
+- **Residual live state (intended, not a gap):** the original stuck Device `40a0a545`'s
+  spurious grant row (`01a055d2`) is permanent — `grant_objects` is append-only (a
+  trigger rejects UPDATE/DELETE), so the spurious row cannot be scrubbed. That Device is
+  unrecoverable at epoch 1 (`wrapEpochKeyToPeers` skips already-granted peers and the
+  spurious row cannot be removed); recovery for it requires an epoch rotation and
+  re-publish. The fix prevents the dead-end for every future enrollment.
 

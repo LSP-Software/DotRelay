@@ -2722,8 +2722,16 @@ const loadWorkflowSession = async (
       {},
       "authentication_required",
     );
+  // A peer that already holds the current epoch grant owns the real key.
+  // Self-minting a fresh random key here can never decrypt pre-existing
+  // content and permanently blocks a peer re-share (peers that hold a grant
+  // are skipped), so the key must be handed over by a Device that holds it.
+  const pendingActions: string[] = [];
+  const peerHoldsEpochKey = boundary.peerDevices.some(
+    (peer) => peer.hasEpochGrant,
+  );
   let epochKey: Uint8Array | undefined;
-  if (!boundary.grantsReady) {
+  if (!boundary.grantsReady && !peerHoldsEpochKey) {
     epochKey = await bootstrapProjectGrant(
       options,
       token,
@@ -2731,25 +2739,27 @@ const loadWorkflowSession = async (
       deviceId,
       keys,
     );
+  } else if (!boundary.grantsReady) {
+    pendingActions.push(
+      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+    );
   } else if (boundary.epochGrant) {
     epochKey = await openProjectEpochGrant(
       fromBase64(boundary.epochGrant, "Project epoch grant"),
       keys.encryptionPrivateKey,
     );
   }
-  // The verified read must survive peer provisioning: a rejected or
-  // unreachable grant write degrades to a truthful pending action instead
-  // of aborting the otherwise authorized read.
-  const pendingActions = epochKey
-    ? await wrapEpochKeyToPeers(
-        options,
-        token,
-        boundary,
-        deviceId,
-        keys,
-        epochKey,
-      )
-    : [];
+  if (epochKey) {
+    for (const action of await wrapEpochKeyToPeers(
+      options,
+      token,
+      boundary,
+      deviceId,
+      keys,
+      epochKey,
+    ))
+      pendingActions.push(action);
+  }
   if (pendingActions.length > 0 && !parsed.json) {
     const output = options.terminal?.output ?? process.stderr;
     for (const action of pendingActions)

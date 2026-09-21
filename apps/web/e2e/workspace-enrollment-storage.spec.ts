@@ -359,3 +359,47 @@ test("a successful enrollment survives a reload and a fresh storage instance", a
     }),
   ).toBeVisible();
 });
+
+test("enrollment skips the self-issued epoch grant when a peer holds the key", async ({
+  page,
+}) => {
+  // The fixture's peer 00000000-0000-4000-8000-000000000041 reports
+  // hasEpochGrant: true, so the Project's current epoch key already lives
+  // on another Device. A key the browser mints for itself can never
+  // decrypt the existing content and would permanently block the peer
+  // re-share that hands the real key over, so enrollment must not mint.
+  test.setTimeout(60_000);
+  const devicePosts: Array<Record<string, string>> = [];
+  const grantPosts: unknown[] = [];
+  await page.route("**/api/v1/devices/bootstrap**", (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postData();
+      if (body) devicePosts.push(JSON.parse(body) as Record<string, string>);
+    }
+    return route.fulfill({ json: {} });
+  });
+  await page.route("**/api/v1/grants/bootstrap**", (route) => {
+    if (route.request().method() === "POST") grantPosts.push(route.request());
+    return route.fulfill({ json: {} });
+  });
+
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await openFirstProject(page);
+  await openDevicesView(page);
+  await page.getByRole("button", { name: "Set up browser" }).click();
+  await expect(
+    page
+      .locator("#devices")
+      .getByText(
+        "This browser is set up. Its private keys stay on this machine.",
+      ),
+  ).toBeVisible({ timeout: 15_000 });
+
+  // The Device was enrolled, but no Project epoch grant was self-minted:
+  // the browser must wait for the key to be handed over by a Device that
+  // holds it (or restored from a Recovery Kit) instead of minting one that
+  // can never decrypt the head.
+  expect(devicePosts).toHaveLength(1);
+  expect(grantPosts).toHaveLength(0);
+});

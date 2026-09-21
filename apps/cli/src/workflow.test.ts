@@ -184,6 +184,7 @@ const setup = async (
     readonly revisions?: SyncPageWire["revisions"];
     readonly bootstrap?: Awaited<ReturnType<typeof createDeviceBootstrap>>;
     readonly withoutBoundaryEnvironment?: boolean;
+    readonly grantsReady?: boolean;
     readonly epochGrant?: string;
     readonly peerDevices?: readonly Readonly<{
       readonly id: string;
@@ -245,6 +246,9 @@ const setup = async (
       : {}),
     ...(options.epochGrant ? { epochGrant: options.epochGrant } : {}),
     ...(options.peerDevices ? { peerDevices: options.peerDevices } : {}),
+    ...(options.grantsReady !== undefined
+      ? { grantsReady: options.grantsReady }
+      : {}),
   };
   const createdEnvironments: string[] = [];
   const admin: StrictJsonClient = {
@@ -5120,6 +5124,47 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(body.ok).toBe(true);
     expect(body).not.toHaveProperty("pendingActions");
     expect(secondScripted.calls).toHaveLength(0);
+  });
+  test("pull does not mint a spurious key when a peer holds the epoch key", async () => {
+    // The Device is enrolled but holds no Project epoch grant, while another
+    // Device (or a CLI run) already holds the current key. Minting a fresh
+    // random key here can never decrypt the existing content and would
+    // permanently block a peer re-share, so pull must report the missing
+    // grant instead of self-minting one.
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await makePeer(true);
+    const runtime = await setup({
+      bootstrap,
+      peerDevices: [peer],
+      grantsReady: false,
+    });
+    const scripted = scriptGrantBootstrap(runtime, () => Response.json({}));
+    const pull = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, fetch: scripted.fetch },
+    );
+    expect(pull.exitCode).toBe(0);
+    const body = JSON.parse(pull.stdout) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.pendingActions).toEqual([
+      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+    ]);
+    // The read must not have minted or re-provisioned any Project epoch
+    // grant: the peer already holds the key, so a grant write is both
+    // pointless and destructive.
+    expect(scripted.calls).toHaveLength(0);
   });
 });
 
