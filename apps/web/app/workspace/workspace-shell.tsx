@@ -1242,7 +1242,11 @@ export const WorkspaceShell = ({
       typeof globalThis.crypto?.subtle?.importKey === "function",
     );
     const params = new URLSearchParams(window.location.search);
-    const nextPreview = params.get("preview");
+    // The preview parameter is a development-fixture affordance. A live
+    // deployment must never honor it: asserting device readiness, role, or
+    // crypto state that the verified boundary does not support would make
+    // the UI lie about the workspace it is showing.
+    const nextPreview = WORKSPACE_FIXTURE ? params.get("preview") : null;
     setPreview(nextPreview);
     const parsed = parseWorkspaceLocation(params);
     const initialProfileId = WORKSPACE_FIXTURE
