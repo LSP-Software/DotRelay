@@ -302,7 +302,7 @@ const abbreviateId = (id: string): string => {
     /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-([0-9a-f]{12})$/i.exec(
       id,
     );
-  return match ? `${match[1]}-${match[5]?.slice(0, 4)}` : id.slice(0, 12);
+  return match ? `${match[1]}-${match[2]?.slice(0, 4)}` : id.slice(0, 12);
 };
 
 type StatusLine = Readonly<{ readonly text: string; readonly tone: Tone }>;

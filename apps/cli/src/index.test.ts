@@ -2410,6 +2410,42 @@ describe("explicit GitHub repository choice", () => {
     }
   });
 
+  test("context card abbreviates identifiers without leaking undefined fragments", async () => {
+    const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
+    try {
+      await seedProfile(profilePath);
+      // A recorded Project/Environment selection makes the card render the
+      // abbreviated identifier rows.
+      await Bun.write(
+        contextPath,
+        JSON.stringify({ serverProfileId, projectId, environmentId }),
+      );
+      const result = await run(["context", "--profile", "relay"], {
+        profilePath,
+        worktreeConfig: contextPath,
+        readGitRemotes: async () => [sourceRemote],
+        admin: resolvingAdmin(),
+      });
+      expect(result.exitCode).toBe(0);
+      // GitHub repository identities are numeric strings (not UUIDs), so the
+      // abbreviator keeps their first 12 characters; UUID ids are rendered as
+      // "xxxxxxxx-0000". A capture-group regression must never surface as
+      // "…-undefined".
+      expect(result.stdout).toContain("verified (1311418611)");
+      expect(result.stdout).toContain(`${projectId.slice(0, 8)}-0000`);
+      expect(result.stdout).not.toContain("-undefined");
+      expect(result.stdout).not.toContain("undefined");
+    } finally {
+      await (await import("node:fs/promises"))
+        .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
+        .catch(() => undefined);
+    }
+  });
+
   test("context --no-input names the exact --remote override when ambiguous", async () => {
     const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
     const contextPath = `${import.meta.dir}/.tmp-choice-${crypto.randomUUID()}`;
