@@ -66,8 +66,8 @@ Each entry: status, evidence, impact.
 - **Remaining gaps (not part of this fix):** no CLI lifecycle command (product gap); the
   membership-command re-execution variants are recorded in F-006 / D-009.
 
-## F-004 (DEFECT) `?preview=` URL parameters are honored in live (non-fixture) deployments
-- **Status:** OPEN (verified against source 2026-09-21)
+## F-004 (FIXED) `?preview=` URL parameters are honored in live (non-fixture) deployments
+- **Status:** FIXED_AND_VERIFIED (this campaign; live self-hosted browser probe 2026-09-21)
 - **Symptom:** `workspace-shell.tsx` reads `preview` from the URL unconditionally in the
   hydration effect (~:1244-1250). `protectedPreview` (:597-619, `displayBoundary`) forces
   `device.active`, `grantsReady: true`, `epochCurrent: true`, crypto available, and
@@ -79,8 +79,19 @@ Each entry: status, evidence, impact.
   `?preview=` to the workspace URL and the UI asserts trusted/active-device state that the
   boundary does not support. No secret is disclosed (real values still require session +
   device + keys), but the UI state lies about readiness and role, and a role preview in
-  production mis-represents permissions. Fix: gate all `preview` handling on the fixture
-  switch.
+  production mis-represents permissions.
+- **Fix (this campaign, commit a58055a):** the single URL-ingestion point now gates on the
+  fixture switch — `const nextPreview = WORKSPACE_FIXTURE ? params.get("preview") : null`
+  (`workspace-shell.tsx` ~:1315) — so in live deployments `?preview=…` is ignored and the
+  real device boundary renders instead.
+- **Verification (live, 2026-09-21):** on the self-hosted non-fixture deployment, the signed-in
+  browser probed `/workspace?preview=protected` and `/workspace?preview=admin`: both rendered
+  the real boundary (team "Audit Team" catalog, "Open a project…", `editorActive: false`),
+  with no "Preview role" text and no `preview-role` select — the `preview` parameter had no
+  effect, confirming the gate. No dedicated live-mode regression test is feasible: the gate
+  is a build-time `NEXT_PUBLIC_*` constant, so the fixture e2e suite (102 specs) structurally
+  cannot exercise the live branch; the fixture path it guards is the same code that now
+  ignores `preview` in live mode, and the live branch is verified by the direct probe above.
 
 ## F-005 (FIXED) CLI identifier abbreviation renders `xxxxxxxx-undefined`
 - **Status:** FIXED_AND_VERIFIED (this campaign)
@@ -261,3 +272,30 @@ Each entry: status, evidence, impact.
   spurious row cannot be removed); recovery for it requires an epoch rotation and
   re-publish. The fix prevents the dead-end for every future enrollment.
 
+## F-010 (PRODUCT GAP) No user-facing trigger for Project epoch key rotation — owner/admin recovery path unreachable
+- **Status:** BLOCKED (product decision; GitHub issue #229, 2026-09-21)
+- **Symptom:** the web recovery copy (`workspace-shell.tsx:2194-2196`) tells users "Owners
+  and Admins can also rotate the project's keys", and `docs/wiki/synchronization.md:21-23`
+  documents key rotation as a first-class flow — but no shipped interface can initiate a
+  rotation. The only code path is the raw protocol endpoint
+  `POST /api/v1/operations/:operationId/epoch-transitions`
+  (`apps/api/src/protocol/routes.ts:679-855`), which requires a pre-staged, device-signed
+  `EPOCH_ROTATION` operation: there is no web UI button, no `dotrelay` CLI subcommand
+  (`apps/cli/src/args.ts` COMMANDS contains no rotation command), and no `packages/client`
+  initiator.
+- **Impact:** a Device stuck without the current epoch's real key (the F-009 dead end:
+  spurious grant row — e.g. live Device `40a0a545` and its grant `01a055d2` on project
+  `1a04be60-d689-4f99-9e7e-eba524e787fe`, epoch 1) can never be unstuck by a human through
+  any shipped interface, because `wrapEpochKeyToPeers` skips already-granted peers and
+  re-enrollment only mints at the current epoch. Recovery requires an epoch rotation that
+  only an operator with signing tooling can drive.
+- **Why not fixed here (D-012):** building a rotation initiator means constructing and
+  signing `EPOCH_TRANSITION` revision artifacts client-side — new E2EE surface with its own
+  failure modes — which is a product decision, not a defect fix. Issue #229 records the
+  options (web owner/admin action, `dotrelay rotate` CLI subcommand, or correcting the
+  copy/docs to mark rotation as an operator operation).
+- **Verification of the gap (this campaign):** inventory scan of all product surfaces —
+  web (`workspace-shell.tsx` has no rotation action), CLI (`apps/cli/src/args.ts`
+  COMMANDS/SUBCOMMANDS), `packages/client` (no initiator), and docs (recovery copy +
+  `synchronization.md`) — against the single protocol endpoint; live audit state confirmed
+  the F-009 dead-end Device is unrecoverable at epoch 1.
