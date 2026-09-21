@@ -461,14 +461,14 @@ Each entry: status, evidence, impact.
   publication the user believes failed, and there is no persisted publication record and no
   operation-status consult anywhere in the CLI or `packages/client/src/sync/transport.ts`
   (single-shot begin/stage/finalize/cancel; `Idempotency-Key` only on begin). `push`'s peer
-  re-share (`shareEnvironmentWithinPeerDevices`, workflow.ts:3284-3315) has the same pattern.
-- **Why it is a defect but not fixed here:** spec #209 decision 11 (settled 2026-09-17) prescribes
-  the fix — a persisted per-attempt publication record (operation id, expected head, attempt
-  count) keyed by Environment + input, idempotent re-finalize of the same operation, and/or a
-  read-only operation-status endpoint, with cancellation of possibly-committed operations
-  removed. The implementing surface spans CLI state storage + a protocol transport change + a
-  new service endpoint (decision 11 names the endpoint); that is the scope of #137, not a
-  surgical audit fix.
+  re-share (`shareEnvironmentWithPeerDevices`, workflow.ts:3284-3315) has the same pattern.
+- **Why not fixed (D-021):** spec #209 decision 11 (settled 2026-09-17) prescribes the fix —
+  a persisted per-attempt publication record (operation id, expected head, attempt count) keyed
+  by Environment + input, idempotent re-finalize of the same operation, and/or a read-only
+  operation-status endpoint, with cancellation of possibly-committed operations removed. The
+  implementing surface spans CLI state storage, the shared protocol transport
+  (`packages/client/src/sync/transport.ts`), and a new service endpoint named by decision 11;
+  that is the scope of #137's implementing ticket, not a surgical audit fix.
 - **Consistency note:** the same codebase already implements decision 11 on the two recovery
   surfaces — `createRecoveryBackup` stages a `.pending` kit and reconciles against the
   service's current envelope on uncertain failure (workflow.ts:2030-2105, pinned by
