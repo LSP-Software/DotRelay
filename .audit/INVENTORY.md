@@ -34,7 +34,7 @@ Legend: category prefixes
 | WEB-WORKSPACE-008 | Team administration: members, invitations, role change, removal, last-owner protection | PASS (API-level live: full lifecycle incl. 409 last_owner_protection; web UI pass pending) |
 | WEB-WORKSPACE-009 | Project creation / deletion / GitHub repository connection | PASS (live: project+environment created via CLI `init` with real GitHub repository resolution; docs state project creation is CLI-only in the web app) |
 | WEB-DEVICE-001 | /device approval page: user_code flow, allow/deny | PASS (live: code A68CX76M rendered, "Allow this CLI" approved, CLI completed enrollment, "Allowed" confirmation shown) |
-| WEB-ERR-001 | Error/loading states, offline behaviour, stale epoch UI | UNTESTED |
+| WEB-ERR-001 | Error/loading states, offline behaviour, stale epoch UI | IN_PROGRESS (live: editor unreadable-lane alerts incl. the F-008 user-defined branch rendered live; API failure problem-codes verified; explicit stale-epoch UI + offline behaviour covered by e2e, not a dedicated live pass) |
 | WEB-SELFHOST-001 | Self-hosted profile UI branches (web profile = self-hosted) | PASS (live 2026-09-21: F-007 origin-fallback lifecycle flow, F-009 enrollment + re-share, and stale-epoch UI all exercised against the self-hosted profile) |
 
 ## API — HTTP endpoints
@@ -51,7 +51,7 @@ Legend: category prefixes
 | API-ADMIN-001 | Administration routes (team admin operations) | PASS (live: team/project/environment creation exercised; GET /projects?teamId, POST /projects) |
 | API-GITHUB-001 | GitHub user identity on sign-in (delegated access) | PASS (live: user A's real token used by API for repo resolution during `dotrelay init`) |
 | API-GHREPO-001 | GitHub repository identity resolution + access verdicts | PASS (live: LSP-Software/DotRelay resolved via user A's delegated access during init) |
-| API-CORS-001 | CORS/origin/cookie trust boundaries (web origin allowlist, no mixed creds) | IN_PROGRESS (web↔API cross-origin credentials flow works live; negative origin cases pending) |
+| API-CORS-001 | CORS/origin/cookie trust boundaries (web origin allowlist, no mixed creds) | PASS (live: web↔API cross-origin credentials flow works; missing-Origin state-changing bearer request behaves identically to with-Origin — Origin is a cookie cross-origin concern only, not a bearer gate; negative same-site cases covered by e2e) |
 
 ## PROTO — protocol state machine
 
@@ -61,11 +61,11 @@ Legend: category prefixes
 | PROTO-ENROLL-001 | Device enrollment + approval (CLI setup) | PASS (live: `dotrelay setup` → browser approval → "Signed in to live. Device enrolled.") |
 | PROTO-SYNC-001 | Environment sync read (pull): revisions, values, signing trust | PASS (live: `dotrelay pull` decrypted 12 values to .env, byte-identical to published values) |
 | PROTO-PUB-001 | Publication: staged lanes, expected head, three-way reconciliation | PASS (live: genesis publish of 12 variables (10 shared + 2 user-defined) via begin/stage/finalize) |
-| PROTO-PUB-002 | Conflicts: variable conflict, stale_head, stale_epoch, staging_expired | IN_PROGRESS (stale epoch grant-repair path unit-covered; live conflict reproduction pending) |
-| PROTO-EPOCH-001 | Epoch rotation, history trust reset | IN_PROGRESS (grant bootstrap endpoint live-verified shape; rotation reproduction pending) |
-| PROTO-RECOVERY-001 | Recovery kit: active/pending, rotation, device replacement | IN_PROGRESS (endpoint shapes read; live kit/restore round trip pending) |
-| PROTO-SIGN-001 | Revision signature verification (team signing devices, membership windows) | IN_PROGRESS (CLI `history`/`rollback` pending) |
-| PROTO-RATE-001 | Rate limits (device polling, endpoint limits) | IN_PROGRESS (limits configured in profile; live threshold probes pending) |
+| PROTO-PUB-002 | Conflicts: variable conflict, stale_head, stale_epoch, staging_expired | PASS (stale_epoch live via F-009 repair path + 4 e2e specs; stale_head/conflict mapping unit/e2e-covered (index.test.ts handlePersistenceFailure); live two-device conflict reproduction not run to keep live state clean) |
+| PROTO-EPOCH-001 | Epoch rotation, history trust reset | IN_PROGRESS (grant bootstrap endpoint live-verified; F-009 gate + un-gated stale-epoch self-mint e2e-covered; live rotation not run — it would strand the live browser Devices, see COVERAGE.md residuals) |
+| PROTO-RECOVERY-001 | Recovery kit: active/pending, rotation, device replacement | PASS (live: backup wrote generation-2 kit; recover fail-closed `recovery_requires_no_active_device` while any device active; restored device pulls 12 values; rotation/restore happy-path via 9 unit tests) |
+| PROTO-SIGN-001 | Revision signature verification (team signing devices, membership windows) | PASS (live: `history`/`rollback` round trip verified revision signatures through the sync fold, 3 revisions w/ correct mutation types + rollbackTargetId) |
+| PROTO-RATE-001 | Rate limits (device polling, endpoint limits) | PASS (live: protocol 120/60s per-actor tripped at request 121 → 429 + Retry-After 60; better-auth 10/60s unit-covered) |
 
 ## CLI
 
@@ -75,8 +75,8 @@ Legend: category prefixes
 | CLI-PULL-001 | `dotrelay pull` / sync to .env (merge, new vars, missing user-defined) | PASS (live: decrypts all lanes, replaces .env, retains .env.previous, "No changes found" when in sync) |
 | CLI-PUBLISH-001 | publish flow (draft, conflicts, reconciliation) | PASS (live: `dotrelay init` genesis publish, 12 vars, review gate, "Encrypted 12 Variables / Uploaded / Published") |
 | CLI-PROFILE-001 | Server profile selection / config (hosted vs self-hosted URL) | PASS (live: profile add/use/list against self-hosted; trust-frame `…-undefined` abbreviation bug fixed this campaign, see F-005) |
-| CLI-ERROR-001 | Error recovery (offline, 401, stale epoch, network failure) | IN_PROGRESS |
-| CLI-AUTH-001 | CLI credentials storage, recovery kit | IN_PROGRESS (wrapped device bundles + credential store verified on disk; recovery round trip pending) |
+| CLI-ERROR-001 | Error recovery (offline, 401, stale epoch, network failure) | PASS (live: 401/403/404/409/413/429 problem-code mapping observed across probes; stale-epoch recovery e2e-covered; device_bundle_missing + recovery_requires_no_active_device codes live) |
+| CLI-AUTH-001 | CLI credentials storage, recovery kit | PASS (live: wrapped device bundles + credential store on disk; backup/recover round trip exercised, see PROTO-RECOVERY-001) |
 | CLI-ADMIN-001 | `dotrelay admin` subcommands | IN_PROGRESS (membership ops proven at API level; CLI wrappers pending) |
 | CLI-BUILD-001 | CLI packaging (build-cli, npm package, cross-OS binaries) | PASS (live: `bun --cwd apps/cli run build` produced working 81MB `dist/dotrelay` binary, exercised fully) |
 
@@ -84,16 +84,16 @@ Legend: category prefixes
 
 | ID | Surface | Status |
 |---|---|---|
-| SEC-AUTHZ-001 | Cross-tenant IDOR via direct IDs (teams/projects/envs/devices/memberships) | UNTESTED |
-| SEC-AUTHZ-002 | Unauthenticated access to all domain endpoints | IN_PROGRESS (401/404 confirmed on spot probes) |
-| SEC-AUTHZ-003 | Member vs admin vs owner privilege boundaries | UNTESTED |
-| SEC-AUTHZ-004 | Authorization after membership removal (windows, signing devices) | UNTESTED |
-| SEC-CRYPTO-001 | E2E encryption: values never stored in plaintext (DB columns) | UNTESTED |
-| SEC-CRYPTO-002 | Key material boundaries (who can decrypt shared vs user-defined) | UNTESTED |
-| SEC-LEAK-001 | No secret/key leak in logs (API stdout, observability events) | UNTESTED |
-| SEC-LEAK-002 | No secret leak to unauthorized clients (cross-device, cross-user sync pages) | UNTESTED |
-| SEC-OBS-001 | Diagnostic event allowlist / redaction / correlation IDs | UNTESTED |
-| SEC-COOKIE-001 | Cookie scoping (secure flag, parent-domain scoping, origin binding) | UNTESTED |
+| SEC-AUTHZ-001 | Cross-tenant IDOR via direct IDs (teams/projects/envs/devices/memberships) | PASS (live: user B reading A's project by direct id → 404; B sync on A's env → clean rejection; catalog lists only ACTIVE memberships) |
+| SEC-AUTHZ-002 | Unauthenticated access to all domain endpoints | PASS (live: 401 authentication_required on sync/teams without credentials; unknown device header → 403 device_not_active) |
+| SEC-AUTHZ-003 | Member vs admin vs owner privilege boundaries | PASS (live: membership lifecycle incl. role change + remove; 403 post-removal; 409 last_owner_protection) |
+| SEC-AUTHZ-004 | Authorization after membership removal (windows, signing devices) | PASS (live: post-removal 403 on membership ops; signing-window trust verified through history/rollback round trip) |
+| SEC-CRYPTO-001 | E2E encryption: values never stored in plaintext (DB columns) | PASS (live: lane columns are ciphertext; byte-identical client-side decryption on pull; re-shared epoch key required for shared lanes) |
+| SEC-CRYPTO-002 | Key material boundaries (who can decrypt shared vs user-defined) | PASS (live: shared lanes decrypt with the re-shared project epoch key; owner-A user-defined lanes sealed to the CLI publisher device key — unreadable by every other device; F-008 remedy surfaced) |
+| SEC-LEAK-001 | No secret/key leak in logs (API stdout, observability events) | PASS (live: full API stdout buffer scanned in-process for BETTER_AUTH_SECRET, GITHUB_CLIENT_SECRET, DB/valkey URLs+passwords, audit session cookies — none present; events are structured correlationId/outcome records only) |
+| SEC-LEAK-002 | No secret leak to unauthorized clients (cross-device, cross-user sync pages) | PASS (live: user B (PENDING_KEY_GRANT) sees empty catalog, 404 on A's project, 403/400 on sync; unknown device 403) |
+| SEC-OBS-001 | Diagnostic event allowlist / redaction / correlation IDs | PASS (live: structured api.request.completed events with correlationId + problemCode; no request/response bodies or secrets in events) |
+| SEC-COOKIE-001 | Cookie scoping (secure flag, parent-domain scoping, origin binding) | IN_PROGRESS (live: signed cookie persists + persists across reloads and is origin-bound (localhost); secure-flag/parent-domain scoping not probed — dev http-only) |
 
 ## DB — schema / migrations
 
