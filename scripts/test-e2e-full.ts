@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
 import { createAuth } from "../apps/api/src/auth";
+import type { ServerProfileConfig } from "../apps/api/src/profile";
 import {
   createBetterAuthDatabaseAdapter,
   createDatabaseClient,
@@ -245,14 +246,28 @@ const signedSessionCookie = async (token: string, secret: string) => {
   return `better-auth.session_token=${encodeURIComponent(`${token}.${base64Signature}`)}`;
 };
 
-const freePort = async (): Promise<number> => {
+// Allocates a port and KEEPS it bound until release() is called, so no
+// concurrent process can claim it while the harness is still setting up.
+// The caller releases it at the last moment before binding the real server.
+const reservePort = (): { port: number; release: () => void } => {
   const probe = Bun.serve({ port: 0, fetch: () => new Response("ok") });
-  const port = probe.port;
-  probe.stop(true);
-  if (port === undefined || port === 0)
+  if (probe.port === undefined || probe.port === 0)
     throw new Error("could not allocate a local port for the e2e API");
-  return port;
+  let released = false;
+  return {
+    port: probe.port,
+    // Idempotent: cleanup may release a port the real server already took.
+    release: () => {
+      if (released) return;
+      released = true;
+      probe.stop(true);
+    },
+  };
 };
+
+const isPortInUse = (error: unknown): boolean =>
+  error instanceof Error &&
+  (error.message.includes("EADDRINUSE") || /in use/i.test(error.message));
 
 let profileOrigin = "";
 let operatorSessionToken = "";
@@ -325,6 +340,10 @@ const runWithDeviceApproval = async (
         );
     }
   };
+  // Start draining stdout before the stderr loop below: if the child fills
+  // the stdout pipe buffer before anyone reads it, it blocks on write and
+  // never closes stderr, so the loop would wait for a stream that never ends.
+  const stdoutText = new Response(child.stdout).text();
   const stderrText = await (async () => {
     const decoder = new TextDecoder();
     let buffer = "";
@@ -348,7 +367,7 @@ const runWithDeviceApproval = async (
     child.kill();
     throw error;
   });
-  const stdout = await new Response(child.stdout).text();
+  const stdout = await stdoutText;
   const exitCode = await child.exited;
   clearTimeout(timeout);
   if (timedOut)
@@ -358,10 +377,55 @@ const runWithDeviceApproval = async (
   return { stdout, stderr: stderrText, exitCode, approvals };
 };
 
+// Releases the held port and binds the real server on it. The handoff window
+// is a few microseconds wide, but if the port is still taken the bind is
+// retried on a freshly reserved port: the profile id is stable across
+// origins, so only the origin is rebound and the seeded demo rows stay valid.
+const bindRealServer = async (
+  api: typeof import("../apps/api/src/index"),
+  initial: { port: number; release: () => void },
+  initialProfile: ServerProfileConfig,
+): Promise<ReturnType<typeof Bun.serve>> => {
+  let held = initial;
+  let profile = initialProfile;
+  for (let attempt = 1; ; attempt++) {
+    const auth = createAuth(createBetterAuthDatabaseAdapter(database), profile);
+    const app = api.createApi({
+      database,
+      profile,
+      auth,
+      githubFetch: fakeGitHubFetch,
+    });
+    held.release();
+    try {
+      return Bun.serve({ port: held.port, fetch: app.fetch });
+    } catch (error) {
+      if (attempt > 2 || !isPortInUse(error)) throw error;
+      console.error(
+        `warning: port ${held.port} was taken between release and bind; retrying on a fresh port`,
+      );
+      const next = reservePort();
+      process.env.SERVER_PROFILE_ORIGIN = `http://127.0.0.1:${next.port}`;
+      process.env.WEB_ORIGIN = process.env.SERVER_PROFILE_ORIGIN;
+      held = next;
+      profile = api.loadServerProfileConfig();
+      await ensureServerProfile(database, {
+        id: profile.id,
+        origin: profile.origin,
+        allowRebind: true,
+      });
+      profileOrigin = profile.origin;
+    }
+  }
+};
+
 await access(binary, process.platform === "win32" ? undefined : constants.X_OK);
 
 let isolatedDirectory: string | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
+// The port held while the real server is not up yet; released on cleanup in
+// case the run fails before the real server takes over the port.
+let heldPort: { port: number; release: () => void } | undefined;
 const database = createDatabaseClient(testDatabaseUrl.toString());
 try {
   const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -371,6 +435,10 @@ try {
     );
   } catch (error) {
     throw new Error(`could not create ${testDatabaseName}: ${String(error)}`);
+  } finally {
+    // The client is only needed for CREATE DATABASE; end it so its socket
+    // cannot outlive the run (the cleanup phase opens its own connection).
+    await admin.end();
   }
 
   console.log(`→ migrating fresh database ${testDatabaseName}`);
@@ -383,8 +451,12 @@ try {
   delete process.env.SERVER_PROFILE_ORIGIN;
   delete process.env.WEB_ORIGIN;
   delete process.env.BETTER_AUTH_URL;
-  const port = await freePort();
-  process.env.SERVER_PROFILE_ORIGIN = `http://127.0.0.1:${port}`;
+  // Hold a bound port for the whole of the slow setup (migrations, seeding)
+  // so a concurrent process cannot take it; the real server takes over at the
+  // last moment.
+  const initialHold = reservePort();
+  heldPort = initialHold;
+  process.env.SERVER_PROFILE_ORIGIN = `http://127.0.0.1:${initialHold.port}`;
   process.env.WEB_ORIGIN = process.env.SERVER_PROFILE_ORIGIN;
   const authSecret = randomHex(32);
   process.env.BETTER_AUTH_SECRET = authSecret;
@@ -521,14 +593,9 @@ try {
     { maxWait: 5_000, timeout: 10_000 },
   );
 
-  const auth = createAuth(createBetterAuthDatabaseAdapter(database), profile);
-  const app = api.createApi({
-    database,
-    profile,
-    auth,
-    githubFetch: fakeGitHubFetch,
-  });
-  server = Bun.serve({ port, fetch: app.fetch });
+  server = await bindRealServer(api, initialHold, profile);
+  // The real server now owns the port; the held port has been released.
+  heldPort = undefined;
 
   isolatedDirectory = await mkdtemp(join(tmpdir(), "dotrelay-e2e-"));
   const repositoryDirectory = join(isolatedDirectory, "repository");
@@ -601,7 +668,7 @@ try {
   const deviceAfterSetup = await database.device.findFirst({
     where: { userId: demoUserId, id: deviceId },
   });
-  if (!deviceAfterSetup || deviceAfterSetup.lifecycle !== "ACTIVE")
+  if (deviceAfterSetup?.lifecycle !== "ACTIVE")
     throw new Error("the real API did not activate the bootstrap Device");
   // The device code is single-use: redeeming it for a session consumes the
   // record, so the durable proof is the session the flow issued.
@@ -664,7 +731,7 @@ try {
   const genesisRevision = await database.revision.findFirst({
     where: { id: genesisRevisionId, environmentId: productionEnvironment.id },
   });
-  if (!genesisRevision || genesisRevision.mutation !== "GENESIS")
+  if (genesisRevision?.mutation !== "GENESIS")
     throw new Error("the genesis Revision was not published on the real API");
 
   console.log("→ CLI: push (change published through the real API)");
@@ -688,7 +755,7 @@ try {
       `push failed with exit code ${pushResult.exitCode}: ${pushResult.stderr.trim()}`,
     );
   requireString(
-    (parseJsonLines(pushResult.stdout).at(-1) ?? {}).revision,
+    parseJsonLines(pushResult.stdout).at(-1)?.revision,
     "published Revision id",
   );
   const publishedCount = await database.revision.count({
@@ -836,7 +903,7 @@ try {
   if (classifiedPush.exitCode !== 0)
     throw new Error(`classified push failed: ${classifiedPush.stderr.trim()}`);
   requireString(
-    (parseJsonLines(classifiedPush.stdout).at(-1) ?? {}).revision,
+    parseJsonLines(classifiedPush.stdout).at(-1)?.revision,
     "reclassified Revision id",
   );
 
@@ -879,13 +946,13 @@ try {
   if (rollbackResult.exitCode !== 0)
     throw new Error(`rollback failed: ${rollbackResult.stderr.trim()}`);
   const rollbackRevisionId = requireString(
-    (parseJsonLines(rollbackResult.stdout).at(-1) ?? {}).revision,
+    parseJsonLines(rollbackResult.stdout).at(-1)?.revision,
     "rollback Revision id",
   );
   const rollbackRevision = await database.revision.findFirst({
     where: { id: rollbackRevisionId },
   });
-  if (!rollbackRevision || rollbackRevision.mutation !== "ROLLBACK")
+  if (rollbackRevision?.mutation !== "ROLLBACK")
     throw new Error("the rollback Revision was not recorded on the real API");
 
   const rolledBack = await runBinary(
@@ -999,7 +1066,7 @@ try {
   );
   if (logoutResult.exitCode !== 0)
     throw new Error(`logout failed: ${logoutResult.stderr.trim()}`);
-  if ((parseJsonLines(logoutResult.stdout).at(-1) ?? {}).loggedOut !== true)
+  if (parseJsonLines(logoutResult.stdout).at(-1)?.loggedOut !== true)
     throw new Error("logout did not confirm");
   const relogin = await runWithDeviceApproval(
     ["login", ...profileFlag, "--no-input", "--json"],
@@ -1047,6 +1114,7 @@ try {
   );
 } finally {
   server?.stop(true);
+  heldPort?.release();
   await database.$disconnect().catch(() => undefined);
   try {
     const admin = postgres(adminUrl.toString(), { max: 1 });
