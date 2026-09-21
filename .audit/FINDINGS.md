@@ -299,3 +299,39 @@ Each entry: status, evidence, impact.
   COMMANDS/SUBCOMMANDS), `packages/client` (no initiator), and docs (recovery copy +
   `synchronization.md`) — against the single protocol endpoint; live audit state confirmed
   the F-009 dead-end Device is unrecoverable at epoch 1.
+
+## F-011 (FIXED) `dotrelay pull`'s unchanged and `--stdout` output variants drop pending grant remediation actions
+- **Status:** FIXED_AND_VERIFIED (this campaign; hermetic CLI unit regression plus fresh full verify)
+- **Symptom:** in the F-009 scenario (the Device holds no Project epoch grant while a peer
+  Device holds the real key), the remediation pending action — *"This Device is missing
+  the Project epoch grant; an owner or admin can provision it by running `dotrelay pull`
+  from their own Device"* — is silently dropped whenever `dotrelay pull` reports
+  "No changes found" (the common in-sync case) or is run with `--stdout`, so the user
+  is told the pull succeeded with no hint that the Device still cannot read the
+  environment.
+- **Root cause:** `runProtectedWorkflow`'s pull handler merges
+  `pendingActionsField(synced.workflow.pendingActions)` into the history, diff, and
+  file-write output variants (`apps/cli/src/workflow.ts`), but the `unchanged`
+  early-return branch and the `--stdout` return branch built their result objects
+  without it. The missing-grant remediation is pushed into `workflow.pendingActions` by
+  the F-009 gate, so it existed in state — only those two output paths dropped it on
+  serialization.
+- **Why the suites missed it:** the F-009 CLI regression test ran `pull` with the
+  default `.env` output into the package directory, so which branch executed depended on
+  whether a leftover `apps/cli/.env` existed (gitignored, invisible to
+  `tracked-tree:clean`): first run with no file → write path (which merged
+  pendingActions) → pass, and that run created the file; any later run → unchanged
+  branch (which dropped it) → fail. The campaign's last full verify replayed the stale
+  turbo-cache pass of that suite instead of re-executing it, so the closeout green did
+  not exercise the failing branch — a false green that masked the defect until a fresh
+  run against the existing file surfaced it.
+- **Fix (this campaign):** the `unchanged` branch and the `--stdout` return now merge
+  `pendingActionsField(...)` exactly like the other output variants, so no output path
+  can silently lose a pending grant remediation.
+- **Verification:** the F-009 CLI unit test was made hermetic — it pulls to a per-suite
+  temp output with the Git tracking probe pinned to "outside", runs `pull` twice (first
+  the write path, then the matching in-sync run), and asserts the second run returns
+  `unchanged: true` **and** the remediation `pendingActions`. Pre-fix, that assertion
+  fails on the unchanged run; post-fix the full CLI unit suite is green (356 pass /
+  0 fail) and a fresh full verify with the turbo cache invalidated re-executed
+  `@dotrelay/cli#test:unit` (not a cache replay) green.

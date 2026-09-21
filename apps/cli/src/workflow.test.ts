@@ -5150,15 +5150,44 @@ describe("peer grant provisioning during ordinary reads", () => {
         "relay",
         "--environment",
         ids.environment,
+        "--output",
+        `${import.meta.dir}/.tmp-workflow-output`,
         "--no-input",
         "--json",
       ],
-      { ...runtime, fetch: scripted.fetch },
+      { ...runtime, fetch: scripted.fetch, gitTrackingProbe: gitOutside },
     );
     expect(pull.exitCode).toBe(0);
     const body = JSON.parse(pull.stdout) as Record<string, unknown>;
     expect(body.ok).toBe(true);
     expect(body.pendingActions).toEqual([
+      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+    ]);
+    // A matching Environment reports "no changes"; the missing-grant
+    // remediation must survive that output variant as well, so the
+    // second, unchanged run is the one that pins the regression.
+    const unchanged = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        `${import.meta.dir}/.tmp-workflow-output`,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, fetch: scripted.fetch, gitTrackingProbe: gitOutside },
+    );
+    expect(unchanged.exitCode).toBe(0);
+    const unchangedBody = JSON.parse(unchanged.stdout) as Record<
+      string,
+      unknown
+    >;
+    expect(unchangedBody.ok).toBe(true);
+    expect(unchangedBody.unchanged).toBe(true);
+    expect(unchangedBody.pendingActions).toEqual([
       "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
     ]);
     // The read must not have minted or re-provisioned any Project epoch

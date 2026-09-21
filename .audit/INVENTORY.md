@@ -72,7 +72,7 @@ Legend: category prefixes
 | ID | Surface | Status |
 |---|---|---|
 | CLI-SETUP-001 | `dotrelay setup` (device enrollment via browser approval) | PASS (live against real API: profile add trust prompt, RFC 8628 code, browser approval, completion) |
-| CLI-PULL-001 | `dotrelay pull` / sync to .env (merge, new vars, missing user-defined) | PASS (live: decrypts all lanes, replaces .env, retains .env.previous, "No changes found" when in sync) |
+| CLI-PULL-001 | `dotrelay pull` / sync to .env (merge, new vars, missing user-defined) | PASS (live: decrypts all lanes, replaces .env, retains .env.previous, "No changes found" when in sync; the pull output contract — every output variant, incl. the unchanged and `--stdout` JSON variants, must carry pending grant remediations — pinned by the hermetic F-009/F-011 regression, F-011) |
 | CLI-PUBLISH-001 | publish flow (draft, conflicts, reconciliation) | PASS (live: `dotrelay init` genesis publish, 12 vars, review gate, "Encrypted 12 Variables / Uploaded / Published") |
 | CLI-PROFILE-001 | Server profile selection / config (hosted vs self-hosted URL) | PASS (live: profile add/use/list against self-hosted; trust-frame `…-undefined` abbreviation bug fixed this campaign, see F-005) |
 | CLI-ERROR-001 | Error recovery (offline, 401, stale epoch, network failure) | PASS (live: 401/403/404/409/413/429 problem-code mapping observed across probes; stale-epoch recovery e2e-covered; device_bundle_missing + recovery_requires_no_active_device codes live) |
@@ -148,3 +148,4 @@ Legend: category prefixes
 | F-008 Wrong remediation for User-defined Value decode failures | FIXED_AND_VERIFIED (2d2e4a5; live user-defined-branch alert rendered in the F-009 re-share pass) | WEB-WORKSPACE-003/004, PROTO-SYNC-001 |
 | F-009 Self-minted spurious epoch grant blocks peer re-share | FIXED_AND_VERIFIED (this commit; live re-enrollment + CLI re-share, D-011) | WEB-WORKSPACE-007, PROTO-SYNC-001, CLI-PULL-001, SEC-CRYPTO-002 |
 | F-010 No owner-initiated epoch-rotation trigger | BLOCKED (product decision — GitHub issue #229, `ready-for-human`; mechanism itself covered by 92f99ba + e2e) | PROTO-EPOCH-001 |
+| F-011 pull unchanged/--stdout variants drop pending grant remediation | FIXED_AND_VERIFIED (this campaign; hermetic CLI unit regression + fresh full verify) | CLI-PULL-001, PROTO-SYNC-001 |

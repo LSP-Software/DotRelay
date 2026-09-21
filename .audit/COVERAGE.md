@@ -88,6 +88,13 @@ decisions (F-010 → GitHub issue #229).
   covered; not run live for the same device-stranding reason (Residuals).
 
 ## CLI (live, DOTRELAY_CONFIG_DIR=/tmp/cli-audit, profile live)
+- Pull output contract (F-011, this campaign): every `dotrelay pull` output variant —
+  history, diff, file-write, `unchanged`, and `--stdout` JSON — now carries the
+  pending grant remediations (`pendingActionsField`), so the F-009 missing-grant
+  message can no longer be silently dropped in the in-sync (`No changes found`) or
+  `--stdout` case. Pinned by the hermetic CLI unit regression (temp output file,
+  Git probe pinned to "outside", two runs: write path then `unchanged: true` run
+  asserting the remediation).
 - profile add/use/list (trust frame, self-hosted), setup (RFC 8628), init (project+env,
   GitHub resolve), pull, push, rollback, history, device backup/recover — live.
 - Recovery kit: backup wrote a generation-2 kit (envelope b22891be, sealed under the
@@ -178,6 +185,14 @@ decisions (F-010 → GitHub issue #229).
 - test:cli + test:cli:live green in the final verify (TEST-CLI-001, including the
   `rm -rf .git/dotrelay` guard against the live profile's config-dir trap);
   test:integration green including the new epoch-rotation test 92f99ba (TEST-INTEG-001).
+- Final-verify hygiene (this campaign): an earlier closeout verify showed a turbo-cache
+  false green — `@dotrelay/cli#test:unit` was replayed from cache while the F-009 test
+  was non-hermetic (its pass depended on whether a leftover gitignored `apps/cli/.env`
+  existed, which selected between pull's write path and its `unchanged` path; the
+  latter dropped the remediation — F-011). The F-009 test is now hermetic (temp output
+  + pinned Git probe) and the campaign's final verify invalidates the turbo cache so
+  `@dotrelay/cli#test:unit` is re-executed, not replayed; that fresh run is green
+  (TEST-CLI-001 / TEST-UNIT-001).
 - Quality pass (TEST-QUALITY-001): missing coverage added during the campaign —
   epoch rotation (92f99ba), the F-009 bootstrap intercept, the F-008 user-defined
   branch alert, and the decode contract pinned at publication-artifacts.test.ts:976

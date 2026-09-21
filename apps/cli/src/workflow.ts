@@ -3823,6 +3823,7 @@ export const runProtectedWorkflow = async (
             output: outputPath,
             unchanged: true,
             ...(gitExclusion ? { gitExclusion } : {}),
+            ...pendingActionsField(synced.workflow.pendingActions),
             message: "No changes found",
           };
         if (options.noInput) {
@@ -3871,7 +3872,10 @@ export const runProtectedWorkflow = async (
         ? `; ${outputPath} is excluded from Git via .git/info/exclude so it will not be tracked`
         : "";
     return parsed.stdout
-      ? { stdout: contents }
+      ? {
+          stdout: contents,
+          ...pendingActionsField(synced.workflow.pendingActions),
+        }
       : {
           output: outputPath ?? "",
           ...(gitExclusion ? { gitExclusion } : {}),
