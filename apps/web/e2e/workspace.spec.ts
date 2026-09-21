@@ -184,6 +184,38 @@ test("role-aware administration reflects the persisted Team record", async ({
 test("Environment archive and restore require explicit confirmation", async ({
   page,
 }) => {
+  // The workspace persists archive/restore through the service, so the test
+  // answers the lifecycle endpoint in place of the Server: the archive
+  // reports the archived lifecycle, the restore reports it active, and the
+  // workspace only flips once the service confirms.
+  const lifecycleCalls = { archive: 0, restore: 0 };
+  await page.route("**/api/v1/environments/*/lifecycle", (route) => {
+    const action = (
+      JSON.parse(route.request().postData() ?? "{}") as {
+        action?: string;
+      }
+    ).action;
+    if (action === "archive") {
+      lifecycleCalls.archive += 1;
+      return route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ lifecycle: "archived" }),
+      });
+    }
+    if (action === "restore") {
+      lifecycleCalls.restore += 1;
+      return route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ lifecycle: "active" }),
+      });
+    }
+    return route.fulfill({
+      contentType: "application/json",
+      status: 400,
+      body: JSON.stringify({ code: "invalid_request" }),
+    });
+  });
+
   await page.goto("/workspace");
   await openFirstProject(page);
 
@@ -195,6 +227,7 @@ test("Environment archive and restore require explicit confirmation", async ({
   await expect(
     page.getByRole("button", { name: "Restore environment" }),
   ).toBeVisible();
+  expect(lifecycleCalls.archive).toBe(1);
 
   await page.getByRole("button", { name: "Restore environment" }).click();
   await expect(page.getByRole("alertdialog")).toContainText(
@@ -204,6 +237,7 @@ test("Environment archive and restore require explicit confirmation", async ({
   await expect(
     page.getByRole("button", { name: "Archive environment" }),
   ).toBeVisible();
+  expect(lifecycleCalls.restore).toBe(1);
 });
 
 test("a recorded trust decision follows the destination across previews", async ({

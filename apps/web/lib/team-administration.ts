@@ -448,3 +448,75 @@ export const removeTeamMember = async (
   if (!removed) return failure("The server returned a malformed reply.");
   return { ok: true, data: removed };
 };
+
+export type PersistedLifecycle = "active" | "archived";
+
+export type ProjectLifecycleChange = Readonly<{
+  readonly projectId: string;
+  readonly lifecycle: PersistedLifecycle;
+}>;
+
+export type EnvironmentLifecycleChange = Readonly<{
+  readonly environmentId: string;
+  readonly lifecycle: PersistedLifecycle;
+}>;
+
+const parseResourceLifecycle = (body: unknown): PersistedLifecycle | null => {
+  if (!isRecord(body)) return null;
+  const lifecycle = asString(body.lifecycle);
+  return lifecycle === "active" || lifecycle === "archived" ? lifecycle : null;
+};
+
+// Archives or restores a Project. The server persists the change (row lock,
+// lifecycle guard, audit fact) and replies with the new lifecycle, so the
+// workspace can trust the reply rather than flipping local state.
+export const changeProjectLifecycle = async (
+  apiOrigin: string,
+  projectId: string,
+  action: "archive" | "restore",
+  deviceId?: string,
+): Promise<TeamAdminResult<ProjectLifecycleChange>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/projects/${projectId}/lifecycle`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+        ...deviceHeaders(deviceId),
+      },
+      body: JSON.stringify({ action }),
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const lifecycle = parseResourceLifecycle(outcome.body);
+  if (!lifecycle) return failure("The server returned a malformed reply.");
+  return { ok: true, data: { projectId, lifecycle } };
+};
+
+// Archives or restores an Environment, persisting the change server-side.
+export const changeEnvironmentLifecycle = async (
+  apiOrigin: string,
+  environmentId: string,
+  action: "archive" | "restore",
+  deviceId?: string,
+): Promise<TeamAdminResult<EnvironmentLifecycleChange>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/environments/${environmentId}/lifecycle`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+        ...deviceHeaders(deviceId),
+      },
+      body: JSON.stringify({ action }),
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const lifecycle = parseResourceLifecycle(outcome.body);
+  if (!lifecycle) return failure("The server returned a malformed reply.");
+  return { ok: true, data: { environmentId, lifecycle } };
+};

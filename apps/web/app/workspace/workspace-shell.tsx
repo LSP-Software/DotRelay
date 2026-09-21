@@ -103,6 +103,8 @@ import {
 } from "@/lib/environment-workflow";
 import {
   acceptTeamInvitation,
+  changeEnvironmentLifecycle,
+  changeProjectLifecycle,
   changeTeamMemberRole,
   createTeamInvitation,
   fetchMyInvitations,
@@ -513,6 +515,13 @@ export const WorkspaceShell = ({
     useState<ResourceLifecycle>("ACTIVE");
   const [projectLifecycle, setProjectLifecycle] =
     useState<ResourceLifecycle>("ACTIVE");
+  // The service's explanation when an archive/restore could not be persisted.
+  // Keyed by the resource the user acted on so the failure stays visible next
+  // to that resource's controls instead of reverting silently.
+  const [lifecycleError, setLifecycleError] = useState<{
+    readonly resource: "environment" | "project";
+    readonly message: string;
+  } | null>(null);
   const [invitationOpen, setInvitationOpen] = useState(false);
   // The invitation dialog is a two-step flow: resolve a GitHub login to its
   // stable subject, then create the invitation. The resolved identity is
@@ -939,6 +948,54 @@ export const WorkspaceShell = ({
       refreshTeamAdministration();
     } else {
       setMemberMutationError({ membershipId, message: result.message });
+    }
+  };
+
+  // Archives or restores the selected Environment. The server persists the
+  // change and reports the resulting lifecycle, so the state only flips when
+  // the service confirms it; a refusal keeps the prior state and surfaces the
+  // explanation instead of reverting silently.
+  const persistEnvironmentLifecycle = async (action: "archive" | "restore") => {
+    const target = selectedEnvironment?.id;
+    if (!apiOrigin || !target) return;
+    setLifecycleError(null);
+    const result = await changeEnvironmentLifecycle(
+      apiOrigin,
+      target,
+      action,
+      browserDeviceId,
+    );
+    if (result.ok) {
+      setEnvironmentLifecycle(
+        result.data.lifecycle === "archived" ? "ARCHIVED" : "ACTIVE",
+      );
+      // In a live deployment re-derive the boundary so the catalog (epoch,
+      // device readiness) reflects the persisted change. The development
+      // fixture is static, so only the confirmed reply updates it.
+      if (!WORKSPACE_FIXTURE) reconnectNowRef.current?.();
+    } else {
+      setLifecycleError({ resource: "environment", message: result.message });
+    }
+  };
+
+  // Archives or restores the selected Project, persisting through the service.
+  const persistProjectLifecycle = async (action: "archive" | "restore") => {
+    const target = selectedProject?.id;
+    if (!apiOrigin || !target) return;
+    setLifecycleError(null);
+    const result = await changeProjectLifecycle(
+      apiOrigin,
+      target,
+      action,
+      browserDeviceId,
+    );
+    if (result.ok) {
+      setProjectLifecycle(
+        result.data.lifecycle === "archived" ? "ARCHIVED" : "ACTIVE",
+      );
+      if (!WORKSPACE_FIXTURE) reconnectNowRef.current?.();
+    } else {
+      setLifecycleError({ resource: "project", message: result.message });
     }
   };
 
@@ -2203,6 +2260,7 @@ export const WorkspaceShell = ({
   const resetWorkspaceContext = () => {
     setEnvironmentLifecycle("ACTIVE");
     setProjectLifecycle("ACTIVE");
+    setLifecycleError(null);
     setInvitationOpen(false);
     resetInvitationDialog();
     setMembershipState(null);
@@ -2807,12 +2865,22 @@ export const WorkspaceShell = ({
                       disabled={!canAdminister}
                       lifecycle={environmentLifecycle}
                       onConfirm={() =>
-                        setEnvironmentLifecycle((value) =>
-                          value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
+                        void persistEnvironmentLifecycle(
+                          environmentLifecycle === "ACTIVE"
+                            ? "archive"
+                            : "restore",
                         )
                       }
                       resource="Environment"
                     />
+                    {lifecycleError?.resource === "environment" ? (
+                      <p
+                        role="alert"
+                        className="text-xs font-medium text-destructive"
+                      >
+                        {lifecycleError.message}
+                      </p>
+                    ) : null}
                   </div>
                   <Tabs
                     className="mb-6"
@@ -3087,41 +3155,53 @@ export const WorkspaceShell = ({
                     </CardContent>
                   </Card>
                   {selectedProject ? (
-                    <Card className="mt-4">
-                      <CardHeader>
-                        <CardTitle>
-                          {projectDisplayName(selectedProject)}
-                        </CardTitle>
-                        <CardDescription>
-                          Archive this project to let another project use its
-                          GitHub repository.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex items-center justify-between gap-4">
-                        <Badge
-                          data-testid="project-lifecycle"
-                          variant={
-                            projectLifecycle === "ACTIVE"
-                              ? "default"
-                              : "secondary"
-                          }
+                    <>
+                      <Card className="mt-4">
+                        <CardHeader>
+                          <CardTitle>
+                            {projectDisplayName(selectedProject)}
+                          </CardTitle>
+                          <CardDescription>
+                            Archive this project to let another project use its
+                            GitHub repository.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="flex items-center justify-between gap-4">
+                          <Badge
+                            data-testid="project-lifecycle"
+                            variant={
+                              projectLifecycle === "ACTIVE"
+                                ? "default"
+                                : "secondary"
+                            }
+                          >
+                            {projectLifecycle === "ACTIVE"
+                              ? "Active"
+                              : "Archived"}
+                          </Badge>
+                          <LifecycleDialog
+                            disabled={!canAdminister}
+                            lifecycle={projectLifecycle}
+                            onConfirm={() =>
+                              void persistProjectLifecycle(
+                                projectLifecycle === "ACTIVE"
+                                  ? "archive"
+                                  : "restore",
+                              )
+                            }
+                            resource="Project"
+                          />
+                        </CardContent>
+                      </Card>
+                      {lifecycleError?.resource === "project" ? (
+                        <p
+                          role="alert"
+                          className="mt-2 text-xs font-medium text-destructive"
                         >
-                          {projectLifecycle === "ACTIVE"
-                            ? "Active"
-                            : "Archived"}
-                        </Badge>
-                        <LifecycleDialog
-                          disabled={!canAdminister}
-                          lifecycle={projectLifecycle}
-                          onConfirm={() =>
-                            setProjectLifecycle((value) =>
-                              value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
-                            )
-                          }
-                          resource="Project"
-                        />
-                      </CardContent>
-                    </Card>
+                          {lifecycleError.message}
+                        </p>
+                      ) : null}
+                    </>
                   ) : null}
                 </section>
               ) : null}
