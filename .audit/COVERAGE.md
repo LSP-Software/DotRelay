@@ -181,10 +181,22 @@ decisions (F-010 → GitHub issue #229).
 - check gate (format/lint/typecheck/boundaries/openapi/vectors/unit) and production
   builds green (TEST-UNIT-001 / TEST-BUILD-001).
 - Playwright suite: 101 passed mid-campaign; the campaign's final verify re-ran the
-  whole suite — 102 passed (TEST-E2E-001).
+  whole suite — 102 passed / 0 failed on a cold dev-server start, after F-013 settled
+  the trust gate in the invitations spec (TEST-E2E-001).
 - test:cli + test:cli:live green in the final verify (TEST-CLI-001, including the
-  `rm -rf .git/dotrelay` guard against the live profile's config-dir trap);
-  test:integration green including the new epoch-rotation test 92f99ba (TEST-INTEG-001).
+  `rm -rf .git/dotrelay` guard against the live profile's config-dir trap).
+- test:integration (TEST-INTEG-001) genuinely executed in the final verify: 19 pass /
+  0 fail, `0 cached, 1 total`, against local postgres/valkey, including the new
+  epoch-rotation test 92f99ba and the F-009 bootstrap-intercept test. **Correction
+  (F-012):** every earlier local "test:integration green" was vacuous — `bun run
+  <script>` loads `.env` in-process only and never exported `DATABASE_URL` to the
+  `turbo` child, so the suites' `describe.skip` gate skipped the entire stage and
+  turbo cached that all-skip as green (23 skip / 0 pass in each local verify log);
+  only CI (job-level env) and the one-off direct runs (e.g. /tmp/integration.txt,
+  which is what actually validated 92f99ba at the time) ever executed the tests. The
+  `scripts/test-integration.ts` wrapper loads `.env`, fails fast on a missing URL,
+  verifies both services, and spawns turbo with the full environment, so a broken
+  environment can no longer degrade to a silent all-skip.
 - Final-verify hygiene (this campaign): an earlier closeout verify showed a turbo-cache
   false green — `@dotrelay/cli#test:unit` was replayed from cache while the F-009 test
   was non-hermetic (its pass depended on whether a leftover gitignored `apps/cli/.env`

@@ -31,7 +31,7 @@ API crashes on boot without migrations (`TableDoesNotExist` on `server_profiles`
 - `bun run check` → format:check + lint + typecheck + boundaries + openapi:check + vectors:verify-sources + test:unit
 - `bun run build` → turbo build (web next build, api bun build, cli bun)
 - `bun run smoke` → turbo smoke (smoke-api.ts / smoke-web.ts / smoke-cli.ts)
-- `bun run test:integration` → scripts/test-services.ts + per-package (postgres integration, trust integration)
+- `bun run test:integration` → scripts/test-integration.ts (loads .env into the process, checks the services, spawns turbo with the full environment — a bare `bun run <script>` would not export .env to turbo's children and would skip every integration test silently) + per-package (postgres integration, trust integration)
 - `bun run test:e2e` → playwright (apps/web/e2e)
 - `bun run test:cli` → apps/cli harness; `bun run test:cli:live` → scripts/test-cli-live.ts
 - `bun run db:validate`, `bun run db:migrate-check`, `bun run docs:validate`, `bun run tracked-tree:clean`

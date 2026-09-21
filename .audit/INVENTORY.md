@@ -121,9 +121,9 @@ Legend: category prefixes
 |---|---|---|
 | TEST-UNIT-001 | All unit suites pass (check gate) | PASS (2026-09-21: check exit 0) |
 | TEST-BUILD-001 | Production builds pass (web/api/cli) | PASS (2026-09-21: build exit 0) |
-| TEST-E2E-001 | Playwright e2e suite (fixture boundary) | PASS (2026-09-21: full suite 101 passed; post-F-009 targeted re-run 9 passed incl. enrollment-storage + all 4 stale-epoch specs; campaign final verify re-ran the whole suite green — 102 passed after the F-003 e2e spec landed) |
+| TEST-E2E-001 | Playwright e2e suite (fixture boundary) | PASS (2026-09-21: full suite 102 passed / 0 failed on a cold dev-server start, after F-013 settled the trust gate in `workspace-invitations.spec.ts`; post-F-009 targeted re-run 9 passed incl. enrollment-storage + all 4 stale-epoch specs) |
 | TEST-CLI-001 | test:cli + test:cli:live round-trip | PASS (2026-09-21 final verify: test:cli + test:cli:live green, incl. the `rm -rf .git/dotrelay` guard against the config-dir trap) |
-| TEST-INTEG-001 | Integration (postgres/valkey, persistence, trust) | PASS (2026-09-21 final verify: test:integration green, incl. the new epoch-rotation integration test 92f99ba and the F-009 bootstrap-intercept test) |
+| TEST-INTEG-001 | Integration (postgres/valkey, persistence, trust) | PASS (2026-09-21: **genuinely executed** — 19 pass / 0 fail, `0 cached, 1 total`, against local postgres/valkey via the F-012 wrapper; includes the epoch-rotation integration test 92f99ba and the F-009 bootstrap-intercept test. Prior local "green" rows were vacuous: `bun run <script>` never exported `DATABASE_URL` to the turbo child, so every integration test was `describe.skip`-ed and turbo cached the all-skip as green — F-012) |
 | TEST-QUALITY-001 | Audit test quality (vacuous tests, over-mocking, missing negative tests) | PASS (campaign review: missing negative/happy-path coverage added — epoch rotation (92f99ba), F-009 bootstrap intercept, F-008 user-defined-branch alert, the `publication-artifacts.test.ts:976` decode contract (actor-owned unreadable → fail, other-user's unreadable → fail-open null); vacuous/over-mocked spots and the F-009 fixture-faking gap documented in FINDINGS.md/COVERAGE.md) |
 
 ## CONTRACTS / tooling
@@ -149,3 +149,5 @@ Legend: category prefixes
 | F-009 Self-minted spurious epoch grant blocks peer re-share | FIXED_AND_VERIFIED (this commit; live re-enrollment + CLI re-share, D-011) | WEB-WORKSPACE-007, PROTO-SYNC-001, CLI-PULL-001, SEC-CRYPTO-002 |
 | F-010 No owner-initiated epoch-rotation trigger | BLOCKED (product decision — GitHub issue #229, `ready-for-human`; mechanism itself covered by 92f99ba + e2e) | PROTO-EPOCH-001 |
 | F-011 pull unchanged/--stdout variants drop pending grant remediation | FIXED_AND_VERIFIED (this campaign; hermetic CLI unit regression + fresh full verify) | CLI-PULL-001, PROTO-SYNC-001 |
+| F-012 Local `test:integration` silently skipped every test (false green) | FIXED_AND_VERIFIED (this campaign; fresh 19 pass / 0 fail run, `0 cached`) | TEST-INTEG-001 |
+| F-013 e2e invitations spec races the trust settle on cold server start | FIXED_AND_VERIFIED (this campaign; 4/4 + full suite 102 pass on cold start) | TEST-E2E-001 |

@@ -335,3 +335,81 @@ Each entry: status, evidence, impact.
   fails on the unchanged run; post-fix the full CLI unit suite is green (356 pass /
   0 fail) and a fresh full verify with the turbo cache invalidated re-executed
   `@dotrelay/cli#test:unit` (not a cache replay) green.
+
+## F-012 (FIXED) Local `test:integration` stage skipped every test — silent all-skip false green
+- **Status:** FIXED_AND_VERIFIED (this campaign; fresh 19 pass / 0 fail run with the turbo cache invalidated)
+- **Symptom:** every local `bun run verify` run reported `test:integration` as green, but the
+  suite actually executed zero tests: `23 skip / 0 pass / 0 fail` (`/tmp/verify-final.log`,
+  `/tmp/verify-final2.log`, `/tmp/verify-final4.log`). The green was vacuous — nothing
+  integration-related (persistence or trust) ever ran locally; only CI exercised it.
+- **Root cause:** `bun run <script>` loads `.env` **in-process only**; it does not export
+  the variables to the shell or to child processes. The stage was
+  `bun scripts/test-services.ts && turbo run test:integration`, so the `turbo` child
+  process had no `DATABASE_URL`. The integration suites gate on
+  `process.env.DATABASE_URL ? describe : describe.skip`
+  (`packages/database/src/persistence/postgres.integration.test.ts:29`,
+  `trust.integration.test.ts:24`), so with the variable absent every describe was
+  skipped, and turbo happily cached that all-skip as a green task. `test-services.ts`
+  itself only checked for `DATABASE_URL` in its own process (where `bun run` had
+  loaded it), so its readiness check passed misleadingly. CI was unaffected because the
+  workflow sets `DATABASE_URL`/`VALKEY_URL` as job-level env (`ci.yml:79-81`). A
+  controlled `/tmp/envprobe` experiment confirmed the behavior: under `bun run <script>`
+  a child process sees `DATABASE_URL` unset, while `bun p.ts` (direct file execution)
+  and `bun run --env-file=.env p.ts` both export it.
+- **Fix (this campaign):** `scripts/test-services.ts` is replaced by
+  `scripts/test-integration.ts`, which (1) loads the repository `.env` into the running
+  process (`process.loadEnvFile`, guarded by `existsSync` so CI jobs without a `.env`
+  still work off their job env vars), (2) fails fast with an actionable error if
+  `DATABASE_URL` is still unset, (3) verifies both services (`SELECT 1` on PostgreSQL,
+  `ping` → PONG on Valkey), and (4) spawns `bun x turbo run test:integration` with the
+  complete `process.env` so the variables reach the integration tasks; it exits with
+  turbo's status. The old readiness-only script is deleted (its only consumer was the
+  stage); `package.json` now runs `bun scripts/test-integration.ts`, and
+  `.audit/RUNBOOK.md:34` documents why the wrapper exists. A broken environment can no
+  longer degrade to a silent all-skip: a missing URL or a dead service throws before
+  any test runs.
+- **Verification:** after invalidating the stale turbo cache entries,
+  `bun run test:integration` executed the real suites against the local
+  `dotrelay-postgres`/`dotrelay-valkey` containers: **19 pass / 0 fail / 100 expect()
+  calls, `0 cached, 1 total`** (the earlier `23 skip` count included 2 bun "(unnamed)"
+  describe artifacts that only appear when the describes are skipped; no conditional
+  skip remains beyond the `DATABASE_URL` gate, which the wrapper now guarantees is set).
+  Every prior local "test:integration green" statement — including the campaign's
+  earlier full-verify logs — was vacuous and is corrected in INVENTORY (TEST-INTEG-001)
+  and COVERAGE.
+
+## F-013 (FIXED) e2e `workspace-invitations` spec races the workspace trust settle on a cold dev server
+- **Status:** FIXED_AND_VERIFIED (this campaign; 4/4 pass on a cold server start, full e2e suite 102 pass / 0 fail)
+- **Symptom:** the fresh full verify (`/tmp/verify-final4.log`) failed in `test:e2e`
+  (1 failed / 101 passed): `workspace-invitations.spec.ts › resolving an unknown GitHub
+  login keeps the form and reports the problem` — `TimeoutError: locator.click: Timeout
+  5000ms exceeded` while clicking `getByRole("button", { name: "Invite member" })`. The
+  error-context snapshot showed the workspace **trust gate still rendered** ("Trust this
+  server" card, the `trust-profile` setup action) and the main view still on the Team
+  landing state, while the sidebar had already selected Team — the click raced the
+  boundary/trust settle.
+- **Root cause:** that run started a **cold** Next dev server (the long-running hub
+  `web` process was stopped for the verify, so Playwright's `webServer` with
+  `reuseExistingServer: !process.env.CI` launched a fresh `bun --cwd apps/web dev`
+  (`playwright.config.ts:10-16`)); `/workspace` compiled on first hit and the first
+  spec to reach the protected Team surface paid the full compile + boundary-verify
+  cost. While the `trust-profile` setup action is active, the shell replaces the Team
+  view with the trust gate (`workspace-shell.tsx:2813-2829`), so "Invite member" simply
+  does not exist until trust settles. Every other spec that drives a protected surface
+  calls `trustWorkspaceServer(page)` after `page.goto("/workspace")`
+  (`apps/web/e2e/trust-server.ts:8-23` — waits `workspace-loading` hidden ≤15 s, settles
+  500 ms, confirms the gate if present, no-op when trusted); `workspace-invitations.spec.ts`
+  never called it, so on a cold server its four tests acted on the Team surface while
+  the gate was still settling. Once the server was warm (or in CI, where
+  `reuseExistingServer: false` starts it the same way and the sibling specs' settles
+  prime the page), the identical clicks pass — a pure timing race, not a product
+  regression (the F-011 fix touched CLI code only; the web invitations surface is
+  untouched).
+- **Fix (this campaign):** `workspace-invitations.spec.ts` now imports
+  `trustWorkspaceServer` and calls it after each of its four `page.goto("/workspace")`
+  sites, matching the sibling-spec convention. The helper is no-op-safe (returns when
+  the gate is absent), so warm runs and CI are unaffected.
+- **Verification:** with nothing on :3000 (guaranteeing Playwright's `webServer`
+  started a fresh, cold dev server), the spec passed 4/4 in 8.5 s, and the full
+  `bun run test:e2e` suite then passed **102 pass / 0 fail** against the same cold
+  start. No assertion was weakened.
