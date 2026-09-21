@@ -99,3 +99,17 @@ Assumptions made during the audit so later work can inspect/override them.
 - **Impact:** F-003's fail-closed flow now works end-to-end through the API. If product later says
   membership re-commands must succeed, the same one-field `operationId`-in-bytes fix extends to
   them with no schema or protocol change.
+
+## D-010 Self-hosted browser lifecycle falls back to the verified profile origin
+- **Decision:** in a self-hosted deployment that declares no build-inlined API origin, the
+  workspace lifecycle handlers (archive/restore project and environment) fall back to the
+  Server Profile origin the boundary already verified (`boundary.profile.origin`), exactly as
+  the device-bootstrap and key-recovery handlers already do. The membership/invitation
+  surfaces keep their documented "skip when no origin is declared" behaviour.
+- **Rationale:** the boundary verification is what establishes which server the user is
+  talking to; the trusted profile's origin is the only origin the browser is already
+  authenticated to, so it is a safe, non-misleading target. Pointing at an unrelated or
+  empty origin (the pre-fix silent no-op, F-007) is worse than using the verified one. The
+  fallback never targets a server the user has not explicitly trusted.
+- **Impact:** self-hosted browser archive/restore now persists instead of silently no-oping
+  (F-007). Hosted deployments (which inline an API origin) are unaffected.

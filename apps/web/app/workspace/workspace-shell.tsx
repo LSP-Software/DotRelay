@@ -957,10 +957,15 @@ export const WorkspaceShell = ({
   // explanation instead of reverting silently.
   const persistEnvironmentLifecycle = async (action: "archive" | "restore") => {
     const target = selectedEnvironment?.id;
-    if (!apiOrigin || !target) return;
+    // Self-hosted deployments may never declare an API origin at build time, so
+    // fall back to the Server Profile origin the boundary already verified (the
+    // same origin device bootstrap and key recovery use) instead of the
+    // build-inlined value alone.
+    const origin = apiOrigin ?? boundary.profile.origin;
+    if (!origin || !target) return;
     setLifecycleError(null);
     const result = await changeEnvironmentLifecycle(
-      apiOrigin,
+      origin,
       target,
       action,
       browserDeviceId,
@@ -981,10 +986,14 @@ export const WorkspaceShell = ({
   // Archives or restores the selected Project, persisting through the service.
   const persistProjectLifecycle = async (action: "archive" | "restore") => {
     const target = selectedProject?.id;
-    if (!apiOrigin || !target) return;
+    // Same self-hosted fallback as the environment handler and the device
+    // bootstrap/recovery paths: use the verified profile origin when no
+    // build-inlined API origin exists.
+    const origin = apiOrigin ?? boundary.profile.origin;
+    if (!origin || !target) return;
     setLifecycleError(null);
     const result = await changeProjectLifecycle(
-      apiOrigin,
+      origin,
       target,
       action,
       browserDeviceId,

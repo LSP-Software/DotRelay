@@ -136,3 +136,37 @@ Each entry: status, evidence, impact.
   409s because the digest is already consumed. Whether that duplicate-prevention is intended
   or the same defect is a product decision — filed as a GitHub issue rather than changed, so
   the F-003 fix stays surgical. See DECISIONS.md D-009.
+
+## F-007 (FIXED) Self-hosted browser lifecycle archive/restore silently no-ops (no API origin inlined)
+- **Status:** FIXED_AND_VERIFIED (this campaign; found and verified in a live self-hosted browser pass)
+- **Symptom:** In a self-hosted deployment that declares no build-inlined API origin
+  (no `NEXT_PUBLIC_DOTRELAY_API_ORIGIN` / `DOTRELAY_API_ORIGIN`), the workspace's
+  "Archive/Restore environment" and "Archive/Restore project" buttons opened the confirm
+  dialog and then did nothing — no HTTP request, no error, state unchanged. The environment
+  stayed `ACTIVE` in the DB.
+- **Root cause:** `workspace-shell.tsx` computes a shell-level
+  `const apiOrigin = resolveApiOrigin()` (no fallback) for the membership/invitation
+  surfaces, which are *intentionally* skipped when no origin is declared (the "Team data
+  unavailable" alert). The two lifecycle handlers copied that bare `apiOrigin` and guarded
+  `if (!apiOrigin || !target) return;`. But the sibling device-bootstrap and key-recovery
+  handlers fall back to the *verified* Server Profile origin (`resolveApiOrigin() ??
+  boundary.profile.origin`), so in the same browser device bootstrap succeeded while the
+  lifecycle buttons bailed. `resolveApiOrigin()` reads `NEXT_PUBLIC_*` / build-inlined vars,
+  none of which exist in a pure self-hosted client bundle, so it is `undefined` there.
+- **Why the suites missed it:** the API unit tests always pass a defined `apiOrigin`, and the
+  Playwright e2e runs in fixture mode which *does* set `NEXT_PUBLIC_DOTRELAY_API_ORIGIN` (so
+  `resolveApiOrigin()` is defined and the request goes to the intercepted endpoint). Only a
+  real live self-hosted browser — no inlined origin, real trusted profile — exposes the
+  undefined value.
+- **Fix:** in `persistEnvironmentLifecycle` / `persistProjectLifecycle`, resolve
+  `const origin = apiOrigin ?? boundary.profile.origin;` and guard on `origin`, exactly as the
+  device-bootstrap and recovery handlers do. The fallback is the same Server Profile origin the
+  boundary already verified and the user just trusted, so it is not pointed at an unrelated
+  server. The membership/invitation surfaces keep their documented "skip when no origin"
+  behaviour.
+- **Verification:** live self-hosted browser (user A, freshly bootstrapped browser device as
+  actor): "Archive environment" → confirm → button flips to "Restore environment" (state
+  persisted; two `ADMINISTRATION` operations committed, environment then `ARCHIVED`); "Restore
+  environment" → confirm → editor back to the variables view, environment `ACTIVE`. No error
+  alert at any step. A pre-fix click in the same browser produced no request and no state
+  change (environment stayed `ACTIVE` in the DB), confirming the silent no-op.
