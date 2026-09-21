@@ -652,6 +652,94 @@ describe("API foundation", () => {
     });
   });
 
+  test("a signed-in user cannot approve or inspect another user's claimed device code", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    const context = await auth.$context;
+    // Seed a code already claimed by user A (as the in-browser claim step
+    // records it), so user B's session is a foreign approver.
+    const userA = await context.internalAdapter.createUser(
+      {
+        email: "cross-approve-a@example.com",
+        emailVerified: true,
+        name: "Cross A",
+      },
+      { method: "oauth", oauth: { providerId: "github" } },
+    );
+    const userB = await context.internalAdapter.createUser(
+      {
+        email: "cross-approve-b@example.com",
+        emailVerified: true,
+        name: "Cross B",
+      },
+      { method: "oauth", oauth: { providerId: "github" } },
+    );
+    const sessionB = await context.internalAdapter.createSession(
+      userB.id,
+      false,
+    );
+    if (!sessionB) throw new Error("test session was not created");
+    await context.adapter.create({
+      model: "deviceCode",
+      data: {
+        deviceCode: "cross-device-code",
+        userCode: "CROSSCODE",
+        userId: userA.id,
+        expiresAt: new Date(Date.now() + 600_000),
+        status: "pending",
+        lastPolledAt: null,
+        pollingInterval: 5000,
+        clientId: "dotrelay-cli",
+        scope: "",
+      },
+    });
+
+    // Foreign approval is refused and never mutates the code.
+    const foreignApprove = await testApp.request(
+      `${profile.origin}/api/auth/device/approve`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.webOrigin,
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionB.token}`,
+        },
+        body: JSON.stringify({ userCode: "CROSSCODE" }),
+      },
+    );
+    expect(foreignApprove.status).toBe(403);
+    expect(await foreignApprove.json()).toEqual({ error: "access_denied" });
+    const afterForeignApprove = await context.adapter.findOne({
+      model: "deviceCode",
+      where: [{ field: "deviceCode", value: "cross-device-code" }],
+    });
+    expect(afterForeignApprove).toMatchObject({
+      status: "pending",
+      userId: userA.id,
+    });
+
+    // A foreign session also cannot claim the code or read its
+    // request context (client_id/scope stay owner-only).
+    const foreignVerify = await testApp.request(
+      `${profile.origin}/api/auth/device?user_code=CROSSCODE`,
+      {
+        headers: {
+          Origin: profile.webOrigin,
+          Authorization: `Bearer ${sessionB.token}`,
+        },
+      },
+    );
+    expect(foreignVerify.status).toBe(200);
+    const foreignBody = (await foreignVerify.json()) as Record<string, unknown>;
+    expect(foreignBody).toMatchObject({
+      user_code: "CROSSCODE",
+      status: "pending",
+    });
+    expect("client_id" in foreignBody).toBe(false);
+    expect("scope" in foreignBody).toBe(false);
+  });
+
   test("applies logout, remote revocation, and expiry on the next bearer request", async () => {
     const profile = loadServerProfileConfig({});
     const auth = createInMemoryAuth(profile);
