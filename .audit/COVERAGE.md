@@ -165,12 +165,21 @@ decisions (F-010 → GitHub issue #229).
   pushes both images, deploys via Coolify, and runs a capabilities smoke.
 - CI (CFG-CI-001): ci.yml jobs map 1:1 onto the local `bun run verify` chain
   (check→check, build-smoke→build+smoke, unit→test:unit, integration→test:integration
-  with pinned postgres/valkey images, browser-e2e→test:e2e, cli-round-trip→
+  with pinned postgres/valkey images, browser-e2e→test:e2e, e2e-full→
+  test:e2e:full on pinned postgres/valkey service containers, cli-round-trip→
   test:cli+test:cli:live on a 3-OS matrix, prisma→db:validate+db:migrate-check with a
   shadow DB, docs→docs:validate); every local equivalent is green in the campaign's
-  verify runs. CI-only delta: the `security` job (`bun run security:audit` = `bun
-  audit`) has no local verify step — it passes locally (no vulnerabilities, 590
-  packages checked).
+  verify runs. The `e2e-full` job (PR #228) drives the packaged CLI binary through
+  the complete operator flow — setup (real device authorization), init, push, pull,
+  diff, refusal, history + rollback, TTY stdout safety, status, logout + re-login —
+  against a real in-process API on a throwaway migrated Postgres database with real
+  Valkey rate limits, demo data only (GitHub stubbed via the `githubFetch` DI seam);
+  it runs on every PR and gates `deploy-dev`/`build-cli-dev` and, in release.yml,
+  gates `build-images`/`build-cli` so prod images and the published CLI cannot ship
+  until the full flow passes. CI-only deltas: the `security` job (`bun run
+  security:audit` = `bun audit`) has no local verify step — it passes locally (no
+  vulnerabilities, 590 packages checked) — and the npm publish step requires the
+  `NPM_TOKEN` registry secret.
 - CLI deployment (CFG-CLI-DEPLOY-001): `package:cli` produced the working 81MB
   `dist/dotrelay` binary, exercised live all campaign (CLI-BUILD-001); ci.yml
   build-cli-dev (3-OS) + publish-cli-dev (npm `--tag dev`) verified by inspection —

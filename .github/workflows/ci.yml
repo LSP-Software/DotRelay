@@ -120,6 +120,43 @@ jobs:
       - run: bun run test:cli:live
       - run: bun run tracked-tree:clean
 
+  e2e-full:
+    name: full-stack e2e (packaged CLI against real API + Postgres + Valkey)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        env:
+          POSTGRES_USER: dotrelay
+          POSTGRES_PASSWORD: dotrelay
+          POSTGRES_DB: dotrelay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dotrelay -d dotrelay"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      valkey:
+        image: valkey/valkey@sha256:495e4fecdc98ee48a20b207726caa5ab6451e0fac3642a9be10d9e70b3068df6
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      # The harness treats this as an ADMIN connection: it is a superuser on
+      # this container, so it uses it to CREATE and DROP a throwaway database
+      # per run. The maintenance "postgres" database always exists for that.
+      DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/postgres
+      VALKEY_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - run: bun install --frozen-lockfile
+      # The harness drives the packaged native binary, so build it first.
+      - run: bun run --cwd apps/cli build
+      - run: bun run test:e2e:full
+      - run: bun run tracked-tree:clean
+
   prisma:
     name: Prisma schema and migrations
     runs-on: ubuntu-latest
@@ -176,7 +213,7 @@ jobs:
     name: deploy dev (Coolify)
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, prisma, docs, security]
+    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, e2e-full, prisma, docs, security]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
@@ -225,7 +262,7 @@ jobs:
     name: build dev CLI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, prisma, docs, security]
+    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, e2e-full, prisma, docs, security]
     strategy:
       fail-fast: false
       matrix:
@@ -290,7 +327,7 @@ jobs:
   tracked-tree-clean:
     name: tracked tree cleanliness
     runs-on: ubuntu-latest
-    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, prisma, docs, security, deploy-dev, build-cli-dev, publish-cli-dev]
+    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, e2e-full, prisma, docs, security, deploy-dev, build-cli-dev, publish-cli-dev]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }

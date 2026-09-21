@@ -33,6 +33,7 @@ API crashes on boot without migrations (`TableDoesNotExist` on `server_profiles`
 - `bun run smoke` → turbo smoke (smoke-api.ts / smoke-web.ts / smoke-cli.ts)
 - `bun run test:integration` → scripts/test-integration.ts (loads .env into the process, checks the services, spawns turbo with the full environment — a bare `bun run <script>` would not export .env to turbo's children and would skip every integration test silently) + per-package (postgres integration, trust integration)
 - `bun run test:e2e` → playwright (apps/web/e2e)
+- `bun run test:e2e:full` → scripts/test-e2e-full.ts (the packaged CLI drives a real in-process API against a throwaway migrated Postgres database + real Valkey, demo data only, GitHub stubbed through the `githubFetch` seam; needs `DATABASE_URL` as an admin connection allowed to CREATE/DROP DATABASE and `VALKEY_URL`; also runs in CI as the `e2e-full` job, gating dev deploy and release builds)
 - `bun run test:cli` → apps/cli harness; `bun run test:cli:live` → scripts/test-cli-live.ts
 - `bun run db:validate`, `bun run db:migrate-check`, `bun run docs:validate`, `bun run tracked-tree:clean`
 - `bun run verify` → all of the above in order
