@@ -248,7 +248,10 @@ decisions (F-010 → GitHub issue #229).
 4. **User B's PENDING_KEY_GRANT membership is hidden by the web catalog** (it lists
    ACTIVE memberships only), so B sees "No teams yet" and no pending-invitation banner.
    The behaviour is fail-closed (B cannot reach A's data); whether to surface a
-   pending-key-grant/pending-invitation affordance is a product decision, not a defect.
+   pending-key-grant/pending-invitation affordance is a product decision, not a defect. The
+   deeper reason B is stranded — no shipped surface provisions the required key grants or
+   commits the PENDING_KEY_GRANT→ACTIVE transition — is F-014 / GitHub issue #133 (spec
+   #209); it is fail-closed, not a privilege boundary.
 5. **OAuth callback round trip** is unit-covered, not live (real GitHub credentials
    required, D-005). Everything downstream of an established session is live-verified.
 6. **No owner-initiated epoch-rotation trigger exists** (F-010, GitHub issue #229,

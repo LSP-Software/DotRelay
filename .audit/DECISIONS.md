@@ -140,3 +140,58 @@ Assumptions made during the audit so later work can inspect/override them.
   boundary is stale-epoch, and it mints a grant for the *new* epoch (where no peer can hold
   a grant yet), which is the correct first-device recovery; gating it would break in-place
   key recovery after a rotation.
+
+## D-012 No owner-initiated epoch-rotation initiator is built
+- **Decision:** this campaign does not add a web/CLI trigger for Project epoch key rotation
+  (F-010 / GitHub issue #229). The rotation *mechanism* (the protocol `epoch-transitions`
+  endpoint + `ProjectEpochRepository.rotate`) is covered and correct; only the human-initiated
+  trigger is missing.
+- **Rationale:** an initiator must construct and sign `EPOCH_TRANSITION` revision artifacts
+  client-side — new E2EE surface with its own failure modes (artifact construction, device-key
+  availability, epoch agreement). Choosing the trigger shape (web owner/admin action, a
+  `dotrelay rotate` CLI subcommand, or marking rotation as an operator operation) and the
+  post-rotation provisioning/re-wrapping semantics is a product decision, not a defect fix.
+  Issue #229 records the options.
+- **Impact:** a Device stuck without the current epoch key (the F-009 dead end) cannot be
+  unstuck by a human through any shipped interface; recovery requires an operator with signing
+  tooling. The gap is tracked and blocked on the product decision, not silently treated as a
+  bug to fix.
+
+## D-014 `dotrelay admin` is not a user command
+- **Assumption:** there is no user-facing `dotrelay admin` subcommand to audit as a distinct
+  CLI surface (CLI-ADMIN-001 is NOT_APPLICABLE).
+- **Rationale:** `apps/cli/src/args.ts` COMMANDS defines no `admin` group, and
+  `apps/cli/src/admin.ts` is the internal `StrictJsonClient` the CLI uses to call the API's
+  JSON administration endpoints — not a user-facing command. Membership, invitation, role, and
+  removal operations are exercised across the CLI (through `init`/`setup`/`pull`), the API
+  routes, and the web workspace surfaces.
+- **Impact:** the CLI command surface is inventoried without a spurious `admin` entry;
+  membership authorisation is proven via the real surfaces (API-MEMBERSHIP-001, SEC-AUTHZ-003).
+
+## D-020 Live browser mutation pass is infeasible, not skipped
+- **Assumption:** the campaign does not perform a live browser *mutation* (add/edit/delete /
+  publish/rollback/reveal) on the self-hosted deployment; those flows are covered by the
+  Playwright e2e suite on the scripted service.
+- **Rationale:** the only live environment with real published content is sealed to the CLI
+  publisher Device's per-device user-defined key, so the web editor correctly hides its table
+  (residual 2) and there is nothing mutable to exercise live; the only scratch environment is
+  left archived, headless, and grant-less. The e2e suite exercises the identical mutation code
+  against a scripted boundary, and the live deployment is verified for the read path, alerts,
+  History, and CLI-driven real publications.
+- **Impact:** browser read/alert/history surfaces are live-verified; browser mutation is
+  e2e-verified. No live mutation evidence is claimed.
+
+## D-015 Member key-provisioning / membership-activation is tracked by issue #133, not fixed here
+- **Decision:** this campaign does not invent a new endpoint or command to provision a new
+  Member's key grants or commit the PENDING_KEY_GRANT→ACTIVE transition (F-014). The gap is
+  already tracked as open issue #133 (`ready-for-agent`), whose design was settled 2026-09-17
+  into spec #209 (donor re-wrap of the Project epoch key to the Member's Devices,
+  owner/admin-authorized, per-Project per-Device grant set, then the existing activation
+  transition).
+- **Rationale:** choosing the trigger (web owner/admin action, a `dotrelay` CLI subcommand, or
+  operator-only documentation) and the cross-User wrapping semantics changes product semantics
+  and E2EE surface. The prior campaign's pattern for such gaps (F-010 → #229) is to track
+  rather than invent an endpoint. Because #133 already exists and is decision-settled, no
+  duplicate issue is filed — the ledger simply records the cross-reference it was missing.
+- **Impact:** a PENDING_KEY_GRANT Member is fail-closed (no cross-tenant access; proven live as
+  user B). The workflow gap is tracked, not fixed, in this campaign.

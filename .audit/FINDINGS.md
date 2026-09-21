@@ -413,3 +413,39 @@ Each entry: status, evidence, impact.
   started a fresh, cold dev server), the spec passed 4/4 in 8.5 s, and the full
   `bun run test:e2e` suite then passed **102 pass / 0 fail** against the same cold
   start. No assertion was weakened.
+
+## F-014 (PRODUCT GAP) No surface provisions member key grants or activates PENDING_KEY_GRANT memberships
+- **Status:** BLOCKED (product decision — already tracked as GitHub issue #133 `ready-for-agent`,
+  decision-settled to spec #209; recorded in this ledger 2026-09-21 because the prior
+  campaign captured the analogous epoch-rotation gap as F-010/#229 but never recorded this one)
+- **Symptom:** after a new Member accepts an invitation, their Membership is `PENDING_KEY_GRANT`,
+  and the only transition to `ACTIVE` is the Team owner/admin provisioning the required key grants
+  to the Member's Devices and then committing an activation. No shipped surface (web UI, `dotrelay`
+  command, or HTTP route) performs either step. The Member is left in a terminal pending state: the
+  web catalog hides `PENDING_KEY_GRANT` memberships (residual 4), so the Member sees "No teams yet",
+  and a Member-side `dotrelay pull` fails with `membership_not_key_provisioned`.
+- **Evidence (re-verified at HEAD 4b234bc, 2026-09-21):** `MembershipRepository.activate`
+  (`packages/database/src/persistence/repositories.ts:1984`; PENDING guard :2007, ACTIVE
+  transition :2055) has no production caller — its only invoker is the integration test
+  (`packages/database/src/persistence/trust.integration.test.ts:614`). The only production
+  grant-creation caller is `POST /api/v1/grants/bootstrap` (`apps/api/src/index.ts:663`), which
+  hard-codes `keyKind: "PROJECT_EPOCH"` / `grantKind: "CURRENT_PROJECT_EPOCH"` (:812-813), never
+  passes `membershipId`, and restricts recipients to the actor's own ACTIVE devices.
+  `GrantRepository.create` does accept a `membershipId`-scoped grant but validates the membership
+  only as `PENDING_KEY_GRANT` on the same team (`repositories.ts:2862-2866`), and no route or CLI
+  command exercises that branch. The CLI's peer provisioning (`apps/cli/src/workflow.ts:634`
+  `wrapEpochKeyToPeers`) targets only the actor's own `boundary.peerDevices`.
+- **Why not fixed (D-015):** choosing the trigger (web owner/admin action, a `dotrelay` CLI
+  subcommand, or documenting the operation as operator-only) and the cross-User wrapping semantics
+  is a product decision, already settled in #133 (decision-settled 2026-09-17 → spec #209,
+  decisions 2 and 7: donor re-wrap of the Project epoch key to the Member's Devices,
+  owner/admin-authorized, per-Project per-Device grant set, then the existing
+  PENDING_KEY_GRANT→ACTIVE transition). This audit neither invents a new endpoint nor reopens
+  that design.
+- **Not an exploitable defect:** the state is fail-closed — a `PENDING_KEY_GRANT` Member cannot
+  read, publish, or be granted cross-tenant content (proven live: user B in that state sees an
+  empty catalog and is 404/403 on the owner's resources, SEC-AUTHZ-001/002). The gap is a missing
+  product workflow, not a privilege boundary.
+- **Disposition:** cross-referenced to the existing open issue #133 (`ready-for-agent`) and spec
+  #209; no duplicate filed. The prior campaign recorded the analogous epoch-rotation gap as
+  F-010/#229 but left this member-provisioning gap unrecorded.

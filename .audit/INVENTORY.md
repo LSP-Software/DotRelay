@@ -48,6 +48,7 @@ Legend: category prefixes
 | API-AUTH-001 | Better Auth /api/auth/* (sign-in callback, session, logout, device flow) | PASS (live: /api/v1/session bearer+cookie; device flow E2E complete; OAuth callback itself unit-only per D-005) |
 | API-DEVICENET-001 | /api/auth/device + /approve + /deny (CLI device authorization) | PASS (live: full RFC 8628 flow — CLI user_code A68CX76M, browser approval, CLI "Signed in to live. Device enrolled.") |
 | API-MEMBERSHIP-001 | Membership CRUD, roles, invitations, last-owner protection | PASS (live: invite→accept→PENDING_KEY_GRANT→role change→remove→post-removal 403→409 last_owner_protection) |
+| API-MEMBERSHIP-002 | Member key-provisioning + PENDING_KEY_GRANT→ACTIVE activation surface | BLOCKED (product decision — no shipped surface; already tracked as GitHub issue #133 `ready-for-agent` → spec #209; fail-closed so not exploitable. See F-014) |
 | API-ADMIN-001 | Administration routes (team admin operations) | PASS (live: team/project/environment creation exercised; GET /projects?teamId, POST /projects) |
 | API-GITHUB-001 | GitHub user identity on sign-in (delegated access) | PASS (live: user A's real token used by API for repo resolution during `dotrelay init`) |
 | API-GHREPO-001 | GitHub repository identity resolution + access verdicts | PASS (live: LSP-Software/DotRelay resolved via user A's delegated access during init) |
@@ -151,3 +152,4 @@ Legend: category prefixes
 | F-011 pull unchanged/--stdout variants drop pending grant remediation | FIXED_AND_VERIFIED (this campaign; hermetic CLI unit regression + fresh full verify) | CLI-PULL-001, PROTO-SYNC-001 |
 | F-012 Local `test:integration` silently skipped every test (false green) | FIXED_AND_VERIFIED (this campaign; fresh 19 pass / 0 fail run, `0 cached`) | TEST-INTEG-001 |
 | F-013 e2e invitations spec races the trust settle on cold server start | FIXED_AND_VERIFIED (this campaign; 4/4 + full suite 102 pass on cold start) | TEST-E2E-001 |
+| F-014 No surface provisions member key grants / activates PENDING_KEY_GRANT | BLOCKED (product decision — existing issue #133 → spec #209; recorded in this ledger 2026-09-21) | API-MEMBERSHIP-002, SEC-AUTHZ-001/002 |
