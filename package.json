@@ -27,7 +27,7 @@
     "test:unit": "bun test scripts/run-issues.test.ts scripts/run-issues-panel.test.ts scripts/verify-boundaries.test.ts scripts/contracts-vectors.test.ts scripts/contracts-browser.test.ts scripts/client-browser.test.ts && turbo run test:unit",
     "test:runner": "bun test scripts/run-issues.test.ts",
     "openapi:check": "bun scripts/check-openapi.ts",
-    "test:integration": "bun scripts/test-services.ts && turbo run test:integration",
+    "test:integration": "bun scripts/test-integration.ts",
     "test:e2e": "playwright test --config=playwright.config.ts",
     "test:cli": "turbo run test:cli --filter=@dotrelay/cli",
     "test:cli:live": "bun scripts/test-cli-live.ts",

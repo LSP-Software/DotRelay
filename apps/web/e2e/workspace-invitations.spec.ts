@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { trustWorkspaceServer } from "./trust-server";
 
 // The Team id of the first fixture team (LSP Software).
 const TEAM_A = "00000000-0000-4000-8000-000000000011";
@@ -114,6 +115,7 @@ test("resolving an unknown GitHub login keeps the form and reports the problem",
   });
 
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
 
@@ -152,6 +154,7 @@ test("a rejected invitation keeps the resolved identity and the error", async ({
   );
 
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
 
@@ -192,6 +195,7 @@ test("the Members table is the Team's record and survives reloads and switches",
   });
 
   await page.goto("/workspace");
+  await trustWorkspaceServer(page);
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
 
   const membersCard = page.getByTestId("members-card");
@@ -239,7 +243,7 @@ test("an invitee accepts the invitation addressed to them and goes pending", asy
   );
 
   await page.goto("/workspace");
-
+  await trustWorkspaceServer(page);
   // The invitation the User holds is surfaced even though the invitee has
   // not joined a Team yet.
   const card = page.getByTestId("my-invitations-card");

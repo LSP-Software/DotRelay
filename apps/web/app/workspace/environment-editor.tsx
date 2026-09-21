@@ -1052,7 +1052,9 @@ export const EnvironmentEditor = ({
         if (!cancelled) {
           setPublishMessage(
             error instanceof UnreadableLaneError
-              ? "This browser's keys can't decrypt the environment's latest values. Run dotrelay pull in the CLI on this machine to re-share the project's keys, then use Retry reading."
+              ? error.laneKind === "USER_DEFINED_VALUE"
+                ? "This browser's keys can't read some of the environment's latest values. They were encrypted for the device that published them, and `dotrelay pull` can't re-share a User-defined Value. Re-publish the affected Values from that Device (or run dotrelay device recover for it), then use Retry reading."
+                : "This browser's keys can't decrypt the environment's latest values. An owner or admin can re-share the Project's keys by running dotrelay pull from the CLI on their machine; afterwards use Retry reading."
               : "This browser couldn't read the current environment. Try reading it again.",
           );
           setLoadPhase("failed");

@@ -103,6 +103,8 @@ import {
 } from "@/lib/environment-workflow";
 import {
   acceptTeamInvitation,
+  changeEnvironmentLifecycle,
+  changeProjectLifecycle,
   changeTeamMemberRole,
   createTeamInvitation,
   fetchMyInvitations,
@@ -513,6 +515,13 @@ export const WorkspaceShell = ({
     useState<ResourceLifecycle>("ACTIVE");
   const [projectLifecycle, setProjectLifecycle] =
     useState<ResourceLifecycle>("ACTIVE");
+  // The service's explanation when an archive/restore could not be persisted.
+  // Keyed by the resource the user acted on so the failure stays visible next
+  // to that resource's controls instead of reverting silently.
+  const [lifecycleError, setLifecycleError] = useState<{
+    readonly resource: "environment" | "project";
+    readonly message: string;
+  } | null>(null);
   const [invitationOpen, setInvitationOpen] = useState(false);
   // The invitation dialog is a two-step flow: resolve a GitHub login to its
   // stable subject, then create the invitation. The resolved identity is
@@ -942,6 +951,63 @@ export const WorkspaceShell = ({
     }
   };
 
+  // Archives or restores the selected Environment. The server persists the
+  // change and reports the resulting lifecycle, so the state only flips when
+  // the service confirms it; a refusal keeps the prior state and surfaces the
+  // explanation instead of reverting silently.
+  const persistEnvironmentLifecycle = async (action: "archive" | "restore") => {
+    const target = selectedEnvironment?.id;
+    // Self-hosted deployments may never declare an API origin at build time, so
+    // fall back to the Server Profile origin the boundary already verified (the
+    // same origin device bootstrap and key recovery use) instead of the
+    // build-inlined value alone.
+    const origin = apiOrigin ?? boundary.profile.origin;
+    if (!origin || !target) return;
+    setLifecycleError(null);
+    const result = await changeEnvironmentLifecycle(
+      origin,
+      target,
+      action,
+      browserDeviceId,
+    );
+    if (result.ok) {
+      setEnvironmentLifecycle(
+        result.data.lifecycle === "archived" ? "ARCHIVED" : "ACTIVE",
+      );
+      // In a live deployment re-derive the boundary so the catalog (epoch,
+      // device readiness) reflects the persisted change. The development
+      // fixture is static, so only the confirmed reply updates it.
+      if (!WORKSPACE_FIXTURE) reconnectNowRef.current?.();
+    } else {
+      setLifecycleError({ resource: "environment", message: result.message });
+    }
+  };
+
+  // Archives or restores the selected Project, persisting through the service.
+  const persistProjectLifecycle = async (action: "archive" | "restore") => {
+    const target = selectedProject?.id;
+    // Same self-hosted fallback as the environment handler and the device
+    // bootstrap/recovery paths: use the verified profile origin when no
+    // build-inlined API origin exists.
+    const origin = apiOrigin ?? boundary.profile.origin;
+    if (!origin || !target) return;
+    setLifecycleError(null);
+    const result = await changeProjectLifecycle(
+      origin,
+      target,
+      action,
+      browserDeviceId,
+    );
+    if (result.ok) {
+      setProjectLifecycle(
+        result.data.lifecycle === "archived" ? "ARCHIVED" : "ACTIVE",
+      );
+      if (!WORKSPACE_FIXTURE) reconnectNowRef.current?.();
+    } else {
+      setLifecycleError({ resource: "project", message: result.message });
+    }
+  };
+
   const setupAction = nextSetupAction({
     sessionActive: displayBoundary.session.active,
     profileTrusted,
@@ -1242,7 +1308,11 @@ export const WorkspaceShell = ({
       typeof globalThis.crypto?.subtle?.importKey === "function",
     );
     const params = new URLSearchParams(window.location.search);
-    const nextPreview = params.get("preview");
+    // The preview parameter is a development-fixture affordance. A live
+    // deployment must never honor it: asserting device readiness, role, or
+    // crypto state that the verified boundary does not support would make
+    // the UI lie about the workspace it is showing.
+    const nextPreview = WORKSPACE_FIXTURE ? params.get("preview") : null;
     setPreview(nextPreview);
     const parsed = parseWorkspaceLocation(params);
     const initialProfileId = WORKSPACE_FIXTURE
@@ -1871,8 +1941,17 @@ export const WorkspaceShell = ({
         const otherDeviceExists =
           Boolean(boundary.device.active) &&
           boundary.device.id !== bootstrap.deviceId;
+        // A peer that already holds the current epoch grant owns the real key;
+        // self-minting here would seal this Device to a fresh random key that
+        // can never decrypt pre-existing content and would permanently block a
+        // peer re-share, so the grant must be handed over by a Device that
+        // holds the key (or restored from a Recovery Kit).
+        const peerHoldsEpochKey = (boundary.peerDevices ?? []).some(
+          (peer) => peer.hasEpochGrant,
+        );
         if (
           !otherDeviceExists &&
+          !peerHoldsEpochKey &&
           environment.projectId &&
           environment.teamId &&
           environment.projectEpoch &&
@@ -2199,6 +2278,7 @@ export const WorkspaceShell = ({
   const resetWorkspaceContext = () => {
     setEnvironmentLifecycle("ACTIVE");
     setProjectLifecycle("ACTIVE");
+    setLifecycleError(null);
     setInvitationOpen(false);
     resetInvitationDialog();
     setMembershipState(null);
@@ -2803,12 +2883,22 @@ export const WorkspaceShell = ({
                       disabled={!canAdminister}
                       lifecycle={environmentLifecycle}
                       onConfirm={() =>
-                        setEnvironmentLifecycle((value) =>
-                          value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
+                        void persistEnvironmentLifecycle(
+                          environmentLifecycle === "ACTIVE"
+                            ? "archive"
+                            : "restore",
                         )
                       }
                       resource="Environment"
                     />
+                    {lifecycleError?.resource === "environment" ? (
+                      <p
+                        role="alert"
+                        className="text-xs font-medium text-destructive"
+                      >
+                        {lifecycleError.message}
+                      </p>
+                    ) : null}
                   </div>
                   <Tabs
                     className="mb-6"
@@ -3083,41 +3173,53 @@ export const WorkspaceShell = ({
                     </CardContent>
                   </Card>
                   {selectedProject ? (
-                    <Card className="mt-4">
-                      <CardHeader>
-                        <CardTitle>
-                          {projectDisplayName(selectedProject)}
-                        </CardTitle>
-                        <CardDescription>
-                          Archive this project to let another project use its
-                          GitHub repository.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex items-center justify-between gap-4">
-                        <Badge
-                          data-testid="project-lifecycle"
-                          variant={
-                            projectLifecycle === "ACTIVE"
-                              ? "default"
-                              : "secondary"
-                          }
+                    <>
+                      <Card className="mt-4">
+                        <CardHeader>
+                          <CardTitle>
+                            {projectDisplayName(selectedProject)}
+                          </CardTitle>
+                          <CardDescription>
+                            Archive this project to let another project use its
+                            GitHub repository.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="flex items-center justify-between gap-4">
+                          <Badge
+                            data-testid="project-lifecycle"
+                            variant={
+                              projectLifecycle === "ACTIVE"
+                                ? "default"
+                                : "secondary"
+                            }
+                          >
+                            {projectLifecycle === "ACTIVE"
+                              ? "Active"
+                              : "Archived"}
+                          </Badge>
+                          <LifecycleDialog
+                            disabled={!canAdminister}
+                            lifecycle={projectLifecycle}
+                            onConfirm={() =>
+                              void persistProjectLifecycle(
+                                projectLifecycle === "ACTIVE"
+                                  ? "archive"
+                                  : "restore",
+                              )
+                            }
+                            resource="Project"
+                          />
+                        </CardContent>
+                      </Card>
+                      {lifecycleError?.resource === "project" ? (
+                        <p
+                          role="alert"
+                          className="mt-2 text-xs font-medium text-destructive"
                         >
-                          {projectLifecycle === "ACTIVE"
-                            ? "Active"
-                            : "Archived"}
-                        </Badge>
-                        <LifecycleDialog
-                          disabled={!canAdminister}
-                          lifecycle={projectLifecycle}
-                          onConfirm={() =>
-                            setProjectLifecycle((value) =>
-                              value === "ACTIVE" ? "ARCHIVED" : "ACTIVE",
-                            )
-                          }
-                          resource="Project"
-                        />
-                      </CardContent>
-                    </Card>
+                          {lifecycleError.message}
+                        </p>
+                      ) : null}
+                    </>
                   ) : null}
                 </section>
               ) : null}

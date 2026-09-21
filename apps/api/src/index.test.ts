@@ -842,6 +842,316 @@ describe("API foundation", () => {
   });
 });
 
+describe("Project and Environment lifecycle administration", () => {
+  const PROJECT = "00000000-0000-4000-8000-000000000001";
+  const ENVIRONMENT = "00000000-0000-4000-8000-000000000003";
+  const TEAM = "00000000-0000-4000-8000-000000000004";
+  const DEVICE = "00000000-0000-4000-8000-000000000005";
+  const HEAD = "00000000-0000-4000-8000-000000000009";
+
+  // Distinct per request so a fresh-key re-execution never collides on the
+  // operation command digest (the F-006 fix embeds the operation id in the
+  // command bytes); same-key replays intentionally reuse a key.
+  const idempotency = (n: number) =>
+    `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
+
+  const ownerAuth = {
+    api: {
+      getSession: async () => ({ user: { id: "auth-owner" } }),
+    },
+  } as never;
+
+  const signedOutAuth = {
+    api: {
+      getSession: async () => null,
+    },
+  } as never;
+
+  // A persistence client covering the lifecycle route's read/write path. The
+  // operation table honors the actor/digest conflict check so a same-key
+  // replay resolves idempotently.
+  const createLifecycleDatabase = (
+    lifecycle: "ACTIVE" | "ARCHIVED",
+    role: string,
+  ) => {
+    const operations = new Map<
+      string,
+      {
+        id: string;
+        actorUserId: string;
+        actorDeviceId: string | null;
+        commandDigest: Uint8Array;
+        kind: string;
+        status: string;
+      }
+    >();
+    const auditKinds: string[] = [];
+    const project = {
+      id: PROJECT,
+      teamId: TEAM,
+      githubRepositoryId: 123n,
+      lifecycle,
+    };
+    const environment = {
+      id: ENVIRONMENT,
+      projectId: PROJECT,
+      label: "default",
+      currentHeadId: HEAD,
+      lifecycle,
+      project: { id: PROJECT, teamId: TEAM, lifecycle: "ACTIVE" },
+    };
+    const database = {
+      $transaction: async (
+        callback: (transaction: unknown) => Promise<unknown>,
+      ) => callback(database),
+      $executeRaw: async () => 0,
+      authAccount: { findFirst: async () => ({ accountId: "1001" }) },
+      user: { upsert: async () => ({ id: "user-1" }) },
+      device: { findFirst: async () => ({ id: DEVICE }) },
+      membership: { findFirst: async () => ({ role, lifecycle: "ACTIVE" }) },
+      project: {
+        findUnique: async () => project,
+        update: async ({
+          data,
+        }: {
+          where: { id: string };
+          data: { lifecycle: string; archivedAt: Date | null };
+        }) => {
+          project.lifecycle = data.lifecycle as "ACTIVE" | "ARCHIVED";
+          return project;
+        },
+      },
+      environment: {
+        findUnique: async () => environment,
+        update: async ({
+          data,
+        }: {
+          where: { id: string };
+          data: { lifecycle: string; archivedAt: Date | null };
+        }) => {
+          environment.lifecycle = data.lifecycle as "ACTIVE" | "ARCHIVED";
+          return environment;
+        },
+      },
+      operation: {
+        createMany: async ({
+          data,
+        }: {
+          data: Array<{
+            id: string;
+            actorUserId: string;
+            actorDeviceId?: string;
+            kind: string;
+            commandDigest: Uint8Array;
+          }>;
+          skipDuplicates?: boolean;
+        }) => {
+          for (const entry of data) {
+            operations.set(entry.id, {
+              id: entry.id,
+              actorUserId: entry.actorUserId,
+              actorDeviceId: entry.actorDeviceId ?? null,
+              commandDigest: entry.commandDigest,
+              kind: entry.kind,
+              status: "STAGED",
+            });
+          }
+          return { count: data.length };
+        },
+        findUnique: async ({ where }: { where: { id: string } }) =>
+          operations.get(where.id) ?? null,
+        update: async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: { status: string; committedAt: Date };
+        }) => {
+          const operation = operations.get(where.id);
+          if (!operation) throw new Error("operation not found");
+          operation.status = data.status;
+          return { count: 1 };
+        },
+      },
+      auditEvent: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          auditKinds.push(data.kind as string);
+          return data;
+        },
+      },
+    } as never;
+    return { database, operations, auditKinds };
+  };
+
+  const post = (
+    database: unknown,
+    auth: unknown,
+    path: string,
+    body: unknown,
+    extraHeaders: Record<string, string> = {},
+  ) => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createApi({
+      database: database as never,
+      profile,
+      auth: auth as never,
+    });
+    return testApp.request(`${profile.origin}${path}`, {
+      method: "POST",
+      headers: {
+        Origin: profile.origin,
+        "Content-Type": "application/json",
+        ...extraHeaders,
+      },
+      body: JSON.stringify(body),
+    });
+  };
+
+  const actorHeaders = (key: string) => ({
+    Authorization: "Bearer owner-token",
+    "X-DotRelay-Device-Id": DEVICE,
+    "Idempotency-Key": key,
+  });
+
+  const problem = (response: Response) =>
+    response.json().then((value) => ({
+      status: response.status,
+      code:
+        value && typeof value === "object" && "code" in value
+          ? String(value.code)
+          : "",
+    }));
+
+  test("persists an environment archive and restore through the service", async () => {
+    const { database, operations, auditKinds } = createLifecycleDatabase(
+      "ACTIVE",
+      "OWNER",
+    );
+    const call = (action: "archive" | "restore", key: string) =>
+      post(
+        database,
+        ownerAuth,
+        `/api/v1/environments/${ENVIRONMENT}/lifecycle`,
+        { action },
+        actorHeaders(key),
+      ) as Promise<Response>;
+
+    const archived = await call("archive", idempotency(1));
+    expect(archived.status).toBe(200);
+    expect(archived.headers.get("Cache-Control")).toBe("no-store");
+    expect(await archived.json()).toEqual({
+      id: ENVIRONMENT,
+      projectId: PROJECT,
+      label: "default",
+      lifecycle: "archived",
+      currentHeadId: HEAD,
+    });
+
+    const restored = await call("restore", idempotency(2));
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toEqual({
+      id: ENVIRONMENT,
+      projectId: PROJECT,
+      label: "default",
+      lifecycle: "active",
+      currentHeadId: HEAD,
+    });
+
+    expect(operations.size).toBe(2);
+    const archiveOperation = operations.get(idempotency(1));
+    if (!archiveOperation) throw new Error("expected the archived operation");
+    expect(archiveOperation.status).toBe("COMMITTED");
+    expect(operations.get(idempotency(2))?.status).toBe("COMMITTED");
+    expect(auditKinds).toEqual([
+      "ENVIRONMENT_ARCHIVED",
+      "ENVIRONMENT_RESTORED",
+    ]);
+  });
+
+  test("reports the persisted state when archiving an already-archived Environment", async () => {
+    const { database } = createLifecycleDatabase("ARCHIVED", "OWNER");
+    const response = await post(
+      database,
+      ownerAuth,
+      `/api/v1/environments/${ENVIRONMENT}/lifecycle`,
+      { action: "archive" },
+      actorHeaders(idempotency(1)),
+    );
+    expect(response.status).toBe(409);
+    expect((await problem(response)).code).toBe("archived_resource");
+  });
+
+  test("leaves a Project unchanged when the actor lacks the administration role", async () => {
+    const { database } = createLifecycleDatabase("ACTIVE", "MEMBER");
+    const response = await post(
+      database,
+      ownerAuth,
+      `/api/v1/projects/${PROJECT}/lifecycle`,
+      { action: "archive" },
+      actorHeaders(idempotency(1)),
+    );
+    expect(response.status).toBe(403);
+    expect((await problem(response)).code).toBe("forbidden");
+  });
+
+  test("requires an authenticated session and an active device", async () => {
+    const unauthenticated = await post(
+      createLifecycleDatabase("ACTIVE", "OWNER").database,
+      signedOutAuth,
+      `/api/v1/projects/${PROJECT}/lifecycle`,
+      { action: "archive" },
+      {
+        "X-DotRelay-Device-Id": DEVICE,
+        "Idempotency-Key": idempotency(1),
+      },
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect((await problem(unauthenticated)).code).toBe(
+      "authentication_required",
+    );
+
+    const noDevice = await post(
+      createLifecycleDatabase("ACTIVE", "OWNER").database,
+      ownerAuth,
+      `/api/v1/projects/${PROJECT}/lifecycle`,
+      { action: "archive" },
+      {
+        Authorization: "Bearer owner-token",
+        "Idempotency-Key": idempotency(1),
+      },
+    );
+    expect(noDevice.status).toBe(400);
+    expect((await problem(noDevice)).code).toBe("invalid_request");
+  });
+
+  test("rejects an unknown lifecycle action and a malformed idempotency key", async () => {
+    const { database } = createLifecycleDatabase("ACTIVE", "OWNER");
+    const badAction = await post(
+      database,
+      ownerAuth,
+      `/api/v1/projects/${PROJECT}/lifecycle`,
+      { action: "pause" },
+      actorHeaders(idempotency(1)),
+    );
+    expect(badAction.status).toBe(400);
+    expect((await problem(badAction)).code).toBe("invalid_request");
+
+    const badKey = await post(
+      database,
+      ownerAuth,
+      `/api/v1/projects/${PROJECT}/lifecycle`,
+      { action: "archive" },
+      {
+        Authorization: "Bearer owner-token",
+        "X-DotRelay-Device-Id": DEVICE,
+        "Idempotency-Key": "not-a-uuid",
+      },
+    );
+    expect(badKey.status).toBe(400);
+    expect((await problem(badKey)).code).toBe("invalid_request");
+  });
+});
+
 describe("Resolving a GitHub Repository's identity", () => {
   // The protocol actor for the route: a signed-in session plus an active
   // Device, mirroring how the Client reaches the administration surface.

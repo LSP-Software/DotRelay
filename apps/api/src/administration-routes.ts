@@ -42,11 +42,15 @@ const responseProblem = (context: Context, code: ProblemCode) => {
 const mapAdministrationError = (error: unknown): ProblemCode => {
   if (error instanceof ContractError) return error.code;
   if (error instanceof OperationConflictError) return "operation_conflict";
+  if (
+    error instanceof Error &&
+    /Project is not active|Environment is not active/.test(error.message)
+  )
+    return "archived_resource";
   const mapped = mapPersistenceError(error);
   if (mapped) return mapped.code;
   if (!(error instanceof Error)) return "service_unavailable";
   if (error.message.includes("not found")) return "resource_not_found";
-  if (error.message.includes("archived")) return "archived_resource";
   if (error.message.includes("authorized")) return "forbidden";
   if (
     error.message.includes("must be positive") ||
@@ -92,6 +96,12 @@ const requireRepositoryId = (value: unknown): bigint => {
   )
     throw new Error("GitHub Repository id must be positive");
   return BigInt(value);
+};
+
+const requireLifecycleActionVerb = (value: unknown): "archive" | "restore" => {
+  if (value !== "archive" && value !== "restore")
+    throw new Error("Lifecycle action is invalid");
+  return value;
 };
 
 const projectResponse = (project: {
@@ -169,6 +179,15 @@ export const registerAdministrationRoutes = (
   );
   app.use(
     "/api/v1/teams",
+    bodyLimit({
+      maxSize: profile.limits.adminBodyBytes,
+      onError: (context) => responseProblem(context, "payload_too_large"),
+    }),
+  );
+  // Exact path only: the bare `/api/v1/environments` prefix is shared with the
+  // protocol `sync` route, whose payloads legitimately exceed the admin limit.
+  app.use(
+    "/api/v1/environments/:environmentId/lifecycle",
     bodyLimit({
       maxSize: profile.limits.adminBodyBytes,
       onError: (context) => responseProblem(context, "payload_too_large"),
@@ -372,6 +391,7 @@ export const registerAdministrationRoutes = (
           repositoryOwner: body.repositoryOwner,
           repositoryName: body.repositoryName,
           githubRepositoryId: githubRepositoryId.toString(),
+          operationId,
         }),
       );
       const result = await projects.create(database, {
@@ -455,7 +475,12 @@ export const registerAdministrationRoutes = (
         context.req.header("Idempotency-Key"),
       );
       const commandBytes = new TextEncoder().encode(
-        JSON.stringify({ action: "environment.create", projectId, label }),
+        JSON.stringify({
+          action: "environment.create",
+          projectId,
+          label,
+          operationId,
+        }),
       );
       const result = await environments.create(database, {
         projectId,
@@ -477,6 +502,124 @@ export const registerAdministrationRoutes = (
       if (!("environment" in result))
         return responseProblem(context, "state_conflict");
       return context.json(environmentResponse(result.environment), 201, {
+        "Cache-Control": "no-store",
+      });
+    } catch (error) {
+      return responseProblem(context, mapAdministrationError(error));
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/lifecycle", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const body = await readJsonBody(context, ["action"]);
+      const action = requireLifecycleActionVerb(body.action);
+      const projectId = parseUuid(context.req.param("projectId"), "projectId");
+      const operationId = parseIdempotencyKey(
+        context.req.header("Idempotency-Key"),
+      );
+      const commandBytes = new TextEncoder().encode(
+        JSON.stringify({
+          action: `project.${action}`,
+          projectId,
+          operationId,
+        }),
+      );
+      const operation = {
+        id: operationId,
+        actorUserId: actor.userId,
+        actorDeviceId: actor.deviceId,
+        kind: "ADMINISTRATION" as const,
+        commandBytes,
+        commandDigest: await sha384Digest(commandBytes),
+      };
+      const result =
+        action === "archive"
+          ? await administration.archiveProject(database, {
+              projectId,
+              operation,
+            })
+          : await administration.restoreProject(database, {
+              projectId,
+              operation,
+            });
+      // An idempotent replay reports no resource; re-read the authoritative
+      // lifecycle so the reply always reflects the persisted state.
+      const project =
+        "project" in result && result.project
+          ? result.project
+          : await database.project.findUnique({
+              where: { id: projectId },
+              select: {
+                id: true,
+                teamId: true,
+                githubRepositoryId: true,
+                lifecycle: true,
+              },
+            });
+      if (!project) return responseProblem(context, "resource_not_found");
+      return context.json(projectResponse(project), 200, {
+        "Cache-Control": "no-store",
+      });
+    } catch (error) {
+      return responseProblem(context, mapAdministrationError(error));
+    }
+  });
+
+  app.post("/api/v1/environments/:environmentId/lifecycle", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const body = await readJsonBody(context, ["action"]);
+      const action = requireLifecycleActionVerb(body.action);
+      const environmentId = parseUuid(
+        context.req.param("environmentId"),
+        "environmentId",
+      );
+      const operationId = parseIdempotencyKey(
+        context.req.header("Idempotency-Key"),
+      );
+      const commandBytes = new TextEncoder().encode(
+        JSON.stringify({
+          action: `environment.${action}`,
+          environmentId,
+          operationId,
+        }),
+      );
+      const operation = {
+        id: operationId,
+        actorUserId: actor.userId,
+        actorDeviceId: actor.deviceId,
+        kind: "ADMINISTRATION" as const,
+        commandBytes,
+        commandDigest: await sha384Digest(commandBytes),
+      };
+      const result =
+        action === "archive"
+          ? await administration.archiveEnvironment(database, {
+              environmentId,
+              operation,
+            })
+          : await administration.restoreEnvironment(database, {
+              environmentId,
+              operation,
+            });
+      const environment =
+        "environment" in result && result.environment
+          ? result.environment
+          : await database.environment.findUnique({
+              where: { id: environmentId },
+              select: {
+                id: true,
+                projectId: true,
+                label: true,
+                lifecycle: true,
+                currentHeadId: true,
+              },
+            });
+      if (!environment) return responseProblem(context, "resource_not_found");
+      return context.json(environmentResponse(environment), 200, {
         "Cache-Control": "no-store",
       });
     } catch (error) {
