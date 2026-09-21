@@ -170,3 +170,62 @@ Each entry: status, evidence, impact.
   environment" → confirm → editor back to the variables view, environment `ACTIVE`. No error
   alert at any step. A pre-fix click in the same browser produced no request and no state
   change (environment stayed `ACTIVE` in the DB), confirming the silent no-op.
+
+## F-008 (FIXED) Web environment editor shows the wrong remediation for User-defined Value decode failures
+- **Status:** FIXED_AND_VERIFIED (this campaign; found in the live self-hosted browser pass, fixed in code)
+- **Symptom:** When this Device cannot decrypt the environment head, the web editor collapsed
+  every `UnreadableLaneError` into one message: "Run dotrelay pull in the CLI on this
+  machine to re-share the project's keys." That is correct only for Variable definitions
+  and Shared Values (sealed to the Project epoch key, which `pull` re-wraps to peer
+  devices). For User-defined Values it names a remedy that does not exist: they are
+  sealed to the *publisher Device's* user-defined key, which `pull`'s re-share
+  (`wrapEpochKeyToPeers`, `apps/cli/src/workflow.ts:634-682`) never re-wraps.
+- **Root cause:** `environment-editor.tsx` matched `error instanceof UnreadableLaneError`
+  without inspecting `laneKind`, while the CLI already distinguishes the two cases
+  (`apps/cli/src/workflow.ts:2837-2839`: user-defined → "run dotrelay device enroll/recover,
+  then re-publish the affected Values"; otherwise → "run dotrelay pull after an owner or
+  admin re-shares").
+- **Fix:** branch on `error.laneKind === "USER_DEFINED_VALUE"` and show the re-publish /
+  device-recover remedy for User-defined Values; keep the pull-based Project-keys remedy for
+  definitions and Shared Values, phrased as an owner/admin action (the key-holder may be
+  another user's Device).
+- **Verification:** code-reviewed against the two-remedy model in `workflow.ts` and the
+  `UnreadableLaneError.laneKind` contract (`packages/client/src/sync/publication.ts:172-207`);
+  `bun run check` and the e2e suite pass; the e2e decrypt-failure specs assert only the
+  `crypto-unavailable` heading and no test pinned the old flat string. The live browser pass
+  that surfaced this finding actually failed on *definition* lanes (the browser lacked the
+  real Project epoch key — see F-009), so the pull-remedy branch rendered there; the
+  user-defined branch is exercised by the two owner-A User-defined Value lanes at the head,
+  which stay sealed to the CLI publisher Device's per-device key for the browser Device.
+
+## F-009 (OPEN) Newly enrolling Device self-mints a spurious Project epoch grant that can never decrypt pre-existing content and permanently blocks peer re-share
+- **Status:** ROOT_CAUSED (this campaign; live self-hosted browser pass; fix pending)
+- **Symptom:** A freshly enrolled browser Device that already has a *different* Device
+  (e.g. a CLI) holding the Project's real epoch key cannot read the environment's
+  definitions or Shared Values, while the boundary reports `grantsReady: true` so no
+  repair prompt is offered. The documented remediation — an owner/admin running
+  `dotrelay pull` to re-share the key — is a proven no-op for that Device.
+- **Root cause:** enrollment self-mints a `CURRENT_PROJECT_EPOCH` grant containing a
+  *fresh random* key (`grant-bootstrap.ts:48-50`, `plaintextKey ?? getRandomValues(32)`)
+  whenever no *presented* Device exists (`workspace-shell.tsx` enrollment gate checks only
+  `boundary.device`, which is absent for a fresh browser — it never consults
+  `boundary.peerDevices`, which reports the CLI Device with `hasEpochGrant: true`). The
+  head's lanes were sealed with the publisher's (CLI's) epoch key; the browser's spurious
+  key can never match it, so every definition/Shared Value lane is unreadable. Because the
+  boundary's `grantsReady` only counts *some* current-epoch grant for the presented Device,
+  the spurious grant suppresses the `pending-grants` repair; and `wrapEpochKeyToPeers`
+  (`apps/cli/src/workflow.ts:651`) skips peers with `hasEpochGrant`, so the re-share never
+  reaches the browser. The same self-mint flaw exists in the CLI mirror
+  (`apps/cli/src/workflow.ts:2726`), so a second CLI Device on an existing project repeats
+  it. The service cannot distinguish a spurious grant from a real one (both are validly
+  signed and sealed to the recipient), so the gate belongs client-side.
+- **Why the suites missed it:** the e2e fixtures script *both* the boundary and the grant
+  bootstrap and seal the *same* epoch key into the scripted grant
+  (`workspace-stale-epoch.spec.ts` et al.), so the key mismatch — which requires a real
+  publisher key plus a real second Device — cannot occur in fixtures.
+- **Fix (planned, D-011):** a newly enrolling Device must not self-mint an epoch grant
+  when any peer Device already holds a `CURRENT_PROJECT_EPOCH` grant for the current
+  epoch (web: gate on `boundary.peerDevices[].hasEpochGrant`; CLI: same gate in the pull
+  flow). With no spurious grant, `grantsReady` is false, the `pending-grants` action is
+  offered, and a key-holder's `dotrelay pull` actually provisions the browser.
+
