@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
-import type { DatabaseClient, ProtocolObjectInput } from "..";
+import type { DatabaseClient, OperationInput, ProtocolObjectInput } from "..";
 import {
   AdministrationRepository,
   createDatabaseClient,
@@ -13,9 +13,11 @@ import {
   OperationRepository,
   ProjectEpochRepository,
   ProjectRepository,
+  PublicationRepository,
   RecoveryRepository,
   StagedObjectRepository,
   StaleEpochError,
+  StaleHeadError,
   sha384Digest,
 } from "..";
 
@@ -59,14 +61,12 @@ const runMigrations = async () => {
   if (exitCode !== 0) throw new Error(`migration failed: ${stdout}\n${stderr}`);
 };
 
-const createOperationInput = async (
+const createOperationInput = async <
+  Kind extends OperationInput["kind"] = "ADMINISTRATION",
+>(
   actorUserId: string,
   label: string,
-  kind:
-    | "ADMINISTRATION"
-    | "DEVICE_ENROLLMENT"
-    | "RECOVERY"
-    | "EPOCH_ROTATION" = "ADMINISTRATION",
+  kind: Kind = "ADMINISTRATION" as Kind,
 ) => {
   const commandBytes = textEncoder.encode(label);
   return {
@@ -89,6 +89,36 @@ const createProtocolObjectInput = async (
     kind,
     canonicalBytes,
     digest: await sha384Digest(canonicalBytes),
+  };
+};
+
+// Like createProtocolObjectInput, but binds the object to a Project and
+// Environment (required when the object is published in a revision) and
+// encodes the sequence with full CBOR length prefixes.
+const createBoundProtocolObject = async (
+  kind: number,
+  projectId: string,
+  environmentId: string,
+): Promise<ProtocolObjectInput> => {
+  const sequence = protocolSequence++;
+  const canonicalBytes = new Uint8Array([
+    0xa1,
+    0x00,
+    ...(sequence < 24
+      ? [sequence]
+      : sequence < 256
+        ? [0x18, sequence]
+        : [0x19, sequence >> 8, sequence & 0xff]),
+  ]);
+  return {
+    id: crypto.randomUUID(),
+    suite: "dotrelay-e2ee-v3-classical-webcrypto",
+    formatVersion: 3,
+    kind,
+    canonicalBytes,
+    digest: await sha384Digest(canonicalBytes),
+    projectId,
+    environmentId,
   };
 };
 
@@ -129,19 +159,9 @@ const createActiveDevice = async (userId: string, identityGeneration = 1n) => {
     },
   });
 };
-
 const stageObject = async (input: {
-  readonly operation: {
-    readonly id: string;
-    readonly actorUserId: string;
+  readonly operation: OperationInput & {
     readonly actorDeviceId: string;
-    readonly kind:
-      | "ADMINISTRATION"
-      | "DEVICE_ENROLLMENT"
-      | "RECOVERY"
-      | "EPOCH_ROTATION";
-    readonly commandBytes: Uint8Array;
-    readonly commandDigest: Uint8Array;
   };
   readonly objectId: string;
   readonly canonicalBytes: Uint8Array;
@@ -160,6 +180,79 @@ const stageObject = async (input: {
     createdAt,
     expiresAt: new Date(createdAt.getTime() + 60_000),
   });
+};
+
+// Publishes a GENESIS revision onto an existing headless Environment (such
+// as the default one that ProjectRepository.create provisions).
+const prepareGenesisPublication = async (input: {
+  readonly actorUserId: string;
+  readonly actorDeviceId: string;
+  readonly projectId: string;
+  readonly environmentId: string;
+  readonly label: string;
+}): Promise<{
+  readonly revisionId: string;
+  readonly revisionDigest: Uint8Array;
+}> => {
+  const operation = {
+    ...(await createOperationInput(
+      input.actorUserId,
+      input.label,
+      "REVISION_PUBLICATION",
+    )),
+    actorDeviceId: input.actorDeviceId,
+  };
+  const revisionObject = await createBoundProtocolObject(
+    16,
+    input.projectId,
+    input.environmentId,
+  );
+  const descriptorObject = await createBoundProtocolObject(
+    15,
+    input.projectId,
+    input.environmentId,
+  );
+  const revisionId = crypto.randomUUID();
+  await stageObject({
+    operation,
+    objectId: revisionObject.id,
+    canonicalBytes: revisionObject.canonicalBytes,
+    digest: revisionObject.digest,
+  });
+  await stageObject({
+    operation,
+    objectId: descriptorObject.id,
+    canonicalBytes: descriptorObject.canonicalBytes,
+    digest: descriptorObject.digest,
+  });
+  const publication = {
+    operation,
+    environmentId: input.environmentId,
+    expectedHeadId: null,
+    revision: {
+      id: revisionId,
+      protocolObjectId: revisionObject.id,
+      projectEpoch: 1n,
+      mutation: "GENESIS" as const,
+      authoredAtMs: BigInt(Date.now()),
+    },
+    revisionObject,
+    descriptor: {
+      protocolObject: descriptorObject,
+      schemaVersion: 1,
+      descriptorHash: descriptorObject.digest,
+      laneCount: 0,
+    },
+    lanes: [],
+    commitments: [],
+    audit: {
+      kind: "REVISION_PUBLISHED" as const,
+      entityKind: "ENVIRONMENT" as const,
+      entityId: input.environmentId,
+    },
+  };
+  await new PublicationRepository().publishRevision(database, publication);
+  return { revisionId, revisionDigest: revisionObject.digest };
 };
 
 integrationDescribe("trust workflow integration", () => {
@@ -641,5 +734,270 @@ integrationDescribe("trust workflow integration", () => {
         actorDeviceId: device.id,
       }),
     ).rejects.toBeInstanceOf(OperationConflictError);
+  });
+  test("rotates the Project epoch, re-anchors Environment heads, and refuses stale or replayed transitions", async () => {
+    const user = await createUserFixture();
+    const device = await createActiveDevice(user.id);
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: user.id } } },
+    });
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: user.id,
+      name: "rotation-team",
+      operation: {
+        ...(await createOperationInput(user.id, "rotation-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const createdProject = await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now() + 2),
+      operation: {
+        ...(await createOperationInput(user.id, "rotation-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("environment" in createdProject))
+      throw new Error("project creation did not provision an environment");
+    const environmentId = createdProject.environment.id;
+    const genesis = await prepareGenesisPublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      label: "rotation-genesis",
+    });
+    const genesisHead = genesis.revisionId;
+
+    const epochRotation = new ProjectEpochRepository();
+    const operations = new OperationRepository();
+    const rotationOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "rotate-epoch-1-to-2",
+        "EPOCH_ROTATION",
+      )),
+      actorDeviceId: device.id,
+    };
+    await operations.begin(database, rotationOperation);
+    const transitionRevisionId = crypto.randomUUID();
+    const transitionObject = await createProtocolObjectInput(12);
+    const transitionRevisionObject = await createBoundProtocolObject(
+      16,
+      projectId,
+      environmentId,
+    );
+    const transitionDescriptorObject = await createBoundProtocolObject(
+      15,
+      projectId,
+      environmentId,
+    );
+    for (const protocolObject of [
+      transitionObject,
+      transitionRevisionObject,
+      transitionDescriptorObject,
+    ]) {
+      await stageObject({
+        operation: rotationOperation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+    }
+    const transitionPublication = {
+      operation: {
+        id: rotationOperation.id,
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        kind: "REVISION_PUBLICATION" as const,
+        commandBytes: rotationOperation.commandBytes,
+        commandDigest: rotationOperation.commandDigest,
+      },
+      environmentId,
+      expectedHeadId: genesisHead,
+      revision: {
+        id: transitionRevisionId,
+        protocolObjectId: transitionRevisionObject.id,
+        parentHash: genesis.revisionDigest,
+        projectEpoch: 2n,
+        mutation: "EPOCH_TRANSITION" as const,
+        authoredAtMs: BigInt(Date.now()),
+      },
+      revisionObject: transitionRevisionObject,
+      descriptor: {
+        protocolObject: transitionDescriptorObject,
+        schemaVersion: 1,
+        descriptorHash: transitionDescriptorObject.digest,
+        laneCount: 0,
+      },
+      lanes: [],
+      commitments: [],
+      audit: {
+        kind: "REVISION_PUBLISHED" as const,
+        entityKind: "ENVIRONMENT" as const,
+        entityId: environmentId,
+      },
+    };
+    const rotateInput = {
+      operation: rotationOperation,
+      projectId,
+      expectedEpoch: 1n,
+      newEpoch: 2n,
+      transitions: [
+        {
+          environmentId,
+          expectedHeadId: genesisHead,
+          newHeadId: transitionRevisionId,
+          protocolObject: transitionObject,
+          publication: transitionPublication,
+        },
+      ],
+    };
+    const result = await epochRotation.rotate(database, rotateInput);
+    if (!("projectEpoch" in result))
+      throw new Error("rotation reported an idempotent replay");
+    expect(result.projectEpoch).toBe(2n);
+
+    const project = await database.project.findUniqueOrThrow({
+      where: { id: projectId },
+    });
+    expect(project.currentEpoch).toBe(2n);
+    const rotatedEnvironment = await database.environment.findUniqueOrThrow({
+      where: { id: environmentId },
+    });
+    expect(rotatedEnvironment.currentHeadId).toBe(transitionRevisionId);
+    const transitionRevision = await database.revision.findUniqueOrThrow({
+      where: { id: transitionRevisionId },
+    });
+    expect(transitionRevision.parentId).toBe(genesisHead);
+    expect(transitionRevision.projectEpoch).toBe(2n);
+    expect(transitionRevision.mutation).toBe("EPOCH_TRANSITION");
+    const epochTransition =
+      await database.epochTransitionObject.findUniqueOrThrow({
+        where: { protocolObjectId: transitionObject.id },
+      });
+    expect(epochTransition.previousEpoch).toBe(1n);
+    expect(epochTransition.newEpoch).toBe(2n);
+    expect(epochTransition.expectedHeadId).toBe(genesisHead);
+    expect(epochTransition.newHeadId).toBe(transitionRevisionId);
+    const rotationRow = await database.operation.findUniqueOrThrow({
+      where: { id: rotationOperation.id },
+    });
+    expect(rotationRow.status).toBe("COMMITTED");
+    expect(
+      await database.auditEvent.count({
+        where: {
+          operationId: rotationOperation.id,
+          kind: "EPOCH_ROTATED",
+        },
+      }),
+    ).toBe(1);
+
+    // A replay of the committed rotation is a no-op that keeps the new epoch.
+    const replay = await epochRotation.rotate(database, rotateInput);
+    if (!("idempotent" in replay) || !replay.idempotent)
+      throw new Error("committed rotation replay was not idempotent");
+    expect(
+      (await database.project.findUniqueOrThrow({ where: { id: projectId } }))
+        .currentEpoch,
+    ).toBe(2n);
+
+    // A transition that still names the old epoch is stale.
+    const staleEpochRotation = {
+      ...(await createOperationInput(
+        user.id,
+        "rotate-stale-epoch",
+        "EPOCH_ROTATION",
+      )),
+      actorDeviceId: device.id,
+    };
+    await operations.begin(database, staleEpochRotation);
+    await expect(
+      epochRotation.rotate(database, {
+        operation: staleEpochRotation,
+        projectId,
+        expectedEpoch: 1n,
+        newEpoch: 2n,
+        transitions: [],
+      }),
+    ).rejects.toBeInstanceOf(StaleEpochError);
+
+    // A transition that anchors on the pre-rotation head is stale: each
+    // Environment's trust history re-anchors at the EPOCH_TRANSITION revision.
+    const staleHeadRotation = {
+      ...(await createOperationInput(
+        user.id,
+        "rotate-stale-head",
+        "EPOCH_ROTATION",
+      )),
+      actorDeviceId: device.id,
+    };
+    await operations.begin(database, staleHeadRotation);
+    const staleHeadObject = await createProtocolObjectInput(12);
+    const staleHeadRevisionObject = await createBoundProtocolObject(
+      16,
+      projectId,
+      environmentId,
+    );
+    const staleHeadDescriptorObject = await createBoundProtocolObject(
+      15,
+      projectId,
+      environmentId,
+    );
+    await expect(
+      epochRotation.rotate(database, {
+        operation: staleHeadRotation,
+        projectId,
+        expectedEpoch: 2n,
+        newEpoch: 3n,
+        transitions: [
+          {
+            environmentId,
+            expectedHeadId: genesisHead,
+            newHeadId: crypto.randomUUID(),
+            protocolObject: staleHeadObject,
+            publication: {
+              operation: {
+                id: staleHeadRotation.id,
+                actorUserId: user.id,
+                actorDeviceId: device.id,
+                kind: "REVISION_PUBLICATION" as const,
+                commandBytes: staleHeadRotation.commandBytes,
+                commandDigest: staleHeadRotation.commandDigest,
+              },
+              environmentId,
+              expectedHeadId: genesisHead,
+              revision: {
+                id: crypto.randomUUID(),
+                protocolObjectId: staleHeadRevisionObject.id,
+                parentHash: genesis.revisionDigest,
+                projectEpoch: 3n,
+                mutation: "EPOCH_TRANSITION" as const,
+                authoredAtMs: 0n,
+              },
+              revisionObject: staleHeadRevisionObject,
+              descriptor: {
+                protocolObject: staleHeadDescriptorObject,
+                schemaVersion: 1,
+                descriptorHash: staleHeadDescriptorObject.digest,
+                laneCount: 0,
+              },
+              lanes: [],
+              commitments: [],
+              audit: {
+                kind: "REVISION_PUBLISHED" as const,
+                entityKind: "ENVIRONMENT" as const,
+                entityId: environmentId,
+              },
+            },
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(StaleHeadError);
   });
 });
