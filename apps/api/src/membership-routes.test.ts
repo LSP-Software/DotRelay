@@ -1650,6 +1650,45 @@ describe("Team membership role and removal routes", () => {
     expect(await removal.json()).toMatchObject({ code: "resource_not_found" });
   });
 
+  test("a membership from another Team answers not found even for an owner of both", async () => {
+    // USER_OWNER is OWNER of both TEAM_A and TEAM_B, so this is the
+    // maximally-privileged probe: presenting a valid TEAM_B membership under
+    // a TEAM_A URL must still 404 (it does not exist in the URL's Team),
+    // and must not mutate the foreign membership or append an audit fact.
+    const { testApp, auditEvents } = createTestApp();
+    const reRole = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M6}/role`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "f0000000-0000-4000-8000-000000000001",
+        body: { role: "ADMIN" },
+      },
+    );
+    const removal = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M6}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "f0000000-0000-4000-8000-000000000002",
+        body: {},
+      },
+    );
+
+    expect(reRole.status).toBe(404);
+    expect(await reRole.json()).toMatchObject({ code: "resource_not_found" });
+    expect(removal.status).toBe(404);
+    expect(await removal.json()).toMatchObject({ code: "resource_not_found" });
+    // No audit fact was appended for the foreign membership: the scoping
+    // guard rejected the request before any mutation could be committed.
+    expect(auditEvents.filter((event) => event.entityId === MEMBER_M6)).toEqual(
+      [],
+    );
+  });
   test("membership mutations require the browser Device, not just the session", async () => {
     const { testApp } = createTestApp();
     const reRole = await request(
