@@ -475,12 +475,23 @@ export const createGrillManager = (options: {
     if (task) return false;
     task = work()
       .catch(async (error) => {
-        const state = await read();
-        await save({
-          ...state,
-          status: "failed",
-          message: error instanceof Error ? error.message : String(error),
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          const state = await read();
+          await save({ ...state, status: "failed", message });
+        } catch (recordError) {
+          // The workspace may have been removed while this turn was settling
+          // (test teardown, panel shutdown, or a failed preparation). A
+          // failure to record the failure must never escape as an unhandled
+          // rejection and take the host process down with it.
+          console.error(
+            `run-issues-grill: could not record failed state: ${
+              recordError instanceof Error
+                ? recordError.message
+                : String(recordError)
+            }`,
+          );
+        }
       })
       .finally(() => {
         task = null;
