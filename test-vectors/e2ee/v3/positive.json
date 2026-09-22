@@ -39,18 +39,6 @@
       "kind": 8
     },
     {
-      "id": "object-9",
-      "kind": 9
-    },
-    {
-      "id": "object-10",
-      "kind": 10
-    },
-    {
-      "id": "object-11",
-      "kind": 11
-    },
-    {
       "id": "object-12",
       "kind": 12
     },
@@ -71,23 +59,34 @@
       "kind": 16
     },
     {
-      "id": "object-17",
-      "kind": 17
-    },
-    {
       "id": "object-18",
       "kind": 18
     },
     {
       "id": "object-19",
       "kind": 19
+    },
+    {
+      "id": "object-20",
+      "kind": 20
+    },
+    {
+      "id": "object-21",
+      "kind": 21
+    },
+    {
+      "id": "object-22",
+      "kind": 22
     }
   ],
   "enumCoverage": {
     "mutationKind": [1, 2, 3, 4, 5],
     "laneScope": [1, 2, 3, 4],
     "keyKind": [1, 2, 3],
-    "grantKind": [1, 2, 3, 4, 5, 6, 7],
+    "grantKind": [1, 2, 3, 4, 5],
+    "wrapperType": [1, 2, 3],
+    "kdfName": [1],
+    "keyEnvelopeType": [1, 2],
     "membershipRole": [1, 2, 3],
     "lifecycle": [1, 2, 3, 4, 5, 6]
   }

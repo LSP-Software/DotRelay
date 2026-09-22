@@ -179,6 +179,7 @@ describe("CLI foundation", () => {
 
   test("maps an empty Git remote result to repository_missing", async () => {
     const profilePath = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}`;
+    const contextPath = `${import.meta.dir}/.tmp-context-${crypto.randomUUID()}`;
     try {
       await Bun.write(
         profilePath,
@@ -198,6 +199,7 @@ describe("CLI foundation", () => {
       );
       const result = await run(["context", "--profile", "relay", "--json"], {
         profilePath,
+        worktreeConfig: contextPath,
         readGitRemotes: async () => [],
       });
       expect(result.exitCode).toBe(2);
@@ -207,6 +209,9 @@ describe("CLI foundation", () => {
     } finally {
       await (await import("node:fs/promises"))
         .unlink(profilePath)
+        .catch(() => undefined);
+      await (await import("node:fs/promises"))
+        .unlink(contextPath)
         .catch(() => undefined);
     }
   });

@@ -20,6 +20,12 @@ const ENVELOPE_FIELDS = Object.freeze([0, 44, 45, 46, 47, 48, 71, 72]);
 const KEY_DERIVATION_INFO = new TextEncoder().encode(
   `DotRelay\0${SUITE_NAME}\0AES-256-GCM\0v1`,
 );
+export const ACCOUNT_KEY_WRAPPER_KDF_INFO = new TextEncoder().encode(
+  `DotRelay\0${SUITE_NAME}\0Account-key-wrapper\0v1`,
+);
+export const ACCOUNT_KEY_ENVELOPE_KDF_INFO = new TextEncoder().encode(
+  `DotRelay\0${SUITE_NAME}\0Account-key-envelope\0v1`,
+);
 
 export const CRYPTO_SUITE = Object.freeze({
   name: SUITE_NAME,
@@ -217,13 +223,14 @@ const parseEnvelope = (encoded: Uint8Array): CiphertextEnvelope => {
   }
 };
 
-const deriveAesKey = async (
-  sharedSecret: Uint8Array,
+export const deriveAesKeyWithInfo = async (
+  ikm: Uint8Array,
   salt: Uint8Array,
+  info: Uint8Array,
 ): Promise<CryptoKey> => {
   const hkdfKey = await crypto.subtle.importKey(
     "raw",
-    asBufferSource(sharedSecret),
+    asBufferSource(ikm),
     "HKDF",
     false,
     ["deriveKey"],
@@ -233,7 +240,7 @@ const deriveAesKey = async (
       name: "HKDF",
       hash: "SHA-384",
       salt: asBufferSource(salt),
-      info: asBufferSource(KEY_DERIVATION_INFO),
+      info: asBufferSource(info),
     },
     hkdfKey,
     { name: "AES-GCM", length: 256 },
@@ -241,6 +248,12 @@ const deriveAesKey = async (
     ["encrypt", "decrypt"],
   );
 };
+
+export const deriveAesKey = async (
+  sharedSecret: Uint8Array,
+  salt: Uint8Array,
+): Promise<CryptoKey> =>
+  deriveAesKeyWithInfo(sharedSecret, salt, KEY_DERIVATION_INFO);
 
 export const generateEncryptionKeyPair = async (): Promise<CryptoKeyPair> =>
   (await crypto.subtle.generateKey({ name: "X25519" }, true, [

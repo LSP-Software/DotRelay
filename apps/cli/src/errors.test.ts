@@ -90,7 +90,7 @@ describe("CLI diagnostics", () => {
       "trusted_head_conflict",
       "trusted_head_invalid",
       "device_bundle_invalid",
-      "recovery_kit_invalid",
+      "account_key_transfer_invalid",
     ]) {
       const diagnostic = diagnosticForError(
         new CliError("crypto", "the integrity check failed", {}, code),
@@ -134,8 +134,8 @@ describe("CLI diagnostics", () => {
       ["crypto", "unsupported_crypto_runtime"],
       ["crypto", "unsupported_crypto_suite"],
       ["conflict", "environment_context_missing"],
-      ["conflict", "recovery_generation_invalid"],
-      ["conflict", "recovery_requires_no_active_device"],
+      ["authentication", "account_key_not_unlocked"],
+      ["conflict", "recovery_wrapper_missing"],
       ["conflict", "rollback_target_unavailable"],
       ["conflict", "rollback_variable_absent"],
       ["incomplete-export", "missing_values"],

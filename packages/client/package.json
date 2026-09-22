@@ -14,6 +14,7 @@
     "test:unit": "bun test src"
   },
   "dependencies": {
-    "@dotrelay/contracts": "workspace:*"
+    "@dotrelay/contracts": "workspace:*",
+    "@noble/hashes": "^2.4.0"
   }
 }

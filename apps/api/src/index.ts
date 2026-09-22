@@ -576,6 +576,8 @@ const createApi = ({
   });
 
   app.use("/api/v1/devices/bootstrap", protocolCors(profile));
+  app.use("/api/v1/account-keys", protocolCors(profile));
+  app.use("/api/v1/account-keys/*", protocolCors(profile));
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
   app.use("/api/v1/operations/*", protocolCors(profile));
   app.use("/api/v1/environments/*", protocolCors(profile));
@@ -993,6 +995,23 @@ const createApi = ({
             orderBy: { protocolObject: { acceptedAt: "desc" } },
           })
         : null;
+    // The current Project Epoch Key wrapped by this User's Account Master
+    // Key: any of the User's Devices that recovers the AMK can open it
+    // without help from an existing Device. A stale-epoch envelope is
+    // worthless for decryption, so only the current epoch is reported.
+    const accountKeyEnvelope = project
+      ? await database.accountKeyEnvelopeObject.findFirst({
+          where: {
+            userId: user.id,
+            envelopeType: "PROJECT_EPOCH_KEY",
+            projectId: project.id,
+            projectEpoch: project.currentEpoch,
+            retiredAt: null,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { protocolObject: { select: { canonicalBytes: true } } },
+        })
+      : null;
     const peerGrantRecipients = project
       ? new Set(
           (
@@ -1061,6 +1080,15 @@ const createApi = ({
           ? {
               epochGrant: bytesToBase64(
                 new Uint8Array(epochGrant.protocolObject.canonicalBytes),
+              ),
+            }
+          : {}),
+        ...(accountKeyEnvelope?.protocolObject.canonicalBytes
+          ? {
+              accountKeyEnvelope: bytesToBase64(
+                new Uint8Array(
+                  accountKeyEnvelope.protocolObject.canonicalBytes,
+                ),
               ),
             }
           : {}),

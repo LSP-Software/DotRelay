@@ -11,6 +11,7 @@ import {
 } from "../diagnostics/event";
 import { createMemoryDeviceRecordStore } from "./browser";
 import {
+  accountKeyCredentialAccount,
   type CredentialStore,
   credentialAccount,
   type DeviceRecordStore,
@@ -31,6 +32,9 @@ export type CliDeviceStorage = Readonly<{
   save(bundle: DevicePrivateBundle): Promise<void>;
   load(scope: DeviceStorageScope): Promise<DevicePrivateBundle>;
   remove(scope: DeviceStorageScope): Promise<void>;
+  saveAccountKey(scope: DeviceStorageScope, key: Uint8Array): Promise<void>;
+  loadAccountKey(scope: DeviceStorageScope): Promise<Uint8Array | null>;
+  clearAccountKey(scope: DeviceStorageScope): Promise<void>;
 }>;
 
 const secrets = new Map<string, Uint8Array>();
@@ -257,11 +261,69 @@ export const createCliDeviceStorage = (
         zeroize(plaintext);
       }
     },
+    saveAccountKey: async (scope, key) => {
+      if (
+        scope.pin.serverProfileId !== pin.serverProfileId ||
+        scope.pin.origin !== pin.origin
+      )
+        throw new Error("device storage scope isolation violation");
+      if (!(key instanceof Uint8Array) || key.length !== 32)
+        throw new TypeError("account master key must be 32 bytes");
+      let stored: Uint8Array | undefined;
+      try {
+        stored = new Uint8Array(key);
+        await credentialStore.set(
+          DOTRELAY_CREDENTIAL_SERVICE,
+          accountKeyCredentialAccount(scope),
+          stored,
+        );
+        emitDiagnostic("client.storage.save", "success");
+      } catch (error) {
+        emitDiagnostic("client.storage.save", "failure");
+        throw error;
+      } finally {
+        zeroize(stored);
+      }
+    },
+    loadAccountKey: async (scope) => {
+      if (
+        scope.pin.serverProfileId !== pin.serverProfileId ||
+        scope.pin.origin !== pin.origin
+      )
+        throw new Error("device storage scope isolation violation");
+      let key: Uint8Array | null = null;
+      try {
+        const value = await credentialStore.get(
+          DOTRELAY_CREDENTIAL_SERVICE,
+          accountKeyCredentialAccount(scope),
+        );
+        if (value !== null) {
+          if (value.length !== 32)
+            throw new Error("account master key is invalid");
+          key = new Uint8Array(value);
+        }
+        emitDiagnostic("client.storage.load", "success");
+        return key;
+      } catch (error) {
+        emitDiagnostic("client.storage.load", "failure");
+        throw error;
+      }
+    },
+    clearAccountKey: async (scope) => {
+      await credentialStore.delete(
+        DOTRELAY_CREDENTIAL_SERVICE,
+        accountKeyCredentialAccount(scope),
+      );
+    },
     remove: async (scope) => {
       await recordStore.remove(scope);
       await credentialStore.delete(
         DOTRELAY_CREDENTIAL_SERVICE,
         credentialAccount(scope),
+      );
+      await credentialStore.delete(
+        DOTRELAY_CREDENTIAL_SERVICE,
+        accountKeyCredentialAccount(scope),
       );
       try {
         await credentialStore.delete(

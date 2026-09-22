@@ -9,6 +9,9 @@ export { decideLaneDisclosure, decideTeamAction } from "./administration";
 export type { BetterAuthDatabaseAdapter } from "./better-auth";
 export { createBetterAuthDatabaseAdapter } from "./better-auth";
 export type {
+  AccountKeyEnvelopeObject,
+  AccountKeyTransferObject,
+  AccountKeyWrapperObject,
   AuditEntityKind,
   AuditEventKind,
   AuthAccount,
@@ -24,6 +27,7 @@ export type {
   GrantObject,
   IdentityObject,
   IdentityRolloverObject,
+  KeyEnvelopeType,
   KeyKind,
   LaneCommitmentObject,
   LaneObject,
@@ -41,10 +45,6 @@ export type {
   Prisma,
   Project,
   ProtocolObject,
-  RecoveryAttempt,
-  RecoveryChallengeObject,
-  RecoveryEnvelope,
-  RecoveryGrantObject,
   ResourceLifecycle,
   Revision,
   RevisionLaneCommitment,
@@ -52,8 +52,10 @@ export type {
   ServerProfile,
   StagedObject,
   Team,
+  TransferStatus,
   User,
   UserIdentityGeneration,
+  WrapperType,
 } from "./generated/prisma/browser";
 export type { PrismaClient } from "./generated/prisma/client";
 export type { ResolveDotRelayUserInput } from "./identity";

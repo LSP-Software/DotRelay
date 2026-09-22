@@ -32,6 +32,8 @@ export type ParsedArguments = Readonly<{
   readonly environment?: string;
   readonly output?: string;
   readonly from?: string;
+  readonly recoveryCode?: string;
+  readonly transfer?: string;
   readonly team?: string;
   readonly name?: string;
   readonly remote?: string;
@@ -57,6 +59,8 @@ type MutableArguments = {
   environment?: string;
   output?: string;
   from?: string;
+  recoveryCode?: string;
+  transfer?: string;
   team?: string;
   name?: string;
   remote?: string;
@@ -78,6 +82,8 @@ const valueFlags = new Set([
   "--environment",
   "--output",
   "--from",
+  "--recovery-code",
+  "--transfer",
   "--team",
   "--name",
   "--remote",
@@ -110,6 +116,8 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   else if (flag === "--environment") parsed.environment = value;
   else if (flag === "--output") parsed.output = value;
   else if (flag === "--from") parsed.from = value;
+  else if (flag === "--recovery-code") parsed.recoveryCode = value;
+  else if (flag === "--transfer") parsed.transfer = value;
   else if (flag === "--team") parsed.team = value;
   else if (flag === "--name") parsed.name = value;
   else if (flag === "--remote") parsed.remote = value;
@@ -144,6 +152,8 @@ export const FLAG_KEYS = [
   "environment",
   "output",
   "from",
+  "recoveryCode",
+  "transfer",
   "team",
   "name",
   "remote",
@@ -166,6 +176,8 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
   environment: "--environment",
   output: "--output",
   from: "--from",
+  recoveryCode: "--recovery-code",
+  transfer: "--transfer",
   team: "--team",
   name: "--name",
   remote: "--remote",
@@ -201,8 +213,9 @@ export const USAGE: Record<string, string> = {
   "device begin": "dotrelay device begin --output <file>",
   "device approve": "dotrelay device approve --from <file>",
   "device complete": "dotrelay device complete --from <file>",
-  "device backup": "dotrelay device backup --output <file>",
-  "device recover": "dotrelay device recover --from <file>",
+  "device backup": "dotrelay device backup",
+  "device recover":
+    "dotrelay device recover --recovery-code <code> | --transfer <transfer-id>",
   "project link": "dotrelay project link --team <team-id>",
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
@@ -295,8 +308,8 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "device begin": ["profile", "noInput", "json", "output"],
   "device approve": ["profile", "noInput", "json", "from"],
   "device complete": ["profile", "noInput", "json", "from"],
-  "device backup": ["profile", "noInput", "force", "json", "output"],
-  "device recover": ["profile", "noInput", "json", "from"],
+  "device backup": ["profile", "noInput", "json"],
+  "device recover": ["profile", "noInput", "json", "recoveryCode", "transfer"],
   "project link": ["profile", "team", "remote", "noInput", "json"],
   "env use": ["profile", "environment", "json"],
 };
@@ -460,16 +473,20 @@ const validateCommand = (parsed: MutableArguments) => {
   }
   if (
     command === "device" &&
-    ["approve", "complete", "recover"].includes(parsed.subcommand ?? "") &&
+    ["approve", "complete"].includes(parsed.subcommand ?? "") &&
     !parsed.from
   )
     throw new CliInvocationError(
       `device ${parsed.subcommand} requires --from <file>; usage: ${usage}`,
     );
-  if (command === "device" && parsed.subcommand === "backup" && !parsed.output)
-    throw new CliInvocationError(
-      `device backup requires --output <file>; usage: ${usage}`,
-    );
+  if (command === "device" && parsed.subcommand === "recover") {
+    const hasRecoveryCode = parsed.recoveryCode !== undefined;
+    const hasTransfer = parsed.transfer !== undefined;
+    if (hasRecoveryCode === hasTransfer)
+      throw new CliInvocationError(
+        `device recover requires exactly one of --recovery-code <code> or --transfer <transfer-id>; usage: ${usage}`,
+      );
+  }
   // Interactively the Variables to roll back are chosen by name from the
   // live Manifest; automation must name at least one.
   if (

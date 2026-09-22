@@ -306,10 +306,10 @@ export type OperationInput = Readonly<{
     | "ADMINISTRATION"
     | "INVITATION"
     | "MEMBERSHIP_CHANGE"
-    | "DEVICE_ENROLLMENT"
-    | "DEVICE_REVOCATION"
-    | "RECOVERY"
-    | "ENVIRONMENT_GENESIS"
+     | "DEVICE_ENROLLMENT"
+     | "DEVICE_REVOCATION"
+     | "ACCOUNT_KEY"
+     | "ENVIRONMENT_GENESIS"
     | "REVISION_PUBLICATION"
     | "ROLLBACK"
     | "EPOCH_ROTATION";
@@ -468,10 +468,13 @@ export type AuditFactInput = Readonly<{
     | "MEMBERSHIP_ACTIVATED"
     | "MEMBERSHIP_ROLE_CHANGED"
     | "MEMBERSHIP_REMOVED"
-    | "DEVICE_ENROLLED"
-    | "DEVICE_REVOKED"
-    | "RECOVERY_COMPLETED"
-    | "PROJECT_CREATED"
+     | "DEVICE_ENROLLED"
+     | "DEVICE_REVOKED"
+     | "ACCOUNT_KEY_WRAPPER_ADDED"
+     | "ACCOUNT_KEY_WRAPPER_REVOKED"
+     | "ACCOUNT_KEY_ENVELOPE_PUBLISHED"
+     | "ACCOUNT_KEY_TRANSFER_CREATED"
+     | "PROJECT_CREATED"
     | "PROJECT_ARCHIVED"
     | "PROJECT_RESTORED"
     | "ENVIRONMENT_CREATED"
@@ -496,10 +499,12 @@ export type AuditFactInput = Readonly<{
     | "INVITATION"
     | "PROJECT"
     | "ENVIRONMENT"
-    | "OPERATION"
-    | "PROTOCOL_OBJECT"
-    | "REVISION"
-    | "RECOVERY_ENVELOPE";
+     | "OPERATION"
+     | "PROTOCOL_OBJECT"
+     | "REVISION"
+     | "ACCOUNT_KEY_WRAPPER"
+     | "ACCOUNT_KEY_ENVELOPE"
+     | "ACCOUNT_KEY_TRANSFER";
   readonly entityId: string;
   readonly priorLifecycle?: string;
   readonly newLifecycle?: string;
@@ -2090,10 +2095,6 @@ export type DeviceBootstrapInput = Readonly<{
     readonly ed25519PublicKey: Uint8Array;
   }>;
   readonly certificateObject: ProtocolObjectInput;
-  readonly recoveryAttempt?: Readonly<{
-    readonly envelopeId: string;
-    readonly challengeHash: Uint8Array;
-  }>;
   readonly now?: Date;
 }>;
 
@@ -2254,22 +2255,9 @@ export class DeviceRepository {
       await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
       const operation = await this.operations.begin(transaction, {
         ...input.operation,
-        kind:
-          input.operation.kind === "RECOVERY"
-            ? "RECOVERY"
-            : "DEVICE_ENROLLMENT",
+        kind: "DEVICE_ENROLLMENT",
       });
       if (operation.idempotent) return operation;
-      if (input.recoveryAttempt) {
-        const priorAttempt = await transaction.recoveryAttempt.findFirst({
-          where: {
-            userId: input.operation.actorUserId,
-            envelopeId: input.recoveryAttempt.envelopeId,
-            succeeded: true,
-          },
-        });
-        if (priorAttempt) throw new Error("recovery envelope already used");
-      }
       const user = await transaction.user.findUnique({
         where: { id: input.operation.actorUserId },
         select: { identityGeneration: true },
@@ -2316,31 +2304,13 @@ export class DeviceRepository {
       });
       await this.audit.append(transaction, {
         operationId: operation.operation.id,
-        kind:
-          input.operation.kind === "RECOVERY"
-            ? "RECOVERY_COMPLETED"
-            : "DEVICE_ENROLLED",
+        kind: "DEVICE_ENROLLED",
         actorUserId: input.operation.actorUserId,
         entityKind: "DEVICE",
         entityId: device.id,
         newLifecycle: "ACTIVE",
         outcomeObjectId: certificateObject.id,
       });
-      if (input.recoveryAttempt) {
-        await transaction.recoveryAttempt.create({
-          data: {
-            userId: input.operation.actorUserId,
-            envelopeId: input.recoveryAttempt.envelopeId,
-            challengeHash: databaseBytes(
-              validateDigest(
-                input.recoveryAttempt.challengeHash,
-                "challenge hash",
-              ),
-            ),
-            succeeded: true,
-          },
-        });
-      }
       return { operation: operation.operation, device };
     });
   }
@@ -2511,53 +2481,61 @@ export class DeviceRepository {
   }
 }
 
-export type RecoveryEnvelopeReplacementInput = Readonly<{
+export type AccountKeyWrapperInput = Readonly<{
   readonly operation: OperationInput & { readonly actorDeviceId: string };
-  readonly envelope: Readonly<{
-    readonly id: string;
+  readonly wrapper: Readonly<{
     readonly protocolObject: ProtocolObjectInput;
     readonly identityGeneration: bigint;
-    readonly recoveryGeneration: bigint;
+    readonly wrapperType: "PASSKEY_PRF" | "PASSWORD" | "RECOVERY_CODE";
+    readonly wrapperId: Uint8Array;
+    readonly credentialId?: Uint8Array;
+    readonly kdfName?: number;
+    readonly kdfMemoryKib?: bigint;
+    readonly kdfIterations?: bigint;
+    readonly kdfParallelism?: number;
     readonly ciphertextHash: Uint8Array;
     readonly ciphertextLength: number;
   }>;
   readonly now?: Date;
 }>;
 
-export class RecoveryRepository {
+export type AccountKeyEnvelopeInput = Readonly<{
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly envelope: Readonly<{
+    readonly protocolObject: ProtocolObjectInput;
+    readonly identityGeneration: bigint;
+    readonly envelopeType: "PROJECT_EPOCH_KEY" | "USER_VALUE_KEY";
+    readonly projectId?: string;
+    readonly projectEpoch?: bigint;
+    readonly ownerUserId?: string;
+    readonly valueGeneration?: bigint;
+    readonly ciphertextHash: Uint8Array;
+    readonly ciphertextLength: number;
+  }>;
+  readonly now?: Date;
+}>;
+
+export type AccountKeyTransferInput = Readonly<{
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly transfer: Readonly<{
+    readonly protocolObject: ProtocolObjectInput;
+    readonly identityGeneration: bigint;
+    readonly recipientDeviceId: string;
+    readonly transferId: Uint8Array;
+    readonly expiresAt: Date;
+  }>;
+  readonly now?: Date;
+}>;
+
+export class AccountKeyRepository {
   private readonly operations = new OperationRepository();
   private readonly protocolObjects = new ProtocolObjectRepository();
   private readonly audit = new AuditFactRepository();
   private readonly stagedObjects = new StagedObjectRepository();
 
-  async recordAttempt(
+  async addWrapper(
     database: TransactionDatabase,
-    input: Readonly<{
-      readonly userId: string;
-      readonly deviceId?: string;
-      readonly envelopeId?: string;
-      readonly challengeHash: Uint8Array;
-      readonly succeeded: boolean;
-    }>,
-  ) {
-    return inShortTransaction(database, (transaction) =>
-      transaction.recoveryAttempt.create({
-        data: {
-          userId: input.userId,
-          challengeHash: databaseBytes(
-            validateDigest(input.challengeHash, "challenge hash"),
-          ),
-          succeeded: input.succeeded,
-          ...(input.deviceId ? { deviceId: input.deviceId } : {}),
-          ...(input.envelopeId ? { envelopeId: input.envelopeId } : {}),
-        },
-      }),
-    );
-  }
-
-  async replaceEnvelope(
-    database: TransactionDatabase,
-    input: RecoveryEnvelopeReplacementInput,
+    input: AccountKeyWrapperInput,
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
@@ -2570,15 +2548,207 @@ export class RecoveryRepository {
         input.operation.actorUserId,
         input.operation.actorDeviceId,
       );
+      if (input.wrapper.identityGeneration !== user.identityGeneration)
+        throw new Error("account key wrapper identity generation is stale");
+      if (input.wrapper.wrapperType === "PASSKEY_PRF" && !input.wrapper.credentialId)
+        throw new Error("passkey wrapper requires a credential id");
+      if (input.wrapper.wrapperType === "PASSWORD" && input.wrapper.kdfName === undefined)
+        throw new Error("password wrapper requires a KDF name");
+      if (input.wrapper.wrapperType === "RECOVERY_CODE") {
+        if (input.wrapper.credentialId || input.wrapper.kdfName !== undefined)
+          throw new Error("recovery code wrapper carries foreign metadata");
+      }
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.wrapper.protocolObject.id,
+            canonicalBytes: input.wrapper.protocolObject.canonicalBytes,
+            digest: input.wrapper.protocolObject.digest,
+          },
+        ],
+      });
+      const protocolObject = await this.protocolObjects.create(
+        transaction,
+        input.wrapper.protocolObject,
+      );
+      if (input.wrapper.wrapperType === "RECOVERY_CODE") {
+        await transaction.accountKeyWrapperObject.updateMany({
+          where: {
+            userId: input.operation.actorUserId,
+            retiredAt: null,
+          },
+          data: { retiredAt: now },
+        });
+      } else {
+        await transaction.accountKeyWrapperObject.updateMany({
+          where: {
+            userId: input.operation.actorUserId,
+            retiredAt: null,
+            wrapperType: "RECOVERY_CODE",
+          },
+          data: { retiredAt: now },
+        });
+      }
+      const wrapper = await transaction.accountKeyWrapperObject.create({
+        data: {
+          protocolObjectId: protocolObject.id,
+          userId: input.operation.actorUserId,
+          identityGeneration: input.wrapper.identityGeneration,
+          wrapperType: input.wrapper.wrapperType,
+          wrapperId: databaseBytes(input.wrapper.wrapperId),
+          ...(input.wrapper.credentialId
+            ? { credentialId: databaseBytes(input.wrapper.credentialId) }
+            : {}),
+          ...(input.wrapper.kdfName !== undefined
+            ? { kdfName: input.wrapper.kdfName }
+            : {}),
+          ...(input.wrapper.kdfMemoryKib !== undefined
+            ? { kdfMemoryKib: input.wrapper.kdfMemoryKib }
+            : {}),
+          ...(input.wrapper.kdfIterations !== undefined
+            ? { kdfIterations: input.wrapper.kdfIterations }
+            : {}),
+          ...(input.wrapper.kdfParallelism !== undefined
+            ? { kdfParallelism: input.wrapper.kdfParallelism }
+            : {}),
+          ciphertextHash: databaseBytes(
+            validateDigest(
+              input.wrapper.ciphertextHash,
+              "wrapper ciphertext hash",
+            ),
+          ),
+          ciphertextLength: input.wrapper.ciphertextLength,
+        },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "ACCOUNT_KEY_WRAPPER_ADDED",
+        actorUserId: input.operation.actorUserId,
+        ...(input.operation.actorDeviceId
+          ? { actorDeviceId: input.operation.actorDeviceId }
+          : {}),
+        entityKind: "ACCOUNT_KEY_WRAPPER",
+        entityId: wrapper.protocolObjectId,
+        outcomeObjectId: protocolObject.id,
+      });
+      return { operation: operation.operation, wrapper };
+    });
+  }
+
+  async revokeWrapper(
+    database: TransactionDatabase,
+    input: Readonly<{
+      readonly operation: OperationInput & { readonly actorDeviceId: string };
+      readonly wrapperId: Uint8Array;
+      readonly now?: Date;
+    }>,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
+      const wrapper = await transaction.accountKeyWrapperObject.findFirst({
+        where: {
+          userId: input.operation.actorUserId,
+          wrapperId: databaseBytes(input.wrapperId),
+          retiredAt: null,
+        },
+      });
+      if (!wrapper)
+        throw new Error("account key wrapper is not active for this user");
+      const activeCount = await transaction.accountKeyWrapperObject.count({
+        where: { userId: input.operation.actorUserId, retiredAt: null },
+      });
+      if (activeCount <= 1)
+        throw new Error("the last account key wrapper cannot be revoked");
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      await transaction.accountKeyWrapperObject.update({
+        where: { protocolObjectId: wrapper.protocolObjectId },
+        data: { retiredAt: now },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "ACCOUNT_KEY_WRAPPER_REVOKED",
+        actorUserId: input.operation.actorUserId,
+        ...(input.operation.actorDeviceId
+          ? { actorDeviceId: input.operation.actorDeviceId }
+          : {}),
+        entityKind: "ACCOUNT_KEY_WRAPPER",
+        entityId: wrapper.protocolObjectId,
+      });
+      return { operation: operation.operation, wrapper };
+    });
+  }
+
+  async publishEnvelope(
+    database: TransactionDatabase,
+    input: AccountKeyEnvelopeInput,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
+      const user = await transaction.user.findUnique({
+        where: { id: input.operation.actorUserId },
+      });
+      if (!user) throw new Error("User not found");
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
       if (input.envelope.identityGeneration !== user.identityGeneration)
-        throw new Error("recovery envelope identity generation is stale");
-      if (input.envelope.recoveryGeneration !== user.recoveryGeneration + 1n)
-        throw new Error("recovery generation must advance by one");
+        throw new Error("account key envelope identity generation is stale");
+      if (input.envelope.envelopeType === "PROJECT_EPOCH_KEY") {
+        if (
+          !input.envelope.projectId ||
+          input.envelope.projectEpoch === undefined
+        )
+          throw new Error("project epoch envelope requires a project and epoch");
+        if (input.envelope.ownerUserId || input.envelope.valueGeneration !== undefined)
+          throw new Error("project epoch envelope carries user value fields");
+        const project = await transaction.project.findFirst({
+          where: {
+            id: input.envelope.projectId,
+            team: { members: { some: { userId: input.operation.actorUserId } } },
+          },
+        });
+        if (!project)
+          throw new Error("envelope project is not reachable by the user");
+      } else {
+        if (!input.envelope.ownerUserId || input.envelope.valueGeneration === undefined)
+          throw new Error("user value envelope requires an owner and generation");
+        if (input.envelope.projectId || input.envelope.projectEpoch !== undefined)
+          throw new Error("user value envelope carries project fields");
+      }
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       const now = input.now ?? new Date();
       await this.stagedObjects.promote(transaction, {
         operationId: operation.operation.id,
@@ -2596,29 +2766,31 @@ export class RecoveryRepository {
         transaction,
         input.envelope.protocolObject,
       );
-      await transaction.recoveryEnvelope.updateMany({
-        where: { userId: input.operation.actorUserId, retiredAt: null },
-        data: { retiredAt: now },
-      });
-      const envelope = await transaction.recoveryEnvelope.create({
+      const envelope = await transaction.accountKeyEnvelopeObject.create({
         data: {
-          id: input.envelope.id,
-          userId: input.operation.actorUserId,
           protocolObjectId: protocolObject.id,
-          identityGeneration: input.envelope.identityGeneration,
-          recoveryGeneration: input.envelope.recoveryGeneration,
+          userId: input.operation.actorUserId,
+          envelopeType: input.envelope.envelopeType,
+          ...(input.envelope.projectId
+            ? { projectId: input.envelope.projectId }
+            : {}),
+          ...(input.envelope.projectEpoch !== undefined
+            ? { projectEpoch: input.envelope.projectEpoch }
+            : {}),
+          ...(input.envelope.ownerUserId
+            ? { ownerUserId: input.envelope.ownerUserId }
+            : {}),
+          ...(input.envelope.valueGeneration !== undefined
+            ? { valueGeneration: input.envelope.valueGeneration }
+            : {}),
           ciphertextHash: databaseBytes(
             validateDigest(
               input.envelope.ciphertextHash,
-              "recovery ciphertext hash",
+              "envelope ciphertext hash",
             ),
           ),
           ciphertextLength: input.envelope.ciphertextLength,
         },
-      });
-      await transaction.user.update({
-        where: { id: input.operation.actorUserId },
-        data: { recoveryGeneration: input.envelope.recoveryGeneration },
       });
       await transaction.operation.update({
         where: { id: operation.operation.id },
@@ -2626,16 +2798,133 @@ export class RecoveryRepository {
       });
       await this.audit.append(transaction, {
         operationId: operation.operation.id,
-        kind: "RECOVERY_COMPLETED",
+        kind: "ACCOUNT_KEY_ENVELOPE_PUBLISHED",
         actorUserId: input.operation.actorUserId,
         ...(input.operation.actorDeviceId
           ? { actorDeviceId: input.operation.actorDeviceId }
           : {}),
-        entityKind: "RECOVERY_ENVELOPE",
-        entityId: envelope.id,
+        entityKind: "ACCOUNT_KEY_ENVELOPE",
+        entityId: envelope.protocolObjectId,
         outcomeObjectId: protocolObject.id,
       });
       return { operation: operation.operation, envelope };
+    });
+  }
+
+  async createTransfer(
+    database: TransactionDatabase,
+    input: AccountKeyTransferInput,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.operation.actorUserId} FOR UPDATE`;
+      await requireActiveDevice(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+      );
+      const recipient = await transaction.device.findFirst({
+        where: {
+          id: input.transfer.recipientDeviceId,
+          userId: input.operation.actorUserId,
+          lifecycle: "ACTIVE",
+        },
+      });
+      if (!recipient)
+        throw new Error("transfer recipient device is not active");
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      const now = input.now ?? new Date();
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.transfer.protocolObject.id,
+            canonicalBytes: input.transfer.protocolObject.canonicalBytes,
+            digest: input.transfer.protocolObject.digest,
+          },
+        ],
+      });
+      const protocolObject = await this.protocolObjects.create(
+        transaction,
+        input.transfer.protocolObject,
+      );
+      const transfer = await transaction.accountKeyTransferObject.create({
+        data: {
+          protocolObjectId: protocolObject.id,
+          userId: input.operation.actorUserId,
+          recipientDeviceId: recipient.id,
+          transferId: databaseBytes(input.transfer.transferId),
+          status: "PENDING",
+          expiresAt: input.transfer.expiresAt,
+        },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "ACCOUNT_KEY_TRANSFER_CREATED",
+        actorUserId: input.operation.actorUserId,
+        ...(input.operation.actorDeviceId
+          ? { actorDeviceId: input.operation.actorDeviceId }
+          : {}),
+        entityKind: "ACCOUNT_KEY_TRANSFER",
+        entityId: transfer.protocolObjectId,
+        outcomeObjectId: protocolObject.id,
+      });
+      return { operation: operation.operation, transfer };
+    });
+  }
+
+  async acceptTransfer(
+    database: TransactionDatabase,
+    input: Readonly<{
+      readonly userId: string;
+      readonly deviceId: string;
+      readonly transferId: Uint8Array;
+      readonly now?: Date;
+    }>,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      const now = input.now ?? new Date();
+      const transfer = await transaction.accountKeyTransferObject.findFirst({
+        where: {
+          userId: input.userId,
+          recipientDeviceId: input.deviceId,
+          transferId: databaseBytes(input.transferId),
+          status: "PENDING",
+        },
+        select: {
+          protocolObjectId: true,
+          expiresAt: true,
+          protocolObject: { select: { canonicalBytes: true } },
+        },
+      });
+      if (!transfer)
+        throw new Error("account key transfer is not pending");
+      if (transfer.expiresAt <= now) {
+        await transaction.accountKeyTransferObject.update({
+          where: { protocolObjectId: transfer.protocolObjectId },
+          data: { status: "EXPIRED" },
+        });
+        throw new Error("account key transfer expired");
+      }
+      const consumed = await transaction.accountKeyTransferObject.update({
+        where: { protocolObjectId: transfer.protocolObjectId },
+        data: { status: "CONSUMED", consumedAt: now },
+        select: { protocolObjectId: true, consumedAt: true },
+      });
+      return Object.freeze({
+        protocolObjectId: consumed.protocolObjectId,
+        consumedAt: consumed.consumedAt,
+        canonicalBytes: new Uint8Array(transfer.protocolObject.canonicalBytes),
+      });
     });
   }
 }
@@ -2799,9 +3088,7 @@ export type GrantCreationInput = Readonly<{
       | "HISTORICAL_PROJECT_EPOCH"
       | "CURRENT_USER_VALUE_GENERATION"
       | "HISTORICAL_USER_VALUE_GENERATION"
-      | "DEVICE_TRUST_PROVISIONING"
-      | "RECOVERY_PROJECT_KEY"
-      | "RECOVERY_USER_VALUE_KEY";
+      | "DEVICE_TRUST_PROVISIONING";
     readonly laneScope?:
       | "ENVIRONMENT_DEFINITION"
       | "VARIABLE_DEFINITION"

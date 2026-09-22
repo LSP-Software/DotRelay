@@ -1,6 +1,9 @@
 export type { DatabaseClient } from "./client";
 export { createDatabaseClient } from "./client";
 export type {
+  AccountKeyEnvelopeInput,
+  AccountKeyTransferInput,
+  AccountKeyWrapperInput,
   AuditFactInput,
   DeviceBootstrapInput,
   DeviceEnrollmentApprovalInput,
@@ -17,12 +20,12 @@ export type {
   PersistenceClient,
   ProjectCreationInput,
   ProtocolObjectInput,
-  RecoveryEnvelopeReplacementInput,
   RevisionPublicationInput,
   StageObjectInput,
   TeamCreationInput,
 } from "./repositories";
 export {
+  AccountKeyRepository,
   AdministrationDisclosureRepository,
   AdministrationRepository,
   AuditFactRepository,
@@ -42,7 +45,6 @@ export {
   ProjectRepository,
   ProtocolObjectRepository,
   PublicationRepository,
-  RecoveryRepository,
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
   SECURITY_REQUEST_LOG_RETENTION_MS,
   type SecurityRequestEndpointTemplate,

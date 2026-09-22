@@ -5,7 +5,6 @@ export const DOTRELAY_PROTOCOL_FORMAT_VERSION = 3 as const;
 export const PERSISTENCE_LIMITS = Object.freeze({
   maxProtocolBytes: 64 * 1024 * 1024,
   maxGrantPlaintextBytes: 4 * 1024,
-  maxRecoveryPlaintextBytes: 16 * 1024,
   maxLaneCommitments: 100_000,
 });
 
@@ -250,7 +249,7 @@ export const validateProtocolProjection = (input: {
     fail("protocol object suite is not supported");
   if (input.formatVersion !== DOTRELAY_PROTOCOL_FORMAT_VERSION)
     fail("protocol object format version is not supported");
-  if (!Number.isInteger(input.kind) || input.kind < 1 || input.kind > 19)
+  if (!Number.isInteger(input.kind) || input.kind < 1 || input.kind > 22)
     fail("protocol object kind is not supported");
   const bytes = validateProtocolBytes(
     input.canonicalBytes,

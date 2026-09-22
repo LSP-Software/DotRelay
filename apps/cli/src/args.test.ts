@@ -122,26 +122,42 @@ describe("CLI argument contract", () => {
     expect(
       parseArguments(["device", "complete", "--from", "request.json"]),
     ).toMatchObject({ command: "device", subcommand: "complete" });
-    expect(
-      parseArguments(["device", "backup", "--output", "recovery.kit"]),
-    ).toMatchObject({
+    expect(parseArguments(["device", "backup"])).toMatchObject({
       command: "device",
       subcommand: "backup",
-      output: "recovery.kit",
     });
     expect(
-      parseArguments(["device", "recover", "--from", "recovery.kit"]),
+      parseArguments(["device", "recover", "--recovery-code", "CODE"]),
     ).toMatchObject({
       command: "device",
       subcommand: "recover",
-      from: "recovery.kit",
+      recoveryCode: "CODE",
+    });
+    expect(
+      parseArguments(["device", "recover", "--transfer", "abc123"]),
+    ).toMatchObject({
+      command: "device",
+      subcommand: "recover",
+      transfer: "abc123",
     });
   });
 
   test("requires explicit handoff files in the trust commands", () => {
     expect(() => parseArguments(["device", "approve"])).toThrow("--from");
-    expect(() => parseArguments(["device", "backup"])).toThrow("--output");
-    expect(() => parseArguments(["device", "recover"])).toThrow("--from");
+    expect(() => parseArguments(["device", "complete"])).toThrow("--from");
+    expect(() => parseArguments(["device", "recover"])).toThrow(
+      "exactly one of --recovery-code",
+    );
+    expect(() =>
+      parseArguments([
+        "device",
+        "recover",
+        "--recovery-code",
+        "C",
+        "--transfer",
+        "T",
+      ]),
+    ).toThrow("exactly one of --recovery-code");
   });
 
   test("accepts --debug as a global flag", () => {
@@ -157,13 +173,12 @@ describe("CLI argument contract", () => {
     expect(
       parseArguments([
         "device",
-        "backup",
-        "--output",
-        "recovery.kit",
+        "recover",
+        "--recovery-code",
+        "C",
         "--no-input",
-        "--force",
       ]).force,
-    ).toBe(true);
+    ).toBe(false);
     expect(parseArguments(["pull", "--output", ".env"]).force).toBe(false);
     expect(() => parseArguments(["diff", "--no-input", "--force"])).toThrow(
       "--force",

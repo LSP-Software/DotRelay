@@ -10,7 +10,7 @@
     },
     {
       "path": "conditional.json",
-      "sha384": "40c4c0ff2531ccc5208e8d6c32349539ea1de9199185e30037a8a34e3550a49881d6682054b7b9d6b665b0841b26de4d"
+      "sha384": "fec782264fad693154fc52128513a027c6e100e9622e458e8d39e3375ee1773f82f58da0bf00df62e9253ffe986f5f1d"
     },
     {
       "path": "negative.json",
@@ -18,11 +18,11 @@
     },
     {
       "path": "objects.json",
-      "sha384": "dab559843956b4464b7d28bb631a3db33c182439a5b48ed6a67d1f558f8001d56510c903558f986c8d3f95b00cfe5cf3"
+      "sha384": "780bd984c9e9b1f7a6a45f048eb1ec1abf8ce05ae74a6e7eb7bafb84947e10a6abdc8cc18e0dc5fb15d9a783eedd7c2d"
     },
     {
       "path": "positive.json",
-      "sha384": "cbd7c53cf04ea757856a11f48af06a4c0b1376f59a10662a33abc20663e24b57f49c9bb1b584c4f6c62fd6ed63853274"
+      "sha384": "e8110b38c7252ddeccb1dbdea758a9866daf7f30ec8265871ea050b95003754b9c4c3706fba96aa6d2018d4d038c6061"
     },
     {
       "path": "primitives.json",

@@ -54,6 +54,15 @@ export const legacyCredentialAccount = (scope: DeviceStorageScope): string =>
 
 export const DOTRELAY_CREDENTIAL_SERVICE = "dotrelay-device-wrap" as const;
 
+/**
+ * Credential account holding this Device's locally recovered Account Master
+ * Key. Only Device storages that run in a trusted local process (the CLI)
+ * persist the AMK; browser devices keep it in memory and never store it.
+ */
+export const accountKeyCredentialAccount = (
+  scope: DeviceStorageScope,
+): string => `amk:${base64Url(scopeKey(scope))}`;
+
 export const zeroize = (value: Uint8Array | undefined): void => {
   value?.fill(0);
 };

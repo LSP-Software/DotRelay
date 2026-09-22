@@ -14,26 +14,53 @@ _Avoid_: Account, developer
 A client installation authorized by exactly one User to access that User's DotRelay data.
 _Avoid_: Session, computer
 
-**Recovery Kit**:
-A user-held recovery secret that can authorize a replacement Device when no existing Device is
-available.
-_Avoid_: Backup password, master password
+**Account Master Key (AMK)**:
+The random 256-bit key that anchors all of one User's encryption within one Server Profile. Every
+Project Epoch Key and User Value Key is wrapped by the User's AMK, so a Device that recovers the
+AMK can recover the content keys and decrypt the User's data. It is never stored or transmitted by
+the service and never differs by recovery method.
+_Avoid_: Master password, account password, encryption key
 
-**Active Recovery Kit**:
-The client artifact holding the last service-accepted Recovery Kit; it is replaced only after the
-service accepts a newer generation, so it always names a kit the service would honor.
-_Avoid_: Current backup, latest file
+**Account Key Wrapper**:
+A service-stored, Device-signed encryption of the Account Master Key under a key derived from one
+User-held secret. Wrappers protect exactly the same AMK regardless of type and may be added,
+changed, or retired without touching the AMK or any encrypted Value.
+_Avoid_: Recovery key, backup key, encryption credential
 
-**Pending Recovery Kit**:
-A staged Recovery Kit attempt that is kept separate from the Active Recovery Kit until the service
-accepts its envelope; a failed attempt is discarded and never becomes the active kit.
-_Avoid_: Draft kit, temporary backup
+**Passkey Wrapper**:
+An Account Key Wrapper whose key derives from a WebAuthn passkey's PRF output. Optional; the
+product never requires a passkey or WebAuthn PRF support to create an account, unlock data, or
+recover from Device loss.
+_Avoid_: Required 2FA, security key requirement
 
-**Recovery Kit Rotation**:
-Publishing a new service-accepted Recovery Kit generation that replaces the Active Recovery Kit and
-retires prior kits so they can no longer authorize a replacement Device; it requires approval and
-states which prior kits become obsolete.
-_Avoid_: Kit refresh, backup update
+**Encryption Password**:
+A User-chosen secret, distinct from the GitHub and Better Auth credentials, that exists solely to
+unlock the User's encrypted DotRelay data by wrapping the Account Master Key. It never authenticates
+the User to the service and never leaves the client that derives its key.
+_Avoid_: Master password, login password, sign-in password
+
+**Recovery Code**:
+The user-held, human-readable, 256-bit emergency secret behind the universal disaster-recovery
+Account Key Wrapper. Generated client-side, shown once, and never stored by the service; it stays
+available even when every Device and every other wrapper is lost.
+_Avoid_: Backup password, recovery key file, master password
+
+**Recovery Code Rotation**:
+Creating a new `RECOVERY_CODE` Account Key Wrapper that wraps the same Account Master Key and, only
+after the service accepts it, retiring the prior recovery wrapper so the old code stops working.
+_Avoid_: Code refresh, backup update
+
+**Account Key Envelope**:
+A service-stored, Device-signed encryption of a content key (Project Epoch Key or User Value Key)
+by the User's Account Master Key. Devices that hold the AMK use it to recover content keys after
+recovery, so no existing Device is needed to read previously published data.
+_Avoid_: Key grant, key backup
+
+**Account Key Transfer**:
+A one-time, ciphertext-only handoff of the Account Master Key from an unlocked Device or browser
+to a new Device's X25519 key, relayed by the service. It underpins CLI login and trusted-Device
+approval; the service relays ciphertext and never sees the AMK.
+_Avoid_: Session handoff, key sync
 
 **Team**:
 The collaboration and authorization boundary whose active Members share access to all of its

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   createCliDeviceStorage,
   createDeviceBootstrap,
+  generateAccountMasterKey,
 } from "@dotrelay/client";
 import {
   bytesToUuid,
@@ -57,7 +58,10 @@ type FixtureState = {
   enrollmentId?: string;
   pendingDeviceId?: string;
   enrollmentApproved: boolean;
-  recoveryEnvelope: boolean;
+  recoveryWrapper?: {
+    readonly wrapperId: string;
+    readonly object: string;
+  };
   bootstrapCount: number;
   enrollmentCount: number;
   recoveryCount: number;
@@ -79,7 +83,6 @@ const state: FixtureState = {
   active: false,
   grantsReady: false,
   enrollmentApproved: false,
-  recoveryEnvelope: false,
   bootstrapCount: 0,
   enrollmentCount: 0,
   recoveryCount: 0,
@@ -446,34 +449,56 @@ const handle = async (request: Request): Promise<Response> => {
     );
   }
   if (
-    url.pathname === "/api/v1/recovery/envelopes/current" &&
+    url.pathname === "/api/v1/account-keys/wrappers" &&
     request.method === "GET"
   )
-    return state.recoveryEnvelope
+    return state.recoveryWrapper
       ? jsonResponse({
-          envelopeId: "00000000-0000-4000-8000-000000000003",
-          identityGeneration: "1",
-          recoveryGeneration: "1",
-          ciphertextHash: "0".repeat(96),
-          ciphertextLength: 0,
-          object: "fixture",
+          wrappers: [
+            {
+              wrapperId: state.recoveryWrapper.wrapperId,
+              type: "recovery-code",
+              object: state.recoveryWrapper.object,
+            },
+          ],
         })
-      : problemResponse("resource_not_found");
+      : jsonResponse({ wrappers: [] });
   if (
-    url.pathname === "/api/v1/recovery/envelopes" &&
+    url.pathname === "/api/v1/account-keys/wrappers" &&
     request.method === "POST"
   ) {
     const body = await readJson(request);
     if (request.headers.get("X-DotRelay-Device-Id") !== state.deviceId)
       return problemResponse("forbidden");
-    if (!uuid(body.envelopeId) || typeof body.object !== "string")
+    if (
+      typeof body.object !== "string" ||
+      body.object.length === 0 ||
+      typeof body.wrapperId !== "string" ||
+      body.wrapperId.length === 0
+    )
       return problemResponse("invalid_request");
-    state.recoveryEnvelope = true;
-    return jsonResponse({
-      envelopeId: body.envelopeId,
-      recoveryGeneration: body.recoveryGeneration,
-      idempotent: false,
-    });
+    state.recoveryWrapper = {
+      wrapperId: body.wrapperId,
+      object: body.object,
+    };
+    return jsonResponse({ wrapperId: body.wrapperId, idempotent: false }, 201);
+  }
+  if (
+    url.pathname === "/api/v1/account-keys/envelopes" &&
+    request.method === "POST"
+  ) {
+    const body = await readJson(request);
+    if (request.headers.get("X-DotRelay-Device-Id") !== state.deviceId)
+      return problemResponse("forbidden");
+    if (
+      typeof body.object !== "string" ||
+      body.object.length === 0 ||
+      typeof body.projectId !== "string" ||
+      typeof body.projectEpoch !== "string"
+    )
+      return problemResponse("invalid_request");
+    state.grantsReady = true;
+    return jsonResponse({ objectId: body.objectId, idempotent: false }, 201);
   }
   if (
     url.pathname === "/api/v1/devices/enrollments" &&
@@ -551,38 +576,14 @@ const handle = async (request: Request): Promise<Response> => {
       201,
     );
   }
-  if (
-    url.pathname === "/api/v1/recovery/restore" &&
-    request.method === "POST"
-  ) {
-    const body = await readJson(request);
-    const x25519PublicKey = registeredKey(body.x25519PublicKey);
-    const ed25519PublicKey = registeredKey(body.ed25519PublicKey);
-    if (
-      !uuid(body.deviceId) ||
-      typeof body.proof !== "string" ||
-      typeof body.certificate !== "string" ||
-      typeof body.keyId !== "string" ||
-      body.keyId.length === 0 ||
-      registeredKey(body.replacementSigningPublicKey) === null ||
-      x25519PublicKey === null ||
-      ed25519PublicKey === null
-    )
-      return problemResponse("invalid_request");
-    // Restoring a Recovery Kit registers the replacement Device's public keys
-    // on the Server Profile, so its boundary must report them from now on.
-    state.active = true;
-    resolveDevice(body.deviceId, x25519PublicKey, ed25519PublicKey);
-    state.recoveryCount += 1;
-    return jsonResponse(
-      {
-        deviceId: body.deviceId,
-        active: true,
-        recoveryGeneration: body.recoveryGeneration,
-        idempotent: false,
-      },
-      201,
+  const transferAccept =
+    /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(
+      url.pathname,
     );
+  if (transferAccept && request.method === "POST") {
+    if (!activeDevice(request)) return problemResponse("forbidden");
+    state.recoveryCount += 1;
+    return problemResponse("state_conflict");
   }
   return problemResponse("resource_not_found");
 };
@@ -1157,15 +1158,12 @@ try {
       "packaged CLI enrollment completion did not register Device keys",
     );
   state.encryptionPublicKey = initialEncryptionPublicKey;
-  const mismatchPath = join(isolatedDirectory, "mismatch-recovery.kit");
   const mismatchedBackup = await runBinary(
     [
       "device",
       "backup",
       "--profile",
       "live",
-      "--output",
-      mismatchPath,
       "--no-input",
       "--json",
     ],
@@ -1188,95 +1186,109 @@ try {
       "packaged CLI bundle/registration mismatch contract failed",
     );
 
-  const recoveryPath = join(isolatedDirectory, "recovery.kit");
-  const backup = await runJson(
-    [
-      "device",
-      "backup",
-      "--profile",
-      "live",
-      "--output",
-      recoveryPath,
-      "--no-input",
-      "--json",
-    ],
+  // The Account Master Key is established out of band (the web app or an
+  // earlier CLI run); the harness seeds it so the Device is unlocked. This
+  // section is self-contained: it resets the Server Profile to the initial
+  // Device and the matching keys it registered, so the recovery round trip
+  // does not depend on the enrollment handoff's device choreography.
+  resolveDevice(
+    initialDeviceId,
+    initialEncryptionPublicKey,
+    initialSigningPublicKey,
+  );
+  state.active = true;
+  state.grantsReady = true;
+  await writeDeviceId(
+    deviceMetadataPath(isolatedDirectory, pin),
+    pin,
+    initialDeviceId,
+  );
+  const accountMasterKey = await generateAccountMasterKey();
+  const accountScope = { pin, deviceId: uuidBytes(initialDeviceId) };
+
+  // A Device that is not unlocked cannot create a Recovery Code wrapper.
+  const lockedBackup = await runBinary(
+    ["device", "backup", "--profile", "live", "--no-input", "--json"],
     environment,
   );
   if (
-    requireString(backup.output, "Recovery Kit path") !== recoveryPath ||
-    !state.recoveryEnvelope
+    lockedBackup.exitCode !== 6 ||
+    !lockedBackup.stderr.includes('"category":"authentication"') ||
+    !lockedBackup.stderr.includes('"code":"account_key_not_unlocked"')
   )
-    throw new Error("packaged CLI Recovery Kit backup contract failed");
-  const artifact = JSON.parse(await readFile(recoveryPath, "utf8")) as {
-    readonly kind?: unknown;
-    readonly kit?: unknown;
-  };
-  if (
-    artifact.kind !== "dotrelay-recovery-kit" ||
-    typeof artifact.kit !== "string"
-  )
-    throw new Error("packaged CLI Recovery Kit artifact contract failed");
+    throw new Error("packaged CLI locked-device backup contract failed");
 
-  const invalidRecoveryPath = join(isolatedDirectory, "invalid-recovery.kit");
-  await Bun.write(
-    invalidRecoveryPath,
-    JSON.stringify({ kind: "portable-plaintext", value: "secret" }),
+  await deviceStorage.saveAccountKey(accountScope, accountMasterKey);
+  const backup = await runJson(
+    ["device", "backup", "--profile", "live", "--no-input", "--json"],
+    environment,
   );
-  const invalidRecovery = await runBinary(
+  const recoveryCode = requireString(backup.recoveryCode, "recovery code");
+  const backupWrapperId = requireString(backup.wrapperId, "recovery wrapper id");
+  if (state.recoveryWrapper?.wrapperId !== backupWrapperId)
+    throw new Error("packaged CLI recovery wrapper backup contract failed");
+
+  // A recovery code that is not 13 groups of 4 Crockford characters is
+  // rejected before any key material is touched or transmitted.
+  const malformedRecovery = await runBinary(
     [
       "device",
       "recover",
       "--profile",
       "live",
-      "--from",
-      invalidRecoveryPath,
+      "--recovery-code",
+      "!!!not-a-valid-recovery-code!!!",
       "--no-input",
       "--json",
     ],
     environment,
   );
   if (
-    invalidRecovery.exitCode !== 5 ||
-    !invalidRecovery.stderr.includes('"category":"crypto"') ||
-    !invalidRecovery.stderr.includes('"code":"recovery_kit_invalid"') ||
-    invalidRecovery.stderr.includes("secret")
+    malformedRecovery.exitCode !== 2 ||
+    !malformedRecovery.stderr.includes('"category":"invocation"') ||
+    !malformedRecovery.stderr.includes('"code":"recovery_code_malformed"')
   )
-    throw new Error("packaged CLI portable-artifact rejection contract failed");
+    throw new Error("packaged CLI malformed recovery code contract failed");
 
-  state.active = false;
+  // Losing the Account Master Key is recovered from the Recovery Code: the
+  // wrapper is fetched and unwrapped locally, so the code never leaves the
+  // machine and the key lands back on this Device.
+  await deviceStorage.clearAccountKey(accountScope);
   const recovered = await runJson(
     [
       "device",
       "recover",
       "--profile",
       "live",
-      "--from",
-      recoveryPath,
+      "--recovery-code",
+      recoveryCode,
       "--no-input",
       "--json",
     ],
     environment,
   );
-  recoveredDeviceId = requireString(recovered.deviceId, "recovered Device id");
   if (
-    recovered.active !== true ||
-    recoveredDeviceId === initialDeviceId ||
-    state.recoveryCount !== 1 ||
-    !state.active
+    recovered.via !== "recovery-code" ||
+    recovered.deviceId !== initialDeviceId
   )
-    throw new Error("packaged CLI Recovery Kit restore contract failed");
-  await deviceStorage.load({
-    pin,
-    deviceId: uuidBytes(recoveredDeviceId),
-  });
+    throw new Error("packaged CLI recovery-code round trip contract failed");
+  const restoredKey = await deviceStorage
+    .loadAccountKey(accountScope)
+    .catch(() => null);
+  if (
+    restoredKey === null ||
+    restoredKey.length !== accountMasterKey.length ||
+    !restoredKey.every((byte, index) => byte === accountMasterKey[index])
+  )
+    throw new Error("packaged CLI did not restore the Account Master Key");
   const requiredRequests = [
     "GET /api/v1/capabilities",
     "POST /api/v1/devices/bootstrap",
     `POST /api/v1/environments/${environmentId}/sync`,
     "POST /api/v1/operations/",
     "POST /api/v1/devices/enrollments",
-    "POST /api/v1/recovery/envelopes",
-    "POST /api/v1/recovery/restore",
+    "POST /api/v1/account-keys/wrappers",
+    "GET /api/v1/account-keys/wrappers",
   ];
   if (
     requiredRequests.some(

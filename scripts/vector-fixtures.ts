@@ -52,10 +52,22 @@ export const buildVectorObject = (
     fields.set(37, 2);
     fields.set(70, 3);
   }
-  if (kind === 9) fields.set(70, 6);
   for (const [field, value] of overrides) fields.set(field, value);
   if (kind === 7 && fields.get(70) === 5 && !overrides.has(37))
     fields.set(37, 3);
+  if (kind === 20 || kind === 21 || kind === 22) {
+    fields.set(47, zeros(48));
+    fields.set(71, 32);
+    fields.set(72, 48);
+  }
+  if (kind === 20 && fields.get(86) === 1) {
+    fields.set(93, zeros(16, 0x21));
+    fields.set(94, zeros(32, 0x22));
+  }
+  if (kind === 21 && fields.get(96) === 1) {
+    fields.set(13, zeros(16, 0x23));
+    fields.set(30, 1);
+  }
   let object = protocolObjectFromFields(kind, fields);
   if (definition.serverVisible) {
     const unsigned = canonicalEncode(object);
@@ -67,11 +79,14 @@ export const buildVectorObject = (
 };
 
 export const VECTOR_CASES = Object.freeze([
-  ...Array.from({ length: 19 }, (_, index) => ({
-    id: `object-${index + 1}`,
-    kind: index + 1,
-    object: buildVectorObject(index + 1),
-  })),
+  ...Object.keys(OBJECT_REGISTRY)
+    .map(Number)
+    .sort((left, right) => left - right)
+    .map((kind) => ({
+      id: `object-${kind}`,
+      kind,
+      object: buildVectorObject(kind),
+    })),
   ...Array.from({ length: 5 }, (_, index) => {
     const mutation = index + 1;
     const overrides = new Map<number, CborValue>([[35, mutation]]);
@@ -118,14 +133,43 @@ export const VECTOR_CASES = Object.freeze([
       [3, 8],
       [4, 8],
       [5, 7],
-      [6, 9],
-      [7, 8],
     ] as ReadonlyArray<readonly [number, number]>
   ).map(([grantKind, kind]) => ({
     id: `grant-kind-${grantKind}`,
     kind,
     object: buildVectorObject(kind, new Map([[70, grantKind]])),
   })),
+  {
+    id: "wrapper-type-2",
+    kind: 20,
+    object: buildVectorObject(
+      20,
+      new Map<number, CborValue>([
+        [86, 2],
+        [89, 1],
+        [90, 65536],
+        [91, 3],
+        [92, 1],
+      ]),
+    ),
+  },
+  {
+    id: "wrapper-type-3",
+    kind: 20,
+    object: buildVectorObject(20, new Map<number, CborValue>([[86, 3]])),
+  },
+  {
+    id: "key-envelope-type-2",
+    kind: 21,
+    object: buildVectorObject(
+      21,
+      new Map<number, CborValue>([
+        [96, 2],
+        [26, zeros(16, 0x24)],
+        [31, 1],
+      ]),
+    ),
+  },
   ...Array.from({ length: 3 }, (_, index) => ({
     id: `membership-role-${index + 1}`,
     kind: 6,

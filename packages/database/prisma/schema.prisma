@@ -43,7 +43,7 @@ enum OperationKind {
   MEMBERSHIP_CHANGE
   DEVICE_ENROLLMENT
   DEVICE_REVOCATION
-  RECOVERY
+  ACCOUNT_KEY
   ENVIRONMENT_GENESIS
   REVISION_PUBLICATION
   ROLLBACK
@@ -77,8 +77,23 @@ enum GrantKind {
   CURRENT_USER_VALUE_GENERATION
   HISTORICAL_USER_VALUE_GENERATION
   DEVICE_TRUST_PROVISIONING
-  RECOVERY_PROJECT_KEY
-  RECOVERY_USER_VALUE_KEY
+}
+
+enum WrapperType {
+  PASSKEY_PRF
+  PASSWORD
+  RECOVERY_CODE
+}
+
+enum KeyEnvelopeType {
+  PROJECT_EPOCH_KEY
+  USER_VALUE_KEY
+}
+
+enum TransferStatus {
+  PENDING
+  CONSUMED
+  EXPIRED
 }
 
 enum AuditEntityKind {
@@ -93,7 +108,9 @@ enum AuditEntityKind {
   OPERATION
   PROTOCOL_OBJECT
   REVISION
-  RECOVERY_ENVELOPE
+  ACCOUNT_KEY_WRAPPER
+  ACCOUNT_KEY_ENVELOPE
+  ACCOUNT_KEY_TRANSFER
 }
 
 enum AuditEventKind {
@@ -105,7 +122,10 @@ enum AuditEventKind {
   MEMBERSHIP_REMOVED
   DEVICE_ENROLLED
   DEVICE_REVOKED
-  RECOVERY_COMPLETED
+  ACCOUNT_KEY_WRAPPER_ADDED
+  ACCOUNT_KEY_WRAPPER_REVOKED
+  ACCOUNT_KEY_ENVELOPE_PUBLISHED
+  ACCOUNT_KEY_TRANSFER_CREATED
   PROJECT_CREATED
   PROJECT_ARCHIVED
   PROJECT_RESTORED
@@ -227,7 +247,6 @@ model User {
   authSubject        String   @db.VarChar(255)
   githubSubject      String   @db.VarChar(255)
   identityGeneration BigInt   @default(1) @db.BigInt
-  recoveryGeneration BigInt   @default(1) @db.BigInt
   createdAt          DateTime @default(now()) @db.Timestamptz(3)
 
   serverProfile               ServerProfile             @relation(fields: [serverProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -241,14 +260,14 @@ model User {
   environmentsCreated         Environment[]             @relation("EnvironmentCreatedBy")
   operations                  Operation[]               @relation("OperationActor")
   auditEvents                 AuditEvent[]              @relation("AuditActor")
-  recoveryEnvelopes           RecoveryEnvelope[]
-  recoveryAttempts            RecoveryAttempt[]
-  recoveryChallenges          RecoveryChallengeObject[]
+  accountKeyWrappers          AccountKeyWrapperObject[]
+  accountKeyEnvelopes         AccountKeyEnvelopeObject[]
+  accountKeyEnvelopeOwned     AccountKeyEnvelopeObject[] @relation("EnvelopeOwnerUser")
+  accountKeyTransfers         AccountKeyTransferObject[]
   identityRollovers           IdentityRolloverObject[]
   ownedLaneObjects            LaneObject[]              @relation("LaneOwner")
   originalProviderLaneObjects LaneObject[]              @relation("LaneOriginalProvider")
   ownedGrants                 GrantObject[]             @relation("GrantOwner")
-  recoveryGrantObjects        RecoveryGrantObject[]
   revisions                   Revision[]
 
   @@unique([serverProfileId, authSubject])
@@ -288,8 +307,7 @@ model Device {
   enrollmentsInitiated DeviceEnrollment[]         @relation("EnrollmentInitiator")
   enrollmentsApproved  DeviceEnrollment[]         @relation("EnrollmentApprover")
   approvalObjects      EnrollmentApprovalObject[]
-  recoveryAttempts     RecoveryAttempt[]
-  recoveryChallenges   RecoveryChallengeObject[]
+  accountKeyTransfers  AccountKeyTransferObject[]
   operations           Operation[]                @relation("OperationDevice")
   auditEvents          AuditEvent[]               @relation("AuditDevice")
   certificateObject    DeviceCertificateObject?
@@ -325,43 +343,6 @@ model DeviceEnrollment {
 
   @@index([userId, expiresAt])
   @@map("device_enrollments")
-}
-
-model RecoveryEnvelope {
-  id                 String    @id @default(uuid()) @db.Uuid
-  userId             String    @db.Uuid
-  protocolObjectId   String    @unique @db.Uuid
-  identityGeneration BigInt    @db.BigInt
-  recoveryGeneration BigInt    @db.BigInt
-  ciphertextHash     Bytes     @db.ByteA
-  ciphertextLength   Int
-  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
-  retiredAt          DateTime? @db.Timestamptz(3)
-
-  user                 User                  @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  protocolObject       ProtocolObject        @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  attempts             RecoveryAttempt[]
-  recoveryGrantObjects RecoveryGrantObject[]
-
-  @@index([userId, recoveryGeneration])
-  @@map("recovery_envelopes")
-}
-
-model RecoveryAttempt {
-  id            String   @id @default(uuid()) @db.Uuid
-  userId        String   @db.Uuid
-  deviceId      String?  @db.Uuid
-  envelopeId    String?  @db.Uuid
-  challengeHash Bytes    @db.ByteA
-  succeeded     Boolean
-  attemptedAt   DateTime @default(now()) @db.Timestamptz(3)
-
-  user     User              @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  device   Device?           @relation(fields: [deviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  envelope RecoveryEnvelope? @relation(fields: [envelopeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-
-  @@index([userId, attemptedAt])
-  @@map("recovery_attempts")
 }
 
 model Team {
@@ -440,7 +421,7 @@ model Project {
   laneObjects          LaneObject[]
   grants               GrantObject[]
   epochTransitions     EpochTransitionObject[]
-  recoveryGrantObjects RecoveryGrantObject[]
+  accountKeyEnvelopes  AccountKeyEnvelopeObject[]
   manifestDescriptors  ManifestDescriptor[]
 
   @@index([teamId, lifecycle])
@@ -488,7 +469,6 @@ model ProtocolObject {
   identityRollover     IdentityRolloverObject?
   deviceCertificate    DeviceCertificateObject?
   grantObject          GrantObject?
-  recoveryEnvelope     RecoveryEnvelope?
   epochTransition      EpochTransitionObject?
   laneObject           LaneObject?
   laneCommitment       LaneCommitmentObject?
@@ -497,8 +477,9 @@ model ProtocolObject {
   enrollmentObject     EnrollmentObject?
   enrollmentApproval   EnrollmentApprovalObject?
   membershipActivation MembershipActivationObject?
-  recoveryChallenge    RecoveryChallengeObject?
-  recoveryGrantObject  RecoveryGrantObject?
+  accountKeyWrapper    AccountKeyWrapperObject?
+  accountKeyEnvelope   AccountKeyEnvelopeObject?
+  accountKeyTransfer   AccountKeyTransferObject?
 
   @@unique([digest])
   @@index([kind, acceptedAt])
@@ -611,19 +592,71 @@ model GrantObject {
   @@map("grant_objects")
 }
 
-model RecoveryGrantObject {
+model AccountKeyWrapperObject {
   protocolObjectId   String    @id @db.Uuid
-  recoveryEnvelopeId String    @db.Uuid
-  projectId          String    @db.Uuid
-  grantKind          GrantKind
-  ownerUserId        String?   @db.Uuid
+  userId             String    @db.Uuid
+  identityGeneration BigInt    @db.BigInt
+  wrapperType        WrapperType
+  wrapperId          Bytes     @db.ByteA
+  wrapperGeneration  BigInt    @default(1) @db.BigInt
+  credentialId       Bytes?    @db.ByteA
+  kdfName            Int?
+  kdfMemoryKib       BigInt?   @db.BigInt
+  kdfIterations      BigInt?   @db.BigInt
+  kdfParallelism     Int?
+  ciphertextHash     Bytes     @db.ByteA
+  ciphertextLength   Int
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+  retiredAt          DateTime? @db.Timestamptz(3)
 
-  protocolObject   ProtocolObject   @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  recoveryEnvelope RecoveryEnvelope @relation(fields: [recoveryEnvelopeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  project          Project          @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  ownerUser        User?            @relation(fields: [ownerUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@map("recovery_grant_objects")
+  @@index([userId, wrapperType, retiredAt])
+  @@index([userId, wrapperId])
+  @@map("account_key_wrapper_objects")
+}
+
+model AccountKeyEnvelopeObject {
+  protocolObjectId String        @id @db.Uuid
+  userId           String        @db.Uuid
+  envelopeType     KeyEnvelopeType
+  projectId        String?       @db.Uuid
+  projectEpoch     BigInt?       @db.BigInt
+  ownerUserId      String?       @db.Uuid
+  valueGeneration  BigInt?       @db.BigInt
+  ciphertextHash   Bytes         @db.ByteA
+  ciphertextLength Int
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+  retiredAt        DateTime?     @db.Timestamptz(3)
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project        Project?       @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  ownerUser      User?          @relation("EnvelopeOwnerUser", fields: [ownerUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId, envelopeType, projectId, projectEpoch])
+  @@index([userId, ownerUserId, valueGeneration])
+  @@map("account_key_envelope_objects")
+}
+
+model AccountKeyTransferObject {
+  protocolObjectId  String         @id @db.Uuid
+  userId            String         @db.Uuid
+  recipientDeviceId String         @db.Uuid
+  transferId        Bytes          @db.ByteA
+  status            TransferStatus @default(PENDING)
+  expiresAt         DateTime       @db.Timestamptz(3)
+  consumedAt        DateTime?      @db.Timestamptz(3)
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+
+  protocolObject  ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user            User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipientDevice Device         @relation(fields: [recipientDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId, status, expiresAt])
+  @@index([recipientDeviceId, status])
+  @@map("account_key_transfer_objects")
 }
 
 model EpochTransitionObject {
@@ -755,21 +788,6 @@ model RevisionLaneCommitment {
   @@id([revisionId, ordinal])
   @@unique([revisionId, laneObjectId])
   @@map("revision_lane_commitments")
-}
-
-model RecoveryChallengeObject {
-  protocolObjectId   String   @id @db.Uuid
-  userId             String   @db.Uuid
-  deviceId           String   @db.Uuid
-  recoveryGeneration BigInt   @db.BigInt
-  challengeHash      Bytes    @db.ByteA
-  expiresAt          DateTime @db.Timestamptz(3)
-
-  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  user           User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  device         Device         @relation(fields: [deviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-
-  @@map("recovery_challenge_objects")
 }
 
 model Operation {

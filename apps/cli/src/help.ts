@@ -258,24 +258,34 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   "device backup": {
     about:
-      "Create a Recovery Kit. The protected file is never printed in normal or JSON output; when replacing an existing path, the prior artifact is retained at <path>.previous.",
+      "Create a Recovery Code that unlocks this account's Account Master Key. The 13x4 code is printed once and is the only output; it is the only recovery path that works on a headless machine, where passkeys and the encryption password need a browser.",
+    notes: [
+      "This Device must already be unlocked: if it does not hold the Account Master Key, run dotrelay device recover first.",
+      "A new Recovery Code invalidates the previous one, so store it somewhere safe.",
+    ],
     options: {
-      output: "Recovery Kit file to write (required)",
-      force: "approve rotating an existing Recovery Kit",
       profile: "Server Profile to back up (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
-    examples: ["dotrelay device backup --output recovery-kit.json"],
+    examples: ["dotrelay device backup"],
   },
   "device recover": {
     about:
-      "Restore this Device from a Recovery Kit. Recovery verifies the profile, User, envelope signature, and fresh challenge proof, and never falls back to initial bootstrap.",
+      "Unlock this Device by recovering the account's Account Master Key, either from a Recovery Code or from an Account Key Transfer created by a trusted Device or browser.",
+    notes: [
+      "Recovery Code entry happens on this machine: the code is never sent to the Server Profile.",
+      "Passkey and encryption password unlock in a browser, which then hands the key to this machine as a transfer.",
+    ],
     options: {
-      from: "Recovery Kit file to restore from (required)",
+      recoveryCode: "Recovery Code to unlock with (13 groups of 4 characters)",
+      transfer: "Account Key Transfer id to accept",
       profile: "Server Profile to recover onto (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
-    examples: ["dotrelay device recover --from recovery-kit.json"],
+    examples: [
+      "dotrelay device recover --recovery-code K4ET-P7QN-...-W9ZC",
+      "dotrelay device recover --transfer <transfer-id>",
+    ],
   },
   "project link": {
     about:
@@ -311,7 +321,7 @@ const GROUP_ABOUT: Readonly<Partial<Record<CommandName, string>>> = {
   profile:
     "Save, select, and list the Server Profiles this installation trusts.",
   device:
-    "Manage Device enrollment, dual-control handoffs, and Recovery Kits for this machine.",
+    "Manage Device enrollment, dual-control handoffs, and account recovery for this machine.",
   project: "Manage the Project linked to this GitHub Repository.",
   env: "Select the worktree Environment.",
 };
@@ -323,6 +333,8 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
   environment: "Environment id or label (default: the worktree selection)",
   output: "output file",
   from: "input file",
+  recoveryCode: "Recovery Code that unlocks the account",
+  transfer: "Account Key Transfer id to accept",
   team: "Team id used to resolve the Project",
   name: "not supported by any command",
   remote: "Git remote that identifies this worktree when remotes are ambiguous",
@@ -346,6 +358,8 @@ const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   environment: " <environment-id-or-label>",
   output: " <file>",
   from: " <file>",
+  recoveryCode: " <code>",
+  transfer: " <transfer-id>",
   team: " <team-id>",
   remote: " <remote-name>",
   limit: " <count>",
@@ -516,8 +530,8 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["device begin", "Begin dual-control enrollment"],
   ["device approve", "Approve an enrollment handoff"],
   ["device complete", "Complete an approved enrollment"],
-  ["device backup", "Create a Recovery Kit"],
-  ["device recover", "Restore a Device from a Recovery Kit"],
+  ["device backup", "Create a Recovery Code for this account"],
+  ["device recover", "Unlock this Device with a Recovery Code or transfer"],
   ["context", "Detect the GitHub Repository"],
   ["project link", "Link a Project explicitly"],
   ["env use", "Select an Environment by id or label"],

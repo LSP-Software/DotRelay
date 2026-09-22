@@ -48,7 +48,7 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     26: field("owner User id", "bytes", { exactLength: 16 }),
     27: field("original-provider User id", "bytes", { exactLength: 16 }),
     28: field("User identity generation", "uint"),
-    29: field("recovery generation", "uint"),
+    29: field("recovery wrapper generation", "uint"),
     30: field("Project epoch", "uint"),
     31: field("User-defined Value generation", "uint"),
     32: field("created-at Unix milliseconds", "uint"),
@@ -76,9 +76,6 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     55: field("complete recipient set", "array"),
     56: field("grant references", "array"),
     57: field("challenge", "bytes", { exactLength: 32 }),
-    58: field("challenge hash", "bytes", { exactLength: 48 }),
-    59: field("recovery-envelope id", "bytes", { exactLength: 16 }),
-    60: field("recovery-envelope hash", "bytes", { exactLength: 48 }),
     61: field("wrapped key material", "bytes", { maxLength: 4096 }),
     62: field("previous Project epoch", "uint"),
     63: field("new Project epoch", "uint"),
@@ -108,6 +105,17 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     }),
     84: field("HKDF purpose code", "uint"),
     85: field("HKDF context hash", "bytes", { exactLength: 48 }),
+    86: field("Account Key Wrapper type", "uint"),
+    87: field("Account Key Wrapper id", "bytes", { exactLength: 16 }),
+    88: field("Account Key Wrapper format version", "uint"),
+    89: field("Account Key Wrapper KDF name", "uint"),
+    90: field("Account Key Wrapper KDF memory (KiB)", "uint"),
+    91: field("Account Key Wrapper KDF iterations", "uint"),
+    92: field("Account Key Wrapper KDF parallelism", "uint"),
+    93: field("passkey credential id", "bytes", { maxLength: 255 }),
+    94: field("passkey PRF input", "bytes", { exactLength: 32 }),
+    95: field("Account Key Transfer id", "bytes", { exactLength: 16 }),
+    96: field("key envelope type", "uint"),
   });
 
 export const ENUM_REGISTRIES = Object.freeze({
@@ -135,8 +143,16 @@ export const ENUM_REGISTRIES = Object.freeze({
     3: "current User-defined Value generation",
     4: "historical User-defined Value generation",
     5: "Device trust provisioning",
-    6: "recovery Project key",
-    7: "recovery User-defined Value key",
+  }),
+  wrapperType: Object.freeze({
+    1: "passkey PRF",
+    2: "encryption password",
+    3: "recovery code",
+  }),
+  kdfName: Object.freeze({ 1: "Argon2id" }),
+  keyEnvelopeType: Object.freeze({
+    1: "Project Epoch Key",
+    2: "User Value Key",
   }),
   membershipRole: Object.freeze({ 1: "owner", 2: "admin", 3: "member" }),
   lifecycle: Object.freeze({
@@ -229,27 +245,6 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
       72, 9, 26, 31,
     ]),
   ),
-  9: objectDefinition(
-    "Recovery grant",
-    [0, 1, 2, 8, 9, 13, 17, 24, 37, 39, 41, 44, 45, 46, 47, 48, 59, 70, 71, 72],
-    signed([
-      0, 1, 2, 8, 9, 13, 17, 24, 28, 29, 30, 31, 37, 39, 41, 42, 44, 45, 46, 47,
-      48, 59, 70, 71, 72,
-    ]),
-  ),
-  10: objectDefinition(
-    "Recovery envelope",
-    [0, 1, 2, 8, 9, 17, 28, 29, 32, 39, 41, 44, 45, 46, 47, 48, 59, 71, 72],
-    signed([
-      0, 1, 2, 8, 9, 17, 28, 29, 32, 39, 41, 44, 45, 46, 47, 48, 59, 71, 72,
-    ]),
-  ),
-  11: objectDefinition(
-    "Recovery plaintext bundle",
-    [0, 1, 2, 8, 9, 28, 29, 80, 81],
-    [0, 1, 2, 8, 9, 28, 29, 80, 81],
-    false,
-  ),
   12: objectDefinition(
     "Epoch transition",
     [0, 1, 2, 8, 11, 13, 17, 23, 32, 55, 56, 62, 63, 64, 65, 66, 67],
@@ -284,11 +279,6 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
       53, 54, 21, 68,
     ]),
   ),
-  17: objectDefinition(
-    "Recovery challenge proof",
-    [0, 1, 2, 8, 9, 10, 17, 28, 29, 32, 33, 58],
-    signed([0, 1, 2, 8, 9, 10, 17, 28, 29, 32, 33, 58]),
-  ),
   18: objectDefinition(
     "Device private bundle",
     [0, 1, 2, 8, 9, 10, 28, 80, 81],
@@ -300,6 +290,28 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
     [0, 1, 2, 8, 9, 28, 29, 80, 81],
     [0, 1, 2, 8, 9, 28, 29, 80, 81, 82, 83],
     false,
+  ),
+  20: objectDefinition(
+    "Account Key Wrapper",
+    [0, 1, 2, 8, 9, 10, 17, 28, 32, 44, 46, 47, 48, 71, 72, 86, 87, 88],
+    signed([
+      0, 1, 2, 8, 9, 10, 17, 28, 32, 44, 46, 47, 48, 71, 72, 86, 87, 88, 89,
+      90, 91, 92, 93, 94,
+    ]),
+  ),
+  21: objectDefinition(
+    "Account Key Envelope",
+    [0, 1, 2, 8, 9, 10, 17, 32, 44, 46, 47, 48, 71, 72, 96],
+    signed([
+      0, 1, 2, 8, 9, 10, 17, 32, 44, 46, 47, 48, 71, 72, 96, 13, 26, 30, 31,
+    ]),
+  ),
+  22: objectDefinition(
+    "Account Key Transfer",
+    [0, 1, 2, 8, 9, 10, 25, 17, 32, 33, 44, 45, 46, 47, 48, 71, 72, 95],
+    signed([
+      0, 1, 2, 8, 9, 10, 25, 17, 32, 33, 44, 45, 46, 47, 48, 71, 72, 95,
+    ]),
   ),
 };
 

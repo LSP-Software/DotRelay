@@ -11,7 +11,7 @@ import { loadServerProfileConfig } from "./profile";
 
 const encodeBase64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 
-describe("Device and Recovery API payload parsers", () => {
+describe("Device and Account Key API payload parsers", () => {
   test("rejects malformed base64 before touching persistence", async () => {
     await expect(
       parseProtocolPayload(
@@ -69,8 +69,11 @@ describe("Device and Recovery API payload parsers", () => {
       "/api/v1/devices/enrollments",
       "/api/v1/devices/enrollments/11111111-1111-4111-8111-111111111111/approve",
       "/api/v1/devices/enrollments/11111111-1111-4111-8111-111111111111/complete",
-      "/api/v1/recovery/envelopes",
-      "/api/v1/recovery/attempts",
+      "/api/v1/account-keys/wrappers",
+      "/api/v1/account-keys/wrappers/revoke",
+      "/api/v1/account-keys/envelopes",
+      "/api/v1/account-keys/transfers",
+      "/api/v1/account-keys/transfers/00000000000000000000000000000000/accept",
     ];
     for (const endpoint of endpoints) {
       const response = await api.request(`${profile.origin}${endpoint}`, {

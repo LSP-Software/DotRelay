@@ -1,50 +1,50 @@
-import { createPrivateKey, createPublicKey } from "node:crypto";
 import { readFile, stat, unlink } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   assertPublicationAccepted,
+  createAccountKeyEnvelope,
+  createAccountKeyWrapper,
   type CliDeviceStorage,
   changedVariableIdsFromRevision,
   createCliDeviceStorage,
   createDeviceBootstrap,
-  createDeviceCertificate,
   createDeviceEnrollmentApproval,
   createDeviceEnrollmentRequest,
-  createDevicePrivateBundle,
   createProjectEpochGrantBootstrap,
   createProtocolTransport,
   createPublicationArtifacts,
-  createRecoveryChallengeProof,
-  createRecoveryKit,
   createVerifiedEnvironmentSession,
+  decodeRecoveryCode,
   type DecodedVariable,
   type DeviceEnrollmentRequest,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
   decodeSyncVariables,
+  encodeRecoveryCode,
   exportSigningPublicKey,
+  generateRecoveryCode,
   loadDeviceKeyMaterial,
+  openAccountKeyEnvelope,
+  openAccountKeyTransfer,
   openProjectEpochGrant,
-  openRecoveryKit,
   type ProtocolTransport,
   type PublicationContext,
+  parseAccountKeyEnvelope,
+  parseAccountKeyTransfer,
+  parseAccountKeyWrapper,
   parseDeviceEnrollmentTranscript,
   type RevisionSigningTrust,
   type RevisionSigningTrustEntry,
   reviewPublication,
   type SyncPageWire,
   UnreadableLaneError,
+  unwrapAccountKeyWrapper,
   verifySignedProtocolObject,
 } from "@dotrelay/client";
 import {
   encodeProtocolObject,
-  exportEncryptionPrivateKey,
-  exportSigningPrivateKey,
   generateEncryptionKeyPair,
-  importEncryptionPublicKey,
-  importSigningPublicKey,
   parseProtocolObject,
-  type ServerProfilePin,
   type SyncRevisionWire,
   sha384,
   sha384ToHex,
@@ -161,6 +161,7 @@ type Boundary = Readonly<{
   readonly rotationRequired: boolean;
   readonly cryptoAvailable: boolean;
   readonly epochGrant?: string;
+  readonly accountKeyEnvelope?: string;
   readonly signingTrustKeys: readonly string[];
   readonly signingTrustDevices: readonly SigningTrustDevice[];
   readonly peerDevices: readonly Readonly<{
@@ -222,6 +223,7 @@ export const workspaceBoundaryFields = [
   "signingTrustKeys",
   "signingTrustDevices",
   "epochGrant",
+  "accountKeyEnvelope",
   "peerDevices",
 ] as const;
 
@@ -278,6 +280,9 @@ const parseBoundary = (value: Record<string, unknown>): Boundary => {
     cryptoAvailable: isRecord(value.crypto) && value.crypto.available === true,
     ...(typeof value.epochGrant === "string"
       ? { epochGrant: value.epochGrant }
+      : {}),
+    ...(typeof value.accountKeyEnvelope === "string"
+      ? { accountKeyEnvelope: value.accountKeyEnvelope }
       : {}),
     signingTrustKeys: Array.isArray(value.signingTrustKeys)
       ? value.signingTrustKeys.filter(
@@ -536,20 +541,6 @@ const terminalConfirm = async (
       "the terminal could not be read, so the interactive prompt went unanswered",
     );
   }
-};
-
-const confirm = async (
-  options: WorkflowOptions,
-  question: string,
-): Promise<boolean> => {
-  if (options.confirm) return options.confirm(question);
-  if (options.noInput)
-    throw new CliInvocationError(
-      "this command requires interactive input; remove --no-input to answer the prompt",
-    );
-  if (options.prompt)
-    return parseConfirmAnswer(await options.prompt(`${question} [y/N]`));
-  return terminalConfirm(options, question, false);
 };
 
 // The review frame has already printed the question, so the terminal read
@@ -837,18 +828,6 @@ type EnrollmentArtifact = Readonly<{
   readonly certificateObjectId: string;
 }>;
 
-type RecoveryArtifact = Readonly<{
-  readonly version: 1;
-  readonly kind: "dotrelay-recovery-kit";
-  readonly serverProfileId: string;
-  readonly userId: string;
-  readonly envelopeId: string;
-  readonly identityGeneration: number;
-  readonly recoveryGeneration: number;
-  readonly activeDeviceSigningPublicKey: string;
-  readonly kit: string;
-}>;
-
 const base64 = (bytes: Uint8Array): string =>
   Buffer.from(bytes).toString("base64");
 
@@ -951,49 +930,6 @@ const readEnrollmentArtifact = async (
     ),
     certificate: requiredArtifactString(value, "certificate"),
     certificateObjectId: requiredArtifactString(value, "certificateObjectId"),
-  });
-};
-
-const readRecoveryArtifact = async (
-  path: string,
-): Promise<RecoveryArtifact> => {
-  const value = await artifactObject(path);
-  if (value.version !== 1 || value.kind !== "dotrelay-recovery-kit")
-    throw new CliError(
-      "crypto",
-      "the Recovery Kit has an unsupported format",
-      {},
-      "recovery_kit_invalid",
-    );
-  const identityGeneration = value.identityGeneration;
-  const recoveryGeneration = value.recoveryGeneration;
-  if (
-    typeof identityGeneration !== "number" ||
-    !Number.isSafeInteger(identityGeneration) ||
-    identityGeneration < 0 ||
-    typeof recoveryGeneration !== "number" ||
-    !Number.isSafeInteger(recoveryGeneration) ||
-    recoveryGeneration < 1
-  )
-    throw new CliError(
-      "crypto",
-      "the Recovery Kit generations are invalid",
-      {},
-      "recovery_kit_invalid",
-    );
-  return Object.freeze({
-    version: 1,
-    kind: "dotrelay-recovery-kit",
-    serverProfileId: requiredArtifactString(value, "serverProfileId"),
-    userId: requiredArtifactString(value, "userId"),
-    envelopeId: requiredArtifactString(value, "envelopeId"),
-    identityGeneration,
-    recoveryGeneration,
-    activeDeviceSigningPublicKey: requiredArtifactString(
-      value,
-      "activeDeviceSigningPublicKey",
-    ),
-    kit: requiredArtifactString(value, "kit"),
   });
 };
 
@@ -1670,877 +1606,253 @@ export const completeDeviceEnrollment = async (
   };
 };
 
-const protocolBytes = (
-  object: ReadonlyMap<number, unknown>,
-  field: number,
-  label: string,
-  length?: number,
-): Uint8Array => {
-  const value = object.get(field);
-  if (
-    !(value instanceof Uint8Array) ||
-    (length !== undefined && value.length !== length)
-  )
-    throw new CliError(
-      "crypto",
-      `the ${label} is invalid`,
-      {},
-      "recovery_kit_invalid",
-    );
-  return value;
-};
+// A Device recovers the User's Account Master Key by exactly one of:
+// unwrapping an active Recovery Code wrapper with a code entered on the
+// Device (the wrapper object is service-visible; the code is never sent),
+// or accepting an Account Key Transfer sealed to the Device's X25519 key by
+// a trusted Device or browser. A passkey or encryption password still
+// unlocks in a browser, which then hands the AMK to a CLI Device as a
+// transfer. Once recovered, the AMK is stored in the Device's credential
+// scope so the Device can open the Account Key Envelopes the service holds
+// without any other Device.
 
-const protocolNumber = (
-  object: ReadonlyMap<number, unknown>,
-  field: number,
-  label: string,
-): number => {
-  const value = object.get(field);
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
-    throw new CliError(
-      "crypto",
-      `the ${label} is invalid`,
-      {},
-      "recovery_kit_invalid",
-    );
-  return value;
-};
-
-type CurrentRecoveryEnvelope = Readonly<{
-  readonly envelopeId: string;
-  readonly recoveryGeneration: number;
-}>;
-
-// The service's current envelope is the only authority on which Recovery Kit
-// generation it accepted; both the next-generation probe and the uncertain
-// publication verification read it.
-const readCurrentRecoveryEnvelope = async (
-  admin: StrictJsonClient,
-): Promise<CurrentRecoveryEnvelope | null> => {
-  let current: Record<string, unknown>;
-  try {
-    current = await admin.get("/api/v1/recovery/envelopes/current", [
-      "envelopeId",
-      "identityGeneration",
-      "recoveryGeneration",
-      "ciphertextHash",
-      "ciphertextLength",
-      "object",
-    ]);
-  } catch (error) {
-    if (error instanceof CliError && error.code === "resource_not_found")
-      return null;
-    throw error;
-  }
-  const generation = current.recoveryGeneration;
-  const parsed =
-    typeof generation === "string" && /^[1-9][0-9]*$/.test(generation)
-      ? BigInt(generation)
-      : null;
-  if (parsed === null || parsed >= BigInt(Number.MAX_SAFE_INTEGER))
-    throw new CliError(
-      "conflict",
-      "the Recovery Kit generation cannot advance safely",
-      {},
-      "recovery_generation_invalid",
-    );
-  const envelopeId = current.envelopeId;
-  if (typeof envelopeId !== "string" || envelopeId.length === 0)
-    throw new CliError(
-      "transient",
-      "the Server Profile returned an invalid current Recovery Kit envelope",
-      {},
-      "response_invalid",
-    );
-  return { envelopeId, recoveryGeneration: Number(parsed) };
-};
-
-const nextRecoveryGeneration = async (
-  admin: StrictJsonClient,
-): Promise<
-  Readonly<{
-    readonly next: number;
-    readonly current: CurrentRecoveryEnvelope | null;
-  }>
-> => {
-  const current = await readCurrentRecoveryEnvelope(admin);
-  if (current === null) return { next: 2, current: null };
-  return { next: current.recoveryGeneration + 1, current };
-};
-
-type PriorRecoveryKit = Readonly<{
-  readonly path: string;
-  readonly role: "active" | "previous";
-  readonly envelopeId?: string;
-  readonly recoveryGeneration?: number;
-}>;
-
-// The artifact layout keeps the last service-accepted kit (the active file)
-// and its retired predecessor (the .previous file) separate from any in-flight
-// attempt (the .pending file), so a failed publication can never clobber a
-// known-good kit.
-const priorRecoveryKits = async (
-  output: string,
-): Promise<readonly PriorRecoveryKit[]> => {
-  const candidates: Array<
-    readonly [path: string, role: "active" | "previous"]
-  > = [
-    [output, "active"],
-    [`${output}.previous`, "previous"],
-  ];
-  const kits: PriorRecoveryKit[] = [];
-  for (const [path, role] of candidates) {
-    try {
-      await readFile(path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw new CliError(
-        "local-io",
-        "could not read the prior Recovery Kit file",
-        {},
-        "artifact_read_failed",
-      );
-    }
-    let artifact: RecoveryArtifact | null = null;
-    try {
-      artifact = await readRecoveryArtifact(path);
-    } catch {
-      artifact = null;
-    }
-    kits.push(
-      artifact === null
-        ? { path, role }
-        : {
-            path,
-            role,
-            envelopeId: artifact.envelopeId,
-            recoveryGeneration: artifact.recoveryGeneration,
-          },
-    );
-  }
-  return kits;
-};
-
-const priorRecoveryKitDescription = (kit: PriorRecoveryKit): string =>
-  kit.envelopeId === undefined
-    ? `${kit.path} (${kit.role} file that is not a recognizable Recovery Kit)`
-    : `${kit.path} (${kit.role} kit, envelope ${kit.envelopeId}, generation ${kit.recoveryGeneration})`;
-
-const rotationConfirmQuestion = (
-  output: string,
-  nextGeneration: number,
-  kits: readonly PriorRecoveryKit[],
-): string =>
-  [
-    `Rotate the Recovery Kit at ${output}?`,
-    `The new generation ${nextGeneration} kit becomes the active kit.`,
-    "These prior kits become obsolete and can no longer restore a Device:",
-    ...kits.map((kit) => `  - ${priorRecoveryKitDescription(kit)}`),
-  ].join("\n");
-
-// A rotation retires kits that may be the only path to restoring a Device, so
-// it never proceeds without approval: --force under --no-input, or an explicit
-// interactive confirmation naming the kits that become obsolete.
-const approveRecoveryKitRotation = async (
+const accountKeyScope = (
   options: WorkflowOptions,
-  output: string,
-  nextGeneration: number,
-  kits: readonly PriorRecoveryKit[],
-): Promise<void> => {
-  if (kits.length === 0) return;
-  if (options.noInput) {
-    if (options.force) return;
-    throw new CliError(
-      "invocation",
-      `rotating the Recovery Kit at ${output} retires ${kits.length === 1 ? "a prior kit" : `${kits.length} prior kits`}; re-run with --force to approve the rotation`,
-      {},
-      "deletion_requires_approval",
-    );
-  }
-  if (
-    !(await confirm(
-      options,
-      rotationConfirmQuestion(output, nextGeneration, kits),
-    ))
-  )
-    throw new CliInvocationError("recovery kit rotation was declined");
-};
+  deviceId: string,
+) => Object.freeze({ pin: options.profile.pin, deviceId: uuidToBytes(deviceId) });
 
-// After an uncertain publication the only authority on which generation the
-// service accepted is its current envelope, so the active artifact is
-// replaced only when the service reports exactly the envelope this attempt
-// published.
-const verifyRecoveryPublication = async (
-  admin: StrictJsonClient,
-  envelopeId: string,
-  recoveryGeneration: number,
-): Promise<"accepted" | "not-accepted" | "unverified"> => {
-  let current: CurrentRecoveryEnvelope | null;
+const loadAccountMasterKey = async (
+  options: WorkflowOptions,
+  deviceId: string,
+): Promise<Uint8Array | null> => {
+  const storage = resolveDeviceStorage(options);
   try {
-    current = await readCurrentRecoveryEnvelope(admin);
-  } catch {
-    return "unverified";
-  }
-  if (current === null) return "not-accepted";
-  return current.envelopeId.toLowerCase() === envelopeId.toLowerCase() &&
-    current.recoveryGeneration === recoveryGeneration
-    ? "accepted"
-    : "not-accepted";
-};
-
-// A pending attempt left by an earlier interrupted run is either the kit the
-// service accepted (and must be promoted) or an attempt it never accepted
-// (and must not shadow the next one).
-const pendingRecoveryKit = async (
-  path: string,
-): Promise<RecoveryArtifact | null> => {
-  try {
-    await stat(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw new CliError(
-      "local-io",
-      "could not read the pending Recovery Kit file",
-      {},
-      "artifact_read_failed",
-    );
-  }
-  try {
-    return await readRecoveryArtifact(path);
+    return await storage.loadAccountKey(accountKeyScope(options, deviceId));
   } catch {
     return null;
   }
 };
 
-const discardPendingKit = async (path: string): Promise<void> => {
-  await unlink(path).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  });
-};
-
-const rotationReport = (
-  output: string,
-  envelopeId: string,
-  recoveryGeneration: number,
-  priorKits: readonly PriorRecoveryKit[],
-  verb: string,
-): Readonly<{
-  output: string;
-  envelopeId: string;
-  recoveryGeneration: number;
-  rotated: boolean;
-  retiredEnvelopeIds: readonly string[];
-  previous?: string;
-  message: string;
-}> => {
-  const rotated = priorKits.length > 0;
-  const retiredEnvelopeIds = priorKits
-    .filter((kit) => kit.envelopeId !== undefined)
-    .map((kit) => kit.envelopeId as string);
-  return {
-    output,
-    envelopeId,
-    recoveryGeneration,
-    rotated,
-    retiredEnvelopeIds,
-    ...(rotated ? { previous: `${output}.previous` } : {}),
-    message: rotated
-      ? `${verb} ${output} (generation ${recoveryGeneration}); prior kits are now obsolete: ${priorKits
-          .map(priorRecoveryKitDescription)
-          .join("; ")}`
-      : `${verb} ${output} (generation ${recoveryGeneration})`,
-  };
-};
-
-export const createRecoveryBackup = async (
-  options: WorkflowOptions,
-  output: string,
-): Promise<
-  Readonly<{
-    output: string;
-    envelopeId: string;
-    recoveryGeneration: number;
-    rotated: boolean;
-    retiredEnvelopeIds: readonly string[];
-    previous?: string;
-    message: string;
-  }>
-> => {
-  const authorized = await loadAuthorizedDevice(options);
-  const { next: recoveryGeneration, current } = await nextRecoveryGeneration(
-    authorized.admin,
-  );
-  const pendingPath = `${output}.pending`;
-  // Locate the prior artifacts before staging anything: a rotation must name
-  // the kits it retires, and a failed attempt must never reach them.
-  const priorKits = await priorRecoveryKits(output);
-  const pendingKit = await pendingRecoveryKit(pendingPath);
-  const pendingAccepted =
-    pendingKit !== null &&
-    current !== null &&
-    pendingKit.envelopeId.toLowerCase() === current.envelopeId.toLowerCase() &&
-    pendingKit.recoveryGeneration === current.recoveryGeneration;
-  if (pendingAccepted) {
-    // An earlier, interrupted run staged the kit the service now accepts.
-    // Promote it instead of overwriting it with a new attempt, so the last
-    // service-accepted kit is never lost to a retry.
-    await approveRecoveryKitRotation(
-      options,
-      output,
-      current.recoveryGeneration,
-      priorKits,
-    );
-    const pendingText = await readFile(pendingPath, "utf8");
-    await atomicWriteProtectedFile(output, pendingText, {
-      retainPrevious: true,
-    });
-    await discardPendingKit(pendingPath);
-    return rotationReport(
-      output,
-      pendingKit.envelopeId,
-      current.recoveryGeneration,
-      priorKits,
-      "Promoted the service-accepted Recovery Kit",
-    );
-  }
-  if (pendingKit !== null)
-    // A pending attempt the service never accepted must not shadow the next
-    // one.
-    await discardPendingKit(pendingPath);
-  await approveRecoveryKitRotation(
-    options,
-    output,
-    recoveryGeneration,
-    priorKits,
-  );
-  const kit = await createRecoveryKit({
-    serverProfileId: options.profile.pin.serverProfileId,
-    userId: authorized.userId,
-    identityGeneration: authorized.bundle.userIdentityGeneration,
-    recoveryGeneration,
-    activeDeviceSigningPrivateKey: authorized.keys.signingPrivateKey,
-  });
-  const envelope = parseProtocolObject(kit.envelopeBytes);
-  const envelopeId = kit.envelopeId;
-  const artifact: RecoveryArtifact = {
-    version: 1,
-    kind: "dotrelay-recovery-kit",
-    serverProfileId: options.profile.pin.serverProfileId,
-    userId: authorized.userId,
-    envelopeId,
-    identityGeneration: kit.identityGeneration,
-    recoveryGeneration: kit.recoveryGeneration,
-    activeDeviceSigningPublicKey: base64(
-      await exportSigningPublicKey(
-        authorized.keys.signingPublicKey ??
-          (() => {
-            throw new CliError(
-              "crypto",
-              "the active Device has no signing public key",
-              {},
-              "device_bundle_invalid",
-            );
-          })(),
-      ),
-    ),
-    kit: base64(kit.bytes),
-  };
-  // Stage the attempt in a file that no failure mode can mistake for the
-  // active kit; the active artifact is replaced only after the service has
-  // accepted the new generation.
-  const pendingText = `${JSON.stringify(artifact)}\n`;
-  await atomicWriteProtectedFile(pendingPath, pendingText);
-  const operationId = crypto.randomUUID();
-  let publicationError: unknown = null;
-  try {
-    await authorized.admin.post(
-      "/api/v1/recovery/envelopes",
-      {
-        operationId,
-        objectId: envelopeId,
-        object: base64(kit.envelopeBytes),
-        envelopeId,
-        identityGeneration: String(kit.identityGeneration),
-        recoveryGeneration: String(kit.recoveryGeneration),
-        ciphertextHash: sha384ToHex(
-          protocolBytes(envelope, 48, "Recovery Kit ciphertext hash", 48),
-        ),
-        ciphertextLength: protocolNumber(
-          envelope,
-          72,
-          "Recovery Kit ciphertext length",
-        ),
-      },
-      ["envelopeId", "recoveryGeneration", "idempotent"],
-      { idempotencyKey: operationId },
-    );
-  } catch (error) {
-    publicationError = error;
-  }
-  if (publicationError !== null) {
-    // A definitive rejection cannot have been accepted; an uncertain failure
-    // must be reconciled against the service's current envelope first.
-    const definitive =
-      publicationError instanceof CliError &&
-      publicationError.category !== "transient";
-    if (definitive) {
-      await discardPendingKit(pendingPath);
-      throw publicationError;
-    }
-    const verified = await verifyRecoveryPublication(
-      authorized.admin,
-      envelopeId,
-      recoveryGeneration,
-    );
-    if (verified === "not-accepted") {
-      await discardPendingKit(pendingPath);
-      throw publicationError;
-    }
-    if (verified === "unverified") {
-      throw new CliError(
-        "transient",
-        `the Recovery Kit publication outcome is unverified; the pending kit is retained at ${pendingPath} and the last service-accepted kit at ${output} is unchanged; re-run device backup to verify which generation the service accepted`,
-        {},
-        "service_unavailable",
-      );
-    }
-    // The service accepted this attempt even though the response was lost.
-  }
-  await atomicWriteProtectedFile(output, pendingText, { retainPrevious: true });
-  await discardPendingKit(pendingPath);
-  return rotationReport(
-    output,
-    envelopeId,
-    recoveryGeneration,
-    priorKits,
-    "Wrote Recovery Kit",
-  );
-};
-
-const publicSpkiFromPrivate = async (
-  privateKey: CryptoKey,
-  exportPrivate: (key: CryptoKey) => Promise<Uint8Array>,
-): Promise<Uint8Array> => {
-  try {
-    const privateKeyObject = createPrivateKey({
-      key: Buffer.from(await exportPrivate(privateKey)),
-      format: "der",
-      type: "pkcs8",
-    });
-    const publicKey = createPublicKey(privateKeyObject).export({
-      format: "der",
-      type: "spki",
-    });
-    return new Uint8Array(publicKey as Buffer);
-  } catch {
-    throw new CliError(
-      "crypto",
-      "the Recovery Kit replacement keys are invalid",
-      {},
-      "recovery_kit_invalid",
-    );
-  }
-};
-
-type PendingRecovery = Readonly<{
-  readonly serverProfileId: string;
-  readonly userId: string;
-  readonly envelopeId: string;
-  readonly identityGeneration: number;
-  readonly recoveryGeneration: number;
-  readonly replacementDeviceId: string;
-  readonly operationId: string;
-  readonly challenge: Uint8Array;
-  readonly expiresAtMs: number;
-  readonly proof: Uint8Array;
-  readonly certificateId: string;
-  readonly certificate: Uint8Array;
+type ActiveWrapper = Readonly<{
+  readonly wrapperId: string;
+  readonly type: "passkey-prf" | "password" | "recovery-code";
+  readonly object: string;
 }>;
 
-const recoveryStatePath = (
-  directory: string,
-  profile: ServerProfilePin,
-): string => join(directory, `device-${profile.serverProfileId}.recovery.json`);
-
-// The pending record pins every value the restore request is built from, so
-// an uncertain response can be re-posted as the same logical operation
-// instead of starting a fresh one.
-const readPendingRecovery = async (
-  path: string,
-): Promise<PendingRecovery | null> => {
-  let value: unknown;
-  try {
-    value = JSON.parse(await readFile(path, "utf8"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw new CliError(
-      "local-io",
-      "could not read the pending Recovery Kit restore",
-      {},
-      "context_read_failed",
-    );
-  }
-  if (
-    !isRecord(value) ||
-    value.version !== 1 ||
-    value.kind !== "dotrelay-pending-recovery-restore"
-  )
-    throw new CliError(
-      "local-io",
-      "the pending Recovery Kit restore is invalid",
-      {},
-      "context_read_failed",
-    );
-  const identityGeneration = value.identityGeneration;
-  const recoveryGeneration = value.recoveryGeneration;
-  if (
-    typeof identityGeneration !== "number" ||
-    !Number.isSafeInteger(identityGeneration) ||
-    identityGeneration < 0 ||
-    typeof recoveryGeneration !== "number" ||
-    !Number.isSafeInteger(recoveryGeneration) ||
-    recoveryGeneration < 1
-  )
-    throw new CliError(
-      "local-io",
-      "the pending Recovery Kit restore is invalid",
-      {},
-      "context_read_failed",
-    );
-  const expiresAt =
-    typeof value.expiresAt === "string" ? Date.parse(value.expiresAt) : NaN;
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0)
-    throw new CliError(
-      "local-io",
-      "the pending Recovery Kit restore is invalid",
-      {},
-      "context_read_failed",
-    );
-  const challenge = fromBase64(value.challenge, "pending recovery challenge");
-  if (challenge.length !== 32)
-    throw new CliError(
-      "local-io",
-      "the pending Recovery Kit restore is invalid",
-      {},
-      "context_read_failed",
-    );
-  return Object.freeze({
-    serverProfileId: requiredString(
-      value.serverProfileId,
-      "pending recovery field",
-    ),
-    userId: requiredString(value.userId, "pending recovery field"),
-    envelopeId: requiredString(value.envelopeId, "pending recovery field"),
-    identityGeneration,
-    recoveryGeneration,
-    replacementDeviceId: requiredString(
-      value.replacementDeviceId,
-      "pending recovery field",
-    ),
-    operationId: requiredString(value.operationId, "pending recovery field"),
-    challenge,
-    expiresAtMs: expiresAt,
-    proof: fromBase64(value.proof, "pending recovery proof"),
-    certificateId: requiredString(
-      value.certificateId,
-      "pending recovery field",
-    ),
-    certificate: fromBase64(value.certificate, "pending recovery certificate"),
-  });
-};
-
-const writePendingRecovery = async (
-  path: string,
-  pending: PendingRecovery,
-): Promise<void> => {
-  await atomicWriteProtectedFile(
-    path,
-    `${JSON.stringify({
-      version: 1,
-      kind: "dotrelay-pending-recovery-restore",
-      serverProfileId: pending.serverProfileId,
-      userId: pending.userId,
-      envelopeId: pending.envelopeId,
-      identityGeneration: pending.identityGeneration,
-      recoveryGeneration: pending.recoveryGeneration,
-      replacementDeviceId: pending.replacementDeviceId,
-      operationId: pending.operationId,
-      challenge: base64(pending.challenge),
-      expiresAt: new Date(pending.expiresAtMs).toISOString(),
-      proof: base64(pending.proof),
-      certificateId: pending.certificateId,
-      certificate: base64(pending.certificate),
-    })}\n`,
+const isActiveWrapper = (value: unknown): value is ActiveWrapper => {
+  if (!isRecord(value)) return false;
+  const wrapperId = value.wrapperId;
+  const object = value.object;
+  return (
+    typeof wrapperId === "string" &&
+    wrapperId.length > 0 &&
+    (value.type === "passkey-prf" ||
+      value.type === "password" ||
+      value.type === "recovery-code") &&
+    typeof object === "string" &&
+    object.length > 0
   );
 };
 
-const clearPendingRecovery = async (path: string): Promise<void> => {
-  await unlink(path).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  });
-};
-
-const loadRecoveryIdentity = async (
-  options: WorkflowOptions,
-  allowActiveDevices = false,
-): Promise<
-  Readonly<{ admin: StrictJsonClient; boundary: Boundary; userId: string }>
-> => {
-  const localDeviceId = await readDeviceId(
-    deviceMetadataPath(options.stateDirectory, options.profile.pin),
-  );
-  const admin = createDeviceAdmin(options, localDeviceId ?? undefined);
-  const session = await admin.get("/api/v1/session", ["authenticated", "user"]);
-  if (!isRecord(session.user))
-    throw new CliError(
-      "authentication",
-      "the Server Profile returned no User identity",
-      {},
-      "session_invalid",
-    );
-  const userId = requiredString(session.user.id, "User id");
-  const boundary = parseBoundary(
-    await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
-  );
-  // Recovery restores a replacement Device for the whole User, so it is
-  // blocked while any of the User's Devices is active on the Server Profile.
-  // Resuming an in-flight restore skips the check: the in-flight replacement
-  // is the only Device that restore may activate, and the idempotent restore
-  // request reconciles the service-side outcome before any local commit.
-  if (
-    !allowActiveDevices &&
-    (boundary.device.active || boundary.activeDeviceCount > 0)
-  )
-    throw new CliError(
-      "conflict",
-      "Recovery Kit restore requires no active Device",
-      {},
-      "recovery_requires_no_active_device",
-    );
-  return { admin, boundary, userId };
-};
-
-export const restoreRecoveryKit = async (
-  options: WorkflowOptions,
-  path: string,
-): Promise<
-  Readonly<{ deviceId: string; active: boolean; recoveryGeneration: number }>
-> => {
-  const artifact = await readRecoveryArtifact(path);
-  if (
-    artifact.serverProfileId.toLowerCase() !==
-    options.profile.pin.serverProfileId
-  )
-    throw new CliError(
-      "authentication",
-      "the Recovery Kit belongs to another Server Profile",
-      {},
-      "profile_mismatch",
-    );
-  // A pending restore that matches this Kit's operation is resumed instead of
-  // re-created, so the pending record is located before the no-active-Device
-  // check: its in-flight replacement Device is the only active Device the
-  // resume may observe.
-  const statePath = recoveryStatePath(
-    options.stateDirectory,
-    options.profile.pin,
-  );
-  const pending = await readPendingRecovery(statePath);
-  const resuming =
-    pending !== null &&
-    pending.serverProfileId.toLowerCase() ===
-      options.profile.pin.serverProfileId.toLowerCase() &&
-    pending.userId.toLowerCase() === artifact.userId.toLowerCase() &&
-    pending.envelopeId.toLowerCase() === artifact.envelopeId.toLowerCase() &&
-    pending.identityGeneration === artifact.identityGeneration &&
-    pending.recoveryGeneration === artifact.recoveryGeneration;
-  const identity = await loadRecoveryIdentity(options, resuming);
-  if (artifact.userId.toLowerCase() !== identity.userId.toLowerCase())
-    throw new CliError(
-      "authentication",
-      "the Recovery Kit belongs to another User",
-      {},
-      "user_mismatch",
-    );
-  let opened: Awaited<ReturnType<typeof openRecoveryKit>>;
-  try {
-    opened = await openRecoveryKit(fromBase64(artifact.kit, "Recovery Kit"), {
-      serverProfileId: options.profile.pin.serverProfileId,
-      userId: identity.userId,
-      activeDeviceSigningPublicKey: fromBase64(
-        artifact.activeDeviceSigningPublicKey,
-        "Recovery Kit signing public key",
-      ),
-    });
-  } catch (error) {
-    if (error instanceof CliError) throw error;
-    throw new CliError(
-      "crypto",
-      "the Recovery Kit could not be verified",
-      {},
-      "recovery_kit_invalid",
-    );
-  }
-  if (
-    opened.envelopeId !== artifact.envelopeId.toLowerCase() ||
-    opened.identityGeneration !== artifact.identityGeneration ||
-    opened.recoveryGeneration !== artifact.recoveryGeneration ||
-    (resuming &&
-      pending.replacementDeviceId.toLowerCase() !==
-        opened.replacementDeviceId.toLowerCase())
-  )
-    throw new CliError(
-      "crypto",
-      resuming
-        ? "the pending Recovery Kit restore does not match its Kit"
-        : "the Recovery Kit metadata does not match its envelope",
-      {},
-      "recovery_kit_invalid",
-    );
-  const encryptionSpki = await publicSpkiFromPrivate(
-    opened.replacementEncryptionPrivateKey,
-    exportEncryptionPrivateKey,
-  );
-  const signingSpki = await publicSpkiFromPrivate(
-    opened.replacementSigningPrivateKey,
-    exportSigningPrivateKey,
-  );
-  const encryptionPublicKey = await importEncryptionPublicKey(encryptionSpki);
-  const signingPublicKey = await importSigningPublicKey(signingSpki);
-  const bundle = await createDevicePrivateBundle({
-    pin: options.profile.pin,
-    userId: uuidToBytes(identity.userId),
-    deviceId: uuidToBytes(opened.replacementDeviceId),
-    userIdentityGeneration: opened.identityGeneration,
-    keyMaterial: {
-      encryptionPrivateKey: opened.replacementEncryptionPrivateKey,
-      signingPrivateKey: opened.replacementSigningPrivateKey,
-      encryptionPublicKey,
-      signingPublicKey,
-    },
-    encryptionPublicKey: encryptionSpki,
-    signingPublicKey: signingSpki,
-  });
-  const rawEncryptionPublicKey = await rawPublicKey(encryptionPublicKey);
-  const rawSigningPublicKey = await rawPublicKey(signingPublicKey);
-  const storage = resolveDeviceStorage(options);
-  let operation: PendingRecovery;
-  if (resuming) {
-    if (pending.expiresAtMs <= Date.now()) {
-      await clearPendingRecovery(statePath);
-      throw new CliError(
-        "conflict",
-        "the pending Recovery Kit restore has expired; create a new Recovery Kit",
-        {},
-        "device_authorization_expired",
-      );
-    }
-    operation = pending;
-  } else {
-    const challenge = crypto.getRandomValues(new Uint8Array(32));
-    const challengeExpiresAtMs = Date.now() + 10 * 60 * 1000;
-    const proof = await createRecoveryChallengeProof({
-      serverProfileId: options.profile.pin.serverProfileId,
-      userId: identity.userId,
-      replacementDeviceId: opened.replacementDeviceId,
-      correlationId: opened.envelopeId,
-      identityGeneration: opened.identityGeneration,
-      recoveryGeneration: opened.recoveryGeneration,
-      challenge,
-      expiresAtMs: challengeExpiresAtMs,
-      signingPrivateKey: opened.replacementSigningPrivateKey,
-    });
-    const certificate = await createDeviceCertificate({
-      serverProfileId: options.profile.pin.serverProfileId,
-      userId: identity.userId,
-      deviceId: opened.replacementDeviceId,
-      identityGeneration: opened.identityGeneration,
-      encryptionPublicKey: rawEncryptionPublicKey,
-      signingPublicKey: rawSigningPublicKey,
-      signingPrivateKey: opened.replacementSigningPrivateKey,
-    });
-    operation = Object.freeze({
-      serverProfileId: options.profile.pin.serverProfileId,
-      userId: identity.userId,
-      envelopeId: opened.envelopeId,
-      identityGeneration: opened.identityGeneration,
-      recoveryGeneration: opened.recoveryGeneration,
-      replacementDeviceId: opened.replacementDeviceId,
-      operationId: crypto.randomUUID(),
-      challenge,
-      expiresAtMs: challengeExpiresAtMs,
-      proof: proof.canonicalBytes,
-      certificateId: crypto.randomUUID(),
-      certificate,
-    });
-    // Persist the operation before it is submitted so an uncertain response
-    // can be reconciled as the same logical operation, with the same
-    // operation id and pending key material.
-    await writePendingRecovery(statePath, operation);
-  }
-  // The replacement bundle is stored under its own Device scope as the
-  // pending key material; it does not change the active Device selection.
-  await storage.save(bundle);
-  let response: Record<string, unknown>;
-  try {
-    response = await identity.admin.post(
-      "/api/v1/recovery/restore",
-      {
-        operationId: operation.operationId,
-        objectId: opened.envelopeId,
-        envelope: base64(encodeProtocolObject(opened.envelope)),
-        object: base64(encodeProtocolObject(opened.envelope)),
-        envelopeId: opened.envelopeId,
-        identityGeneration: String(opened.identityGeneration),
-        recoveryGeneration: String(opened.recoveryGeneration),
-        deviceId: opened.replacementDeviceId,
-        challenge: base64(operation.challenge),
-        expiresAt: new Date(operation.expiresAtMs).toISOString(),
-        proof: base64(operation.proof),
-        replacementEncryptionPublicKey: base64(rawEncryptionPublicKey),
-        replacementSigningPublicKey: base64(rawSigningPublicKey),
-        x25519PublicKey: base64(rawEncryptionPublicKey),
-        ed25519PublicKey: base64(rawSigningPublicKey),
-        keyId: base64(await sha384(rawEncryptionPublicKey)),
-        certificateId: operation.certificateId,
-        certificate: base64(operation.certificate),
-      },
-      ["deviceId", "active", "recoveryGeneration", "idempotent"],
-      { idempotencyKey: operation.operationId },
-    );
-  } catch (error) {
-    // A definitive rejection leaves nothing in flight, so the pending record
-    // is discarded and the prior Device selection stands. A transient failure
-    // may still have reached the service, so the pending operation must
-    // survive for the next reconciliation attempt.
-    if (error instanceof CliError && error.category !== "transient")
-      await clearPendingRecovery(statePath);
-    throw error;
-  }
-  // The approval identifies the Device selection that becomes active. The
-  // local selection switches only for the exact replacement Device this
-  // operation prepared.
-  if (
-    response.active !== true ||
-    typeof response.deviceId !== "string" ||
-    response.deviceId.toLowerCase() !== opened.replacementDeviceId.toLowerCase()
-  )
+const fetchActiveWrappers = async (
+  admin: StrictJsonClient,
+): Promise<readonly ActiveWrapper[]> => {
+  const body = await admin.get("/api/v1/account-keys/wrappers", ["wrappers"]);
+  const wrappers = body.wrappers;
+  if (!Array.isArray(wrappers))
     throw new CliError(
       "transient",
-      "the Server Profile did not confirm this replacement Device",
+      "the Server Profile returned an invalid wrapper list",
       {},
       "response_invalid",
     );
-  await writeDeviceId(
-    deviceMetadataPath(options.stateDirectory, options.profile.pin),
-    options.profile.pin,
-    opened.replacementDeviceId,
+  return Object.freeze(wrappers.filter(isActiveWrapper));
+};
+
+export const createRecoveryCodeBackup = async (
+  options: WorkflowOptions,
+): Promise<
+  Readonly<{
+    readonly recoveryCode: string;
+    readonly wrapperId: string;
+    readonly message: string;
+  }>
+> => {
+  const authorized = await loadAuthorizedDevice(options);
+  const storage = resolveDeviceStorage(options);
+  const accountMasterKey = await storage
+    .loadAccountKey(accountKeyScope(options, authorized.deviceId))
+    .catch(() => null);
+  if (!accountMasterKey)
+    throw new CliError(
+      "authentication",
+      "this Device is not unlocked; run dotrelay device recover --recovery-code <code> to unlock it",
+      {},
+      "account_key_not_unlocked",
+    );
+  const recoveryCode = generateRecoveryCode();
+  const wrapper = await createAccountKeyWrapper({
+    serverProfileId: options.profile.pin.serverProfileId,
+    userId: uuidToBytes(authorized.userId),
+    deviceId: uuidToBytes(authorized.deviceId),
+    userIdentityGeneration: authorized.bundle.userIdentityGeneration,
+    createdAtMs: Date.now(),
+    accountMasterKey,
+    signingPrivateKey: authorized.keys.signingPrivateKey,
+    kind: { type: "recoveryCode", recoveryCode },
+  });
+  const operationId = crypto.randomUUID();
+  await authorized.admin.post(
+    "/api/v1/account-keys/wrappers",
+    {
+      operationId,
+      objectId: crypto.randomUUID(),
+      object: base64(encodeProtocolObject(wrapper.object)),
+      wrapperId: bytesToHex(wrapper.wrapperId),
+      identityGeneration: String(authorized.bundle.userIdentityGeneration),
+      ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
+      ciphertextLength: wrapper.ciphertext.length,
+    },
+    ["wrapperId", "idempotent"],
+    { idempotencyKey: operationId },
   );
-  await clearPendingRecovery(statePath);
   return {
-    deviceId: opened.replacementDeviceId,
-    active: true,
-    recoveryGeneration: opened.recoveryGeneration,
+    recoveryCode: encodeRecoveryCode(recoveryCode),
+    wrapperId: bytesToHex(wrapper.wrapperId),
+    message:
+      "A new Recovery Code wrapper is active and the previous recovery code no longer works; the code is shown only once, so store it somewhere safe",
+  };
+};
+
+export const recoverAccountKey = async (
+  options: WorkflowOptions,
+  input: Readonly<{
+    readonly recoveryCode?: string;
+    readonly transferId?: string;
+  }>,
+): Promise<
+  Readonly<{
+    readonly deviceId: string;
+    readonly via: "recovery-code" | "transfer";
+    readonly message: string;
+  }>
+> => {
+  const hasCode = input.recoveryCode !== undefined;
+  const hasTransfer = input.transferId !== undefined;
+  if (hasCode === hasTransfer)
+    throw new CliInvocationError(
+      "device recover requires exactly one of --recovery-code <code> or --transfer <transfer-id>",
+    );
+  await enrollFirstDevice(options);
+  const authorized = await loadAuthorizedDevice(options);
+  const storage = resolveDeviceStorage(options);
+  let accountMasterKey: Uint8Array;
+  let via: "recovery-code" | "transfer";
+  if (hasCode) {
+    let code: Uint8Array;
+    try {
+      code = decodeRecoveryCode(input.recoveryCode as string);
+    } catch {
+      throw new CliError(
+        "invocation",
+        "the recovery code is malformed; it is 13 groups of 4 Crockford characters",
+        {},
+        "recovery_code_malformed",
+      );
+    }
+    const wrappers = await fetchActiveWrappers(authorized.admin);
+    const entry = wrappers.find((wrapper) => wrapper.type === "recovery-code");
+    if (!entry)
+      throw new CliError(
+        "conflict",
+        "the account has no active Recovery Code wrapper; create one with dotrelay device backup or the web app",
+        {},
+        "recovery_wrapper_missing",
+      );
+    let wrapper: ReturnType<typeof parseAccountKeyWrapper>;
+    try {
+      wrapper = parseAccountKeyWrapper(
+        fromBase64(entry.object, "recovery wrapper"),
+      );
+    } catch {
+      throw new CliError(
+        "transient",
+        "the Server Profile returned an invalid recovery wrapper",
+        {},
+        "response_invalid",
+      );
+    }
+    try {
+      accountMasterKey = await unwrapAccountKeyWrapper(wrapper, {
+        recoveryCode: code,
+      });
+    } catch {
+      throw new CliError(
+        "authentication",
+        "could not unlock the account with the recovery code; re-check the code and retry",
+        {},
+        "account_key_unlock_failed",
+      );
+    }
+    via = "recovery-code";
+  } else {
+    const transferId = (input.transferId as string).toLowerCase();
+    let result: Record<string, unknown>;
+    try {
+      result = await authorized.admin.post(
+        `/api/v1/account-keys/transfers/${transferId}/accept`,
+        {},
+        ["accepted", "object"],
+      );
+    } catch (error) {
+      if (error instanceof CliError && error.code === "state_conflict")
+        throw new CliError(
+          "conflict",
+          "the account key transfer is not pending or has expired; have the approving Device create a new transfer",
+          {},
+          "state_conflict",
+        );
+      throw error;
+    }
+    let transfer: ReturnType<typeof parseAccountKeyTransfer>;
+    try {
+      transfer = parseAccountKeyTransfer(
+        fromBase64(result.object, "transfer object"),
+      );
+    } catch {
+      throw new CliError(
+        "transient",
+        "the Server Profile returned an invalid account key transfer",
+        {},
+        "response_invalid",
+      );
+    }
+    try {
+      accountMasterKey = await openAccountKeyTransfer(
+        transfer,
+        authorized.keys.encryptionPrivateKey,
+      );
+    } catch {
+      throw new CliError(
+        "crypto",
+        "could not open the account key transfer for this Device",
+        {},
+        "account_key_transfer_invalid",
+      );
+    }
+    via = "transfer";
+  }
+  await storage.saveAccountKey(
+    accountKeyScope(options, authorized.deviceId),
+    accountMasterKey,
+  );
+  return {
+    deviceId: authorized.deviceId,
+    via,
+    message:
+      via === "recovery-code"
+        ? "unlocked with the recovery code; the Account Master Key is now stored on this Device"
+        : "unlocked by the trusted Device transfer; the Account Master Key is now stored on this Device",
   };
 };
 
@@ -2722,16 +2034,110 @@ const loadWorkflowSession = async (
       {},
       "authentication_required",
     );
-  // A peer that already holds the current epoch grant owns the real key.
-  // Self-minting a fresh random key here can never decrypt pre-existing
-  // content and permanently blocks a peer re-share (peers that hold a grant
-  // are skipped), so the key must be handed over by a Device that holds it.
+  // A Device that holds the Account Master Key opens the Project Epoch Key
+  // from the Account Key Envelope the service holds, so it reads
+  // pre-existing content without any peer. A peer that already holds the
+  // current epoch grant owns the real key in the meantime: self-minting a
+  // fresh random key can never decrypt pre-existing content and blocks the
+  // peer re-share, so the key must come from a Device that holds it.
   const pendingActions: string[] = [];
   const peerHoldsEpochKey = boundary.peerDevices.some(
     (peer) => peer.hasEpochGrant,
   );
+  let accountMasterKey: Uint8Array | null = null;
+  try {
+    accountMasterKey = await loadAccountMasterKey(options, deviceId);
+  } catch {
+    accountMasterKey = null;
+  }
   let epochKey: Uint8Array | undefined;
-  if (!boundary.grantsReady && !peerHoldsEpochKey) {
+  if (
+    accountMasterKey !== null &&
+    boundary.accountKeyEnvelope !== undefined &&
+    boundary.environment.projectId !== null
+  ) {
+    let envelope: ReturnType<typeof parseAccountKeyEnvelope> | null = null;
+    try {
+      envelope = parseAccountKeyEnvelope(
+        fromBase64(boundary.accountKeyEnvelope, "Account key envelope"),
+      );
+    } catch {
+      envelope = null;
+    }
+    if (
+      envelope !== null &&
+      envelope.projectId !== undefined &&
+      bytesToHex(envelope.projectId) ===
+        bytesToHex(uuidToBytes(boundary.environment.projectId)) &&
+      envelope.projectEpoch ===
+        safeProjectEpoch(boundary.environment.projectEpoch)
+    ) {
+      try {
+        epochKey = await openAccountKeyEnvelope(envelope, accountMasterKey);
+      } catch {
+        epochKey = undefined;
+      }
+    }
+  }
+  if (
+    epochKey === undefined &&
+    accountMasterKey !== null &&
+    !boundary.grantsReady &&
+    !peerHoldsEpochKey &&
+    boundary.environment.projectId !== null
+  ) {
+    // No Device holds this epoch's key, so this unlocked Device establishes
+    // it: a fresh random Project Epoch Key wrapped by the User's AMK.
+    const userId = boundary.session.userId;
+    if (userId === undefined)
+      throw new CliError(
+        "transient",
+        "the Server Profile returned no User identity",
+        {},
+        "session_invalid",
+      );
+    const projectEpoch = safeProjectEpoch(boundary.environment.projectEpoch);
+    epochKey = crypto.getRandomValues(new Uint8Array(32));
+    const envelope = await createAccountKeyEnvelope({
+      serverProfileId: options.profile.pin.serverProfileId,
+      userId: uuidToBytes(userId),
+      deviceId: uuidToBytes(deviceId),
+      createdAtMs: Date.now(),
+      accountMasterKey,
+      signingPrivateKey: keys.signingPrivateKey,
+      kind: {
+        type: "projectEpochKey",
+        projectId: uuidToBytes(boundary.environment.projectId),
+        projectEpoch,
+        contentKey: epochKey,
+      },
+    });
+    const operationId = crypto.randomUUID();
+    await createDeviceAdmin(options, deviceId).post(
+      "/api/v1/account-keys/envelopes",
+      {
+        operationId,
+        objectId: crypto.randomUUID(),
+        object: base64(encodeProtocolObject(envelope.object)),
+        projectId: boundary.environment.projectId,
+        projectEpoch: String(projectEpoch),
+        ciphertextHash: sha384ToHex(await sha384(envelope.ciphertext)),
+        ciphertextLength: envelope.ciphertext.length,
+      },
+      ["objectId", "idempotent"],
+      { idempotencyKey: operationId },
+    );
+  } else if (epochKey === undefined && boundary.epochGrant) {
+    epochKey = await openProjectEpochGrant(
+      fromBase64(boundary.epochGrant, "Project epoch grant"),
+      keys.encryptionPrivateKey,
+    );
+  } else if (
+    epochKey === undefined &&
+    accountMasterKey === null &&
+    !boundary.grantsReady &&
+    !peerHoldsEpochKey
+  ) {
     epochKey = await bootstrapProjectGrant(
       options,
       token,
@@ -2739,16 +2145,15 @@ const loadWorkflowSession = async (
       deviceId,
       keys,
     );
-  } else if (!boundary.grantsReady) {
+  } else if (epochKey === undefined && !boundary.grantsReady) {
     pendingActions.push(
       "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
     );
-  } else if (boundary.epochGrant) {
-    epochKey = await openProjectEpochGrant(
-      fromBase64(boundary.epochGrant, "Project epoch grant"),
-      keys.encryptionPrivateKey,
-    );
   }
+  // A locked Device's missing Account Master Key is surfaced by the device
+  // backup/recover commands, not here: the missing-grant action above already
+  // names the actionable fix when the epoch key is unavailable, and an empty
+  // Environment needs no key at all.
   if (epochKey) {
     for (const action of await wrapEpochKeyToPeers(
       options,

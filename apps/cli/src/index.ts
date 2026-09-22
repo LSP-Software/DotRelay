@@ -112,10 +112,10 @@ import {
   approveDeviceEnrollment,
   beginDeviceEnrollment,
   completeDeviceEnrollment,
-  createRecoveryBackup,
+  createRecoveryCodeBackup,
   enrollDevice,
   enrollFirstDevice,
-  restoreRecoveryKit,
+  recoverAccountKey,
   runProtectedWorkflow,
   workspaceBoundaryFields,
 } from "./workflow";
@@ -503,10 +503,14 @@ const renderDeviceResult = (
       value: value.active ? "active · verified" : "pending approval",
       tone: value.active ? "brand" : "warn",
     });
-  if (typeof value.recoveryGeneration === "number")
+  if (typeof value.recoveryCode === "string")
+    rows.push({ key: "Recovery code", value: value.recoveryCode, tone: "accent" });
+  if (typeof value.wrapperId === "string")
+    rows.push({ key: "Wrapper", value: abbreviateId(value.wrapperId), tone: "muted" });
+  if (typeof value.via === "string")
     rows.push({
-      key: "Generation",
-      value: String(value.recoveryGeneration),
+      key: "Via",
+      value: value.via === "recovery-code" ? "recovery code" : "device transfer",
       tone: "accent",
     });
   const message =
@@ -1586,12 +1590,21 @@ const execute = async (
         ),
       };
     if (parsed.subcommand === "backup")
+      return { value: await createRecoveryCodeBackup(workflowOptions) };
+    if (parsed.subcommand === "recover")
       return {
-        value: await createRecoveryBackup(workflowOptions, parsed.output ?? ""),
+        value: await recoverAccountKey(workflowOptions, {
+          ...(parsed.recoveryCode !== undefined
+            ? { recoveryCode: parsed.recoveryCode }
+            : {}),
+          ...(parsed.transfer !== undefined
+            ? { transferId: parsed.transfer }
+            : {}),
+        }),
       };
-    return {
-      value: await restoreRecoveryKit(workflowOptions, parsed.from ?? ""),
-    };
+    throw new CliInvocationError(
+      "unrecognized device command; run dotrelay device --help",
+    );
   }
   const protectedCommands = new Set([
     "init",

@@ -1856,6 +1856,9 @@ describe("workspace boundary Device binding", () => {
         findMany: async (args: { where: Record<string, unknown> }) =>
           grants.filter((grant) => matchGrant(args.where, grant)),
       },
+      accountKeyEnvelopeObject: {
+        findFirst: async () => null,
+      },
     };
     const profile = loadServerProfileConfig({});
     const auth = {

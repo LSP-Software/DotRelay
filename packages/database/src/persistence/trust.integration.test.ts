@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import type { DatabaseClient, OperationInput, ProtocolObjectInput } from "..";
 import {
+  AccountKeyRepository,
   AdministrationRepository,
   createDatabaseClient,
   DeviceRepository,
@@ -14,7 +15,6 @@ import {
   ProjectEpochRepository,
   ProjectRepository,
   PublicationRepository,
-  RecoveryRepository,
   StagedObjectRepository,
   StaleEpochError,
   StaleHeadError,
@@ -623,7 +623,7 @@ integrationDescribe("trust workflow integration", () => {
     expect(activated.membership.lifecycle).toBe("ACTIVE");
   });
 
-  test("revokes a Device and replaces a Recovery envelope", async () => {
+  test("revokes a Device and manages Account Key wrappers", async () => {
     const user = await createUserFixture();
     const device = await createActiveDevice(user.id);
     const target = await createActiveDevice(user.id);
@@ -644,39 +644,84 @@ integrationDescribe("trust workflow integration", () => {
       throw new Error("revoke did not return a device");
     expect(revoked.device.lifecycle).toBe("REVOKED");
 
-    const recovery = new RecoveryRepository();
-    const envelopeObject = await createProtocolObjectInput(10);
-    const recoveryOperation = {
-      ...(await createOperationInput(user.id, "recovery-envelope", "RECOVERY")),
+    const accountKeys = new AccountKeyRepository();
+    const recoveryCodeObject = await createProtocolObjectInput(20);
+    const recoveryCodeOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "recovery-code-wrapper",
+        "ACCOUNT_KEY",
+      )),
       actorDeviceId: device.id,
     };
     await stageObject({
-      operation: recoveryOperation,
-      objectId: envelopeObject.id,
-      canonicalBytes: envelopeObject.canonicalBytes,
-      digest: envelopeObject.digest,
+      operation: recoveryCodeOperation,
+      objectId: recoveryCodeObject.id,
+      canonicalBytes: recoveryCodeObject.canonicalBytes,
+      digest: recoveryCodeObject.digest,
     });
-    const envelope = await recovery.replaceEnvelope(database, {
-      operation: recoveryOperation,
-      envelope: {
-        id: crypto.randomUUID(),
-        protocolObject: envelopeObject,
+    const recoveryCodeResult = await accountKeys.addWrapper(database, {
+      operation: recoveryCodeOperation,
+      wrapper: {
+        protocolObject: recoveryCodeObject,
         identityGeneration: 1n,
-        recoveryGeneration: 2n,
+        wrapperType: "RECOVERY_CODE",
+        wrapperId: crypto.getRandomValues(new Uint8Array(16)),
         ciphertextHash: new Uint8Array(48),
         ciphertextLength: 128,
       },
     });
-    if (!("envelope" in envelope))
-      throw new Error("recovery did not return an envelope");
-    expect(envelope.envelope.recoveryGeneration).toBe(2n);
-    await recovery.recordAttempt(database, {
-      userId: user.id,
-      deviceId: device.id,
-      envelopeId: envelope.envelope.id,
-      challengeHash: new Uint8Array(48),
-      succeeded: false,
+    if (!("wrapper" in recoveryCodeResult))
+      throw new Error("addWrapper did not return a wrapper");
+    const passwordObject = await createProtocolObjectInput(20);
+    const passwordOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "password-wrapper",
+        "ACCOUNT_KEY",
+      )),
+      actorDeviceId: device.id,
+    };
+    await stageObject({
+      operation: passwordOperation,
+      objectId: passwordObject.id,
+      canonicalBytes: passwordObject.canonicalBytes,
+      digest: passwordObject.digest,
     });
+    await accountKeys.addWrapper(database, {
+      operation: passwordOperation,
+      wrapper: {
+        protocolObject: passwordObject,
+        identityGeneration: 1n,
+        wrapperType: "PASSWORD",
+        wrapperId: crypto.getRandomValues(new Uint8Array(16)),
+        kdfName: 1,
+        kdfMemoryKib: 65536n,
+        kdfIterations: 3n,
+        kdfParallelism: 1,
+        ciphertextHash: new Uint8Array(48),
+        ciphertextLength: 128,
+      },
+    });
+    const retiredRecoveryCode =
+      await database.accountKeyWrapperObject.findUniqueOrThrow({
+        where: { protocolObjectId: recoveryCodeResult.wrapper.protocolObjectId },
+      });
+    expect(retiredRecoveryCode.retiredAt).not.toBeNull();
+
+    await expect(
+      accountKeys.revokeWrapper(database, {
+        operation: {
+          ...(await createOperationInput(
+            user.id,
+            "revoke-unknown-wrapper",
+            "ACCOUNT_KEY",
+          )),
+          actorDeviceId: device.id,
+        },
+        wrapperId: crypto.getRandomValues(new Uint8Array(16)),
+      }),
+    ).rejects.toThrow("account key wrapper is not active for this user");
   });
 
   test("refuses stale epoch rotation and duplicate operation bytes", async () => {

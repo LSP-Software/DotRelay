@@ -83,6 +83,7 @@ export type WorkspaceBoundary = Readonly<{
   readonly signingTrustKeys?: readonly string[];
   readonly signingTrustDevices?: readonly WorkspaceSigningTrustDevice[];
   readonly epochGrant?: string;
+  readonly accountKeyEnvelope?: string;
   readonly peerDevices?: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;

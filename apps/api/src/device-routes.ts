@@ -14,10 +14,9 @@ import {
 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
+  AccountKeyRepository,
   DeviceRepository,
   OperationRepository,
-  RecoveryRepository,
-  resolveDotRelayUser,
   StagedObjectRepository,
   sha384Digest,
 } from "@dotrelay/database";
@@ -56,6 +55,9 @@ const mapError = (error: unknown) => {
   if (error.message.includes("must differ")) return "forbidden" as const;
   if (error.message.includes("requires no active"))
     return "state_conflict" as const;
+  if (error.message.includes("cannot be revoked"))
+    return "state_conflict" as const;
+  if (error.message.includes("expired")) return "state_conflict" as const;
   return "service_unavailable" as const;
 };
 
@@ -69,12 +71,27 @@ const decodeBase64 = (value: unknown): Uint8Array => {
   }
 };
 
-const encodeBase64 = (bytes: Uint8Array) => {
-  let output = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000)
-    output += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  return btoa(output);
+const parseHex = (value: unknown, length: number): Uint8Array => {
+  if (
+    typeof value !== "string" ||
+    value.length !== length * 2 ||
+    !/^[0-9a-f]+$/i.test(value)
+  )
+    throw new ContractError("invalid_request");
+  const bytes = new Uint8Array(length);
+  for (let index = 0; index < length; index += 1)
+    bytes[index] = Number.parseInt(
+      (value as string).slice(index * 2, index * 2 + 2),
+      16,
+    );
+  return bytes;
 };
+
+const toHex = (bytes: Uint8Array) =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const toBase64 = (bytes: Uint8Array) =>
+  Buffer.from(bytes).toString("base64");
 
 const commandBytes = (...parts: readonly Uint8Array[]) => {
   const output = new Uint8Array(
@@ -122,18 +139,15 @@ const readBody = async (context: Context) => {
       "certificateObjectId",
       "certificateObject",
       "enrolledDeviceId",
-      "envelopeId",
-      "envelope",
-      "recoveryGeneration",
+      "wrapperId",
+      "recipientDeviceId",
+      "transferId",
+      "projectId",
+      "projectEpoch",
+      "ownerUserId",
+      "valueGeneration",
       "ciphertextHash",
       "ciphertextLength",
-      "succeeded",
-      "challenge",
-      "proof",
-      "certificateId",
-      "certificate",
-      "replacementSigningPublicKey",
-      "replacementEncryptionPublicKey",
     ]);
   } catch {
     throw new ContractError("invalid_request");
@@ -190,6 +204,26 @@ const requiredUint = (object: ReadonlyMap<number, unknown>, field: number) => {
   return BigInt(value);
 };
 
+const uintField = (
+  object: ReadonlyMap<number, unknown>,
+  field: number,
+): bigint => {
+  const value = object.get(field);
+  if (typeof value !== "number" && typeof value !== "bigint")
+    throw new ContractError("invalid_crypto_object");
+  return BigInt(value);
+};
+
+const intField = (
+  object: ReadonlyMap<number, unknown>,
+  field: number,
+): number => {
+  const value = object.get(field);
+  if (typeof value !== "number")
+    throw new ContractError("invalid_crypto_object");
+  return value;
+};
+
 const validateActorBinding = (
   object: ReadonlyMap<number, unknown>,
   profileId: string,
@@ -205,7 +239,7 @@ const validateActorBinding = (
 const operation = async (
   body: Record<string, unknown>,
   actor: { readonly userId: string; readonly deviceId: string },
-  kind: "DEVICE_ENROLLMENT" | "RECOVERY",
+  kind: "DEVICE_ENROLLMENT" | "ACCOUNT_KEY",
   commandBytes: Uint8Array,
 ) => {
   const operationId = parseUuid(body.operationId, "operationId");
@@ -217,24 +251,6 @@ const operation = async (
     commandBytes,
     commandDigest: await sha384Digest(commandBytes),
   } as const;
-};
-
-const requireSessionUser = async (
-  context: Context,
-  database: DatabaseClient,
-  profile: ServerProfileConfig,
-  auth: DotRelayAuth,
-): Promise<string | Response> => {
-  const session = await auth.api.getSession({
-    headers: context.req.raw.headers,
-  });
-  if (!session) return problem(context, "authentication_required");
-  const user = await resolveDotRelayUser(database, {
-    serverProfileId: profile.id,
-    authSubject: session.user.id,
-  });
-  if (!user) return problem(context, "service_unavailable");
-  return user.id;
 };
 
 const verifyWithStoredDevice = async (
@@ -315,7 +331,7 @@ export const registerDeviceRoutes = (
 ) => {
   const devices = new DeviceRepository();
   const operations = new OperationRepository();
-  const recovery = new RecoveryRepository();
+  const accountKeys = new AccountKeyRepository();
   const jsonLimit = bodyLimit({
     maxSize: profile.limits.adminBodyBytes,
     onError: (context) => problem(context, "payload_too_large"),
@@ -323,7 +339,8 @@ export const registerDeviceRoutes = (
 
   app.use("/api/v1/devices/enrollments", jsonLimit);
   app.use("/api/v1/devices/enrollments/*", jsonLimit);
-  app.use("/api/v1/recovery/*", jsonLimit);
+  app.use("/api/v1/account-keys", jsonLimit);
+  app.use("/api/v1/account-keys/*", jsonLimit);
 
   app.post("/api/v1/devices/enrollments", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
@@ -675,32 +692,57 @@ export const registerDeviceRoutes = (
     },
   );
 
-  app.post("/api/v1/recovery/envelopes", async (context) => {
+  const bytesField = (
+    object: ReadonlyMap<number, unknown>,
+    field: number,
+  ): Uint8Array => {
+    const value = object.get(field);
+    if (!(value instanceof Uint8Array))
+      throw new ContractError("invalid_crypto_object");
+    return value;
+  };
+
+  app.post("/api/v1/account-keys/wrappers", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
     try {
       const body = await readBody(context);
       requireIdempotencyKey(context, body.operationId);
-      const object = await parseProtocolPayload(body, "objectId", "object", 10);
+      const object = await parseProtocolPayload(body, "objectId", "object", 20);
+      validateActorBinding(object.object, profile.id, actor.userId);
+      if (
+        !equalBytes(
+          requiredBytes(object.object, 10, 16),
+          uuidToBytes(actor.deviceId),
+        )
+      )
+        throw new ContractError("invalid_crypto_object");
+      const wrapperId = parseHex(body.wrapperId, 16);
       const identityGeneration = body.identityGeneration;
-      const recoveryGeneration = body.recoveryGeneration;
+      if (
+        typeof identityGeneration !== "string" ||
+        !/^[1-9][0-9]*$/.test(identityGeneration)
+      )
+        throw new ContractError("invalid_request");
+      const ciphertextHash = parseSha384Hex(
+        body.ciphertextHash,
+        "ciphertextHash",
+      );
       const ciphertextLength = body.ciphertextLength;
       if (
-        ![identityGeneration, recoveryGeneration].every(
-          (value) => typeof value === "string" && /^[1-9][0-9]*$/.test(value),
-        ) ||
         typeof ciphertextLength !== "number" ||
         !Number.isSafeInteger(ciphertextLength) ||
         ciphertextLength < 0 ||
         ciphertextLength > 64 * 1024 * 1024
       )
         throw new ContractError("invalid_request");
-      const envelopeId = parseUuid(body.envelopeId, "envelopeId");
-      const ciphertextHash = parseSha384Hex(
-        body.ciphertextHash,
-        "ciphertextHash",
-      );
-      validateActorBinding(object.object, profile.id, actor.userId);
+      if (
+        !equalBytes(requiredBytes(object.object, 87, 16), wrapperId) ||
+        requiredUint(object.object, 28) !== BigInt(identityGeneration) ||
+        !equalBytes(requiredBytes(object.object, 48, 48), ciphertextHash) ||
+        requiredUint(object.object, 72) !== BigInt(ciphertextLength)
+      )
+        throw new ContractError("invalid_crypto_object");
       if (
         !(await verifyWithStoredDevice(
           database,
@@ -710,45 +752,62 @@ export const registerDeviceRoutes = (
         ))
       )
         throw new ContractError("invalid_crypto_object");
-      if (
-        !equalBytes(
-          requiredBytes(object.object, 59, 16),
-          uuidToBytes(envelopeId),
-        ) ||
-        requiredUint(object.object, 28) !==
-          BigInt(identityGeneration as string) ||
-        requiredUint(object.object, 29) !==
-          BigInt(recoveryGeneration as string) ||
-        !equalBytes(requiredBytes(object.object, 48, 48), ciphertextHash) ||
-        requiredUint(object.object, 72) !== BigInt(ciphertextLength)
-      )
+      const wrapperType = object.object.get(86);
+      if (wrapperType !== 1 && wrapperType !== 2 && wrapperType !== 3)
         throw new ContractError("invalid_crypto_object");
+      let credentialId: Uint8Array | undefined;
+      let kdf:
+        | Readonly<{
+            readonly kdfName: number;
+            readonly kdfMemoryKib: bigint;
+            readonly kdfIterations: bigint;
+            readonly kdfParallelism: number;
+          }>
+        | undefined;
+      if (wrapperType === 1) credentialId = bytesField(object.object, 93);
+      if (wrapperType === 2)
+        kdf = {
+          kdfName: intField(object.object, 89),
+          kdfMemoryKib: uintField(object.object, 90),
+          kdfIterations: uintField(object.object, 91),
+          kdfParallelism: intField(object.object, 92),
+        };
       const op = await operation(
         body,
         actor,
-        "RECOVERY",
+        "ACCOUNT_KEY",
         object.canonicalBytes,
       );
       await operations.begin(database, op);
       await stage(database, op, [object], profile.limits.stagingTtlSeconds);
-      const result = await recovery.replaceEnvelope(database, {
+      const result = await accountKeys.addWrapper(database, {
         operation: op,
-        envelope: {
-          id: envelopeId,
+        wrapper: {
           protocolObject: object,
-          identityGeneration: BigInt(identityGeneration as string),
-          recoveryGeneration: BigInt(recoveryGeneration as string),
+          identityGeneration: BigInt(identityGeneration),
+          wrapperType:
+            wrapperType === 1
+              ? "PASSKEY_PRF"
+              : wrapperType === 2
+                ? "PASSWORD"
+                : "RECOVERY_CODE",
+          wrapperId,
+          ...(credentialId ? { credentialId } : {}),
+          ...(kdf
+            ? {
+                kdfName: kdf.kdfName,
+                kdfMemoryKib: kdf.kdfMemoryKib,
+                kdfIterations: kdf.kdfIterations,
+                kdfParallelism: kdf.kdfParallelism,
+              }
+            : {}),
           ciphertextHash,
           ciphertextLength,
         },
       });
       return context.json(
         {
-          envelopeId,
-          recoveryGeneration: ("envelope" in result
-            ? result.envelope.recoveryGeneration
-            : BigInt(recoveryGeneration as string)
-          ).toString(),
+          wrapperId: toHex(wrapperId),
           idempotent: "idempotent" in result && result.idempotent,
         },
         201,
@@ -759,161 +818,202 @@ export const registerDeviceRoutes = (
     }
   });
 
-  app.post("/api/v1/recovery/restore", async (context) => {
-    const user = await requireSessionUser(context, database, profile, auth);
-    if (user instanceof Response) return user;
+  app.get("/api/v1/account-keys/wrappers", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const wrappers = await database.accountKeyWrapperObject.findMany({
+        where: { userId: actor.userId, retiredAt: null },
+        orderBy: { createdAt: "asc" },
+        select: {
+          wrapperId: true,
+          wrapperType: true,
+          kdfName: true,
+          kdfMemoryKib: true,
+          kdfIterations: true,
+          kdfParallelism: true,
+          createdAt: true,
+          protocolObject: { select: { canonicalBytes: true } },
+        },
+      });
+      return context.json(
+        {
+          wrappers: wrappers.map((wrapper) => ({
+            wrapperId: toHex(new Uint8Array(wrapper.wrapperId)),
+            type:
+              wrapper.wrapperType === "PASSKEY_PRF"
+                ? "passkey-prf"
+                : wrapper.wrapperType === "PASSWORD"
+                  ? "password"
+                  : "recovery-code",
+            object: toBase64(
+              new Uint8Array(wrapper.protocolObject.canonicalBytes),
+            ),
+            ...(wrapper.kdfName === null
+              ? {}
+              : {
+                  kdf: {
+                    name: wrapper.kdfName,
+                    memoryKib:
+                      wrapper.kdfMemoryKib === null
+                        ? null
+                        : wrapper.kdfMemoryKib.toString(),
+                    iterations:
+                      wrapper.kdfIterations === null
+                        ? null
+                        : wrapper.kdfIterations.toString(),
+                    parallelism: wrapper.kdfParallelism,
+                  },
+                }),
+            createdAt: wrapper.createdAt.toISOString(),
+          })),
+        },
+        200,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      return problem(context, mapError(error));
+    }
+  });
+
+  app.post("/api/v1/account-keys/wrappers/revoke", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
     try {
       const body = await readBody(context);
       requireIdempotencyKey(context, body.operationId);
-      const current = await database.recoveryEnvelope.findFirst({
-        where: { userId: user, retiredAt: null },
-        orderBy: { recoveryGeneration: "desc" },
-        include: { protocolObject: true },
+      const wrapperId = parseHex(body.wrapperId, 16);
+      const op = await operation(body, actor, "ACCOUNT_KEY", wrapperId);
+      await operations.begin(database, op);
+      const result = await accountKeys.revokeWrapper(database, {
+        operation: op,
+        wrapperId,
       });
-      if (!current) return problem(context, "resource_not_found");
-      const envelope = await parseProtocolPayload(
-        body,
-        "envelopeId",
-        "envelope",
-        10,
+      return context.json(
+        {
+          revoked: true,
+          idempotent: "idempotent" in result && result.idempotent,
+        },
+        200,
+        { "Cache-Control": "no-store" },
       );
+    } catch (error) {
+      return problem(context, mapError(error));
+    }
+  });
+
+  app.post("/api/v1/account-keys/envelopes", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const body = await readBody(context);
+      requireIdempotencyKey(context, body.operationId);
+      const object = await parseProtocolPayload(body, "objectId", "object", 21);
+      validateActorBinding(object.object, profile.id, actor.userId);
       if (
-        envelope.id !== current.id ||
         !equalBytes(
-          envelope.digest,
-          new Uint8Array(current.protocolObject.digest),
+          requiredBytes(object.object, 10, 16),
+          uuidToBytes(actor.deviceId),
         )
       )
-        throw new ContractError("state_conflict");
-      if (!(await verifyWithStoredDevice(database, user, envelope.object)))
         throw new ContractError("invalid_crypto_object");
-
-      const challenge = decodeBase64(body.challenge);
-      if (challenge.length !== 32) throw new ContractError("invalid_request");
-      const proofBytes = decodeBase64(body.proof);
-      const proof = parseProtocolObject(proofBytes);
-      validateProtocolObject(proof);
-      if (proof.get(1) !== 17) throw new ContractError("invalid_crypto_object");
-      const replacementSigningPublicKey = decodeBase64(
-        body.replacementSigningPublicKey,
+      const ciphertextHash = parseSha384Hex(
+        body.ciphertextHash,
+        "ciphertextHash",
       );
-      if (replacementSigningPublicKey.length !== 32)
-        throw new ContractError("invalid_request");
-      const proofKey = await crypto.subtle.importKey(
-        "raw",
-        new Uint8Array(replacementSigningPublicKey).buffer,
-        { name: "Ed25519" },
-        false,
-        ["verify"],
-      );
-      const proofSignature = requiredBytes(proof, 4, 64);
-      if (!(await verifyProtocolObject(proof, proofSignature, proofKey)))
-        throw new ContractError("invalid_crypto_object");
+      const ciphertextLength = body.ciphertextLength;
       if (
-        !equalBytes(requiredBytes(proof, 8, 16), uuidToBytes(profile.id)) ||
-        !equalBytes(requiredBytes(proof, 9, 16), uuidToBytes(user)) ||
-        !equalBytes(requiredBytes(proof, 17, 16), uuidToBytes(envelope.id))
-      ) {
-        throw new ContractError("invalid_crypto_object");
-      }
-      const deviceId = parseUuid(body.deviceId, "deviceId");
-      const identityGeneration = body.identityGeneration;
-      if (
-        typeof identityGeneration !== "string" ||
-        !/^[1-9][0-9]*$/.test(identityGeneration)
+        typeof ciphertextLength !== "number" ||
+        !Number.isSafeInteger(ciphertextLength) ||
+        ciphertextLength < 0 ||
+        ciphertextLength > 64 * 1024 * 1024
       )
         throw new ContractError("invalid_request");
       if (
-        !equalBytes(requiredBytes(proof, 10, 16), uuidToBytes(deviceId)) ||
-        requiredUint(proof, 28) !== BigInt(identityGeneration) ||
-        requiredUint(proof, 29) !== current.recoveryGeneration
+        !equalBytes(requiredBytes(object.object, 48, 48), ciphertextHash) ||
+        requiredUint(object.object, 72) !== BigInt(ciphertextLength)
       )
         throw new ContractError("invalid_crypto_object");
-      const expiresAt = requiredUint(proof, 33);
-      if (expiresAt <= BigInt(Date.now()))
-        throw new ContractError("stale_generation");
-      const challengeHash = await sha384Digest(challenge);
-      if (!equalBytes(requiredBytes(proof, 58, 48), challengeHash))
-        throw new ContractError("invalid_crypto_object");
-
-      const x25519PublicKey = decodeBase64(body.x25519PublicKey);
-      const ed25519PublicKey = decodeBase64(body.ed25519PublicKey);
-      const keyId = decodeBase64(body.keyId);
       if (
-        x25519PublicKey.length !== 32 ||
-        ed25519PublicKey.length !== 32 ||
-        keyId.length !== 48 ||
-        !equalBytes(ed25519PublicKey, replacementSigningPublicKey)
-      )
-        throw new ContractError("invalid_request");
-      const expectedKeyId = await sha384Digest(x25519PublicKey);
-      if (!equalBytes(keyId, expectedKeyId))
-        throw new ContractError("invalid_crypto_object");
-      const certificate = await parseProtocolPayload(
-        body,
-        "certificateId",
-        "certificate",
-        2,
-      );
-      validateActorBinding(certificate.object, profile.id, user);
-      if (
-        !equalBytes(
-          requiredBytes(certificate.object, 10, 16),
-          uuidToBytes(deviceId),
-        ) ||
-        requiredUint(certificate.object, 28) !== BigInt(identityGeneration) ||
-        !equalBytes(
-          requiredBytes(certificate.object, 39, 32),
-          x25519PublicKey,
-        ) ||
-        !equalBytes(requiredBytes(certificate.object, 41, 32), ed25519PublicKey)
-      )
-        throw new ContractError("invalid_crypto_object");
-      const certificateSignature = requiredBytes(certificate.object, 4, 64);
-      if (
-        !(await verifyProtocolObject(
-          certificate.object,
-          certificateSignature,
-          proofKey,
+        !(await verifyWithStoredDevice(
+          database,
+          actor.userId,
+          object.object,
+          actor.deviceId,
         ))
       )
         throw new ContractError("invalid_crypto_object");
-      const op = {
-        id: body.operationId as string,
-        actorUserId: user,
-        kind: "RECOVERY" as const,
-        commandBytes: commandBytes(
-          envelope.canonicalBytes,
-          proofBytes,
-          certificate.canonicalBytes,
-        ),
-        commandDigest: await sha384Digest(
-          commandBytes(
-            envelope.canonicalBytes,
-            proofBytes,
-            certificate.canonicalBytes,
-          ),
-        ),
-      };
-      const result = await new DeviceRepository().completeBootstrap(database, {
+      const envelopeType = object.object.get(96);
+      let envelopeFields:
+        | { readonly projectId: string; readonly projectEpoch: bigint }
+        | { readonly ownerUserId: string; readonly valueGeneration: bigint };
+      if (envelopeType === 1) {
+        const projectId = parseUuid(body.projectId, "projectId");
+        const projectEpoch = body.projectEpoch;
+        if (
+          typeof projectEpoch !== "string" ||
+          !/^[1-9][0-9]*$/.test(projectEpoch)
+        )
+          throw new ContractError("invalid_request");
+        if (
+          !equalBytes(
+            requiredBytes(object.object, 13, 16),
+            uuidToBytes(projectId),
+          ) ||
+          requiredUint(object.object, 30) !== BigInt(projectEpoch)
+        )
+          throw new ContractError("invalid_crypto_object");
+        envelopeFields = { projectId, projectEpoch: BigInt(projectEpoch) };
+      } else if (envelopeType === 2) {
+        const ownerUserId = parseUuid(body.ownerUserId, "ownerUserId");
+        const valueGeneration = body.valueGeneration;
+        if (
+          typeof valueGeneration !== "string" ||
+          !/^[1-9][0-9]*$/.test(valueGeneration)
+        )
+          throw new ContractError("invalid_request");
+        if (
+          !equalBytes(
+            requiredBytes(object.object, 26, 16),
+            uuidToBytes(ownerUserId),
+          ) ||
+          requiredUint(object.object, 31) !== BigInt(valueGeneration)
+        )
+          throw new ContractError("invalid_crypto_object");
+        envelopeFields = {
+          ownerUserId,
+          valueGeneration: BigInt(valueGeneration),
+        };
+      } else {
+        throw new ContractError("invalid_crypto_object");
+      }
+      const user = await database.user.findUnique({
+        where: { id: actor.userId },
+        select: { identityGeneration: true },
+      });
+      if (!user) return problem(context, "service_unavailable");
+      const op = await operation(
+        body,
+        actor,
+        "ACCOUNT_KEY",
+        object.canonicalBytes,
+      );
+      await operations.begin(database, op);
+      await stage(database, op, [object], profile.limits.stagingTtlSeconds);
+      const result = await accountKeys.publishEnvelope(database, {
         operation: op,
-        device: {
-          id: deviceId,
-          identityGeneration: BigInt(identityGeneration),
-          keyId,
-          x25519PublicKey,
-          ed25519PublicKey,
-        },
-        certificateObject: certificate,
-        recoveryAttempt: {
-          envelopeId: current.id,
-          challengeHash,
+        envelope: {
+          protocolObject: object,
+          identityGeneration: user.identityGeneration,
+          envelopeType: envelopeType === 1 ? "PROJECT_EPOCH_KEY" : "USER_VALUE_KEY",
+          ...envelopeFields,
+          ciphertextHash,
+          ciphertextLength,
         },
       });
       return context.json(
         {
-          deviceId: "device" in result ? result.device.id : deviceId,
-          active: true,
+          objectId: object.id,
           idempotent: "idempotent" in result && result.idempotent,
         },
         201,
@@ -924,108 +1024,134 @@ export const registerDeviceRoutes = (
     }
   });
 
-  app.post("/api/v1/recovery/attempts", async (context) => {
+  app.post("/api/v1/account-keys/transfers", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
     try {
       const body = await readBody(context);
-      const challengeHash = parseSha384Hex(body.challengeHash, "challengeHash");
-      const succeeded = body.succeeded;
-      if (typeof succeeded !== "boolean")
+      requireIdempotencyKey(context, body.operationId);
+      const object = await parseProtocolPayload(body, "objectId", "object", 22);
+      validateActorBinding(object.object, profile.id, actor.userId);
+      if (
+        !equalBytes(
+          requiredBytes(object.object, 10, 16),
+          uuidToBytes(actor.deviceId),
+        )
+      )
+        throw new ContractError("invalid_crypto_object");
+      const recipientDeviceId = parseUuid(
+        body.recipientDeviceId,
+        "recipientDeviceId",
+      );
+      const transferId = parseHex(body.transferId, 16);
+      const expiresAt = new Date(String(body.expiresAt));
+      const now = new Date();
+      if (
+        !Number.isFinite(expiresAt.getTime()) ||
+        expiresAt <= now ||
+        expiresAt.getTime() >
+          now.getTime() + profile.limits.stagingTtlSeconds * 1000
+      )
         throw new ContractError("invalid_request");
-      if (succeeded) throw new ContractError("forbidden");
-      const envelopeId =
-        body.envelopeId === undefined
-          ? undefined
-          : parseUuid(body.envelopeId, "envelopeId");
-      if (envelopeId) {
-        const envelope = await database.recoveryEnvelope.findFirst({
-          where: { id: envelopeId, userId: actor.userId },
+      const ciphertextHash = parseSha384Hex(
+        body.ciphertextHash,
+        "ciphertextHash",
+      );
+      const ciphertextLength = body.ciphertextLength;
+      if (
+        typeof ciphertextLength !== "number" ||
+        !Number.isSafeInteger(ciphertextLength) ||
+        ciphertextLength < 0 ||
+        ciphertextLength > 64 * 1024 * 1024
+      )
+        throw new ContractError("invalid_request");
+      if (
+        !equalBytes(
+          requiredBytes(object.object, 25, 16),
+          uuidToBytes(recipientDeviceId),
+        ) ||
+        !equalBytes(requiredBytes(object.object, 95, 16), transferId) ||
+        requiredUint(object.object, 33) !== BigInt(expiresAt.getTime()) ||
+        !equalBytes(requiredBytes(object.object, 48, 48), ciphertextHash) ||
+        requiredUint(object.object, 72) !== BigInt(ciphertextLength)
+      )
+        throw new ContractError("invalid_crypto_object");
+      if (
+        !(await verifyWithStoredDevice(
+          database,
+          actor.userId,
+          object.object,
+          actor.deviceId,
+        ))
+      )
+        throw new ContractError("invalid_crypto_object");
+      const user = await database.user.findUnique({
+        where: { id: actor.userId },
+        select: { identityGeneration: true },
+      });
+      if (!user) return problem(context, "service_unavailable");
+      const op = await operation(
+        body,
+        actor,
+        "ACCOUNT_KEY",
+        object.canonicalBytes,
+      );
+      await operations.begin(database, op);
+      await stage(database, op, [object], profile.limits.stagingTtlSeconds);
+      const result = await accountKeys.createTransfer(database, {
+        operation: op,
+        transfer: {
+          protocolObject: object,
+          identityGeneration: user.identityGeneration,
+          recipientDeviceId,
+          transferId,
+          expiresAt,
+        },
+      });
+      return context.json(
+        {
+          transferId: toHex(transferId),
+          recipientDeviceId,
+          expiresAt: expiresAt.toISOString(),
+          idempotent: "idempotent" in result && result.idempotent,
+        },
+        201,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      return problem(context, mapError(error));
+    }
+  });
+
+  app.post(
+    "/api/v1/account-keys/transfers/:transferId/accept",
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      try {
+        const transferId = parseHex(context.req.param("transferId"), 16);
+        const transfer = await accountKeys.acceptTransfer(database, {
+          userId: actor.userId,
+          deviceId: actor.deviceId,
+          transferId,
         });
-        if (!envelope) return problem(context, "resource_not_found");
+        return context.json(
+          {
+            accepted: true,
+            object: toBase64(transfer.canonicalBytes),
+          },
+          200,
+          { "Cache-Control": "no-store" },
+        );
+      } catch (error) {
+        return problem(context, mapError(error));
       }
-      await recovery.recordAttempt(database, {
-        userId: actor.userId,
-        deviceId: actor.deviceId,
-        ...(envelopeId ? { envelopeId } : {}),
-        challengeHash,
-        succeeded,
-      });
-      return context.json({ recorded: true }, 201, {
-        "Cache-Control": "no-store",
-      });
-    } catch (error) {
-      return problem(context, mapError(error));
-    }
-  });
-
-  app.get("/api/v1/devices/enrollments/:enrollmentId", async (context) => {
-    const actor = await requireProtocolActor(context, database, profile, auth);
-    if (actor instanceof Response) return actor;
-    try {
-      const enrollmentId = parseUuid(
-        context.req.param("enrollmentId"),
-        "enrollmentId",
-      );
-      const enrollment = await database.deviceEnrollment.findFirst({
-        where: { id: enrollmentId, userId: actor.userId },
-        select: {
-          id: true,
-          initiatorDeviceId: true,
-          approverDeviceId: true,
-          expiresAt: true,
-          completedAt: true,
-        },
-      });
-      if (!enrollment) return problem(context, "resource_not_found");
-      return context.json(
-        {
-          enrollmentId: enrollment.id,
-          initiatorDeviceId: enrollment.initiatorDeviceId,
-          approverDeviceId: enrollment.approverDeviceId,
-          expiresAt: enrollment.expiresAt.toISOString(),
-          status: enrollment.completedAt
-            ? "completed"
-            : enrollment.approverDeviceId
-              ? "approved"
-              : "pending",
-        },
-        200,
-        { "Cache-Control": "no-store" },
-      );
-    } catch (error) {
-      return problem(context, mapError(error));
-    }
-  });
-
-  app.get("/api/v1/recovery/envelopes/current", async (context) => {
-    const actor = await requireProtocolActor(context, database, profile, auth);
-    if (actor instanceof Response) return actor;
-    try {
-      const envelope = await database.recoveryEnvelope.findFirst({
-        where: { userId: actor.userId, retiredAt: null },
-        orderBy: { recoveryGeneration: "desc" },
-        include: { protocolObject: true },
-      });
-      if (!envelope) return problem(context, "resource_not_found");
-      return context.json(
-        {
-          envelopeId: envelope.id,
-          identityGeneration: envelope.identityGeneration.toString(),
-          recoveryGeneration: envelope.recoveryGeneration.toString(),
-          ciphertextHash: sha384ToHex(new Uint8Array(envelope.ciphertextHash)),
-          ciphertextLength: envelope.ciphertextLength,
-          object: encodeBase64(
-            new Uint8Array(envelope.protocolObject.canonicalBytes),
-          ),
-        },
-        200,
-        { "Cache-Control": "no-store" },
-      );
-    } catch (error) {
-      return problem(context, mapError(error));
-    }
-  });
-
+    },
+  );
   void DEVICE_ID_HEADER;
 };

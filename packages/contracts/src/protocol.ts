@@ -165,18 +165,14 @@ const validateConditionalValues = (
   const keyKind = numberValue(mapValue(object, 37));
   if (keyKind !== undefined) validateEnum(keyKind, 3);
   const grantKind = numberValue(mapValue(object, 70));
-  if (grantKind !== undefined) validateEnum(grantKind, 7);
+  if (grantKind !== undefined) validateEnum(grantKind, 5);
   if (kind === 7) {
     validateEnumSet(grantKind, [1, 2, 5]);
     validateEnumSet(keyKind, grantKind === 5 ? [3] : [1]);
   }
   if (kind === 8) {
-    validateEnumSet(grantKind, [3, 4, 7]);
+    validateEnumSet(grantKind, [3, 4]);
     validateEnumSet(keyKind, [2]);
-  }
-  if (kind === 9) {
-    validateEnumSet(grantKind, [6, 7]);
-    validateEnumSet(keyKind, grantKind === 6 ? [1] : [2]);
   }
   const role = numberValue(mapValue(object, 78));
   if (role !== undefined) validateEnum(role, 3);
@@ -213,17 +209,70 @@ const validateConditionalValues = (
       contractError("payload_too_large");
   }
   if (
-    [7, 8, 9].includes(kind) &&
+    [7, 8].includes(kind) &&
     plaintextLength !== undefined &&
     plaintextLength > CBOR_LIMITS.maxGrantPlaintextBytes
   )
     contractError("payload_too_large");
-  if (
-    kind === 10 &&
-    plaintextLength !== undefined &&
-    plaintextLength > CBOR_LIMITS.maxRecoveryPlaintextBytes
-  )
-    contractError("payload_too_large");
+  if (kind === 20) {
+    const wrapperType = numberValue(mapValue(object, 86));
+    validateEnum(wrapperType, 3);
+    if (numberValue(mapValue(object, 88)) !== 1)
+      contractError("invalid_crypto_object");
+    if (plaintextLength !== undefined && plaintextLength !== 32n)
+      contractError("invalid_crypto_object");
+    const fields = new Set(object.keys());
+    if (wrapperType === 1) {
+      if (!fields.has(93) || !fields.has(94))
+        contractError("invalid_crypto_object");
+      if (fields.has(89) || fields.has(90) || fields.has(91) || fields.has(92))
+        contractError("invalid_crypto_object");
+    }
+    if (wrapperType === 2) {
+      if (!fields.has(89) || !fields.has(90) || !fields.has(91) || !fields.has(92))
+        contractError("invalid_crypto_object");
+      validateEnumSet(numberValue(mapValue(object, 89)), [1]);
+      if (fields.has(93) || fields.has(94))
+        contractError("invalid_crypto_object");
+    }
+    if (wrapperType === 3) {
+      if (
+        fields.has(89) ||
+        fields.has(90) ||
+        fields.has(91) ||
+        fields.has(92) ||
+        fields.has(93) ||
+        fields.has(94)
+      )
+        contractError("invalid_crypto_object");
+    }
+  }
+  if (kind === 21) {
+    const envelopeType = numberValue(mapValue(object, 96));
+    validateEnum(envelopeType, 2);
+    if (plaintextLength !== undefined && plaintextLength !== 32n)
+      contractError("invalid_crypto_object");
+    const fields = new Set(object.keys());
+    if (envelopeType === 1) {
+      if (!fields.has(13) || !fields.has(30))
+        contractError("invalid_crypto_object");
+      if (fields.has(26) || fields.has(31))
+        contractError("invalid_crypto_object");
+    }
+    if (envelopeType === 2) {
+      if (!fields.has(26) || !fields.has(31))
+        contractError("invalid_crypto_object");
+      if (fields.has(13) || fields.has(30))
+        contractError("invalid_crypto_object");
+    }
+  }
+  if (kind === 22) {
+    if (
+      plaintextLength !== undefined &&
+      (plaintextLength !== 32n || ciphertextLength !== 48n)
+    )
+      contractError("invalid_crypto_object");
+  }
 };
 
 export const validateManifestCeilings = (

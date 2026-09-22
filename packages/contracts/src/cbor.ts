@@ -11,7 +11,6 @@ export const CBOR_LIMITS = Object.freeze({
   maxSyncObjects: 256,
   maxSyncBytes: 16 * 1024 * 1024,
   maxGrantPlaintextBytes: 4 * 1024,
-  maxRecoveryPlaintextBytes: 16 * 1024,
   maxManifestVariables: 10_000,
   maxManifestLaneCommitments: 100_000,
 });

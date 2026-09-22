@@ -9,6 +9,7 @@ import {
   encodeProtocolObject,
   FIXED_LENGTHS,
   isSignedField,
+  OBJECT_REGISTRY,
   parseProtocolObject,
   unsignedBodyBytes,
   validateManifestCeilings,
@@ -199,9 +200,9 @@ describe("immutable dotrelay-e2ee-v3 classical vectors", () => {
       suiteValue: 3,
       immutable: true,
     });
-    expect(positive.objects).toHaveLength(19);
-    expect(objects.vectors).toHaveLength(19);
-    expect(conditional.vectors).toHaveLength(28);
+    expect(positive.objects).toHaveLength(18);
+    expect(objects.vectors).toHaveLength(18);
+    expect(conditional.vectors).toHaveLength(29);
     expect(objects.vectors.map((vector: { id: string }) => vector.id)).toEqual(
       positive.objects.map((vector: { id: string }) => vector.id),
     );
@@ -291,7 +292,7 @@ describe("immutable dotrelay-e2ee-v3 classical vectors", () => {
   test("covers every closed object kind, enum registry, and canonical round trip", async () => {
     const kinds = new Set(VECTOR_CASES.map((vector) => vector.kind));
     expect(kinds).toEqual(
-      new Set(Array.from({ length: 19 }, (_, index) => index + 1)),
+      new Set(Object.keys(OBJECT_REGISTRY).map(Number)),
     );
     for (const vector of await frozenVectors()) {
       const bytes = bytesFromHex(vector.canonicalHex);

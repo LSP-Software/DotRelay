@@ -18,12 +18,15 @@ export {
   canonicalEncode,
 } from "./cbor";
 export {
+  ACCOUNT_KEY_ENVELOPE_KDF_INFO,
+  ACCOUNT_KEY_WRAPPER_KDF_INFO,
   assertCryptoRuntime,
   type CiphertextEnvelope,
   type ClassicalEncryptionKeyPair,
   type ClassicalSigningKeyPair,
   CRYPTO_SUITE,
   decodeCiphertextEnvelope,
+  deriveAesKeyWithInfo,
   encodeCiphertextEnvelope,
   exportEncryptionPrivateKey,
   exportEncryptionPublicKey,

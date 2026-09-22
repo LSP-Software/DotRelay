@@ -1945,7 +1945,7 @@ export const WorkspaceShell = ({
         // self-minting here would seal this Device to a fresh random key that
         // can never decrypt pre-existing content and would permanently block a
         // peer re-share, so the grant must be handed over by a Device that
-        // holds the key (or restored from a Recovery Kit).
+        // holds the key (or recovered with the account's recovery code).
         const peerHoldsEpochKey = (boundary.peerDevices ?? []).some(
           (peer) => peer.hasEpochGrant,
         );
@@ -2192,7 +2192,7 @@ export const WorkspaceShell = ({
           selectedTeam?.name ??
           "your team";
         setDeviceSetupMessage(
-          `This browser can't recover the project's current keys on its own. Run \`bun apps/cli/src/index.ts pull\` on another of your devices to hand the keys over, or restore a Device from a Recovery Kit. ${teamName}'s Owners and Admins can also rotate the project's keys.`,
+          `This browser can't recover the project's current keys on its own. Run \`bun apps/cli/src/index.ts pull\` on another of your devices to hand the keys over, or recover the account's key with your recovery code. ${teamName}'s Owners and Admins can also rotate the project's keys.`,
         );
         return;
       }
@@ -3337,19 +3337,25 @@ export const WorkspaceShell = ({
                     Recovery
                   </h1>
                   <p className="mt-2 max-w-2xl text-muted-foreground">
-                    Use a recovery kit to authorize a replacement device when
-                    none of your devices are available.
+                    If none of your devices are available, unlock your
+                    account's encryption key from the recovery code you saved
+                    when you set up your account, or from a transfer sent by
+                    another one of your devices.
                   </p>
                   <Card className="mt-6">
                     <CardHeader>
                       <CardTitle>Use the CLI</CardTitle>
                       <CardDescription>
-                        Recovery runs on your machine. Run it after you've
-                        trusted this server.
+                        Recovery runs on your machine. Enter your recovery code
+                        after you've trusted this server; a headless machine
+                        can only recover with the code, since passkeys and the
+                        encryption password need a browser.
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <CopyableCommand value="dotrelay recover" />
+                      <CopyableCommand
+                        value="dotrelay device recover --recovery-code"
+                      />
                     </CardContent>
                   </Card>
                 </section>

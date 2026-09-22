@@ -149,13 +149,13 @@ const parseOperationKind = (
   | "ROLLBACK"
   | "EPOCH_ROTATION"
   | "DEVICE_ENROLLMENT"
-  | "RECOVERY" => {
+  | "ACCOUNT_KEY" => {
   if (
     value !== "REVISION_PUBLICATION" &&
     value !== "ROLLBACK" &&
     value !== "EPOCH_ROTATION" &&
     value !== "DEVICE_ENROLLMENT" &&
-    value !== "RECOVERY"
+    value !== "ACCOUNT_KEY"
   )
     throw new ContractError("invalid_request");
   return value;
