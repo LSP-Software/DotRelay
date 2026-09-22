@@ -1,19 +1,19 @@
-import { argon2id } from "@noble/hashes/argon2.js";
 import {
-  type CborValue,
   ACCOUNT_KEY_ENVELOPE_KDF_INFO,
   ACCOUNT_KEY_WRAPPER_KDF_INFO,
+  type CborValue,
   canonicalEncode,
   decodeCiphertextEnvelope,
   deriveAesKeyWithInfo,
+  open,
   type ProtocolObject,
   parseProtocolObject,
   protocolObjectFromFields,
-  open,
   seal,
   sha384,
   signProtocolObject,
 } from "@dotrelay/contracts";
+import { argon2id } from "@noble/hashes/argon2.js";
 
 export const ACCOUNT_KEY_WRAPPER_FORMAT_VERSION = 1;
 export const ACCOUNT_KEY_WRAPPER_KIND = 20;
@@ -25,8 +25,7 @@ export const WRAPPER_TYPE = {
   password: 2,
   recoveryCode: 3,
 } as const;
-export type WrapperType =
-  (typeof WRAPPER_TYPE)[keyof typeof WRAPPER_TYPE];
+export type WrapperType = (typeof WRAPPER_TYPE)[keyof typeof WRAPPER_TYPE];
 
 export const KDF_ARGON2ID = 1;
 export const KEY_ENVELOPE_TYPE = {
@@ -319,10 +318,7 @@ export const createAccountKeyWrapper = async (
     fields.set(91, kdf.iterations);
     fields.set(92, kdf.parallelism);
   }
-  const unsigned = protocolObjectFromFields(
-    ACCOUNT_KEY_WRAPPER_KIND,
-    fields,
-  );
+  const unsigned = protocolObjectFromFields(ACCOUNT_KEY_WRAPPER_KIND, fields);
   const signedFields = new Map<number, CborValue>([
     ...fields,
     [3, canonicalEncode(unsigned)],
@@ -334,10 +330,7 @@ export const createAccountKeyWrapper = async (
   );
   signedFields.set(4, signature);
   return Object.freeze({
-    object: protocolObjectFromFields(
-      ACCOUNT_KEY_WRAPPER_KIND,
-      signedFields,
-    ),
+    object: protocolObjectFromFields(ACCOUNT_KEY_WRAPPER_KIND, signedFields),
     wrapperType,
     wrapperId: new Uint8Array(wrapperId),
     salt: new Uint8Array(salt),
@@ -386,8 +379,7 @@ export const parseAccountKeyWrapper = (
 ): AccountKeyWrapper => {
   const object = decodeProtocolKind(bytes, ACCOUNT_KEY_WRAPPER_KIND);
   const wrapperType = object.get(86);
-  if (!isWrapperType(wrapperType))
-    throw new TypeError("unknown wrapper type");
+  if (!isWrapperType(wrapperType)) throw new TypeError("unknown wrapper type");
   const credentialId = object.get(93);
   const prfInput = object.get(94);
   const kdfMemory = object.get(90);
@@ -429,8 +421,7 @@ export const unwrapAccountKeyWrapper = async (
 ): Promise<Uint8Array> => {
   let ikm: Uint8Array;
   if (wrapper.wrapperType === WRAPPER_TYPE.passkeyPrf) {
-    if (!input.prfOutput)
-      throw new TypeError("passkey PRF output is required");
+    if (!input.prfOutput) throw new TypeError("passkey PRF output is required");
     requireLength(input.prfOutput, 64, "passkey PRF output");
     ikm = input.prfOutput;
   } else if (wrapper.wrapperType === WRAPPER_TYPE.password) {
@@ -444,8 +435,7 @@ export const unwrapAccountKeyWrapper = async (
       dkLen: 32,
     });
   } else {
-    if (!input.recoveryCode)
-      throw new TypeError("recovery code is required");
+    if (!input.recoveryCode) throw new TypeError("recovery code is required");
     requireLength(input.recoveryCode, 32, "recovery code");
     ikm = input.recoveryCode;
   }
@@ -509,10 +499,7 @@ export const createAccountKeyEnvelope = async (
     fields.set(26, kind.ownerUserId);
     fields.set(31, kind.valueGeneration);
   }
-  const unsigned = protocolObjectFromFields(
-    ACCOUNT_KEY_ENVELOPE_KIND,
-    fields,
-  );
+  const unsigned = protocolObjectFromFields(ACCOUNT_KEY_ENVELOPE_KIND, fields);
   const signedFields = new Map<number, CborValue>([
     ...fields,
     [3, canonicalEncode(unsigned)],
@@ -524,10 +511,7 @@ export const createAccountKeyEnvelope = async (
   );
   signedFields.set(4, signature);
   return Object.freeze({
-    object: protocolObjectFromFields(
-      ACCOUNT_KEY_ENVELOPE_KIND,
-      signedFields,
-    ),
+    object: protocolObjectFromFields(ACCOUNT_KEY_ENVELOPE_KIND, signedFields),
     envelopeType,
     salt: new Uint8Array(salt),
     iv: new Uint8Array(iv),
@@ -564,8 +548,7 @@ export const parseAccountKeyEnvelope = (
     ...(projectId instanceof Uint8Array && typeof projectEpoch === "number"
       ? { projectId: new Uint8Array(projectId), projectEpoch }
       : {}),
-    ...(ownerUserId instanceof Uint8Array &&
-    typeof valueGeneration === "number"
+    ...(ownerUserId instanceof Uint8Array && typeof valueGeneration === "number"
       ? { ownerUserId: new Uint8Array(ownerUserId), valueGeneration }
       : {}),
   });
@@ -639,10 +622,7 @@ export const createAccountKeyTransfer = async (
     [72, ciphertextLength],
     [95, transferId],
   ]);
-  const unsigned = protocolObjectFromFields(
-    ACCOUNT_KEY_TRANSFER_KIND,
-    fields,
-  );
+  const unsigned = protocolObjectFromFields(ACCOUNT_KEY_TRANSFER_KIND, fields);
   const signedFields = new Map<number, CborValue>([
     ...fields,
     [3, canonicalEncode(unsigned)],
@@ -654,10 +634,7 @@ export const createAccountKeyTransfer = async (
   );
   signedFields.set(4, signature);
   return Object.freeze({
-    object: protocolObjectFromFields(
-      ACCOUNT_KEY_TRANSFER_KIND,
-      signedFields,
-    ),
+    object: protocolObjectFromFields(ACCOUNT_KEY_TRANSFER_KIND, signedFields),
     transferId: new Uint8Array(transferId),
     recipientDeviceId: uuidToBytes(input.recipientDeviceId),
     expiresAtMs: input.expiresAtMs,
@@ -749,8 +726,7 @@ export const decodeRecoveryCode = (text: string): Uint8Array => {
     if (character === undefined)
       throw new TypeError("recovery code is malformed");
     const value = CROCKFORD_LOOKUP.get(character);
-    if (value === undefined)
-      throw new TypeError("recovery code is malformed");
+    if (value === undefined) throw new TypeError("recovery code is malformed");
     if (symbol === 51 && value & 0b0000_1111)
       throw new TypeError("recovery code is malformed");
     for (let bit = 4; bit >= 0; bit -= 1) {

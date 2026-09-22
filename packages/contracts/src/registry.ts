@@ -295,8 +295,8 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
     "Account Key Wrapper",
     [0, 1, 2, 8, 9, 10, 17, 28, 32, 44, 46, 47, 48, 71, 72, 86, 87, 88],
     signed([
-      0, 1, 2, 8, 9, 10, 17, 28, 32, 44, 46, 47, 48, 71, 72, 86, 87, 88, 89,
-      90, 91, 92, 93, 94,
+      0, 1, 2, 8, 9, 10, 17, 28, 32, 44, 46, 47, 48, 71, 72, 86, 87, 88, 89, 90,
+      91, 92, 93, 94,
     ]),
   ),
   21: objectDefinition(
@@ -309,9 +309,7 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
   22: objectDefinition(
     "Account Key Transfer",
     [0, 1, 2, 8, 9, 10, 25, 17, 32, 33, 44, 45, 46, 47, 48, 71, 72, 95],
-    signed([
-      0, 1, 2, 8, 9, 10, 25, 17, 32, 33, 44, 45, 46, 47, 48, 71, 72, 95,
-    ]),
+    signed([0, 1, 2, 8, 9, 10, 25, 17, 32, 33, 44, 45, 46, 47, 48, 71, 72, 95]),
   ),
 };
 

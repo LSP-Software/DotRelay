@@ -577,9 +577,7 @@ const handle = async (request: Request): Promise<Response> => {
     );
   }
   const transferAccept =
-    /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(
-      url.pathname,
-    );
+    /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(url.pathname);
   if (transferAccept && request.method === "POST") {
     if (!activeDevice(request)) return problemResponse("forbidden");
     state.recoveryCount += 1;
@@ -1159,14 +1157,7 @@ try {
     );
   state.encryptionPublicKey = initialEncryptionPublicKey;
   const mismatchedBackup = await runBinary(
-    [
-      "device",
-      "backup",
-      "--profile",
-      "live",
-      "--no-input",
-      "--json",
-    ],
+    ["device", "backup", "--profile", "live", "--no-input", "--json"],
     environment,
   );
   state.encryptionPublicKey = enrolledEncryptionPublicKey;
@@ -1224,7 +1215,10 @@ try {
     environment,
   );
   const recoveryCode = requireString(backup.recoveryCode, "recovery code");
-  const backupWrapperId = requireString(backup.wrapperId, "recovery wrapper id");
+  const backupWrapperId = requireString(
+    backup.wrapperId,
+    "recovery wrapper id",
+  );
   if (state.recoveryWrapper?.wrapperId !== backupWrapperId)
     throw new Error("packaged CLI recovery wrapper backup contract failed");
 

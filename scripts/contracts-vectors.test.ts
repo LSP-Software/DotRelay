@@ -291,9 +291,7 @@ describe("immutable dotrelay-e2ee-v3 classical vectors", () => {
 
   test("covers every closed object kind, enum registry, and canonical round trip", async () => {
     const kinds = new Set(VECTOR_CASES.map((vector) => vector.kind));
-    expect(kinds).toEqual(
-      new Set(Object.keys(OBJECT_REGISTRY).map(Number)),
-    );
+    expect(kinds).toEqual(new Set(Object.keys(OBJECT_REGISTRY).map(Number)));
     for (const vector of await frozenVectors()) {
       const bytes = bytesFromHex(vector.canonicalHex);
       const object = parseProtocolObject(bytes);

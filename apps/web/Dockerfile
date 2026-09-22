@@ -4,7 +4,7 @@
 # baked in at build time; CI passes them per environment (dev vs prod
 # origins, and the profile DotRelay's own deployments declare), so the web
 # image is environment-specific.
-FROM oven/bun:1.4.0 AS builder
+FROM oven/bun:1.4.2 AS builder
 
 ARG NEXT_PUBLIC_WEB_ORIGIN
 ARG NEXT_PUBLIC_DOTRELAY_API_ORIGIN

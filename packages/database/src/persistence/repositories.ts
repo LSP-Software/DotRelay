@@ -306,10 +306,10 @@ export type OperationInput = Readonly<{
     | "ADMINISTRATION"
     | "INVITATION"
     | "MEMBERSHIP_CHANGE"
-     | "DEVICE_ENROLLMENT"
-     | "DEVICE_REVOCATION"
-     | "ACCOUNT_KEY"
-     | "ENVIRONMENT_GENESIS"
+    | "DEVICE_ENROLLMENT"
+    | "DEVICE_REVOCATION"
+    | "ACCOUNT_KEY"
+    | "ENVIRONMENT_GENESIS"
     | "REVISION_PUBLICATION"
     | "ROLLBACK"
     | "EPOCH_ROTATION";
@@ -468,13 +468,13 @@ export type AuditFactInput = Readonly<{
     | "MEMBERSHIP_ACTIVATED"
     | "MEMBERSHIP_ROLE_CHANGED"
     | "MEMBERSHIP_REMOVED"
-     | "DEVICE_ENROLLED"
-     | "DEVICE_REVOKED"
-     | "ACCOUNT_KEY_WRAPPER_ADDED"
-     | "ACCOUNT_KEY_WRAPPER_REVOKED"
-     | "ACCOUNT_KEY_ENVELOPE_PUBLISHED"
-     | "ACCOUNT_KEY_TRANSFER_CREATED"
-     | "PROJECT_CREATED"
+    | "DEVICE_ENROLLED"
+    | "DEVICE_REVOKED"
+    | "ACCOUNT_KEY_WRAPPER_ADDED"
+    | "ACCOUNT_KEY_WRAPPER_REVOKED"
+    | "ACCOUNT_KEY_ENVELOPE_PUBLISHED"
+    | "ACCOUNT_KEY_TRANSFER_CREATED"
+    | "PROJECT_CREATED"
     | "PROJECT_ARCHIVED"
     | "PROJECT_RESTORED"
     | "ENVIRONMENT_CREATED"
@@ -499,12 +499,12 @@ export type AuditFactInput = Readonly<{
     | "INVITATION"
     | "PROJECT"
     | "ENVIRONMENT"
-     | "OPERATION"
-     | "PROTOCOL_OBJECT"
-     | "REVISION"
-     | "ACCOUNT_KEY_WRAPPER"
-     | "ACCOUNT_KEY_ENVELOPE"
-     | "ACCOUNT_KEY_TRANSFER";
+    | "OPERATION"
+    | "PROTOCOL_OBJECT"
+    | "REVISION"
+    | "ACCOUNT_KEY_WRAPPER"
+    | "ACCOUNT_KEY_ENVELOPE"
+    | "ACCOUNT_KEY_TRANSFER";
   readonly entityId: string;
   readonly priorLifecycle?: string;
   readonly newLifecycle?: string;
@@ -2550,9 +2550,15 @@ export class AccountKeyRepository {
       );
       if (input.wrapper.identityGeneration !== user.identityGeneration)
         throw new Error("account key wrapper identity generation is stale");
-      if (input.wrapper.wrapperType === "PASSKEY_PRF" && !input.wrapper.credentialId)
+      if (
+        input.wrapper.wrapperType === "PASSKEY_PRF" &&
+        !input.wrapper.credentialId
+      )
         throw new Error("passkey wrapper requires a credential id");
-      if (input.wrapper.wrapperType === "PASSWORD" && input.wrapper.kdfName === undefined)
+      if (
+        input.wrapper.wrapperType === "PASSWORD" &&
+        input.wrapper.kdfName === undefined
+      )
         throw new Error("password wrapper requires a KDF name");
       if (input.wrapper.wrapperType === "RECOVERY_CODE") {
         if (input.wrapper.credentialId || input.wrapper.kdfName !== undefined)
@@ -2727,21 +2733,36 @@ export class AccountKeyRepository {
           !input.envelope.projectId ||
           input.envelope.projectEpoch === undefined
         )
-          throw new Error("project epoch envelope requires a project and epoch");
-        if (input.envelope.ownerUserId || input.envelope.valueGeneration !== undefined)
+          throw new Error(
+            "project epoch envelope requires a project and epoch",
+          );
+        if (
+          input.envelope.ownerUserId ||
+          input.envelope.valueGeneration !== undefined
+        )
           throw new Error("project epoch envelope carries user value fields");
         const project = await transaction.project.findFirst({
           where: {
             id: input.envelope.projectId,
-            team: { members: { some: { userId: input.operation.actorUserId } } },
+            team: {
+              members: { some: { userId: input.operation.actorUserId } },
+            },
           },
         });
         if (!project)
           throw new Error("envelope project is not reachable by the user");
       } else {
-        if (!input.envelope.ownerUserId || input.envelope.valueGeneration === undefined)
-          throw new Error("user value envelope requires an owner and generation");
-        if (input.envelope.projectId || input.envelope.projectEpoch !== undefined)
+        if (
+          !input.envelope.ownerUserId ||
+          input.envelope.valueGeneration === undefined
+        )
+          throw new Error(
+            "user value envelope requires an owner and generation",
+          );
+        if (
+          input.envelope.projectId ||
+          input.envelope.projectEpoch !== undefined
+        )
           throw new Error("user value envelope carries project fields");
       }
       const operation = await this.operations.begin(
@@ -2906,8 +2927,7 @@ export class AccountKeyRepository {
           protocolObject: { select: { canonicalBytes: true } },
         },
       });
-      if (!transfer)
-        throw new Error("account key transfer is not pending");
+      if (!transfer) throw new Error("account key transfer is not pending");
       if (transfer.expiresAt <= now) {
         await transaction.accountKeyTransferObject.update({
           where: { protocolObjectId: transfer.protocolObjectId },

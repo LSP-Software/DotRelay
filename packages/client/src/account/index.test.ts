@@ -1,18 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  encodeProtocolObject,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
-  encodeProtocolObject,
-  parseProtocolObject,
   type ProtocolObject,
+  parseProtocolObject,
   verifyProtocolObject,
 } from "@dotrelay/contracts";
 import {
   createAccountKeyEnvelope,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
-  decodeRecoveryCode,
   DEFAULT_PASSWORD_KDF,
+  decodeRecoveryCode,
   encodeRecoveryCode,
   generateAccountMasterKey,
   generateRecoveryCode,
@@ -55,9 +55,7 @@ describe("recovery code codec", () => {
     const code = generateRecoveryCode();
     const text = encodeRecoveryCode(code);
     expect(text).toHaveLength(64);
-    expect(text).toMatch(
-      /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){12}$/,
-    );
+    expect(text).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){12}$/);
     expect(decodeRecoveryCode(text)).toEqual(code);
   });
 
@@ -97,9 +95,7 @@ describe("account key wrappers", () => {
     expect(object.get(1)).toBe(20);
     expect(object.get(88)).toBe(1);
     expect(object.get(71)).toBe(32);
-    await expect(
-      verifySigned(object, signing.publicKey),
-    ).resolves.toBe(true);
+    await expect(verifySigned(object, signing.publicKey)).resolves.toBe(true);
     const recovered = await unwrapAccountKeyWrapper(
       parseAccountKeyWrapper(encode(wrapper.object)),
       { password },

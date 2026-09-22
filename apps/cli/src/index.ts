@@ -504,13 +504,22 @@ const renderDeviceResult = (
       tone: value.active ? "brand" : "warn",
     });
   if (typeof value.recoveryCode === "string")
-    rows.push({ key: "Recovery code", value: value.recoveryCode, tone: "accent" });
+    rows.push({
+      key: "Recovery code",
+      value: value.recoveryCode,
+      tone: "accent",
+    });
   if (typeof value.wrapperId === "string")
-    rows.push({ key: "Wrapper", value: abbreviateId(value.wrapperId), tone: "muted" });
+    rows.push({
+      key: "Wrapper",
+      value: abbreviateId(value.wrapperId),
+      tone: "muted",
+    });
   if (typeof value.via === "string")
     rows.push({
       key: "Via",
-      value: value.via === "recovery-code" ? "recovery code" : "device transfer",
+      value:
+        value.via === "recovery-code" ? "recovery code" : "device transfer",
       tone: "accent",
     });
   const message =

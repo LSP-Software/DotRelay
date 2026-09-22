@@ -90,8 +90,7 @@ const parseHex = (value: unknown, length: number): Uint8Array => {
 const toHex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-const toBase64 = (bytes: Uint8Array) =>
-  Buffer.from(bytes).toString("base64");
+const toBase64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
 
 const commandBytes = (...parts: readonly Uint8Array[]) => {
   const output = new Uint8Array(
@@ -1005,7 +1004,8 @@ export const registerDeviceRoutes = (
         envelope: {
           protocolObject: object,
           identityGeneration: user.identityGeneration,
-          envelopeType: envelopeType === 1 ? "PROJECT_EPOCH_KEY" : "USER_VALUE_KEY",
+          envelopeType:
+            envelopeType === 1 ? "PROJECT_EPOCH_KEY" : "USER_VALUE_KEY",
           ...envelopeFields,
           ciphertextHash,
           ciphertextLength,

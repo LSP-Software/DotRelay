@@ -1,12 +1,14 @@
+import { GeistMono } from "geist/font/mono";
+import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
-import { Geist, Geist_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
-const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono" });
+// The Geist fonts resolve from the checked-in `geist` package instead of a
+// remote font service, so the web build is deterministic in restricted and
+// self-hosted environments with no general outbound access.
 
 export const metadata: Metadata = {
   title: {
@@ -21,7 +23,7 @@ const RootLayout = ({ children }: Readonly<{ children: ReactNode }>) => {
   return (
     <html
       lang="en"
-      className={cn("dark font-sans", geist.variable, geistMono.variable)}
+      className={cn("dark font-sans", GeistSans.variable, GeistMono.variable)}
       data-scroll-behavior="smooth"
     >
       <body>

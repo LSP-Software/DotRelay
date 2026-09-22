@@ -3337,25 +3337,23 @@ export const WorkspaceShell = ({
                     Recovery
                   </h1>
                   <p className="mt-2 max-w-2xl text-muted-foreground">
-                    If none of your devices are available, unlock your
-                    account's encryption key from the recovery code you saved
-                    when you set up your account, or from a transfer sent by
-                    another one of your devices.
+                    If none of your devices are available, unlock your account's
+                    encryption key from the recovery code you saved when you set
+                    up your account, or from a transfer sent by another one of
+                    your devices.
                   </p>
                   <Card className="mt-6">
                     <CardHeader>
                       <CardTitle>Use the CLI</CardTitle>
                       <CardDescription>
                         Recovery runs on your machine. Enter your recovery code
-                        after you've trusted this server; a headless machine
-                        can only recover with the code, since passkeys and the
+                        after you've trusted this server; a headless machine can
+                        only recover with the code, since passkeys and the
                         encryption password need a browser.
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <CopyableCommand
-                        value="dotrelay device recover --recovery-code"
-                      />
+                      <CopyableCommand value="dotrelay device recover --recovery-code" />
                     </CardContent>
                   </Card>
                 </section>
