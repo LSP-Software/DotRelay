@@ -287,6 +287,44 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "dotrelay device recover --transfer <transfer-id>",
     ],
   },
+  "device setup": {
+    about:
+      "Establish this account's Account Master Key on a freshly enrolled Device: it generates the key, creates the mandatory Recovery Code wrapper, and stores the key locally. Idempotent: if this Device already holds the key it does nothing, and if the account already has an AMK it tells you to recover it instead.",
+    notes: [
+      "The Recovery Code is printed once and is the only durable recovery path a headless machine has; store it somewhere safe.",
+      "Run dotrelay login first if this Server Profile has no session yet.",
+    ],
+    options: {
+      profile: "Server Profile to set up (required with --no-input)",
+      noInput: "never prompt; requires explicit --profile",
+    },
+    examples: ["dotrelay device setup"],
+  },
+  "device transfer": {
+    about:
+      "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <id>. The key stays on this Device; transfers are an addition, not a move.",
+    notes: [
+      "The receiving Device id comes from dotrelay status (or the service) and must be an active Device for the same account.",
+      "The transfer is sealed and one-time: if it is not accepted in time it must be created again.",
+    ],
+    options: {
+      to: "receiving Device id to seal the transfer for (required)",
+      profile: "Server Profile to transfer from (required with --no-input)",
+      noInput: "never prompt; requires explicit --profile",
+    },
+    examples: ["dotrelay device transfer --to <peer-device-id>"],
+  },
+  "device revoke-wrapper": {
+    about:
+      "Retire an active account-key Recovery Code wrapper so the Recovery Code it seals can no longer unlock the account. At least one Recovery Code wrapper and at least one wrapper of any kind must remain active.",
+    options: {
+      wrapperId:
+        "wrapper id to revoke (from dotrelay status or a previous wrapper listing)",
+      profile: "Server Profile to revoke on (required with --no-input)",
+      noInput: "never prompt; requires explicit --profile",
+    },
+    examples: ["dotrelay device revoke-wrapper --wrapper-id <wrapper-id>"],
+  },
   "project link": {
     about:
       "Link a Project explicitly: the resolved GitHub Repository id is sent to the authenticated Server Profile, which creates a default Environment when the Project is new.",
@@ -335,6 +373,8 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
   from: "input file",
   recoveryCode: "Recovery Code that unlocks the account",
   transfer: "Account Key Transfer id to accept",
+  to: "receiving Device id to seal an account-key transfer for",
+  wrapperId: "account-key wrapper id to revoke",
   team: "Team id used to resolve the Project",
   name: "not supported by any command",
   remote: "Git remote that identifies this worktree when remotes are ambiguous",
@@ -360,6 +400,8 @@ const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   from: " <file>",
   recoveryCode: " <code>",
   transfer: " <transfer-id>",
+  to: " <peer-device-id>",
+  wrapperId: " <wrapper-id>",
   team: " <team-id>",
   remote: " <remote-name>",
   limit: " <count>",
@@ -532,6 +574,9 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["device complete", "Complete an approved enrollment"],
   ["device backup", "Create a Recovery Code for this account"],
   ["device recover", "Unlock this Device with a Recovery Code or transfer"],
+  ["device setup", "Establish the account key and its Recovery Code"],
+  ["device transfer", "Hand the account key to another Device"],
+  ["device revoke-wrapper", "Retire an active Recovery Code wrapper"],
   ["context", "Detect the GitHub Repository"],
   ["project link", "Link a Project explicitly"],
   ["env use", "Select an Environment by id or label"],

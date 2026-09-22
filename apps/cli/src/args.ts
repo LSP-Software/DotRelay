@@ -34,6 +34,8 @@ export type ParsedArguments = Readonly<{
   readonly from?: string;
   readonly recoveryCode?: string;
   readonly transfer?: string;
+  readonly to?: string;
+  readonly wrapperId?: string;
   readonly team?: string;
   readonly name?: string;
   readonly remote?: string;
@@ -61,6 +63,8 @@ type MutableArguments = {
   from?: string;
   recoveryCode?: string;
   transfer?: string;
+  to?: string;
+  wrapperId?: string;
   team?: string;
   name?: string;
   remote?: string;
@@ -84,6 +88,8 @@ const valueFlags = new Set([
   "--from",
   "--recovery-code",
   "--transfer",
+  "--to",
+  "--wrapper-id",
   "--team",
   "--name",
   "--remote",
@@ -118,6 +124,8 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   else if (flag === "--from") parsed.from = value;
   else if (flag === "--recovery-code") parsed.recoveryCode = value;
   else if (flag === "--transfer") parsed.transfer = value;
+  else if (flag === "--to") parsed.to = value;
+  else if (flag === "--wrapper-id") parsed.wrapperId = value;
   else if (flag === "--team") parsed.team = value;
   else if (flag === "--name") parsed.name = value;
   else if (flag === "--remote") parsed.remote = value;
@@ -154,6 +162,8 @@ export const FLAG_KEYS = [
   "from",
   "recoveryCode",
   "transfer",
+  "to",
+  "wrapperId",
   "team",
   "name",
   "remote",
@@ -178,6 +188,8 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
   from: "--from",
   recoveryCode: "--recovery-code",
   transfer: "--transfer",
+  to: "--to",
+  wrapperId: "--wrapper-id",
   team: "--team",
   name: "--name",
   remote: "--remote",
@@ -216,6 +228,9 @@ export const USAGE: Record<string, string> = {
   "device backup": "dotrelay device backup",
   "device recover":
     "dotrelay device recover --recovery-code <code> | --transfer <transfer-id>",
+  "device setup": "dotrelay device setup",
+  "device transfer": "dotrelay device transfer --to <peer-device-id>",
+  "device revoke-wrapper": "dotrelay device revoke-wrapper --wrapper-id <id>",
   "project link": "dotrelay project link --team <team-id>",
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
@@ -310,6 +325,9 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "device complete": ["profile", "noInput", "json", "from"],
   "device backup": ["profile", "noInput", "json"],
   "device recover": ["profile", "noInput", "json", "recoveryCode", "transfer"],
+  "device setup": ["profile", "noInput", "json"],
+  "device transfer": ["profile", "noInput", "json", "to"],
+  "device revoke-wrapper": ["profile", "noInput", "json", "wrapperId"],
   "project link": ["profile", "team", "remote", "noInput", "json"],
   "env use": ["profile", "environment", "json"],
 };
@@ -320,7 +338,17 @@ export const SUBCOMMANDS: Readonly<
   Partial<Record<CommandName, readonly string[]>>
 > = {
   profile: ["add", "use", "list"],
-  device: ["enroll", "begin", "approve", "complete", "backup", "recover"],
+  device: [
+    "enroll",
+    "begin",
+    "approve",
+    "complete",
+    "backup",
+    "recover",
+    "setup",
+    "transfer",
+    "revoke-wrapper",
+  ],
   project: ["link"],
   env: ["use"],
 };
@@ -487,6 +515,18 @@ const validateCommand = (parsed: MutableArguments) => {
         `device recover requires exactly one of --recovery-code <code> or --transfer <transfer-id>; usage: ${usage}`,
       );
   }
+  if (command === "device" && parsed.subcommand === "transfer" && !parsed.to)
+    throw new CliInvocationError(
+      `device transfer requires --to <peer-device-id>; usage: ${usage}`,
+    );
+  if (
+    command === "device" &&
+    parsed.subcommand === "revoke-wrapper" &&
+    !parsed.wrapperId
+  )
+    throw new CliInvocationError(
+      `device revoke-wrapper requires --wrapper-id <id>; usage: ${usage}`,
+    );
   // Interactively the Variables to roll back are chosen by name from the
   // live Manifest; automation must name at least one.
   if (

@@ -116,7 +116,10 @@ import {
   enrollDevice,
   enrollFirstDevice,
   recoverAccountKey,
+  revokeAccountKeyWrapper,
   runProtectedWorkflow,
+  setupDeviceAccountKey,
+  transferAccountKey,
   workspaceBoundaryFields,
 } from "./workflow";
 
@@ -522,6 +525,20 @@ const renderDeviceResult = (
         value.via === "recovery-code" ? "recovery code" : "device transfer",
       tone: "accent",
     });
+  if (typeof value.transferId === "string")
+    rows.push({
+      key: "Transfer",
+      value: abbreviateId(value.transferId),
+      tone: "accent",
+    });
+  if (typeof value.recipientDeviceId === "string")
+    rows.push({
+      key: "To",
+      value: abbreviateId(value.recipientDeviceId),
+      tone: "muted",
+    });
+  if (typeof value.expiresAt === "string")
+    rows.push({ key: "Expires", value: value.expiresAt, tone: "muted" });
   const message =
     typeof value.message === "string" ? sanitizeCliText(value.message) : "";
   const epilogues: string[] = [];
@@ -1537,6 +1554,9 @@ const execute = async (
     "complete",
     "backup",
     "recover",
+    "setup",
+    "transfer",
+    "revoke-wrapper",
   ]);
   if (
     parsed.command === "device" &&
@@ -1610,6 +1630,19 @@ const execute = async (
             ? { transferId: parsed.transfer }
             : {}),
         }),
+      };
+    if (parsed.subcommand === "setup")
+      return { value: await setupDeviceAccountKey(workflowOptions) };
+    if (parsed.subcommand === "transfer")
+      return {
+        value: await transferAccountKey(workflowOptions, parsed.to ?? ""),
+      };
+    if (parsed.subcommand === "revoke-wrapper")
+      return {
+        value: await revokeAccountKeyWrapper(
+          workflowOptions,
+          parsed.wrapperId ?? "",
+        ),
       };
     throw new CliInvocationError(
       "unrecognized device command; run dotrelay device --help",

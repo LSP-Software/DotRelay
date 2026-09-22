@@ -14,6 +14,8 @@ import {
   encodeRecoveryCode,
   generateAccountMasterKey,
   generateRecoveryCode,
+  openAccountKeyTransfer,
+  parseAccountKeyTransfer,
   resetMemoryCredentialStore,
 } from "@dotrelay/client";
 import {
@@ -26,6 +28,7 @@ import {
   parseProtocolObject,
   type SyncPageWire,
   sha384,
+  sha384ToHex,
   uuidToBytes,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
@@ -169,6 +172,12 @@ const accountKeyService = (
 ) => {
   const publishedWrappers: string[] = [];
   const publishedEnvelopes: string[] = [];
+  const postedTransfers: Array<
+    Record<string, unknown> & {
+      readonly object: string;
+    }
+  > = [];
+  const revokedWrappers: string[] = [];
   const admin: StrictJsonClient = {
     get: async (path, fields) => {
       if (path === "/api/v1/account-keys/wrappers") {
@@ -189,6 +198,19 @@ const accountKeyService = (
       if (path === "/api/v1/account-keys/wrappers") {
         publishedWrappers.push(String(body.wrapperId));
         return { wrapperId: body.wrapperId, idempotent: false };
+      }
+      if (path === "/api/v1/account-keys/wrappers/revoke") {
+        revokedWrappers.push(String(body.wrapperId));
+        return { revoked: true, idempotent: false };
+      }
+      if (path === "/api/v1/account-keys/transfers") {
+        postedTransfers.push({ ...body } as (typeof postedTransfers)[number]);
+        return {
+          transferId: body.transferId,
+          recipientDeviceId: body.recipientDeviceId,
+          expiresAt: "2026-12-31T23:59:59.000Z",
+          idempotent: false,
+        };
       }
       if (path === "/api/v1/account-keys/envelopes") {
         publishedEnvelopes.push(String(body.objectId));
@@ -218,6 +240,8 @@ const accountKeyService = (
     admin,
     publishedWrappers: () => publishedWrappers,
     publishedEnvelopes: () => publishedEnvelopes,
+    postedTransfers: () => postedTransfers,
+    revokedWrappers: () => revokedWrappers,
   };
 };
 
@@ -226,6 +250,29 @@ const bytesToHex = (value: Uint8Array): string =>
 
 const rawSigningPublicKey = async (key: CryptoKey): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.exportKey("raw", key)).slice(0, 32);
+// A real peer Device key pair: the raw public key seeds the boundary so
+// the CLI seals the transfer to a key it can actually find, and the
+// private key lets a test prove the sealed AMK comes back unchanged.
+const peerX25519 = async (): Promise<{
+  readonly id: string;
+  readonly encryptionPublicKey: string;
+  readonly encryptionPrivateKey: CryptoKey;
+}> => {
+  const encryptionKeyPair = (await crypto.subtle.generateKey(
+    { name: "X25519" },
+    true,
+    ["deriveBits"],
+  )) as unknown as CryptoKeyPair;
+  const publicRaw = await crypto.subtle.exportKey(
+    "raw",
+    encryptionKeyPair.publicKey,
+  );
+  return {
+    id: crypto.randomUUID(),
+    encryptionPublicKey: bytesToHex(new Uint8Array(publicRaw)),
+    encryptionPrivateKey: encryptionKeyPair.privateKey,
+  };
+};
 
 type TestSigningTrustDevice = Readonly<{
   readonly signingPublicKey: string;
@@ -3725,6 +3772,256 @@ describe("protected CLI workflows", () => {
       code: "state_conflict",
       exitCode: 4,
     });
+  });
+
+  test("device setup establishes the account key and its Recovery Code on a fresh Device", async () => {
+    const runtime = await setup();
+    const service = accountKeyService(runtime.admin);
+    const result = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.ok).toBe(true);
+    expect(report.deviceId).toBe(ids.device);
+    expect(report.recoveryCode).toBeString();
+    expect(report.wrapperId).toBeString();
+    // The mandatory Recovery Code wrapper is published once and the key is
+    // now persisted on the Device, scoped to it.
+    expect(service.publishedWrappers()).toHaveLength(1);
+    const stored = await runtime.deviceStorage.loadAccountKey({
+      pin: profile.pin,
+      deviceId: uuidToBytes(ids.device),
+    });
+    expect(stored).toBeDefined();
+    expect(new Uint8Array(stored as Uint8Array).length).toBe(32);
+  });
+
+  test("device setup is a no-op when this Device already holds the account key", async () => {
+    const amk = generateAccountMasterKey();
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const result = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.ok).toBe(true);
+    expect(report.deviceId).toBe(ids.device);
+    expect(report.message).toContain("already holds");
+    // It short-circuits before minting anything, so no wrapper is published.
+    expect(service.publishedWrappers()).toHaveLength(0);
+  });
+
+  test("device setup refuses to mint a second key when the account already has one", async () => {
+    const amk = generateAccountMasterKey();
+    const code = generateRecoveryCode();
+    const runtime = await setup();
+    const fixture = await accountKeyFixture(runtime.bootstrap, {
+      accountMasterKey: amk,
+      recoveryCode: code,
+    });
+    const service = accountKeyService(runtime.admin, {
+      recoveryWrapper: {
+        wrapperId: fixture.recoveryWrapperId as string,
+        object: fixture.recoveryWrapperObject as string,
+      },
+    });
+    const result = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "account_key_already_exists",
+      exitCode: 4,
+    });
+    expect(service.publishedWrappers()).toHaveLength(0);
+  });
+
+  test("device transfer seals the account key to the receiving Device and it opens back to the same key", async () => {
+    const amk = generateAccountMasterKey();
+    const peer = await peerX25519();
+    const runtime = await setup({
+      peerDevices: [
+        {
+          id: peer.id,
+          encryptionPublicKey: peer.encryptionPublicKey,
+          hasEpochGrant: false,
+        },
+      ],
+    });
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const result = await run(
+      [
+        "device",
+        "transfer",
+        "--profile",
+        "relay",
+        "--to",
+        peer.id,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.ok).toBe(true);
+    expect(report.deviceId).toBe(ids.device);
+    expect(report.transferId).toBeString();
+    expect(report.recipientDeviceId).toBe(peer.id);
+    expect(report.expiresAt).toBeString();
+    const posted = service.postedTransfers();
+    expect(posted).toHaveLength(1);
+    const transferBody = posted[0];
+    expect(transferBody).toBeDefined();
+    if (!transferBody) throw new Error("no transfer was posted");
+    expect(transferBody.recipientDeviceId).toBe(peer.id);
+    // The published object, opened with the receiver's X25519 key, yields the
+    // very Account Master Key the sender sealed — proving the handoff is intact.
+    const parsed = parseAccountKeyTransfer(
+      new Uint8Array(Buffer.from(String(transferBody.object), "base64")),
+    );
+    expect(bytesToHex(parsed.recipientDeviceId)).toBe(
+      peer.id.replaceAll("-", ""),
+    );
+    const opened = await openAccountKeyTransfer(
+      parsed,
+      peer.encryptionPrivateKey,
+    );
+    expect(new Uint8Array(opened)).toEqual(new Uint8Array(amk));
+  });
+
+  test("device transfer refuses a recipient that is not an active Device", async () => {
+    const amk = generateAccountMasterKey();
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const result = await run(
+      [
+        "device",
+        "transfer",
+        "--profile",
+        "relay",
+        "--to",
+        "88888888-8888-4888-8888-888888888888",
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "transfer_recipient_unknown",
+      exitCode: 4,
+    });
+    expect(service.postedTransfers()).toHaveLength(0);
+  });
+
+  test("device transfer reports when this Device is not unlocked", async () => {
+    const runtime = await setup();
+    const service = accountKeyService(runtime.admin);
+    const result = await run(
+      [
+        "device",
+        "transfer",
+        "--profile",
+        "relay",
+        "--to",
+        "88888888-8888-4888-8888-888888888888",
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(6);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "authentication",
+      code: "account_key_not_unlocked",
+      exitCode: 6,
+    });
+    expect(service.postedTransfers()).toHaveLength(0);
+  });
+
+  test("device revoke-wrapper retires the named account-key wrapper", async () => {
+    const amk = generateAccountMasterKey();
+    const wrapperId = bytesToHex(new Uint8Array(16));
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const result = await run(
+      [
+        "device",
+        "revoke-wrapper",
+        "--profile",
+        "relay",
+        "--wrapper-id",
+        wrapperId,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.ok).toBe(true);
+    expect(report.wrapperId).toBe(wrapperId);
+    expect(report.revoked).toBe(true);
+    expect(report.idempotent).toBe(false);
+    expect(service.revokedWrappers()).toEqual([wrapperId]);
   });
 
   test("an unlocked Device opens the Project epoch key from its Account Key Envelope", async () => {
