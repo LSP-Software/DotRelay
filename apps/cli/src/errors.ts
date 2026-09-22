@@ -49,6 +49,7 @@ const safeDiagnosticNumericKeys = new Set(safeDiagnosticKeys);
 // never leak through as a stable category, while the category and exit code
 // the command assigned remain actionable.
 const safeDiagnosticCodes = new Set([
+  "account_key_already_exists",
   "account_key_not_unlocked",
   "account_key_transfer_invalid",
   "account_key_unlock_failed",
@@ -144,6 +145,7 @@ const safeDiagnosticCodes = new Set([
   "stale_generation",
   "stale_head",
   "state_conflict",
+  "transfer_recipient_unknown",
   "transient",
   "trusted_head_conflict",
   "trusted_head_invalid",

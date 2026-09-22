@@ -565,6 +565,7 @@ try {
   // limits — not Project creation, which is a separate (project link) flow.
   const projectId = crypto.randomUUID();
   const environmentId = crypto.randomUUID();
+  const lifecycleEnvironmentId = crypto.randomUUID();
   const projectCreatedAt = new Date();
   await database.$transaction(
     async (tx) => {
@@ -589,6 +590,22 @@ try {
           createdAt: projectCreatedAt,
         },
       });
+      // A second Environment on the same Project, dedicated to the Account
+      // Master Key lifecycle proof. It holds only shared Values, so every
+      // Device that can open the Project Epoch Key (via the AMK envelope)
+      // decrypts it byte-identically; the production Environment above
+      // carries a user-defined Value sealed to Device 1 and is unreadable
+      // from any peer, which is why the cross-device comparison lives here.
+      await tx.environment.create({
+        data: {
+          id: lifecycleEnvironmentId,
+          projectId,
+          createdByUserId: demoUserId,
+          label: "lifecycle",
+          lifecycle: "ACTIVE",
+          createdAt: projectCreatedAt,
+        },
+      });
     },
     { maxWait: 5_000, timeout: 10_000 },
   );
@@ -597,8 +614,9 @@ try {
   // The real server now owns the port; the held port has been released.
   heldPort = undefined;
 
-  isolatedDirectory = await mkdtemp(join(tmpdir(), "dotrelay-e2e-"));
-  const repositoryDirectory = join(isolatedDirectory, "repository");
+  const baseDirectory = await mkdtemp(join(tmpdir(), "dotrelay-e2e-"));
+  isolatedDirectory = baseDirectory;
+  const repositoryDirectory = join(baseDirectory, "repository");
   const cliEnvironment: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: isolatedDirectory,
@@ -682,6 +700,206 @@ try {
       "device authorization did not issue a CLI session in the real database",
     );
 
+  console.log(
+    "→ CLI: device setup (Account Master Key established through the production CLI)",
+  );
+  const setupAk = await runBinary(
+    ["device", "setup", ...profileFlag, "--no-input", "--json"],
+    cliEnvironment,
+    repositoryDirectory,
+  );
+  if (setupAk.exitCode !== 0)
+    throw new Error(
+      `device setup failed with exit code ${setupAk.exitCode}: ${setupAk.stderr.trim()}`,
+    );
+  const setupAkResult = parseJsonLines(setupAk.stdout).at(-1) ?? {};
+  const amkRecoveryCode = requireString(
+    setupAkResult.recoveryCode,
+    "initial recovery code",
+  );
+  const setupWrapperId = requireString(
+    setupAkResult.wrapperId,
+    "initial recovery-code wrapper id",
+  );
+  if (setupAkResult.deviceId !== deviceId)
+    throw new Error(
+      `device setup reported Device ${String(setupAkResult.deviceId)}, expected ${deviceId}`,
+    );
+  let activeRecoveryWrappers = await database.accountKeyWrapperObject.findMany({
+    where: {
+      userId: demoUserId,
+      wrapperType: "RECOVERY_CODE",
+      retiredAt: null,
+    },
+  });
+  const setupRecoveryWrapper = await database.accountKeyWrapperObject.findFirst(
+    {
+      where: {
+        userId: demoUserId,
+        wrapperType: "RECOVERY_CODE",
+        retiredAt: null,
+      },
+    },
+  );
+  if (
+    activeRecoveryWrappers.length !== 1 ||
+    Buffer.from(setupRecoveryWrapper?.wrapperId ?? new Uint8Array(0)).toString(
+      "hex",
+    ) !== setupWrapperId
+  )
+    throw new Error(
+      "device setup did not publish exactly one active recovery-code wrapper",
+    );
+  // The command is idempotent on the Device that already stores the AMK: it
+  // reports the Device and mints no second wrapper.
+  const setupAgain = await runBinary(
+    ["device", "setup", ...profileFlag, "--no-input", "--json"],
+    cliEnvironment,
+    repositoryDirectory,
+  );
+  if (setupAgain.exitCode !== 0)
+    throw new Error(
+      `idempotent device setup failed: ${setupAgain.stderr.trim()}`,
+    );
+  const setupAgainResult = parseJsonLines(setupAgain.stdout).at(-1) ?? {};
+  if ("recoveryCode" in setupAgainResult || "wrapperId" in setupAgainResult)
+    throw new Error(
+      `idempotent device setup leaked a new wrapper: ${JSON.stringify(setupAgainResult)}`,
+    );
+  if (
+    (await database.accountKeyWrapperObject.count({
+      where: {
+        userId: demoUserId,
+        wrapperType: "RECOVERY_CODE",
+        retiredAt: null,
+      },
+    })) !== 1
+  )
+    throw new Error(
+      "idempotent device setup minted an extra recovery-code wrapper",
+    );
+
+  // Enroll Devices 2 and 3 through the real device authorization so all three
+  // Devices share the same User and can exchange the AMK. Each lives in its
+  // own isolated home/config directory and its own Git repository tracking
+  // the same demo origin, so repository identity resolves to the same Project.
+  const enrollPeerDevice = async (
+    index: number,
+  ): Promise<{ env: NodeJS.ProcessEnv; repo: string; deviceId: string }> => {
+    const deviceHome = join(baseDirectory, `device${index}`);
+    const repo = join(baseDirectory, `device${index}-repo`);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: deviceHome,
+      DOTRELAY_CONFIG_DIR: join(deviceHome, "cli"),
+    };
+    await mkdir(join(deviceHome, "cli", "credentials"), { recursive: true });
+    await mkdir(repo, { recursive: true });
+    const git = async (args: readonly string[]) => {
+      const child = Bun.spawn(["git", ...args], {
+        cwd: repo,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stderr).text(),
+      ]);
+      if (exitCode !== 0)
+        throw new Error(`git ${args.join(" ")}: ${stderr.trim()}`);
+    };
+    await git(["init", "-b", "main"]);
+    await git([
+      "remote",
+      "add",
+      "origin",
+      `https://github.com/${DEMO_GITHUB.owner}/${DEMO_GITHUB.name}.git`,
+    ]);
+    const enrolled = await runWithDeviceApproval(
+      [
+        "setup",
+        profileOrigin,
+        "--accept-profile",
+        profile.id,
+        "--no-input",
+        "--json",
+      ],
+      env,
+      repo,
+    );
+    if (enrolled.exitCode !== 0)
+      throw new Error(
+        `device${index} setup failed: exit=${enrolled.exitCode} ${enrolled.stderr.trim()}`,
+      );
+    if (enrolled.approvals !== 1)
+      throw new Error(
+        `device${index} setup performed ${enrolled.approvals} authorizations`,
+      );
+    const result = parseJsonLines(enrolled.stdout).at(-1) ?? {};
+    if (result.device !== "enrolled")
+      throw new Error(
+        `device${index} did not enroll: ${JSON.stringify(result)}`,
+      );
+    return {
+      env,
+      repo,
+      deviceId: requireString(result.deviceId, `device${index} id`),
+    };
+  };
+  const device2 = await enrollPeerDevice(2);
+  const device3 = await enrollPeerDevice(3);
+  const activeDeviceCount = await database.device.count({
+    where: { userId: demoUserId, lifecycle: "ACTIVE" },
+  });
+  if (activeDeviceCount !== 3)
+    throw new Error(`expected 3 active Devices, found ${activeDeviceCount}`);
+
+  // A second Device that does not store the AMK must refuse to mint a second,
+  // incompatible key: the account already has one (the active wrapper proves it).
+  const secondSetup = await runWithDeviceApproval(
+    ["device", "setup", ...profileFlag, "--no-input", "--json"],
+    device2.env,
+    device2.repo,
+  );
+  if (secondSetup.exitCode !== 4)
+    throw new Error(
+      `second Device setup was not refused: exit=${secondSetup.exitCode} ${secondSetup.stderr.trim()}`,
+    );
+  if (
+    parseJsonLines(secondSetup.stderr).at(-1)?.code !==
+    "account_key_already_exists"
+  )
+    throw new Error(
+      `second Device setup reported the wrong diagnostic: ${secondSetup.stderr.trim()}`,
+    );
+
+  // Device 2 recovers the AMK from the one-time recovery code, so it can
+  // decrypt the shared-only lifecycle Environment independently of Device 1.
+  const recoverDevice2 = await runBinary(
+    [
+      "device",
+      "recover",
+      ...profileFlag,
+      "--recovery-code",
+      amkRecoveryCode,
+      "--no-input",
+      "--json",
+    ],
+    device2.env,
+    device2.repo,
+  );
+  if (recoverDevice2.exitCode !== 0)
+    throw new Error(
+      `device2 recover failed: exit=${recoverDevice2.exitCode} ${recoverDevice2.stderr.trim()}`,
+    );
+  const recoverDevice2Result =
+    parseJsonLines(recoverDevice2.stdout).at(-1) ?? {};
+  if (recoverDevice2Result.via !== "recovery-code")
+    throw new Error(
+      `device2 recover used an unexpected channel: ${JSON.stringify(recoverDevice2Result)}`,
+    );
+
   const sourcePath = join(isolatedDirectory, "source.env");
   await writeFile(sourcePath, "SHARED_VALUE=one\nUSER_VALUE=secret\nEMPTY=\n");
 
@@ -733,6 +951,23 @@ try {
   });
   if (genesisRevision?.mutation !== "GENESIS")
     throw new Error("the genesis Revision was not published on the real API");
+  // With Device 1 holding the AMK and no epoch key established, the main init
+  // is the Device that establishes the Project Epoch Key: it wraps a fresh
+  // random key in an AMK envelope the service stores, so every later Device
+  // that recovers the AMK can open the same key.
+  const epochEnvelope = await database.accountKeyEnvelopeObject.findFirst({
+    where: {
+      userId: demoUserId,
+      envelopeType: "PROJECT_EPOCH_KEY",
+      projectId: linkedProject.id,
+      projectEpoch: 1n,
+      retiredAt: null,
+    },
+  });
+  if (!epochEnvelope)
+    throw new Error(
+      "the main init did not publish the AMK-wrapped Project Epoch Key envelope",
+    );
 
   console.log("→ CLI: push (change published through the real API)");
   await writeFile(sourcePath, "SHARED_VALUE=two\nUSER_VALUE=secret\nEMPTY=\n");
@@ -1092,25 +1327,350 @@ try {
       "the Device stopped being active after the second device authorization",
     );
 
+  console.log(
+    "→ CLI: device lifecycle (shared Environment decrypts identically on every Device that holds the AMK)",
+  );
+  const lifecycleSource = join(isolatedDirectory, "lifecycle.env");
+  await writeFile(lifecycleSource, "SHARED_VALUE=alpha\nEMPTY=\n");
+  const lifecycleInit = await runBinary(
+    [
+      "init",
+      lifecycleEnvironmentId,
+      ...profileFlag,
+      "--from",
+      lifecycleSource,
+      "--classify",
+      "SHARED_VALUE=shared",
+      "--classify",
+      "EMPTY=shared",
+      "--remote",
+      "origin",
+      "--no-input",
+      "--json",
+    ],
+    cliEnvironment,
+    repositoryDirectory,
+  );
+  if (lifecycleInit.exitCode !== 0)
+    throw new Error(
+      `lifecycle init failed: exit=${lifecycleInit.exitCode} ${lifecycleInit.stderr.trim()}`,
+    );
+  requireString(
+    parseJsonLines(lifecycleInit.stdout).at(-1)?.revision,
+    "lifecycle genesis Revision id",
+  );
+
+  const lifecyclePull = async (
+    name: string,
+    env: NodeJS.ProcessEnv,
+    repo: string,
+  ): Promise<string> => {
+    const outputPath = join(repo, "lifecycle.env.out");
+    const run = await runBinary(
+      [
+        "pull",
+        ...profileFlag,
+        "--environment",
+        lifecycleEnvironmentId,
+        "--output",
+        outputPath,
+        "--remote",
+        "origin",
+        "--no-input",
+        "--json",
+      ],
+      env,
+      repo,
+    );
+    if (run.exitCode !== 0)
+      throw new Error(
+        `device${name} lifecycle pull failed: exit=${run.exitCode} ${run.stderr.trim()}`,
+      );
+    return outputPath;
+  };
+  const device1LifecycleFile = await lifecyclePull(
+    "1",
+    cliEnvironment,
+    repositoryDirectory,
+  );
+  const device2LifecycleFile = await lifecyclePull(
+    "2",
+    device2.env,
+    device2.repo,
+  );
+  const device1LifecycleBytes = await readFile(device1LifecycleFile);
+  const device2LifecycleBytes = await readFile(device2LifecycleFile);
+  if (Buffer.compare(device1LifecycleBytes, device2LifecycleBytes) !== 0)
+    throw new Error(
+      "Devices 1 and 2 decrypted the shared Environment differently",
+    );
+  const lifecycleText = device1LifecycleBytes.toString("utf8");
+  if (
+    !lifecycleText.includes('SHARED_VALUE="alpha"') ||
+    !lifecycleText.includes('EMPTY=""')
+  )
+    throw new Error(
+      `lifecycle pull decoded unexpected Values: ${JSON.stringify(lifecycleText)}`,
+    );
+
+  // Device 3 does not yet hold the AMK. Device 1 seals it to Device 3 with a
+  // short-lived transfer; Device 3 accepts the transfer exactly once.
+  const transfer = await runBinary(
+    [
+      "device",
+      "transfer",
+      ...profileFlag,
+      "--to",
+      device3.deviceId,
+      "--no-input",
+      "--json",
+    ],
+    cliEnvironment,
+    repositoryDirectory,
+  );
+  if (transfer.exitCode !== 0)
+    throw new Error(
+      `device transfer failed: exit=${transfer.exitCode} ${transfer.stderr.trim()}`,
+    );
+  const transferResult = parseJsonLines(transfer.stdout).at(-1) ?? {};
+  const transferId = requireString(transferResult.transferId, "transfer id");
+  if (transferResult.recipientDeviceId !== device3.deviceId)
+    throw new Error(
+      `transfer targeted the wrong Device: ${JSON.stringify(transferResult)}`,
+    );
+  const pendingTransfer = await database.accountKeyTransferObject.findFirst({
+    where: {
+      userId: demoUserId,
+      transferId: Buffer.from(transferId, "hex"),
+      status: "PENDING",
+    },
+  });
+  if (!pendingTransfer)
+    throw new Error("the transfer was not recorded as pending on the real API");
+
+  const acceptTransfer = await runBinary(
+    [
+      "device",
+      "recover",
+      ...profileFlag,
+      "--transfer",
+      transferId,
+      "--no-input",
+      "--json",
+    ],
+    device3.env,
+    device3.repo,
+  );
+  if (acceptTransfer.exitCode !== 0)
+    throw new Error(
+      `device3 transfer accept failed: exit=${acceptTransfer.exitCode} ${acceptTransfer.stderr.trim()}`,
+    );
+  const acceptResult = parseJsonLines(acceptTransfer.stdout).at(-1) ?? {};
+  if (acceptResult.via !== "transfer")
+    throw new Error(
+      `device3 accept used an unexpected channel: ${JSON.stringify(acceptResult)}`,
+    );
+  const device3LifecycleFile = await lifecyclePull(
+    "3",
+    device3.env,
+    device3.repo,
+  );
+  const device3LifecycleBytes = await readFile(device3LifecycleFile);
+  if (Buffer.compare(device1LifecycleBytes, device3LifecycleBytes) !== 0)
+    throw new Error(
+      "Device 3 decrypted the shared Environment differently from Device 1",
+    );
+  const consumedTransfer = await database.accountKeyTransferObject.findFirst({
+    where: { userId: demoUserId, transferId: Buffer.from(transferId, "hex") },
+  });
+  if (
+    consumedTransfer?.status !== "CONSUMED" ||
+    consumedTransfer?.consumedAt === null
+  )
+    throw new Error("the one-shot transfer was not consumed by the real API");
+
+  // A one-shot transfer cannot be accepted twice.
+  const replayTransfer = await runBinary(
+    [
+      "device",
+      "recover",
+      ...profileFlag,
+      "--transfer",
+      transferId,
+      "--no-input",
+      "--json",
+    ],
+    device3.env,
+    device3.repo,
+  );
+  if (replayTransfer.exitCode !== 4)
+    throw new Error(
+      `one-shot transfer replay was not refused: exit=${replayTransfer.exitCode} ${replayTransfer.stderr.trim()}`,
+    );
+  if (parseJsonLines(replayTransfer.stderr).at(-1)?.code !== "state_conflict")
+    throw new Error(
+      `transfer replay reported the wrong diagnostic: ${replayTransfer.stderr.trim()}`,
+    );
+
+  // Rotating the recovery code retires the previous wrapper, so the old code
+  // can no longer unlock the account and the new one can.
+  const backup = await runBinary(
+    ["device", "backup", ...profileFlag, "--no-input", "--json"],
+    cliEnvironment,
+    repositoryDirectory,
+  );
+  if (backup.exitCode !== 0)
+    throw new Error(`device backup failed: ${backup.stderr.trim()}`);
+  const backupResult = parseJsonLines(backup.stdout).at(-1) ?? {};
+  const rotatedRecoveryCode = requireString(
+    backupResult.recoveryCode,
+    "rotated recovery code",
+  );
+  const backupWrapperId = requireString(
+    backupResult.wrapperId,
+    "backup wrapper id",
+  );
+  activeRecoveryWrappers = await database.accountKeyWrapperObject.findMany({
+    where: {
+      userId: demoUserId,
+      wrapperType: "RECOVERY_CODE",
+      retiredAt: null,
+    },
+  });
+  const backupRecoveryWrapper =
+    await database.accountKeyWrapperObject.findFirst({
+      where: {
+        userId: demoUserId,
+        wrapperType: "RECOVERY_CODE",
+        retiredAt: null,
+      },
+    });
+  if (
+    activeRecoveryWrappers.length !== 1 ||
+    Buffer.from(backupRecoveryWrapper?.wrapperId ?? new Uint8Array(0)).toString(
+      "hex",
+    ) !== backupWrapperId
+  )
+    throw new Error(
+      "rotation did not leave exactly one active recovery-code wrapper",
+    );
+
+  const staleRecover = await runBinary(
+    [
+      "device",
+      "recover",
+      ...profileFlag,
+      "--recovery-code",
+      amkRecoveryCode,
+      "--no-input",
+      "--json",
+    ],
+    device2.env,
+    device2.repo,
+  );
+  if (staleRecover.exitCode !== 6)
+    throw new Error(
+      `stale recovery code was not refused: exit=${staleRecover.exitCode} ${staleRecover.stderr.trim()}`,
+    );
+  if (
+    parseJsonLines(staleRecover.stderr).at(-1)?.code !==
+    "account_key_unlock_failed"
+  )
+    throw new Error(
+      `stale recovery code reported the wrong diagnostic: ${staleRecover.stderr.trim()}`,
+    );
+  const freshRecover = await runBinary(
+    [
+      "device",
+      "recover",
+      ...profileFlag,
+      "--recovery-code",
+      rotatedRecoveryCode,
+      "--no-input",
+      "--json",
+    ],
+    device2.env,
+    device2.repo,
+  );
+  if (freshRecover.exitCode !== 0)
+    throw new Error(
+      `rotated recovery code failed: exit=${freshRecover.exitCode} ${freshRecover.stderr.trim()}`,
+    );
+  if (parseJsonLines(freshRecover.stdout).at(-1)?.via !== "recovery-code")
+    throw new Error(
+      "rotated recovery code did not unlock the Account Master Key",
+    );
+
+  // The last active recovery-code wrapper cannot be revoked: it would strand
+  // the account with no way to recover the AMK, so the guard refuses.
+  const revokeGuard = await runBinary(
+    [
+      "device",
+      "revoke-wrapper",
+      ...profileFlag,
+      "--wrapper-id",
+      backupWrapperId,
+      "--no-input",
+      "--json",
+    ],
+    cliEnvironment,
+    repositoryDirectory,
+  );
+  if (revokeGuard.exitCode !== 4)
+    throw new Error(
+      `last-wrapper revocation was not guarded: exit=${revokeGuard.exitCode} ${revokeGuard.stderr.trim()}`,
+    );
+  if (parseJsonLines(revokeGuard.stderr).at(-1)?.code !== "state_conflict")
+    throw new Error(
+      `revocation guard reported the wrong diagnostic: ${revokeGuard.stderr.trim()}`,
+    );
+  const backupStillActive = await database.accountKeyWrapperObject.findFirst({
+    where: {
+      userId: demoUserId,
+      wrapperId: Buffer.from(backupWrapperId, "hex"),
+    },
+  });
+  if (backupStillActive?.retiredAt !== null)
+    throw new Error(
+      "the revocation guard retired the last active recovery-code wrapper",
+    );
+
   const auditEvents = await database.auditEvent.count({
     where: { actorUserId: demoUserId },
   });
   const operations = await database.operation.findMany({
     where: { actorUserId: demoUserId },
-    select: { status: true },
+    select: { status: true, kind: true, actorDeviceId: true },
   });
-  if (
-    operations.length < 3 ||
-    operations.some((operation) => operation.status === "STAGED")
-  )
+  if (operations.length < 3)
     throw new Error(
       `operations were not committed: ${JSON.stringify(operations)}`,
+    );
+  // The last-wrapper revocation guard is the only command this run rejects
+  // after the API has staged it: the device routes stage the command before
+  // the guard validates it, and a rejected command stays staged until its
+  // TTL expires. Every other command in the run must have committed.
+  const staged = operations.filter(
+    (operation) => operation.status === "STAGED",
+  );
+  if (staged.length !== 1)
+    throw new Error(
+      `expected exactly one staged operation (the guarded revocation), found ${staged.length}`,
+    );
+  const stagedOperation = staged[0];
+  if (
+    stagedOperation === undefined ||
+    stagedOperation.kind !== "ACCOUNT_KEY" ||
+    stagedOperation.actorDeviceId !== deviceId
+  )
+    throw new Error(
+      `the staged operation is not the guarded revocation: ${JSON.stringify(stagedOperation)}`,
     );
   if (auditEvents < 1)
     throw new Error("the audit trail recorded nothing for the demo user");
 
   console.log(
-    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
+    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin, and the full Account Master Key lifecycle (3-Device cross-device decrypt, one-shot transfer, rotation, revocation guard) against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
   );
 } finally {
   server?.stop(true);

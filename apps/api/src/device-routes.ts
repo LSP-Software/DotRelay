@@ -47,6 +47,12 @@ const problem = (
 
 const mapError = (error: unknown) => {
   if (error instanceof ContractError) return error.code;
+  if (error instanceof Error && error.message.includes("cannot be revoked")) {
+    // The last-wrapper guards throw plain Errors whose messages the generic
+    // persistence mapper would read as invalid input; they are server-state
+    // conflicts, so classify them before the mapper runs.
+    return "state_conflict" as const;
+  }
   const mapped = mapPersistenceError(error);
   if (mapped) return mapped.code;
   if (!(error instanceof Error)) return "service_unavailable" as const;
@@ -54,8 +60,6 @@ const mapError = (error: unknown) => {
   if (error.message.includes("not pending")) return "state_conflict" as const;
   if (error.message.includes("must differ")) return "forbidden" as const;
   if (error.message.includes("requires no active"))
-    return "state_conflict" as const;
-  if (error.message.includes("cannot be revoked"))
     return "state_conflict" as const;
   if (error.message.includes("expired")) return "state_conflict" as const;
   return "service_unavailable" as const;

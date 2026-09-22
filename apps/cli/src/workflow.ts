@@ -5,6 +5,7 @@ import {
   type CliDeviceStorage,
   changedVariableIdsFromRevision,
   createAccountKeyEnvelope,
+  createAccountKeyTransfer,
   createAccountKeyWrapper,
   createCliDeviceStorage,
   createDeviceBootstrap,
@@ -22,6 +23,7 @@ import {
   decodeSyncVariables,
   encodeRecoveryCode,
   exportSigningPublicKey,
+  generateAccountMasterKey,
   generateRecoveryCode,
   loadDeviceKeyMaterial,
   openAccountKeyEnvelope,
@@ -1851,6 +1853,209 @@ export const recoverAccountKey = async (
       via === "recovery-code"
         ? "unlocked with the recovery code; the Account Master Key is now stored on this Device"
         : "unlocked by the trusted Device transfer; the Account Master Key is now stored on this Device",
+  };
+};
+
+// Account Master Key establishment, handoff, and recovery-wrapper lifecycle
+// are driven from the CLI for headless Devices. The browser keeps the AMK
+// in-memory only, so a CLI Device is the surface that persists it; these
+// commands cover the same lifecycle a browser session would, through the
+// production /api/v1/account-keys/* routes.
+
+// A transfer is sealed for a single peer Device and consumed exactly once;
+// a short validity window keeps an unaccepted transfer from lingering while
+// staying far below the service's staging TTL.
+const accountKeyTransferValidityMs = 5 * 60 * 1000;
+
+export const setupDeviceAccountKey = async (
+  options: WorkflowOptions,
+): Promise<
+  Readonly<{
+    readonly deviceId: string;
+    readonly recoveryCode?: string;
+    readonly wrapperId?: string;
+    readonly message: string;
+  }>
+> => {
+  await enrollFirstDevice(options);
+  const authorized = await loadAuthorizedDevice(options);
+  const storage = resolveDeviceStorage(options);
+  const existing = await loadAccountMasterKey(options, authorized.deviceId);
+  if (existing)
+    return {
+      deviceId: authorized.deviceId,
+      message:
+        "this Device already holds the Account Master Key; nothing to set up",
+    };
+  // The AMK is never stored by the service; active wrappers are the only
+  // durable proof that one exists. Any active wrapper means another Device
+  // or browser already established the AMK, so this one must recover it
+  // rather than mint a second, incompatible key.
+  const wrappers = await fetchActiveWrappers(authorized.admin);
+  if (wrappers.length > 0)
+    throw new CliError(
+      "conflict",
+      "this account already has an Account Master Key; run dotrelay device recover to take it over from an existing Device",
+      {},
+      "account_key_already_exists",
+    );
+  const accountMasterKey = generateAccountMasterKey();
+  const recoveryCode = generateRecoveryCode();
+  const wrapper = await createAccountKeyWrapper({
+    serverProfileId: options.profile.pin.serverProfileId,
+    userId: uuidToBytes(authorized.userId),
+    deviceId: uuidToBytes(authorized.deviceId),
+    userIdentityGeneration: authorized.bundle.userIdentityGeneration,
+    createdAtMs: Date.now(),
+    accountMasterKey,
+    signingPrivateKey: authorized.keys.signingPrivateKey,
+    kind: { type: "recoveryCode", recoveryCode },
+  });
+  const operationId = crypto.randomUUID();
+  await authorized.admin.post(
+    "/api/v1/account-keys/wrappers",
+    {
+      operationId,
+      objectId: crypto.randomUUID(),
+      object: base64(encodeProtocolObject(wrapper.object)),
+      wrapperId: bytesToHex(wrapper.wrapperId),
+      identityGeneration: String(authorized.bundle.userIdentityGeneration),
+      ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
+      ciphertextLength: wrapper.ciphertext.length,
+    },
+    ["wrapperId", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  await storage.saveAccountKey(
+    accountKeyScope(options, authorized.deviceId),
+    accountMasterKey,
+  );
+  return {
+    deviceId: authorized.deviceId,
+    recoveryCode: encodeRecoveryCode(recoveryCode),
+    wrapperId: bytesToHex(wrapper.wrapperId),
+    message:
+      "the Account Master Key is set up on this Device; the Recovery Code is shown only once, so store it somewhere safe",
+  };
+};
+
+export const transferAccountKey = async (
+  options: WorkflowOptions,
+  recipientDeviceId: string,
+): Promise<
+  Readonly<{
+    readonly deviceId: string;
+    readonly transferId: string;
+    readonly recipientDeviceId: string;
+    readonly expiresAt: string;
+    readonly message: string;
+  }>
+> => {
+  const authorized = await loadAuthorizedDevice(options);
+  const accountMasterKey = await loadAccountMasterKey(
+    options,
+    authorized.deviceId,
+  );
+  if (!accountMasterKey)
+    throw new CliError(
+      "authentication",
+      "this Device is not unlocked; run dotrelay device setup or dotrelay device recover first",
+      {},
+      "account_key_not_unlocked",
+    );
+  const peer = authorized.boundary.peerDevices.find(
+    (device) => device.id.toLowerCase() === recipientDeviceId.toLowerCase(),
+  );
+  if (!peer)
+    throw new CliError(
+      "conflict",
+      `device ${recipientDeviceId} is not an active Device for this account`,
+      {},
+      "transfer_recipient_unknown",
+    );
+  const recipientX25519PublicKey = hexToBytes(peer.encryptionPublicKey);
+  if (recipientX25519PublicKey.length !== 32)
+    throw new CliError(
+      "transient",
+      "the Server Profile returned an invalid peer Device key",
+      {},
+      "response_invalid",
+    );
+  const recipientEncryptionPublicKey = await crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(recipientX25519PublicKey),
+    { name: "X25519" },
+    true,
+    [],
+  );
+  const now = Date.now();
+  const expiresAtMs = now + accountKeyTransferValidityMs;
+  const transfer = await createAccountKeyTransfer({
+    serverProfileId: options.profile.pin.serverProfileId,
+    userId: uuidToBytes(authorized.userId),
+    deviceId: uuidToBytes(authorized.deviceId),
+    createdAtMs: now,
+    expiresAtMs,
+    accountMasterKey,
+    recipientDeviceId: peer.id,
+    recipientEncryptionPublicKey,
+    signingPrivateKey: authorized.keys.signingPrivateKey,
+  });
+  const operationId = crypto.randomUUID();
+  await authorized.admin.post(
+    "/api/v1/account-keys/transfers",
+    {
+      operationId,
+      objectId: crypto.randomUUID(),
+      object: base64(encodeProtocolObject(transfer.object)),
+      recipientDeviceId: peer.id,
+      transferId: bytesToHex(transfer.transferId),
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      ciphertextHash: sha384ToHex(transfer.object.get(48) as Uint8Array),
+      ciphertextLength: Number(transfer.object.get(72)),
+    },
+    ["transferId", "recipientDeviceId", "expiresAt", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  return {
+    deviceId: authorized.deviceId,
+    transferId: bytesToHex(transfer.transferId),
+    recipientDeviceId: peer.id,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    message:
+      "the Account Master Key is sealed for the receiving Device; run dotrelay device recover --transfer <id> on that Device before it expires",
+  };
+};
+
+export const revokeAccountKeyWrapper = async (
+  options: WorkflowOptions,
+  wrapperId: string,
+): Promise<
+  Readonly<{
+    readonly wrapperId: string;
+    readonly revoked: boolean;
+    readonly idempotent: boolean;
+    readonly message: string;
+  }>
+> => {
+  const authorized = await loadAuthorizedDevice(options);
+  const operationId = crypto.randomUUID();
+  const result = await authorized.admin.post(
+    "/api/v1/account-keys/wrappers/revoke",
+    {
+      operationId,
+      wrapperId: wrapperId.toLowerCase(),
+    },
+    ["revoked", "idempotent"],
+    { idempotencyKey: operationId },
+  );
+  return {
+    wrapperId: wrapperId.toLowerCase(),
+    revoked: Boolean(result.revoked),
+    idempotent: Boolean(result.idempotent),
+    message: result.idempotent
+      ? "the Recovery Code wrapper was already revoked"
+      : "the Recovery Code wrapper is retired and can no longer unlock the account",
   };
 };
 

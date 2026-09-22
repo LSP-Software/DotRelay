@@ -12,7 +12,6 @@ import { join } from "node:path";
 import {
   createCliDeviceStorage,
   createDeviceBootstrap,
-  generateAccountMasterKey,
 } from "@dotrelay/client";
 import {
   bytesToUuid,
@@ -482,6 +481,43 @@ const handle = async (request: Request): Promise<Response> => {
       object: body.object,
     };
     return jsonResponse({ wrapperId: body.wrapperId, idempotent: false }, 201);
+  }
+  if (
+    url.pathname === "/api/v1/account-keys/wrappers/revoke" &&
+    request.method === "POST"
+  ) {
+    if (!activeDevice(request)) return problemResponse("forbidden");
+    const body = await readJson(request);
+    if (typeof body.wrapperId !== "string" || body.wrapperId.length === 0)
+      return problemResponse("invalid_request");
+    return jsonResponse({ revoked: true, idempotent: false });
+  }
+  if (
+    url.pathname === "/api/v1/account-keys/transfers" &&
+    request.method === "POST"
+  ) {
+    if (!activeDevice(request)) return problemResponse("forbidden");
+    const body = await readJson(request);
+    if (
+      typeof body.object !== "string" ||
+      body.object.length === 0 ||
+      typeof body.transferId !== "string" ||
+      body.transferId.length === 0 ||
+      typeof body.recipientDeviceId !== "string" ||
+      body.recipientDeviceId.length === 0 ||
+      typeof body.expiresAt !== "string" ||
+      body.expiresAt.length === 0
+    )
+      return problemResponse("invalid_request");
+    return jsonResponse(
+      {
+        transferId: body.transferId,
+        recipientDeviceId: body.recipientDeviceId,
+        expiresAt: body.expiresAt,
+        idempotent: false,
+      },
+      201,
+    );
   }
   if (
     url.pathname === "/api/v1/account-keys/envelopes" &&
@@ -1177,11 +1213,13 @@ try {
       "packaged CLI bundle/registration mismatch contract failed",
     );
 
-  // The Account Master Key is established out of band (the web app or an
-  // earlier CLI run); the harness seeds it so the Device is unlocked. This
-  // section is self-contained: it resets the Server Profile to the initial
-  // Device and the matching keys it registered, so the recovery round trip
-  // does not depend on the enrollment handoff's device choreography.
+  // The Account Master Key is established in-band by the production
+  // `device setup` command: it mints the key on this Device, publishes the
+  // mandatory Recovery Code wrapper, and stores the key locally. Nothing is
+  // seeded out of band - the CLI is the only surface that ever holds the key.
+  // This section is self-contained: it resets the Server Profile to the
+  // initial Device and the matching keys it registered, so the recovery
+  // round trip does not depend on the enrollment handoff's choreography.
   resolveDevice(
     initialDeviceId,
     initialEncryptionPublicKey,
@@ -1194,7 +1232,6 @@ try {
     pin,
     initialDeviceId,
   );
-  const accountMasterKey = await generateAccountMasterKey();
   const accountScope = { pin, deviceId: uuidBytes(initialDeviceId) };
 
   // A Device that is not unlocked cannot create a Recovery Code wrapper.
@@ -1209,18 +1246,28 @@ try {
   )
     throw new Error("packaged CLI locked-device backup contract failed");
 
-  await deviceStorage.saveAccountKey(accountScope, accountMasterKey);
-  const backup = await runJson(
-    ["device", "backup", "--profile", "live", "--no-input", "--json"],
+  // Establish the account key through the production path: the command
+  // mints the key, publishes the Recovery Code wrapper, and stores the key
+  // on this Device - the same surface a freshly enrolled Device uses.
+  const setup = await runJson(
+    ["device", "setup", "--profile", "live", "--no-input", "--json"],
     environment,
   );
-  const recoveryCode = requireString(backup.recoveryCode, "recovery code");
-  const backupWrapperId = requireString(
-    backup.wrapperId,
-    "recovery wrapper id",
-  );
-  if (state.recoveryWrapper?.wrapperId !== backupWrapperId)
-    throw new Error("packaged CLI recovery wrapper backup contract failed");
+  const recoveryCode = requireString(setup.recoveryCode, "recovery code");
+  const setupWrapperId = requireString(setup.wrapperId, "setup wrapper id");
+  if (setup.deviceId !== initialDeviceId)
+    throw new Error("packaged CLI device setup contract failed");
+  // The wrapper setup published is what the Server Profile reports active.
+  if (state.recoveryWrapper?.wrapperId !== setupWrapperId)
+    throw new Error("packaged CLI setup wrapper publish contract failed");
+  // The CLI generated and stored the Account Master Key on this Device.
+  const accountMasterKey = await deviceStorage
+    .loadAccountKey(accountScope)
+    .catch(() => null);
+  if (accountMasterKey === null || accountMasterKey.length !== 32)
+    throw new Error(
+      "packaged CLI device setup did not store the Account Master Key",
+    );
 
   // A recovery code that is not 13 groups of 4 Crockford characters is
   // rejected before any key material is touched or transmitted.
