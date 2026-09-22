@@ -194,9 +194,8 @@ const accountKeyService = (
         publishedEnvelopes.push(String(body.objectId));
         return { objectId: body.objectId, idempotent: false };
       }
-      const match = /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(
-        path,
-      );
+      const match =
+        /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(path);
       if (match) {
         const transfer = seed.transfer;
         if (
@@ -3517,7 +3516,11 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      { ...runtime, admin: service.admin, fetch: async () => Response.json({}) },
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
     );
     expect(recover.exitCode).toBe(0);
     const report = JSON.parse(recover.stdout) as Record<string, unknown>;
@@ -3546,7 +3549,11 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      { ...runtime, admin: service.admin, fetch: async () => Response.json({}) },
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
     );
     expect(recover.exitCode).toBe(2);
     const diagnostic = JSON.parse(recover.stderr) as Record<string, unknown>;
@@ -3584,7 +3591,11 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      { ...runtime, admin: service.admin, fetch: async () => Response.json({}) },
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
     );
     expect(recover.exitCode).toBe(6);
     const diagnostic = JSON.parse(recover.stderr) as Record<string, unknown>;
@@ -3611,7 +3622,11 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      { ...runtime, admin: service.admin, fetch: async () => Response.json({}) },
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
     );
     expect(recover.exitCode).toBe(4);
     const diagnostic = JSON.parse(recover.stderr) as Record<string, unknown>;
@@ -3661,7 +3676,11 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      { ...runtime, admin: service.admin, fetch: async () => Response.json({}) },
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
     );
     expect(recover.exitCode).toBe(0);
     const report = JSON.parse(recover.stdout) as Record<string, unknown>;
@@ -3692,7 +3711,11 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      { ...runtime, admin: service.admin, fetch: async () => Response.json({}) },
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
     );
     expect(recover.exitCode).toBe(4);
     const diagnostic = JSON.parse(recover.stderr) as Record<string, unknown>;

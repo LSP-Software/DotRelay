@@ -705,7 +705,9 @@ integrationDescribe("trust workflow integration", () => {
     });
     const retiredRecoveryCode =
       await database.accountKeyWrapperObject.findUniqueOrThrow({
-        where: { protocolObjectId: recoveryCodeResult.wrapper.protocolObjectId },
+        where: {
+          protocolObjectId: recoveryCodeResult.wrapper.protocolObjectId,
+        },
       });
     expect(retiredRecoveryCode.retiredAt).not.toBeNull();
 

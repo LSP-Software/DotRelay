@@ -2,10 +2,10 @@ import { readFile, stat, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   assertPublicationAccepted,
-  createAccountKeyEnvelope,
-  createAccountKeyWrapper,
   type CliDeviceStorage,
   changedVariableIdsFromRevision,
+  createAccountKeyEnvelope,
+  createAccountKeyWrapper,
   createCliDeviceStorage,
   createDeviceBootstrap,
   createDeviceEnrollmentApproval,
@@ -14,11 +14,11 @@ import {
   createProtocolTransport,
   createPublicationArtifacts,
   createVerifiedEnvironmentSession,
-  decodeRecoveryCode,
   type DecodedVariable,
   type DeviceEnrollmentRequest,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
+  decodeRecoveryCode,
   decodeSyncVariables,
   encodeRecoveryCode,
   exportSigningPublicKey,
@@ -1616,10 +1616,8 @@ export const completeDeviceEnrollment = async (
 // scope so the Device can open the Account Key Envelopes the service holds
 // without any other Device.
 
-const accountKeyScope = (
-  options: WorkflowOptions,
-  deviceId: string,
-) => Object.freeze({ pin: options.profile.pin, deviceId: uuidToBytes(deviceId) });
+const accountKeyScope = (options: WorkflowOptions, deviceId: string) =>
+  Object.freeze({ pin: options.profile.pin, deviceId: uuidToBytes(deviceId) });
 
 const loadAccountMasterKey = async (
   options: WorkflowOptions,

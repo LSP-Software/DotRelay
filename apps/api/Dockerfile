@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # DotRelay API (Bun/Hono). Build context = repository root: bun workspaces
 # and the Prisma client generation (postinstall) resolve at the root.
-FROM oven/bun:1.4.0 AS builder
+FROM oven/bun:1.4.2 AS builder
 
 WORKDIR /app
 COPY . .
@@ -13,7 +13,7 @@ RUN bun run --cwd apps/api build
 # Runtime. The full builder tree (node_modules, built API, @dotrelay/database
 # with its migrations and generated Prisma client) is copied over so that
 # `bun x prisma` resolves from the root node_modules at deploy time.
-FROM oven/bun:1.4.0
+FROM oven/bun:1.4.2
 
 # Unprivileged runtime user. The API only reads /app (code, migrations, the
 # generated Prisma client) and reaches the database over the network, so it

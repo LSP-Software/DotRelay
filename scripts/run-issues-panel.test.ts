@@ -897,6 +897,56 @@ describe("run issues panel", () => {
     );
   });
 
+  test("records a failed grill turn without an unhandled rejection when its workspace vanishes", async () => {
+    const baseDirectory = await mkdtemp(
+      join(tmpdir(), "dotrelay-issue-panel-"),
+    );
+    temporaryDirectories.push(baseDirectory);
+    // Point the runs directory at a regular file: the supervisor's mkdir
+    // (recursive) then fails deterministically when it records the failed
+    // turn, reproducing the teardown race where the state directory is
+    // removed while a turn is still settling.
+    const runsDirectory = join(baseDirectory, "blocked");
+    await writeFile(runsDirectory, "a file is not a directory", "utf8");
+
+    const realConsoleError = console.error.bind(console);
+    const logged = new Promise<string | null>((resolve) => {
+      console.error = (...args: unknown[]) => {
+        const text = args.map(String).join(" ");
+        realConsoleError(...(args as [unknown, ...unknown[]]));
+        if (text.includes("could not record failed state")) {
+          resolve("logged");
+        }
+      };
+    });
+    const escaped = new Promise<string>((resolve) => {
+      process.once("unhandledRejection", () => resolve("rejection"));
+    });
+    process.on("unhandledRejection", () => {});
+    try {
+      const manager = createGrillManager({
+        repoRoot: baseDirectory,
+        runsDirectory,
+        command: async () => ({
+          code: 1,
+          output: "boom",
+          stdout: "",
+          infrastructure: false,
+        }),
+      });
+      await manager.ensure();
+      // The vanished workspace guarantees the supervisor's failure-recording
+      // path runs, so exactly one real signal fires: the fixed behavior
+      // logs that it could not record the state; a regression escapes the
+      // error as an unhandled rejection. Await that signal — do not sleep.
+      const outcome = await Promise.race([logged, escaped]);
+      expect(outcome).toBe("logged");
+    } finally {
+      console.error = realConsoleError;
+      process.removeAllListeners("unhandledRejection");
+    }
+  }, 5_000);
+
   test("resets the human grill through the control API", async () => {
     let resets = 0;
     const { server } = createPanelServer({

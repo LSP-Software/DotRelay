@@ -229,7 +229,12 @@ const validateConditionalValues = (
         contractError("invalid_crypto_object");
     }
     if (wrapperType === 2) {
-      if (!fields.has(89) || !fields.has(90) || !fields.has(91) || !fields.has(92))
+      if (
+        !fields.has(89) ||
+        !fields.has(90) ||
+        !fields.has(91) ||
+        !fields.has(92)
+      )
         contractError("invalid_crypto_object");
       validateEnumSet(numberValue(mapValue(object, 89)), [1]);
       if (fields.has(93) || fields.has(94))
