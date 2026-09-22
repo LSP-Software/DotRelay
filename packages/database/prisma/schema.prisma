@@ -654,6 +654,7 @@ model AccountKeyTransferObject {
   user            User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   recipientDevice Device         @relation(fields: [recipientDeviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  @@unique([userId, transferId])
   @@index([userId, status, expiresAt])
   @@index([recipientDeviceId, status])
   @@map("account_key_transfer_objects")
