@@ -709,7 +709,7 @@ integrationDescribe("trust workflow integration", () => {
           protocolObjectId: recoveryCodeResult.wrapper.protocolObjectId,
         },
       });
-    expect(retiredRecoveryCode.retiredAt).not.toBeNull();
+    expect(retiredRecoveryCode.retiredAt).toBeNull();
 
     await expect(
       accountKeys.revokeWrapper(database, {

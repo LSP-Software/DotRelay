@@ -2587,14 +2587,9 @@ export class AccountKeyRepository {
         input.wrapper.protocolObject,
       );
       if (input.wrapper.wrapperType === "RECOVERY_CODE") {
-        await transaction.accountKeyWrapperObject.updateMany({
-          where: {
-            userId: input.operation.actorUserId,
-            retiredAt: null,
-          },
-          data: { retiredAt: now },
-        });
-      } else {
+        // Rotating the Recovery Code retires only the previously active
+        // RECOVERY_CODE wrapper; other wrapper types are optional and keep
+        // coexisting (ADR 0009).
         await transaction.accountKeyWrapperObject.updateMany({
           where: {
             userId: input.operation.actorUserId,
@@ -2681,6 +2676,22 @@ export class AccountKeyRepository {
       const activeCount = await transaction.accountKeyWrapperObject.count({
         where: { userId: input.operation.actorUserId, retiredAt: null },
       });
+      if (wrapper.wrapperType === "RECOVERY_CODE") {
+        // A RECOVERY_CODE wrapper is the universal disaster-recovery route,
+        // so at least one must always survive (ADR 0009).
+        const activeRecoveryCodeCount =
+          await transaction.accountKeyWrapperObject.count({
+            where: {
+              userId: input.operation.actorUserId,
+              retiredAt: null,
+              wrapperType: "RECOVERY_CODE",
+            },
+          });
+        if (activeRecoveryCodeCount <= 1)
+          throw new Error(
+            "the last active RECOVERY_CODE wrapper cannot be revoked",
+          );
+      }
       if (activeCount <= 1)
         throw new Error("the last account key wrapper cannot be revoked");
       const operation = await this.operations.begin(
@@ -2744,13 +2755,27 @@ export class AccountKeyRepository {
         const project = await transaction.project.findFirst({
           where: {
             id: input.envelope.projectId,
+            lifecycle: "ACTIVE",
             team: {
-              members: { some: { userId: input.operation.actorUserId } },
+              memberships: {
+                some: {
+                  userId: input.operation.actorUserId,
+                  lifecycle: "ACTIVE",
+                },
+              },
             },
           },
         });
         if (!project)
           throw new Error("envelope project is not reachable by the user");
+        if (input.envelope.projectEpoch < 1n)
+          throw new Error("project epoch envelope requires a positive epoch");
+        // Prior epochs remain re-publishable so recovering Devices can read
+        // pre-rotation data; future epochs never exist yet.
+        if (input.envelope.projectEpoch > project.currentEpoch)
+          throw new Error(
+            "project epoch envelope must not target a future epoch",
+          );
       } else {
         if (
           !input.envelope.ownerUserId ||
@@ -2764,6 +2789,8 @@ export class AccountKeyRepository {
           input.envelope.projectEpoch !== undefined
         )
           throw new Error("user value envelope carries project fields");
+        if (input.envelope.ownerUserId !== input.operation.actorUserId)
+          throw new Error("user value envelope must belong to the acting user");
       }
       const operation = await this.operations.begin(
         transaction,
@@ -2912,9 +2939,9 @@ export class AccountKeyRepository {
       readonly now?: Date;
     }>,
   ) {
-    return inShortTransaction(database, async (transaction) => {
-      const now = input.now ?? new Date();
-      const transfer = await transaction.accountKeyTransferObject.findFirst({
+    const now = input.now ?? new Date();
+    const pending = await inShortTransaction(database, async (transaction) => {
+      return transaction.accountKeyTransferObject.findFirst({
         where: {
           userId: input.userId,
           recipientDeviceId: input.deviceId,
@@ -2927,25 +2954,48 @@ export class AccountKeyRepository {
           protocolObject: { select: { canonicalBytes: true } },
         },
       });
-      if (!transfer) throw new Error("account key transfer is not pending");
-      if (transfer.expiresAt <= now) {
-        await transaction.accountKeyTransferObject.update({
-          where: { protocolObjectId: transfer.protocolObjectId },
+    });
+    if (!pending) throw new Error("account key transfer is not pending");
+    if (pending.expiresAt <= now) {
+      // The EXPIRED status must survive the rollback that the throw below
+      // would otherwise trigger, so it commits in its own transaction.
+      const marked = await inShortTransaction(database, async (transaction) => {
+        return transaction.accountKeyTransferObject.updateMany({
+          where: {
+            protocolObjectId: pending.protocolObjectId,
+            status: "PENDING",
+          },
           data: { status: "EXPIRED" },
         });
-        throw new Error("account key transfer expired");
-      }
-      const consumed = await transaction.accountKeyTransferObject.update({
-        where: { protocolObjectId: transfer.protocolObjectId },
+      });
+      if (marked.count === 0)
+        throw new Error("account key transfer is not pending");
+      throw new Error("account key transfer expired");
+    }
+    const accepted = await inShortTransaction(database, async (transaction) => {
+      // updateMany (rather than update) keeps a lost consume race from
+      // raising P2025 inside the transaction, which poisons the pooled
+      // connection for later top-level calls.
+      const marked = await transaction.accountKeyTransferObject.updateMany({
+        where: {
+          protocolObjectId: pending.protocolObjectId,
+          status: "PENDING",
+        },
         data: { status: "CONSUMED", consumedAt: now },
+      });
+      if (marked.count === 0) return null;
+      const row = await transaction.accountKeyTransferObject.findUniqueOrThrow({
+        where: { protocolObjectId: pending.protocolObjectId },
         select: { protocolObjectId: true, consumedAt: true },
       });
       return Object.freeze({
-        protocolObjectId: consumed.protocolObjectId,
-        consumedAt: consumed.consumedAt,
-        canonicalBytes: new Uint8Array(transfer.protocolObject.canonicalBytes),
+        protocolObjectId: row.protocolObjectId,
+        consumedAt: row.consumedAt,
+        canonicalBytes: new Uint8Array(pending.protocolObject.canonicalBytes),
       });
     });
+    if (!accepted) throw new Error("account key transfer is not pending");
+    return accepted;
   }
 }
 
