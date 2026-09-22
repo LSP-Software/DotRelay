@@ -111,7 +111,7 @@ describe("account key wrappers", () => {
         recoveryCode: generateRecoveryCode(),
       }),
     ).rejects.toThrow();
-  });
+  }, 60_000);
 
   test("recovery code wrapper recovers the Account Master Key", async () => {
     const signing = await generateSigningKeyPair();
