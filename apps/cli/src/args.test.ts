@@ -127,12 +127,17 @@ describe("CLI argument contract", () => {
       subcommand: "backup",
     });
     expect(
-      parseArguments(["device", "recover", "--recovery-code", "CODE"]),
+      parseArguments(["device", "recover", "--recovery-code-file", "CODE.txt"]),
     ).toMatchObject({
       command: "device",
       subcommand: "recover",
-      recoveryCode: "CODE",
+      recoveryCodeFile: "CODE.txt",
     });
+    // The Recovery Code itself never appears in argv: the flag takes the
+    // path of the 0600 file that holds the code.
+    expect(() =>
+      parseArguments(["device", "recover", "--recovery-code", "CODE"]),
+    ).toThrow("unknown option: --recovery-code");
     expect(
       parseArguments(["device", "recover", "--transfer", "abc123"]),
     ).toMatchObject({
@@ -145,19 +150,22 @@ describe("CLI argument contract", () => {
   test("requires explicit handoff files in the trust commands", () => {
     expect(() => parseArguments(["device", "approve"])).toThrow("--from");
     expect(() => parseArguments(["device", "complete"])).toThrow("--from");
-    expect(() => parseArguments(["device", "recover"])).toThrow(
-      "exactly one of --recovery-code",
-    );
+    // No channel is required: the code may also be entered at a hidden
+    // prompt or piped on stdin.
+    expect(parseArguments(["device", "recover"])).toMatchObject({
+      command: "device",
+      subcommand: "recover",
+    });
     expect(() =>
       parseArguments([
         "device",
         "recover",
-        "--recovery-code",
+        "--recovery-code-file",
         "C",
         "--transfer",
         "T",
       ]),
-    ).toThrow("exactly one of --recovery-code");
+    ).toThrow("not both");
   });
 
   test("accepts --debug as a global flag", () => {
@@ -174,8 +182,8 @@ describe("CLI argument contract", () => {
       parseArguments([
         "device",
         "recover",
-        "--recovery-code",
-        "C",
+        "--recovery-code-file",
+        "C.txt",
         "--no-input",
       ]).force,
     ).toBe(false);

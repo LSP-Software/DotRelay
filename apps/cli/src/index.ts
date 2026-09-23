@@ -1623,8 +1623,8 @@ const execute = async (
     if (parsed.subcommand === "recover")
       return {
         value: await recoverAccountKey(workflowOptions, {
-          ...(parsed.recoveryCode !== undefined
-            ? { recoveryCode: parsed.recoveryCode }
+          ...(parsed.recoveryCodeFile !== undefined
+            ? { recoveryCodeFile: parsed.recoveryCodeFile }
             : {}),
           ...(parsed.transfer !== undefined
             ? { transferId: parsed.transfer }

@@ -271,19 +271,22 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   "device recover": {
     about:
-      "Unlock this Device by recovering the account's Account Master Key, either from a Recovery Code or from an Account Key Transfer created by a trusted Device or browser.",
+      "Unlock this Device by recovering the account's Account Master Key, either from a Recovery Code entered on this machine or from an Account Key Transfer created by a trusted Device or browser.",
     notes: [
-      "Recovery Code entry happens on this machine: the code is never sent to the Server Profile.",
+      "The Recovery Code is entered at a hidden prompt (or piped on stdin, or read from --recovery-code-file <path>); it is never placed on the command line and never sent to the Server Profile.",
+      "--no-input never prompts: pass --recovery-code-file or --transfer explicitly.",
       "Passkey and encryption password unlock in a browser, which then hands the key to this machine as a transfer.",
     ],
     options: {
-      recoveryCode: "Recovery Code to unlock with (13 groups of 4 characters)",
+      recoveryCodeFile:
+        "path to a 0600 file holding the Recovery Code (13 groups of 4 characters); automation channel",
       transfer: "Account Key Transfer id to accept",
       profile: "Server Profile to recover onto (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
     examples: [
-      "dotrelay device recover --recovery-code K4ET-P7QN-...-W9ZC",
+      "dotrelay device recover",
+      "dotrelay device recover --recovery-code-file <path-to-code>",
       "dotrelay device recover --transfer <transfer-id>",
     ],
   },
@@ -371,7 +374,8 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
   environment: "Environment id or label (default: the worktree selection)",
   output: "output file",
   from: "input file",
-  recoveryCode: "Recovery Code that unlocks the account",
+  recoveryCodeFile:
+    "path to a file holding the Recovery Code that unlocks the account",
   transfer: "Account Key Transfer id to accept",
   to: "receiving Device id to seal an account-key transfer for",
   wrapperId: "account-key wrapper id to revoke",
@@ -398,7 +402,7 @@ const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   environment: " <environment-id-or-label>",
   output: " <file>",
   from: " <file>",
-  recoveryCode: " <code>",
+  recoveryCodeFile: " <path>",
   transfer: " <transfer-id>",
   to: " <peer-device-id>",
   wrapperId: " <wrapper-id>",

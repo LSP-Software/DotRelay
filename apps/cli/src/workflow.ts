@@ -104,7 +104,12 @@ import type { CliServerProfile, FetchFunction } from "./profile";
 import { createProgress, type Progress } from "./progress";
 import { readTerminalLine, type TerminalIo } from "./terminal";
 import { pad, type Tone, visibleWidth } from "./theme";
-import { confirmAction, paint, parseConfirmAnswer } from "./ui";
+import {
+  confirmAction,
+  paint,
+  parseConfirmAnswer,
+  readTerminalSecret,
+} from "./ui";
 import {
   destinationRows,
   type PublicationChange,
@@ -1728,7 +1733,7 @@ export const createRecoveryCodeBackup = async (
   if (!accountMasterKey)
     throw new CliError(
       "authentication",
-      "this Device is not unlocked; run dotrelay device recover --recovery-code <code> to unlock it",
+      "this Device is not unlocked; run dotrelay device recover to unlock it",
       {},
       "account_key_not_unlocked",
     );
@@ -1766,10 +1771,68 @@ export const createRecoveryCodeBackup = async (
   };
 };
 
+// The Recovery Code is a secret: it never appears in the process argument
+// list. The automation channel is a 0600 file (--recovery-code-file <path>);
+// otherwise an interactive terminal reads it at a masked prompt, and a
+// non-TTY caller may pipe the single code line on stdin (with a printed
+// warning). The code never leaves the machine and is never sent to the
+// Server Profile.
+const readRecoveryCode = async (
+  options: WorkflowOptions,
+  path: string | undefined,
+): Promise<string> => {
+  if (path !== undefined) {
+    let file = "";
+    try {
+      const info = await stat(path);
+      // A symlink or non-regular file never qualifies as a 0600 secret.
+      if (!info.isFile() || info.isSymbolicLink())
+        throw new Error("not a regular file");
+      if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600)
+        throw new Error("wrong mode");
+      file = await readFile(path, "utf8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT")
+        throw new CliError(
+          "local-io",
+          `the recovery code file does not exist: ${path}`,
+          {},
+          "recovery_code_file_missing",
+        );
+      if (code === "EACCES")
+        throw new CliError(
+          "local-io",
+          `the recovery code file is not readable: ${path}`,
+          {},
+          "recovery_code_file_invalid",
+        );
+      throw new CliError(
+        "local-io",
+        `--recovery-code-file must point to a regular, non-symlink file with mode 0600: ${path}`,
+        {},
+        "recovery_code_file_invalid",
+      );
+    }
+    return file.trim();
+  }
+  if (options.noInput)
+    throw new CliError(
+      "invocation",
+      "--no-input reads no secret; pass --recovery-code-file <path> or pipe the code on stdin",
+      {},
+      "recovery_code_required",
+    );
+  return await readTerminalSecret("Recovery Code", {
+    ...(options.terminal ? { terminal: options.terminal } : {}),
+    ...(options.prompt ? { prompt: options.prompt } : {}),
+  });
+};
+
 export const recoverAccountKey = async (
   options: WorkflowOptions,
   input: Readonly<{
-    readonly recoveryCode?: string;
+    readonly recoveryCodeFile?: string;
     readonly transferId?: string;
   }>,
 ): Promise<
@@ -1779,21 +1842,22 @@ export const recoverAccountKey = async (
     readonly message: string;
   }>
 > => {
-  const hasCode = input.recoveryCode !== undefined;
+  const hasCodeFile = input.recoveryCodeFile !== undefined;
   const hasTransfer = input.transferId !== undefined;
-  if (hasCode === hasTransfer)
+  if (hasCodeFile && hasTransfer)
     throw new CliInvocationError(
-      "device recover requires exactly one of --recovery-code <code> or --transfer <transfer-id>",
+      "device recover accepts either --recovery-code-file <path> or --transfer <transfer-id>, not both",
     );
   await enrollFirstDevice(options);
   const authorized = await loadAuthorizedDevice(options);
   const storage = resolveDeviceStorage(options);
   let accountMasterKey: Uint8Array;
   let via: "recovery-code" | "transfer";
-  if (hasCode) {
+  if (!hasTransfer) {
+    const codeText = await readRecoveryCode(options, input.recoveryCodeFile);
     let code: Uint8Array;
     try {
-      code = decodeRecoveryCode(input.recoveryCode as string);
+      code = decodeRecoveryCode(codeText);
     } catch {
       throw new CliError(
         "invocation",

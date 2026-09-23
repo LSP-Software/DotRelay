@@ -441,6 +441,81 @@ integrationDescribe("trust workflow integration", () => {
     expect(completed.device.lifecycle).toBe("ACTIVE");
   });
 
+  // ADR 0010: a Device created by initial trust bootstrap is fully ACTIVE.
+  // It may perform device-level authorization on its own behalf, including
+  // approving an enrollment that a different Device initiated. The
+  // lifecycle gate is "active", not "enrolled through dual control".
+  test("a session-bootstrapped Device is ACTIVE and can approve an enrollment", async () => {
+    const user = await createUserFixture();
+    const devices = new DeviceRepository();
+    const bootstrapKey = crypto.getRandomValues(new Uint8Array(32));
+    const bootstrap = await devices.completeBootstrap(database, {
+      operation: await createOperationInput(
+        user.id,
+        "bootstrap-approver",
+        "DEVICE_ENROLLMENT",
+      ),
+      device: {
+        id: crypto.randomUUID(),
+        identityGeneration: 1n,
+        keyId: new Uint8Array(await sha384Digest(bootstrapKey)),
+        x25519PublicKey: bootstrapKey,
+        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      },
+      certificateObject: await createProtocolObjectInput(2),
+    });
+    if (!("device" in bootstrap))
+      throw new Error("bootstrap did not return a device");
+    expect(bootstrap.device.lifecycle).toBe("ACTIVE");
+    const initiator = await createActiveDevice(user.id);
+    const enrollmentId = crypto.randomUUID();
+    const beginOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "begin-bootstrap-approval",
+        "DEVICE_ENROLLMENT",
+      )),
+      actorDeviceId: initiator.id,
+    };
+    await devices.beginEnrollment(database, {
+      operation: beginOperation,
+      enrollmentId,
+      userId: user.id,
+      initiatorDeviceId: initiator.id,
+      transcriptHash: new Uint8Array(48),
+      challengeHash: new Uint8Array(48),
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const approvalObject = await createProtocolObjectInput(5);
+    const approveOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "approve-bootstrap-approval",
+        "DEVICE_ENROLLMENT",
+      )),
+      actorDeviceId: bootstrap.device.id,
+    };
+    await stageObject({
+      operation: approveOperation,
+      objectId: approvalObject.id,
+      canonicalBytes: approvalObject.canonicalBytes,
+      digest: approvalObject.digest,
+    });
+    await devices.approveEnrollment(database, {
+      operation: approveOperation,
+      enrollmentId,
+      approvalObject,
+    });
+    expect(
+      await database.auditEvent.count({
+        where: {
+          operationId: approveOperation.id,
+          kind: "DEVICE_ENROLLMENT_APPROVED",
+        },
+      }),
+    ).toBe(1);
+  });
+
   test("provisions grants and activates a pending Membership", async () => {
     const owner = await createUserFixture();
     const ownerDevice = await createActiveDevice(owner.id);

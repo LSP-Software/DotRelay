@@ -12,6 +12,7 @@
 
 import {
   access,
+  chmod,
   constants,
   mkdir,
   mkdtemp,
@@ -141,6 +142,20 @@ const runBinary = async (
 
 const shellQuote = (value: string): string =>
   `'${value.replaceAll("'", "'\\''")}'`;
+
+// The packaged CLI never accepts the Recovery Code in argv (R10), so the
+// harness hands it over through a 0600 file, exactly like an automation
+// caller would.
+const writeRecoveryCodeFile = async (
+  directory: string,
+  code: string,
+  name: string,
+): Promise<string> => {
+  const path = join(directory, `recovery-code-${name}.txt`);
+  await writeFile(path, code, { mode: 0o600 });
+  await chmod(path, 0o600);
+  return path;
+};
 
 const runTerminal = async (
   args: readonly string[],
@@ -881,8 +896,12 @@ try {
       "device",
       "recover",
       ...profileFlag,
-      "--recovery-code",
-      amkRecoveryCode,
+      "--recovery-code-file",
+      await writeRecoveryCodeFile(
+        isolatedDirectory,
+        amkRecoveryCode,
+        "device2",
+      ),
       "--no-input",
       "--json",
     ],
@@ -1560,8 +1579,8 @@ try {
       "device",
       "recover",
       ...profileFlag,
-      "--recovery-code",
-      amkRecoveryCode,
+      "--recovery-code-file",
+      await writeRecoveryCodeFile(isolatedDirectory, amkRecoveryCode, "stale"),
       "--no-input",
       "--json",
     ],
@@ -1584,8 +1603,12 @@ try {
       "device",
       "recover",
       ...profileFlag,
-      "--recovery-code",
-      rotatedRecoveryCode,
+      "--recovery-code-file",
+      await writeRecoveryCodeFile(
+        isolatedDirectory,
+        rotatedRecoveryCode,
+        "rotated",
+      ),
       "--no-input",
       "--json",
     ],

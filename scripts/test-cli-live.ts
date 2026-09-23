@@ -1,11 +1,13 @@
 import {
   access,
+  chmod,
   constants,
   mkdir,
   mkdtemp,
   readFile,
   rm,
   stat,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1269,6 +1271,16 @@ try {
       "packaged CLI device setup did not store the Account Master Key",
     );
 
+  // The packaged CLI never accepts the Recovery Code in argv (R10), so the
+  // harness hands it over through a 0600 file, exactly like an automation
+  // caller would.
+  const writeRecoveryCodeFile = async (code: string, name: string) => {
+    const path = join(isolatedDirectory, `recovery-code-${name}.txt`);
+    await writeFile(path, code, { mode: 0o600 });
+    await chmod(path, 0o600);
+    return path;
+  };
+
   // A recovery code that is not 13 groups of 4 Crockford characters is
   // rejected before any key material is touched or transmitted.
   const malformedRecovery = await runBinary(
@@ -1277,8 +1289,11 @@ try {
       "recover",
       "--profile",
       "live",
-      "--recovery-code",
-      "!!!not-a-valid-recovery-code!!!",
+      "--recovery-code-file",
+      await writeRecoveryCodeFile(
+        "!!!not-a-valid-recovery-code!!!",
+        "malformed",
+      ),
       "--no-input",
       "--json",
     ],
@@ -1301,8 +1316,8 @@ try {
       "recover",
       "--profile",
       "live",
-      "--recovery-code",
-      recoveryCode,
+      "--recovery-code-file",
+      await writeRecoveryCodeFile(recoveryCode, "roundtrip"),
       "--no-input",
       "--json",
     ],
