@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   encodeProtocolObject,
+  exportSigningPublicKey,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   type ProtocolObject,
   parseProtocolObject,
+  uuidToBytes,
   verifyProtocolObject,
 } from "@dotrelay/contracts";
 import {
@@ -50,6 +52,109 @@ const verifySigned = async (
   return verifyProtocolObject(object, signature, publicKey);
 };
 
+// Build the verification argument (trusted keys + identity context) from the
+// signing key pair that created the object, so a self-created object verifies
+// against its own trusted key.
+const wrapperVerification = async (
+  signing: CryptoKeyPair,
+): Promise<
+  Readonly<{
+    readonly trustedKeys: { readonly keys: readonly Uint8Array[] };
+    readonly context: Readonly<{
+      readonly serverProfileId: Uint8Array;
+      readonly userId: Uint8Array;
+      readonly deviceId: Uint8Array;
+      readonly userIdentityGeneration: number;
+    }>;
+  }>
+> => {
+  const trustedKeys = Object.freeze({
+    keys: [await exportSigningPublicKey(signing.publicKey)],
+  });
+  return Object.freeze({
+    trustedKeys,
+    context: Object.freeze({
+      serverProfileId: uuidToBytes(SERVER_PROFILE_ID),
+      userId: USER_ID,
+      deviceId: DEVICE_ID,
+      userIdentityGeneration: 1,
+    }),
+  });
+};
+
+const envelopeVerification = async (
+  signing: CryptoKeyPair,
+  context: Readonly<{
+    readonly envelopeType: number;
+    readonly projectId?: Uint8Array;
+    readonly projectEpoch?: number;
+    readonly ownerUserId?: Uint8Array;
+    readonly valueGeneration?: number;
+  }>,
+): Promise<
+  Readonly<{
+    readonly trustedKeys: { readonly keys: readonly Uint8Array[] };
+    readonly context: Readonly<{
+      readonly serverProfileId: Uint8Array;
+      readonly userId: Uint8Array;
+      readonly deviceId: Uint8Array;
+      readonly userIdentityGeneration: number;
+    }> & {
+      readonly envelopeType: number;
+      readonly projectId?: Uint8Array;
+      readonly projectEpoch?: number;
+      readonly ownerUserId?: Uint8Array;
+      readonly valueGeneration?: number;
+    };
+  }>
+> => {
+  const trustedKeys = Object.freeze({
+    keys: [await exportSigningPublicKey(signing.publicKey)],
+  });
+  return Object.freeze({
+    trustedKeys,
+    context: Object.freeze({
+      serverProfileId: uuidToBytes(SERVER_PROFILE_ID),
+      userId: USER_ID,
+      deviceId: DEVICE_ID,
+      userIdentityGeneration: 1,
+      ...context,
+    }),
+  });
+};
+
+const transferVerification = async (
+  signing: CryptoKeyPair,
+  ownDeviceId: Uint8Array,
+): Promise<
+  Readonly<{
+    readonly trustedKeys: { readonly keys: readonly Uint8Array[] };
+    readonly context: Readonly<{
+      readonly serverProfileId: Uint8Array;
+      readonly userId: Uint8Array;
+      readonly deviceId: Uint8Array;
+      readonly userIdentityGeneration: number;
+      readonly ownDeviceId: Uint8Array;
+      readonly nowMs: number;
+    }>;
+  }>
+> => {
+  const trustedKeys = Object.freeze({
+    keys: [await exportSigningPublicKey(signing.publicKey)],
+  });
+  return Object.freeze({
+    trustedKeys,
+    context: Object.freeze({
+      serverProfileId: uuidToBytes(SERVER_PROFILE_ID),
+      userId: USER_ID,
+      deviceId: DEVICE_ID,
+      userIdentityGeneration: 1,
+      ownDeviceId,
+      nowMs: 0,
+    }),
+  });
+};
+
 describe("recovery code codec", () => {
   test("round trips 32 bytes through Crockford base32", () => {
     const code = generateRecoveryCode();
@@ -93,23 +198,29 @@ describe("account key wrappers", () => {
     expect(wrapper.kdf).toEqual(DEFAULT_PASSWORD_KDF);
     const object = parseProtocolObject(encode(wrapper.object));
     expect(object.get(1)).toBe(20);
-    expect(object.get(88)).toBe(1);
+    expect(object.get(88)).toBe(2);
     expect(object.get(71)).toBe(32);
     await expect(verifySigned(object, signing.publicKey)).resolves.toBe(true);
+    const verification = await wrapperVerification(signing);
     const recovered = await unwrapAccountKeyWrapper(
       parseAccountKeyWrapper(encode(wrapper.object)),
       { password },
+      verification,
     );
     expect(recovered).toEqual(accountMasterKey);
     await expect(
-      unwrapAccountKeyWrapper(wrapper, {
-        password: new TextEncoder().encode("wrong password"),
-      }),
+      unwrapAccountKeyWrapper(
+        wrapper,
+        { password: new TextEncoder().encode("wrong password") },
+        verification,
+      ),
     ).rejects.toThrow();
     await expect(
-      unwrapAccountKeyWrapper(wrapper, {
-        recoveryCode: generateRecoveryCode(),
-      }),
+      unwrapAccountKeyWrapper(
+        wrapper,
+        { recoveryCode: generateRecoveryCode() },
+        verification,
+      ),
     ).rejects.toThrow();
   }, 60_000);
 
@@ -133,6 +244,7 @@ describe("account key wrappers", () => {
     const recovered = await unwrapAccountKeyWrapper(
       parseAccountKeyWrapper(encode(wrapper.object)),
       { recoveryCode },
+      await wrapperVerification(signing),
     );
     expect(recovered).toEqual(accountMasterKey);
   });
@@ -142,7 +254,7 @@ describe("account key wrappers", () => {
     const accountMasterKey = generateAccountMasterKey();
     const credentialId = new Uint8Array(16).fill(3);
     const prfInput = new Uint8Array(32).fill(5);
-    const prfOutput = new Uint8Array(64).fill(6);
+    const prfOutput = new Uint8Array(32).fill(6);
     const wrapper = await createAccountKeyWrapper({
       serverProfileId: SERVER_PROFILE_ID,
       userId: USER_ID,
@@ -157,13 +269,19 @@ describe("account key wrappers", () => {
     expect(wrapper.credentialId).toEqual(credentialId);
     expect(wrapper.prfInput).toEqual(prfInput);
     expect(wrapper.kdf).toBeUndefined();
+    const verification = await wrapperVerification(signing);
     const recovered = await unwrapAccountKeyWrapper(
       parseAccountKeyWrapper(encode(wrapper.object)),
       { prfOutput },
+      verification,
     );
     expect(recovered).toEqual(accountMasterKey);
     await expect(
-      unwrapAccountKeyWrapper(wrapper, { password: new Uint8Array(4) }),
+      unwrapAccountKeyWrapper(
+        wrapper,
+        { password: new Uint8Array(4) },
+        verification,
+      ),
     ).rejects.toThrow();
   });
 
@@ -185,6 +303,7 @@ describe("account key wrappers", () => {
     const recovered = await unwrapAccountKeyWrapper(
       parseAccountKeyWrapper(encode(wrapper.object)),
       { password },
+      await wrapperVerification(signing),
     );
     expect(recovered).toEqual(accountMasterKey);
   });
@@ -212,11 +331,16 @@ describe("account key envelopes", () => {
     expect(envelope.envelopeType).toBe(KEY_ENVELOPE_TYPE.projectEpochKey);
     const parsed = parseAccountKeyEnvelope(encode(envelope.object));
     expect(parsed.projectEpoch).toBe(2);
-    expect(await openAccountKeyEnvelope(parsed, accountMasterKey)).toEqual(
-      contentKey,
-    );
+    const verification = await envelopeVerification(signing, {
+      envelopeType: KEY_ENVELOPE_TYPE.projectEpochKey,
+      projectId: parsed.projectId,
+      projectEpoch: parsed.projectEpoch,
+    });
+    expect(
+      await openAccountKeyEnvelope(parsed, accountMasterKey, verification),
+    ).toEqual(contentKey);
     await expect(
-      openAccountKeyEnvelope(parsed, generateAccountMasterKey()),
+      openAccountKeyEnvelope(parsed, generateAccountMasterKey(), verification),
     ).rejects.toThrow();
   });
 
@@ -242,9 +366,17 @@ describe("account key envelopes", () => {
     const parsed = parseAccountKeyEnvelope(encode(envelope.object));
     expect(parsed.valueGeneration).toBe(3);
     expect(parsed.projectId).toBeUndefined();
-    expect(await openAccountKeyEnvelope(parsed, accountMasterKey)).toEqual(
-      contentKey,
-    );
+    expect(
+      await openAccountKeyEnvelope(
+        parsed,
+        accountMasterKey,
+        await envelopeVerification(signing, {
+          envelopeType: KEY_ENVELOPE_TYPE.userValueKey,
+          ownerUserId: USER_ID,
+          valueGeneration: parsed.valueGeneration,
+        }),
+      ),
+    ).toEqual(contentKey);
   });
 });
 
@@ -267,12 +399,16 @@ describe("account key transfers", () => {
     expect(transfer.transferId).toHaveLength(16);
     const parsed = parseAccountKeyTransfer(encode(transfer.object));
     expect(parsed.expiresAtMs).toBe(1_700_000_600_000);
-    expect(await openAccountKeyTransfer(parsed, recipient.privateKey)).toEqual(
-      accountMasterKey,
+    const verification = await transferVerification(
+      signing,
+      uuidToBytes(PEER_DEVICE_ID),
     );
+    expect(
+      await openAccountKeyTransfer(parsed, recipient.privateKey, verification),
+    ).toEqual(accountMasterKey);
     const stranger = await generateEncryptionKeyPair();
     await expect(
-      openAccountKeyTransfer(parsed, stranger.privateKey),
+      openAccountKeyTransfer(parsed, stranger.privateKey, verification),
     ).rejects.toThrow();
   });
 });

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type CborValue,
   ContractError,
   canonicalEncode,
+  FIELD_REGISTRY,
+  isSignedField,
+  OBJECT_REGISTRY,
   protocolObjectFromFields,
 } from "@dotrelay/contracts";
 import { createInMemoryAuth } from "./auth";
@@ -86,5 +90,93 @@ describe("Device and Account Key API payload parsers", () => {
         code: "authentication_required",
       });
     }
+  });
+});
+
+// Build a structurally complete, self-signed kind-20 Account Key Wrapper for
+// the wire-gate tests. Mirrors the frozen-vector fixture builder: every
+// required field gets a well-formed value, the password-wrapper KDF fields
+// default to an in-policy Argon2id, field 3 is the canonical encoding of the
+// unsigned body and field 4 a fixed-length signature placeholder. `overrides`
+// let a case flip a single field (version, KDF cost, KDF name) to probe the
+// v1->v2 and KDF-policy gates.
+const wrapperFieldValue = (field: number): CborValue => {
+  const definition = FIELD_REGISTRY[field];
+  if (!definition) throw new Error(`unknown field ${field}`);
+  if (definition.type === "uint") {
+    if (field === 88) return 2; // account key wrapper format version
+    if (field === 71) return 32;
+    if (field === 72) return 48;
+    return 1;
+  }
+  const length =
+    definition.exactLength ?? (field === 47 ? 48 : (definition.maxLength ?? 0));
+  return new Uint8Array(length);
+};
+
+const buildWrapperBytes = (
+  overrides: ReadonlyMap<number, CborValue> = new Map(),
+): Uint8Array => {
+  const definition = OBJECT_REGISTRY[20];
+  if (!definition) throw new Error("kind 20 not registered");
+  const fields = new Map<number, CborValue>();
+  for (const field of definition.requiredFields)
+    if (field > 2 && !isSignedField(field))
+      fields.set(field, wrapperFieldValue(field));
+  fields.set(86, 2); // wrapperType = PASSWORD
+  fields.set(89, 1); // kdfName = ARGON2ID
+  fields.set(90, 65536); // in-policy memory
+  fields.set(91, 3); // in-policy iterations
+  fields.set(92, 1); // in-policy parallelism
+  for (const [field, value] of overrides) fields.set(field, value);
+  const unsigned = canonicalEncode(protocolObjectFromFields(20, fields));
+  fields.set(3, unsigned);
+  fields.set(4, new Uint8Array(64));
+  return canonicalEncode(protocolObjectFromFields(20, fields));
+};
+
+const wrapperPayload = (bytes: Uint8Array) =>
+  parseProtocolPayload(
+    {
+      objectId: "11111111-1111-4111-8111-111111111111",
+      object: encodeBase64(bytes),
+    },
+    "objectId",
+    "object",
+    20,
+  );
+
+describe("Account Key Wrapper ingest wire gates", () => {
+  test("accepts a v2 password wrapper with an in-policy KDF", async () => {
+    const payload = await wrapperPayload(buildWrapperBytes());
+    expect(payload.kind).toBe(20);
+    expect(payload.object.get(88)).toBe(2);
+  });
+
+  test("rejects a version-1 wrapper at the wire gate", async () => {
+    await expect(
+      wrapperPayload(buildWrapperBytes(new Map([[88, 1]]))),
+    ).rejects.toMatchObject({ code: "invalid_crypto_object" });
+  });
+
+  test("rejects a password wrapper whose KDF exceeds the Argon2id policy", async () => {
+    // memoryKiB beyond the policy ceiling
+    await expect(
+      wrapperPayload(buildWrapperBytes(new Map([[90, 524289]]))),
+    ).rejects.toMatchObject({ code: "invalid_crypto_object" });
+    // iterations beyond the policy ceiling
+    await expect(
+      wrapperPayload(buildWrapperBytes(new Map([[91, 11]]))),
+    ).rejects.toMatchObject({ code: "invalid_crypto_object" });
+    // parallelism beyond the policy ceiling
+    await expect(
+      wrapperPayload(buildWrapperBytes(new Map([[92, 17]]))),
+    ).rejects.toMatchObject({ code: "invalid_crypto_object" });
+  });
+
+  test("rejects a password wrapper whose KDF name is not Argon2id", async () => {
+    await expect(
+      wrapperPayload(buildWrapperBytes(new Map([[89, 2]]))),
+    ).rejects.toMatchObject({ code: "invalid_crypto_object" });
   });
 });

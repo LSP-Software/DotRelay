@@ -15,6 +15,7 @@ const fixtureValue = (field: number): CborValue => {
   const definition = FIELD_REGISTRY[field];
   if (!definition) throw new Error(`unknown vector field ${field}`);
   if (definition.type === "uint") {
+    if (field === 88) return 2; // wrapper format version
     if (field === 35) return 1; // mutation kind
     if (field === 36) return 1; // lane scope
     if (field === 37) return 1; // key kind
@@ -78,6 +79,22 @@ export const buildVectorObject = (
   return copyObject(object);
 };
 
+// Encode a (possibly intentionally invalid) object to its canonical CBOR bytes
+// for use as a negative wire vector. The byte string parses as CBOR but is
+// rejected by validateProtocolObject for the expected reason.
+const buildVectorObjectBytes = (
+  kind: number,
+  overrides: ReadonlyMap<number, CborValue> = new Map(),
+): Uint8Array => canonicalEncode(buildVectorObject(kind, overrides));
+
+// Semantic negative vectors are generated directly as v3 (suite value 3); they
+// must not pass through the v2 -> v3 suite normalizer, which would risk
+// corrupting a coincidental 0x00 0x02 byte pair.
+const GENERATED_NEGATIVE_IDS = new Set([
+  "wrapper-format-version-not-2",
+  "wrapper-kdf-out-of-policy",
+  "wrapper-kdf-name-not-argon2id",
+]);
 export const VECTOR_CASES = Object.freeze([
   ...Object.keys(OBJECT_REGISTRY)
     .map(Number)
@@ -303,12 +320,51 @@ const NEGATIVE_VECTOR_CASES_BASE = [
     bytes: hex("a40002010102010801"),
     error: "invalid_crypto_object",
   },
+  {
+    // A wrapper/envelope/transfer whose format-version field (88) is not 2 is
+    // rejected: the hard v1 -> v2 cutover has no dual-version support.
+    id: "wrapper-format-version-not-2",
+    bytes: buildVectorObjectBytes(20, new Map<number, CborValue>([[88, 1]])),
+    error: "invalid_crypto_object",
+  },
+  {
+    // A password wrapper whose declared Argon2id cost exceeds the shared policy
+    // is rejected before any memory is allocated.
+    id: "wrapper-kdf-out-of-policy",
+    bytes: buildVectorObjectBytes(
+      20,
+      new Map<number, CborValue>([
+        [86, 2],
+        [89, 1],
+        [90, 524289],
+        [91, 3],
+        [92, 1],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // A password wrapper declaring a KDF other than Argon2id (name != 1).
+    id: "wrapper-kdf-name-not-argon2id",
+    bytes: buildVectorObjectBytes(
+      20,
+      new Map<number, CborValue>([
+        [86, 2],
+        [89, 2],
+        [90, 65536],
+        [91, 3],
+        [92, 1],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
 ];
 
 const normalizeV3Negative = <T extends { id: string; bytes: Uint8Array }>(
   vector: T,
 ): T => {
   if (vector.id === "unsupported-suite") return vector;
+  if (GENERATED_NEGATIVE_IDS.has(vector.id)) return vector;
   const bytes = new Uint8Array(vector.bytes);
   for (let index = 0; index + 1 < bytes.length; index++) {
     if (bytes[index] === 0 && bytes[index + 1] === 2) {

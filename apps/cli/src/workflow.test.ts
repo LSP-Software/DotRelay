@@ -23,6 +23,7 @@ import {
   createProblem,
   encodeProtocolObject,
   encodeSyncPage,
+  exportSigningPublicKey,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   parseProtocolObject,
@@ -3915,9 +3916,24 @@ describe("protected CLI workflows", () => {
     expect(bytesToHex(parsed.recipientDeviceId)).toBe(
       peer.id.replaceAll("-", ""),
     );
+    // The receiving Device opens the transfer as itself: the sender's (creator's)
+    // Ed25519 key is the only trusted signer, and the ownDeviceId/nowMs bindings
+    // assert the transfer is addressed to the receiver and still valid.
+    const senderSigningKey = runtime.bootstrap.keyMaterial.signingPublicKey;
+    if (!senderSigningKey)
+      throw new Error("Device signing public key is missing");
+    const senderSigningPublicKey =
+      await exportSigningPublicKey(senderSigningKey);
     const opened = await openAccountKeyTransfer(
       parsed,
       peer.encryptionPrivateKey,
+      {
+        trustedKeys: { keys: [senderSigningPublicKey] },
+        context: {
+          ownDeviceId: uuidToBytes(peer.id),
+          nowMs: Date.now(),
+        },
+      },
     );
     expect(new Uint8Array(opened)).toEqual(new Uint8Array(amk));
   });
