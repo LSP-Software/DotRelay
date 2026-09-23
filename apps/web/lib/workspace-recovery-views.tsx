@@ -685,20 +685,24 @@ export const RecoveryArea = ({
 export type RecoveryCodeDialogProps = Readonly<{
   readonly code: string | null;
   readonly note: string | null;
-  readonly onRequestClose: () => void;
+  readonly error: string | null;
+  readonly busy: boolean;
+  readonly onConfirm: () => void;
+  readonly onDismiss: () => void;
 }>;
 
 export const RecoveryCodeDialog = ({
   code,
   note,
-  onRequestClose,
+  error,
+  busy,
+  onConfirm,
+  onDismiss,
 }: RecoveryCodeDialogProps) => (
   <Dialog
     onOpenChange={(open) => {
       if (open) return;
-      // Closing the dialog without confirming discards the code: the
-      // user can still rotate it later, and the note said so.
-      onRequestClose();
+      onDismiss();
     }}
     open={code !== null}
   >
@@ -718,15 +722,22 @@ export const RecoveryCodeDialog = ({
           lose it, and every other recovery method, the account's content
           becomes unrecoverable.
         </p>
+        {error ? (
+          <Alert role="alert">
+            <AlertTitle>The code is not active yet</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
       </div>
       <DialogFooter>
         <Button
           data-testid="recovery-code-saved"
+          disabled={busy}
           onClick={() => {
-            onRequestClose();
+            onConfirm();
           }}
         >
-          I saved it
+          {busy ? "Saving…" : "I saved it"}
         </Button>
       </DialogFooter>
     </DialogContent>

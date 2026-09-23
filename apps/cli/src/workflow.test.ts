@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
   createAccountKeyEnvelope,
@@ -38,6 +45,7 @@ import { CliError } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
+import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
 
 const profile = {
   name: "relay",
@@ -3824,7 +3832,7 @@ describe("protected CLI workflows", () => {
     expect(new Uint8Array(stored as Uint8Array).length).toBe(32);
   });
 
-  test("device setup is a no-op when this Device already holds the account key", async () => {
+  test("device setup wraps an already saved key that has no recovery code", async () => {
     const amk = generateAccountMasterKey();
     const runtime = await setup();
     await runtime.deviceStorage.saveAccountKey(
@@ -3843,10 +3851,131 @@ describe("protected CLI workflows", () => {
     expect(result.exitCode).toBe(0);
     const report = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(report.ok).toBe(true);
-    expect(report.deviceId).toBe(ids.device);
+    expect(report.recoveryCode).toBeString();
+    expect(service.publishedWrappers()).toHaveLength(1);
+    const stored = await runtime.deviceStorage.loadAccountKey({
+      pin: profile.pin,
+      deviceId: uuidToBytes(ids.device),
+    });
+    expect(Buffer.from(stored as Uint8Array)).toEqual(Buffer.from(amk));
+  });
+
+  test("device setup is a no-op when this Device already holds a recoverable key", async () => {
+    const amk = generateAccountMasterKey();
+    const code = generateRecoveryCode();
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const fixture = await accountKeyFixture(runtime.bootstrap, {
+      accountMasterKey: amk,
+      recoveryCode: code,
+    });
+    if (!fixture.recoveryWrapperId || !fixture.recoveryWrapperObject)
+      throw new Error("fixture wrapper missing");
+    const service = accountKeyService(runtime.admin, {
+      recoveryWrapper: {
+        wrapperId: fixture.recoveryWrapperId,
+        object: fixture.recoveryWrapperObject,
+      },
+    });
+    const result = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(report.message).toContain("already holds");
-    // It short-circuits before minting anything, so no wrapper is published.
+    expect(report.recoveryCode).toBeUndefined();
     expect(service.publishedWrappers()).toHaveLength(0);
+  });
+
+  test("device setup retries a lost wrapper publish without minting another key", async () => {
+    const runtime = await setup();
+    const service = accountKeyService(runtime.admin);
+    let remainingFailures = 1;
+    const admin = {
+      ...service.admin,
+      post: async (
+        path: string,
+        body: Record<string, unknown>,
+        fields: readonly string[],
+        options?: { readonly idempotencyKey?: string },
+      ) => {
+        if (path === "/api/v1/account-keys/wrappers" && remainingFailures > 0) {
+          remainingFailures -= 1;
+          throw new Error("lost response");
+        }
+        return service.admin.post(path, body, fields, options);
+      },
+    };
+    const first = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(first.exitCode).not.toBe(0);
+    expect(first.stderr).not.toContain("shown only once");
+    expect(first.stdout).toBe("");
+    expect(service.publishedWrappers()).toHaveLength(0);
+    const second = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(second.exitCode).toBe(0);
+    const report = JSON.parse(second.stdout) as Record<string, unknown>;
+    const wrapperId = report.wrapperId;
+    if (typeof wrapperId !== "string") throw new Error("wrapper id missing");
+    expect(service.publishedWrappers()).toEqual([wrapperId]);
+    const recoveryCode = report.recoveryCode;
+    if (typeof recoveryCode !== "string") throw new Error("code missing");
+    const pendingPath = consumeDisplayedRecoveryCodePath();
+    if (!pendingPath) throw new Error("pending path missing");
+    const pending = JSON.parse(await readFile(pendingPath, "utf8")) as {
+      recoveryCode?: string;
+    };
+    expect(pending.recoveryCode).toBe(recoveryCode);
+    await unlink(pendingPath);
+  });
+
+  test("device setup does not publish when the local key cannot be saved", async () => {
+    const runtime = await setup();
+    const service = accountKeyService(runtime.admin);
+    const deviceStorage = {
+      ...runtime.deviceStorage,
+      saveAccountKey: async () => {
+        throw new Error("disk full");
+      },
+    };
+    const result = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        deviceStorage,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(service.publishedWrappers()).toHaveLength(0);
+    const stored = await runtime.deviceStorage.loadAccountKey({
+      pin: profile.pin,
+      deviceId: uuidToBytes(ids.device),
+    });
+    expect(stored).toBeNull();
   });
 
   test("device setup refuses to mint a second key when the account already has one", async () => {

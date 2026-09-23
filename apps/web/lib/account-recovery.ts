@@ -15,10 +15,12 @@ import {
   accountKeyTrustedKeys,
   accountKeyVerificationContext,
   fromBase64 as akFromBase64,
+  bytesToHex,
   createAccountKeyEnvelope,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
   encodeRecoveryCode,
+  fetchAccountKeyWrappers,
   generateAccountMasterKey,
   generateRecoveryCode,
   hexToBytes,
@@ -305,117 +307,166 @@ export const unlockAccount = async (
   }
 };
 
-// Set up the account on this browser: generate the Account Master Key in
-// memory, publish its first wrapper (a Recovery Code, shown exactly once
-// and never stored), and, when a Project is open, make sure the
-// Project's current epoch key is reachable from the key.
+// A recovery-code ceremony stays in the page until the user confirms
+// they saved the code. Nothing is published before that confirmation, and
+// a retry reuses this same key, code, wrapper, and operation id. Closing
+// the tab before confirmation discards it; a lost publish response is
+// retried as the same commit.
+export type RecoveryCeremony = {
+  readonly purpose: "setup" | "rotation";
+  readonly accountMasterKey: Uint8Array;
+  readonly codeText: string;
+  readonly note: string;
+  readonly wrapper: Awaited<ReturnType<typeof createAccountKeyWrapper>>;
+  readonly wrapperOperationId: string;
+  readonly replacesWrapperId: string | null;
+  readonly envelope: Awaited<
+    ReturnType<typeof createAccountKeyEnvelope>
+  > | null;
+  readonly envelopeOperationId: string | null;
+  readonly envelopeProjectId: string | null;
+  readonly envelopeProjectEpoch: number | null;
+  wrapperCommitted: boolean;
+  envelopeCommitted: boolean;
+};
+
+export type RecoveryCeremonyHolder = {
+  current: RecoveryCeremony | null;
+};
+
+const SETUP_NOTE =
+  "This code is not active until you confirm you saved it. Closing this dialog leaves the account unchanged.";
+const ROTATION_NOTE =
+  "The current recovery code keeps working until you confirm. This replacement is shown once and is not stored in this browser.";
+
+const presentCeremony = (
+  holder: RecoveryCeremonyHolder,
+  feedback: AccountRecoveryFeedback,
+): void => {
+  const ceremony = holder.current;
+  if (!ceremony) return;
+  feedback.setCode(ceremony.codeText, ceremony.note);
+};
+
+const prepareRecoveryCeremony = async (
+  inputs: AccountRecoveryInputs,
+  purpose: "setup" | "rotation",
+): Promise<RecoveryCeremony> => {
+  const { actor, boundary } = inputs;
+  if (!actor) throw new Error("Sign in before changing recovery.");
+  const verification = accountKeyVerification(boundary, inputs.wrappers);
+  const signingPrivateKey = await loadDeviceSigningKey(boundary);
+  if (!verification || !signingPrivateKey)
+    throw new Error(
+      "This browser's device keys aren't available, so it can't protect your account. Set up this browser first.",
+    );
+  const existingKey =
+    purpose === "rotation" ? inputs.accountMasterKey.read() : null;
+  if (purpose === "rotation" && !existingKey) throw new Error(UNLOCK_FAILURE);
+  const accountMasterKey = existingKey ?? (await generateAccountMasterKey());
+  const recoveryCode = await generateRecoveryCode();
+  const profile = boundary.profile;
+  const device = boundary.device;
+  const bundle = await loadRecoveryBundle(inputs);
+  const wrapper = await createAccountKeyWrapper({
+    serverProfileId: profile.serverProfileId ?? "",
+    userId: bundle.userId,
+    deviceId: uuidToBytes(device.id ?? ""),
+    userIdentityGeneration: bundle.userIdentityGeneration,
+    createdAtMs: Date.now(),
+    accountMasterKey,
+    signingPrivateKey,
+    kind: { type: "recoveryCode", recoveryCode },
+  });
+  let envelope: RecoveryCeremony["envelope"] = null;
+  let envelopeOperationId: string | null = null;
+  let envelopeProjectId: string | null = null;
+  let envelopeProjectEpoch: number | null = null;
+  const environment = boundary.environment;
+  if (purpose === "setup" && environment.projectId) {
+    const peerHoldsEpochKey = (boundary.peerDevices ?? []).some(
+      (peer) => peer.hasEpochGrant,
+    );
+    const existingEnvelope =
+      (await openProjectEpochEnvelope(
+        boundary.accountKeyEnvelope,
+        accountMasterKey,
+        {
+          trustedKeys: verification.trustedKeys,
+          context: verification.context,
+          projectId: environment.projectId,
+          projectEpoch: Number(environment.projectEpoch ?? 1),
+        },
+      )) ?? null;
+    if (
+      !boundary.grantsReady &&
+      !peerHoldsEpochKey &&
+      existingEnvelope === null
+    ) {
+      const epochKey = globalThis.crypto.getRandomValues(new Uint8Array(32));
+      envelopeProjectEpoch = Number(environment.projectEpoch ?? 1);
+      envelopeProjectId = environment.projectId;
+      envelopeOperationId = globalThis.crypto.randomUUID();
+      envelope = await createAccountKeyEnvelope({
+        serverProfileId: profile.serverProfileId ?? "",
+        userId: bundle.userId,
+        deviceId: uuidToBytes(device.id ?? ""),
+        createdAtMs: Date.now(),
+        accountMasterKey,
+        signingPrivateKey,
+        kind: {
+          type: "projectEpochKey",
+          projectId: uuidToBytes(environment.projectId),
+          projectEpoch: envelopeProjectEpoch,
+          contentKey: epochKey,
+        },
+      });
+    }
+  }
+  return {
+    purpose,
+    accountMasterKey,
+    codeText: encodeRecoveryCode(recoveryCode),
+    note: purpose === "setup" ? SETUP_NOTE : ROTATION_NOTE,
+    wrapper,
+    wrapperOperationId: globalThis.crypto.randomUUID(),
+    replacesWrapperId:
+      inputs.wrappers.find((entry) => entry.type === "recovery-code")
+        ?.wrapperId ?? null,
+    envelope,
+    envelopeOperationId,
+    envelopeProjectId,
+    envelopeProjectEpoch,
+    wrapperCommitted: false,
+    envelopeCommitted: envelope === null,
+  };
+};
+
+// Show a recovery code and wait. A later confirmation publishes this exact
+// ceremony; calling setup or rotation again while it is still unconfirmed
+// shows the same code instead of minting another key.
 export const setupAccountRecovery = (
   inputs: AccountRecoveryInputs,
   feedback: AccountRecoveryFeedback,
   onMutated: AccountRecoveryOnMutated,
+  holder: RecoveryCeremonyHolder,
 ): void => {
   const { actor, boundary } = inputs;
   if (!actor || !boundary.session.userId) {
     feedback.setError("Sign in before setting up recovery.");
     return;
   }
+  if (holder.current?.purpose === "setup") {
+    presentCeremony(holder, feedback);
+    return;
+  }
   void (async () => {
-    const verification = accountKeyVerification(boundary, inputs.wrappers);
-    const signingPrivateKey = await loadDeviceSigningKey(boundary);
-    if (!verification || !signingPrivateKey) {
-      feedback.setError(
-        "This browser's device keys aren't available, so it can't protect your account. Set up this browser first.",
-      );
-      return;
-    }
     feedback.setBusy(true);
     feedback.setError(null);
     feedback.setMessage(null);
     try {
-      const accountMasterKey = await generateAccountMasterKey();
-      inputs.accountMasterKey.write(accountMasterKey);
-      const recoveryCode = await generateRecoveryCode();
-      const profile = boundary.profile;
-      const device = boundary.device;
-      const bundle = await loadRecoveryBundle(inputs);
-      const wrapper = await createAccountKeyWrapper({
-        serverProfileId: profile.serverProfileId ?? "",
-        userId: bundle.userId,
-        deviceId: uuidToBytes(device.id ?? ""),
-        userIdentityGeneration: bundle.userIdentityGeneration,
-        createdAtMs: Date.now(),
-        accountMasterKey,
-        signingPrivateKey,
-        kind: { type: "recoveryCode", recoveryCode },
-      });
-      await publishAccountKeyWrapper(
-        actor,
-        globalThis.crypto.randomUUID(),
-        wrapper,
-        String(bundle.userIdentityGeneration),
-      );
-      const environment = boundary.environment;
-      if (environment.projectId) {
-        // A peer that already holds the current epoch grant owns the
-        // real key; self-minting here would seal this account to a
-        // fresh random key that can never decrypt pre-existing content
-        // and would block the peer re-share, so it is skipped.
-        const peerHoldsEpochKey = (boundary.peerDevices ?? []).some(
-          (peer) => peer.hasEpochGrant,
-        );
-        const existingEnvelope =
-          (await openProjectEpochEnvelope(
-            boundary.accountKeyEnvelope,
-            accountMasterKey,
-            {
-              trustedKeys: verification.trustedKeys,
-              context: verification.context,
-              projectId: environment.projectId,
-              projectEpoch: Number(environment.projectEpoch ?? 1),
-            },
-          )) ?? null;
-        if (
-          !boundary.grantsReady &&
-          !peerHoldsEpochKey &&
-          existingEnvelope === null
-        ) {
-          const epochKey = globalThis.crypto.getRandomValues(
-            new Uint8Array(32),
-          );
-          const envelope = await createAccountKeyEnvelope({
-            serverProfileId: profile.serverProfileId ?? "",
-            userId: bundle.userId,
-            deviceId: uuidToBytes(device.id ?? ""),
-            createdAtMs: Date.now(),
-            accountMasterKey,
-            signingPrivateKey,
-            kind: {
-              type: "projectEpochKey",
-              projectId: uuidToBytes(environment.projectId),
-              projectEpoch: Number(environment.projectEpoch ?? 1),
-              contentKey: epochKey,
-            },
-          });
-          await publishAccountKeyEnvelope(
-            actor,
-            globalThis.crypto.randomUUID(),
-            envelope,
-            {
-              envelopeType: "PROJECT_EPOCH_KEY",
-              projectId: environment.projectId,
-              projectEpoch: Number(environment.projectEpoch ?? 1),
-            },
-          );
-        }
-      }
-      feedback.setAccountUnlocked(true);
-      feedback.setMessage(
-        "Recovery is on. This browser keeps the account's key in memory for this session only; the next visit unlocks it again with the code or another method below.",
-      );
-      feedback.setCode(
-        encodeRecoveryCode(recoveryCode),
-        "This code is shown once and is never stored in this browser. Save it somewhere only you can read it: if you lose it and every other recovery method, your account's content becomes unrecoverable.",
-      );
+      holder.current = await prepareRecoveryCeremony(inputs, "setup");
+      presentCeremony(holder, feedback);
     } catch (error) {
       feedback.setError(
         error instanceof Error && error.message
@@ -429,61 +480,33 @@ export const setupAccountRecovery = (
   })();
 };
 
-// Rotate the Recovery Code: the new code is shown once, and publishing
-// its wrapper retires the account's previous active one, so the old code
-// stops working the moment the commit lands.
 export const rotateRecoveryCode = (
   inputs: AccountRecoveryInputs,
   feedback: AccountRecoveryFeedback,
   onMutated: AccountRecoveryOnMutated,
+  holder: RecoveryCeremonyHolder,
 ): void => {
-  const { actor, boundary } = inputs;
+  const { actor } = inputs;
   if (!actor) {
     feedback.setError(
       "This browser can't change the account's recovery options.",
     );
     return;
   }
+  if (
+    holder.current?.purpose === "rotation" &&
+    !holder.current.wrapperCommitted
+  ) {
+    presentCeremony(holder, feedback);
+    return;
+  }
   void (async () => {
-    const verification = accountKeyVerification(boundary, inputs.wrappers);
-    const signingPrivateKey = await loadDeviceSigningKey(boundary);
-    if (!verification || !signingPrivateKey) {
-      feedback.setError(
-        "This browser's device keys aren't available, so it can't rotate the code.",
-      );
-      return;
-    }
     feedback.setBusy(true);
     feedback.setError(null);
     feedback.setMessage(null);
     try {
-      const accountMasterKey = inputs.accountMasterKey.read();
-      if (!accountMasterKey) throw new Error(UNLOCK_FAILURE);
-      const profile = boundary.profile;
-      const device = boundary.device;
-      const bundle = await loadRecoveryBundle(inputs);
-      const recoveryCode = await generateRecoveryCode();
-      const wrapper = await createAccountKeyWrapper({
-        serverProfileId: profile.serverProfileId ?? "",
-        userId: bundle.userId,
-        deviceId: uuidToBytes(device.id ?? ""),
-        userIdentityGeneration: bundle.userIdentityGeneration,
-        createdAtMs: Date.now(),
-        accountMasterKey,
-        signingPrivateKey,
-        kind: { type: "recoveryCode", recoveryCode },
-      });
-      await publishAccountKeyWrapper(
-        actor,
-        globalThis.crypto.randomUUID(),
-        wrapper,
-        String(bundle.userIdentityGeneration),
-      );
-      feedback.setCode(
-        encodeRecoveryCode(recoveryCode),
-        "The old code no longer works. This code is shown once and is never stored; save it somewhere safe.",
-      );
-      feedback.setMessage("Your recovery code was rotated.");
+      holder.current = await prepareRecoveryCeremony(inputs, "rotation");
+      presentCeremony(holder, feedback);
     } catch (error) {
       feedback.setError(
         error instanceof Error && error.message
@@ -495,6 +518,125 @@ export const rotateRecoveryCode = (
       onMutated();
     }
   })();
+};
+
+// Publish the ceremony the user just confirmed. A failed or lost response
+// leaves the ceremony in place, so the next confirmation retries the same
+// wrapper and the same project-key envelope.
+export const commitPresentedRecoveryCode = (
+  inputs: AccountRecoveryInputs,
+  feedback: AccountRecoveryFeedback,
+  onMutated: AccountRecoveryOnMutated,
+  holder: RecoveryCeremonyHolder,
+): void => {
+  const ceremony = holder.current;
+  const { actor } = inputs;
+  if (!ceremony || !actor) return;
+  void (async () => {
+    feedback.setBusy(true);
+    feedback.setError(null);
+    try {
+      const listed = await fetchAccountKeyWrappers(actor);
+      const active = listed.find((entry) => entry.type === "recovery-code");
+      const ownWrapperId = bytesToHex(ceremony.wrapper.wrapperId);
+      if (
+        ceremony.purpose === "setup" &&
+        active &&
+        active.wrapperId !== ownWrapperId
+      ) {
+        holder.current = null;
+        feedback.setCode(null, null);
+        feedback.setError(
+          "Another tab already created this account's recovery code. This code was not activated. Unlock with the code from that tab.",
+        );
+        return;
+      }
+      if (
+        ceremony.purpose === "rotation" &&
+        active &&
+        active.wrapperId !== ceremony.replacesWrapperId &&
+        active.wrapperId !== ownWrapperId
+      ) {
+        holder.current = null;
+        feedback.setCode(null, null);
+        feedback.setError(
+          "Another tab already replaced the recovery code. The code shown here was not activated.",
+        );
+        return;
+      }
+      const bundle = await loadRecoveryBundle(inputs);
+      if (!ceremony.wrapperCommitted) {
+        await publishAccountKeyWrapper(
+          actor,
+          ceremony.wrapperOperationId,
+          ceremony.wrapper,
+          String(bundle.userIdentityGeneration),
+        );
+        ceremony.wrapperCommitted = true;
+      }
+      if (
+        ceremony.envelope &&
+        ceremony.envelopeOperationId &&
+        ceremony.envelopeProjectId &&
+        ceremony.envelopeProjectEpoch !== null &&
+        !ceremony.envelopeCommitted
+      ) {
+        await publishAccountKeyEnvelope(
+          actor,
+          ceremony.envelopeOperationId,
+          ceremony.envelope,
+          {
+            envelopeType: "PROJECT_EPOCH_KEY",
+            projectId: ceremony.envelopeProjectId,
+            projectEpoch: ceremony.envelopeProjectEpoch,
+          },
+        );
+        ceremony.envelopeCommitted = true;
+      }
+      inputs.accountMasterKey.write(ceremony.accountMasterKey);
+      feedback.setAccountUnlocked(true);
+      feedback.setCode(null, null);
+      holder.current = null;
+      feedback.setMessage(
+        ceremony.purpose === "rotation"
+          ? "Your recovery code was rotated."
+          : "Recovery is on. This browser keeps the account's key in memory for this session only; the next visit unlocks it again with the code or another method below.",
+      );
+    } catch {
+      const published = ceremony.wrapperCommitted;
+      feedback.setError(
+        published
+          ? "The recovery code is active, but the project key was not stored. Confirm the saved code again to retry that same key."
+          : "The recovery code was not activated. Nothing changed.",
+      );
+      if (!published) {
+        feedback.setMessage(
+          ceremony.purpose === "rotation"
+            ? "The previous recovery code still works."
+            : null,
+        );
+      }
+      presentCeremony(holder, feedback);
+    } finally {
+      feedback.setBusy(false);
+      onMutated();
+    }
+  })();
+};
+
+export const discardPresentedRecoveryCode = (
+  holder: RecoveryCeremonyHolder,
+  feedback: AccountRecoveryFeedback,
+): void => {
+  if (holder.current?.wrapperCommitted) {
+    feedback.setError(
+      "The recovery code is already active. Confirm again to finish storing the project key.",
+    );
+    presentCeremony(holder, feedback);
+    return;
+  }
+  holder.current = null;
+  feedback.setCode(null, null);
 };
 
 export const addEncryptionPassword = (

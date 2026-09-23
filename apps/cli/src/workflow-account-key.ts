@@ -1,4 +1,12 @@
-import { readFile, stat } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   createAccountKeyTransfer,
   createAccountKeyWrapper,
@@ -90,6 +98,129 @@ export const fetchActiveWrappers = async (
   return Object.freeze(wrappers.filter(isActiveWrapper));
 };
 
+type PendingRecoveryCode = {
+  readonly purpose: "setup" | "rotation";
+  readonly recoveryCode: string;
+  readonly wrapperId: string;
+  readonly operationId: string;
+  readonly objectId: string;
+  readonly object: string;
+  readonly identityGeneration: string;
+  readonly ciphertextHash: string;
+  readonly ciphertextLength: number;
+};
+
+const pendingRecoveryPath = (
+  options: WorkflowOptions,
+  deviceId: string,
+): string =>
+  join(options.stateDirectory, `recovery-code-pending-${deviceId}.json`);
+
+// Set only after the wrapper publish has succeeded, so the process can
+// delete the local copy once it has written the code to stdout. A failure
+// leaves this unset and the file in place for the retry.
+let displayedRecoveryCodePath: string | null = null;
+
+const markRecoveryCodeReadyToDisplay = (
+  options: WorkflowOptions,
+  deviceId: string,
+): void => {
+  displayedRecoveryCodePath = pendingRecoveryPath(options, deviceId);
+};
+
+export const consumeDisplayedRecoveryCodePath = (): string | null => {
+  const path = displayedRecoveryCodePath;
+  displayedRecoveryCodePath = null;
+  return path;
+};
+
+const readPendingRecoveryCode = async (
+  options: WorkflowOptions,
+  deviceId: string,
+): Promise<PendingRecoveryCode | null> => {
+  try {
+    const parsed = JSON.parse(
+      await readFile(pendingRecoveryPath(options, deviceId), "utf8"),
+    ) as Partial<PendingRecoveryCode>;
+    if (
+      (parsed.purpose !== "setup" && parsed.purpose !== "rotation") ||
+      typeof parsed.recoveryCode !== "string" ||
+      typeof parsed.wrapperId !== "string" ||
+      typeof parsed.operationId !== "string" ||
+      typeof parsed.objectId !== "string" ||
+      typeof parsed.object !== "string" ||
+      typeof parsed.identityGeneration !== "string" ||
+      typeof parsed.ciphertextHash !== "string" ||
+      typeof parsed.ciphertextLength !== "number"
+    )
+      return null;
+    return parsed as PendingRecoveryCode;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+};
+
+const writePendingRecoveryCode = async (
+  options: WorkflowOptions,
+  deviceId: string,
+  pending: PendingRecoveryCode,
+): Promise<void> => {
+  const path = pendingRecoveryPath(options, deviceId);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(pending), { mode: 0o600 });
+  await chmod(path, 0o600);
+};
+
+export const clearPresentedRecoveryCode = async (
+  options: WorkflowOptions,
+  deviceId: string,
+): Promise<void> => {
+  await unlink(pendingRecoveryPath(options, deviceId)).catch(
+    (error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    },
+  );
+};
+
+const publishRecoveryWrapper = async (
+  admin: StrictJsonClient,
+  pending: PendingRecoveryCode,
+): Promise<void> => {
+  await admin.post(
+    "/api/v1/account-keys/wrappers",
+    {
+      operationId: pending.operationId,
+      objectId: pending.objectId,
+      object: pending.object,
+      wrapperId: pending.wrapperId,
+      identityGeneration: pending.identityGeneration,
+      ciphertextHash: pending.ciphertextHash,
+      ciphertextLength: pending.ciphertextLength,
+    },
+    ["wrapperId", "idempotent"],
+    { idempotencyKey: pending.operationId },
+  );
+};
+
+const pendingFromWrapper = async (
+  purpose: "setup" | "rotation",
+  recoveryCode: Uint8Array,
+  wrapper: Awaited<ReturnType<typeof createAccountKeyWrapper>>,
+  identityGeneration: number,
+): Promise<PendingRecoveryCode> =>
+  Object.freeze({
+    purpose,
+    recoveryCode: encodeRecoveryCode(recoveryCode),
+    wrapperId: bytesToHex(wrapper.wrapperId),
+    operationId: crypto.randomUUID(),
+    objectId: crypto.randomUUID(),
+    object: base64(encodeProtocolObject(wrapper.object)),
+    identityGeneration: String(identityGeneration),
+    ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
+    ciphertextLength: wrapper.ciphertext.length,
+  });
+
 export const createRecoveryCodeBackup = async (
   options: WorkflowOptions,
 ): Promise<
@@ -111,6 +242,36 @@ export const createRecoveryCodeBackup = async (
       {},
       "account_key_not_unlocked",
     );
+  const wrappers = await fetchActiveWrappers(authorized.admin);
+  const pending = await readPendingRecoveryCode(options, authorized.deviceId);
+  if (pending?.purpose === "setup")
+    throw new CliError(
+      "conflict",
+      "device setup has a recovery code waiting to be published; rerun dotrelay device setup before replacing it",
+      {},
+      "account_key_setup_pending",
+    );
+  if (pending?.purpose === "rotation") {
+    if (!wrappers.some((wrapper) => wrapper.wrapperId === pending.wrapperId)) {
+      try {
+        await publishRecoveryWrapper(authorized.admin, pending);
+      } catch {
+        throw new CliError(
+          "transient",
+          "the replacement was not published, so the previous recovery code still works. Rerun dotrelay device backup to retry the same replacement.",
+          {},
+          "recovery_code_not_published",
+        );
+      }
+    }
+    markRecoveryCodeReadyToDisplay(options, authorized.deviceId);
+    return {
+      recoveryCode: pending.recoveryCode,
+      wrapperId: pending.wrapperId,
+      message:
+        "A new Recovery Code wrapper is active and the previous recovery code no longer works; the code is shown only once, so store it somewhere safe",
+    };
+  }
   const recoveryCode = generateRecoveryCode();
   const wrapper = await createAccountKeyWrapper({
     serverProfileId: options.profile.pin.serverProfileId,
@@ -122,24 +283,27 @@ export const createRecoveryCodeBackup = async (
     signingPrivateKey: authorized.keys.signingPrivateKey,
     kind: { type: "recoveryCode", recoveryCode },
   });
-  const operationId = crypto.randomUUID();
-  await authorized.admin.post(
-    "/api/v1/account-keys/wrappers",
-    {
-      operationId,
-      objectId: crypto.randomUUID(),
-      object: base64(encodeProtocolObject(wrapper.object)),
-      wrapperId: bytesToHex(wrapper.wrapperId),
-      identityGeneration: String(authorized.bundle.userIdentityGeneration),
-      ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
-      ciphertextLength: wrapper.ciphertext.length,
-    },
-    ["wrapperId", "idempotent"],
-    { idempotencyKey: operationId },
+  const next = await pendingFromWrapper(
+    "rotation",
+    recoveryCode,
+    wrapper,
+    authorized.bundle.userIdentityGeneration,
   );
+  await writePendingRecoveryCode(options, authorized.deviceId, next);
+  try {
+    await publishRecoveryWrapper(authorized.admin, next);
+  } catch {
+    throw new CliError(
+      "transient",
+      "the replacement was not published, so the previous recovery code still works. Rerun dotrelay device backup to retry the same replacement.",
+      {},
+      "recovery_code_not_published",
+    );
+  }
+  markRecoveryCodeReadyToDisplay(options, authorized.deviceId);
   return {
-    recoveryCode: encodeRecoveryCode(recoveryCode),
-    wrapperId: bytesToHex(wrapper.wrapperId),
+    recoveryCode: next.recoveryCode,
+    wrapperId: next.wrapperId,
     message:
       "A new Recovery Code wrapper is active and the previous recovery code no longer works; the code is shown only once, so store it somewhere safe",
   };
@@ -403,26 +567,53 @@ export const setupDeviceAccountKey = async (
   await enrollFirstDevice(options);
   const authorized = await loadAuthorizedDevice(options);
   const storage = resolveDeviceStorage(options);
+  const scope = accountKeyScope(options, authorized.deviceId);
   const existing = await loadAccountMasterKey(options, authorized.deviceId);
-  if (existing)
+  const wrappers = await fetchActiveWrappers(authorized.admin);
+  const pending = await readPendingRecoveryCode(options, authorized.deviceId);
+  if (pending?.purpose === "setup") {
+    if (!existing)
+      throw new CliError(
+        "local-io",
+        "a recovery code is waiting on this device, but its Account Master Key is not saved. The account is not recoverable from this device.",
+        {},
+        "account_key_not_saved",
+      );
+    if (!wrappers.some((wrapper) => wrapper.wrapperId === pending.wrapperId)) {
+      try {
+        await publishRecoveryWrapper(authorized.admin, pending);
+      } catch {
+        throw new CliError(
+          "transient",
+          "the recovery code is saved on this device, but the server does not have it yet. Rerun dotrelay device setup to retry the same key. The account is not recoverable from another device until that succeeds.",
+          {},
+          "recovery_code_not_published",
+        );
+      }
+    }
+    markRecoveryCodeReadyToDisplay(options, authorized.deviceId);
     return {
       deviceId: authorized.deviceId,
+      recoveryCode: pending.recoveryCode,
+      wrapperId: pending.wrapperId,
       message:
-        "this Device already holds the Account Master Key; nothing to set up",
+        "the Account Master Key is set up on this Device; the Recovery Code is shown only once, so store it somewhere safe",
     };
-  // The AMK is never stored by the service; active wrappers are the only
-  // durable proof that one exists. Any active wrapper means another Device
-  // or browser already established the AMK, so this one must recover it
-  // rather than mint a second, incompatible key.
-  const wrappers = await fetchActiveWrappers(authorized.admin);
-  if (wrappers.length > 0)
+  }
+  if (!existing && wrappers.length > 0)
     throw new CliError(
       "conflict",
       "this account already has an Account Master Key; run dotrelay device recover to take it over from an existing Device",
       {},
       "account_key_already_exists",
     );
-  const accountMasterKey = generateAccountMasterKey();
+  if (existing && wrappers.some((wrapper) => wrapper.type === "recovery-code"))
+    return {
+      deviceId: authorized.deviceId,
+      message:
+        "this Device already holds the Account Master Key; nothing to set up",
+    };
+  const accountMasterKey = existing ?? generateAccountMasterKey();
   const recoveryCode = generateRecoveryCode();
   const wrapper = await createAccountKeyWrapper({
     serverProfileId: options.profile.pin.serverProfileId,
@@ -434,29 +625,29 @@ export const setupDeviceAccountKey = async (
     signingPrivateKey: authorized.keys.signingPrivateKey,
     kind: { type: "recoveryCode", recoveryCode },
   });
-  const operationId = crypto.randomUUID();
-  await authorized.admin.post(
-    "/api/v1/account-keys/wrappers",
-    {
-      operationId,
-      objectId: crypto.randomUUID(),
-      object: base64(encodeProtocolObject(wrapper.object)),
-      wrapperId: bytesToHex(wrapper.wrapperId),
-      identityGeneration: String(authorized.bundle.userIdentityGeneration),
-      ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
-      ciphertextLength: wrapper.ciphertext.length,
-    },
-    ["wrapperId", "idempotent"],
-    { idempotencyKey: operationId },
+  if (!existing) await storage.saveAccountKey(scope, accountMasterKey);
+  const next = await pendingFromWrapper(
+    "setup",
+    recoveryCode,
+    wrapper,
+    authorized.bundle.userIdentityGeneration,
   );
-  await storage.saveAccountKey(
-    accountKeyScope(options, authorized.deviceId),
-    accountMasterKey,
-  );
+  await writePendingRecoveryCode(options, authorized.deviceId, next);
+  try {
+    await publishRecoveryWrapper(authorized.admin, next);
+  } catch {
+    throw new CliError(
+      "transient",
+      "the recovery code is saved on this device, but the server does not have it yet. Rerun dotrelay device setup to retry the same key. The account is not recoverable from another device until that succeeds.",
+      {},
+      "recovery_code_not_published",
+    );
+  }
+  markRecoveryCodeReadyToDisplay(options, authorized.deviceId);
   return {
     deviceId: authorized.deviceId,
-    recoveryCode: encodeRecoveryCode(recoveryCode),
-    wrapperId: bytesToHex(wrapper.wrapperId),
+    recoveryCode: next.recoveryCode,
+    wrapperId: next.wrapperId,
     message:
       "the Account Master Key is set up on this Device; the Recovery Code is shown only once, so store it somewhere safe",
   };
