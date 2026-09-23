@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { OperationRepository } from "./repositories";
+import { OperationRepository } from "./objects";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 
 describe("short persistence transactions", () => {

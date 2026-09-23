@@ -3,7 +3,7 @@ import {
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
   SECURITY_REQUEST_LOG_RETENTION_MS,
   SecurityRequestLogRepository,
-} from "./repositories";
+} from "./objects";
 
 describe("Security Request Log boundary", () => {
   test("accepts only a known endpoint template and bounded metadata", async () => {

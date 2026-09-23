@@ -1,9 +1,7 @@
 import { decideLaneDisclosure } from "../administration";
 import type { MutationKind } from "../generated/prisma/client";
-import {
-  AdministrationDisclosureRepository,
-  type PersistenceClient,
-} from "./repositories";
+import { AdministrationDisclosureRepository } from "./disclosure";
+import type { PersistenceClient } from "./repository-core";
 import { copyBytes } from "./validation";
 
 export class SyncIntegrityError extends Error {

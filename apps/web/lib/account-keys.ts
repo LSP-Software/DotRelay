@@ -393,7 +393,7 @@ export const accountKeyVerificationContext = (
 // Every failure to open a wrapper or transfer maps to one uniform message:
 // a wrong secret, a retired code, and a tampered object are indistinguishable
 // on purpose, so the UI never leaks which of its checks rejected the attempt.
-const UNLOCK_FAILURE =
+export const UNLOCK_FAILURE =
   "We couldn't unlock your account with that. Check the input and try again.";
 
 const unwrapError = (): Error => new Error(UNLOCK_FAILURE);
