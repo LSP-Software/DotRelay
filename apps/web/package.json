@@ -2,7 +2,8 @@
   "name": "@dotrelay/web",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "bun run build:worker && next dev",
+    "build:worker": "bun scripts/build-argon2-worker.ts",
     "build": "next build",
     "smoke": "bun ../../scripts/smoke-web.ts",
     "format": "biome format . --write",

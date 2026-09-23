@@ -65,7 +65,7 @@ Account Master Key; presenting the code exchanges it for an AMK recovery, and a 
 invalidates the previous one. The server stores the encrypted wrapper and never the Recovery
 Code or the AMK plaintext.
 
-Recovery Code generation, presentation, and key exchange are client and CLI responsibilities
+Recovery Code generation, presentation, and key exchange are client, browser, and CLI responsibilities
 (ADR 0009). The server enforces one active recovery-code wrapper per User and refuses codes
 that do not match the stored wrapper.
 

@@ -39,6 +39,7 @@ export type {
 } from "./account/argon2-worker";
 export {
   type AccountKeyTrustedKeys,
+  type AccountKeyVerificationContext,
   AccountKeyVerificationError,
   verifyAccountKeyEnvelope,
   verifyAccountKeyTransfer,

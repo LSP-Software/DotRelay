@@ -774,8 +774,8 @@ export const nextSetupAction = (
     return {
       id: "pending-grants",
       title: "This browser doesn't have the project's keys yet",
-      body: "Run `bun apps/cli/src/index.ts pull` on this machine to give this browser the project's keys.",
-      actionLabel: "Retry access",
+      body: "Open the Recovery area to unlock the account with your recovery code, or run `dotrelay pull` on this machine, to give this browser the project's keys.",
+      actionLabel: "Open recovery",
     };
   if (!state.resourceActive)
     return {

@@ -77,7 +77,7 @@ Legend: category prefixes
 | CLI-PUBLISH-001 | publish flow (draft, conflicts, reconciliation) | PASS (live: `dotrelay init` genesis publish, 12 vars, review gate, "Encrypted 12 Variables / Uploaded / Published") |
 | CLI-PROFILE-001 | Server profile selection / config (hosted vs self-hosted URL) | PASS (live: profile add/use/list against self-hosted; trust-frame `…-undefined` abbreviation bug fixed this campaign, see F-005) |
 | CLI-ERROR-001 | Error recovery (offline, 401, stale epoch, network failure) | PASS (live: 401/403/404/409/413/429 problem-code mapping observed across probes; stale-epoch recovery e2e-covered; device_bundle_missing + recovery_requires_no_active_device codes live) |
-| CLI-AUTH-001 | CLI credentials storage, recovery kit | PASS (live: wrapped device bundles + credential store on disk; backup/recover round trip exercised, see PROTO-RECOVERY-001) |
+| CLI-AUTH-001 | CLI credentials storage, account-key backup/recover | PASS (live: wrapped device bundles + credential store on disk; backup/recover round trip exercised, see PROTO-RECOVERY-001) |
 | CLI-ADMIN-001 | `dotrelay admin` subcommands | NOT_APPLICABLE (D-014: no `dotrelay admin` subcommand exists in the code or docs — `apps/cli/src/args.ts` COMMANDS has no admin group and `src/admin.ts` is the internal StrictJsonClient, not a user command; membership operations are proven across the CLI/API/WEB surfaces under CLI-SETUP/API-MEMBERSHIP/WEB-WORKSPACE-008) |
 | CLI-BUILD-001 | CLI packaging (build-cli, npm package, cross-OS binaries) | PASS (live: `bun --cwd apps/cli run build` produced working 81MB `dist/dotrelay` binary, exercised fully) |
 

@@ -102,6 +102,7 @@ const fetchLiveBoundary = async (
             signingTrustKeys?: unknown;
             signingTrustDevices?: unknown;
             epochGrant?: unknown;
+            accountKeyEnvelope?: unknown;
             peerDevices?: unknown;
           }
         | undefined)
@@ -180,6 +181,9 @@ const fetchLiveBoundary = async (
     ),
     ...(typeof workspaceBody.epochGrant === "string"
       ? { epochGrant: workspaceBody.epochGrant }
+      : {}),
+    ...(typeof workspaceBody.accountKeyEnvelope === "string"
+      ? { accountKeyEnvelope: workspaceBody.accountKeyEnvelope }
       : {}),
     peerDevices: parsePeerDevices(workspaceBody.peerDevices),
     crypto: { available: true },
