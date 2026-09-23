@@ -67,3 +67,27 @@ retiring the prior one only after the new wrapper is committed, and needs no fil
 replacement-Device key ceremony. The `users.recoveryGeneration` column is removed: the active
 `RECOVERY_CODE` wrapper is identified by its wrapper id, and rotating the code simply retires
 the old wrapper and commits a new one.
+
+## Identity and transfer retry
+
+First establishment is a different transition from recovery-code rotation. A
+client that observes no active wrapper publishes with intent `establish`. The
+service locks the user row and inserts that wrapper only when the account
+still has none. A second establishment fails, leaves the winner untouched, and
+the losing device discards its candidate and recovers the winner. Rotation is
+the explicit `rotate` intent, and it is the only path that retires the previous
+recovery code. Passkey and password wrappers use `add` and do not retire the
+recovery code.
+
+One active Project Epoch Key envelope exists for each `(user, project, epoch)`,
+and one active User Value Key envelope for each `(user, owner, generation)`.
+A byte-identical retry of that ciphertext is idempotent. A different ciphertext
+for the same identity is rejected. The migration that adds the unique indexes
+reports existing duplicate protocol object ids and stops; it does not delete
+rows.
+
+Accepting an Account Key Transfer marks it delivered and returns the ciphertext.
+The same recipient can accept again until it signs an acknowledgement or the
+transfer expires. Acknowledgement is the transition that makes the transfer
+unusable. Expiry and recipient revocation fail closed and do not return the
+ciphertext.

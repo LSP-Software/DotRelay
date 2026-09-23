@@ -11,7 +11,12 @@ import {
   parseAccountKeyWrapper,
   unwrapAccountKeyWrapper,
 } from "@dotrelay/client";
-import { canonicalEncode, sha384, uuidToBytes } from "@dotrelay/contracts";
+import {
+  accountKeyTransferAcknowledgementMessage,
+  canonicalEncode,
+  sha384,
+  uuidToBytes,
+} from "@dotrelay/contracts";
 import type { WorkspaceBoundary } from "./workspace-boundary";
 
 // Browser-side client for the account-key protocol routes
@@ -192,6 +197,7 @@ export const publishAccountKeyWrapper = async (
   operationId: string,
   wrapper: AccountKeyWrapper,
   identityGeneration: string,
+  intent: "establish" | "rotate" | "add",
 ): Promise<Readonly<{ readonly idempotent: boolean }>> => {
   const body = await jsonPost(
     actor,
@@ -204,6 +210,7 @@ export const publishAccountKeyWrapper = async (
       identityGeneration,
       ciphertextHash: await sha384ToHex(wrapper.ciphertext),
       ciphertextLength: wrapper.ciphertext.length,
+      intent,
     },
   );
   return Object.freeze({ idempotent: body.idempotent === true });
@@ -341,6 +348,24 @@ export const acceptAccountKeyTransfer = async (
       : {}),
   });
 };
+
+// POST .../acknowledge — the recipient proves it holds the device signing key
+// and has the transfer. Until this lands, accept stays retryable.
+export const acknowledgeAccountKeyTransfer = async (
+  actor: AccountKeyActor,
+  transferIdHex: string,
+  signature: Uint8Array,
+): Promise<Readonly<{ readonly idempotent: boolean }>> => {
+  const body = await jsonPost(
+    actor,
+    `/api/v1/account-keys/transfers/${transferIdHex.toLowerCase()}/acknowledge`,
+    globalThis.crypto.randomUUID(),
+    { signature: toBase64(signature) },
+  );
+  return Object.freeze({ idempotent: body.idempotent === true });
+};
+
+export { accountKeyTransferAcknowledgementMessage };
 
 // The trust set an account-key object's signature is checked against: the
 // local Device's signing key, the boundary's Team trust keys and Devices,

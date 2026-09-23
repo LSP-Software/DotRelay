@@ -13,6 +13,7 @@ import {
   unwrapAccountKeyWrapper,
 } from "@dotrelay/client";
 import {
+  accountKeyTransferAcknowledgementMessage,
   encodeProtocolObject,
   sha384,
   sha384ToHex,
@@ -133,6 +134,7 @@ export const createRecoveryCodeBackup = async (
       identityGeneration: String(authorized.bundle.userIdentityGeneration),
       ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
       ciphertextLength: wrapper.ciphertext.length,
+      intent: "rotate",
     },
     ["wrapperId", "idempotent"],
     { idempotencyKey: operationId },
@@ -369,6 +371,21 @@ export const recoverAccountKey = async (
     accountKeyScope(options, authorized.deviceId),
     accountMasterKey,
   );
+  if (via === "transfer") {
+    const transferId = (input.transferId as string).toLowerCase();
+    const signature = new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "Ed25519" },
+        authorized.keys.signingPrivateKey,
+        accountKeyTransferAcknowledgementMessage(hexToBytes(transferId)),
+      ),
+    );
+    await authorized.admin.post(
+      `/api/v1/account-keys/transfers/${transferId}/acknowledge`,
+      { signature: base64(signature) },
+      ["acknowledged", "idempotent"],
+    );
+  }
   return {
     deviceId: authorized.deviceId,
     via,
@@ -385,9 +402,10 @@ export const recoverAccountKey = async (
 // commands cover the same lifecycle a browser session would, through the
 // production /api/v1/account-keys/* routes.
 
-// A transfer is sealed for a single peer Device and consumed exactly once;
-// a short validity window keeps an unaccepted transfer from lingering while
-// staying far below the service's staging TTL.
+// A transfer is sealed for a single peer Device. Accepting it can be retried
+// until that Device acknowledges it or the transfer expires; acknowledgement
+// is what makes it unusable. The validity window stays far below the service's
+// staging TTL.
 export const accountKeyTransferValidityMs = 5 * 60 * 1000;
 
 export const setupDeviceAccountKey = async (
@@ -435,20 +453,32 @@ export const setupDeviceAccountKey = async (
     kind: { type: "recoveryCode", recoveryCode },
   });
   const operationId = crypto.randomUUID();
-  await authorized.admin.post(
-    "/api/v1/account-keys/wrappers",
-    {
-      operationId,
-      objectId: crypto.randomUUID(),
-      object: base64(encodeProtocolObject(wrapper.object)),
-      wrapperId: bytesToHex(wrapper.wrapperId),
-      identityGeneration: String(authorized.bundle.userIdentityGeneration),
-      ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
-      ciphertextLength: wrapper.ciphertext.length,
-    },
-    ["wrapperId", "idempotent"],
-    { idempotencyKey: operationId },
-  );
+  try {
+    await authorized.admin.post(
+      "/api/v1/account-keys/wrappers",
+      {
+        operationId,
+        objectId: crypto.randomUUID(),
+        object: base64(encodeProtocolObject(wrapper.object)),
+        wrapperId: bytesToHex(wrapper.wrapperId),
+        identityGeneration: String(authorized.bundle.userIdentityGeneration),
+        ciphertextHash: sha384ToHex(await sha384(wrapper.ciphertext)),
+        ciphertextLength: wrapper.ciphertext.length,
+        intent: "establish",
+      },
+      ["wrapperId", "idempotent"],
+      { idempotencyKey: operationId },
+    );
+  } catch (error) {
+    if (error instanceof CliError && error.code === "state_conflict")
+      throw new CliError(
+        "conflict",
+        "this account already has an Account Master Key; this Device discarded its candidate. Run dotrelay device recover to take over the established key",
+        {},
+        "account_key_already_exists",
+      );
+    throw error;
+  }
   await storage.saveAccountKey(
     accountKeyScope(options, authorized.deviceId),
     accountMasterKey,

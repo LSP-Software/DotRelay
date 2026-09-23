@@ -1,5 +1,6 @@
 import {
   ARGON2ID_POLICY,
+  accountKeyTransferAcknowledgementMessage,
   ContractError,
   createProblem,
   DEVICE_ID_HEADER,
@@ -63,6 +64,17 @@ const mapError = (error: unknown) => {
   if (error.message.includes("requires no active"))
     return "state_conflict" as const;
   if (error.message.includes("expired")) return "state_conflict" as const;
+  if (error.message.includes("already established"))
+    return "state_conflict" as const;
+  if (error.message.includes("not established"))
+    return "state_conflict" as const;
+  if (error.message.includes("recovery code is missing"))
+    return "state_conflict" as const;
+  if (error.message.includes("envelope conflicts"))
+    return "state_conflict" as const;
+  if (error.message.includes("not delivered")) return "state_conflict" as const;
+  if (error.message.includes("recipient is revoked"))
+    return "state_conflict" as const;
   return "service_unavailable" as const;
 };
 
@@ -152,6 +164,8 @@ const readBody = async (context: Context) => {
       "valueGeneration",
       "ciphertextHash",
       "ciphertextLength",
+      "intent",
+      "signature",
     ]);
   } catch {
     throw new ContractError("invalid_request");
@@ -756,9 +770,16 @@ export const registerDeviceRoutes = (
         ))
       )
         throw new ContractError("invalid_crypto_object");
+      const intent = body.intent;
+      if (intent !== "establish" && intent !== "rotate" && intent !== "add")
+        throw new ContractError("invalid_request");
       const wrapperType = object.object.get(86);
       if (wrapperType !== 1 && wrapperType !== 2 && wrapperType !== 3)
         throw new ContractError("invalid_crypto_object");
+      if (intent === "rotate" && wrapperType !== 3)
+        throw new ContractError("invalid_request");
+      if (intent === "add" && wrapperType === 3)
+        throw new ContractError("invalid_request");
       let credentialId: Uint8Array | undefined;
       let kdf:
         | Readonly<{
@@ -825,6 +846,7 @@ export const registerDeviceRoutes = (
           ciphertextHash,
           ciphertextLength,
         },
+        intent,
       });
       return context.json(
         {
@@ -1238,6 +1260,61 @@ export const registerDeviceRoutes = (
                 }
               : {}),
           },
+          200,
+          { "Cache-Control": "no-store" },
+        );
+      } catch (error) {
+        return problem(context, mapError(error));
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/account-keys/transfers/:transferId/acknowledge",
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      try {
+        const body = await readBody(context);
+        const transferId = parseHex(context.req.param("transferId"), 16);
+        const signature = decodeBase64(body.signature);
+        if (signature.length !== 64)
+          throw new ContractError("invalid_crypto_object");
+        const device = await database.device.findFirst({
+          where: {
+            id: actor.deviceId,
+            userId: actor.userId,
+            lifecycle: "ACTIVE",
+          },
+          select: { ed25519PublicKey: true },
+        });
+        if (!device) return problem(context, "device_not_active");
+        const publicKey = await crypto.subtle.importKey(
+          "raw",
+          new Uint8Array(device.ed25519PublicKey).buffer,
+          { name: "Ed25519" },
+          false,
+          ["verify"],
+        );
+        const verified = await crypto.subtle.verify(
+          { name: "Ed25519" },
+          publicKey,
+          new Uint8Array(signature).slice(),
+          accountKeyTransferAcknowledgementMessage(transferId),
+        );
+        if (!verified) throw new ContractError("invalid_crypto_object");
+        const result = await accountKeys.acknowledgeTransfer(database, {
+          userId: actor.userId,
+          deviceId: actor.deviceId,
+          transferId,
+        });
+        return context.json(
+          { acknowledged: true, idempotent: result.idempotent },
           200,
           { "Cache-Control": "no-store" },
         );

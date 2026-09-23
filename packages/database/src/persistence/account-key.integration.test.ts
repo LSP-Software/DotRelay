@@ -154,6 +154,7 @@ const addWrapper = async (input: {
   readonly wrapperType: "RECOVERY_CODE" | "PASSWORD" | "PASSKEY_PRF";
   readonly wrapperId?: Uint8Array;
   readonly credentialId?: Uint8Array;
+  readonly intent?: "establish" | "rotate" | "add";
 }) => {
   const accountKeys = new AccountKeyRepository();
   const protocolObject = await createProtocolObjectInput(20);
@@ -186,6 +187,7 @@ const addWrapper = async (input: {
       ciphertextHash: new Uint8Array(48),
       ciphertextLength: 128,
     },
+    ...(input.intent ? { intent: input.intent } : {}),
   });
 };
 
@@ -221,6 +223,8 @@ const publishEnvelope = async (input: {
     readonly ownerUserId?: string;
     readonly valueGeneration?: bigint;
   }>;
+  readonly ciphertextHash?: Uint8Array;
+  readonly ciphertextLength?: number;
 }) => {
   const accountKeys = new AccountKeyRepository();
   const protocolObject = await createProtocolObjectInput(21);
@@ -239,8 +243,8 @@ const publishEnvelope = async (input: {
     envelope: {
       protocolObject,
       identityGeneration: 1n,
-      ciphertextHash: new Uint8Array(48),
-      ciphertextLength: 256,
+      ciphertextHash: input.ciphertextHash ?? new Uint8Array(48),
+      ciphertextLength: input.ciphertextLength ?? 256,
       ...input.envelope,
     },
   });
@@ -941,10 +945,34 @@ integrationDescribe("account key persistence invariants", () => {
       transferId,
     });
     expect(accepted.protocolObjectId).toBe(protocolObject.id);
+    const delivered = await database.accountKeyTransferObject.findUniqueOrThrow(
+      {
+        where: { protocolObjectId: protocolObject.id },
+      },
+    );
+    expect(delivered.status).toBe("DELIVERED");
+    const retried = await accountKeys.acceptTransfer(database, {
+      userId: user.id,
+      deviceId: recipient.id,
+      transferId,
+    });
+    expect(retried.canonicalBytes).toEqual(accepted.canonicalBytes);
+    const acknowledged = await accountKeys.acknowledgeTransfer(database, {
+      userId: user.id,
+      deviceId: recipient.id,
+      transferId,
+    });
+    expect(acknowledged.idempotent).toBe(false);
     const consumed = await database.accountKeyTransferObject.findUniqueOrThrow({
       where: { protocolObjectId: protocolObject.id },
     });
     expect(consumed.status).toBe("CONSUMED");
+    const replayedAck = await accountKeys.acknowledgeTransfer(database, {
+      userId: user.id,
+      deviceId: recipient.id,
+      transferId,
+    });
+    expect(replayedAck.idempotent).toBe(true);
     await expect(
       accountKeys.acceptTransfer(database, {
         userId: user.id,
@@ -1028,5 +1056,289 @@ integrationDescribe("account key persistence invariants", () => {
       where: { protocolObjectId: protocolObject.id },
     });
     expect(expired.status).toBe("EXPIRED");
+  });
+
+  test("concurrent first establishments keep a single wrapper and do not retire the winner", async () => {
+    const { user } = await createUserFixture();
+    const browser = await createActiveDevice(user.id);
+    const cli = await createActiveDevice(user.id);
+    const browserId = randomWrapperId();
+    const cliId = randomWrapperId();
+    const settled = await Promise.allSettled([
+      addWrapper({
+        actorUserId: user.id,
+        actorDeviceId: browser.id,
+        label: "establish-browser",
+        wrapperType: "RECOVERY_CODE",
+        wrapperId: browserId,
+        intent: "establish",
+      }),
+      addWrapper({
+        actorUserId: user.id,
+        actorDeviceId: cli.id,
+        label: "establish-cli",
+        wrapperType: "RECOVERY_CODE",
+        wrapperId: cliId,
+        intent: "establish",
+      }),
+    ]);
+    const fulfilled = settled.filter(
+      (outcome) => outcome.status === "fulfilled",
+    );
+    const rejected = settled.filter((outcome) => outcome.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const reason =
+      rejected[0]?.status === "rejected" ? rejected[0].reason : null;
+    expect(String(reason)).toMatch(/already established/);
+    const active = await activeWrapperRows(user.id);
+    expect(active).toHaveLength(1);
+    const winner = Buffer.from(
+      active[0]?.wrapperId ?? new Uint8Array(),
+    ).toString("hex");
+    const candidates = [browserId, cliId].map((id) =>
+      Buffer.from(id).toString("hex"),
+    );
+    expect(candidates).toContain(winner);
+    const retired = await database.accountKeyWrapperObject.findMany({
+      where: { userId: user.id, retiredAt: { not: null } },
+    });
+    expect(retired).toHaveLength(0);
+    const loser = candidates.find((id) => id !== winner);
+    const loserRows = await database.accountKeyWrapperObject.findMany({
+      where: { userId: user.id },
+    });
+    expect(
+      loserRows.some(
+        (row) => Buffer.from(row.wrapperId).toString("hex") === loser,
+      ),
+    ).toBe(false);
+  });
+
+  test("a byte-identical envelope retry succeeds and a competing key is rejected", async () => {
+    const { serverProfile, user } = await createUserFixture();
+    const device = await createActiveDevice(user.id);
+    const { projectId } = await createProjectFixture({
+      serverProfileId: serverProfile.id,
+      ownerUserId: user.id,
+      actorDeviceId: device.id,
+      name: "envelope-identity",
+      operationLabel: "envelope-identity",
+    });
+    const ciphertextHash = new Uint8Array(48).fill(4);
+    const first = await publishEnvelope({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      label: "epoch-key-first",
+      ciphertextHash,
+      envelope: {
+        envelopeType: "PROJECT_EPOCH_KEY",
+        projectId,
+        projectEpoch: 1n,
+      },
+    });
+    const replay = await publishEnvelope({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      label: "epoch-key-replay",
+      ciphertextHash,
+      envelope: {
+        envelopeType: "PROJECT_EPOCH_KEY",
+        projectId,
+        projectEpoch: 1n,
+      },
+    });
+    expect("idempotent" in replay && replay.idempotent).toBe(true);
+    expect("envelope" in first && "envelope" in replay).toBe(true);
+    const competingHash = new Uint8Array(48).fill(9);
+    await expect(
+      publishEnvelope({
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        label: "epoch-key-competing",
+        ciphertextHash: competingHash,
+        envelope: {
+          envelopeType: "PROJECT_EPOCH_KEY",
+          projectId,
+          projectEpoch: 1n,
+        },
+      }),
+    ).rejects.toThrow(/conflicts/);
+    const valueHash = new Uint8Array(48).fill(3);
+    await publishEnvelope({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      label: "value-key-first",
+      ciphertextHash: valueHash,
+      envelope: {
+        envelopeType: "USER_VALUE_KEY",
+        ownerUserId: user.id,
+        valueGeneration: 1n,
+      },
+    });
+    const valueReplay = await publishEnvelope({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      label: "value-key-replay",
+      ciphertextHash: valueHash,
+      envelope: {
+        envelopeType: "USER_VALUE_KEY",
+        ownerUserId: user.id,
+        valueGeneration: 1n,
+      },
+    });
+    expect("idempotent" in valueReplay && valueReplay.idempotent).toBe(true);
+    await expect(
+      publishEnvelope({
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        label: "value-key-competing",
+        ciphertextHash: competingHash,
+        envelope: {
+          envelopeType: "USER_VALUE_KEY",
+          ownerUserId: user.id,
+          valueGeneration: 1n,
+        },
+      }),
+    ).rejects.toThrow(/conflicts/);
+    const envelopes = await database.accountKeyEnvelopeObject.findMany({
+      where: { userId: user.id, retiredAt: null },
+    });
+    expect(envelopes).toHaveLength(2);
+  });
+
+  test("a delivered transfer can be retried, then fails closed on expiry, revocation, and invalid acknowledgement order", async () => {
+    const { user } = await createUserFixture();
+    const sender = await createActiveDevice(user.id);
+    const recipient = await createActiveDevice(user.id);
+    const accountKeys = new AccountKeyRepository();
+    const transferId = crypto.getRandomValues(new Uint8Array(16));
+    const protocolObject = await createProtocolObjectInput(22);
+    const operation = {
+      ...(await createOperationInput(user.id, "retry-transfer")),
+      actorDeviceId: sender.id,
+    };
+    await stageObject({
+      operation,
+      objectId: protocolObject.id,
+      canonicalBytes: protocolObject.canonicalBytes,
+      digest: protocolObject.digest,
+    });
+    const now = new Date("2026-09-23T12:00:00.000Z");
+    await accountKeys.createTransfer(database, {
+      operation,
+      transfer: {
+        protocolObject,
+        identityGeneration: 1n,
+        recipientDeviceId: recipient.id,
+        transferId,
+        expiresAt: new Date(now.getTime() + 60_000),
+      },
+      now,
+    });
+    const [first, second] = await Promise.all([
+      accountKeys.acceptTransfer(database, {
+        userId: user.id,
+        deviceId: recipient.id,
+        transferId,
+        now,
+      }),
+      accountKeys.acceptTransfer(database, {
+        userId: user.id,
+        deviceId: recipient.id,
+        transferId,
+        now,
+      }),
+    ]);
+    expect(first.canonicalBytes).toEqual(second.canonicalBytes);
+    await expect(
+      accountKeys.acknowledgeTransfer(database, {
+        userId: user.id,
+        deviceId: sender.id,
+        transferId,
+        now,
+      }),
+    ).rejects.toThrow(/not pending/);
+    await database.device.update({
+      where: { id: recipient.id },
+      data: { lifecycle: "REVOKED", revokedAt: now },
+    });
+    await expect(
+      accountKeys.acceptTransfer(database, {
+        userId: user.id,
+        deviceId: recipient.id,
+        transferId,
+        now,
+      }),
+    ).rejects.toThrow(/revoked/);
+    await expect(
+      accountKeys.acknowledgeTransfer(database, {
+        userId: user.id,
+        deviceId: recipient.id,
+        transferId,
+        now,
+      }),
+    ).rejects.toThrow(/revoked/);
+    const stillDelivered =
+      await database.accountKeyTransferObject.findUniqueOrThrow({
+        where: { protocolObjectId: protocolObject.id },
+      });
+    expect(stillDelivered.status).toBe("DELIVERED");
+    await database.device.update({
+      where: { id: recipient.id },
+      data: { lifecycle: "ACTIVE", revokedAt: null },
+    });
+    await expect(
+      accountKeys.acceptTransfer(database, {
+        userId: user.id,
+        deviceId: recipient.id,
+        transferId,
+        now: new Date(now.getTime() + 120_000),
+      }),
+    ).rejects.toThrow("account key transfer expired");
+    const expired = await database.accountKeyTransferObject.findUniqueOrThrow({
+      where: { protocolObjectId: protocolObject.id },
+    });
+    expect(expired.status).toBe("EXPIRED");
+  });
+
+  test("acknowledgement before delivery does not consume the transfer", async () => {
+    const { user } = await createUserFixture();
+    const sender = await createActiveDevice(user.id);
+    const recipient = await createActiveDevice(user.id);
+    const accountKeys = new AccountKeyRepository();
+    const transferId = crypto.getRandomValues(new Uint8Array(16));
+    const protocolObject = await createProtocolObjectInput(22);
+    const operation = {
+      ...(await createOperationInput(user.id, "ack-before-delivery")),
+      actorDeviceId: sender.id,
+    };
+    await stageObject({
+      operation,
+      objectId: protocolObject.id,
+      canonicalBytes: protocolObject.canonicalBytes,
+      digest: protocolObject.digest,
+    });
+    await accountKeys.createTransfer(database, {
+      operation,
+      transfer: {
+        protocolObject,
+        identityGeneration: 1n,
+        recipientDeviceId: recipient.id,
+        transferId,
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    await expect(
+      accountKeys.acknowledgeTransfer(database, {
+        userId: user.id,
+        deviceId: recipient.id,
+        transferId,
+      }),
+    ).rejects.toThrow("account key transfer is not delivered");
+    const pending = await database.accountKeyTransferObject.findUniqueOrThrow({
+      where: { protocolObjectId: protocolObject.id },
+    });
+    expect(pending.status).toBe("PENDING");
   });
 });

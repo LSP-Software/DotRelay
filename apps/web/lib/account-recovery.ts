@@ -12,8 +12,10 @@ import {
   type AccountKeyVerificationContext,
   type AccountKeyWrapperEntry,
   acceptAccountKeyTransfer,
+  accountKeyTransferAcknowledgementMessage,
   accountKeyTrustedKeys,
   accountKeyVerificationContext,
+  acknowledgeAccountKeyTransfer,
   fromBase64 as akFromBase64,
   createAccountKeyEnvelope,
   createAccountKeyTransfer,
@@ -63,6 +65,7 @@ export type AccountRecoveryUnlockMethod =
 export type AccountKeyVault = Readonly<{
   readonly read: () => Uint8Array | null;
   readonly write: (key: Uint8Array) => void;
+  readonly clear: () => void;
 }>;
 
 export type AccountRecoveryInputs = Readonly<{
@@ -283,6 +286,23 @@ export const unlockAccount = async (
         },
       );
       accountMasterKeyBytes = opened.accountMasterKey;
+      try {
+        const signingPrivateKey = await loadDeviceSigningKey(boundary);
+        if (signingPrivateKey) {
+          const transferId = hexToBytes(secret.trim().toLowerCase());
+          const signature = new Uint8Array(
+            await globalThis.crypto.subtle.sign(
+              { name: "Ed25519" },
+              signingPrivateKey,
+              accountKeyTransferAcknowledgementMessage(transferId),
+            ),
+          );
+          await acknowledgeAccountKeyTransfer(actor, secret.trim(), signature);
+        }
+      } catch {
+        // The key is already unwrapped. A failed acknowledgement leaves the
+        // transfer retryable until it expires.
+      }
     }
     accountMasterKey.write(accountMasterKeyBytes);
     feedback.setAccountUnlocked(true);
@@ -353,6 +373,7 @@ export const setupAccountRecovery = (
         globalThis.crypto.randomUUID(),
         wrapper,
         String(bundle.userIdentityGeneration),
+        "establish",
       );
       const environment = boundary.environment;
       if (environment.projectId) {
@@ -417,6 +438,18 @@ export const setupAccountRecovery = (
         "This code is shown once and is never stored in this browser. Save it somewhere only you can read it: if you lose it and every other recovery method, your account's content becomes unrecoverable.",
       );
     } catch (error) {
+      if (
+        error instanceof AccountKeyRequestError &&
+        error.code === "state_conflict"
+      ) {
+        inputs.accountMasterKey.clear();
+        feedback.setAccountUnlocked(false);
+        feedback.setCode(null, null);
+        feedback.setError(
+          "Another device already created this account's key. This browser discarded its new key. Unlock with the recovery code from the device that finished setup.",
+        );
+        return;
+      }
       feedback.setError(
         error instanceof Error && error.message
           ? error.message
@@ -478,6 +511,7 @@ export const rotateRecoveryCode = (
         globalThis.crypto.randomUUID(),
         wrapper,
         String(bundle.userIdentityGeneration),
+        "rotate",
       );
       feedback.setCode(
         encodeRecoveryCode(recoveryCode),
@@ -550,6 +584,7 @@ export const addEncryptionPassword = (
         globalThis.crypto.randomUUID(),
         wrapper,
         String(bundle.userIdentityGeneration),
+        "add",
       );
       onAdded();
       feedback.setMessage(

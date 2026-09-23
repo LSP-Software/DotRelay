@@ -295,20 +295,31 @@ export const loadWorkflowSession = async (
       },
     });
     const operationId = crypto.randomUUID();
-    await createDeviceAdmin(options, deviceId).post(
-      "/api/v1/account-keys/envelopes",
-      {
-        operationId,
-        objectId: crypto.randomUUID(),
-        object: base64(encodeProtocolObject(envelope.object)),
-        projectId: boundary.environment.projectId,
-        projectEpoch: String(projectEpoch),
-        ciphertextHash: sha384ToHex(await sha384(envelope.ciphertext)),
-        ciphertextLength: envelope.ciphertext.length,
-      },
-      ["objectId", "idempotent"],
-      { idempotencyKey: operationId },
-    );
+    try {
+      await createDeviceAdmin(options, deviceId).post(
+        "/api/v1/account-keys/envelopes",
+        {
+          operationId,
+          objectId: crypto.randomUUID(),
+          object: base64(encodeProtocolObject(envelope.object)),
+          projectId: boundary.environment.projectId,
+          projectEpoch: String(projectEpoch),
+          ciphertextHash: sha384ToHex(await sha384(envelope.ciphertext)),
+          ciphertextLength: envelope.ciphertext.length,
+        },
+        ["objectId", "idempotent"],
+        { idempotencyKey: operationId },
+      );
+    } catch (error) {
+      if (error instanceof CliError && error.code === "state_conflict")
+        throw new CliError(
+          "conflict",
+          "this project epoch already has an account key envelope; refresh and open the existing key instead of creating another",
+          {},
+          "account_key_envelope_conflict",
+        );
+      throw error;
+    }
   } else if (epochKey === undefined && boundary.epochGrant) {
     epochKey = await openProjectEpochGrant(
       fromBase64(boundary.epochGrant, "Project epoch grant"),

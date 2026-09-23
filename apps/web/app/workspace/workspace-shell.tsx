@@ -897,6 +897,9 @@ export const WorkspaceShell = ({
       write: (key: Uint8Array) => {
         accountMasterKeyRef.current = key;
       },
+      clear: () => {
+        accountMasterKeyRef.current = null;
+      },
     },
     passkeyAvailable,
   };

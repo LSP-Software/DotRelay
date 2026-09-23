@@ -1,3 +1,4 @@
+export { accountKeyTransferAcknowledgementMessage } from "./account-key-ack";
 export {
   type CapabilitiesDocument,
   createCapabilitiesDocument,

@@ -94,6 +94,8 @@ enum TransferStatus {
   PENDING
   CONSUMED
   EXPIRED
+  // Handed to the recipient and still retryable until they acknowledge it.
+  DELIVERED
 }
 
 enum AuditEntityKind {

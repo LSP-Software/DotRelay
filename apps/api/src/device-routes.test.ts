@@ -78,6 +78,7 @@ describe("Device and Account Key API payload parsers", () => {
       "/api/v1/account-keys/envelopes",
       "/api/v1/account-keys/transfers",
       "/api/v1/account-keys/transfers/00000000000000000000000000000000/accept",
+      "/api/v1/account-keys/transfers/00000000000000000000000000000000/acknowledge",
     ];
     for (const endpoint of endpoints) {
       const response = await api.request(`${profile.origin}${endpoint}`, {

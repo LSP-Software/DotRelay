@@ -170,9 +170,13 @@ const accountKeyService = (
       readonly object: string;
     }>;
     readonly acceptBehavior?: "accepted" | "state-conflict";
+    readonly establishConflict?: boolean;
   }> = {},
 ) => {
   const publishedWrappers: string[] = [];
+  const wrapperIntents: unknown[] = [];
+  const acknowledgedTransfers: string[] = [];
+  let established = false;
   const publishedEnvelopes: string[] = [];
   const postedTransfers: Array<
     Record<string, unknown> & {
@@ -204,7 +208,18 @@ const accountKeyService = (
     },
     post: async (path, body, fields, options) => {
       if (path === "/api/v1/account-keys/wrappers") {
+        if (body.intent === "establish") {
+          if (established || seed.establishConflict === true)
+            throw new CliError(
+              "conflict",
+              "account key is already established",
+              {},
+              "state_conflict",
+            );
+          established = true;
+        }
         publishedWrappers.push(String(body.wrapperId));
+        wrapperIntents.push(body.intent);
         return { wrapperId: body.wrapperId, idempotent: false };
       }
       if (path === "/api/v1/account-keys/wrappers/revoke") {
@@ -223,6 +238,14 @@ const accountKeyService = (
       if (path === "/api/v1/account-keys/envelopes") {
         publishedEnvelopes.push(String(body.objectId));
         return { objectId: body.objectId, idempotent: false };
+      }
+      const acknowledged =
+        /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/acknowledge$/u.exec(
+          path,
+        );
+      if (acknowledged) {
+        acknowledgedTransfers.push(acknowledged[1] ?? "");
+        return { acknowledged: true, idempotent: false };
       }
       const match =
         /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(path);
@@ -247,6 +270,8 @@ const accountKeyService = (
   return {
     admin,
     publishedWrappers: () => publishedWrappers,
+    wrapperIntents: () => wrapperIntents,
+    acknowledgedTransfers: () => acknowledgedTransfers,
     publishedEnvelopes: () => publishedEnvelopes,
     postedTransfers: () => postedTransfers,
     revokedWrappers: () => revokedWrappers,
@@ -3536,6 +3561,7 @@ describe("protected CLI workflows", () => {
     // The wrapper is published once, and the code is the only credential a
     // headless machine needs.
     expect(service.publishedWrappers()).toHaveLength(1);
+    expect(service.wrapperIntents()).toEqual(["rotate"]);
   });
 
   test("device backup on a locked Device reports that the account is not unlocked", async () => {
@@ -3761,6 +3787,44 @@ describe("protected CLI workflows", () => {
     });
     expect(stored).toBeDefined();
     expect(new Uint8Array(stored as Uint8Array).length).toBe(32);
+    expect(service.acknowledgedTransfers()).toEqual([transferIdHex]);
+  });
+
+  test("device recover does not acknowledge a transfer it cannot open", async () => {
+    const runtime = await setup();
+    const transferId = "ab".repeat(16);
+    const service = accountKeyService(runtime.admin, {
+      transfer: {
+        id: transferId,
+        object: Buffer.from("not-a-transfer").toString("base64"),
+      },
+    });
+    const recover = await run(
+      [
+        "device",
+        "recover",
+        "--profile",
+        "relay",
+        "--transfer",
+        transferId,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(recover.exitCode).not.toBe(0);
+    expect(service.acknowledgedTransfers()).toHaveLength(0);
+    const stored = await runtime.deviceStorage
+      .loadAccountKey({
+        pin: profile.pin,
+        deviceId: uuidToBytes(ids.device),
+      })
+      .catch(() => null);
+    expect(stored).toBeNull();
   });
 
   test("device recover reports when a transfer is no longer pending", async () => {
@@ -3816,12 +3880,45 @@ describe("protected CLI workflows", () => {
     // The mandatory Recovery Code wrapper is published once and the key is
     // now persisted on the Device, scoped to it.
     expect(service.publishedWrappers()).toHaveLength(1);
+    expect(service.wrapperIntents()).toEqual(["establish"]);
     const stored = await runtime.deviceStorage.loadAccountKey({
       pin: profile.pin,
       deviceId: uuidToBytes(ids.device),
     });
     expect(stored).toBeDefined();
     expect(new Uint8Array(stored as Uint8Array).length).toBe(32);
+  });
+
+  test("device setup discards its candidate when establishment loses", async () => {
+    const runtime = await setup();
+    const service = accountKeyService(runtime.admin, {
+      establishConflict: true,
+    });
+    const result = await run(
+      ["device", "setup", "--profile", "relay", "--no-input", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "account_key_already_exists",
+      exitCode: 4,
+    });
+    expect(String(diagnostic.detail)).toContain("discarded its candidate");
+    expect(service.publishedWrappers()).toHaveLength(0);
+    const stored = await runtime.deviceStorage
+      .loadAccountKey({
+        pin: profile.pin,
+        deviceId: uuidToBytes(ids.device),
+      })
+      .catch(() => null);
+    expect(stored).toBeNull();
   });
 
   test("device setup is a no-op when this Device already holds the account key", async () => {

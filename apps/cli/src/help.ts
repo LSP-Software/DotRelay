@@ -308,7 +308,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <id>. The key stays on this Device; transfers are an addition, not a move.",
     notes: [
       "The receiving Device id comes from dotrelay status (or the service) and must be an active Device for the same account.",
-      "The transfer is sealed and one-time: if it is not accepted in time it must be created again.",
+      "The transfer stays retryable until the receiving Device acknowledges it or it expires. A lost response can be accepted again; after acknowledgement, or once it expires, it must be created again.",
     ],
     options: {
       to: "receiving Device id to seal the transfer for (required)",

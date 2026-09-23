@@ -50,6 +50,7 @@ const safeDiagnosticNumericKeys = new Set(safeDiagnosticKeys);
 // the command assigned remain actionable.
 const safeDiagnosticCodes = new Set([
   "account_key_already_exists",
+  "account_key_envelope_conflict",
   "account_key_not_unlocked",
   "account_key_transfer_invalid",
   "account_key_unlock_failed",
