@@ -35,6 +35,7 @@
     "prisma:generate": "bun x prisma generate --config packages/database/prisma.config.ts",
     "db:validate": "bun scripts/validate-prisma.ts",
     "db:migrate-check": "bun scripts/check-migrations.ts",
+    "db:cutover-guard": "bun scripts/guard-legacy-recovery-cutover.ts",
     "docs:validate": "bun scripts/validate-docs.ts",
     "tracked-tree:clean": "bun scripts/check-tracked-tree.ts",
     "security:audit": "bun audit",

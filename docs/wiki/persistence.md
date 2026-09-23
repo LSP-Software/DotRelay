@@ -58,6 +58,38 @@ only the approved IP, endpoint template, status, transfer size, and retention ti
 not contain request bodies, ciphertext, plaintext, credentials, User-Agent data, or free-form
 metadata.
 
+### Destructive cutover: legacy recovery data
+
+The committed migration `20260922000000_account_key_models` retires the pre-ADR-0009 Recovery Kit
+and is deliberately destructive: it drops the `recovery_envelopes`, `recovery_attempts`,
+`recovery_challenge_objects`, and `recovery_grant_objects` tables (deleting any rows they hold)
+and re-types `OperationKind`, `AuditEventKind`, `AuditEntityKind`, and `GrantKind` by removing
+their `RECOVERY*` members, so a database that still carries those enum values fails the migration
+instead of silently discarding the rows. It also drops `users.recoveryGeneration`.
+
+The campaign decision (LSP-Software/DotRelay#233, 2026-09-23) records that DotRelay is
+pre-production and the legacy recovery rows on existing deployments are disposable, so the
+cutover ships without a data-export prerequisite; the reasoning is in
+`docs/adr/0011-legacy-recovery-cutover-is-destructive-and-guarded.md`.
+
+Before running `prisma migrate deploy` against a durable deployment, operators must run the
+pre-deploy guard. It reports the dropped tables, the legacy enum rows, and the used recovery
+generations it found, and refuses (exit 1) until the operator either exports the data or passes
+`--acknowledge-legacy-recovery-data` to record that the data is disposable:
+
+```sh
+bun run db:cutover-guard
+bun run db:cutover-guard --database <DATABASE_URL>
+bun run db:cutover-guard --acknowledge-legacy-recovery-data
+```
+
+A database that has already cut over, or that never held legacy recovery data, passes silently.
+The guard is an operator tool, not a CI gate: the release `verify` job has no PostgreSQL service.
+The CI regression lives in `scripts/check-migrations.ts`, which builds a realistic pre-cutover
+database from the committed baseline migrations, seeds legacy recovery state, and asserts that the
+guard is loud, that a disposable database cuts over cleanly and lands drift-free, and that a
+database with surviving `RECOVERY*` enum rows fails the deploy loudly.
+
 ## Local PostgreSQL
 
 Start the repository services with `docker compose up -d postgres valkey`, then apply the committed
