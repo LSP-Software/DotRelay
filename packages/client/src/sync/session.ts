@@ -56,6 +56,7 @@ export const createVerifiedEnvironmentSession = (input: {
   readonly sharedValuePrivateKey: CryptoKey;
   readonly userDefinedValuePrivateKey?: CryptoKey;
   readonly sharedValueSecret?: Uint8Array;
+  readonly userDefinedValueSecret?: Uint8Array;
   /**
    * The trust set Revision signatures are checked against. Plain keys carry
    * no authorization window; entries name the signing Device and Member and
@@ -96,6 +97,7 @@ export const createVerifiedEnvironmentSession = (input: {
       previousVariables,
       input.sharedValueSecret,
       input.context.actorUserId,
+      input.userDefinedValueSecret,
     );
     for (const [revisionId, snapshot] of decoded.snapshots)
       snapshots.set(revisionId, snapshot);

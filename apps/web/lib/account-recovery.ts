@@ -1,5 +1,7 @@
 import {
+  authenticatedCreatorKeys,
   createBrowserDeviceStorage,
+  deviceHistorySigningKeys,
   extractPasskeyPrfOutput,
   loadDeviceKeyMaterial,
   parseAccountKeyWrapper,
@@ -144,8 +146,11 @@ export const accountKeyVerification = (
       trustedKeys: accountKeyTrustedKeys(
         boundary,
         localSigningKey,
-        wrappers.flatMap((entry) =>
-          entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
+        authenticatedCreatorKeys(
+          wrappers.flatMap((entry) =>
+            entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
+          ),
+          deviceHistorySigningKeys(boundary),
         ),
       ),
       context: accountKeyVerificationContext(boundary),

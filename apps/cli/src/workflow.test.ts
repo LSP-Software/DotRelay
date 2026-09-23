@@ -236,7 +236,9 @@ const accountKeyService = (
         };
       }
       if (path === "/api/v1/account-keys/envelopes") {
-        publishedEnvelopes.push(String(body.objectId));
+        publishedEnvelopes.push(
+          `${body.ownerUserId ? "user" : "project"}:${String(body.objectId)}`,
+        );
         return { objectId: body.objectId, idempotent: false };
       }
       const acknowledged =
@@ -4195,7 +4197,9 @@ describe("protected CLI workflows", () => {
     expect(history.exitCode).toBe(0);
     // The Device opened the existing envelope instead of establishing a new
     // epoch key, so it published no envelope of its own.
-    expect(service.publishedEnvelopes()).toHaveLength(0);
+    expect(
+      service.publishedEnvelopes().filter((id) => id.startsWith("project:")),
+    ).toHaveLength(0);
   });
 
   test("an unlocked Device without an envelope establishes the epoch key as an Account Key Envelope", async () => {
@@ -4226,7 +4230,9 @@ describe("protected CLI workflows", () => {
     expect(history.exitCode).toBe(0);
     // No Device holds this epoch's key, so this unlocked Device mints a fresh
     // Project Epoch Key and wraps it by the Account Master Key.
-    expect(service.publishedEnvelopes()).toHaveLength(1);
+    expect(
+      service.publishedEnvelopes().filter((id) => id.startsWith("project:")),
+    ).toHaveLength(1);
   });
 });
 

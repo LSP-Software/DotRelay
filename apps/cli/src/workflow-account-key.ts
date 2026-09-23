@@ -1,8 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import {
+  authenticatedCreatorKeys,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
   decodeRecoveryCode,
+  deviceHistorySigningKeys,
   encodeRecoveryCode,
   exportSigningPublicKey,
   generateAccountMasterKey,
@@ -280,7 +282,10 @@ export const recoverAccountKey = async (
           trustedKeys: accountKeyTrustedKeys(
             authorized.boundary,
             localSigningKey,
-            entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
+            authenticatedCreatorKeys(
+              entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
+              deviceHistorySigningKeys(authorized.boundary),
+            ),
           ),
           context: {
             serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
@@ -344,7 +349,10 @@ export const recoverAccountKey = async (
           trustedKeys: accountKeyTrustedKeys(
             authorized.boundary,
             localSigningKey,
-            creatorPublicKey,
+            authenticatedCreatorKeys(
+              creatorPublicKey,
+              deviceHistorySigningKeys(authorized.boundary),
+            ),
           ),
           context: {
             serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),

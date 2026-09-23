@@ -74,6 +74,7 @@ export type Boundary = Readonly<{
   readonly cryptoAvailable: boolean;
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;
+  readonly userValueKeyEnvelope?: string;
   readonly signingTrustKeys: readonly string[];
   readonly signingTrustDevices: readonly SigningTrustDevice[];
   readonly peerDevices: readonly Readonly<{
@@ -136,6 +137,7 @@ export const workspaceBoundaryFields = [
   "signingTrustDevices",
   "epochGrant",
   "accountKeyEnvelope",
+  "userValueKeyEnvelope",
   "peerDevices",
 ] as const;
 
@@ -195,6 +197,9 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
       : {}),
     ...(typeof value.accountKeyEnvelope === "string"
       ? { accountKeyEnvelope: value.accountKeyEnvelope }
+      : {}),
+    ...(typeof value.userValueKeyEnvelope === "string"
+      ? { userValueKeyEnvelope: value.userValueKeyEnvelope }
       : {}),
     signingTrustKeys: Array.isArray(value.signingTrustKeys)
       ? value.signingTrustKeys.filter(
@@ -335,9 +340,8 @@ export const collectSigningTrust = (
 // Assemble the set of Ed25519 signing public keys (raw 32-byte) that are
 // trusted to have signed an account-key object on this Server Profile: the
 // local Device's key, the boundary's signing-trust devices, and peer Devices.
-// For API-issued objects the creator Device is one of these (or the caller adds
-// the creatorPublicKey from the response), so verifying against this set plus
-// the creator key authorizes the signature (R9).
+// A creatorPublicKey from an API response is not added unless
+// authenticatedCreatorKeys has already found that key in this history.
 export const accountKeyTrustedKeys = (
   boundary: Boundary,
   localSigningPublicKey: Uint8Array,

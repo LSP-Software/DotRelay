@@ -279,6 +279,51 @@ export const publishAccountKeyEnvelope = async (
   return Object.freeze({ idempotent: body.idempotent === true });
 };
 
+export type AccountKeyEnvelopeEntry = Readonly<{
+  readonly envelopeType: "project-epoch-key" | "user-value-key";
+  readonly object: string;
+  readonly ownerUserId?: string;
+  readonly valueGeneration?: string;
+  readonly creatorPublicKey?: string;
+}>;
+
+// GET /api/v1/account-keys/envelopes — active envelopes for this User.
+export const fetchAccountKeyEnvelopes = async (
+  actor: AccountKeyActor,
+): Promise<readonly AccountKeyEnvelopeEntry[]> => {
+  const body = await fetchJson(actor, "/api/v1/account-keys/envelopes");
+  const envelopes = body.envelopes;
+  if (!Array.isArray(envelopes))
+    throw new Error("the envelope list is malformed");
+  const entries: AccountKeyEnvelopeEntry[] = [];
+  for (const raw of envelopes) {
+    if (!raw || typeof raw !== "object") continue;
+    const candidate = raw as Record<string, unknown>;
+    if (
+      (candidate.envelopeType !== "project-epoch-key" &&
+        candidate.envelopeType !== "user-value-key") ||
+      typeof candidate.object !== "string"
+    )
+      continue;
+    entries.push(
+      Object.freeze({
+        envelopeType: candidate.envelopeType,
+        object: candidate.object,
+        ...(typeof candidate.ownerUserId === "string"
+          ? { ownerUserId: candidate.ownerUserId }
+          : {}),
+        ...(typeof candidate.valueGeneration === "string"
+          ? { valueGeneration: candidate.valueGeneration }
+          : {}),
+        ...(typeof candidate.creatorPublicKey === "string"
+          ? { creatorPublicKey: candidate.creatorPublicKey }
+          : {}),
+      }),
+    );
+  }
+  return Object.freeze(entries);
+};
+
 // POST /api/v1/account-keys/transfers — stage an Account Key Transfer sealed
 // to one recipient Device. The recipient redeems it with
 // /api/v1/account-keys/transfers/:id/accept before it expires.
@@ -370,9 +415,9 @@ export { accountKeyTransferAcknowledgementMessage };
 // The trust set an account-key object's signature is checked against: the
 // local Device's signing key, the boundary's Team trust keys and Devices,
 // the boundary's own Device key, and every peer Device key. API responses
-// may additionally name a creator Device's public key (extraKeys), since a
-// wrapper, envelope, or transfer can be created by any of the User's
-// Devices. Mirrors accountKeyTrustedKeys in apps/cli/src/workflow.ts.
+// may name a creator Device only after that key has been authenticated
+// against Device trust history. A key that merely arrived with the object
+// is not a trust anchor. Mirrors accountKeyTrustedKeys in the CLI.
 export const accountKeyTrustedKeys = (
   boundary: WorkspaceBoundary,
   localSigningPublicKey: Uint8Array,

@@ -84,6 +84,7 @@ export type WorkspaceBoundary = Readonly<{
   readonly signingTrustDevices?: readonly WorkspaceSigningTrustDevice[];
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;
+  readonly userValueKeyEnvelope?: string;
   readonly peerDevices?: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
@@ -389,6 +390,8 @@ export const e2eWorkspaceBoundary = (
     readonly deviceId?: string;
     /** Base64 Account Key Envelope the development boundary should report. */
     readonly accountKeyEnvelope?: string;
+    /** Base64 User Value Key envelope the development boundary should report. */
+    readonly userValueKeyEnvelope?: string;
   }>,
 ): WorkspaceBoundary => {
   const profile = profileCatalog[profileId];
@@ -471,6 +474,9 @@ export const e2eWorkspaceBoundary = (
     ...(options?.accountKeyEnvelope
       ? { accountKeyEnvelope: options.accountKeyEnvelope }
       : {}),
+    ...(options?.userValueKeyEnvelope
+      ? { userValueKeyEnvelope: options.userValueKeyEnvelope }
+      : {}),
     crypto: { available: true },
   };
 };
@@ -523,7 +529,9 @@ const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
     typeof (crypto as { readonly available?: unknown }).available ===
       "boolean" &&
     (candidate.accountKeyEnvelope === undefined ||
-      typeof candidate.accountKeyEnvelope === "string")
+      typeof candidate.accountKeyEnvelope === "string") &&
+    (candidate.userValueKeyEnvelope === undefined ||
+      typeof candidate.userValueKeyEnvelope === "string")
   );
 };
 

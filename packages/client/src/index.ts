@@ -38,6 +38,12 @@ export type {
   Argon2WorkerRequest,
 } from "./account/argon2-worker";
 export {
+  authenticatedCreatorKeys,
+  deviceHistorySigningKeys,
+  openOwnedUserValueKey,
+  USER_VALUE_KEY_GENERATION,
+} from "./account/user-value-key";
+export {
   type AccountKeyTrustedKeys,
   type AccountKeyVerificationContext,
   AccountKeyVerificationError,

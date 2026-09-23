@@ -28,6 +28,7 @@ export const createEnvironmentProtocolSession = (input: {
   readonly userDefinedValuePrivateKey?: CryptoKey;
   readonly signingTrustKeys?: RevisionSigningTrust;
   readonly sharedValueSecret?: Uint8Array;
+  readonly userDefinedValueSecret?: Uint8Array;
 }): EnvironmentProtocolSession => {
   const signingTrustKeys =
     input.signingTrustKeys && input.signingTrustKeys.length > 0

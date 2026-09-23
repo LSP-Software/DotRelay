@@ -28,6 +28,7 @@ import {
   createEnvironmentProtocolSession,
   type EnvironmentProtocolSession,
 } from "@/lib/environment-protocol-session";
+import { resolveUserValueKey } from "@/lib/user-value-key";
 import {
   fetchWorkspaceBoundary,
   type WorkspaceBoundary,
@@ -358,6 +359,35 @@ export const loadWorkspaceSession = (
       const keyMaterial = await loadDeviceKeyMaterial(bundle);
       if (!keyMaterial.encryptionPublicKey)
         throw new Error("stored Device public key is missing");
+      let userDefinedValueSecret: Uint8Array | undefined;
+      const userValueMaster = accountMasterKey.get();
+      const ownerUserIdText = boundary.session.userId;
+      if (userValueMaster && ownerUserIdText && recoveryActor) {
+        const verification = accountKeyVerification(boundary, recoveryWrappers);
+        const signingPrivateKey = await loadDeviceSigningKey(boundary);
+        if (verification && signingPrivateKey && profile.serverProfileId) {
+          const valueBundle = await storage.load({
+            pin,
+            deviceId: uuidToBytes(device.id),
+          });
+          const opened = await resolveUserValueKey({
+            actor: recoveryActor,
+            boundary,
+            accountMasterKey: userValueMaster,
+            signingPrivateKey,
+            trustedKeys: verification.trustedKeys,
+            context: verification.context,
+            ownerUserId: valueBundle.userId,
+            ownerUserIdText,
+            serverProfileId: profile.serverProfileId,
+            deviceId: uuidToBytes(device.id),
+            ...(boundary.userValueKeyEnvelope
+              ? { listedEnvelope: boundary.userValueKeyEnvelope }
+              : {}),
+          }).catch(() => null);
+          if (opened) userDefinedValueSecret = opened;
+        }
+      }
       const expectedHeadId =
         boundary.environment.headRevision === "empty-environment"
           ? null
@@ -380,6 +410,7 @@ export const loadWorkspaceSession = (
         userDefinedValueRecipientPublicKey: keyMaterial.encryptionPublicKey,
         signingPrivateKey: keyMaterial.signingPrivateKey,
         revisionSigningPublicKey: hexToBytes(device.signingPublicKey),
+        ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       };
       const transport = createProtocolTransport({ origin: profile.origin });
       const signingTrustKeys = (boundary.signingTrustKeys ?? [])
@@ -521,6 +552,7 @@ export const loadWorkspaceSession = (
               ? signingTrustKeys
               : [hexToBytes(device.signingPublicKey)],
         ...(sharedValueSecret ? { sharedValueSecret } : {}),
+        ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       });
       if (cancelled) return;
       if (

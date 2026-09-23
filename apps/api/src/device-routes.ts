@@ -893,8 +893,8 @@ export const registerDeviceRoutes = (
           const deviceId = object.get(10);
           if (deviceId instanceof Uint8Array && deviceId.length === 16) {
             deviceIdHex = toHex(deviceId);
-            const device = await database.device.findUnique({
-              where: { id: deviceIdHex },
+            const device = await database.device.findFirst({
+              where: { id: deviceIdHex, userId: actor.userId },
               select: { ed25519PublicKey: true },
             });
             if (device)
@@ -1113,6 +1113,68 @@ export const registerDeviceRoutes = (
     }
   });
 
+  app.get("/api/v1/account-keys/envelopes", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    const envelopes = await database.accountKeyEnvelopeObject.findMany({
+      where: { userId: actor.userId, retiredAt: null },
+      orderBy: { createdAt: "asc" },
+      select: {
+        envelopeType: true,
+        projectId: true,
+        projectEpoch: true,
+        ownerUserId: true,
+        valueGeneration: true,
+        protocolObject: { select: { canonicalBytes: true } },
+      },
+    });
+    const listed = [];
+    for (const envelope of envelopes) {
+      const bytes = new Uint8Array(envelope.protocolObject.canonicalBytes);
+      let creatorDeviceId: string | undefined;
+      let creatorPublicKey: string | undefined;
+      try {
+        const object = parseProtocolObject(bytes);
+        const deviceId = object.get(10);
+        if (deviceId instanceof Uint8Array && deviceId.length === 16) {
+          creatorDeviceId = toHex(deviceId);
+          const device = await database.device.findFirst({
+            where: { id: creatorDeviceId, userId: actor.userId },
+            select: { ed25519PublicKey: true },
+          });
+          if (device)
+            creatorPublicKey = toHex(new Uint8Array(device.ed25519PublicKey));
+        }
+      } catch {
+        // omit creator fields on malformed objects
+      }
+      listed.push({
+        envelopeType:
+          envelope.envelopeType === "PROJECT_EPOCH_KEY"
+            ? "project-epoch-key"
+            : "user-value-key",
+        object: toBase64(bytes),
+        ...(envelope.projectId ? { projectId: envelope.projectId } : {}),
+        ...(envelope.projectEpoch !== null
+          ? { projectEpoch: envelope.projectEpoch.toString() }
+          : {}),
+        ...(envelope.ownerUserId ? { ownerUserId: envelope.ownerUserId } : {}),
+        ...(envelope.valueGeneration !== null
+          ? { valueGeneration: envelope.valueGeneration.toString() }
+          : {}),
+        ...(creatorDeviceId
+          ? {
+              creatorDeviceId,
+              ...(creatorPublicKey ? { creatorPublicKey } : {}),
+            }
+          : {}),
+      });
+    }
+    return context.json({ envelopes: listed }, 200, {
+      "Cache-Control": "no-store",
+    });
+  });
+
   app.post("/api/v1/account-keys/transfers", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
@@ -1239,8 +1301,8 @@ export const registerDeviceRoutes = (
           const deviceId = object.get(10);
           if (deviceId instanceof Uint8Array && deviceId.length === 16) {
             creatorDeviceId = toHex(deviceId);
-            const device = await database.device.findUnique({
-              where: { id: creatorDeviceId },
+            const device = await database.device.findFirst({
+              where: { id: creatorDeviceId, userId: actor.userId },
               select: { ed25519PublicKey: true },
             });
             if (device)

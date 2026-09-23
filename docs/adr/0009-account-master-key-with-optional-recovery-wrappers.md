@@ -91,3 +91,11 @@ The same recipient can accept again until it signs an acknowledgement or the
 transfer expires. Acknowledgement is the transition that makes the transfer
 unusable. Expiry and recipient revocation fail closed and do not return the
 ciphertext.
+
+User-defined Values are sealed to the User Value Key, not to the publishing
+Device and not to the Project Epoch Key. The first unlocked Device of the
+owner publishes one generation-1 envelope. Another Device of that owner opens
+the same envelope after it recovers the Account Master Key, then decrypts the
+Value. Team-shared Values stay on the Project Epoch Key. A `creatorPublicKey`
+returned beside an object is not added to the trust set unless that key is
+already in the Device trust history.

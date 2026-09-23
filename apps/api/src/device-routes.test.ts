@@ -91,6 +91,11 @@ describe("Device and Account Key API payload parsers", () => {
         code: "authentication_required",
       });
     }
+    const envelopes = await api.request(
+      `${profile.origin}/api/v1/account-keys/envelopes`,
+      { method: "GET" },
+    );
+    expect(envelopes.status).toBe(401);
   });
 });
 

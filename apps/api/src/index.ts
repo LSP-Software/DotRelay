@@ -1012,6 +1012,18 @@ const createApi = ({
           select: { protocolObject: { select: { canonicalBytes: true } } },
         })
       : null;
+    const userValueKeyEnvelope =
+      await database.accountKeyEnvelopeObject.findFirst({
+        where: {
+          userId: user.id,
+          envelopeType: "USER_VALUE_KEY",
+          ownerUserId: user.id,
+          valueGeneration: 1n,
+          retiredAt: null,
+        },
+        orderBy: { createdAt: "desc" },
+        select: { protocolObject: { select: { canonicalBytes: true } } },
+      });
     const peerGrantRecipients = project
       ? new Set(
           (
@@ -1088,6 +1100,15 @@ const createApi = ({
               accountKeyEnvelope: bytesToBase64(
                 new Uint8Array(
                   accountKeyEnvelope.protocolObject.canonicalBytes,
+                ),
+              ),
+            }
+          : {}),
+        ...(userValueKeyEnvelope?.protocolObject.canonicalBytes
+          ? {
+              userValueKeyEnvelope: bytesToBase64(
+                new Uint8Array(
+                  userValueKeyEnvelope.protocolObject.canonicalBytes,
                 ),
               ),
             }

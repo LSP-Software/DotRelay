@@ -1,15 +1,19 @@
 import {
+  authenticatedCreatorKeys,
   createAccountKeyEnvelope,
   createProtocolTransport,
   createVerifiedEnvironmentSession,
   type DecodedVariable,
+  deviceHistorySigningKeys,
   exportSigningPublicKey,
   openAccountKeyEnvelope,
+  openOwnedUserValueKey,
   openProjectEpochGrant,
   type PublicationContext,
   parseAccountKeyEnvelope,
   type SyncPageWire,
   UnreadableLaneError,
+  USER_VALUE_KEY_GENERATION,
 } from "@dotrelay/client";
 import {
   encodeProtocolObject,
@@ -370,6 +374,119 @@ export const loadWorkflowSession = async (
   });
   const signingPublicKey = await exportSigningPublicKey(deviceSigningPublicKey);
   const signingTrustKeys = collectSigningTrust(boundary, signingPublicKey);
+  let userValueKey: Uint8Array | undefined;
+  if (accountMasterKey !== null && boundary.session.userId) {
+    const unlockedKey = accountMasterKey;
+    const ownerUserId = uuidToBytes(boundary.session.userId);
+    const trustedKeys = accountKeyTrustedKeys(boundary, signingPublicKey);
+    const verification = {
+      trustedKeys,
+      context: {
+        serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
+        userId: ownerUserId,
+      },
+      ownerUserId,
+    };
+    const openEnvelope = async (
+      object: string,
+      claimedCreatorKey?: string,
+    ): Promise<Uint8Array | null> => {
+      const extras = authenticatedCreatorKeys(
+        claimedCreatorKey ? [claimedCreatorKey] : [],
+        deviceHistorySigningKeys(boundary),
+      );
+      return openOwnedUserValueKey(
+        fromBase64(object, "User value key envelope"),
+        unlockedKey,
+        extras.length === 0
+          ? verification
+          : {
+              ...verification,
+              trustedKeys: accountKeyTrustedKeys(
+                boundary,
+                signingPublicKey,
+                extras,
+              ),
+            },
+      );
+    };
+    try {
+      if (boundary.userValueKeyEnvelope) {
+        const opened = await openEnvelope(boundary.userValueKeyEnvelope);
+        if (opened) userValueKey = opened;
+      }
+      if (!userValueKey) {
+        const contentKey = crypto.getRandomValues(new Uint8Array(32));
+        const envelope = await createAccountKeyEnvelope({
+          serverProfileId: options.profile.pin.serverProfileId,
+          userId: ownerUserId,
+          deviceId: uuidToBytes(deviceId),
+          createdAtMs: Date.now(),
+          accountMasterKey: unlockedKey,
+          signingPrivateKey: keys.signingPrivateKey,
+          kind: {
+            type: "userValueKey",
+            ownerUserId,
+            valueGeneration: USER_VALUE_KEY_GENERATION,
+            contentKey,
+          },
+        });
+        const operationId = crypto.randomUUID();
+        try {
+          await createDeviceAdmin(options, deviceId).post(
+            "/api/v1/account-keys/envelopes",
+            {
+              operationId,
+              objectId: crypto.randomUUID(),
+              object: base64(encodeProtocolObject(envelope.object)),
+              ownerUserId: boundary.session.userId,
+              valueGeneration: String(USER_VALUE_KEY_GENERATION),
+              ciphertextHash: sha384ToHex(await sha384(envelope.ciphertext)),
+              ciphertextLength: envelope.ciphertext.length,
+            },
+            ["objectId", "idempotent"],
+            { idempotencyKey: operationId },
+          );
+          userValueKey = contentKey;
+        } catch (error) {
+          if (!(error instanceof CliError) || error.code !== "state_conflict")
+            throw error;
+          const listed = await createDeviceAdmin(options, deviceId).get(
+            "/api/v1/account-keys/envelopes",
+            ["envelopes"],
+          );
+          const envelopes = listed.envelopes;
+          if (Array.isArray(envelopes)) {
+            for (const entry of envelopes) {
+              if (
+                !entry ||
+                typeof entry !== "object" ||
+                !("object" in entry) ||
+                typeof entry.object !== "string" ||
+                entry.envelopeType !== "user-value-key" ||
+                entry.valueGeneration !== String(USER_VALUE_KEY_GENERATION)
+              )
+                continue;
+              const claimed =
+                "creatorPublicKey" in entry &&
+                typeof entry.creatorPublicKey === "string"
+                  ? entry.creatorPublicKey
+                  : undefined;
+              const opened = claimed
+                ? await openEnvelope(entry.object, claimed)
+                : await openEnvelope(entry.object);
+              if (opened) {
+                userValueKey = opened;
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      userValueKey = undefined;
+    }
+  }
   const publicationContext: PublicationContext = {
     serverProfileId: options.profile.pin.serverProfileId,
     teamId: boundary.environment.teamId,
@@ -385,6 +502,7 @@ export const loadWorkflowSession = async (
     signingPrivateKey: keys.signingPrivateKey,
     revisionSigningPublicKey: signingPublicKey,
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),
+    ...(userValueKey ? { userDefinedValueSecret: userValueKey } : {}),
   };
   const session = createVerifiedEnvironmentSession({
     context: publicationContext,
@@ -393,6 +511,7 @@ export const loadWorkflowSession = async (
     userDefinedValuePrivateKey: keys.encryptionPrivateKey,
     signingTrustKeys,
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),
+    ...(userValueKey ? { userDefinedValueSecret: userValueKey } : {}),
   });
   return {
     boundary,

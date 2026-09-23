@@ -110,6 +110,10 @@ export type PublicationContext = Readonly<{
   readonly valueRecipientPublicKey: CryptoKey;
   readonly userDefinedValueRecipientPublicKey?: CryptoKey;
   readonly sharedValueSecret?: Uint8Array;
+  // The User Value Key opened from the owner's Account Key Envelope. It seals
+  // User-defined Values for every Device that can recover the Account Master
+  // Key. Team-shared Values keep using sharedValueSecret.
+  readonly userDefinedValueSecret?: Uint8Array;
   readonly signingPrivateKey: CryptoKey;
   readonly revisionSigningPublicKey?: Uint8Array;
   readonly trustedRevisionId?: string;
@@ -552,6 +556,10 @@ export const createPublicationArtifacts = async (
           ...(variable.ownership === "SHARED_VALUE" && context.sharedValueSecret
             ? { sharedSecret: context.sharedValueSecret }
             : {}),
+          ...(variable.ownership === "USER_DEFINED_VALUE" &&
+          context.userDefinedValueSecret
+            ? { sharedSecret: context.userDefinedValueSecret }
+            : {}),
           ...(variable.ownership === "USER_DEFINED_VALUE"
             ? { ownerUserId: context.actorUserId }
             : { originalProviderUserId: context.actorUserId }),
@@ -750,6 +758,7 @@ export const decodeSyncManifest = async (
   existingVariables: readonly DecodedVariable[] = [],
   sharedValueSecret?: Uint8Array,
   actorUserId?: string,
+  userDefinedValueSecret?: Uint8Array,
 ): Promise<SyncManifestDecode> => {
   const variables = new Map<string, DecodedVariableState>();
   for (const variable of existingVariables)
@@ -857,7 +866,7 @@ export const decodeSyncManifest = async (
           resolvePrivateKey(
             scope === 3 ? "SHARED_VALUE" : "USER_DEFINED_VALUE",
           ),
-          scope === 3 ? sharedValueSecret : undefined,
+          scope === 3 ? sharedValueSecret : userDefinedValueSecret,
         );
         if (!plaintext) {
           // Never carry an earlier Value across a lane this Device cannot
@@ -1007,6 +1016,7 @@ export const decodeSyncVariables = async (
   existingVariables: readonly DecodedVariable[] = [],
   sharedValueSecret?: Uint8Array,
   actorUserId?: string,
+  userDefinedValueSecret?: Uint8Array,
 ): Promise<readonly DecodedVariable[]> =>
   (
     await decodeSyncManifest(
@@ -1015,6 +1025,7 @@ export const decodeSyncVariables = async (
       existingVariables,
       sharedValueSecret,
       actorUserId,
+      userDefinedValueSecret,
     )
   ).variables;
 

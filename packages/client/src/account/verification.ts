@@ -15,8 +15,9 @@ import {
 
 // A trusted Ed25519 signing public key (raw 32 bytes) that is allowed to have
 // signed an account-key object. Callers assemble this set from their trust
-// boundary: the local Device's signing key plus the peer Devices' keys (and,
-// for API-issued objects, the creator Device's key). Verification succeeds if
+// boundary: the local Device's signing key plus the peer Devices' keys.
+// A creator key that merely arrived with the object is not added here.
+// Verification succeeds if
 // at least one trusted key validates the field-4 signature over the canonical
 // unsigned body, mirroring sync revision authorization.
 export type AccountKeyTrustedKeys = Readonly<{

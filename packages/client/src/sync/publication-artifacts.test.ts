@@ -1068,4 +1068,81 @@ describe("unreadable Manifest lanes", () => {
       }),
     ]);
   });
+
+  test("a User-defined Value sealed to the User Value Key opens on another Device, and a Team-shared Value does not", async () => {
+    const deviceA = await generateEncryptionKeyPair();
+    const deviceB = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const epochKey = crypto.getRandomValues(new Uint8Array(32));
+    const userValueKey = crypto.getRandomValues(new Uint8Array(32));
+    const artifacts = await createPublicationArtifacts(
+      [
+        variable({
+          id: "77777777-7777-4777-8777-777777777771",
+          name: "SHARED_URL",
+          ownership: "SHARED_VALUE",
+          value: "postgres://shared",
+        }),
+        variable({
+          id: "77777777-7777-4777-8777-777777777772",
+          name: "MY_TOKEN",
+          description: "Owned by this User.",
+          ownership: "USER_DEFINED_VALUE",
+          value: "device-a-secret",
+        }),
+      ],
+      {
+        ...ids,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: deviceA.publicKey,
+        userDefinedValueRecipientPublicKey: deviceA.publicKey,
+        userDefinedValueSecret: userValueKey,
+        sharedValueSecret: epochKey,
+        signingPrivateKey: signing.privateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const page = await syncPageFor(artifacts);
+    const decoded = await decodeSyncVariables(
+      page,
+      () => deviceB.privateKey,
+      [],
+      epochKey,
+      ids.actorUserId,
+      userValueKey,
+    );
+    expect(decoded).toEqual([
+      expect.objectContaining({
+        name: "SHARED_URL",
+        value: "postgres://shared",
+      }),
+      expect.objectContaining({ name: "MY_TOKEN", value: "device-a-secret" }),
+    ]);
+    await expect(
+      decodeSyncVariables(
+        page,
+        () => deviceB.privateKey,
+        [],
+        epochKey,
+        ids.actorUserId,
+      ),
+    ).rejects.toMatchObject({
+      name: "UnreadableLaneError",
+      laneKind: "USER_DEFINED_VALUE",
+    });
+    await expect(
+      decodeSyncVariables(
+        page,
+        () => deviceB.privateKey,
+        [],
+        userValueKey,
+        ids.actorUserId,
+        userValueKey,
+      ),
+    ).rejects.toMatchObject({
+      name: "UnreadableLaneError",
+    });
+  });
 });
