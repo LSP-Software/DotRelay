@@ -14,6 +14,17 @@ import {
 import { utf8Encode } from "./runtime";
 
 const UINT64_MAX = (1n << 64n) - 1n;
+// Hard ceiling on password-wrapper Argon2id cost parameters. Every
+// implementation (client, API ingest, wire validation) rejects a wrapper whose
+// declared cost exceeds these bounds BEFORE allocating any memory, so a
+// hostile or corrupted wrapper cannot drive an unbounded allocation. The
+// production default (64 MiB / 3 iterations / p1) sits well inside these limits.
+export const ARGON2ID_POLICY = Object.freeze({
+  maxMemoryKiB: 524288, // 512 MiB
+  maxIterations: 10,
+  maxParallelism: 16,
+});
+
 const SIGNED_FIELDS = new Set([3, 4]);
 
 export const isSignedField = (field: number): boolean =>
@@ -217,7 +228,7 @@ const validateConditionalValues = (
   if (kind === 20) {
     const wrapperType = numberValue(mapValue(object, 86));
     validateEnum(wrapperType, 3);
-    if (numberValue(mapValue(object, 88)) !== 1)
+    if (numberValue(mapValue(object, 88)) !== 2)
       contractError("invalid_crypto_object");
     if (plaintextLength !== undefined && plaintextLength !== 32n)
       contractError("invalid_crypto_object");
@@ -237,6 +248,21 @@ const validateConditionalValues = (
       )
         contractError("invalid_crypto_object");
       validateEnumSet(numberValue(mapValue(object, 89)), [1]);
+      const memoryKiB = numberValue(mapValue(object, 90));
+      const iterations = numberValue(mapValue(object, 91));
+      const parallelism = numberValue(mapValue(object, 92));
+      if (
+        memoryKiB === undefined ||
+        iterations === undefined ||
+        parallelism === undefined ||
+        memoryKiB < 8 ||
+        memoryKiB > ARGON2ID_POLICY.maxMemoryKiB ||
+        iterations < 1 ||
+        iterations > ARGON2ID_POLICY.maxIterations ||
+        parallelism < 1 ||
+        parallelism > ARGON2ID_POLICY.maxParallelism
+      )
+        contractError("invalid_crypto_object");
       if (fields.has(93) || fields.has(94))
         contractError("invalid_crypto_object");
     }
@@ -253,6 +279,8 @@ const validateConditionalValues = (
     }
   }
   if (kind === 21) {
+    if (numberValue(mapValue(object, 88)) !== 2)
+      contractError("invalid_crypto_object");
     const envelopeType = numberValue(mapValue(object, 96));
     validateEnum(envelopeType, 2);
     if (plaintextLength !== undefined && plaintextLength !== 32n)
@@ -272,6 +300,8 @@ const validateConditionalValues = (
     }
   }
   if (kind === 22) {
+    if (numberValue(mapValue(object, 88)) !== 2)
+      contractError("invalid_crypto_object");
     if (
       plaintextLength !== undefined &&
       (plaintextLength !== 32n || ciphertextLength !== 48n)

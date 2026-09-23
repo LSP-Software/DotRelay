@@ -1,6 +1,7 @@
 import { readFile, stat, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  type AccountKeyTrustedKeys,
   assertPublicationAccepted,
   type CliDeviceStorage,
   changedVariableIdsFromRevision,
@@ -420,6 +421,41 @@ const collectSigningTrust = (
   for (const peer of boundary.peerDevices)
     if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
   return keys;
+};
+
+// Assemble the set of Ed25519 signing public keys (raw 32-byte) that are
+// trusted to have signed an account-key object on this Server Profile: the
+// local Device's key, the boundary's signing-trust devices, and peer Devices.
+// For API-issued objects the creator Device is one of these (or the caller adds
+// the creatorPublicKey from the response), so verifying against this set plus
+// the creator key authorizes the signature (R9).
+const accountKeyTrustedKeys = (
+  boundary: Boundary,
+  localSigningPublicKey: Uint8Array,
+  extraKeys: readonly string[] = [],
+): AccountKeyTrustedKeys => {
+  const keys: Uint8Array[] = [localSigningPublicKey];
+  const seen = new Set<string>([bytesToHex(localSigningPublicKey)]);
+  const addHex = (value: string): void => {
+    try {
+      const bytes = hexToBytes(value);
+      const hex = bytesToHex(bytes);
+      if (seen.has(hex)) return;
+      seen.add(hex);
+      keys.push(bytes);
+    } catch {
+      // ignore malformed keys
+    }
+  };
+  for (const device of boundary.signingTrustDevices)
+    addHex(device.signingPublicKey);
+  for (const key of boundary.signingTrustKeys) addHex(key);
+  if (boundary.device.signingPublicKey)
+    addHex(boundary.device.signingPublicKey);
+  for (const peer of boundary.peerDevices)
+    if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
+  for (const key of extraKeys) addHex(key);
+  return Object.freeze({ keys });
 };
 
 const statePath = (directory: string, environmentId: string): string =>
@@ -1637,6 +1673,8 @@ type ActiveWrapper = Readonly<{
   readonly wrapperId: string;
   readonly type: "passkey-prf" | "password" | "recovery-code";
   readonly object: string;
+  readonly creatorDeviceId?: string;
+  readonly creatorPublicKey?: string;
 }>;
 
 const isActiveWrapper = (value: unknown): value is ActiveWrapper => {
@@ -1650,7 +1688,11 @@ const isActiveWrapper = (value: unknown): value is ActiveWrapper => {
       value.type === "password" ||
       value.type === "recovery-code") &&
     typeof object === "string" &&
-    object.length > 0
+    object.length > 0 &&
+    (value.creatorDeviceId === undefined ||
+      typeof value.creatorDeviceId === "string") &&
+    (value.creatorPublicKey === undefined ||
+      typeof value.creatorPublicKey === "string")
   );
 };
 
@@ -1783,9 +1825,29 @@ export const recoverAccountKey = async (
       );
     }
     try {
-      accountMasterKey = await unwrapAccountKeyWrapper(wrapper, {
-        recoveryCode: code,
-      });
+      const localSigningKey = await exportSigningPublicKey(
+        authorized.keys.signingPublicKey as CryptoKey,
+      );
+      // The wrapper is sealed and signed by the Device that created it, which
+      // may be a different Device than the one opening it with the code. The
+      // creator's identity fields (deviceId/userIdentityGeneration) are
+      // signature-authenticated, so pin only the shared profile/user identity
+      // and add the creator's key to the trust set when the API reports it.
+      accountMasterKey = await unwrapAccountKeyWrapper(
+        wrapper,
+        { recoveryCode: code },
+        {
+          trustedKeys: accountKeyTrustedKeys(
+            authorized.boundary,
+            localSigningKey,
+            entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
+          ),
+          context: {
+            serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
+            userId: uuidToBytes(authorized.userId),
+          },
+        },
+      );
     } catch {
       throw new CliError(
         "authentication",
@@ -1802,7 +1864,7 @@ export const recoverAccountKey = async (
       result = await authorized.admin.post(
         `/api/v1/account-keys/transfers/${transferId}/accept`,
         {},
-        ["accepted", "object"],
+        ["accepted", "object", "creatorDeviceId", "creatorPublicKey"],
       );
     } catch (error) {
       if (error instanceof CliError && error.code === "state_conflict")
@@ -1814,6 +1876,10 @@ export const recoverAccountKey = async (
         );
       throw error;
     }
+    const creatorPublicKey =
+      typeof result.creatorPublicKey === "string"
+        ? [result.creatorPublicKey]
+        : [];
     let transfer: ReturnType<typeof parseAccountKeyTransfer>;
     try {
       transfer = parseAccountKeyTransfer(
@@ -1828,9 +1894,28 @@ export const recoverAccountKey = async (
       );
     }
     try {
+      const localSigningKey = await exportSigningPublicKey(
+        authorized.keys.signingPublicKey as CryptoKey,
+      );
       accountMasterKey = await openAccountKeyTransfer(
         transfer,
         authorized.keys.encryptionPrivateKey,
+        {
+          trustedKeys: accountKeyTrustedKeys(
+            authorized.boundary,
+            localSigningKey,
+            creatorPublicKey,
+          ),
+          context: {
+            serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
+            userId: uuidToBytes(authorized.userId),
+            // The transfer's deviceId/userIdentityGeneration are the sender's
+            // (signature-authenticated); the recipient pins only the binding to
+            // itself (field 25) and the expiry window.
+            ownDeviceId: uuidToBytes(authorized.deviceId),
+            nowMs: Date.now(),
+          },
+        },
       );
     } catch {
       throw new CliError(
@@ -2276,7 +2361,21 @@ const loadWorkflowSession = async (
         safeProjectEpoch(boundary.environment.projectEpoch)
     ) {
       try {
-        epochKey = await openAccountKeyEnvelope(envelope, accountMasterKey);
+        const localSigningKey = await exportSigningPublicKey(
+          deviceSigningPublicKey,
+        );
+        epochKey = await openAccountKeyEnvelope(envelope, accountMasterKey, {
+          trustedKeys: accountKeyTrustedKeys(boundary, localSigningKey),
+          context: {
+            serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
+            userId: bundle.userId,
+            // The envelope's deviceId/userIdentityGeneration are the creator
+            // Device's (signature-authenticated); do not pin them to the opener.
+            envelopeType: envelope.envelopeType,
+            projectId: envelope.projectId,
+            projectEpoch: envelope.projectEpoch,
+          },
+        });
       } catch {
         epochKey = undefined;
       }

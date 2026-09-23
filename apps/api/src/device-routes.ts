@@ -1,4 +1,5 @@
 import {
+  ARGON2ID_POLICY,
   ContractError,
   createProblem,
   DEVICE_ID_HEADER,
@@ -768,13 +769,30 @@ export const registerDeviceRoutes = (
           }>
         | undefined;
       if (wrapperType === 1) credentialId = bytesField(object.object, 93);
-      if (wrapperType === 2)
+      if (wrapperType === 2) {
         kdf = {
           kdfName: intField(object.object, 89),
           kdfMemoryKib: uintField(object.object, 90),
           kdfIterations: uintField(object.object, 91),
           kdfParallelism: intField(object.object, 92),
         };
+        // Defense in depth: reject a password wrapper whose declared Argon2id
+        // cost exceeds the shared policy before it is staged/stored. The wire
+        // contract already enforces these bounds; this guards against any path
+        // that bypasses client-side validation.
+        const memoryKiB = Number(kdf.kdfMemoryKib);
+        const iterations = Number(kdf.kdfIterations);
+        if (
+          kdf.kdfName !== 1 ||
+          memoryKiB < 8 ||
+          memoryKiB > ARGON2ID_POLICY.maxMemoryKiB ||
+          iterations < 1 ||
+          iterations > ARGON2ID_POLICY.maxIterations ||
+          kdf.kdfParallelism < 1 ||
+          kdf.kdfParallelism > ARGON2ID_POLICY.maxParallelism
+        )
+          throw new ContractError("invalid_crypto_object");
+      }
       const op = await operation(
         body,
         actor,
@@ -839,37 +857,82 @@ export const registerDeviceRoutes = (
           protocolObject: { select: { canonicalBytes: true } },
         },
       });
+      // Expose each wrapper's creator Device id + Ed25519 signing public key so
+      // a client can verify the object's field-4 signature against its trust
+      // boundary (R9). The creator device is read from field 10 of the stored
+      // canonical object.
+      const creatorDevices = new Map<string, string>();
+      for (const wrapper of wrappers) {
+        const bytes = new Uint8Array(wrapper.protocolObject.canonicalBytes);
+        let deviceIdHex: string | undefined;
+        let publicKeyHex: string | undefined;
+        try {
+          const object = parseProtocolObject(bytes);
+          const deviceId = object.get(10);
+          if (deviceId instanceof Uint8Array && deviceId.length === 16) {
+            deviceIdHex = toHex(deviceId);
+            const device = await database.device.findUnique({
+              where: { id: deviceIdHex },
+              select: { ed25519PublicKey: true },
+            });
+            if (device)
+              publicKeyHex = toHex(new Uint8Array(device.ed25519PublicKey));
+          }
+        } catch {
+          // A malformed stored object omits the creator fields rather than failing the list.
+        }
+        if (deviceIdHex) creatorDevices.set(deviceIdHex, publicKeyHex ?? "");
+      }
       return context.json(
         {
-          wrappers: wrappers.map((wrapper) => ({
-            wrapperId: toHex(new Uint8Array(wrapper.wrapperId)),
-            type:
-              wrapper.wrapperType === "PASSKEY_PRF"
-                ? "passkey-prf"
-                : wrapper.wrapperType === "PASSWORD"
-                  ? "password"
-                  : "recovery-code",
-            object: toBase64(
-              new Uint8Array(wrapper.protocolObject.canonicalBytes),
-            ),
-            ...(wrapper.kdfName === null
-              ? {}
-              : {
-                  kdf: {
-                    name: wrapper.kdfName,
-                    memoryKib:
-                      wrapper.kdfMemoryKib === null
-                        ? null
-                        : wrapper.kdfMemoryKib.toString(),
-                    iterations:
-                      wrapper.kdfIterations === null
-                        ? null
-                        : wrapper.kdfIterations.toString(),
-                    parallelism: wrapper.kdfParallelism,
-                  },
-                }),
-            createdAt: wrapper.createdAt.toISOString(),
-          })),
+          wrappers: wrappers.map((wrapper) => {
+            const bytes = new Uint8Array(wrapper.protocolObject.canonicalBytes);
+            let creatorDeviceId: string | undefined;
+            let creatorPublicKey: string | undefined;
+            try {
+              const object = parseProtocolObject(bytes);
+              const deviceId = object.get(10);
+              if (deviceId instanceof Uint8Array && deviceId.length === 16) {
+                creatorDeviceId = toHex(deviceId);
+                creatorPublicKey = creatorDevices.get(creatorDeviceId);
+              }
+            } catch {
+              // omit creator fields on malformed objects
+            }
+            return {
+              wrapperId: toHex(new Uint8Array(wrapper.wrapperId)),
+              type:
+                wrapper.wrapperType === "PASSKEY_PRF"
+                  ? "passkey-prf"
+                  : wrapper.wrapperType === "PASSWORD"
+                    ? "password"
+                    : "recovery-code",
+              object: toBase64(bytes),
+              ...(creatorDeviceId
+                ? {
+                    creatorDeviceId,
+                    ...(creatorPublicKey ? { creatorPublicKey } : {}),
+                  }
+                : {}),
+              ...(wrapper.kdfName === null
+                ? {}
+                : {
+                    kdf: {
+                      name: wrapper.kdfName,
+                      memoryKib:
+                        wrapper.kdfMemoryKib === null
+                          ? null
+                          : wrapper.kdfMemoryKib.toString(),
+                      iterations:
+                        wrapper.kdfIterations === null
+                          ? null
+                          : wrapper.kdfIterations.toString(),
+                      parallelism: wrapper.kdfParallelism,
+                    },
+                  }),
+              createdAt: wrapper.createdAt.toISOString(),
+            };
+          }),
         },
         200,
         { "Cache-Control": "no-store" },
@@ -1144,10 +1207,36 @@ export const registerDeviceRoutes = (
           deviceId: actor.deviceId,
           transferId,
         });
+        // Expose the creator Device's id + Ed25519 signing public key (read from
+        // field 10 of the stored transfer object) so the recipient can verify the
+        // signature against its trust boundary (R9).
+        let creatorDeviceId: string | undefined;
+        let creatorPublicKey: string | undefined;
+        try {
+          const object = parseProtocolObject(transfer.canonicalBytes);
+          const deviceId = object.get(10);
+          if (deviceId instanceof Uint8Array && deviceId.length === 16) {
+            creatorDeviceId = toHex(deviceId);
+            const device = await database.device.findUnique({
+              where: { id: creatorDeviceId },
+              select: { ed25519PublicKey: true },
+            });
+            if (device)
+              creatorPublicKey = toHex(new Uint8Array(device.ed25519PublicKey));
+          }
+        } catch {
+          // omit creator fields on malformed objects
+        }
         return context.json(
           {
             accepted: true,
             object: toBase64(transfer.canonicalBytes),
+            ...(creatorDeviceId
+              ? {
+                  creatorDeviceId,
+                  ...(creatorPublicKey ? { creatorPublicKey } : {}),
+                }
+              : {}),
           },
           200,
           { "Cache-Control": "no-store" },

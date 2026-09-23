@@ -10,15 +10,15 @@
     },
     {
       "path": "conditional.json",
-      "sha384": "fec782264fad693154fc52128513a027c6e100e9622e458e8d39e3375ee1773f82f58da0bf00df62e9253ffe986f5f1d"
+      "sha384": "4be3079e1656dbb0f9c810e398f83612cfaa32f5201a3ed0dd04e1023b3f382ab516aabbafd15f00327e6f35833849cc"
     },
     {
       "path": "negative.json",
-      "sha384": "865a75d280e38ca38230bfbdb4cd54f3f46d963175440047281f7ebf0422910b100fdb3fcdaefd342edfbc0361b8fe6a"
+      "sha384": "d6c0a050b57c651fd8c954a68b9aa7d8047e2b86875150762f32b23a37fc7991fb829295366a5c1665b8fc3df143a5a3"
     },
     {
       "path": "objects.json",
-      "sha384": "780bd984c9e9b1f7a6a45f048eb1ec1abf8ce05ae74a6e7eb7bafb84947e10a6abdc8cc18e0dc5fb15d9a783eedd7c2d"
+      "sha384": "631c27355ed06727038b5b10c21dd212c66206e3730b75e7cdde8ef7b76eac0971119c0a3cc90285bc345ce9aa3fdf29"
     },
     {
       "path": "positive.json",

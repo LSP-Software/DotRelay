@@ -23,12 +23,12 @@ import {
   createProblem,
   encodeProtocolObject,
   encodeSyncPage,
+  exportSigningPublicKey,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   parseProtocolObject,
   type SyncPageWire,
   sha384,
-  sha384ToHex,
   uuidToBytes,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
@@ -162,6 +162,8 @@ const accountKeyService = (
     readonly recoveryWrapper?: Readonly<{
       readonly wrapperId: string;
       readonly object: string;
+      readonly creatorDeviceId?: string;
+      readonly creatorPublicKey?: string;
     }>;
     readonly transfer?: Readonly<{
       readonly id: string;
@@ -187,6 +189,12 @@ const accountKeyService = (
                 wrapperId: seed.recoveryWrapper.wrapperId,
                 type: "recovery-code" as const,
                 object: seed.recoveryWrapper.object,
+                ...(seed.recoveryWrapper.creatorDeviceId
+                  ? { creatorDeviceId: seed.recoveryWrapper.creatorDeviceId }
+                  : {}),
+                ...(seed.recoveryWrapper.creatorPublicKey
+                  ? { creatorPublicKey: seed.recoveryWrapper.creatorPublicKey }
+                  : {}),
               },
             ]
           : [];
@@ -3546,10 +3554,14 @@ describe("protected CLI workflows", () => {
       accountMasterKey: amk,
       recoveryCode,
     });
+    const signingKey = runtime.bootstrap.keyMaterial.signingPublicKey;
+    if (!signingKey) throw new Error("Device signing public key is missing");
     const service = accountKeyService(runtime.admin, {
       recoveryWrapper: {
         wrapperId: fixture.recoveryWrapperId as string,
         object: fixture.recoveryWrapperObject as string,
+        creatorDeviceId: ids.device,
+        creatorPublicKey: bytesToHex(await exportSigningPublicKey(signingKey)),
       },
     });
     const recover = await run(
@@ -3915,9 +3927,24 @@ describe("protected CLI workflows", () => {
     expect(bytesToHex(parsed.recipientDeviceId)).toBe(
       peer.id.replaceAll("-", ""),
     );
+    // The receiving Device opens the transfer as itself: the sender's (creator's)
+    // Ed25519 key is the only trusted signer, and the ownDeviceId/nowMs bindings
+    // assert the transfer is addressed to the receiver and still valid.
+    const senderSigningKey = runtime.bootstrap.keyMaterial.signingPublicKey;
+    if (!senderSigningKey)
+      throw new Error("Device signing public key is missing");
+    const senderSigningPublicKey =
+      await exportSigningPublicKey(senderSigningKey);
     const opened = await openAccountKeyTransfer(
       parsed,
       peer.encryptionPrivateKey,
+      {
+        trustedKeys: { keys: [senderSigningPublicKey] },
+        context: {
+          ownDeviceId: uuidToBytes(peer.id),
+          nowMs: Date.now(),
+        },
+      },
     );
     expect(new Uint8Array(opened)).toEqual(new Uint8Array(amk));
   });

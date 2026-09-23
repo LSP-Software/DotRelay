@@ -1,6 +1,7 @@
 import {
   ACCOUNT_KEY_ENVELOPE_KDF_INFO,
   ACCOUNT_KEY_WRAPPER_KDF_INFO,
+  ARGON2ID_POLICY,
   type CborValue,
   canonicalEncode,
   decodeCiphertextEnvelope,
@@ -14,26 +15,45 @@ import {
   signProtocolObject,
 } from "@dotrelay/contracts";
 import { argon2id } from "@noble/hashes/argon2.js";
+import {
+  type AccountKeyVerificationContext,
+  verifyAccountKeyEnvelope,
+  verifyAccountKeyTransfer,
+  verifyAccountKeyWrapper,
+} from "./verification";
 
-export const ACCOUNT_KEY_WRAPPER_FORMAT_VERSION = 1;
-export const ACCOUNT_KEY_WRAPPER_KIND = 20;
-export const ACCOUNT_KEY_ENVELOPE_KIND = 21;
-export const ACCOUNT_KEY_TRANSFER_KIND = 22;
+export {
+  ACCOUNT_KEY_ENVELOPE_KIND,
+  ACCOUNT_KEY_TRANSFER_KIND,
+  ACCOUNT_KEY_WRAPPER_FORMAT_VERSION,
+  ACCOUNT_KEY_WRAPPER_KIND,
+  KDF_ARGON2ID,
+  KEY_ENVELOPE_TYPE,
+  type KeyEnvelopeType,
+  WRAPPER_TYPE,
+  type WrapperType,
+} from "./constants";
+export {
+  type AccountKeyTrustedKeys,
+  type AccountKeyVerificationContext,
+  AccountKeyVerificationError,
+  verifyAccountKeyEnvelope,
+  verifyAccountKeyTransfer,
+  verifyAccountKeyWrapper,
+} from "./verification";
 
-export const WRAPPER_TYPE = {
-  passkeyPrf: 1,
-  password: 2,
-  recoveryCode: 3,
-} as const;
-export type WrapperType = (typeof WRAPPER_TYPE)[keyof typeof WRAPPER_TYPE];
-
-export const KDF_ARGON2ID = 1;
-export const KEY_ENVELOPE_TYPE = {
-  projectEpochKey: 1,
-  userValueKey: 2,
-} as const;
-export type KeyEnvelopeType =
-  (typeof KEY_ENVELOPE_TYPE)[keyof typeof KEY_ENVELOPE_TYPE];
+import {
+  ACCOUNT_KEY_ENVELOPE_KIND,
+  ACCOUNT_KEY_TRANSFER_KIND,
+  ACCOUNT_KEY_WRAPPER_FORMAT_VERSION,
+  ACCOUNT_KEY_WRAPPER_KIND,
+  KDF_ARGON2ID,
+  KEY_ENVELOPE_TYPE,
+  type KeyEnvelopeType,
+  PASSKEY_PRF_OUTPUT_LENGTH,
+  WRAPPER_TYPE,
+  type WrapperType,
+} from "./constants";
 
 export type PasswordKdfParameters = Readonly<{
   readonly memoryKiB: number;
@@ -183,15 +203,134 @@ const toBuffer = (input: Uint8Array): ArrayBuffer => {
   return copy.buffer;
 };
 
+// Associated data bound into the AES-GCM tag. For a direct-GCM wrapper/envelope
+// this is the canonical object body minus the two signing fields and the sealed
+// ciphertext/digest pair (fields 47/48), so it binds salt, IV, identity, type
+// and KDF parameters without being circular with the ciphertext GCM seals. For
+// an X25519 transfer the whole inner envelope (salt/ephemeral/IV/ciphertext/
+// digest/lengths) is excluded because that material is sealed by the inner
+// seal() rather than a direct GCM call.
+const WRAPPER_AAD_EXCLUDED = new Set([3, 4, 47, 48, 72]);
+const ENVELOPE_AAD_EXCLUDED = new Set([3, 4, 47, 48, 72]);
+const TRANSFER_AAD_EXCLUDED = new Set([3, 4, 44, 45, 46, 47, 48, 71, 72]);
+
+const associatedDataFor = (
+  object: ProtocolObject,
+  kind: number,
+): Uint8Array => {
+  const excluded =
+    kind === ACCOUNT_KEY_TRANSFER_KIND
+      ? TRANSFER_AAD_EXCLUDED
+      : kind === ACCOUNT_KEY_ENVELOPE_KIND
+        ? ENVELOPE_AAD_EXCLUDED
+        : WRAPPER_AAD_EXCLUDED;
+  return canonicalEncode(
+    new Map([...object.entries()].filter(([field]) => !excluded.has(field))),
+  );
+};
+
+// Reject password-wrapper KDF cost parameters outside ARGON2ID_POLICY before any
+// memory is allocated. Shared by create (pre-argon2id) and unwrap (gate before
+// allocation) so a hostile or corrupted wrapper can never drive an unbounded
+// Argon2id allocation.
+export const validatePasswordKdfParameters = (
+  kdf: PasswordKdfParameters,
+): void => {
+  if (
+    !Number.isSafeInteger(kdf.memoryKiB) ||
+    kdf.memoryKiB < 8 ||
+    kdf.memoryKiB > ARGON2ID_POLICY.maxMemoryKiB ||
+    !Number.isSafeInteger(kdf.iterations) ||
+    kdf.iterations < 1 ||
+    kdf.iterations > ARGON2ID_POLICY.maxIterations ||
+    !Number.isSafeInteger(kdf.parallelism) ||
+    kdf.parallelism < 1 ||
+    kdf.parallelism > ARGON2ID_POLICY.maxParallelism
+  )
+    throw new TypeError("password KDF parameters are out of policy");
+};
+
+// When the host (web app, or the browser bundle test) assigns a self-contained
+// worker IIFE source string to this global, the password KDF runs in a Worker
+// off the main thread; otherwise runArgon2id uses noble on the main thread.
+// Read at call time so the host can set it after module load.
+const argon2WorkerSource = (): string | undefined => {
+  const value = (globalThis as { __DOTRELAY_ARGON2_WORKER_SOURCE__?: string })
+    .__DOTRELAY_ARGON2_WORKER_SOURCE__;
+  return typeof value === "string" ? value : undefined;
+};
+
+type Argon2WorkerRequest = Readonly<{
+  readonly id: number;
+  readonly password: Uint8Array;
+  readonly salt: Uint8Array;
+  readonly params: PasswordKdfParameters;
+}>;
+type Argon2WorkerReply = Readonly<{
+  readonly id: number;
+  readonly ikm: Uint8Array;
+}>;
+
+let argon2Worker: Worker | null = null;
+const pendingArgon2 = new Map<number, (ikm: Uint8Array) => void>();
+let argon2RequestId = 0;
+
+const getArgon2Worker = (): Worker | null => {
+  const source = argon2WorkerSource();
+  if (!source) return null;
+  if (argon2Worker === null) {
+    const url = URL.createObjectURL(
+      new Blob([source], { type: "application/javascript" }),
+    );
+    argon2Worker = new Worker(url);
+    argon2Worker.onmessage = (event: MessageEvent<Argon2WorkerReply>) => {
+      const resolve = pendingArgon2.get(event.data.id);
+      if (resolve) {
+        pendingArgon2.delete(event.data.id);
+        resolve(event.data.ikm);
+      }
+    };
+  }
+  return argon2Worker;
+};
+
+const runArgon2id = async (
+  password: Uint8Array,
+  salt: Uint8Array,
+  kdf: PasswordKdfParameters,
+): Promise<Uint8Array> => {
+  const worker = getArgon2Worker();
+  if (worker) {
+    const id = ++argon2RequestId;
+    return await new Promise<Uint8Array>((resolve) => {
+      pendingArgon2.set(id, resolve);
+      worker.postMessage({
+        id,
+        password,
+        salt,
+        params: kdf,
+      } satisfies Argon2WorkerRequest);
+    });
+  }
+  return argon2id(password, salt, {
+    t: kdf.iterations,
+    m: kdf.memoryKiB,
+    p: kdf.parallelism,
+    dkLen: 32,
+  });
+};
+
 const aesGcmSeal = async (
   key: CryptoKey,
   iv: Uint8Array,
   plaintext: Uint8Array,
+  associatedData: Uint8Array,
 ): Promise<Uint8Array> => {
   const encrypted = await crypto.subtle.encrypt(
     {
       name: "AES-GCM",
       iv: toBuffer(iv),
+      additionalData: toBuffer(associatedData),
       tagLength: 128,
     },
     key,
@@ -204,12 +343,14 @@ const aesGcmOpen = async (
   key: CryptoKey,
   iv: Uint8Array,
   ciphertext: Uint8Array,
+  associatedData: Uint8Array,
 ): Promise<Uint8Array> => {
   try {
     const decrypted = await crypto.subtle.decrypt(
       {
         name: "AES-GCM",
         iv: toBuffer(iv),
+        additionalData: toBuffer(associatedData),
         tagLength: 128,
       },
       key,
@@ -263,36 +404,25 @@ export const createAccountKeyWrapper = async (
     )
       throw new TypeError("passkey credential id must be 1-255 bytes");
     requireLength(kind.prfInput, 32, "passkey PRF input");
-    requireLength(kind.prfOutput, 64, "passkey PRF output");
+    requireLength(
+      kind.prfOutput,
+      PASSKEY_PRF_OUTPUT_LENGTH,
+      "passkey PRF output",
+    );
     credentialId = kind.credentialId;
     prfInput = kind.prfInput;
     ikm = kind.prfOutput;
   } else if (kind.type === "password") {
     wrapperType = WRAPPER_TYPE.password;
     kdf = kind.kdf ?? DEFAULT_PASSWORD_KDF;
-    if (
-      !Number.isSafeInteger(kdf.memoryKiB) ||
-      kdf.memoryKiB < 8 ||
-      !Number.isSafeInteger(kdf.iterations) ||
-      kdf.iterations < 1 ||
-      !Number.isSafeInteger(kdf.parallelism) ||
-      kdf.parallelism < 1
-    )
-      throw new TypeError("password KDF parameters are invalid");
-    ikm = argon2id(kind.password, salt, {
-      t: kdf.iterations,
-      m: kdf.memoryKiB,
-      p: kdf.parallelism,
-      dkLen: 32,
-    });
+    validatePasswordKdfParameters(kdf);
+    ikm = await runArgon2id(kind.password, salt, kdf);
   } else {
     wrapperType = WRAPPER_TYPE.recoveryCode;
     requireLength(kind.recoveryCode, 32, "recovery code");
     ikm = kind.recoveryCode;
   }
   const keK = await wrapperKek(ikm, salt);
-  const ciphertext = await aesGcmSeal(keK, iv, input.accountMasterKey);
-  const ciphertextHash = await sha384(ciphertext);
   const fields = new Map<number, CborValue>([
     [8, uuidToBytes(input.serverProfileId)],
     [9, input.userId],
@@ -302,10 +432,7 @@ export const createAccountKeyWrapper = async (
     [32, input.createdAtMs],
     [44, salt],
     [46, iv],
-    [47, ciphertext],
-    [48, ciphertextHash],
     [71, 32],
-    [72, ciphertext.length],
     [86, wrapperType],
     [87, wrapperId],
     [88, ACCOUNT_KEY_WRAPPER_FORMAT_VERSION],
@@ -318,6 +445,17 @@ export const createAccountKeyWrapper = async (
     fields.set(91, kdf.iterations);
     fields.set(92, kdf.parallelism);
   }
+  const preSeal = protocolObjectFromFields(ACCOUNT_KEY_WRAPPER_KIND, fields);
+  const ciphertext = await aesGcmSeal(
+    keK,
+    iv,
+    input.accountMasterKey,
+    associatedDataFor(preSeal, ACCOUNT_KEY_WRAPPER_KIND),
+  );
+  const ciphertextHash = await sha384(ciphertext);
+  fields.set(47, ciphertext);
+  fields.set(48, ciphertextHash);
+  fields.set(72, ciphertext.length);
   const unsigned = protocolObjectFromFields(ACCOUNT_KEY_WRAPPER_KIND, fields);
   const signedFields = new Map<number, CborValue>([
     ...fields,
@@ -418,22 +556,31 @@ export const parseAccountKeyWrapper = (
 export const unwrapAccountKeyWrapper = async (
   wrapper: AccountKeyWrapper,
   input: UnwrapAccountKeyWrapperInput,
+  verification: Readonly<{
+    readonly trustedKeys: import("./verification").AccountKeyTrustedKeys;
+    readonly context: AccountKeyVerificationContext;
+  }>,
 ): Promise<Uint8Array> => {
+  await verifyAccountKeyWrapper(
+    wrapper.object,
+    verification.trustedKeys,
+    verification.context,
+  );
   let ikm: Uint8Array;
   if (wrapper.wrapperType === WRAPPER_TYPE.passkeyPrf) {
     if (!input.prfOutput) throw new TypeError("passkey PRF output is required");
-    requireLength(input.prfOutput, 64, "passkey PRF output");
+    requireLength(
+      input.prfOutput,
+      PASSKEY_PRF_OUTPUT_LENGTH,
+      "passkey PRF output",
+    );
     ikm = input.prfOutput;
   } else if (wrapper.wrapperType === WRAPPER_TYPE.password) {
     if (!input.password) throw new TypeError("password is required");
     const kdf = wrapper.kdf;
     if (!kdf) throw new TypeError("password KDF parameters are missing");
-    ikm = argon2id(input.password, wrapper.salt, {
-      t: kdf.iterations,
-      m: kdf.memoryKiB,
-      p: kdf.parallelism,
-      dkLen: 32,
-    });
+    validatePasswordKdfParameters(kdf);
+    ikm = await runArgon2id(input.password, wrapper.salt, kdf);
   } else {
     if (!input.recoveryCode) throw new TypeError("recovery code is required");
     requireLength(input.recoveryCode, 32, "recovery code");
@@ -444,6 +591,7 @@ export const unwrapAccountKeyWrapper = async (
     keK,
     wrapper.iv,
     wrapper.ciphertext,
+    associatedDataFor(wrapper.object, ACCOUNT_KEY_WRAPPER_KIND),
   );
   requireLength(accountMasterKey, 32, "account master key");
   return accountMasterKey;
@@ -476,8 +624,6 @@ export const createAccountKeyEnvelope = async (
     salt,
     ACCOUNT_KEY_ENVELOPE_KDF_INFO,
   );
-  const ciphertext = await aesGcmSeal(keK, iv, kind.contentKey);
-  const ciphertextHash = await sha384(ciphertext);
   const fields = new Map<number, CborValue>([
     [8, uuidToBytes(input.serverProfileId)],
     [9, input.userId],
@@ -486,10 +632,8 @@ export const createAccountKeyEnvelope = async (
     [32, input.createdAtMs],
     [44, salt],
     [46, iv],
-    [47, ciphertext],
-    [48, ciphertextHash],
     [71, 32],
-    [72, ciphertext.length],
+    [88, ACCOUNT_KEY_WRAPPER_FORMAT_VERSION],
     [96, envelopeType],
   ]);
   if (kind.type === "projectEpochKey") {
@@ -499,6 +643,17 @@ export const createAccountKeyEnvelope = async (
     fields.set(26, kind.ownerUserId);
     fields.set(31, kind.valueGeneration);
   }
+  const preSeal = protocolObjectFromFields(ACCOUNT_KEY_ENVELOPE_KIND, fields);
+  const ciphertext = await aesGcmSeal(
+    keK,
+    iv,
+    kind.contentKey,
+    associatedDataFor(preSeal, ACCOUNT_KEY_ENVELOPE_KIND),
+  );
+  const ciphertextHash = await sha384(ciphertext);
+  fields.set(47, ciphertext);
+  fields.set(48, ciphertextHash);
+  fields.set(72, ciphertext.length);
   const unsigned = protocolObjectFromFields(ACCOUNT_KEY_ENVELOPE_KIND, fields);
   const signedFields = new Map<number, CborValue>([
     ...fields,
@@ -557,14 +712,34 @@ export const parseAccountKeyEnvelope = (
 export const openAccountKeyEnvelope = async (
   envelope: AccountKeyEnvelope,
   accountMasterKey: Uint8Array,
+  verification: Readonly<{
+    readonly trustedKeys: import("./verification").AccountKeyTrustedKeys;
+    readonly context: AccountKeyVerificationContext & {
+      readonly envelopeType: number;
+      readonly projectId?: Uint8Array;
+      readonly projectEpoch?: number;
+      readonly ownerUserId?: Uint8Array;
+      readonly valueGeneration?: number;
+    };
+  }>,
 ): Promise<Uint8Array> => {
+  await verifyAccountKeyEnvelope(
+    envelope.object,
+    verification.trustedKeys,
+    verification.context,
+  );
   requireLength(accountMasterKey, 32, "account master key");
   const keK = await deriveAesKeyWithInfo(
     accountMasterKey,
     envelope.salt,
     ACCOUNT_KEY_ENVELOPE_KDF_INFO,
   );
-  const contentKey = await aesGcmOpen(keK, envelope.iv, envelope.ciphertext);
+  const contentKey = await aesGcmOpen(
+    keK,
+    envelope.iv,
+    envelope.ciphertext,
+    associatedDataFor(envelope.object, ACCOUNT_KEY_ENVELOPE_KIND),
+  );
   requireLength(contentKey, 32, "content key");
   return contentKey;
 };
@@ -583,9 +758,30 @@ export const createAccountKeyTransfer = async (
     throw new TypeError("transfer validity window is invalid");
   const transferId = input.transferId ?? randomId();
   requireLength(transferId, 16, "transfer id");
+  // The inner X25519 envelope's associated data binds the outer object's
+  // identity/expiry/type fields. Those fields are final before sealing, so the
+  // AAD is computable up front; the sealed envelope material (salt/ephemeral/
+  // IV/ciphertext/digest/lengths) is excluded from the AAD and re-read from the
+  // sealed bytes below.
+  const preSeal = protocolObjectFromFields(
+    ACCOUNT_KEY_TRANSFER_KIND,
+    new Map<number, CborValue>([
+      [8, uuidToBytes(input.serverProfileId)],
+      [9, input.userId],
+      [10, input.deviceId],
+      [17, randomId()],
+      [25, uuidToBytes(input.recipientDeviceId)],
+      [32, input.createdAtMs],
+      [33, input.expiresAtMs],
+      [88, ACCOUNT_KEY_WRAPPER_FORMAT_VERSION],
+      [95, transferId],
+    ]),
+  );
+  const aad = associatedDataFor(preSeal, ACCOUNT_KEY_TRANSFER_KIND);
   const envelopeBytes = await seal(
     input.accountMasterKey,
     input.recipientEncryptionPublicKey,
+    aad,
   );
   const envelope = decodeCiphertextEnvelope(envelopeBytes);
   const salt = envelope.get(44);
@@ -609,7 +805,7 @@ export const createAccountKeyTransfer = async (
     [8, uuidToBytes(input.serverProfileId)],
     [9, input.userId],
     [10, input.deviceId],
-    [17, randomId()],
+    [17, preSeal.get(17) as CborValue],
     [25, uuidToBytes(input.recipientDeviceId)],
     [32, input.createdAtMs],
     [33, input.expiresAtMs],
@@ -620,6 +816,7 @@ export const createAccountKeyTransfer = async (
     [48, ciphertextHash],
     [71, plaintextLength],
     [72, ciphertextLength],
+    [88, ACCOUNT_KEY_WRAPPER_FORMAT_VERSION],
     [95, transferId],
   ]);
   const unsigned = protocolObjectFromFields(ACCOUNT_KEY_TRANSFER_KIND, fields);
@@ -659,7 +856,19 @@ export const parseAccountKeyTransfer = (
 export const openAccountKeyTransfer = async (
   transfer: AccountKeyTransfer,
   recipientX25519PrivateKey: CryptoKey,
+  verification: Readonly<{
+    readonly trustedKeys: import("./verification").AccountKeyTrustedKeys;
+    readonly context: AccountKeyVerificationContext & {
+      readonly ownDeviceId: Uint8Array;
+      readonly nowMs: number;
+    };
+  }>,
 ): Promise<Uint8Array> => {
+  await verifyAccountKeyTransfer(
+    transfer.object,
+    verification.trustedKeys,
+    verification.context,
+  );
   const object = transfer.object;
   const requiredField = (key: number): CborValue => {
     const value = object.get(key);
@@ -679,7 +888,11 @@ export const openAccountKeyTransfer = async (
       [72, requiredField(72)],
     ]),
   );
-  const accountMasterKey = await open(envelope, recipientX25519PrivateKey);
+  const accountMasterKey = await open(
+    envelope,
+    recipientX25519PrivateKey,
+    associatedDataFor(object, ACCOUNT_KEY_TRANSFER_KIND),
+  );
   requireLength(accountMasterKey, 32, "account master key");
   return accountMasterKey;
 };

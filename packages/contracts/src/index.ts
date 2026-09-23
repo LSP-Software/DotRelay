@@ -58,6 +58,7 @@ export {
   type ProblemCode,
 } from "./errors";
 export {
+  ARGON2ID_POLICY,
   encodeProtocolObject,
   isSignedField,
   parseProtocolObject,

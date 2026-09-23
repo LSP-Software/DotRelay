@@ -32,6 +32,24 @@ export {
   WRAPPER_TYPE,
   type WrapperType,
 } from "./account";
+export type {
+  Argon2KdfParams,
+  Argon2WorkerReply,
+  Argon2WorkerRequest,
+} from "./account/argon2-worker";
+export {
+  type AccountKeyTrustedKeys,
+  AccountKeyVerificationError,
+  verifyAccountKeyEnvelope,
+  verifyAccountKeyTransfer,
+  verifyAccountKeyWrapper,
+} from "./account/verification";
+export {
+  extractPasskeyPrfOutput,
+  type PasskeyAuthenticationResponse,
+  type PasskeyPrfPlatform,
+  passkeyPrfSupported,
+} from "./account/webauthn-prf";
 export * from "./contracts";
 export {
   createDeviceBootstrap,
