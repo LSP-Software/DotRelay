@@ -46,10 +46,15 @@ export {
   verifyAccountKeyWrapper,
 } from "./account/verification";
 export {
+  createPasskeyWithPrf,
   extractPasskeyPrfOutput,
-  type PasskeyAuthenticationResponse,
+  type PasskeyCredential,
+  PasskeyPrfError,
+  type PasskeyPrfErrorCode,
   type PasskeyPrfPlatform,
+  type PrfExtensionResult,
   passkeyPrfSupported,
+  runPasskeyAssertion,
 } from "./account/webauthn-prf";
 export * from "./contracts";
 export {

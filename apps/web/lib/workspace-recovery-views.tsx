@@ -105,6 +105,8 @@ export type RecoveryAreaProps = Readonly<{
   readonly onRotateRecoveryCode: () => void;
   readonly onAddEncryptionPassword: () => void;
   readonly onRemovePasswordDialogOpen: (open: boolean) => void;
+  readonly onAddPasskey: () => void;
+  readonly onRemovePasskeyDialogOpen: (open: boolean) => void;
   readonly onSendTransfer: () => void;
 }>;
 
@@ -142,7 +144,9 @@ export const RecoveryArea = ({
   onAddPasswordOpen,
   onRotateRecoveryCode,
   onAddEncryptionPassword,
+  onAddPasskey,
   onRemovePasswordDialogOpen,
+  onRemovePasskeyDialogOpen,
   onSendTransfer,
 }: RecoveryAreaProps) => {
   return (
@@ -533,10 +537,30 @@ export const RecoveryArea = ({
                           : "Not set up"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {passkeyAvailable
-                        ? "Unlock with a platform passkey when one exists."
-                        : "This browser can't use the passkey PRF; unlock with the code or password instead."}
+                    <TableCell>
+                      {recoveryWrappers.some(
+                        (wrapper) => wrapper.type === "passkey-prf",
+                      ) ? (
+                        <Button
+                          data-testid="remove-passkey"
+                          disabled={recoveryBusy}
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => onRemovePasskeyDialogOpen(true)}
+                        >
+                          Remove
+                        </Button>
+                      ) : (
+                        <Button
+                          data-testid="add-passkey"
+                          disabled={recoveryBusy || !passkeyAvailable}
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onAddPasskey()}
+                        >
+                          Add passkey
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 </TableBody>
@@ -765,6 +789,43 @@ export const RemovePasswordDialog = ({
           onClick={() => onConfirm()}
         >
           {busy ? "Removing…" : "Remove password"}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+);
+
+export type RemovePasskeyDialogProps = Readonly<{
+  readonly open: boolean;
+  readonly busy: boolean;
+  readonly onDialogOpen: (open: boolean) => void;
+  readonly onConfirm: () => void;
+}>;
+
+export const RemovePasskeyDialog = ({
+  open,
+  busy,
+  onDialogOpen,
+  onConfirm,
+}: RemovePasskeyDialogProps) => (
+  <Dialog onOpenChange={(open) => onDialogOpen(open)} open={open}>
+    <DialogContent data-testid="remove-passkey-dialog" role="alertdialog">
+      <DialogHeader>
+        <DialogTitle>Remove the passkey?</DialogTitle>
+        <DialogDescription>
+          The passkey will stop unlocking this account. Your recovery code stays
+          in place, and the account always keeps at least one recovery method.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+        <Button
+          data-testid="remove-passkey-confirm"
+          disabled={busy}
+          variant="destructive"
+          onClick={() => onConfirm()}
+        >
+          {busy ? "Removing…" : "Remove passkey"}
         </Button>
       </DialogFooter>
     </DialogContent>
