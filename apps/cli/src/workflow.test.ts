@@ -163,6 +163,8 @@ const accountKeyService = (
     readonly recoveryWrapper?: Readonly<{
       readonly wrapperId: string;
       readonly object: string;
+      readonly creatorDeviceId?: string;
+      readonly creatorPublicKey?: string;
     }>;
     readonly transfer?: Readonly<{
       readonly id: string;
@@ -188,6 +190,12 @@ const accountKeyService = (
                 wrapperId: seed.recoveryWrapper.wrapperId,
                 type: "recovery-code" as const,
                 object: seed.recoveryWrapper.object,
+                ...(seed.recoveryWrapper.creatorDeviceId
+                  ? { creatorDeviceId: seed.recoveryWrapper.creatorDeviceId }
+                  : {}),
+                ...(seed.recoveryWrapper.creatorPublicKey
+                  ? { creatorPublicKey: seed.recoveryWrapper.creatorPublicKey }
+                  : {}),
               },
             ]
           : [];
@@ -3547,10 +3555,14 @@ describe("protected CLI workflows", () => {
       accountMasterKey: amk,
       recoveryCode,
     });
+    const signingKey = runtime.bootstrap.keyMaterial.signingPublicKey;
+    if (!signingKey) throw new Error("Device signing public key is missing");
     const service = accountKeyService(runtime.admin, {
       recoveryWrapper: {
         wrapperId: fixture.recoveryWrapperId as string,
         object: fixture.recoveryWrapperObject as string,
+        creatorDeviceId: ids.device,
+        creatorPublicKey: bytesToHex(await exportSigningPublicKey(signingKey)),
       },
     });
     const recover = await run(

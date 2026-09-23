@@ -259,3 +259,78 @@ describe("webauthn prf extraction (R4)", () => {
     ).toBe(false);
   });
 });
+
+describe("cross-device account key opening", () => {
+  // A recovery code exists so a *different* Device can unlock the account:
+  // the wrapper's field 10 (deviceId) and 28 (userIdentityGeneration) are the
+  // creator Device's identity, bound into the signature and the seal-time AAD.
+  // The opener authenticates via the creator's trusted key and must pin only
+  // the shared profile/user identity — pinning the creator fields to the
+  // opener is the regression that broke device2 recover.
+  test("a second Device opens the creator's recovery wrapper via the creator's key", async () => {
+    const creator = await generateSigningKeyPair();
+    const opener = await generateSigningKeyPair();
+    const accountMasterKey = generateAccountMasterKey();
+    const recoveryCode = generateRecoveryCode();
+    const wrapper = await createAccountKeyWrapper(
+      baseInput(creator, accountMasterKey, {
+        type: "recoveryCode",
+        recoveryCode,
+      }),
+    );
+    // The opener pins only the shared identity fields and trusts the creator's
+    // key (as the API reports it via creatorPublicKey).
+    const verification = Object.freeze({
+      trustedKeys: Object.freeze({
+        keys: [await exportSigningPublicKey(creator.publicKey)],
+      }),
+      context: Object.freeze({
+        serverProfileId: uuidToBytes(SERVER_PROFILE_ID),
+        userId: USER_ID,
+      }),
+    });
+    const recovered = await unwrapAccountKeyWrapper(
+      parseAccountKeyWrapper(encode(wrapper.object)),
+      { recoveryCode },
+      verification,
+    );
+    expect(recovered).toEqual(accountMasterKey);
+  });
+
+  test("pinning the creator's device identity to the opener fails verification", async () => {
+    const creator = await generateSigningKeyPair();
+    const opener = await generateSigningKeyPair();
+    const accountMasterKey = generateAccountMasterKey();
+    const recoveryCode = generateRecoveryCode();
+    const wrapper = await createAccountKeyWrapper(
+      baseInput(creator, accountMasterKey, {
+        type: "recoveryCode",
+        recoveryCode,
+      }),
+    );
+    // The buggy shape: the opener pins its own deviceId/generation against
+    // fields that carry the creator's identity. The signature still validates
+    // (creator key is trusted), but the identity binding must reject.
+    const verification = Object.freeze({
+      trustedKeys: Object.freeze({
+        keys: [
+          await exportSigningPublicKey(creator.publicKey),
+          await exportSigningPublicKey(opener.publicKey),
+        ],
+      }),
+      context: Object.freeze({
+        serverProfileId: uuidToBytes(SERVER_PROFILE_ID),
+        userId: USER_ID,
+        deviceId: new Uint8Array(16).fill(0x77),
+        userIdentityGeneration: 99,
+      }),
+    });
+    await expect(
+      unwrapAccountKeyWrapper(
+        parseAccountKeyWrapper(encode(wrapper.object)),
+        { recoveryCode },
+        verification,
+      ),
+    ).rejects.toThrow("binding mismatch");
+  });
+});

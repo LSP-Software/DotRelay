@@ -1676,6 +1676,8 @@ type ActiveWrapper = Readonly<{
   readonly wrapperId: string;
   readonly type: "passkey-prf" | "password" | "recovery-code";
   readonly object: string;
+  readonly creatorDeviceId?: string;
+  readonly creatorPublicKey?: string;
 }>;
 
 const isActiveWrapper = (value: unknown): value is ActiveWrapper => {
@@ -1689,7 +1691,11 @@ const isActiveWrapper = (value: unknown): value is ActiveWrapper => {
       value.type === "password" ||
       value.type === "recovery-code") &&
     typeof object === "string" &&
-    object.length > 0
+    object.length > 0 &&
+    (value.creatorDeviceId === undefined ||
+      typeof value.creatorDeviceId === "string") &&
+    (value.creatorPublicKey === undefined ||
+      typeof value.creatorPublicKey === "string")
   );
 };
 
@@ -1825,6 +1831,11 @@ export const recoverAccountKey = async (
       const localSigningKey = await exportSigningPublicKey(
         authorized.keys.signingPublicKey as CryptoKey,
       );
+      // The wrapper is sealed and signed by the Device that created it, which
+      // may be a different Device than the one opening it with the code. The
+      // creator's identity fields (deviceId/userIdentityGeneration) are
+      // signature-authenticated, so pin only the shared profile/user identity
+      // and add the creator's key to the trust set when the API reports it.
       accountMasterKey = await unwrapAccountKeyWrapper(
         wrapper,
         { recoveryCode: code },
@@ -1832,12 +1843,11 @@ export const recoverAccountKey = async (
           trustedKeys: accountKeyTrustedKeys(
             authorized.boundary,
             localSigningKey,
+            entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
           ),
           context: {
             serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
             userId: uuidToBytes(authorized.userId),
-            deviceId: uuidToBytes(authorized.deviceId),
-            userIdentityGeneration: authorized.bundle.userIdentityGeneration,
           },
         },
       );
@@ -1902,8 +1912,9 @@ export const recoverAccountKey = async (
           context: {
             serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
             userId: uuidToBytes(authorized.userId),
-            deviceId: uuidToBytes(authorized.deviceId),
-            userIdentityGeneration: authorized.bundle.userIdentityGeneration,
+            // The transfer's deviceId/userIdentityGeneration are the sender's
+            // (signature-authenticated); the recipient pins only the binding to
+            // itself (field 25) and the expiry window.
             ownDeviceId: uuidToBytes(authorized.deviceId),
             nowMs: Date.now(),
           },
@@ -2361,8 +2372,8 @@ const loadWorkflowSession = async (
           context: {
             serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
             userId: bundle.userId,
-            deviceId: uuidToBytes(deviceId),
-            userIdentityGeneration: bundle.userIdentityGeneration,
+            // The envelope's deviceId/userIdentityGeneration are the creator
+            // Device's (signature-authenticated); do not pin them to the opener.
             envelopeType: envelope.envelopeType,
             projectId: envelope.projectId,
             projectEpoch: envelope.projectEpoch,
