@@ -6,7 +6,12 @@ import {
 } from "./classify-ui";
 import { CliInvocationError } from "./errors";
 import type { TerminalIo } from "./terminal";
-import { confirmAction, rewriteRegion, selectOption } from "./ui";
+import {
+  confirmAction,
+  readTerminalSecret,
+  rewriteRegion,
+  selectOption,
+} from "./ui";
 
 describe("CLI region rewrite", () => {
   test("never uses a full-screen clear", () => {
@@ -270,5 +275,119 @@ describe("confirmAction raw TTY", () => {
     expect(shown).toContain("Confirmed");
     expect(shown).not.toContain("\x1b[2J");
     expect(shown).not.toContain("\x1b[H");
+  });
+});
+
+const rawSecretTerminal = () => {
+  const input = new PassThrough() as PassThrough & {
+    isTTY?: boolean;
+    setRawMode?: (enabled: boolean) => void;
+  };
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  let written = "";
+  output.on("data", (chunk: string | Buffer) => {
+    written += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  });
+  return {
+    terminal: { input, output } as unknown as TerminalIo,
+    input,
+    outputText: async (): Promise<string> => {
+      await tick();
+      return written;
+    },
+  };
+};
+
+describe("readTerminalSecret raw TTY", () => {
+  test("returns the typed secret and masks the input", async () => {
+    const { terminal, input, outputText } = rawSecretTerminal();
+    const pending = readTerminalSecret("Recovery Code", { terminal });
+    input.write("K4ET-P7Q");
+    await tick();
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe("K4ET-P7Q");
+    const shown = await outputText();
+    expect(shown).toContain("Recovery Code:");
+    expect(shown).toContain("········");
+    expect(shown).not.toContain("K4ET-P7Q");
+  });
+
+  test("Backspace removes the last character", async () => {
+    const { terminal, input } = rawSecretTerminal();
+    const pending = readTerminalSecret("Recovery Code", { terminal });
+    input.write("ABC\u007f");
+    await tick();
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe("AB");
+  });
+
+  test("an empty secret is rejected", async () => {
+    const { terminal, input } = rawSecretTerminal();
+    const pending = readTerminalSecret("Recovery Code", { terminal });
+    input.write("\r");
+    input.end();
+    await expect(pending).rejects.toThrow("must not be empty");
+  });
+
+  test("Esc cancels the prompt", async () => {
+    const { terminal, input } = rawSecretTerminal();
+    const pending = readTerminalSecret("Recovery Code", { terminal });
+    input.write("\u001b");
+    input.end();
+    await expect(pending).rejects.toThrow(
+      new CliInvocationError("secret input cancelled"),
+    );
+  });
+
+  test("Ctrl+C cancels the prompt", async () => {
+    const { terminal, input } = rawSecretTerminal();
+    const pending = readTerminalSecret("Recovery Code", { terminal });
+    input.write("\u0003");
+    input.end();
+    await expect(pending).rejects.toThrow(
+      new CliInvocationError("secret input cancelled"),
+    );
+  });
+});
+
+describe("readTerminalSecret non-interactive channels", () => {
+  test("a non-TTY stdin line is read with an echo warning", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let written = "";
+    output.on("data", (chunk: string | Buffer) => {
+      written += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    });
+    const pending = readTerminalSecret("Recovery Code", {
+      terminal: { input, output } as unknown as TerminalIo,
+    });
+    input.write("K4ET-P7QN\n");
+    input.end();
+    expect(await pending).toBe("K4ET-P7QN");
+    expect(written).toContain("warning: stdin is not a terminal");
+  });
+
+  test("an embedding prompt callback supplies the secret", async () => {
+    const answer = await readTerminalSecret("Recovery Code", {
+      prompt: async () => "K4ET-P7QN",
+    });
+    expect(answer).toBe("K4ET-P7QN");
+  });
+
+  test("--no-input refuses to read a secret from the terminal", async () => {
+    await expect(
+      readTerminalSecret("Recovery Code", {
+        terminal: selectTerminal(),
+        noInput: true,
+      }),
+    ).rejects.toThrow(
+      new CliInvocationError(
+        "--no-input does not read secrets from the terminal; pass the value with a --*-file flag or pipe it to stdin",
+      ),
+    );
   });
 });

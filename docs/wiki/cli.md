@@ -255,15 +255,15 @@ signed request artifact to a second authorized installation and run `device appr
 The request contains public protocol objects only; the pending private bundle stays in encrypted
 local Device storage.
 
-Create a Recovery Kit with `device backup --output <path>`. The protected file contains the kit and
-the public key needed to verify its signed envelope. It is never printed in normal or JSON output.
-When replacing an existing path, the prior protected artifact is retained at `<path>.previous` so a
-failed publication cannot remove the last usable Recovery Kit.
-`device recover --from <path>` verifies the profile, User, envelope signature, decryption, fresh
-challenge proof, replacement keys, and certificate before sending the recovery request. Recovery
-requires no active Device on the Server Profile and uses `/api/v1/recovery/restore`; it never falls
-back to initial bootstrap. `--no-input` requires an explicit profile and all required handoff paths,
-and never answers a confirmation prompt on the user's behalf.
+Create a Recovery Code with `device backup`. The 13x4 code is printed once and is the only
+output; it unlocks the account's Account Master Key and is the only recovery path that works on
+a headless machine. A new code invalidates the previous one, so store it somewhere safe.
+`device recover` unlocks this Device from a Recovery Code or an Account Key Transfer. The
+Recovery Code is entered at a hidden prompt, piped on stdin, or read from `--recovery-code-file
+<path>` (a 0600 file); it is never placed on the command line and never sent to the Server
+Profile. Recovery uses the Server Profile's account-key routes and never falls back to initial
+bootstrap. `--no-input` requires an explicit profile and a `--recovery-code-file` or `--transfer`
+channel, and never answers a prompt on the user's behalf.
 
 The stable exit categories are invocation/configuration (2), incomplete export (3), unresolved
 conflict (4), cryptographic/integrity/compatibility (5), authentication/device/authorization (6),

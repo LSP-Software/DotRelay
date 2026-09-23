@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
   createAccountKeyEnvelope,
@@ -528,6 +528,15 @@ const setup = async (
   };
 };
 
+// R10: the packaged CLI never takes the Recovery Code in argv, so these
+// tests hand it over through a 0600 file, exactly like an automation caller.
+const writeCodeFile = async (code: string, name: string): Promise<string> => {
+  const path = `${import.meta.dir}/.tmp-workflow-code-${name}`;
+  await writeFile(path, code, { mode: 0o600 });
+  await chmod(path, 0o600);
+  return path;
+};
+
 afterEach(async () => {
   // The in-memory credential store is process-wide, so clear it to keep a
   // stored Account Master Key (or wrapping secret) from leaking across tests.
@@ -542,6 +551,7 @@ afterEach(async () => {
     await unlink(`${import.meta.dir}/${file}`).catch(() => undefined);
   for (const file of await readdir(import.meta.dir))
     if (
+      file.startsWith(".tmp-workflow-code-") ||
       file.startsWith(".tmp-workflow-git-") ||
       file.startsWith(".tmp-workflow-profile-") ||
       file.startsWith(".tmp-workflow-state-") ||
@@ -3570,8 +3580,8 @@ describe("protected CLI workflows", () => {
         "recover",
         "--profile",
         "relay",
-        "--recovery-code",
-        encodeRecoveryCode(recoveryCode),
+        "--recovery-code-file",
+        await writeCodeFile(encodeRecoveryCode(recoveryCode), "valid"),
         "--no-input",
         "--json",
       ],
@@ -3603,8 +3613,8 @@ describe("protected CLI workflows", () => {
         "recover",
         "--profile",
         "relay",
-        "--recovery-code",
-        "not-a-valid-code",
+        "--recovery-code-file",
+        await writeCodeFile("not-a-valid-code", "malformed"),
         "--no-input",
         "--json",
       ],
@@ -3645,8 +3655,8 @@ describe("protected CLI workflows", () => {
         "recover",
         "--profile",
         "relay",
-        "--recovery-code",
-        encodeRecoveryCode(wrongCode),
+        "--recovery-code-file",
+        await writeCodeFile(encodeRecoveryCode(wrongCode), "wrong"),
         "--no-input",
         "--json",
       ],
@@ -3676,8 +3686,8 @@ describe("protected CLI workflows", () => {
         "recover",
         "--profile",
         "relay",
-        "--recovery-code",
-        encodeRecoveryCode(code),
+        "--recovery-code-file",
+        await writeCodeFile(encodeRecoveryCode(code), "orphan"),
         "--no-input",
         "--json",
       ],

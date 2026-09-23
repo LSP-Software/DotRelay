@@ -296,6 +296,75 @@ export const confirmAction = async (
   );
   return parseConfirmAnswer(answer);
 };
+// Reads a secret from the terminal without echoing it. On a raw-mode TTY the
+// input is masked with dots; on a non-TTY stream one line is read from stdin
+// and a warning is printed because the shell may echo the value. An embedding
+// `prompt` callback supplies the secret directly.
+export const readTerminalSecret = async (
+  question: string,
+  options: Readonly<{
+    readonly terminal?: TerminalIo;
+    readonly prompt?: (question: string) => Promise<string>;
+    readonly noInput?: boolean;
+  }> = {},
+): Promise<string> => {
+  const { terminal } = options;
+  if (options.prompt) return options.prompt(question);
+  if (options.noInput)
+    throw new CliInvocationError(
+      "--no-input does not read secrets from the terminal; pass the value with a --*-file flag or pipe it to stdin",
+    );
+  const input = (terminal?.input ?? process.stdin) as ReadableRaw;
+  const output = terminal?.output ?? process.stderr;
+  if (supportsRawMode(input)) {
+    input.setEncoding?.("utf8");
+    input.setRawMode?.(true);
+    input.resume?.();
+    const written = rewriteRegion(output, 0, `${question}:`);
+    let buffer = "";
+    const render = (masked: string) =>
+      rewriteRegion(
+        output,
+        written,
+        buffer ? `${question}: ${masked}` : `${question}:`,
+      );
+    try {
+      for (;;) {
+        const key = await readRawKey(input);
+        if (key === "\u0003" || key === "\u001b")
+          throw new CliInvocationError("secret input cancelled");
+        if (key.startsWith("\u001b")) continue;
+        for (const ch of key) {
+          if (ch === "\r" || ch === "\n") {
+            if (buffer.length === 0)
+              throw new CliInvocationError(`${question} must not be empty`);
+            return buffer;
+          }
+          if (ch === "\u0008" || ch === "\u007f") {
+            if (buffer.length > 0) {
+              buffer = buffer.slice(0, -1);
+              render("·".repeat(buffer.length));
+            }
+            continue;
+          }
+          if (ch >= " " && ch <= "~") {
+            buffer += ch;
+            render("·".repeat(buffer.length));
+          }
+        }
+      }
+    } finally {
+      rewriteRegion(output, written, `${question}:`);
+      output.write("\x1b[0J\n");
+      input.setRawMode?.(false);
+      input.pause?.();
+    }
+  }
+  output.write(
+    "warning: stdin is not a terminal, so the secret may be echoed or logged by the calling process\n",
+  );
+  return (await readTerminalLine(question, terminal)).trim();
+};
 
 export type { TerminalIo } from "./terminal";
 export type { ReadableRaw };

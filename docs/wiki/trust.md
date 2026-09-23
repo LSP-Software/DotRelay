@@ -19,10 +19,13 @@ or plaintext that were already downloaded to a client.
 A Device for a client installation uses **`DeviceRepository.completeBootstrap`**. The User must have
 an authenticated session. CLI and browser are distinct Devices, so bootstrap may run again for this
 browser after the CLI is already enrolled. It commits a Device certificate protocol object and
-creates the Device as `ACTIVE` without a dual-control enrollment record.
+creates the Device as `ACTIVE` without a dual-control enrollment record. A
+session-bootstrapped Device is a fully active Device (ADR 0010): it satisfies the same
+`ACTIVE` lifecycle gate as an enrolled Device and may act on the User's behalf, including
+approving an enrollment that a different Device initiated.
 
-Dual-control enrollment remains the CLI handoff for adding a Device whose keys are generated on an
-already enrolled installation.
+Dual-control enrollment remains the CLI handoff for adding a Device whose keys are generated on
+an already enrolled installation; it is not a gate a bootstrap Device must pass.
 
 ## Dual-control enrollment
 
@@ -56,13 +59,15 @@ rules as Project administration.
 
 ## Recovery
 
-Users may store an encrypted **Recovery envelope** on the server via
-**`RecoveryRepository.replaceEnvelope`**, advancing `recoveryGeneration` by one and retiring prior
-envelopes. Recovery attempts are append-only audit rows keyed by challenge hash; they never store
-Recovery Kit bytes or plaintext.
+Users may store an encrypted **Account Master Key wrapper** of type `RECOVERY_CODE` on the
+server. Creating a wrapper publishes a one-time Recovery Code (a 13x4 code) that unlocks the
+Account Master Key; presenting the code exchanges it for an AMK recovery, and a new code
+invalidates the previous one. The server stores the encrypted wrapper and never the Recovery
+Code or the AMK plaintext.
 
-Recovery Kit generation, export, local proof, and identity rollover remain client responsibilities.
-The server enforces generation counters and refuses stale envelopes.
+Recovery Code generation, presentation, and key exchange are client and CLI responsibilities
+(ADR 0009). The server enforces one active recovery-code wrapper per User and refuses codes
+that do not match the stored wrapper.
 
 ## Epoch rotation
 
@@ -72,8 +77,8 @@ Stale expected epochs surface as reconciliation failures rather than silent rewr
 
 ## Security boundaries
 
-Trust repositories never persist private keys, Recovery Kit material, bearer tokens, plaintext, or
-decrypted Manifest content. Protocol objects store canonical bytes and SHA-384 digests only. Staged
+Trust repositories never persist private keys, Recovery Codes, AMK wrappers in plaintext, bearer
+tokens, or decrypted Manifest content. Protocol objects store canonical bytes and SHA-384 digests only. Staged
 objects expire after the configured operation lifetime and become visible only through explicit
 finalization.
 
