@@ -269,7 +269,6 @@ describe("cross-device account key opening", () => {
   // opener is the regression that broke device2 recover.
   test("a second Device opens the creator's recovery wrapper via the creator's key", async () => {
     const creator = await generateSigningKeyPair();
-    const opener = await generateSigningKeyPair();
     const accountMasterKey = generateAccountMasterKey();
     const recoveryCode = generateRecoveryCode();
     const wrapper = await createAccountKeyWrapper(

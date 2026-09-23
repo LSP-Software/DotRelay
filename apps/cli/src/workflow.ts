@@ -42,9 +42,6 @@ import {
   type SyncPageWire,
   UnreadableLaneError,
   unwrapAccountKeyWrapper,
-  verifyAccountKeyEnvelope,
-  verifyAccountKeyTransfer,
-  verifyAccountKeyWrapper,
   verifySignedProtocolObject,
 } from "@dotrelay/client";
 import {

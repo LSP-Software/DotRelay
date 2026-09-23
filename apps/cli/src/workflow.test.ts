@@ -29,7 +29,6 @@ import {
   parseProtocolObject,
   type SyncPageWire,
   sha384,
-  sha384ToHex,
   uuidToBytes,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";

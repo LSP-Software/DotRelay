@@ -203,8 +203,6 @@ const toBuffer = (input: Uint8Array): ArrayBuffer => {
   return copy.buffer;
 };
 
-const SIGNING_FIELDS = new Set([3, 4]);
-
 // Associated data bound into the AES-GCM tag. For a direct-GCM wrapper/envelope
 // this is the canonical object body minus the two signing fields and the sealed
 // ciphertext/digest pair (fields 47/48), so it binds salt, IV, identity, type
