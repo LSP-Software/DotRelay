@@ -401,12 +401,60 @@ const installRecoveryRoutes = async (
   });
   // The browser seals its choice of the project's epoch key into an envelope
   // it publishes here; capturing the object is how the test learns the key a
-  // browser-chosen journey will use to read existing content.
+  // browser-chosen journey will use to read existing content. A User Value
+  // Key envelope is a different object: the first publish wins, and a later
+  // one is the same conflict the service returns so the page opens that key
+  // instead of sealing later values to a second key.
+  let userValueEnvelope: {
+    readonly object: string;
+    readonly ownerUserId: string;
+    readonly valueGeneration: string;
+  } | null = null;
   await page.route("**/api/v1/account-keys/envelopes", (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        json: {
+          envelopes: userValueEnvelope
+            ? [
+                {
+                  envelopeType: "user-value-key",
+                  object: userValueEnvelope.object,
+                  ownerUserId: userValueEnvelope.ownerUserId,
+                  valueGeneration: userValueEnvelope.valueGeneration,
+                },
+              ]
+            : [],
+        },
+      });
+    }
     const body = (route.request().postDataJSON() ?? {}) as {
       readonly object?: string;
+      readonly projectId?: string;
+      readonly ownerUserId?: string;
+      readonly valueGeneration?: string;
     };
-    if (typeof body.object === "string") scenario.envelopeB64 = body.object;
+    if (
+      typeof body.object === "string" &&
+      typeof body.ownerUserId === "string"
+    ) {
+      if (userValueEnvelope) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          json: { code: "state_conflict" },
+        });
+      }
+      userValueEnvelope = {
+        object: body.object,
+        ownerUserId: body.ownerUserId,
+        valueGeneration:
+          typeof body.valueGeneration === "string" ? body.valueGeneration : "1",
+      };
+    }
+    if (typeof body.object === "string" && typeof body.projectId === "string")
+      scenario.envelopeB64 = body.object;
     return route.fulfill({
       status: 201,
       contentType: "application/json",
