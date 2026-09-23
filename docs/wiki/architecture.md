@@ -45,9 +45,9 @@ fields are capped at `256` bytes. Enum registries cover mutation `1–5`, lane s
 
 Hard ceilings are: canonical object/descriptor `64 MiB`, administrative JSON `256 KiB`, CBOR
 depth `12`, staging `256` objects/`16 MiB` with a `24-hour` default TTL, synchronization `256`
-objects/`16 MiB`, grant plaintext `4 KiB`, Recovery plaintext `16 KiB`, `10,000` Manifest
-variables, and `100,000` current lane commitments. Variable names are `256` ASCII bytes,
-descriptions `16 KiB` validated UTF-8, and Values `1 MiB` validated UTF-8.
+objects/`16 MiB`, grant plaintext `4 KiB`, `10,000` Manifest variables, and `100,000` current
+lane commitments. Variable names are `256` ASCII bytes, descriptions `16 KiB` validated UTF-8,
+and Values `1 MiB` validated UTF-8.
 
 The public problem registry is in `packages/contracts/src/errors.ts`. It preserves the stable
 status mapping: malformed requests and crypto objects `400`; authentication `401`; authorization

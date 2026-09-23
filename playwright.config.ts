@@ -1,14 +1,18 @@
 import { defineConfig } from "@playwright/test";
 
 const hostname = process.env.CI ? "127.0.0.1" : "localhost";
-const origin = `http://${hostname}:3000`;
+// An existing dev server on the default port may run different code (or live
+// mode without the fixture), so E2E_WEB_PORT can point the suite at a
+// dedicated instance; CI stays on the standard port.
+const port = process.env.E2E_WEB_PORT ?? "3000";
+const origin = `http://${hostname}:${port}`;
 
 export default defineConfig({
   testDir: "./apps/web/e2e",
   timeout: 30_000,
   expect: { timeout: 5_000 },
   webServer: {
-    command: `bun --cwd apps/web dev --hostname ${hostname}`,
+    command: `bun --cwd apps/web dev --hostname ${hostname} --port ${port}`,
     url: origin,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -8,8 +8,11 @@ import {
   createProtocolTransport,
   type DeviceBootstrap,
   type DeviceKeyMaterial,
+  extractPasskeyPrfOutput,
   loadDeviceKeyMaterial,
   openProjectEpochGrant,
+  parseAccountKeyWrapper,
+  passkeyPrfSupported,
   probeBrowserDeviceStorage,
   type RevisionSigningTrustEntry,
   uuidToBytes,
@@ -80,6 +83,33 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  type AccountKeyActor,
+  AccountKeyRequestError,
+  type AccountKeyTrustedKeys,
+  type AccountKeyVerificationContext,
+  type AccountKeyWrapperEntry,
+  acceptAccountKeyTransfer,
+  accountKeyTrustedKeys,
+  accountKeyVerificationContext,
+  fromBase64 as akFromBase64,
+  createAccountKeyEnvelope,
+  createAccountKeyTransfer,
+  createAccountKeyWrapper,
+  encodeRecoveryCode,
+  fetchAccountKeyWrappers,
+  generateAccountMasterKey,
+  generateRecoveryCode,
+  openAccountKeyTransferForDevice,
+  openProjectEpochEnvelope,
+  publishAccountKeyEnvelope,
+  publishAccountKeyWrapper,
+  revokeAccountKeyWrapper,
+  stageAccountKeyTransfer,
+  unlockWithPasskeyPrf,
+  unlockWithPassword,
+  unlockWithRecoveryCode,
+} from "@/lib/account-keys";
 import {
   probeBrowserLocalStorage,
   readStoredBrowserDeviceId,
@@ -380,6 +410,41 @@ const copyText = async (value: string) => {
   }
 };
 
+const asArrayBuffer = (input: Uint8Array): ArrayBuffer => {
+  const copy = new Uint8Array(input.byteLength);
+  copy.set(input);
+  return copy.buffer;
+};
+
+// Every unlock failure is reported with this one message: a wrong secret, a
+// retired code, and a tampered object are indistinguishable on purpose, so
+// the UI never leaks which check rejected the attempt.
+const UNLOCK_FAILURE =
+  "We couldn't unlock your account with that. Check the input and try again.";
+
+// The Argon2id worker source is fetched once per page load and handed to the
+// client's KDF at call time through the documented global. Without it the
+// client derives on the main thread, which blocks for seconds at the default
+// cost, so the cheap fetch always happens; a failed fetch falls back to the
+// main thread rather than breaking password unlock.
+const installArgon2Worker = () => {
+  const global = globalThis as {
+    __DOTRELAY_ARGON2_WORKER_SOURCE__?: string;
+  };
+  if (typeof global.__DOTRELAY_ARGON2_WORKER_SOURCE__ === "string") return;
+  void (async () => {
+    try {
+      const response = await fetch("/argon2-worker.js", {
+        cache: "force-cache",
+      });
+      if (!response.ok) return;
+      global.__DOTRELAY_ARGON2_WORKER_SOURCE__ = await response.text();
+    } catch {
+      // The main-thread fallback remains available.
+    }
+  })();
+};
+
 const NavLinks = ({
   onNavigate,
   onOpenProject,
@@ -588,6 +653,49 @@ export const WorkspaceShell = ({
   const [replacementDialogOpen, setReplacementDialogOpen] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [browserCrypto, setBrowserCrypto] = useState(true);
+  // In-browser Account Key recovery. The Account Master Key never reaches
+  // persistent storage on a browser device: policy keeps it in memory only,
+  // so an unlocked state lasts for this page session and the next visit
+  // starts locked again (unlock via Recovery Code, Encryption Password,
+  // passkey, or a transfer). A ref keeps the key bytes out of state: they
+  // must not re-render or churn the session-load effect, which re-runs on
+  // the generation counter instead.
+  const accountMasterKeyRef = useRef<Uint8Array | null>(null);
+  const [accountUnlocked, setAccountUnlocked] = useState(false);
+  const [recoveryGeneration, setRecoveryGeneration] = useState(0);
+  // The account's active Account Key Wrappers, listed by the service.
+  const [recoveryWrappers, setRecoveryWrappers] = useState<
+    readonly AccountKeyWrapperEntry[]
+  >([]);
+  // One in-flight recovery mutation at a time, so the area stays busy while
+  // a wrapper, envelope, or transfer commit lands.
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  // The Recovery Code shown exactly once after a setup or rotation publish.
+  // It is displayed in a dialog and never stored: the service holds the
+  // wrapper's ciphertext, and this browser holds only the in-memory key.
+  const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
+  const [recoveryCodeNote, setRecoveryCodeNote] = useState<string | null>(null);
+  const [unlockMethod, setUnlockMethod] = useState<
+    "recovery-code" | "password" | "passkey-prf" | "transfer"
+  >("recovery-code");
+  const [unlockInput, setUnlockInput] = useState("");
+  const [password, setPassword] = useState("");
+  const [addPassword, setAddPassword] = useState("");
+  const [addPasswordOpen, setAddPasswordOpen] = useState(false);
+  const [transferIdInput, setTransferIdInput] = useState("");
+  const [removePasswordDialogOpen, setRemovePasswordDialogOpen] =
+    useState(false);
+  const [transferTarget, setTransferTarget] = useState<string | null>(null);
+  // A transfer this browser offered to a peer Device, with the id and expiry
+  // the receiver needs before the transfer lapses.
+  const [sentTransfer, setSentTransfer] = useState<Readonly<{
+    readonly transferId: string;
+    readonly expiresAt: string;
+    readonly recipientDeviceId: string;
+  }> | null>(null);
+  const passkeyAvailable = passkeyPrfSupported();
   // Pending enrollment identity (keys + operation id) retained across retries
   // so a storage failure after the Server Profile created the Device cannot
   // be retried as a fresh, duplicate enrollment.
@@ -616,13 +724,31 @@ export const WorkspaceShell = ({
       !noCryptoPreview &&
       browserCrypto &&
       (protectedPreview || boundary.crypto.available);
+    // A browser that unlocked the Account Master Key in this session reads
+    // the project's current epoch key from the boundary's Account Key
+    // Envelope (see the session loader below), which the server's
+    // per-device grant tally does not count. The editor treats that
+    // combination as ready instead of stranding the user on "pending
+    // grants".
+    const envelopeReady =
+      accountUnlocked &&
+      !protectedPreview &&
+      !boundary.grantsReady &&
+      boundary.accountKeyEnvelope !== undefined &&
+      boundary.environment.projectId !== undefined;
     return {
       ...boundary,
       device: protectedPreview
         ? { active: true, label: "Active device" }
         : boundary.device,
-      grantsReady: protectedPreview ? true : boundary.grantsReady,
-      epochCurrent: protectedPreview ? true : boundary.epochCurrent,
+      grantsReady:
+        protectedPreview || boundary.grantsReady || envelopeReady
+          ? true
+          : boundary.grantsReady,
+      epochCurrent:
+        protectedPreview || boundary.epochCurrent || envelopeReady
+          ? true
+          : boundary.epochCurrent,
       rotationRequired: protectedPreview ? false : boundary.rotationRequired,
       crypto: cryptoAvailable
         ? { available: true }
@@ -631,7 +757,13 @@ export const WorkspaceShell = ({
             problemCode: "crypto_provider_unavailable" as const,
           },
     };
-  }, [boundary, browserCrypto, noCryptoPreview, protectedPreview]);
+  }, [
+    boundary,
+    browserCrypto,
+    noCryptoPreview,
+    protectedPreview,
+    accountUnlocked,
+  ]);
   // Trust is a browser-side decision: a pin this browser recorded for the
   // exact origin and server identity the boundary verified, or the explicit
   // development preview. It is never implied by the deployment alone.
@@ -810,6 +942,65 @@ export const WorkspaceShell = ({
   const refreshTeamAdministration = () => {
     setMembershipTick((tick) => tick + 1);
   };
+
+  // The account-key routes act for the signed-in User's active Device, so
+  // recovery state is derivable only when both exist.
+  const recoveryActor: AccountKeyActor | null =
+    apiOrigin && boundary.device.active && boundary.device.id
+      ? { origin: apiOrigin, deviceId: boundary.device.id }
+      : null;
+  const recoveryActorKey = recoveryActor?.deviceId ?? null;
+
+  // Keep the account's active wrappers listed by the service current: on
+  // reconnect, after each recovery mutation (generation), and whenever the
+  // area is opened so a long-idle tab doesn't act on a stale list.
+  // A refresh triggered by a recovery generation bump must not clear the
+  // alert the recovery handler just set (for example, a failed unlock);
+  // reconnect and view-driven refreshes keep clearing stale alerts.
+  const lastRecoveryGenerationRef = useRef(recoveryGeneration);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recoveryActor is derived from the depended-on keys (deviceId, api origin, device active) and is rebuilt each render
+  useEffect(() => {
+    const generationTriggered =
+      recoveryGeneration !== lastRecoveryGenerationRef.current;
+    lastRecoveryGenerationRef.current = recoveryGeneration;
+    if (
+      connection !== "online" ||
+      recoveryActorKey === null ||
+      !boundary.session.active
+    ) {
+      setRecoveryWrappers([]);
+      return;
+    }
+    const actor = recoveryActor as AccountKeyActor;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const wrappers = await fetchAccountKeyWrappers(actor);
+        if (cancelled) return;
+        setRecoveryWrappers(wrappers);
+        if (!generationTriggered) setRecoveryError(null);
+      } catch {
+        if (cancelled) return;
+        setRecoveryError(
+          "We couldn't load this account's recovery options. Retry, or check the connection.",
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    connection,
+    recoveryActorKey,
+    boundary.session.active,
+    recoveryGeneration,
+    view,
+  ]);
+
+  // The periodic boundary refresh also establishes the project's Account Key
+  // Envelope after an in-session unlock or rotation, so it re-runs on
+  // recovery generation changes too.
 
   // Sign out the account session. The session cookie is scoped to the API
   // origin (see apps/api/src/auth.ts), so the request goes there with
@@ -1007,6 +1198,638 @@ export const WorkspaceShell = ({
       setLifecycleError({ resource: "project", message: result.message });
     }
   };
+
+  // ---------------------------------------------------------------------
+  // In-browser Account Key recovery.
+  //
+  // Every mutation takes a caller-stable operationId that doubles as the
+  // Idempotency-Key, so retrying the same logical attempt replays the
+  // commit instead of double-publishing. A failed commit keeps the prior
+  // UI state and re-offers the action, so the user never sees a
+  // half-applied state.
+  // ---------------------------------------------------------------------
+
+  // The signature trust set for this workspace's account-key objects: the
+  // boundary's trust keys and devices, this Device's key, every peer
+  // Device, plus any creator key the service named on a listed wrapper.
+  const accountKeyVerification = (): Readonly<{
+    readonly trustedKeys: AccountKeyTrustedKeys;
+    readonly context: AccountKeyVerificationContext;
+  } | null> => {
+    const device = boundary.device;
+    if (
+      !boundary.session.userId ||
+      !boundary.profile.serverProfileId ||
+      !device.id ||
+      !device.signingPublicKey
+    )
+      return null;
+    try {
+      const localSigningKey = hexToBytes(device.signingPublicKey);
+      return Object.freeze({
+        trustedKeys: accountKeyTrustedKeys(
+          boundary,
+          localSigningKey,
+          recoveryWrappers.flatMap((entry) =>
+            entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
+          ),
+        ),
+        context: accountKeyVerificationContext(boundary),
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  // The stored Device's signing key, needed to create wrappers, envelopes,
+  // and transfers on this account's behalf.
+  const loadDeviceSigningKey = async (): Promise<CryptoKey | null> => {
+    const profile = boundary.profile;
+    const device = boundary.device;
+    if (!profile.serverProfileId || !device.id) return null;
+    const pin = {
+      serverProfileId: profile.serverProfileId,
+      origin: profile.origin,
+    };
+    try {
+      const bundle = await createBrowserDeviceStorage(pin).load({
+        pin,
+        deviceId: uuidToBytes(device.id),
+      });
+      return (await loadDeviceKeyMaterial(bundle)).signingPrivateKey;
+    } catch {
+      return null;
+    }
+  };
+
+  // Unlock the Account Master Key from one of the account's methods. Every
+  // failure collapses to the uniform message so the UI never reveals which
+  // check rejected the attempt; a success holds the key in memory for the
+  // page session and bumps the generation so the session loader re-derives
+  // the project's keys through the envelope path.
+  const unlockAccount = async (
+    method: "recovery-code" | "password" | "passkey-prf" | "transfer",
+    secret: string,
+  ) => {
+    const actor = recoveryActor;
+    const verification = accountKeyVerification();
+    if (!actor || !verification) {
+      setRecoveryError(
+        "This browser's device keys aren't available, so it can't verify that. Set up this browser first.",
+      );
+      return;
+    }
+    setRecoveryBusy(true);
+    setRecoveryError(null);
+    setRecoveryMessage(null);
+    try {
+      let accountMasterKey: Uint8Array;
+      if (method === "recovery-code" || method === "password") {
+        const entry = recoveryWrappers.find(
+          (wrapper) =>
+            wrapper.type ===
+            (method === "recovery-code" ? "recovery-code" : "password"),
+        );
+        if (!entry) throw new Error(UNLOCK_FAILURE);
+        accountMasterKey =
+          method === "recovery-code"
+            ? (await unlockWithRecoveryCode(entry, secret, verification))
+                .accountMasterKey
+            : (await unlockWithPassword(entry, secret, verification))
+                .accountMasterKey;
+      } else if (method === "passkey-prf") {
+        const entry = recoveryWrappers.find(
+          (wrapper) => wrapper.type === "passkey-prf",
+        );
+        if (!entry || !passkeyAvailable) throw new Error(UNLOCK_FAILURE);
+        try {
+          const parsed = parseAccountKeyWrapper(akFromBase64(entry.object));
+          const credentialId = parsed.credentialId;
+          const prfInput = parsed.prfInput;
+          if (!credentialId || !prfInput) throw new Error();
+          const credentials = globalThis.navigator.credentials;
+          if (!credentials?.get) throw new Error();
+          const challenge = globalThis.crypto.getRandomValues(
+            new Uint8Array(32),
+          );
+          // Shipped browsers implement the PRF extension inputs as
+          // `{ first }`; the DOM lib here types a newer spec proposal, so
+          // the extension input is passed through a cast to the runtime
+          // shape the platform actually honors.
+          const prfExtension = {
+            prf: { first: prfInput },
+          } as unknown as AuthenticationExtensionsClientInputs;
+          const assertion = await credentials.get({
+            publicKey: {
+              challenge: asArrayBuffer(challenge),
+              allowCredentials: [
+                {
+                  id: asArrayBuffer(credentialId),
+                  type: "public-key",
+                  transports: ["internal", "hybrid"],
+                },
+              ],
+              extensions: prfExtension,
+            },
+          });
+          const response = (
+            assertion as {
+              response?: { extensions?: { prf?: ArrayBuffer } };
+            }
+          ).response;
+          const prfOutput = extractPasskeyPrfOutput(response ?? {});
+          if (!prfOutput) throw new Error();
+          accountMasterKey = (
+            await unlockWithPasskeyPrf(entry, prfOutput, verification)
+          ).accountMasterKey;
+        } catch {
+          throw new Error(UNLOCK_FAILURE);
+        }
+      } else {
+        const accepted = await acceptAccountKeyTransfer(actor, secret.trim());
+        const material = await loadDeviceKeyMaterial(
+          await createBrowserDeviceStorage({
+            serverProfileId: boundary.profile.serverProfileId ?? "",
+            origin: boundary.profile.origin,
+          }).load({
+            pin: {
+              serverProfileId: boundary.profile.serverProfileId ?? "",
+              origin: boundary.profile.origin,
+            },
+            deviceId: uuidToBytes(boundary.device.id ?? ""),
+          }),
+        );
+        const opened = await openAccountKeyTransferForDevice(
+          accepted.object,
+          material.encryptionPrivateKey,
+          {
+            trustedKeys: verification.trustedKeys,
+            context: verification.context,
+            ownDeviceId: uuidToBytes(boundary.device.id ?? ""),
+            nowMs: Date.now(),
+          },
+        );
+        accountMasterKey = opened.accountMasterKey;
+      }
+      accountMasterKeyRef.current = accountMasterKey;
+      setAccountUnlocked(true);
+      setRecoveryMessage(
+        "This account is unlocked for this browser session. The key stays in memory and is gone when the tab closes; unlock it again next time with one of the methods below.",
+      );
+      setRecoveryGeneration((generation) => generation + 1);
+    } catch (error) {
+      setRecoveryError(
+        error instanceof AccountKeyRequestError &&
+          error.code === "state_conflict"
+          ? "That transfer expired or was already used. Ask the sender to create a new one."
+          : error instanceof Error && error.message === UNLOCK_FAILURE
+            ? UNLOCK_FAILURE
+            : "We couldn't unlock the account. Try again.",
+      );
+      setUnlockInput("");
+      setPassword("");
+      setTransferIdInput("");
+    } finally {
+      setRecoveryBusy(false);
+      setRecoveryGeneration((generation) => generation + 1);
+    }
+  };
+
+  // Set up the account on this browser: generate the Account Master Key in
+  // memory, publish its first wrapper (a Recovery Code, shown exactly once
+  // and never stored), and, when a Project is open, make sure the
+  // Project's current epoch key is reachable from the key.
+  const setupAccountRecovery = () => {
+    const actor = recoveryActor;
+    if (!actor || !boundary.session.userId) {
+      setRecoveryError("Sign in before setting up recovery.");
+      return;
+    }
+    void (async () => {
+      const verification = accountKeyVerification();
+      const signingPrivateKey = await loadDeviceSigningKey();
+      if (!verification || !signingPrivateKey) {
+        setRecoveryError(
+          "This browser's device keys aren't available, so it can't protect your account. Set up this browser first.",
+        );
+        return;
+      }
+      setRecoveryBusy(true);
+      setRecoveryError(null);
+      setRecoveryMessage(null);
+      try {
+        const accountMasterKey = await generateAccountMasterKey();
+        accountMasterKeyRef.current = accountMasterKey;
+        const recoveryCode = await generateRecoveryCode();
+        const profile = boundary.profile;
+        const device = boundary.device;
+        const pin = {
+          serverProfileId: profile.serverProfileId ?? "",
+          origin: profile.origin,
+        };
+        const bundle = await createBrowserDeviceStorage(pin).load({
+          pin,
+          deviceId: uuidToBytes(device.id ?? ""),
+        });
+        const wrapper = await createAccountKeyWrapper({
+          serverProfileId: profile.serverProfileId ?? "",
+          userId: bundle.userId,
+          deviceId: uuidToBytes(device.id ?? ""),
+          userIdentityGeneration: bundle.userIdentityGeneration,
+          createdAtMs: Date.now(),
+          accountMasterKey,
+          signingPrivateKey,
+          kind: { type: "recoveryCode", recoveryCode },
+        });
+        await publishAccountKeyWrapper(
+          actor,
+          globalThis.crypto.randomUUID(),
+          wrapper,
+          String(bundle.userIdentityGeneration),
+        );
+        const environment = boundary.environment;
+        if (environment.projectId) {
+          // A peer that already holds the current epoch grant owns the
+          // real key; self-minting here would seal this account to a
+          // fresh random key that can never decrypt pre-existing content
+          // and would block the peer re-share, so it is skipped.
+          const peerHoldsEpochKey = (boundary.peerDevices ?? []).some(
+            (peer) => peer.hasEpochGrant,
+          );
+          const existingEnvelope =
+            (await openProjectEpochEnvelope(
+              boundary.accountKeyEnvelope,
+              accountMasterKey,
+              {
+                trustedKeys: verification.trustedKeys,
+                context: verification.context,
+                projectId: environment.projectId,
+                projectEpoch: Number(environment.projectEpoch ?? 1),
+              },
+            )) ?? null;
+          if (
+            !boundary.grantsReady &&
+            !peerHoldsEpochKey &&
+            existingEnvelope === null
+          ) {
+            const epochKey = globalThis.crypto.getRandomValues(
+              new Uint8Array(32),
+            );
+            const envelope = await createAccountKeyEnvelope({
+              serverProfileId: profile.serverProfileId ?? "",
+              userId: bundle.userId,
+              deviceId: uuidToBytes(device.id ?? ""),
+              createdAtMs: Date.now(),
+              accountMasterKey,
+              signingPrivateKey,
+              kind: {
+                type: "projectEpochKey",
+                projectId: uuidToBytes(environment.projectId),
+                projectEpoch: Number(environment.projectEpoch ?? 1),
+                contentKey: epochKey,
+              },
+            });
+            await publishAccountKeyEnvelope(
+              actor,
+              globalThis.crypto.randomUUID(),
+              envelope,
+              {
+                envelopeType: "PROJECT_EPOCH_KEY",
+                projectId: environment.projectId,
+                projectEpoch: Number(environment.projectEpoch ?? 1),
+              },
+            );
+          }
+        }
+        setAccountUnlocked(true);
+        setRecoveryMessage(
+          "Recovery is on. This browser keeps the account's key in memory for this session only; the next visit unlocks it again with the code or another method below.",
+        );
+        setRecoveryCode(encodeRecoveryCode(recoveryCode));
+        setRecoveryCodeNote(
+          "This code is shown once and is never stored in this browser. Save it somewhere only you can read it: if you lose it and every other recovery method, your account's content becomes unrecoverable.",
+        );
+      } catch (error) {
+        setRecoveryError(
+          error instanceof Error && error.message
+            ? error.message
+            : "We couldn't set up recovery. Try again.",
+        );
+      } finally {
+        setRecoveryBusy(false);
+        setRecoveryGeneration((generation) => generation + 1);
+      }
+    })();
+  };
+
+  // Rotate the Recovery Code: the new code is shown once, and publishing
+  // its wrapper retires the account's previous active one, so the old code
+  // stops working the moment the commit lands.
+  const rotateRecoveryCode = () => {
+    const actor = recoveryActor;
+    if (!actor) {
+      setRecoveryError(
+        "This browser can't change the account's recovery options.",
+      );
+      return;
+    }
+    void (async () => {
+      const verification = accountKeyVerification();
+      const signingPrivateKey = await loadDeviceSigningKey();
+      if (!verification || !signingPrivateKey) {
+        setRecoveryError(
+          "This browser's device keys aren't available, so it can't rotate the code.",
+        );
+        return;
+      }
+      setRecoveryBusy(true);
+      setRecoveryError(null);
+      setRecoveryMessage(null);
+      try {
+        const accountMasterKey = accountMasterKeyRef.current;
+        if (!accountMasterKey) throw new Error(UNLOCK_FAILURE);
+        const profile = boundary.profile;
+        const device = boundary.device;
+        const pin = {
+          serverProfileId: profile.serverProfileId ?? "",
+          origin: profile.origin,
+        };
+        const bundle = await createBrowserDeviceStorage(pin).load({
+          pin,
+          deviceId: uuidToBytes(device.id ?? ""),
+        });
+        const recoveryCode = await generateRecoveryCode();
+        const wrapper = await createAccountKeyWrapper({
+          serverProfileId: profile.serverProfileId ?? "",
+          userId: bundle.userId,
+          deviceId: uuidToBytes(device.id ?? ""),
+          userIdentityGeneration: bundle.userIdentityGeneration,
+          createdAtMs: Date.now(),
+          accountMasterKey,
+          signingPrivateKey,
+          kind: { type: "recoveryCode", recoveryCode },
+        });
+        await publishAccountKeyWrapper(
+          actor,
+          globalThis.crypto.randomUUID(),
+          wrapper,
+          String(bundle.userIdentityGeneration),
+        );
+        setRecoveryCode(encodeRecoveryCode(recoveryCode));
+        setRecoveryCodeNote(
+          "The old code no longer works. This code is shown once and is never stored; save it somewhere safe.",
+        );
+        setRecoveryMessage("Your recovery code was rotated.");
+      } catch (error) {
+        setRecoveryError(
+          error instanceof Error && error.message
+            ? error.message
+            : "The rotation didn't complete. The old code still works.",
+        );
+      } finally {
+        setRecoveryBusy(false);
+        setRecoveryGeneration((generation) => generation + 1);
+      }
+    })();
+  };
+
+  const addEncryptionPassword = () => {
+    const actor = recoveryActor;
+    if (!actor) {
+      setRecoveryError(
+        "This browser can't change the account's recovery options.",
+      );
+      return;
+    }
+    void (async () => {
+      const verification = accountKeyVerification();
+      const signingPrivateKey = await loadDeviceSigningKey();
+      const accountMasterKey = accountMasterKeyRef.current;
+      if (!verification || !signingPrivateKey || !accountMasterKey) {
+        setRecoveryError(
+          "Unlock the account in this browser first, then add an encryption password.",
+        );
+        return;
+      }
+      if (addPassword.length < 8) {
+        setRecoveryError(
+          "The encryption password needs at least 8 characters.",
+        );
+        return;
+      }
+      setRecoveryBusy(true);
+      setRecoveryError(null);
+      setRecoveryMessage(null);
+      try {
+        const profile = boundary.profile;
+        const device = boundary.device;
+        const pin = {
+          serverProfileId: profile.serverProfileId ?? "",
+          origin: profile.origin,
+        };
+        const bundle = await createBrowserDeviceStorage(pin).load({
+          pin,
+          deviceId: uuidToBytes(device.id ?? ""),
+        });
+        const wrapper = await createAccountKeyWrapper({
+          serverProfileId: profile.serverProfileId ?? "",
+          userId: bundle.userId,
+          deviceId: uuidToBytes(device.id ?? ""),
+          userIdentityGeneration: bundle.userIdentityGeneration,
+          createdAtMs: Date.now(),
+          accountMasterKey,
+          signingPrivateKey,
+          kind: {
+            type: "password",
+            password: new TextEncoder().encode(addPassword),
+          },
+        });
+        await publishAccountKeyWrapper(
+          actor,
+          globalThis.crypto.randomUUID(),
+          wrapper,
+          String(bundle.userIdentityGeneration),
+        );
+        setAddPassword("");
+        setAddPasswordOpen(false);
+        setRecoveryMessage(
+          "You can now unlock this account with the encryption password, next to your recovery code.",
+        );
+      } catch (error) {
+        setRecoveryError(
+          error instanceof Error && error.message
+            ? error.message
+            : "The password wasn't added. Try again.",
+        );
+      } finally {
+        setRecoveryBusy(false);
+        setRecoveryGeneration((generation) => generation + 1);
+      }
+    })();
+  };
+
+  const removeEncryptionPassword = () => {
+    const actor = recoveryActor;
+    const entry = recoveryWrappers.find(
+      (wrapper) => wrapper.type === "password",
+    );
+    if (!actor || !entry) return;
+    void (async () => {
+      setRecoveryBusy(true);
+      setRecoveryError(null);
+      setRecoveryMessage(null);
+      try {
+        await revokeAccountKeyWrapper(
+          actor,
+          globalThis.crypto.randomUUID(),
+          entry.wrapperId,
+        );
+        setRemovePasswordDialogOpen(false);
+        setRecoveryMessage(
+          "The encryption password no longer unlocks this account. Your recovery code still works.",
+        );
+      } catch (error) {
+        setRecoveryError(
+          error instanceof AccountKeyRequestError &&
+            error.code === "state_conflict"
+            ? "The account keeps at least one recovery method, so the server refused to remove this one. Add another method first, then try again."
+            : "The password wasn't removed. Try again.",
+        );
+      } finally {
+        setRecoveryBusy(false);
+        setRecoveryGeneration((generation) => generation + 1);
+      }
+    })();
+  };
+
+  // Hand this account's key to one of the User's other Devices: sealed to
+  // the target's encryption key and staged as a one-time transfer the
+  // target redeems before it expires. The key stays on this browser, so a
+  // transfer is an addition, not a move.
+  const sendAccountKeyTransfer = () => {
+    const actor = recoveryActor;
+    const target = boundary.peerDevices?.find(
+      (peer) => peer.id === transferTarget,
+    );
+    const accountMasterKey = accountMasterKeyRef.current;
+    if (!actor || !target || !accountMasterKey) {
+      setRecoveryError(
+        "Unlock the account in this browser and choose one of its devices first.",
+      );
+      return;
+    }
+    void (async () => {
+      const verification = accountKeyVerification();
+      const signingPrivateKey = await loadDeviceSigningKey();
+      if (!verification || !signingPrivateKey) {
+        setRecoveryError(
+          "This browser's device keys aren't available, so it can't send a transfer.",
+        );
+        return;
+      }
+      setRecoveryBusy(true);
+      setRecoveryError(null);
+      setRecoveryMessage(null);
+      try {
+        const recipientPublicKey = await globalThis.crypto.subtle.importKey(
+          "raw",
+          asArrayBuffer(hexToBytes(target.encryptionPublicKey)),
+          { name: "X25519" },
+          false,
+          [],
+        );
+        const profile = boundary.profile;
+        const device = boundary.device;
+        const pin = {
+          serverProfileId: profile.serverProfileId ?? "",
+          origin: profile.origin,
+        };
+        const bundle = await createBrowserDeviceStorage(pin).load({
+          pin,
+          deviceId: uuidToBytes(device.id ?? ""),
+        });
+        // Transfers are short-lived by design: the receiver redeems it on
+        // its own schedule, and an unclaimed one stops being redeemable
+        // once the window lapses.
+        const validityMs = 5 * 60 * 1000;
+        const transfer = await createAccountKeyTransfer({
+          serverProfileId: profile.serverProfileId ?? "",
+          userId: bundle.userId,
+          deviceId: uuidToBytes(device.id ?? ""),
+          createdAtMs: Date.now(),
+          expiresAtMs: Date.now() + validityMs,
+          accountMasterKey,
+          recipientDeviceId: target.id,
+          recipientEncryptionPublicKey: recipientPublicKey,
+          signingPrivateKey,
+        });
+        const staged = await stageAccountKeyTransfer(
+          actor,
+          globalThis.crypto.randomUUID(),
+          transfer,
+          {
+            recipientDeviceId: target.id,
+            expiresAt: new Date(Date.now() + validityMs).toISOString(),
+          },
+        );
+        setSentTransfer({
+          transferId: staged.transferId,
+          expiresAt: staged.expiresAt,
+          recipientDeviceId: staged.recipientDeviceId,
+        });
+        setTransferTarget(null);
+        setRecoveryMessage(
+          "The transfer is staged. The receiving device redeems it from its own Recovery area, or on the CLI with `dotrelay device recover --transfer <id>`.",
+        );
+      } catch (error) {
+        setRecoveryError(
+          error instanceof Error && error.message
+            ? error.message
+            : "The transfer wasn't sent. Try again.",
+        );
+      } finally {
+        setRecoveryBusy(false);
+        setRecoveryGeneration((generation) => generation + 1);
+      }
+    })();
+  };
+
+  // The unlock methods, in display order. A method is offered only when
+  // the account actually has it (except "transfer", which always can):
+  // surfacing a method whose wrapper doesn't exist would only end in the
+  // uniform failure.
+  const unlockMethods = [
+    {
+      id: "recovery-code" as const,
+      label: "Recovery code",
+      available: recoveryWrappers.some(
+        (wrapper) => wrapper.type === "recovery-code",
+      ),
+      note: undefined,
+    },
+    {
+      id: "password" as const,
+      label: "Encryption password",
+      available: recoveryWrappers.some(
+        (wrapper) => wrapper.type === "password",
+      ),
+      note: undefined,
+    },
+    {
+      id: "passkey-prf" as const,
+      label: "Passkey",
+      available:
+        passkeyAvailable &&
+        recoveryWrappers.some((wrapper) => wrapper.type === "passkey-prf"),
+      note: !passkeyAvailable ? "PRF not supported in this browser" : undefined,
+    },
+    {
+      id: "transfer" as const,
+      label: "From another device",
+      available: true,
+      note: undefined,
+    },
+  ];
 
   const setupAction = nextSetupAction({
     sessionActive: displayBoundary.session.active,
@@ -1370,6 +2193,10 @@ export const WorkspaceShell = ({
     return () => window.removeEventListener("beforeunload", guardUnload);
   }, []);
 
+  useEffect(() => {
+    installArgon2Worker();
+  }, []);
+
   const viewFallback = useCallback(
     (hasProject: boolean): WorkspaceView =>
       hasProject || preview === "protected" ? "environment" : "projects",
@@ -1554,6 +2381,7 @@ export const WorkspaceShell = ({
 
   const requestRetry = () => reconnectNowRef.current?.();
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: accountUnlocked mirrors accountMasterKeyRef, which the effect reads; recoveryGeneration is re-run state
   useEffect(() => {
     let cancelled = false;
     let generation = 0;
@@ -1592,6 +2420,84 @@ export const WorkspaceShell = ({
         if (resolvedJson !== boundaryJsonRef.current) {
           boundaryJsonRef.current = resolvedJson;
           setBoundary(resolved);
+        }
+        // A plain refresh (no Device actor) still establishes the
+        // Project Epoch Key when the account is unlocked in this session
+        // and no Device holds the current epoch's key: the envelope is the
+        // only path by which the in-memory key reaches the server. A
+        // failure here must not take the boundary offline.
+        try {
+          if (
+            storedId === null &&
+            accountMasterKeyRef.current &&
+            resolved.connection === "online" &&
+            !resolved.grantsReady &&
+            !(resolved.peerDevices ?? []).some((peer) => peer.hasEpochGrant) &&
+            resolved.environment.projectId
+          ) {
+            const environment = resolved.environment;
+            const verification = accountKeyVerification();
+            const signingPrivateKey = await loadDeviceSigningKey();
+            if (
+              verification &&
+              signingPrivateKey &&
+              resolved.profile.serverProfileId &&
+              resolved.device.id &&
+              environment.projectId
+            ) {
+              const bundle = await createBrowserDeviceStorage({
+                serverProfileId: resolved.profile.serverProfileId,
+                origin: resolved.profile.origin,
+              }).load({
+                pin: {
+                  serverProfileId: resolved.profile.serverProfileId,
+                  origin: resolved.profile.origin,
+                },
+                deviceId: uuidToBytes(resolved.device.id),
+              });
+              const projectEpoch = Number(environment.projectEpoch ?? 1);
+              const epochKey = globalThis.crypto.getRandomValues(
+                new Uint8Array(32),
+              );
+              const envelope = await createAccountKeyEnvelope({
+                serverProfileId: resolved.profile.serverProfileId,
+                userId: bundle.userId,
+                deviceId: uuidToBytes(resolved.device.id),
+                createdAtMs: Date.now(),
+                accountMasterKey: accountMasterKeyRef.current,
+                signingPrivateKey,
+                kind: {
+                  type: "projectEpochKey",
+                  projectId: uuidToBytes(environment.projectId),
+                  projectEpoch,
+                  contentKey: epochKey,
+                },
+              });
+              try {
+                await publishAccountKeyEnvelope(
+                  {
+                    origin: apiOrigin ?? resolved.profile.origin,
+                    deviceId: resolved.device.id,
+                  },
+                  globalThis.crypto.randomUUID(),
+                  envelope,
+                  {
+                    envelopeType: "PROJECT_EPOCH_KEY",
+                    projectId: environment.projectId,
+                    projectEpoch,
+                  },
+                );
+              } catch {
+                // A refusal (for example the peer holds the key in the
+                // meantime) leaves the prior state in place; the next
+                // refresh rechecks.
+              }
+            }
+          }
+        } catch {
+          // Storage or key material that is missing on this browser
+          // can't be repaired from a refresh; the actor-bound paths
+          // surface those to the user instead.
         }
         if (!storedId) {
           removeSessionByKey(
@@ -1639,7 +2545,14 @@ export const WorkspaceShell = ({
       reconnectNowRef.current = null;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [profileId, teamId, projectId, environmentId, removeSessionByKey]);
+  }, [
+    profileId,
+    teamId,
+    projectId,
+    environmentId,
+    removeSessionByKey,
+    recoveryGeneration,
+  ]);
 
   // Bound the open-ended loading state: a healthy load of a profile resolves
   // in well under a second, so if it is still unverified after the stall
@@ -1656,6 +2569,7 @@ export const WorkspaceShell = ({
     return () => clearTimeout(timer);
   }, [connection, verifiedAt, profileId]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recoveryActor and the verification helpers are derived from the depended-on boundary keys and read fresh, so each boundary commit already re-runs the loader with current values
   useEffect(() => {
     let cancelled = false;
     const targetKey = environmentContextKey(
@@ -1778,6 +2692,93 @@ export const WorkspaceShell = ({
             sharedValueSecret = undefined;
           }
         }
+        // A session that unlocked the Account Master Key in this browser
+        // (setup or unlock in the Recovery area) reads the project's
+        // current epoch key from the boundary's Account Key Envelope, so a
+        // Device without a direct grant still decrypts pre-existing
+        // content. A mismatch or verification failure leaves the secret
+        // unset: the session then degrades exactly like a Device that
+        // simply lacks the key, and the setup action names the fix.
+        if (
+          sharedValueSecret === undefined &&
+          boundary.accountKeyEnvelope &&
+          accountMasterKeyRef.current &&
+          boundary.device.signingPublicKey
+        ) {
+          const verification = accountKeyVerification();
+          if (verification) {
+            const projectEpoch = Number(environment.projectEpoch ?? 1);
+            const envelopeKey = await openProjectEpochEnvelope(
+              boundary.accountKeyEnvelope,
+              accountMasterKeyRef.current,
+              {
+                trustedKeys: verification.trustedKeys,
+                context: verification.context,
+                projectId: environment.projectId,
+                projectEpoch,
+              },
+            );
+            if (envelopeKey) sharedValueSecret = envelopeKey;
+          }
+        }
+        // The last-resort self-mint, mirroring the CLI: only when the
+        // account key is unlocked, no Device holds this epoch's key, and
+        // no peer holds one — otherwise a fresh random key could never
+        // decrypt pre-existing content and would block the peer re-share.
+        if (
+          sharedValueSecret === undefined &&
+          accountMasterKeyRef.current &&
+          !boundary.grantsReady &&
+          !(boundary.peerDevices ?? []).some((peer) => peer.hasEpochGrant)
+        ) {
+          const actor = recoveryActor;
+          const signingPrivateKey = await loadDeviceSigningKey();
+          const verification = accountKeyVerification();
+          if (
+            actor &&
+            signingPrivateKey &&
+            verification &&
+            environment.projectId
+          ) {
+            const pin = {
+              serverProfileId: profile.serverProfileId,
+              origin: profile.origin,
+            };
+            const bundle = await createBrowserDeviceStorage(pin).load({
+              pin,
+              deviceId: uuidToBytes(device.id),
+            });
+            const projectEpoch = Number(environment.projectEpoch ?? 1);
+            const epochKey = globalThis.crypto.getRandomValues(
+              new Uint8Array(32),
+            );
+            const envelope = await createAccountKeyEnvelope({
+              serverProfileId: profile.serverProfileId,
+              userId: bundle.userId,
+              deviceId: uuidToBytes(device.id),
+              createdAtMs: Date.now(),
+              accountMasterKey: accountMasterKeyRef.current,
+              signingPrivateKey,
+              kind: {
+                type: "projectEpochKey",
+                projectId: uuidToBytes(environment.projectId),
+                projectEpoch,
+                contentKey: epochKey,
+              },
+            });
+            await publishAccountKeyEnvelope(
+              actor,
+              globalThis.crypto.randomUUID(),
+              envelope,
+              {
+                envelopeType: "PROJECT_EPOCH_KEY",
+                projectId: environment.projectId,
+                projectEpoch,
+              },
+            );
+            sharedValueSecret = epochKey;
+          }
+        }
         const session = createEnvironmentProtocolSession({
           context,
           transport,
@@ -1815,6 +2816,10 @@ export const WorkspaceShell = ({
     return () => {
       cancelled = true;
     };
+    // The Account Master Key lives in a ref: an in-session unlock or
+    // rotation (recoveryGeneration) re-derives the project's shared value
+    // secret through the envelope, so the loader runs whenever that state
+    // changes.
   }, [
     boundary,
     profileId,
@@ -1822,6 +2827,8 @@ export const WorkspaceShell = ({
     projectId,
     environmentId,
     removeSessionByKey,
+    accountUnlocked,
+    recoveryGeneration,
   ]);
 
   const provisionBrowserDevice = async () => {
@@ -2192,7 +3199,7 @@ export const WorkspaceShell = ({
           selectedTeam?.name ??
           "your team";
         setDeviceSetupMessage(
-          `This browser can't recover the project's current keys on its own. Run \`bun apps/cli/src/index.ts pull\` on another of your devices to hand the keys over, or recover the account's key with your recovery code. ${teamName}'s Owners and Admins can also rotate the project's keys.`,
+          `This browser can't recover the project's current keys on its own. Recover the account's key from the Recovery area, or have another of your devices run \`dotrelay device transfer\` to hand this browser the key${teamName !== "your team" ? `; ${teamName}'s Owners and Admins can also rotate the project's keys` : ""}.`,
         );
         return;
       }
@@ -2224,40 +3231,11 @@ export const WorkspaceShell = ({
       return;
     }
     if (editorSetupAction.id === "pending-grants") {
-      void (async () => {
-        setDeviceSetupInProgress(true);
-        try {
-          const storedId = boundary.profile.serverProfileId
-            ? readStoredBrowserDeviceId(
-                boundary.profile.origin,
-                boundary.profile.serverProfileId,
-              )
-            : null;
-          const nextBoundary = await fetchWorkspaceBoundary(profileId, {
-            ...(storedId ? { deviceId: storedId } : {}),
-            ...(selectedEnvironment?.id
-              ? { environmentId: selectedEnvironment.id }
-              : environmentId
-                ? { environmentId }
-                : {}),
-          });
-          if (nextBoundary.connection !== "online") {
-            setConnection("offline");
-            setDeviceSetupMessage("Couldn't refresh project access.");
-          } else {
-            commitBoundary(nextBoundary);
-            setDeviceSetupMessage(
-              nextBoundary.grantsReady
-                ? null
-                : "This browser doesn't have the project's keys yet. Run `bun apps/cli/src/index.ts pull` on this machine, then retry.",
-            );
-          }
-        } catch {
-          setDeviceSetupMessage("Couldn't refresh project access.");
-        } finally {
-          setDeviceSetupInProgress(false);
-        }
-      })();
+      // The fix lives in the Recovery area: unlock the account key there
+      // (recovery code, password, or a transfer from another Device) and
+      // the session reads the project's key from its Account Key Envelope.
+      setDeviceSetupMessage(null);
+      setView("recovery");
       return;
     }
     if (editorSetupAction.id === "crypto-unavailable") {
@@ -2276,6 +3254,23 @@ export const WorkspaceShell = ({
   };
 
   const resetWorkspaceContext = () => {
+    // The in-memory Account Master Key is bound to the User on the profile
+    // being left; a rebind must never carry it to another server.
+    accountMasterKeyRef.current = null;
+    setAccountUnlocked(false);
+    setRecoveryWrappers([]);
+    setRecoveryCode(null);
+    setRecoveryCodeNote(null);
+    setRecoveryMessage(null);
+    setRecoveryError(null);
+    setUnlockInput("");
+    setPassword("");
+    setAddPassword("");
+    setAddPasswordOpen(false);
+    setTransferIdInput("");
+    setTransferTarget(null);
+    setSentTransfer(null);
+    setRemovePasswordDialogOpen(false);
     setEnvironmentLifecycle("ACTIVE");
     setProjectLifecycle("ACTIVE");
     setLifecycleError(null);
@@ -3332,30 +4327,610 @@ export const WorkspaceShell = ({
               ) : null}
 
               {view === "recovery" ? (
-                <section id="recovery">
+                <section id="recovery" data-testid="recovery-area">
                   <h1 className="font-heading text-3xl font-semibold">
                     Recovery
                   </h1>
                   <p className="mt-2 max-w-2xl text-muted-foreground">
-                    If none of your devices are available, unlock your account's
-                    encryption key from the recovery code you saved when you set
-                    up your account, or from a transfer sent by another one of
-                    your devices.
+                    Your account's encryption key stays on your devices. If
+                    every device is lost, one of the recovery methods below
+                    unlocks it again.
                   </p>
-                  <Card className="mt-6">
-                    <CardHeader>
-                      <CardTitle>Use the CLI</CardTitle>
-                      <CardDescription>
-                        Recovery runs on your machine. Enter your recovery code
-                        after you've trusted this server; a headless machine can
-                        only recover with the code, since passkeys and the
-                        encryption password need a browser.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <CopyableCommand value="dotrelay device recover --recovery-code" />
-                    </CardContent>
-                  </Card>
+                  {recoveryError ? (
+                    <Alert
+                      className="mt-4 border-destructive/30 bg-destructive/10"
+                      role="alert"
+                    >
+                      <AlertTitle>Recovery needs attention</AlertTitle>
+                      <AlertDescription>{recoveryError}</AlertDescription>
+                    </Alert>
+                  ) : null}
+                  {recoveryMessage ? (
+                    <p
+                      className="mt-4 rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 text-sm text-primary"
+                      role="status"
+                    >
+                      {recoveryMessage}
+                    </p>
+                  ) : null}
+                  {!sessionActive ? (
+                    <Card className="mt-6" data-testid="recovery-signin">
+                      <CardHeader>
+                        <CardTitle>Sign in first</CardTitle>
+                        <CardDescription>
+                          Signing in with GitHub only identifies your account.
+                          It never decrypts anything: the values stay ciphertext
+                          on the server until a device unlocks the account.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardFooter>
+                        <a
+                          className="inline-flex h-8 items-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
+                          href="/sign-in"
+                        >
+                          Sign in
+                        </a>
+                      </CardFooter>
+                    </Card>
+                  ) : !boundary.device.active ? (
+                    <Card className="mt-6" data-testid="recovery-device-setup">
+                      <CardHeader>
+                        <CardTitle>Set up this browser</CardTitle>
+                        <CardDescription>
+                          Recovery methods act on this browser's Device, which
+                          doesn't exist yet. Set up this browser first; it takes
+                          a moment and stores its keys on this machine.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardFooter>
+                        <Button
+                          disabled={deviceSetupInProgress}
+                          onClick={() => void provisionBrowserDevice()}
+                        >
+                          {deviceSetupInProgress
+                            ? "Setting up…"
+                            : "Set up browser"}
+                        </Button>
+                      </CardFooter>
+                    </Card>
+                  ) : connection === "offline" ? (
+                    <Card className="mt-6" data-testid="recovery-offline">
+                      <CardHeader>
+                        <CardTitle>
+                          <span className="flex items-center gap-2">
+                            <WifiOff
+                              aria-hidden="true"
+                              className="size-4 text-amber-300"
+                            />
+                            Recovery needs a connection to this server
+                          </span>
+                        </CardTitle>
+                        <CardDescription>
+                          The service that keeps your account's recovery methods
+                          is unreachable right now. Nothing was changed.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardFooter>
+                        <Button
+                          disabled={recoveryBusy}
+                          onClick={() => requestRetry()}
+                        >
+                          Try again
+                        </Button>
+                      </CardFooter>
+                    </Card>
+                  ) : recoveryWrappers.length === 0 ? (
+                    <div data-testid="recovery-setup">
+                      <Card className="mt-6">
+                        <CardHeader>
+                          <CardTitle>
+                            <span className="flex items-center gap-2">
+                              <KeyRound
+                                aria-hidden="true"
+                                className="size-4 text-primary"
+                              />
+                              Protect this account
+                            </span>
+                          </CardTitle>
+                          <CardDescription>
+                            This account has no recovery methods yet. Setting up
+                            creates the account's key in this browser and a
+                            recovery code that can unlock it again if every
+                            device is lost.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3 text-sm text-muted-foreground">
+                          <p>
+                            Your values are stored as ciphertext on the server.
+                            Signing in with GitHub never decrypts them, and if
+                            every recovery method and every device is ever lost,
+                            the content can't be recovered. A saved recovery
+                            code is the one thing that can.
+                          </p>
+                          <p>
+                            The key this browser creates stays in memory for
+                            this session only; the next time you visit, unlock
+                            the account again with the code or another method.
+                          </p>
+                        </CardContent>
+                        <CardFooter>
+                          <Button
+                            disabled={recoveryBusy}
+                            onClick={() => setupAccountRecovery()}
+                          >
+                            {recoveryBusy
+                              ? "Setting up…"
+                              : "Create recovery code"}
+                          </Button>
+                        </CardFooter>
+                      </Card>
+                    </div>
+                  ) : !accountUnlocked ? (
+                    <div data-testid="recovery-unlock">
+                      <Card className="mt-6">
+                        <CardHeader>
+                          <CardTitle>
+                            <span className="flex items-center gap-2">
+                              <LockKeyhole
+                                aria-hidden="true"
+                                className="size-4 text-primary"
+                              />
+                              Unlock this account
+                            </span>
+                          </CardTitle>
+                          <CardDescription>
+                            Choose how this browser unlocks the account. The key
+                            stays in memory for this session only; it is never
+                            stored in the browser.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-5">
+                          <fieldset
+                            aria-label="Unlock method"
+                            className="m-0 min-w-0 border-0 p-0"
+                          >
+                            <div className="flex flex-wrap gap-2">
+                              {unlockMethods.map((method) => (
+                                <button
+                                  aria-pressed={unlockMethod === method.id}
+                                  className={cn(
+                                    "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
+                                    !method.available && "opacity-50",
+                                    unlockMethod === method.id
+                                      ? "border-primary/50 bg-primary/10 text-primary"
+                                      : "border-input bg-input/30 hover:bg-muted/40",
+                                  )}
+                                  data-testid={`recovery-method-${method.id}`}
+                                  disabled={!method.available}
+                                  key={method.id}
+                                  onClick={() => {
+                                    setUnlockMethod(method.id);
+                                    setRecoveryError(null);
+                                  }}
+                                  type="button"
+                                >
+                                  {method.label}
+                                  {!method.available ? (
+                                    <span className="text-xs text-muted-foreground">
+                                      {method.note ?? "not set up"}
+                                    </span>
+                                  ) : null}
+                                </button>
+                              ))}
+                            </div>
+                          </fieldset>
+                          {unlockMethod === "recovery-code" ? (
+                            <div className="space-y-2">
+                              <Label htmlFor="recovery-code-input">
+                                Recovery code
+                              </Label>
+                              <Input
+                                autoComplete="off"
+                                data-testid="recovery-code-input"
+                                disabled={recoveryBusy}
+                                id="recovery-code-input"
+                                onChange={(event) =>
+                                  setUnlockInput(event.target.value)
+                                }
+                                placeholder="XXXX-XXXX-XXXX-…"
+                                value={unlockInput}
+                              />
+                            </div>
+                          ) : null}
+                          {unlockMethod === "password" ? (
+                            <div className="space-y-2">
+                              <Label htmlFor="unlock-password">
+                                Encryption password
+                              </Label>
+                              <Input
+                                data-testid="unlock-password"
+                                disabled={recoveryBusy}
+                                id="unlock-password"
+                                onChange={(event) =>
+                                  setPassword(event.target.value)
+                                }
+                                type="password"
+                                value={password}
+                              />
+                            </div>
+                          ) : null}
+                          {unlockMethod === "transfer" ? (
+                            <div className="space-y-2">
+                              <Label htmlFor="transfer-id-input">
+                                Transfer ID
+                              </Label>
+                              <Input
+                                autoComplete="off"
+                                data-testid="transfer-id-input"
+                                disabled={recoveryBusy}
+                                id="transfer-id-input"
+                                onChange={(event) =>
+                                  setTransferIdInput(event.target.value)
+                                }
+                                placeholder="0123456789abcdef0123456789abcdef"
+                                value={transferIdInput}
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                The sending device shares a short-lived
+                                transfer; it expires a few minutes after it was
+                                created.
+                              </p>
+                            </div>
+                          ) : null}
+                          <div className="flex items-center gap-3">
+                            <Button
+                              data-testid="unlock-account"
+                              disabled={
+                                recoveryBusy ||
+                                (unlockMethod === "recovery-code" &&
+                                  !unlockInput.trim()) ||
+                                (unlockMethod === "password" && !password) ||
+                                (unlockMethod === "transfer" &&
+                                  !transferIdInput.trim())
+                              }
+                              onClick={() =>
+                                void unlockAccount(
+                                  unlockMethod,
+                                  unlockMethod === "password"
+                                    ? password
+                                    : unlockMethod === "transfer"
+                                      ? transferIdInput
+                                      : unlockInput,
+                                )
+                              }
+                            >
+                              {recoveryBusy ? "Unlocking…" : "Unlock"}
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card className="mt-4">
+                        <CardHeader>
+                          <CardTitle>If none of these work</CardTitle>
+                          <CardDescription>
+                            Your values are stored as ciphertext, and the server
+                            never sees or decrypts them: signing in with GitHub
+                            only identifies the account. If every recovery
+                            method and every device that holds the account's key
+                            is lost, the content is unrecoverable. A human with
+                            the server's database can restore the ciphertext but
+                            cannot read it.
+                          </CardDescription>
+                        </CardHeader>
+                      </Card>
+                    </div>
+                  ) : (
+                    <div data-testid="recovery-status">
+                      <Card className="mt-6">
+                        <CardHeader>
+                          <CardTitle>
+                            <span className="flex items-center gap-2">
+                              <KeyRound
+                                aria-hidden="true"
+                                className="size-4 text-primary"
+                              />
+                              Account recovery status
+                            </span>
+                          </CardTitle>
+                          <CardDescription>
+                            This account is unlocked in this browser for the
+                            session. The key is held in memory only and is gone
+                            when the tab closes; unlock it again next time with
+                            one of these methods.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <Table aria-label="Recovery methods">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Method</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead>Action</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              <TableRow>
+                                <TableCell className="font-medium">
+                                  Recovery code
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    className={cn(
+                                      !recoveryWrappers.some(
+                                        (wrapper) =>
+                                          wrapper.type === "recovery-code",
+                                      ) && "text-muted-foreground",
+                                    )}
+                                    variant="outline"
+                                  >
+                                    {recoveryWrappers.some(
+                                      (wrapper) =>
+                                        wrapper.type === "recovery-code",
+                                    )
+                                      ? `Active since ${formatDate(
+                                          recoveryWrappers.find(
+                                            (wrapper) =>
+                                              wrapper.type === "recovery-code",
+                                          )?.createdAt,
+                                        )}`
+                                      : "Not set up"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <Button
+                                    data-testid="rotate-recovery-code"
+                                    disabled={recoveryBusy}
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => rotateRecoveryCode()}
+                                  >
+                                    Rotate code
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="font-medium">
+                                  Encryption password
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    className={
+                                      !recoveryWrappers.some(
+                                        (wrapper) =>
+                                          wrapper.type === "password",
+                                      )
+                                        ? "text-muted-foreground"
+                                        : undefined
+                                    }
+                                    variant="outline"
+                                  >
+                                    {recoveryWrappers.some(
+                                      (wrapper) => wrapper.type === "password",
+                                    )
+                                      ? "Active"
+                                      : "Not set up"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  {recoveryWrappers.some(
+                                    (wrapper) => wrapper.type === "password",
+                                  ) ? (
+                                    <Button
+                                      data-testid="remove-encryption-password"
+                                      disabled={recoveryBusy}
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() =>
+                                        setRemovePasswordDialogOpen(true)
+                                      }
+                                    >
+                                      Remove
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      data-testid="add-encryption-password"
+                                      disabled={recoveryBusy}
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => setAddPasswordOpen(true)}
+                                    >
+                                      Add password
+                                    </Button>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="font-medium">
+                                  Passkey
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    className={
+                                      !recoveryWrappers.some(
+                                        (wrapper) =>
+                                          wrapper.type === "passkey-prf",
+                                      )
+                                        ? "text-muted-foreground"
+                                        : undefined
+                                    }
+                                    variant="outline"
+                                  >
+                                    {recoveryWrappers.some(
+                                      (wrapper) =>
+                                        wrapper.type === "passkey-prf",
+                                    )
+                                      ? passkeyAvailable
+                                        ? "Active"
+                                        : "Active · PRF not supported here"
+                                      : "Not set up"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">
+                                  {passkeyAvailable
+                                    ? "Unlock with a platform passkey when one exists."
+                                    : "This browser can't use the passkey PRF; unlock with the code or password instead."}
+                                </TableCell>
+                              </TableRow>
+                            </TableBody>
+                          </Table>
+                        </CardContent>
+                        {addPasswordOpen ? (
+                          <CardContent className="space-y-2 border-t">
+                            <Label htmlFor="add-encryption-password">
+                              New encryption password
+                            </Label>
+                            <Input
+                              data-testid="add-encryption-password-input"
+                              id="add-encryption-password"
+                              onChange={(event) =>
+                                setAddPassword(event.target.value)
+                              }
+                              type="password"
+                              value={addPassword}
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                data-testid="add-encryption-password-confirm"
+                                disabled={
+                                  recoveryBusy || addPassword.length < 8
+                                }
+                                onClick={() => addEncryptionPassword()}
+                              >
+                                {recoveryBusy ? "Adding…" : "Add password"}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setAddPassword("");
+                                  setAddPasswordOpen(false);
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </CardContent>
+                        ) : null}
+                        <CardFooter>
+                          <Button
+                            data-testid="send-transfer"
+                            disabled={
+                              recoveryBusy ||
+                              !boundary.peerDevices ||
+                              boundary.peerDevices.length === 0
+                            }
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              setTransferTarget(
+                                boundary.peerDevices?.[0]?.id ?? null,
+                              )
+                            }
+                          >
+                            Send the key to another device
+                          </Button>
+                        </CardFooter>
+                      </Card>
+                      <Card className="mt-4">
+                        <CardHeader>
+                          <CardTitle>
+                            <span className="flex items-center gap-2">
+                              <MonitorSmartphone
+                                aria-hidden="true"
+                                className="size-4"
+                              />
+                            </span>{" "}
+                            Other devices
+                          </CardTitle>
+                          <CardDescription>
+                            Hand this account's key to another of your devices:
+                            it is sealed to that device and redeemable once, for
+                            a few minutes.
+                          </CardDescription>
+                        </CardHeader>
+                        {sentTransfer ? (
+                          <CardContent className="space-y-3">
+                            <div
+                              className="rounded-lg border border-primary/25 bg-primary/5 p-3"
+                              role="status"
+                            >
+                              <p className="text-sm font-medium">
+                                Transfer staged for{" "}
+                                {sentTransfer.recipientDeviceId}
+                              </p>
+                              <p className="mt-1 font-mono text-xs">
+                                {sentTransfer.transferId}
+                              </p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Redeemable until{" "}
+                                {new Date(
+                                  sentTransfer.expiresAt,
+                                ).toLocaleString()}
+                                . The receiving device enters it in its own
+                                Recovery area, or the CLI uses{" "}
+                                <InlineCommand
+                                  value={`dotrelay device recover --transfer ${sentTransfer.transferId}`}
+                                />
+                                .
+                              </p>
+                            </div>
+                          </CardContent>
+                        ) : null}
+                        {boundary.peerDevices &&
+                        boundary.peerDevices.length > 0 ? (
+                          <CardContent className="space-y-2">
+                            <Label htmlFor="transfer-target">
+                              Device to receive the key
+                            </Label>
+                            <select
+                              className="flex h-9 w-full rounded-lg border border-input bg-input/30 px-3 text-sm outline-none"
+                              disabled={recoveryBusy}
+                              id="transfer-target"
+                              onChange={(event) =>
+                                setTransferTarget(event.target.value)
+                              }
+                              value={transferTarget ?? ""}
+                            >
+                              <option value="" disabled>
+                                Choose a device
+                              </option>
+                              {boundary.peerDevices.map((peer) => (
+                                <option key={peer.id} value={peer.id}>
+                                  {peer.id}
+                                </option>
+                              ))}
+                            </select>
+                            <Button
+                              data-testid="send-transfer-confirm"
+                              disabled={recoveryBusy || transferTarget === null}
+                              size="sm"
+                              variant="outline"
+                              onClick={() => sendAccountKeyTransfer()}
+                            >
+                              {recoveryBusy ? "Sending…" : "Create transfer"}
+                            </Button>
+                          </CardContent>
+                        ) : (
+                          <CardContent className="text-sm text-muted-foreground">
+                            No other devices are enrolled on this account yet.
+                          </CardContent>
+                        )}
+                      </Card>
+                      <Card className="mt-4">
+                        <CardHeader>
+                          <CardTitle>If you lose everything</CardTitle>
+                          <CardDescription>
+                            Your values are stored as ciphertext. Signing in
+                            with GitHub never decrypts them: the server cannot
+                            read your values, and neither can anyone with the
+                            server's database. If every recovery method above is
+                            lost and every device that held the account's key is
+                            gone, the content is unrecoverable — that is the
+                            price of the key never leaving your devices.
+                          </CardDescription>
+                        </CardHeader>
+                      </Card>
+                    </div>
+                  )}
                 </section>
               ) : null}
 
@@ -3667,6 +5242,79 @@ export const WorkspaceShell = ({
               }}
             >
               {deviceSetupInProgress ? "Setting up…" : "Replace device"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (open) return;
+          // Closing the dialog without confirming discards the code: the
+          // user can still rotate it later, and the note said so.
+          setRecoveryCode(null);
+          setRecoveryCodeNote(null);
+        }}
+        open={recoveryCode !== null}
+      >
+        <DialogContent data-testid="recovery-code-dialog" role="alertdialog">
+          <DialogHeader>
+            <DialogTitle>Save this recovery code</DialogTitle>
+            <DialogDescription>
+              {recoveryCodeNote ??
+                "This code unlocks the account's key if every device is lost."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Label>Your recovery code</Label>
+            <CopyableCommand
+              data-testid="recovery-code-value"
+              value={recoveryCode ?? ""}
+            />
+            <p className="text-sm text-muted-foreground">
+              The code is shown once and is never stored in this browser. If you
+              lose it, and every other recovery method, the account's content
+              becomes unrecoverable.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              data-testid="recovery-code-saved"
+              onClick={() => {
+                setRecoveryCode(null);
+                setRecoveryCodeNote(null);
+              }}
+            >
+              I saved it
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        onOpenChange={(open) => setRemovePasswordDialogOpen(open)}
+        open={removePasswordDialogOpen}
+      >
+        <DialogContent data-testid="remove-password-dialog" role="alertdialog">
+          <DialogHeader>
+            <DialogTitle>Remove the encryption password?</DialogTitle>
+            <DialogDescription>
+              The account keeps at least one recovery method, so removing the
+              password is refused if it is the last one. Your recovery code
+              stays in place either way.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              Cancel
+            </DialogClose>
+            <Button
+              data-testid="remove-password-confirm"
+              disabled={recoveryBusy}
+              variant="destructive"
+              onClick={() => removeEncryptionPassword()}
+            >
+              {recoveryBusy ? "Removing…" : "Remove password"}
             </Button>
           </DialogFooter>
         </DialogContent>

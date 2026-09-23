@@ -381,7 +381,9 @@ test("a rejected in-place repair reports the owner or admin actions that unblock
   await expect(
     page.getByText("LSP Software's Owners and Admins can also rotate"),
   ).toBeVisible();
-  await expect(page.getByText("bun apps/cli/src/index.ts pull")).toBeVisible();
+  await expect(
+    page.getByText("Recover the account's key from the Recovery area"),
+  ).toBeVisible();
   expect(await page.getByTestId("replace-device-dialog").count()).toBe(0);
 
   // A rotation still in progress is reported as its own retryable state.

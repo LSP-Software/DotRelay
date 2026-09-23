@@ -398,7 +398,7 @@ test("enrollment skips the self-issued epoch grant when a peer holds the key", a
 
   // The Device was enrolled, but no Project epoch grant was self-minted:
   // the browser must wait for the key to be handed over by a Device that
-  // holds it (or restored from a Recovery Kit) instead of minting one that
+  // holds it (or restored from the account's key) instead of minting one that
   // can never decrypt the head.
   expect(devicePosts).toHaveLength(1);
   expect(grantPosts).toHaveLength(0);

@@ -10,7 +10,8 @@
       "!**/dist",
       "!**/coverage",
       "!**/test-results",
-      "!**/generated"
+      "!**/generated",
+      "!apps/web/public/argon2-worker.js"
     ]
   },
   "formatter": {

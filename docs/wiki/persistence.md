@@ -32,11 +32,11 @@ fact, and head update together. The repository never performs network calls whil
 is held.
 
 The public repository seams cover atomic Team/owner creation, Environment genesis, ordinary
-publication and Rollback, Membership activation, Device enrollment, Recovery envelope replacement
-and attempt recording, Project epoch rotation, staging and expiry, archive/restore, idempotency,
-and append-only audit facts. Staged objects are private to their operation and Device, expire after
-the configured operation lifetime (24 hours by default), and become visible only through an
-explicit finalization.
+publication and Rollback, Membership activation, Device enrollment, Account Key wrapper and
+envelope replacement and transfer redemption, Project epoch rotation, staging and expiry,
+archive/restore, idempotency, and append-only audit facts. Staged objects are private to their
+operation and Device, expire after the configured operation lifetime (24 hours by default), and
+become visible only through an explicit finalization.
 
 Signed commands and administrative mutations carry a SHA-384 idempotency digest. A byte-identical
 retry returns the committed outcome; reusing an operation id or actor/digest pair with different

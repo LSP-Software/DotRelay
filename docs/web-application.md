@@ -26,7 +26,7 @@ The workspace presents information in this order:
 3. protected-content availability and a stable API problem code when unavailable;
 4. Revision continuity metadata;
 5. non-secret Membership and resource administration;
-6. Device authorization and Recovery Kit entry points.
+6. Device authorization and in-browser recovery entry points.
 
 Desktop navigation is persistent. The same landmarks are available from a keyboard-operable sheet
 on narrow viewports, and a skip link moves focus directly to the workspace.
@@ -55,7 +55,7 @@ When the v3 runtime or provider is unavailable, the shell reports the stable
 `unsupported_crypto_runtime` or `crypto_provider_unavailable` problem and does not request or
 render Manifest lanes, Variable names, Shared Values, or User-defined Values. The permitted surface
 is limited to sign-in/out and trust explanation, non-secret Team/Membership and
-resource lifecycle metadata, invitation administration, Device authorization, Recovery Kit entry,
+resource lifecycle metadata, invitation administration, Device authorization, recovery entry,
 and stable problem guidance.
 
 ## Environment editor workflow
@@ -109,8 +109,9 @@ the restored editor is the reported result. A Device replacement is proposed onl
 stored keys are unusable or the service deactivated the Device, and because replacing the
 Device discards the stored keys it requires explicit approval before a new Device is enrolled.
 When this browser cannot complete the repair, the gate reports the actions that unblock it:
-hand the keys over from another of the User's Devices with the CLI, restore a Device from a
-Recovery Kit, or have the Team's Owners and Admins rotate the Project's keys.
+hand the keys over from another of the User's Devices with the CLI, unlock the account in
+a browser Recovery area (a recovery code or a transfer from another device), or have the
+Team's Owners and Admins rotate the Project's keys.
 
 Unpublished drafts are retained per Environment while moving among workspace views and across
 Projects and Environments within a Server Profile. Any action that would discard unpublished
@@ -229,5 +230,11 @@ rejected creation keeps the resolved identity and the service's error ready to r
 Members table reads the Team's persisted record and survives reloads and Team switching,
 and an invitee who has not joined a Team sees the invitation addressed to them and, after
 the service confirms acceptance, the record moves to the pending key-grant state.
-Tests observe browser-visible behavior and never
-reach into component state.
+`apps/web/e2e/workspace-recovery.spec.ts` covers the in-browser Recovery area: the one-time recovery
+code displays in an `alertdialog` and a later visit unlocks and decrypts with it, a wrong secret fails
+with one uniform alert that never names which check rejected it, rotating the recovery code retires
+the previous one so it stops unlocking, an encryption password can be added, used after a reload, and
+removed, a transfer crosses two browsers (the sender stages it, the receiver redeems it as a one-time
+hand-over, and an expired or already-used transfer surfaces its own conflict copy), an offline service
+offers the retry card, and setup plus the one-time display hold at a phone viewport. Tests observe
+browser-visible behavior and never reach into component state.

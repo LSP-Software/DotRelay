@@ -121,9 +121,11 @@ issues.
 - Device management - CLEAN-PASS-1 (devices table, CLI setup command,
   device approval page are e2e-covered)
 - Adding/new device - CLEAN-PASS-1 (approval page is e2e-covered)
-- Recovery - CLEAN-PASS-1 (walked in the browser: the Recovery view
-  correctly states the flow is CLI-side - "Use the CLI ... dotrelay
-  recover" - so the web UI has no broken in-browser flow to offer)
+- Recovery - CLEAN-PASS-1 (now in-browser: the Recovery area's one-time
+  code is shown in an alertdialog; the journey is e2e-covered in
+  workspace-recovery.spec.ts, incl. rotation, password add/remove,
+  transfer, and the offline retry card; the CLI backup/recover flow
+  stays separate)
 - Server trust - CLEAN-PASS-1 (trust gate + dialog is e2e-covered)
 
 ## FAILURE STATES

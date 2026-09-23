@@ -387,6 +387,8 @@ export const e2eWorkspaceBoundary = (
   options?: Readonly<{
     readonly environmentId?: string;
     readonly deviceId?: string;
+    /** Base64 Account Key Envelope the development boundary should report. */
+    readonly accountKeyEnvelope?: string;
   }>,
 ): WorkspaceBoundary => {
   const profile = profileCatalog[profileId];
@@ -466,6 +468,9 @@ export const e2eWorkspaceBoundary = (
         memberUntilMs: null,
       },
     ],
+    ...(options?.accountKeyEnvelope
+      ? { accountKeyEnvelope: options.accountKeyEnvelope }
+      : {}),
     crypto: { available: true },
   };
 };
@@ -515,7 +520,10 @@ const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
     crypto !== null &&
     typeof crypto === "object" &&
     !Array.isArray(crypto) &&
-    typeof (crypto as { readonly available?: unknown }).available === "boolean"
+    typeof (crypto as { readonly available?: unknown }).available ===
+      "boolean" &&
+    (candidate.accountKeyEnvelope === undefined ||
+      typeof candidate.accountKeyEnvelope === "string")
   );
 };
 
