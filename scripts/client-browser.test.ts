@@ -22,7 +22,8 @@ type ClientBrowserRunner = Readonly<{
     readonly extract64Rejected: boolean;
     readonly extract16Rejected: boolean;
     readonly missingRejected: boolean;
-    readonly unsupportedFalseRejected: boolean;
+    readonly emptyResultsRejected: boolean;
+    readonly enabledWithoutResultRejected: boolean;
     readonly assertion32Length: number;
     readonly assertionInputBound: boolean;
     readonly assertionCarriesPrfEvalInput: boolean;
@@ -33,6 +34,9 @@ type ClientBrowserRunner = Readonly<{
     readonly createViaConfirmation: boolean;
     readonly createDiscardedCode: string | null;
     readonly createDiscardedDeleted: number;
+    readonly createDisabledCode: string | null;
+    readonly createDisabledAssertions: number;
+    readonly createDisabledDeleted: number;
   }>;
   readonly dotRelayClientWrapRoundTrip: () => Promise<{
     readonly plaintextLength: number;
@@ -159,7 +163,8 @@ test("Chromium drives the WebAuthn prf path through the platform interface (simu
         readonly extract64Rejected: boolean;
         readonly extract16Rejected: boolean;
         readonly missingRejected: boolean;
-        readonly unsupportedFalseRejected: boolean;
+        readonly emptyResultsRejected: boolean;
+        readonly enabledWithoutResultRejected: boolean;
         readonly assertion32Length: number;
         readonly assertionInputBound: boolean;
         readonly assertionCarriesPrfEvalInput: boolean;
@@ -170,6 +175,9 @@ test("Chromium drives the WebAuthn prf path through the platform interface (simu
         readonly createViaConfirmation: boolean;
         readonly createDiscardedCode: string | null;
         readonly createDiscardedDeleted: number;
+        readonly createDisabledCode: string | null;
+        readonly createDisabledAssertions: number;
+        readonly createDisabledDeleted: number;
       }>(page, "dotRelayClientPasskeyPrf");
       // Chromium exposes the PublicKeyCredential surface, so the PRF path
       // is detected as available.
@@ -181,7 +189,8 @@ test("Chromium drives the WebAuthn prf path through the platform interface (simu
       expect(prf.extract64Rejected).toBe(true);
       expect(prf.extract16Rejected).toBe(true);
       expect(prf.missingRejected).toBe(true);
-      expect(prf.unsupportedFalseRejected).toBe(true);
+      expect(prf.emptyResultsRejected).toBe(true);
+      expect(prf.enabledWithoutResultRejected).toBe(true);
       // An assertion requesting the Level 3 PRF extension input
       // ({ prf: { eval: { first } } }) returns the credential-bound 32-byte
       // output, and different PRF inputs yield different outputs.
@@ -199,6 +208,9 @@ test("Chromium drives the WebAuthn prf path through the platform interface (simu
       // ... and discards a credential that can deliver no PRF output.
       expect(prf.createDiscardedCode).toBe("unsupported");
       expect(prf.createDiscardedDeleted).toBe(1);
+      expect(prf.createDisabledCode).toBe("unsupported");
+      expect(prf.createDisabledAssertions).toBe(0);
+      expect(prf.createDisabledDeleted).toBe(1);
     } finally {
       await browser.close();
     }

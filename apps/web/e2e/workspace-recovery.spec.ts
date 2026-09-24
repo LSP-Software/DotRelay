@@ -661,7 +661,7 @@ const scenarioBase = (
 });
 const installPasskeySimulation = async (
   page: Page,
-  mode: "prf" | "unsupported" | "cancelled",
+  mode: "prf" | "confirm" | "unsupported" | "missing-output" | "cancelled",
 ): Promise<void> => {
   await page.addInitScript({
     content: `globalThis.__dotrelayPasskeyMode = ${JSON.stringify(mode)};`,
@@ -1377,6 +1377,90 @@ test.describe("workspace recovery", () => {
     expect(
       scenario.wrappers.some((wrapper) => wrapper.type === "passkey-prf"),
     ).toBe(false);
+
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", recoveryCode);
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("a simulated creation without an immediate PRF result confirms, then unlocks after reload", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    let publishedBody: Record<string, unknown> | null = null;
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => {
+        publishedBody = body;
+        rememberPublishedWrapper(scenario, body);
+      },
+    });
+    await installPasskeySimulation(page, "confirm");
+    await prepareUnlockedRecovery(page, scenario);
+
+    const status = page.getByTestId("recovery-status");
+    await status.getByTestId("add-passkey").click();
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "You can now unlock this account with the passkey",
+      }),
+    ).toBeVisible({ timeout: 90_000 });
+    expect(publishedBody).not.toBeNull();
+    expect(publishedBody).not.toHaveProperty("prfOutput");
+    expect(publishedBody).not.toHaveProperty("credential");
+
+    await page.reload();
+    await openRecoveryView(page);
+    const unlock = page.getByTestId("recovery-unlock");
+    await unlock.getByTestId("recovery-method-passkey-prf").click();
+    await unlock.getByTestId("unlock-account").click();
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("a simulated assertion without PRF output falls back to the password and recovery code", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const password = "correct-horse-battery-9";
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => rememberPublishedWrapper(scenario, body),
+    });
+    await installPasskeySimulation(page, "missing-output");
+    const { recoveryCode } = await prepareUnlockedRecovery(page, scenario);
+    const status = page.getByTestId("recovery-status");
+    await status.getByTestId("add-encryption-password").click();
+    await page.getByTestId("add-encryption-password-input").fill(password);
+    await page.getByTestId("add-encryption-password-confirm").click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "encryption password" }),
+    ).toBeVisible({ timeout: 90_000 });
+    await status.getByTestId("add-passkey").click();
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "You can now unlock this account with the passkey",
+      }),
+    ).toBeVisible({ timeout: 90_000 });
+
+    await page.reload();
+    await openRecoveryView(page);
+    const unlock = page.getByTestId("recovery-unlock");
+    await unlock.getByTestId("recovery-method-passkey-prf").click();
+    await unlock.getByTestId("unlock-account").click();
+    await expect(
+      page.getByRole("alert").filter({
+        hasText: "recovery code or password",
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+
+    await unlock.getByTestId("recovery-method-password").click();
+    await unlockWith(page, "password", password);
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 90_000,
+    });
 
     await page.reload();
     await openRecoveryView(page);
