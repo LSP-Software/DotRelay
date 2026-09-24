@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 // When the Server Profile rejects this browser's devices/bootstrap, the
 // Devices view must name the situation a person can act on — and keep the
