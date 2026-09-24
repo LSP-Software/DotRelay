@@ -22,6 +22,17 @@ type ClientBrowserRunner = Readonly<{
     readonly extract64Rejected: boolean;
     readonly extract16Rejected: boolean;
     readonly missingRejected: boolean;
+    readonly unsupportedFalseRejected: boolean;
+    readonly assertion32Length: number;
+    readonly assertionInputBound: boolean;
+    readonly assertionCarriesPrfEvalInput: boolean;
+    readonly cancelledCode: string | null;
+    readonly noMatchingCode: string | null;
+    readonly nullCredentialCode: string | null;
+    readonly createFromCreateOutput: boolean;
+    readonly createViaConfirmation: boolean;
+    readonly createDiscardedCode: string | null;
+    readonly createDiscardedDeleted: number;
   }>;
   readonly dotRelayClientWrapRoundTrip: () => Promise<{
     readonly plaintextLength: number;
@@ -128,7 +139,7 @@ test("Chromium unlocks the Account Master Key through a recovery code", async ()
   }
 });
 
-test("Chromium reads the WebAuthn prf extension output (R4)", async () => {
+test("Chromium drives the WebAuthn prf path through the platform interface (simulation)", async () => {
   const outputDirectory = await mkdtemp(join(tmpdir(), "dotrelay-client-"));
   try {
     const bundlePath = await buildRunner(outputDirectory);
@@ -137,21 +148,57 @@ test("Chromium reads the WebAuthn prf extension output (R4)", async () => {
       const page = await browser.newPage();
       await page.goto("https://example.com");
       await page.addScriptTag({ path: bundlePath });
+      // This test simulates the platform interface: Playwright cannot
+      // emulate the PRF extension, so the runner drives
+      // runPasskeyAssertion/createPasskeyWithPrf against a faithful in-page
+      // fake of the real PublicKeyCredential interface. A real passkey
+      // hardware test is recorded as outstanding for this campaign.
       const prf = await evaluate<{
         readonly supported: boolean;
         readonly extract32Length: number;
         readonly extract64Rejected: boolean;
         readonly extract16Rejected: boolean;
         readonly missingRejected: boolean;
+        readonly unsupportedFalseRejected: boolean;
+        readonly assertion32Length: number;
+        readonly assertionInputBound: boolean;
+        readonly assertionCarriesPrfEvalInput: boolean;
+        readonly cancelledCode: string | null;
+        readonly noMatchingCode: string | null;
+        readonly nullCredentialCode: string | null;
+        readonly createFromCreateOutput: boolean;
+        readonly createViaConfirmation: boolean;
+        readonly createDiscardedCode: string | null;
+        readonly createDiscardedDeleted: number;
       }>(page, "dotRelayClientPasskeyPrf");
-      // Chromium exposes PublicKeyCredential, so the PRF path is detected.
+      // Chromium exposes the PublicKeyCredential surface, so the PRF path
+      // is detected as available.
       expect(prf.supported).toBe(true);
       // A 32-byte PRF extension output is extracted at its spec length ...
       expect(prf.extract32Length).toBe(32);
-      // ... and any other length, or a missing extension, is rejected.
+      // ... and any other length, a missing extension, or a platform that
+      // reports the PRF unsupported is rejected.
       expect(prf.extract64Rejected).toBe(true);
       expect(prf.extract16Rejected).toBe(true);
       expect(prf.missingRejected).toBe(true);
+      expect(prf.unsupportedFalseRejected).toBe(true);
+      // An assertion requesting the Level 3 PRF extension input
+      // ({ prf: { eval: { first } } }) returns the credential-bound 32-byte
+      // output, and different PRF inputs yield different outputs.
+      expect(prf.assertion32Length).toBe(32);
+      expect(prf.assertionInputBound).toBe(true);
+      expect(prf.assertionCarriesPrfEvalInput).toBe(true);
+      // Platform failures classify into distinct, honest error codes.
+      expect(prf.cancelledCode).toBe("cancelled");
+      expect(prf.noMatchingCode).toBe("no-matching-credential");
+      expect(prf.nullCredentialCode).toBe("no-matching-credential");
+      // Creation uses the creation-time output when present ...
+      expect(prf.createFromCreateOutput).toBe(true);
+      // ... otherwise confirms through a real assertion ...
+      expect(prf.createViaConfirmation).toBe(true);
+      // ... and discards a credential that can deliver no PRF output.
+      expect(prf.createDiscardedCode).toBe("unsupported");
+      expect(prf.createDiscardedDeleted).toBe(1);
     } finally {
       await browser.close();
     }

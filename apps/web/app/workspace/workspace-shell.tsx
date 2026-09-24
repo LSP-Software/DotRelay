@@ -77,7 +77,9 @@ import {
 } from "@/lib/account-keys";
 import {
   addEncryptionPassword,
+  addPasskeyPrf,
   removeEncryptionPassword,
+  removePasskeyPrf,
   rotateRecoveryCode,
   sendAccountKeyTransfer,
   setupAccountRecovery,
@@ -142,6 +144,7 @@ import {
 import {
   RecoveryArea,
   RecoveryCodeDialog,
+  RemovePasskeyDialog,
   RemovePasswordDialog,
 } from "@/lib/workspace-recovery-views";
 import {
@@ -619,6 +622,7 @@ export const WorkspaceShell = ({
   const [transferIdInput, setTransferIdInput] = useState("");
   const [removePasswordDialogOpen, setRemovePasswordDialogOpen] =
     useState(false);
+  const [removePasskeyDialogOpen, setRemovePasskeyDialogOpen] = useState(false);
   const [transferTarget, setTransferTarget] = useState<string | null>(null);
   // A transfer this browser offered to a peer Device, with the id and expiry
   // the receiver needs before the transfer lapses.
@@ -627,7 +631,13 @@ export const WorkspaceShell = ({
     readonly expiresAt: string;
     readonly recipientDeviceId: string;
   }> | null>(null);
-  const passkeyAvailable = passkeyPrfSupported();
+  // Detected after mount. The server render has no WebAuthn surface, so
+  // reading it during the first render would disagree with the browser and
+  // hydrate the Add passkey control as permanently unavailable.
+  const [passkeyAvailable, setPasskeyAvailable] = useState(false);
+  useEffect(() => {
+    setPasskeyAvailable(passkeyPrfSupported());
+  }, []);
   // Pending enrollment identity (keys + operation id) retained across retries
   // so a storage failure after the Server Profile created the Device cannot
   // be retried as a fresh, duplicate enrollment.
@@ -1205,6 +1215,14 @@ export const WorkspaceShell = ({
       recoveryFeedback,
       onRecoveryMutated,
       () => setRemovePasswordDialogOpen(false),
+    );
+
+  const addPasskeyHandler = () =>
+    addPasskeyPrf(recoveryInputs, recoveryFeedback, onRecoveryMutated);
+
+  const removePasskeyHandler = () =>
+    removePasskeyPrf(recoveryInputs, recoveryFeedback, onRecoveryMutated, () =>
+      setRemovePasskeyDialogOpen(false),
     );
 
   const sendAccountKeyTransferHandler = () =>
@@ -3017,7 +3035,6 @@ export const WorkspaceShell = ({
                   </Card>
                 </section>
               ) : null}
-
               {view === "recovery" ? (
                 <RecoveryArea
                   accountUnlocked={accountUnlocked}
@@ -3029,9 +3046,11 @@ export const WorkspaceShell = ({
                   onAddPassword={setAddPassword}
                   onAddPasswordOpen={setAddPasswordOpen}
                   onAddEncryptionPassword={addEncryptionPasswordHandler}
+                  onAddPasskey={addPasskeyHandler}
                   onDeviceSetup={provisionBrowserDevice}
                   onPassword={setPassword}
                   password={password}
+                  onRemovePasskeyDialogOpen={setRemovePasskeyDialogOpen}
                   onRemovePasswordDialogOpen={setRemovePasswordDialogOpen}
                   onRetry={requestRetry}
                   onRotateRecoveryCode={rotateRecoveryCodeHandler}
@@ -3388,6 +3407,13 @@ export const WorkspaceShell = ({
         onConfirm={removeEncryptionPasswordHandler}
         onDialogOpen={setRemovePasswordDialogOpen}
         open={removePasswordDialogOpen}
+      />
+
+      <RemovePasskeyDialog
+        busy={recoveryBusy}
+        onConfirm={removePasskeyHandler}
+        onDialogOpen={setRemovePasskeyDialogOpen}
+        open={removePasskeyDialogOpen}
       />
     </div>
   );

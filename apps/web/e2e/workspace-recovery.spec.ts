@@ -636,6 +636,80 @@ const scenarioBase = (
   forceNoPeerEpochGrant: options?.forceNoPeerEpochGrant ?? false,
   onWrapperPublish: options?.onWrapperPublish ?? (() => {}),
 });
+const installPasskeySimulation = async (
+  page: Page,
+  mode: "prf" | "unsupported" | "cancelled",
+): Promise<void> => {
+  await page.addInitScript({
+    content: `globalThis.__dotrelayPasskeyMode = ${JSON.stringify(mode)};`,
+  });
+  await page.addInitScript({
+    path: "apps/web/e2e/passkey-platform-simulation.js",
+  });
+};
+
+const rememberPublishedWrapper = (
+  scenario: RecoveryScenario,
+  body: Record<string, unknown>,
+): void => {
+  if (typeof body.wrapperId !== "string" || typeof body.object !== "string")
+    return;
+  const bytes = new Uint8Array(Buffer.from(body.object, "base64"));
+  const wrapperType = parseProtocolObject(bytes).get(86);
+  const type =
+    wrapperType === 1
+      ? "passkey-prf"
+      : wrapperType === 2
+        ? "password"
+        : "recovery-code";
+  scenario.wrappers = [
+    ...scenario.wrappers,
+    {
+      wrapperId: body.wrapperId,
+      type,
+      object: body.object,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+};
+
+const prepareUnlockedRecovery = async (
+  page: Page,
+  scenario: RecoveryScenario,
+  surface: "desktop" | "phone" = "desktop",
+): Promise<Readonly<{ readonly recoveryCode: string }>> => {
+  await installRecoveryRoutes(page, scenario);
+  if (surface === "phone") await enrollDeviceMobile(page);
+  else await enrollDevice(page);
+  const deviceKeys = capturedDeviceKeys(scenario);
+  const accountMasterKey = await generateAccountMasterKey();
+  const recoveryCode = await generateRecoveryCode();
+  const signer = await importSigningKey();
+  scenario.wrappers = [
+    await buildRecoveryCodeWrapper({
+      accountMasterKey,
+      recoveryCode,
+      deviceId: deviceKeys.id,
+      signer,
+    }),
+  ];
+  scenario.envelopeB64 = await buildEpochEnvelopeB64({
+    accountMasterKey,
+    deviceId: deviceKeys.id,
+    signer,
+  });
+  scenario.syncPage = await buildVerifiedFixturePage(
+    deviceKeys.encryptionPublicKey,
+  );
+  await page.reload();
+  if (surface === "phone") await openRecoveryViewMobile(page);
+  else await openRecoveryView(page);
+  await unlockWith(page, "recovery-code", encodeRecoveryCode(recoveryCode));
+  await expect(page.getByTestId("recovery-status")).toBeVisible({
+    timeout: 30_000,
+  });
+  return { recoveryCode: encodeRecoveryCode(recoveryCode) };
+};
 
 const capturedDeviceKeys = (scenario: RecoveryScenario): DeviceKeys => {
   const keys = scenario.deviceKeys;
@@ -1136,6 +1210,158 @@ test.describe("workspace recovery", () => {
       timeout: 30_000,
     });
   });
+  test("a simulated passkey adds, reloads, unlocks, and decrypts", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    let publishedBody: Record<string, unknown> | null = null;
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => {
+        publishedBody = body;
+        rememberPublishedWrapper(scenario, body);
+      },
+    });
+    await installPasskeySimulation(page, "prf");
+    await prepareUnlockedRecovery(page, scenario);
+
+    const status = page.getByTestId("recovery-status");
+    await status.getByTestId("add-passkey").click();
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "You can now unlock this account with the passkey",
+      }),
+    ).toBeVisible({ timeout: 90_000 });
+    const passkey = scenario.wrappers.find(
+      (wrapper) => wrapper.type === "passkey-prf",
+    );
+    expect(passkey).toBeDefined();
+    expect(publishedBody).not.toBeNull();
+    expect(publishedBody).not.toHaveProperty("prfOutput");
+    const passkeyObject = parseProtocolObject(
+      new Uint8Array(Buffer.from(passkey?.object ?? "", "base64")),
+    );
+    expect(passkeyObject.get(86)).toBe(1);
+    expect(passkeyObject.get(93)).toBeInstanceOf(Uint8Array);
+    expect(passkeyObject.get(94)).toBeInstanceOf(Uint8Array);
+
+    await page.reload();
+    await openRecoveryView(page);
+    const unlock = page.getByTestId("recovery-unlock");
+    const passkeyMethod = unlock.getByTestId("recovery-method-passkey-prf");
+    await expect(passkeyMethod).toBeEnabled();
+    await passkeyMethod.click();
+    await unlock.getByTestId("unlock-account").click();
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+    await page
+      .locator("aside")
+      .getByRole("button", { name: "LSP-Software / DotRelay" })
+      .click();
+    await sharedValueVisible(page);
+  });
+
+  test("a simulated passkey can be removed while the recovery code still works", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => rememberPublishedWrapper(scenario, body),
+    });
+    await installPasskeySimulation(page, "prf");
+    const { recoveryCode } = await prepareUnlockedRecovery(page, scenario);
+
+    const status = page.getByTestId("recovery-status");
+    await status.getByTestId("add-passkey").click();
+    await expect(status.getByTestId("remove-passkey")).toBeVisible({
+      timeout: 90_000,
+    });
+    await status.getByTestId("remove-passkey").click();
+    const dialog = page.getByTestId("remove-passkey-dialog");
+    await expect(dialog).toBeVisible();
+    await page.getByTestId("remove-passkey-confirm").click();
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: "The passkey no longer unlocks this account" }),
+    ).toBeVisible({ timeout: 30_000 });
+    expect(
+      scenario.wrappers.some((wrapper) => wrapper.type === "passkey-prf"),
+    ).toBe(false);
+
+    await page.reload();
+    await openRecoveryView(page);
+    const unlock = page.getByTestId("recovery-unlock");
+    await expect(
+      unlock.getByTestId("recovery-method-passkey-prf"),
+    ).toBeDisabled();
+    await unlockWith(page, "recovery-code", recoveryCode);
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("a simulated authenticator without PRF leaves recovery unchanged", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => rememberPublishedWrapper(scenario, body),
+    });
+    await installPasskeySimulation(page, "unsupported");
+    const { recoveryCode } = await prepareUnlockedRecovery(page, scenario);
+
+    await page
+      .getByTestId("recovery-status")
+      .getByTestId("add-passkey")
+      .click();
+    await expect(
+      page
+        .getByRole("alert")
+        .filter({ hasText: "can't generate the key material" }),
+    ).toBeVisible({ timeout: 30_000 });
+    expect(
+      scenario.wrappers.some((wrapper) => wrapper.type === "passkey-prf"),
+    ).toBe(false);
+
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", recoveryCode);
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("a cancelled simulated passkey prompt leaves recovery unchanged", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => rememberPublishedWrapper(scenario, body),
+    });
+    await installPasskeySimulation(page, "cancelled");
+    const { recoveryCode } = await prepareUnlockedRecovery(page, scenario);
+
+    await page
+      .getByTestId("recovery-status")
+      .getByTestId("add-passkey")
+      .click();
+    await expect(
+      page
+        .getByRole("alert")
+        .filter({ hasText: "The passkey prompt was cancelled" }),
+    ).toBeVisible({ timeout: 30_000 });
+    expect(
+      scenario.wrappers.some((wrapper) => wrapper.type === "passkey-prf"),
+    ).toBe(false);
+
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", recoveryCode);
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+  });
 });
 
 test.describe("workspace recovery at phone width", () => {
@@ -1190,6 +1416,30 @@ test.describe("workspace recovery at phone width", () => {
     await codeDialog.getByRole("button", { name: "I saved it" }).click();
     await expect(page.getByTestId("recovery-status")).toBeVisible();
     // No horizontal overflow anywhere in the recovery area at this width.
+    const metrics = await page
+      .getByTestId("recovery-area")
+      .evaluate((element) => ({
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+      }));
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+  });
+  test("a simulated passkey fits and activates at a phone viewport", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => rememberPublishedWrapper(scenario, body),
+    });
+    await installPasskeySimulation(page, "prf");
+    await prepareUnlockedRecovery(page, scenario, "phone");
+
+    const status = page.getByTestId("recovery-status");
+    await status.getByTestId("add-passkey").click();
+    await expect(status.getByTestId("remove-passkey")).toBeVisible({
+      timeout: 90_000,
+    });
+    await expect(status).toContainText("Active");
     const metrics = await page
       .getByTestId("recovery-area")
       .evaluate((element) => ({

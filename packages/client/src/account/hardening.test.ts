@@ -11,12 +11,16 @@ import {
 } from "@dotrelay/contracts";
 import {
   createAccountKeyWrapper,
+  createPasskeyWithPrf,
   extractPasskeyPrfOutput,
   generateAccountMasterKey,
   generateRecoveryCode,
+  PasskeyPrfError,
+  type PasskeyPrfPlatform,
   type PasswordKdfParameters,
   parseAccountKeyWrapper,
   passkeyPrfSupported,
+  runPasskeyAssertion,
   unwrapAccountKeyWrapper,
   WRAPPER_TYPE,
 } from "../index";
@@ -215,48 +219,332 @@ describe("account key wire-format hardening", () => {
   });
 });
 
-describe("webauthn prf extraction (R4)", () => {
-  test("extracts a 32-byte PRF extension output", () => {
+describe("webauthn prf extraction (WebAuthn Level 3)", () => {
+  // The W3C shape: getClientExtensionResults() maps the extension id to
+  // { supported, results: { first } }, each result a 32-byte ArrayBuffer.
+  const extensionResults = (
+    prf:
+      | Readonly<{
+          readonly supported: boolean;
+          readonly results?: Readonly<{ readonly first?: ArrayBuffer }>;
+        }>
+      | undefined,
+  ): Readonly<Record<string, unknown>> =>
+    Object.freeze(prf !== undefined ? Object.freeze({ prf }) : {});
+
+  test("extracts a 32-byte PRF extension output from the client extension results", () => {
     const prf = new ArrayBuffer(32);
     new Uint8Array(prf).set(Array.from({ length: 32 }, (_, i) => i));
-    const out = extractPasskeyPrfOutput({ extensions: { prf } });
+    const out = extractPasskeyPrfOutput(
+      extensionResults({ supported: true, results: { first: prf } }),
+    );
     expect(out).not.toBeNull();
-    const bytes = out as Uint8Array;
-    expect(bytes.length).toBe(32);
-    expect(bytes[31]).toBe(31);
+    expect(out).toHaveLength(32);
+    expect(out?.[31]).toBe(31);
   });
 
   test("returns null for a PRF output of the wrong length", () => {
     expect(
-      extractPasskeyPrfOutput({ extensions: { prf: new ArrayBuffer(64) } }),
+      extractPasskeyPrfOutput(
+        extensionResults({
+          supported: true,
+          results: { first: new ArrayBuffer(64) },
+        }),
+      ),
     ).toBeNull();
     expect(
-      extractPasskeyPrfOutput({ extensions: { prf: new ArrayBuffer(16) } }),
+      extractPasskeyPrfOutput(
+        extensionResults({
+          supported: true,
+          results: { first: new ArrayBuffer(16) },
+        }),
+      ),
     ).toBeNull();
   });
 
-  test("returns null when the platform returned no PRF extension", () => {
+  test("returns null when the platform reported no PRF output", () => {
+    // No extension results at all.
     expect(extractPasskeyPrfOutput({})).toBeNull();
-    expect(extractPasskeyPrfOutput({ extensions: {} })).toBeNull();
+    expect(extractPasskeyPrfOutput(undefined)).toBeNull();
+    // The extension ran but the authenticator could not evaluate it.
+    expect(
+      extractPasskeyPrfOutput(extensionResults({ supported: false })),
+    ).toBeNull();
+    // The extension ran but no result was produced.
+    expect(
+      extractPasskeyPrfOutput(
+        extensionResults({ supported: true, results: {} }),
+      ),
+    ).toBeNull();
+    // A malformed entry of another extension is never read as the PRF.
+    expect(
+      extractPasskeyPrfOutput(
+        Object.freeze({ prf: { supported: true }, appid: true }),
+      ),
+    ).toBeNull();
   });
 
   test("feature-detects the PRF extension surface", () => {
     expect(
       passkeyPrfSupported({
-        PublicKeyCredential: class {},
-        navigator: { credentials: { get: () => {} } },
+        PublicKeyCredential: {
+          isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+        },
+        navigator: {
+          credentials: {
+            get: async () => {
+              throw new Error("unreachable");
+            },
+            create: async () => {
+              throw new Error("unreachable");
+            },
+          },
+        },
       }),
     ).toBe(true);
     expect(passkeyPrfSupported({})).toBe(false);
-    // PublicKeyCredential present but no credentials.get is not usable.
-    expect(passkeyPrfSupported({ PublicKeyCredential: class {} })).toBe(false);
+    // PublicKeyCredential present but no platform-authenticator probe is not
+    // usable.
+    expect(passkeyPrfSupported({ PublicKeyCredential: {} })).toBe(false);
     // credentials present but no get() function is not usable.
     expect(
       passkeyPrfSupported({
-        PublicKeyCredential: class {},
-        navigator: { credentials: {} },
+        PublicKeyCredential: {
+          isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+        },
+        navigator: {
+          credentials: {
+            create: async () => {
+              throw new Error("unreachable");
+            },
+          },
+        },
       }),
     ).toBe(false);
+  });
+});
+
+describe("webauthn prf ceremonies (faithful platform double)", () => {
+  // A test double implementing the real PublicKeyCredential interface the
+  // browser exposes: the PRF output is derived from the credential id and the
+  // requested PRF input (deterministic stand-in for the authenticator's
+  // HMAC), exactly like a real credential-bound PRF. The double is labeled a
+  // double on purpose: Playwright cannot emulate the PRF extension, and a
+  // synthetic response object is not a passkey ceremony.
+  const credentialIdBytes = new Uint8Array(32).fill(3);
+  const prfInputBytes = new Uint8Array(32).fill(5);
+
+  const expectedPrfOutput = async (
+    credentialId: Uint8Array,
+  ): Promise<Uint8Array> => {
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new Uint8Array([...credentialId, ...prfInputBytes]),
+    );
+    return new Uint8Array(digest);
+  };
+
+  const makeCredential = (prfOutput: Uint8Array | null) => ({
+    id: "test-credential",
+    rawId: credentialIdBytes.buffer.slice(
+      credentialIdBytes.byteOffset,
+      credentialIdBytes.byteOffset + credentialIdBytes.byteLength,
+    ),
+    type: "public-key",
+    getClientExtensionResults: () =>
+      Object.freeze(
+        prfOutput
+          ? {
+              prf: {
+                supported: true,
+                results: { first: prfOutput.buffer },
+              },
+            }
+          : { prf: { supported: false } },
+      ),
+  });
+
+  const makePlatform = (
+    behavior: Readonly<{
+      assertionResult:
+        | "output"
+        | "no-output"
+        | "cancel"
+        | "no-credential"
+        | "throw";
+      creationResult: "output" | "no-output" | "cancel";
+    }>,
+  ) => {
+    const seen: {
+      getOptions: Array<Readonly<{ readonly publicKey: unknown }>>;
+      createOptions: Array<Readonly<{ readonly publicKey: unknown }>>;
+      deleted: number;
+    } = { getOptions: [], createOptions: [], deleted: 0 };
+    const platform: PasskeyPrfPlatform = {
+      PublicKeyCredential: {
+        isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+      },
+      crypto: globalThis.crypto,
+      navigator: {
+        credentials: {
+          get: async (options) => {
+            seen.getOptions.push(options);
+            switch (behavior.assertionResult) {
+              case "output": {
+                const output = await expectedPrfOutput(credentialIdBytes);
+                return makeCredential(output);
+              }
+              case "no-output":
+                return makeCredential(null);
+              case "cancel":
+                throw new DOMException("cancelled", "NotAllowedError");
+              case "no-credential":
+                throw new DOMException(
+                  "no matching credential",
+                  "CredentialNotAllowedError",
+                );
+              default:
+                throw new Error("authenticator gone");
+            }
+          },
+          create: async (options) => {
+            seen.createOptions.push(options);
+            if (behavior.creationResult === "cancel")
+              throw new DOMException("cancelled", "NotAllowedError");
+            return makeCredential(
+              behavior.creationResult === "output"
+                ? new Uint8Array(await expectedPrfOutput(credentialIdBytes))
+                : null,
+            );
+          },
+          delete: async () => {
+            seen.deleted += 1;
+          },
+        },
+      },
+    };
+    return { platform, seen };
+  };
+
+  const capture = (promise: Promise<unknown>): Promise<PasskeyPrfError> =>
+    promise.then(
+      () => {
+        throw new Error("expected the ceremony to fail");
+      },
+      (failure: unknown) => {
+        if (!(failure instanceof PasskeyPrfError)) throw failure;
+        return failure;
+      },
+    );
+
+  test("an assertion requesting the PRF extension returns the 32-byte output", async () => {
+    const { platform, seen } = makePlatform({
+      assertionResult: "output",
+      creationResult: "output",
+    });
+    const output = await runPasskeyAssertion(
+      platform,
+      credentialIdBytes,
+      prfInputBytes,
+    );
+    expect(output).toEqual(await expectedPrfOutput(credentialIdBytes));
+    // The request carried the Level 3 PRF extension input
+    // ({ prf: { eval: { first } } }), not the legacy { prf: { first } }
+    // input shape.
+    const publicKey = seen.getOptions[0].publicKey;
+    expect(
+      typeof publicKey === "object" &&
+        publicKey !== null &&
+        "extensions" in publicKey &&
+        typeof publicKey.extensions === "object" &&
+        publicKey.extensions !== null &&
+        "prf" in publicKey.extensions &&
+        typeof publicKey.extensions.prf === "object" &&
+        publicKey.extensions.prf !== null &&
+        "eval" in publicKey.extensions.prf,
+    ).toBe(true);
+    if (
+      typeof publicKey !== "object" ||
+      publicKey === null ||
+      !("extensions" in publicKey) ||
+      typeof publicKey.extensions !== "object" ||
+      publicKey.extensions === null ||
+      !("prf" in publicKey.extensions) ||
+      typeof publicKey.extensions.prf !== "object" ||
+      publicKey.extensions.prf === null ||
+      !("eval" in publicKey.extensions.prf)
+    )
+      throw new Error("missing PRF extension input");
+    const evalInput = publicKey.extensions.prf.eval;
+    if (
+      typeof evalInput !== "object" ||
+      evalInput === null ||
+      !("first" in evalInput) ||
+      !(evalInput.first instanceof ArrayBuffer)
+    )
+      throw new Error("missing PRF extension first input");
+    expect(new Uint8Array(evalInput.first)).toEqual(prfInputBytes);
+  });
+
+  test("a cancelled passkey prompt is classified as a cancellation", async () => {
+    const { platform } = makePlatform({
+      assertionResult: "cancel",
+      creationResult: "cancel",
+    });
+    const error = await capture(
+      runPasskeyAssertion(platform, credentialIdBytes, prfInputBytes),
+    );
+    expect(error.code).toBe("cancelled");
+  });
+
+  test("an authenticator that cannot evaluate the PRF is reported as unsupported", async () => {
+    const { platform } = makePlatform({
+      assertionResult: "no-output",
+      creationResult: "output",
+    });
+    const error = await capture(
+      runPasskeyAssertion(platform, credentialIdBytes, prfInputBytes),
+    );
+    expect(error.code).toBe("unsupported");
+  });
+
+  test("a credential without a matching passkey is reported distinctly", async () => {
+    const { platform } = makePlatform({
+      assertionResult: "no-credential",
+      creationResult: "output",
+    });
+    const error = await capture(
+      runPasskeyAssertion(platform, credentialIdBytes, prfInputBytes),
+    );
+    expect(error.code).toBe("no-matching-credential");
+  });
+
+  test("passkey creation confirms PRF capability from the created credential", async () => {
+    const { platform } = makePlatform({
+      assertionResult: "output",
+      creationResult: "output",
+    });
+    const created = await createPasskeyWithPrf(
+      platform,
+      prfInputBytes,
+      new Uint8Array(16).fill(1),
+    );
+    expect(created.credentialId).toEqual(credentialIdBytes);
+    expect(created.prfOutput).toEqual(
+      await expectedPrfOutput(credentialIdBytes),
+    );
+  });
+
+  test("a created passkey without PRF support is discarded and reported", async () => {
+    const { platform, seen } = makePlatform({
+      assertionResult: "no-output",
+      creationResult: "no-output",
+    });
+    const error = await capture(
+      createPasskeyWithPrf(platform, prfInputBytes, new Uint8Array(16).fill(1)),
+    );
+    expect(error.code).toBe("unsupported");
+    expect(seen.deleted).toBe(1);
   });
 });
 

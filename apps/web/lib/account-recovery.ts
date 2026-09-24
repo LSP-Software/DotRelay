@@ -1,10 +1,12 @@
 import {
   authenticatedCreatorKeys,
   createBrowserDeviceStorage,
+  createPasskeyWithPrf,
   deviceHistorySigningKeys,
-  extractPasskeyPrfOutput,
   loadDeviceKeyMaterial,
+  PasskeyPrfError,
   parseAccountKeyWrapper,
+  runPasskeyAssertion,
   uuidToBytes,
 } from "@dotrelay/client";
 import {
@@ -225,47 +227,23 @@ export const unlockAccount = async (
     } else if (method === "passkey-prf") {
       const entry = wrappers.find((wrapper) => wrapper.type === "passkey-prf");
       if (!entry || !passkeyAvailable) throw new Error(UNLOCK_FAILURE);
-      try {
-        const parsed = parseAccountKeyWrapper(akFromBase64(entry.object));
-        const credentialId = parsed.credentialId;
-        const prfInput = parsed.prfInput;
-        if (!credentialId || !prfInput) throw new Error();
-        const credentials = globalThis.navigator.credentials;
-        if (!credentials?.get) throw new Error();
-        const challenge = globalThis.crypto.getRandomValues(new Uint8Array(32));
-        // Shipped browsers implement the PRF extension inputs as
-        // `{ first }`; the DOM lib here types a newer spec proposal, so
-        // the extension input is passed through a cast to the runtime
-        // shape the platform actually honors.
-        const prfExtension = {
-          prf: { first: prfInput },
-        } as unknown as AuthenticationExtensionsClientInputs;
-        const assertion = await credentials.get({
-          publicKey: {
-            challenge: asArrayBuffer(challenge),
-            allowCredentials: [
-              {
-                id: asArrayBuffer(credentialId),
-                type: "public-key",
-                transports: ["internal", "hybrid"],
-              },
-            ],
-            extensions: prfExtension,
-          },
-        });
-        const response = (
-          assertion as {
-            response?: { extensions?: { prf?: ArrayBuffer } };
-          }
-        ).response;
-        const prfOutput = extractPasskeyPrfOutput(response ?? {});
-        if (!prfOutput) throw new Error();
-        accountMasterKeyBytes = (
-          await unlockWithPasskeyPrf(entry, prfOutput, verification)
-        ).accountMasterKey;
-      } catch {
-        throw new Error(UNLOCK_FAILURE);
-      }
+      const parsed = parseAccountKeyWrapper(akFromBase64(entry.object));
+      const credentialId = parsed.credentialId;
+      const prfInput = parsed.prfInput;
+      if (!credentialId || !prfInput) throw new Error(UNLOCK_FAILURE);
+      // A genuine passkey assertion: the platform runs the user-verification
+      // prompt and evaluates the stored passkey's PRF over the stored input,
+      // so the 32-byte output that seals the wrapper derives from the
+      // credential. The credential response never leaves the browser, and
+      // the PRF output is never stored or transmitted.
+      const prfOutput = await runPasskeyAssertion(
+        globalThis,
+        credentialId,
+        prfInput,
+      );
+      accountMasterKeyBytes = (
+        await unlockWithPasskeyPrf(entry, prfOutput, verification)
+      ).accountMasterKey;
     } else {
       const accepted = await acceptAccountKeyTransfer(actor, secret.trim());
       const material = await loadDeviceKeyMaterial(
@@ -319,9 +297,11 @@ export const unlockAccount = async (
     feedback.setError(
       error instanceof AccountKeyRequestError && error.code === "state_conflict"
         ? "That transfer expired or was already used. Ask the sender to create a new one."
-        : error instanceof Error && error.message === UNLOCK_FAILURE
-          ? UNLOCK_FAILURE
-          : "We couldn't unlock the account. Try again.",
+        : error instanceof PasskeyPrfError
+          ? error.message
+          : error instanceof Error && error.message === UNLOCK_FAILURE
+            ? UNLOCK_FAILURE
+            : "We couldn't unlock the account. Try again.",
     );
     feedback.clearInputs();
   } finally {
@@ -637,6 +617,137 @@ export const removeEncryptionPassword = (
           error.code === "state_conflict"
           ? "The account keeps at least one recovery method, so the server refused to remove this one. Add another method first, then try again."
           : "The password wasn't removed. Try again.",
+      );
+    } finally {
+      feedback.setBusy(false);
+      onMutated();
+    }
+  })();
+};
+
+// Add a passkey that can unlock this account: the browser's authenticator
+// creates a credential that supports the WebAuthn PRF extension, and the
+// account's key is wrapped under that credential's 32-byte PRF output for a
+// fresh, random PRF input. No key rotation: the Account Master Key is
+// unchanged, so every existing method (recovery code, password, other
+// passkeys, every device) keeps working; the passkey is one more door onto
+// the same key. The PRF input is stored in the wrapper, the PRF output is
+// ephemeral and never stored or transmitted. A credential that cannot
+// deliver the PRF output is discarded by the client module before this
+// point, so the account is never offered a passkey that could not unlock
+// it.
+export const addPasskeyPrf = (
+  inputs: AccountRecoveryInputs,
+  feedback: AccountRecoveryFeedback,
+  onMutated: AccountRecoveryOnMutated,
+): void => {
+  const { actor, boundary } = inputs;
+  if (!actor) {
+    feedback.setError(
+      "This browser can't change the account's recovery options.",
+    );
+    return;
+  }
+  if (!inputs.passkeyAvailable) {
+    feedback.setError(
+      "This browser can't use the passkey PRF, so it can't add a passkey. On a browser that can, the passkey can still unlock the account from here.",
+    );
+    return;
+  }
+  void (async () => {
+    const verification = accountKeyVerification(boundary, inputs.wrappers);
+    const signingPrivateKey = await loadDeviceSigningKey(boundary);
+    const accountMasterKey = inputs.accountMasterKey.read();
+    if (!verification || !signingPrivateKey || !accountMasterKey) {
+      feedback.setError(
+        "Unlock the account in this browser first, then add a passkey.",
+      );
+      return;
+    }
+    feedback.setBusy(true);
+    feedback.setError(null);
+    feedback.setMessage(null);
+    try {
+      const bundle = await loadRecoveryBundle(inputs);
+      const prfInput = globalThis.crypto.getRandomValues(new Uint8Array(32));
+      // The browser runs the real passkey creation ceremony (user
+      // verification included) and confirms the new credential can evaluate
+      // the PRF; only then is a wrapper published. If the prompt is
+      // cancelled, nothing changed.
+      const created = await createPasskeyWithPrf(
+        globalThis,
+        prfInput,
+        bundle.userId,
+      );
+      const wrapper = await createAccountKeyWrapper({
+        serverProfileId: boundary.profile.serverProfileId ?? "",
+        userId: bundle.userId,
+        deviceId: uuidToBytes(boundary.device.id ?? ""),
+        userIdentityGeneration: bundle.userIdentityGeneration,
+        createdAtMs: Date.now(),
+        accountMasterKey,
+        signingPrivateKey,
+        kind: {
+          type: "passkeyPrf",
+          credentialId: created.credentialId,
+          prfInput,
+          prfOutput: created.prfOutput,
+        },
+      });
+      await publishAccountKeyWrapper(
+        actor,
+        globalThis.crypto.randomUUID(),
+        wrapper,
+        String(bundle.userIdentityGeneration),
+        "add",
+      );
+      feedback.setMessage(
+        "You can now unlock this account with the passkey, next to your recovery code.",
+      );
+    } catch (error) {
+      feedback.setError(
+        error instanceof PasskeyPrfError
+          ? error.message
+          : error instanceof Error && error.message
+            ? error.message
+            : "The passkey wasn't added. Try again.",
+      );
+    } finally {
+      feedback.setBusy(false);
+      onMutated();
+    }
+  })();
+};
+
+export const removePasskeyPrf = (
+  inputs: AccountRecoveryInputs,
+  feedback: AccountRecoveryFeedback,
+  onMutated: AccountRecoveryOnMutated,
+  onRemoved: () => void,
+): void => {
+  const { actor, wrappers } = inputs;
+  const entry = wrappers.find((wrapper) => wrapper.type === "passkey-prf");
+  if (!actor || !entry) return;
+  void (async () => {
+    feedback.setBusy(true);
+    feedback.setError(null);
+    feedback.setMessage(null);
+    try {
+      await revokeAccountKeyWrapper(
+        actor,
+        globalThis.crypto.randomUUID(),
+        entry.wrapperId,
+      );
+      onRemoved();
+      feedback.setMessage(
+        "The passkey no longer unlocks this account. Your recovery code still works.",
+      );
+    } catch (error) {
+      feedback.setError(
+        error instanceof AccountKeyRequestError &&
+          error.code === "state_conflict"
+          ? "The account keeps at least one recovery method, so the server refused to remove this one. Add another method first, then try again."
+          : "The passkey wasn't removed. Try again.",
       );
     } finally {
       feedback.setBusy(false);
