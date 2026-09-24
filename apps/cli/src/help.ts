@@ -307,26 +307,38 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     about:
       "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <id>. The key stays on this Device; transfers are an addition, not a move.",
     notes: [
-      "The receiving Device id comes from dotrelay status (or the service) and must be an active Device for the same account.",
+      "Without --to, the command lists this account's other Devices and you choose one. --no-input requires --to.",
+      "The receiving Device id comes from that list, from dotrelay status, or from the service, and must be an active Device for the same account.",
       "The transfer stays retryable until the receiving Device acknowledges it or it expires. A lost response can be accepted again; after acknowledgement, or once it expires, it must be created again.",
+      "The command prints the full transfer ID. Paste it into Recovery on the receiving device, or pass it to dotrelay device recover --transfer on that device.",
     ],
     options: {
-      to: "receiving Device id to seal the transfer for (required)",
+      to: "receiving Device id to seal the transfer for (required with --no-input)",
       profile: "Server Profile to transfer from (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
-    examples: ["dotrelay device transfer --to <peer-device-id>"],
+    examples: [
+      "dotrelay device transfer",
+      "dotrelay device transfer --to <peer-device-id>",
+    ],
   },
   "device revoke-wrapper": {
     about:
       "Retire an active account-key Recovery Code wrapper so the Recovery Code it seals can no longer unlock the account. At least one Recovery Code wrapper and at least one wrapper of any kind must remain active.",
+    notes: [
+      "Without --wrapper-id, the command lists this account's active wrappers and you choose one. --no-input requires --wrapper-id.",
+      "The full wrapper id is printed when a wrapper is created and in this command's result; pass it with --wrapper-id from either place.",
+    ],
     options: {
       wrapperId:
-        "wrapper id to revoke (from dotrelay status or a previous wrapper listing)",
+        "wrapper id to revoke (full id; omit to choose from the list; required with --no-input)",
       profile: "Server Profile to revoke on (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
-    examples: ["dotrelay device revoke-wrapper --wrapper-id <wrapper-id>"],
+    examples: [
+      "dotrelay device revoke-wrapper",
+      "dotrelay device revoke-wrapper --wrapper-id <wrapper-id>",
+    ],
   },
   "project link": {
     about:

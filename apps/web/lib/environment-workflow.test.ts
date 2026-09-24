@@ -968,6 +968,13 @@ test("setup reports only the next action the person can take", () => {
       ...blockedSetup,
       sessionActive: true,
       profileTrusted: true,
+    })?.body,
+  ).not.toContain("CLI on this machine");
+  expect(
+    nextSetupAction({
+      ...blockedSetup,
+      sessionActive: true,
+      profileTrusted: true,
       cryptoAvailable: true,
     })?.id,
   ).toBe("enroll-device");
@@ -979,6 +986,14 @@ test("setup reports only the next action the person can take", () => {
       cryptoAvailable: true,
     })?.body,
   ).toContain("separate device");
+  expect(
+    nextSetupAction({
+      ...blockedSetup,
+      sessionActive: true,
+      profileTrusted: true,
+      cryptoAvailable: true,
+    })?.body,
+  ).not.toContain("CLI on this machine");
   expect(
     nextSetupAction({
       sessionActive: true,
@@ -1006,6 +1021,14 @@ test("setup gates surface missing grants, then archived and stale-project states
   expect(nextSetupAction({ ...signedIn, deviceActive: true })?.id).toBe(
     "pending-grants",
   );
+  const pendingGrants = nextSetupAction({
+    ...signedIn,
+    deviceActive: true,
+  });
+  expect(pendingGrants?.body).toContain("Recovery area");
+  expect(pendingGrants?.body).toContain("dotrelay device transfer");
+  expect(pendingGrants?.body).not.toContain("dotrelay pull");
+  expect(pendingGrants?.body).not.toContain("on this machine");
   expect(
     nextSetupAction({ ...signedIn, deviceActive: true, grantsReady: true })?.id,
   ).toBe("archived");

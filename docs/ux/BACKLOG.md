@@ -411,3 +411,228 @@ authorisation matrix) and by
 views). Leaving a team is not a product capability (the policy matrix has
 no such operation), so it stays unimplemented. Committed on main. See
 DECISIONS.md (D-003).
+
+## UX-010 - Browser device setup collapses every server failure into "The server rejected this browser."
+Journey:
+FIRST USE - Devices area, "Set up browser" (first-run Device enrollment).
+State:
+Any Server Profile; reproduced against the fixture deployment (API origin
+returns a non-protocol response for `/api/v1/devices/bootstrap`) and pinned
+against real problem codes by interception.
+Severity:
+HIGH (first-use critical path: no cause, no next action)
+Observed:
+`apps/web/lib/device-provisioning.ts` handled only `authentication_required`
+and `state_conflict`; every other problem code from the
+`devices/bootstrap` route — `service_unavailable`, `rate_limited`,
+`device_not_active`, `unsupported_crypto_runtime`/`_suite`/`_api_version`,
+`invalid_request`, `invalid_crypto_object`, `payload_too_large` — rendered
+one opaque "The server rejected this browser." with no cause and no action.
+A network-level failure (server down mid-setup) leaked the raw browser text
+("Failed to fetch") into the message. The sibling stale-epoch repair flow in
+the same file already maps its codes (`device_not_active`, `stale_epoch`)
+and the team administration module maps its codes via `problemMessage`, so
+the provisioning path was the lone straggler.
+Expected:
+Each failure the server can return names the situation and the next action,
+matching the vocabulary the CLI already uses; a network failure says the
+server was unreachable; anything unexpected falls back to a neutral retry
+message that never dumps a raw code.
+Status:
+FIXED - `apps/web/lib/device-provisioning.ts` now maps the full code set the
+bootstrap route can return (signed out, conflict, server down, rate-limited,
+device revoked, incompatible API/cryptography, invalid request, unknown) to
+actionable copy, wraps the bootstrap fetch so a network failure reports
+"We couldn't reach the server." (same wording as `team-administration.ts`),
+and shows raw text only for intentional messages. Verified by
+`apps/web/lib/device-provisioning.test.ts` (code-to-copy mapping) and
+`apps/web/e2e/workspace-enrollment-failures.spec.ts` (seven real-browser
+scenarios: aborted request, 503/429/409/400 codes, an unknown code that
+must not be dumped, and the pinned `state_conflict` line); full e2e suite
+126/126. Committed on main.
+
+## UX-011 - `device revoke-wrapper` asks for an identifier no user surface ever shows
+Journey:
+RECOVERY - CLI `dotrelay device revoke-wrapper --wrapper-id <id>`.
+State:
+Any account with an Account Master Key; reproduced on a real deployment.
+Severity:
+MEDIUM (recovery command unusable as documented)
+Observed:
+The API revoke route (`apps/api/src/device-routes.ts`, POST
+`/api/v1/account-keys/wrappers/revoke`) parses `--wrapper-id` as a full
+16-byte hex value. But the CLI only ever prints the abbreviated form
+(12 hex chars, `abbreviateId` in `apps/cli/src/index.ts`), `dotrelay
+status` does not list wrappers, and no CLI command or web surface (the
+Recovery area manages named methods, not ids) shows a full wrapper id.
+The help text claims the id comes "from dotrelay status or a previous
+wrapper listing" — neither source exists.
+Expected:
+Either a listing surface that shows full wrapper ids (`dotrelay status`
+or a `device wrappers` command backed by the existing
+`GET /api/v1/account-keys/wrappers` endpoint) or the revoke command
+accepts the abbreviated id; help text must name a source that exists.
+Status:
+FIXED - `dotrelay device revoke-wrapper` without `--wrapper-id` now lists
+this account's active wrappers (via the existing
+GET /api/v1/account-keys/wrappers) and you choose one; `--no-input` still
+requires `--wrapper-id` (args validation mirrors the device transfer
+contract). The list offers only wrappers whose revocation can succeed
+under ADR 0009 (at least one Recovery Code wrapper and one wrapper of any
+kind must remain), and with nothing revocable the command refuses with
+that rule named. The card prints the full wrapper id wherever one is
+produced (wrapper creation and this command's result), and the help text
+now names sources that exist instead of "dotrelay status or a previous
+wrapper listing". Verified by `apps/cli/src/args.test.ts` (bare invocation
+parses, --no-input requires the flag) and `apps/cli/src/workflow.test.ts`
+(picker lists full ids + types and revokes the chosen one, the last
+Recovery Code wrapper is never offered, --no-input contract, nothing-
+revocable refusal); full CLI suite 379/379; live binary: new help text,
+exit 2 with the new usage line under --no-input. Live picker against a
+real account is environment-blocked (GitHub sign-in requires a human).
+Committed on main.
+## UX-012 - Device approval copy says "this machine" when the CLI is on another host
+Journey:
+AUTHORIZATION - CLI `dotrelay setup` on a remote/SSH host with `--no-open`;
+the user approves from a laptop browser at `/device?user_code=…`.
+State:
+Reproduced: the approval page shows "The CLI on this machine is asking to
+sign in" while the machine whose browser the user holds is not the machine
+running the CLI.
+Severity:
+LOW (copy; the flow still works)
+Expected:
+Copy that is true for both cases, e.g. "A DotRelay CLI is asking to sign
+in" or naming the CLI's host when known.
+Status:
+FIXED - the approval page no longer claims the CLI is on this machine:
+"A DotRelay CLI is asking to sign in. Check that the code matches the one
+in its terminal" is true whether the CLI runs locally or over SSH with
+--no-open, and the page metadata description matches. Pinned by the
+existing device approval e2e in `apps/web/e2e/workspace.spec.ts`. Committed
+on main.
+## UX-013 - Duplicate `user:email` scope in the GitHub sign-in request
+Journey:
+SIGN IN - GitHub OAuth handshake.
+State:
+Any deployment with GitHub sign-in enabled; observed in the real OAuth
+redirect (scope `read:user+user:email+user:email+repo`).
+Severity:
+LOW (cosmetic; GitHub de-duplicates, no functional effect)
+Observed:
+`apps/api/src/auth.ts` requests `["user:email", "repo"]` and the provider
+defaults add `read:user` + `user:email` again, so the authorization URL
+lists `user:email` twice.
+Expected:
+The scope list de-duplicated at the source so the consent screen and logs
+show each scope once.
+Status:
+FIXED - the configured scope is now just `repo`; the provider's own
+defaults (`read:user`, `user:email`) are no longer repeated in the
+config, so the consent screen and logs show each scope once. Effective
+permissions unchanged. Verified live against the running API:
+`POST /api/auth/sign-in/social` now returns an authorize URL with
+`scope=read:user user:email repo` (no duplicate). Committed on main.
+## UX-014 - `env use` with no session points at project linking instead of signing in
+Journey:
+FIRST USE - `dotrelay env use <environment>` before any `dotrelay login`.
+State:
+Reproduced on a real deployment (clean CLI config, API up).
+Severity:
+LOW (wrong next-action; the command still exits non-zero)
+Observed:
+The remediation text suggests linking a project, but the actual blocker is
+the missing session; the user has to discover `dotrelay login` themselves.
+Expected:
+When no session exists, the remediation says to run `dotrelay login` first.
+Status:
+FIXED - session precheck before the project-link demand in both surfaces
+(`env use` dispatch and `loadWorkflowSession` label resolution); missing
+session now exits 6 `authentication_required` with "login is required for
+this Server Profile", while an existing session still gets the project-link
+invocation error. Covered by three workflow tests; live binary proof on a
+clean config (exit 6, no project-link mention).
+
+## UX-015 - Pending-grants gate names a remediation that cannot work
+Journey:
+WORKSPACE - opening a protected environment whose browser Device has no
+epoch grant (`grantsReady: false`).
+State:
+Any account where the browser enrolled but has no project grant yet;
+reproduced from the setup-gate state machine
+(`nextSetupAction` `pending-grants`).
+Severity:
+MEDIUM (half the remediation is false and the transfer path is invisible)
+Observed:
+The gate body read "Open the Recovery area to unlock the account with your
+recovery code, or run `dotrelay pull` on this machine, to give this browser
+the project's keys." But `dotrelay pull` only decrypts values into a worktree
+with the CLI Device's own keys (grants are counted per
+`recipientDeviceId`), so it can never give the browser keys; and the real
+second path - accepting an Account Key Transfer in Recovery (the UI's
+"From another device" method with its Transfer ID input, fed by
+`dotrelay device transfer`) - was not mentioned at all.
+Expected:
+The body names only paths that give THIS browser keys: any Recovery unlock
+method, or accepting a Transfer created by `dotrelay device transfer`.
+Status:
+FIXED - body rewritten to the Recovery + Transfer paths; unit test pins
+`dotrelay device transfer`, Recovery area, and the absence of
+`dotrelay pull`/`on this machine`.
+
+## UX-016 - Setup copy claims the CLI runs "on this machine"
+Journey:
+WORKSPACE - setup gates and the CLI hand-off prompts.
+State:
+Browser setup surfaces that suggest the CLI as an alternative
+(`environment-workflow.ts` crypto-unavailable/enroll-device,
+`workspace-shell.tsx` and `environment-editor.tsx` "Prefer the CLI?").
+Severity:
+LOW (P3 copy; prescriptive language can mislead in the remote-CLI flow)
+Observed:
+Several surfaces say "the CLI on this machine" / "It sets up the CLI on
+this machine" when the CLI may run elsewhere (--no-open/remote approval is
+a first-class flow; the same co-location claim was fixed on the device
+approval page as UX-012).
+Expected:
+Location-agnostic wording wherever the copy is not strictly describing
+where the user would run a copied command.
+Status:
+FIXED - the five false co-location claims now say "the CLI is a separate
+device" / "sets up the CLI, not this browser" / "or the CLI"; browser-key
+storage copy ("Keys stay on this machine") kept because it is true.
+Unit tests pin the absence of "CLI on this machine" in both setup-gate
+bodies; the two workspace e2e surfaces that show the CLI hand-off pin
+`getByText("CLI on this machine")` count 0.
+
+## UX-017 - Recovery mutations can surface the raw transport message
+Journey:
+RECOVERY - adding a password/passkey, setting up or rotating a recovery
+code, or staging a transfer when the request fails.
+State:
+Any non-`state_conflict` rejection (`authentication_required` on an
+expired session, rate limits, contract errors) or a failed fetch, during
+one of those five mutations.
+Severity:
+LOW-MEDIUM (user-visible internal jargon; the operation's own fallback
+copy exists but is unreachable)
+Observed:
+`jsonPost`/`fetchJson` throw `AccountKeyRequestError` whose message is
+always "The server rejected the request.", and five recovery catches
+(`setupAccountRecovery`, `rotateRecoveryCode`, `addEncryptionPassword`,
+`addPasskeyPrf`, `sendAccountKeyTransfer`) pass `error.message` through
+whenever it is non-empty - which it always is - so the per-operation
+fallbacks ("The password wasn't added. Try again." etc.) are dead code
+and a failed fetch leaks the browser's "Failed to fetch" the same way.
+Expected:
+Transport-only failures (server rejections, failed fetches) show the
+operation's written fallback; human-authored messages (`UNLOCK_FAILURE`,
+`PasskeyPrfError`) still pass through.
+Status:
+FIXED - shared `recoveryErrorMessage` helper now backs all five catches:
+server rejections (`AccountKeyRequestError`) and failed fetches
+(`TypeError`) show the operation's written fallback; human-authored
+messages still pass through. Red-green proven: the new e2e observed
+"Recovery needs attention The server rejected the request." before the
+fix and the written fallback after; four unit tests pin the helper.
+Full suite 127/127, `bun run check` green.

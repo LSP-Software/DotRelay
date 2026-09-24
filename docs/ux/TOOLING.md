@@ -4,7 +4,7 @@ Persistent reference for the browser-driven UX audit and improvement process on
 DotRelay. Read this before doing UX work in a future session; it records the
 toolchain, its verification state, and the exact commands to run.
 
-Last verified: 2026-09-18 (bootstrap session).
+Last verified: 2026-09-24 (campaign-2 bootstrap: the post-AMK audit).
 
 ## Responsibility split
 
@@ -36,12 +36,24 @@ REAL BROWSER (browser prelude)
 
 | Tool | Where | Version | Notes |
 | --- | --- | --- | --- |
-| Oh My Pi | `omp` v18.2.6 (global, `~/.bun/bin/omp`) | 18.2.6 | Harness for these sessions |
+| Oh My Pi | `omp` v18.2.6 (global, `~/.bun/bin/omp`) | 18.2.6 | Harness for OMP-run sessions |
+| Opencode + T3 Code preview | opencode CLI (this environment) | — | Harness for the 2026-09-24 campaign; its `t3-code_preview_*` tools are the session's native browser driver (navigate, snapshot with ARIA text, click/type/press, resize, appearance, screenshots) |
 | Pi (standalone) | `pi` v0.85.1 (global) | 0.85.1 | Same skill runtime; `pi` also reads `.pi/skills/` (not needed here) |
-| Native browser | OMP `browser` eval prelude (Puppeteer/CDP via cmux) | — | The browser implementation for this project. **Do not install pi-playwright.** |
+| Native browser | OMP `browser` eval prelude (Puppeteer/CDP via cmux) or the T3 Code preview browser above, whichever the running harness provides | — | **Do not install pi-playwright** unless a running harness provides no browser at all |
 | Impeccable | `.agents/skills/impeccable/` (project) | skill 4.3.1, launcher 4.0.0 (engine v0.1.5) | Design guidance skill + deterministic detectors + live-variant mode |
 | UX Audit skill | `.agents/skills/ux-audit/` (project) | 1.4.0 | Evidence-based audit methodology, 16 dimensions, reference material, `scripts/contrast-check.py` |
-| Docker | host Docker + Compose | 29.7.2 / v5.4.0 | Postgres + Valkey backing services |
+| Product Marketing Context | `.agents/skills/product-marketing/` (project) | 2.1.0 (upstream coreyhaines31/marketingskills @ 5b2c000, 2026-09-04) | Maintains `.agents/product-marketing.md` |
+| Copywriting | `.agents/skills/copywriting/` (project) | 2.0.2 (same upstream/commit) | New explanatory copy only |
+| Copy Editing | `.agents/skills/copy-editing/` (project) | 2.0.0 (same upstream/commit) | Seven-sweeps diagnostic pass |
+| Developer Audience Context | `.agents/skills/developer-audience-context/` (project) | 1.0.0 (upstream jonathimer/devmarketing-skills @ 500b44b, 2026-03-03) | Maintains `.agents/developer-audience-context.md` |
+| Humanizer | `.agents/skills/humanizer/` (project) | upstream Aboudjem/humanizer-skill @ a58df06, 2026-09-06 | 55-pattern AI-tell detection, technical-voice final prose pass |
+| Docker | host Docker + Compose | 29.7.2 / v5.4.0 (2026-09-18; 29.1.3/v5.4.0 on the 2026-09-24 machine) | Postgres + Valkey backing services |
+
+The 2026-09-24 bootstrap installed the five non-DotRelay skills above from the
+upstream repositories listed (fetched, inspected for unsafe content, and copied
+project-locally; `evals/` development artifacts excluded). Impeccable (4.3.1)
+and UX Audit (1.4.0) were already present and match upstream; they were not
+touched.
 
 ### Why `.agents/skills/` and not `.pi/skills/`
 
@@ -90,7 +102,23 @@ curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/   # 200
 curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/api/v1/capabilities  # 200
 ```
 
-## Browser usage (Oh My Pi native)
+## Browser usage (native per harness)
+
+### T3 Code preview browser (2026-09-24 campaign)
+
+This campaign runs under opencode inside T3 Code. Its `t3-code_preview_*`
+tools are the native browser driver: `preview_open` / `preview_navigate`
+(open tabs, navigate, including `environment-port` targets for dev servers),
+`preview_snapshot` (page state, semantic elements, diagnostics, PNG — the
+ARIA/semantic view is the primary inspection surface; `save: true` writes the
+PNG to disk for embedding), `preview_click` / `preview_type` / `preview_press`
+/ `preview_scroll` (interaction, Playwright locators or legacy CSS
+selectors), `preview_evaluate` (page JS), `preview_wait_for` (semantic
+waits), `preview_resize` (viewports incl. named device presets),
+`preview_set_appearance` (light/dark). No extra install: these are native.
+`pi-playwright` remains unnecessary and uninstalled.
+
+### Oh My Pi native
 
 Use the `browser` object from the `eval` prelude (JavaScript or Python).
 Verified capabilities (2026-09-18):
@@ -123,8 +151,11 @@ automation passed the full smoke test against the running app.
 
 ## Invoking the skills
 
-In an OMP (or `pi`) session started from the repository root, both skills are
-discovered automatically (project-trusted). Use:
+In an OMP (or `pi`) session started from the repository root, the project
+skills are discovered automatically (project-trusted). Under opencode, the
+same `.agents/skills/` directory is scanned at session start and each skill is
+loadable through the `skill` tool by name (e.g. `ux-audit`, `impeccable`,
+`copy-editing`, `humanizer`). Use:
 
 - `/skill:ux-audit` (or just ask for an audit, e.g. "audit the UX of the
   sign-in to workspace flow" — the skill description triggers autoload)
@@ -176,21 +207,42 @@ runs the Impeccable `init` flow (see Product context below). Do not run broad
 
 ## Product context (Impeccable)
 
-`PRODUCT.md` does not exist yet. The audit session should run the Impeccable
-`init` flow (`.agents/skills/impeccable/reference/init.md`) to capture durable
-product context in `PRODUCT.md` before any design work. It interviews the user
-for material gaps it cannot infer from the repository (primary users/situation,
-positioning, durable constraints) — do not invent answers. `docs/web-application.md`
-and `docs/wiki/` are strong starting evidence. `DESIGN.md` is produced by
-`/impeccable document` only if the session chooses to record the incumbent
-visual system; it is not required for audits.
+`docs/ux/PRODUCT.md` holds the durable product truth (target user,
+jobs-to-be-done, security truths, precise terminology, established decisions)
+for the campaign; it was created from the repository record on 2026-09-24
+rather than by interview, and must be re-grounded whenever the implementation
+moves. The repo-root `PRODUCT.md` the Impeccable `init` flow would create is
+superseded by this file for UX sessions; do not run a broad `init` and do not
+create a competing repo-root document. `.agents/product-marketing.md` and
+`.agents/developer-audience-context.md` carry the copy-side context. `DESIGN.md`
+is produced by `/impeccable document` only if a session chooses to record the
+incumbent visual system; it is not required for audits.
 
 ## Skill reload
 
 Skill discovery runs at session start. After installing or moving skills,
 start a **new** session (an existing session will not see new skills). No
 reload command is needed. To verify discovery in a new session, ask the agent
-to `read skill://impeccable` and `read skill://ux-audit`.
+to load `impeccable` and `ux-audit`. Known limitation observed on 2026-09-24:
+skills installed mid-session (the five copy/audience skills) were not in the
+running opencode session's skill list, so the session read their `SKILL.md`
+files directly; the content is identical either way.
+
+## Verification (campaign-2 bootstrap, 2026-09-24)
+
+- Skill stack reconciled: `impeccable` 4.3.1 and `ux-audit` 1.4.0 already
+  present and matching upstream (no update); `product-marketing` 2.1.0,
+  `copywriting` 2.0.2, `copy-editing` 2.0.0 installed from
+  coreyhaines31/marketingskills @ 5b2c000; `developer-audience-context`
+  1.0.0 from jonathimer/devmarketing-skills @ 500b44b; `humanizer` from
+  Aboudjem/humanizer-skill @ a58df06. All fetched and inspected (pure
+  Markdown, no scripts beyond ux-audit's stock `contrast-check.py` and the
+  Impeccable launcher); `evals/` artifacts excluded.
+- `.agents/product-marketing.md` and `.agents/developer-audience-context.md`
+  created from current product truth; `docs/ux/PRODUCT.md` and
+  `docs/ux/evidence/` created.
+- This session's browser driver: the T3 Code preview tools under opencode
+  (no pi-playwright installed or needed).
 
 ## Verification (bootstrap session, 2026-09-18)
 

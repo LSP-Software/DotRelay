@@ -234,7 +234,7 @@ the service confirms acceptance, the record moves to the pending key-grant state
 code displays in an `alertdialog` and a later visit unlocks and decrypts with it, a wrong secret fails
 with one uniform alert that never names which check rejected it, rotating the recovery code retires
 the previous one so it stops unlocking, an encryption password can be added, used after a reload, and
-removed, a transfer crosses two browsers (the sender stages it, the receiver redeems it as a one-time
+removed, a transfer crosses two browsers (the sender stages a transfer ID, the receiver is shown how to get that ID from an unlocked device's CLI with `dotrelay device transfer --to` this browser or from this Recovery page in another unlocked browser, the receiver redeems it as a one-time
 hand-over, and an expired or already-used transfer surfaces its own conflict copy), an offline service
 offers the retry card, and setup plus the one-time display hold at a phone viewport. Tests observe
 browser-visible behavior and never reach into component state.

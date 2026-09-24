@@ -12,7 +12,7 @@ read it first.
 
 | File | Purpose |
 | --- | --- |
-| `PRODUCT.md` | Durable product context captured by the Impeccable `init` flow (users, purpose, positioning, constraints). Lives at the repo root, not here. Created by the first audit session before design work. |
+| `PRODUCT.md` | Durable product truth for UX work (target user, jobs-to-be-done, security truths, precise terminology, established decisions). Created 2026-09-24 from the repository record; re-ground whenever the implementation moves. |
 | `JOURNEYS.md` | The user journeys the audits walk end-to-end in the browser (entry, steps, states, completion criteria). |
 | `BACKLOG.md` | The prioritised, evidence-linked backlog of findings: severity, journey/step, evidence, owning skill, status. |
 | `DECISIONS.md` | Decisions made during UX work (approaches taken, tradeoffs, rejected options) so later sessions don't relitigate. |

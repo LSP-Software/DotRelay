@@ -3178,13 +3178,12 @@ export const WorkspaceShell = ({
                       <CardDescription>
                         {thisBrowserEnrolled
                           ? "This browser has saved its device keys. It also needs the project's keys to read its secrets."
-                          : "This creates a key pair in this browser. The CLI on this machine is a separate device."}
+                          : "This creates a key pair in this browser. The CLI is a separate device."}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <p className="text-sm text-muted-foreground">
-                        Prefer the CLI? It sets up the CLI on this machine, not
-                        this browser.
+                        Prefer the CLI? It sets up the CLI, not this browser.
                       </p>
                       <CopyableCommand
                         data-testid="cli-setup-command"
@@ -3247,6 +3246,7 @@ export const WorkspaceShell = ({
                   recoveryMessage={recoveryMessage}
                   recoveryWrappers={recoveryWrappers}
                   sentTransfer={sentTransfer}
+                  deviceId={boundary.device.id}
                   sessionActive={sessionActive}
                   transferIdInput={transferIdInput}
                   transferTarget={transferTarget}

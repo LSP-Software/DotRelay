@@ -484,3 +484,56 @@ Each entry: status, evidence, impact.
 - **Disposition:** cross-referenced to the existing open issue #137 (`bug`, `ready-for-agent`)
   and spec #209 decision 11; no duplicate filed. The prior campaign's ledger never recorded the
   CLI sweep's finding because the sweep is new to this session (2026-09-21).
+
+## F-016 (FIXED) Browser device setup hid every non-conflict server failure behind "The server rejected this browser."
+- **Status:** FIXED_AND_VERIFIED (this campaign; cross-referenced as UX-010)
+- **Symptom:** on first-run Device enrollment, any `devices/bootstrap`
+  problem code other than `authentication_required`/`state_conflict`
+  rendered "The server rejected this browser." — no cause, no next action;
+  a network failure leaked the raw "Failed to fetch" text. Observed live in
+  the fixture browser (bootstrap route 404 at the API origin) and pinned
+  per-code by interception.
+- **Root cause:** `apps/web/lib/device-provisioning.ts` mapped two codes
+  and defaulted to one opaque sentence; no handling for fetch-level
+  failures. The stale-epoch repair in the same file and
+  `team-administration.ts` already map their codes, so provisioning was the
+  lone straggler on the product's most common journey.
+- **Fix:** full code-to-copy map for every code the route returns
+  (service down, rate-limited, device revoked, incompatible
+  API/cryptography, invalid request, unknown), a wrapped fetch so network
+  failures report "We couldn't reach the server. Check your connection and
+  try again." (wording shared with team administration), and a final
+  fallback that shows raw text only for intentional messages.
+- **Verification:** `apps/web/lib/device-provisioning.test.ts` (mapping),
+  `apps/web/e2e/workspace-enrollment-failures.spec.ts` (7 real-browser
+  scenarios incl. unknown-code fallback that must not dump the code),
+  `apps/web/e2e/workspace-enrollment-storage.spec.ts` + `workspace.spec.ts`
+  pinned behaviour unchanged; full suite 126/126; typecheck + biome clean.
+
+## F-017 (RECORD) Second-pass sweep: CLI wrapper-id dead-end + three P3 copy/scope nits
+- **Status:** RECORD (no code change this entry)
+- `dotrelay device revoke-wrapper` requires a full 16-byte wrapper id that
+  no user surface ever shows: the CLI prints only the 12-char abbreviation,
+  `dotrelay status` lists no wrappers, the web Recovery area manages named
+  methods, and the help text cites two sources that do not exist (UX-011;
+  API: `POST /api/v1/account-keys/wrappers/revoke`,
+  `parseHex(body.wrapperId, 16)`; CLI: `abbreviateId`,
+  `apps/cli/src/index.ts`).
+- Device approval page said "The CLI on this machine is asking to sign
+  in" — false for the product's own `--no-open`/remote-CLI flow; FIXED
+  this campaign (location-agnostic copy, pinned in the device approval e2e)
+  (UX-012).
+- GitHub OAuth scope listed `user:email` twice
+  (`apps/api/src/auth.ts` `["user:email","repo"]` + provider defaults) —
+  cosmetic; FIXED this campaign (config now requests only `repo`; live
+  authorize URL verified deduplicated) (UX-013).
+- `dotrelay env use` with no session suggests project linking instead of
+  `dotrelay login` (UX-014; FIXED this campaign).
+- **Disposition:** UX-011 FIXED this campaign (interactive wrapper picker +
+  full id printed at creation/result + truthful help; args/workflow tests,
+  CLI suite 379/379, live help/arg proof). UX-012 FIXED this campaign
+  (location-agnostic approval copy, e2e pin). UX-013 FIXED this campaign
+  (scope deduplicated, live authorize-URL proof). UX-014 FIXED this campaign
+  (session precheck before the project-link demand in `env use` and
+  `loadWorkflowSession`; three workflow tests, live clean-config proof,
+  CLI suite 382/382) - all four findings in this entry are now closed.

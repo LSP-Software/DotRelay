@@ -83,10 +83,23 @@ export const loadWorkflowSession = async (
     !opaqueEnvironmentId.test(requestedEnvironment)
   ) {
     const projectId = localContext?.projectId;
-    if (projectId === undefined)
+    if (projectId === undefined) {
+      // Project link and environment resolution both need a signed-in
+      // Device, so a missing session is reported before a missing link.
+      const token = await createSessionStore(options.credentials).get(
+        options.profile.pin,
+      );
+      if (!token)
+        throw new CliError(
+          "authentication",
+          "login is required for this Server Profile",
+          {},
+          "authentication_required",
+        );
       throw new CliInvocationError(
         "the Environment reference could not be resolved to a stable id; run dotrelay project link to record the Project",
       );
+    }
     requestedEnvironment = (
       await resolveEnvironmentReference(
         admin,

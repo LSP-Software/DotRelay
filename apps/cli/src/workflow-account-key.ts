@@ -31,7 +31,7 @@ import {
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { CliError, CliInvocationError } from "./errors";
-import { readTerminalSecret } from "./ui";
+import { readTerminalSecret, selectOption } from "./ui";
 import {
   accountKeyTrustedKeys,
   base64,
@@ -729,13 +729,43 @@ export const transferAccountKey = async (
       {},
       "account_key_not_unlocked",
     );
+  let recipient = recipientDeviceId.trim();
+  if (!recipient) {
+    if (options.noInput)
+      throw new CliInvocationError(
+        "device transfer requires --to <peer-device-id> with --no-input",
+      );
+    if (authorized.boundary.peerDevices.length === 0)
+      throw new CliError(
+        "conflict",
+        "this account has no other active Device to receive the key",
+        {},
+        "transfer_recipient_unknown",
+      );
+    recipient = await selectOption(
+      "Device to receive the key",
+      authorized.boundary.peerDevices.map((device) => ({
+        id: device.id,
+        label: device.id,
+        ...(device.hasEpochGrant ? { detail: "holds the project key" } : {}),
+      })),
+      {
+        ...(options.terminal ? { terminal: options.terminal } : {}),
+        ...(options.prompt ? { prompt: options.prompt } : {}),
+        noInput: options.noInput,
+        // Sending the key to the wrong Device is the mistake this list exists
+        // to prevent, so an empty answer does not pick the first row.
+        defaultToFirst: false,
+      },
+    );
+  }
   const peer = authorized.boundary.peerDevices.find(
-    (device) => device.id.toLowerCase() === recipientDeviceId.toLowerCase(),
+    (device) => device.id.toLowerCase() === recipient.toLowerCase(),
   );
   if (!peer)
     throw new CliError(
       "conflict",
-      `device ${recipientDeviceId} is not an active Device for this account`,
+      `device ${recipient} is not an active Device for this account`,
       {},
       "transfer_recipient_unknown",
     );
@@ -805,18 +835,65 @@ export const revokeAccountKeyWrapper = async (
   }>
 > => {
   const authorized = await loadAuthorizedDevice(options);
+  let id = wrapperId.trim();
+  if (!id) {
+    if (options.noInput)
+      throw new CliInvocationError(
+        "device revoke-wrapper requires --wrapper-id <id> with --no-input",
+      );
+    const active = await fetchActiveWrappers(authorized.admin);
+    // The service keeps at least one Recovery Code wrapper and at least one
+    // wrapper of any kind active (ADR 0009), so the list offers only the
+    // wrappers whose revocation can succeed.
+    const recoveryCodeCount = active.filter(
+      (wrapper) => wrapper.type === "recovery-code",
+    ).length;
+    const revocable = active.filter(
+      (wrapper) =>
+        active.length > 1 &&
+        (wrapper.type !== "recovery-code" || recoveryCodeCount > 1),
+    );
+    if (revocable.length === 0)
+      throw new CliError(
+        "conflict",
+        "this account must keep at least one Recovery Code wrapper and one wrapper of any kind active; there is no wrapper to revoke",
+        {},
+        "state_conflict",
+      );
+    id = await selectOption(
+      "Wrapper to revoke",
+      revocable.map((wrapper) => ({
+        id: wrapper.wrapperId,
+        label: wrapper.wrapperId,
+        detail:
+          wrapper.type === "recovery-code"
+            ? "Recovery Code wrapper"
+            : wrapper.type === "password"
+              ? "Password wrapper"
+              : "Passkey wrapper",
+      })),
+      {
+        ...(options.terminal ? { terminal: options.terminal } : {}),
+        ...(options.prompt ? { prompt: options.prompt } : {}),
+        noInput: options.noInput,
+        // Revoking the wrong wrapper retires a recovery route, so an empty
+        // answer does not pick the first row.
+        defaultToFirst: false,
+      },
+    );
+  }
   const operationId = crypto.randomUUID();
   const result = await authorized.admin.post(
     "/api/v1/account-keys/wrappers/revoke",
     {
       operationId,
-      wrapperId: wrapperId.toLowerCase(),
+      wrapperId: id.toLowerCase(),
     },
     ["revoked", "idempotent"],
     { idempotencyKey: operationId },
   );
   return {
-    wrapperId: wrapperId.toLowerCase(),
+    wrapperId: id.toLowerCase(),
     revoked: Boolean(result.revoked),
     idempotent: Boolean(result.idempotent),
     message: result.idempotent

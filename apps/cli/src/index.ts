@@ -539,7 +539,10 @@ const renderDeviceResult = (
   if (typeof value.wrapperId === "string")
     rows.push({
       key: "Wrapper",
-      value: abbreviateId(value.wrapperId),
+      // The person has to carry this value to this command's --wrapper-id,
+      // so the card prints it whole. Other ids on this card are labels and
+      // stay short.
+      value: value.wrapperId,
       tone: "muted",
     });
   if (typeof value.via === "string")
@@ -551,8 +554,10 @@ const renderDeviceResult = (
     });
   if (typeof value.transferId === "string")
     rows.push({
-      key: "Transfer",
-      value: abbreviateId(value.transferId),
+      key: "Transfer ID",
+      // The person has to carry this value to another device, so the card
+      // prints it whole. Other ids on this card are labels and stay short.
+      value: value.transferId,
       tone: "accent",
     });
   if (typeof value.recipientDeviceId === "string")
@@ -1584,10 +1589,22 @@ const execute = async (
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readWorktreeContext(contextPath);
-    if (!context || context.projectId === undefined)
+    const credentials = localCredentials(runtime);
+    if (!context || context.projectId === undefined) {
+      // Environment resolution needs a signed-in session, so a missing
+      // session is reported before a missing link.
+      const token = await createSessionStore(credentials).get(profile.pin);
+      if (!token)
+        throw new CliError(
+          "authentication",
+          "login is required for this Server Profile",
+          {},
+          "authentication_required",
+        );
       throw new CliInvocationError(
         "No Project selected; use project link before selecting an Environment",
       );
+    }
     if (context.serverProfileId !== profile.pin.serverProfileId)
       throw new CliInvocationError(
         "worktree Project belongs to a different Server Profile",
@@ -1595,7 +1612,6 @@ const execute = async (
     const environmentReference = parsed.environment ?? parsed.positionals[0];
     if (!environmentReference)
       throw new Error("env use requires an Environment id or label");
-    const credentials = localCredentials(runtime);
     const admin = await createAdminClient(runtime, profile, credentials);
     const environment = await resolveEnvironmentReference(
       admin,

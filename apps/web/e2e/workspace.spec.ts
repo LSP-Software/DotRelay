@@ -33,6 +33,11 @@ test("device approval page asks to allow the CLI", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Allow this CLI?" }),
   ).toBeVisible();
+  // The CLI may run on another host (dotrelay setup --no-open), so the
+  // copy never claims it is on this machine.
+  await expect(
+    page.getByText("A DotRelay CLI is asking to sign in"),
+  ).toBeVisible();
   await expect(page.getByText("ABCD-EFGH")).toBeVisible();
 });
 
@@ -303,8 +308,9 @@ test("missing Device setup has one action and does not dump problem codes", asyn
   await expect(page.getByTestId("cli-setup-command")).toContainText(
     "dotrelay setup",
   );
+  await expect(page.getByText("CLI on this machine")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "Copy command" }),
+    page.getByRole("button", { name: "Set up browser" }),
   ).toBeVisible();
   await expect(page.getByText("crypto_provider_unavailable")).toHaveCount(0);
   await expect(page.getByText("Protected content is unavailable")).toHaveCount(
@@ -327,6 +333,7 @@ test("unsupported cryptography explains how to continue", async ({ page }) => {
   await expect(page.getByTestId("cli-setup-command")).toContainText(
     "dotrelay setup",
   );
+  await expect(page.getByText("CLI on this machine")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Copy command" }),
   ).toBeVisible();

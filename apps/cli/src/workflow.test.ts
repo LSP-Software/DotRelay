@@ -173,6 +173,11 @@ const accountKeyService = (
       readonly creatorDeviceId?: string;
       readonly creatorPublicKey?: string;
     }>;
+    readonly wrappers?: ReadonlyArray<{
+      readonly wrapperId: string;
+      readonly type: "passkey-prf" | "password" | "recovery-code";
+      readonly object: string;
+    }>;
     readonly transfer?: Readonly<{
       readonly id: string;
       readonly object: string;
@@ -195,21 +200,25 @@ const accountKeyService = (
   const admin: StrictJsonClient = {
     get: async (path, fields) => {
       if (path === "/api/v1/account-keys/wrappers") {
-        const wrappers = seed.recoveryWrapper
-          ? [
-              {
-                wrapperId: seed.recoveryWrapper.wrapperId,
-                type: "recovery-code" as const,
-                object: seed.recoveryWrapper.object,
-                ...(seed.recoveryWrapper.creatorDeviceId
-                  ? { creatorDeviceId: seed.recoveryWrapper.creatorDeviceId }
-                  : {}),
-                ...(seed.recoveryWrapper.creatorPublicKey
-                  ? { creatorPublicKey: seed.recoveryWrapper.creatorPublicKey }
-                  : {}),
-              },
-            ]
-          : [];
+        const wrappers = seed.wrappers
+          ? [...seed.wrappers]
+          : seed.recoveryWrapper
+            ? [
+                {
+                  wrapperId: seed.recoveryWrapper.wrapperId,
+                  type: "recovery-code" as const,
+                  object: seed.recoveryWrapper.object,
+                  ...(seed.recoveryWrapper.creatorDeviceId
+                    ? { creatorDeviceId: seed.recoveryWrapper.creatorDeviceId }
+                    : {}),
+                  ...(seed.recoveryWrapper.creatorPublicKey
+                    ? {
+                        creatorPublicKey: seed.recoveryWrapper.creatorPublicKey,
+                      }
+                    : {}),
+                },
+              ]
+            : [];
         return { wrappers };
       }
       return baseAdmin.get(path, fields);
@@ -651,6 +660,76 @@ describe("protected CLI workflows", () => {
     expect(boundaryRequests).toEqual([
       `/api/v1/workspace/boundary?environment=${ids.environment}`,
     ]);
+  });
+
+  test("env use names login before project link when no session is stored", async () => {
+    const runtime = await setup();
+    await createSessionStore(runtime.credentials).remove(profile.pin);
+    const result = await run(
+      ["env", "use", "development", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        worktreeConfig: `${runtime.stateDirectory}/no-context.json`,
+      },
+    );
+    expect(result.exitCode).toBe(6);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "authentication",
+      code: "authentication_required",
+      exitCode: 6,
+    });
+    expect(String(diagnostic.detail)).not.toContain("project link");
+  });
+
+  test("env use names project link when a session exists but no Project is linked", async () => {
+    const runtime = await setup();
+    const result = await run(
+      ["env", "use", "development", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        worktreeConfig: `${runtime.stateDirectory}/no-context.json`,
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "invocation",
+      exitCode: 2,
+    });
+    expect(String(diagnostic.detail)).toContain("project link");
+  });
+
+  test("pull with an Environment label and no session names login before project link", async () => {
+    const runtime = await setup();
+    await createSessionStore(runtime.credentials).remove(profile.pin);
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        "development",
+        "--output",
+        `${runtime.stateDirectory}/pulled.json`,
+        "--json",
+      ],
+      {
+        ...runtime,
+        worktreeConfig: `${runtime.stateDirectory}/no-context.json`,
+      },
+    );
+    expect(result.exitCode).toBe(6);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "authentication",
+      code: "authentication_required",
+      exitCode: 6,
+    });
+    expect(String(diagnostic.detail)).not.toContain("project link");
   });
 
   test("init accepts an Environment label as its positional argument", async () => {
@@ -4187,6 +4266,58 @@ describe("protected CLI workflows", () => {
     expect(new Uint8Array(opened)).toEqual(new Uint8Array(amk));
   });
 
+  test("device transfer lets you choose the receiving Device", async () => {
+    const amk = generateAccountMasterKey();
+    const first = await peerX25519();
+    const second = await peerX25519();
+    const runtime = await setup({
+      peerDevices: [
+        {
+          id: first.id,
+          encryptionPublicKey: first.encryptionPublicKey,
+          hasEpochGrant: true,
+        },
+        {
+          id: second.id,
+          encryptionPublicKey: second.encryptionPublicKey,
+          hasEpochGrant: false,
+        },
+      ],
+    });
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const terminalInput = new PassThrough();
+    terminalInput.end();
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => rendered.push(chunk.toString("utf8")));
+    const result = await run(
+      ["device", "transfer", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+        terminal: { input: terminalInput, output: terminalOutput },
+        prompt: async (question) => {
+          if (question === "Device to receive the key") return "2";
+          throw new Error(`unexpected prompt: ${question}`);
+        },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.recipientDeviceId).toBe(second.id);
+    const shown = rendered.join("");
+    expect(shown).toContain("Device to receive the key");
+    expect(shown).toContain(first.id);
+    expect(shown).toContain(second.id);
+    expect(shown).toContain("holds the project key");
+    expect(service.postedTransfers()[0]?.recipientDeviceId).toBe(second.id);
+  });
+
   test("device transfer refuses a recipient that is not an active Device", async () => {
     const amk = generateAccountMasterKey();
     const runtime = await setup();
@@ -4287,6 +4418,152 @@ describe("protected CLI workflows", () => {
     expect(report.revoked).toBe(true);
     expect(report.idempotent).toBe(false);
     expect(service.revokedWrappers()).toEqual([wrapperId]);
+  });
+
+  test("device revoke-wrapper lets you choose the wrapper", async () => {
+    const amk = generateAccountMasterKey();
+    const firstCode = bytesToHex(new Uint8Array(16).fill(1));
+    const secondCode = bytesToHex(new Uint8Array(16).fill(2));
+    const passwordId = bytesToHex(new Uint8Array(16).fill(3));
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin, {
+      wrappers: [
+        { wrapperId: firstCode, type: "recovery-code", object: "obj-1" },
+        { wrapperId: secondCode, type: "recovery-code", object: "obj-2" },
+        { wrapperId: passwordId, type: "password", object: "obj-3" },
+      ],
+    });
+    const terminalInput = new PassThrough();
+    terminalInput.end();
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => rendered.push(chunk.toString("utf8")));
+    const result = await run(
+      ["device", "revoke-wrapper", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+        terminal: { input: terminalInput, output: terminalOutput },
+        prompt: async (question) => {
+          if (question === "Wrapper to revoke") return "3";
+          throw new Error(`unexpected prompt: ${question}`);
+        },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.wrapperId).toBe(passwordId);
+    const shown = rendered.join("");
+    expect(shown).toContain("Wrapper to revoke");
+    expect(shown).toContain(firstCode);
+    expect(shown).toContain(secondCode);
+    expect(shown).toContain(passwordId);
+    expect(shown).toContain("Recovery Code wrapper");
+    expect(shown).toContain("Password wrapper");
+    expect(service.revokedWrappers()).toEqual([passwordId]);
+  });
+
+  test("device revoke-wrapper never offers the last Recovery Code wrapper", async () => {
+    const amk = generateAccountMasterKey();
+    const codeId = bytesToHex(new Uint8Array(16).fill(4));
+    const passwordId = bytesToHex(new Uint8Array(16).fill(5));
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin, {
+      wrappers: [
+        { wrapperId: codeId, type: "recovery-code", object: "obj-1" },
+        { wrapperId: passwordId, type: "password", object: "obj-2" },
+      ],
+    });
+    // Only the password wrapper is revocable, so the single remaining
+    // choice is taken without a prompt and the Recovery Code wrapper is
+    // never offered.
+    const result = await run(
+      ["device", "revoke-wrapper", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.wrapperId).toBe(passwordId);
+    expect(service.revokedWrappers()).toEqual([passwordId]);
+  });
+
+  test("device revoke-wrapper with --no-input requires --wrapper-id", async () => {
+    const amk = generateAccountMasterKey();
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const result = await run(
+      [
+        "device",
+        "revoke-wrapper",
+        "--profile",
+        "relay",
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "invocation",
+      exitCode: 2,
+    });
+    expect(service.revokedWrappers()).toHaveLength(0);
+  });
+
+  test("device revoke-wrapper refuses when nothing can be revoked", async () => {
+    const amk = generateAccountMasterKey();
+    const codeId = bytesToHex(new Uint8Array(16).fill(6));
+    const runtime = await setup();
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin, {
+      wrappers: [{ wrapperId: codeId, type: "recovery-code", object: "obj-1" }],
+    });
+    const result = await run(
+      ["device", "revoke-wrapper", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(4);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "state_conflict",
+      exitCode: 4,
+    });
+    expect(String(diagnostic.detail)).toContain(
+      "at least one Recovery Code wrapper",
+    );
+    expect(service.revokedWrappers()).toHaveLength(0);
   });
 
   test("an unlocked Device opens the Project epoch key from its Account Key Envelope", async () => {

@@ -968,8 +968,7 @@ export const EnvironmentEditor = ({
               {setupCommand ? (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    Prefer the CLI? It sets up the CLI on this machine, not this
-                    browser.
+                    Prefer the CLI? It sets up the CLI, not this browser.
                   </p>
                   <CopyableCommand
                     className="mt-2"
