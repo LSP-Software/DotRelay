@@ -39,6 +39,73 @@ test("Devices lists other devices besides this browser", async ({ page }) => {
   ).toContainText("Device");
 });
 
+test("the Devices table does not repeat this browser's OS in its summary line", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  let deviceKeys: Readonly<{
+    readonly encryptionPublicKey: string;
+    readonly signingPublicKey: string;
+  }> | null = null;
+  await page.route("**/api/v1/devices/bootstrap**", (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postData();
+      if (body) {
+        const parsed = JSON.parse(body) as {
+          readonly x25519PublicKey?: string;
+          readonly ed25519PublicKey?: string;
+        };
+        if (parsed.x25519PublicKey && parsed.ed25519PublicKey)
+          deviceKeys = {
+            encryptionPublicKey: parsed.x25519PublicKey,
+            signingPublicKey: parsed.ed25519PublicKey,
+          };
+      }
+    }
+    return route.fulfill({ json: {} });
+  });
+  await page.route("**/api/v1/grants/bootstrap**", (route) =>
+    route.fulfill({ json: {} }),
+  );
+  // The browser's client description already names its OS ("Chrome 126 on
+  // Linux"); the fixture's Device reports none, so the test stands in for the
+  // real service's report.
+  await page.route("**/api/workspace/boundary**", async (route) => {
+    const real = await route.fetch();
+    const body = (await real.json()) as Record<string, unknown>;
+    const device = body.device as Record<string, unknown> | undefined;
+    if (device && device.active === true && deviceKeys) {
+      device.encryptionPublicKey = deviceKeys.encryptionPublicKey;
+      device.signingPublicKey = deviceKeys.signingPublicKey;
+      device.osName = "Linux";
+      device.clientSummary = "Chrome 126 on Linux";
+    }
+    await route.fulfill({
+      status: real.status(),
+      contentType: "application/json",
+      json: body,
+    });
+  });
+
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
+  await expect(
+    page.locator("#devices").getByText("This browser is set up", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 15_000 });
+  const thisBrowserRow = page
+    .getByRole("table", { name: "Your devices" })
+    .getByRole("row", { name: /This browser/ });
+  // The summary line is the client's own description, which already names
+  // the OS; repeating it after the summary ("…on Linux · Linux") is what
+  // this test pins against.
+  await expect(thisBrowserRow).toContainText("Chrome 126 on Linux");
+  await expect(thisBrowserRow).not.toContainText("· Linux");
+});
+
 test("device approval page asks to allow the CLI", async ({ page }) => {
   await page.goto("/device?user_code=ABCD-EFGH");
   await expect(

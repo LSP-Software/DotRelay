@@ -3057,16 +3057,11 @@ export const WorkspaceShell = ({
                                   <div className="font-mono text-[10px] text-muted-foreground">
                                     {device.id}
                                   </div>
-                                  {device.current &&
-                                  device.osName &&
-                                  device.clientSummary ? (
-                                    <div className="text-xs text-muted-foreground">
-                                      {device.clientSummary}
-                                      {device.osName
-                                        ? ` · ${device.osName}`
-                                        : ""}
-                                    </div>
-                                  ) : device.clientSummary ? (
+                                  {device.clientSummary ? (
+                                    // The client's own description already
+                                    // names the OS when it has one ("Chrome
+                                    // 126 on Windows 10/11"), so the row never
+                                    // appends it a second time.
                                     <div className="text-xs text-muted-foreground">
                                       {device.clientSummary}
                                     </div>

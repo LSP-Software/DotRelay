@@ -827,3 +827,26 @@ FIXED - shared `isUnreadableTerminalError` predicate in `ui.ts`
 call sites remap it to errors naming the positional and `--variable`
 (`ask()` itself unchanged, still the base fixed message). Red-green
 proven at dispatch level with closed-stdin terminals.
+
+## UX-025 - Devices table repeated this browser's OS in its summary line
+Journey:
+WEB - Devices view, the row for this browser after setting it up.
+State:
+Browser device enrolled with a client description (PR #247).
+Severity:
+LOW (correctness-neutral, but the row reads "Chrome 126 on Windows 10/11 ·
+Windows 10/11" — the OS twice, in the most prominent row of the table)
+Observed:
+The render branch for the current device appended `· ${osName}` after
+`clientSummary`. A browser's `clientSummary` already ends with its OS
+("Chrome 126 on Windows 10/11", per `describeBrowserClient`), and in the
+web app the current device is always this browser, so the append duplicated
+the OS in every session. Proven live: the e2e enrolls the fixture browser
+and the row rendered "Chrome 126 on Linux · Linux".
+Expected:
+The summary line is the client's own description, once.
+Status:
+FIXED - `workspace-shell.tsx` renders `clientSummary` alone (no `· osName`
+append; peer rows never had one). The e2e pins the row to
+"Chrome 126 on Linux" and asserts "· Linux" is absent; full e2e and
+`check` green.
