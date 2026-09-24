@@ -220,15 +220,159 @@ describe("account key wire-format hardening", () => {
 });
 
 describe("webauthn prf extraction (WebAuthn Level 3)", () => {
-  // The W3C shape: getClientExtensionResults() maps the extension id to
-  // { supported, results: { first } }, each result a 32-byte ArrayBuffer.
+  const outputBuffer = (bytes: Uint8Array): ArrayBuffer => {
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    return copy.buffer;
+  };
+
+  // Authentication supplies prf.results.first and does not report enabled.
+  // Registration reports prf.enabled. The invented `supported` flag is not
+  // part of either response.
+  test("an assertion result without supported or enabled unlocks the existing account master key", async () => {
+    const signing = await generateSigningKeyPair();
+    const accountMasterKey = generateAccountMasterKey();
+    const credentialIdBytes = new Uint8Array(32).fill(3);
+    const prfInputBytes = new Uint8Array(32).fill(5);
+    const prfOutput = new Uint8Array(32);
+    prfOutput.set(Array.from({ length: 32 }, (_, index) => index + 1));
+    const wrapper = await createAccountKeyWrapper(
+      baseInput(signing, accountMasterKey, {
+        type: "passkeyPrf",
+        credentialId: credentialIdBytes,
+        prfInput: prfInputBytes,
+        prfOutput,
+      }),
+    );
+    const platform: PasskeyPrfPlatform = {
+      PublicKeyCredential: {
+        isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+      },
+      crypto: globalThis.crypto,
+      navigator: {
+        credentials: {
+          get: async () => ({
+            id: "spec-assertion",
+            rawId: outputBuffer(credentialIdBytes),
+            type: "public-key",
+            getClientExtensionResults: () =>
+              Object.freeze({
+                prf: { results: { first: outputBuffer(prfOutput) } },
+              }),
+          }),
+          create: async () => {
+            throw new Error("creation is not part of an unlock");
+          },
+        },
+      },
+    };
+    const asserted = await runPasskeyAssertion(
+      platform,
+      credentialIdBytes,
+      prfInputBytes,
+    );
+    expect(asserted).toEqual(prfOutput);
+    const recovered = await unwrapAccountKeyWrapper(
+      parseAccountKeyWrapper(encode(wrapper.object)),
+      { prfOutput: asserted },
+      await selfVerification(signing),
+    );
+    expect(recovered).toEqual(accountMasterKey);
+  });
+
+  test("a creation response with enabled false is not a recovery method", async () => {
+    const prfOutput = new Uint8Array(32).fill(9);
+    const credentialIdBytes = new Uint8Array(16).fill(4);
+    let assertions = 0;
+    const platform: PasskeyPrfPlatform = {
+      PublicKeyCredential: {
+        isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+      },
+      crypto: globalThis.crypto,
+      navigator: {
+        credentials: {
+          create: async () => ({
+            id: "disabled-prf",
+            rawId: outputBuffer(credentialIdBytes),
+            type: "public-key",
+            getClientExtensionResults: () =>
+              Object.freeze({
+                prf: {
+                  enabled: false,
+                  supported: true,
+                  results: { first: outputBuffer(prfOutput) },
+                },
+              }),
+          }),
+          get: async () => {
+            assertions += 1;
+            return {
+              id: "disabled-prf",
+              rawId: outputBuffer(credentialIdBytes),
+              type: "public-key",
+              getClientExtensionResults: () =>
+                Object.freeze({
+                  prf: {
+                    supported: true,
+                    results: { first: outputBuffer(prfOutput) },
+                  },
+                }),
+            };
+          },
+          delete: async () => undefined,
+        },
+      },
+    };
+    await expect(
+      createPasskeyWithPrf(
+        platform,
+        new Uint8Array(32).fill(5),
+        new Uint8Array(16).fill(1),
+      ),
+    ).rejects.toMatchObject({ code: "unsupported" });
+    expect(assertions).toBe(0);
+  });
+
+  test("a creation response with enabled true and no result is confirmed by an assertion", async () => {
+    const prfOutput = new Uint8Array(32).fill(8);
+    const credentialIdBytes = new Uint8Array(16).fill(6);
+    const platform: PasskeyPrfPlatform = {
+      PublicKeyCredential: {
+        isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+      },
+      crypto: globalThis.crypto,
+      navigator: {
+        credentials: {
+          create: async () => ({
+            id: "confirm-prf",
+            rawId: outputBuffer(credentialIdBytes),
+            type: "public-key",
+            getClientExtensionResults: () =>
+              Object.freeze({ prf: { enabled: true } }),
+          }),
+          get: async () => ({
+            id: "confirm-prf",
+            rawId: outputBuffer(credentialIdBytes),
+            type: "public-key",
+            getClientExtensionResults: () =>
+              Object.freeze({
+                prf: { results: { first: outputBuffer(prfOutput) } },
+              }),
+          }),
+        },
+      },
+    };
+    const created = await createPasskeyWithPrf(
+      platform,
+      new Uint8Array(32).fill(5),
+      new Uint8Array(16).fill(1),
+    );
+    expect(created.credentialId).toEqual(credentialIdBytes);
+    expect(created.prfOutput).toEqual(prfOutput);
+  });
+
   const extensionResults = (
-    prf:
-      | Readonly<{
-          readonly supported: boolean;
-          readonly results?: Readonly<{ readonly first?: ArrayBuffer }>;
-        }>
-      | undefined,
+    prf: Readonly<Record<string, unknown>> | undefined,
   ): Readonly<Record<string, unknown>> =>
     Object.freeze(prf !== undefined ? Object.freeze({ prf }) : {});
 
@@ -236,7 +380,7 @@ describe("webauthn prf extraction (WebAuthn Level 3)", () => {
     const prf = new ArrayBuffer(32);
     new Uint8Array(prf).set(Array.from({ length: 32 }, (_, i) => i));
     const out = extractPasskeyPrfOutput(
-      extensionResults({ supported: true, results: { first: prf } }),
+      extensionResults({ results: { first: prf } }),
     );
     expect(out).not.toBeNull();
     expect(out).toHaveLength(32);
@@ -246,40 +390,32 @@ describe("webauthn prf extraction (WebAuthn Level 3)", () => {
   test("returns null for a PRF output of the wrong length", () => {
     expect(
       extractPasskeyPrfOutput(
-        extensionResults({
-          supported: true,
-          results: { first: new ArrayBuffer(64) },
-        }),
+        extensionResults({ results: { first: new ArrayBuffer(64) } }),
       ),
     ).toBeNull();
     expect(
       extractPasskeyPrfOutput(
-        extensionResults({
-          supported: true,
-          results: { first: new ArrayBuffer(16) },
-        }),
+        extensionResults({ results: { first: new ArrayBuffer(16) } }),
       ),
     ).toBeNull();
   });
 
   test("returns null when the platform reported no PRF output", () => {
-    // No extension results at all.
     expect(extractPasskeyPrfOutput({})).toBeNull();
     expect(extractPasskeyPrfOutput(undefined)).toBeNull();
-    // The extension ran but the authenticator could not evaluate it.
+    expect(extractPasskeyPrfOutput(extensionResults({}))).toBeNull();
     expect(
-      extractPasskeyPrfOutput(extensionResults({ supported: false })),
+      extractPasskeyPrfOutput(extensionResults({ enabled: false })),
     ).toBeNull();
-    // The extension ran but no result was produced.
+    expect(
+      extractPasskeyPrfOutput(extensionResults({ enabled: true })),
+    ).toBeNull();
+    expect(
+      extractPasskeyPrfOutput(extensionResults({ results: {} })),
+    ).toBeNull();
     expect(
       extractPasskeyPrfOutput(
-        extensionResults({ supported: true, results: {} }),
-      ),
-    ).toBeNull();
-    // A malformed entry of another extension is never read as the PRF.
-    expect(
-      extractPasskeyPrfOutput(
-        Object.freeze({ prf: { supported: true }, appid: true }),
+        Object.freeze({ prf: { enabled: false }, appid: true }),
       ),
     ).toBeNull();
   });
@@ -344,24 +480,36 @@ describe("webauthn prf ceremonies (faithful platform double)", () => {
     return new Uint8Array(digest);
   };
 
-  const makeCredential = (prfOutput: Uint8Array | null) => ({
+  const copyBuffer = (bytes: Uint8Array): ArrayBuffer => {
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    return copy.buffer;
+  };
+
+  const makeCredential = (
+    ceremony: "authentication" | "registration",
+    prfOutput: Uint8Array | null,
+    registration: "output" | "confirm" | "disabled" = "output",
+  ) => ({
     id: "test-credential",
-    rawId: credentialIdBytes.buffer.slice(
-      credentialIdBytes.byteOffset,
-      credentialIdBytes.byteOffset + credentialIdBytes.byteLength,
-    ),
+    rawId: copyBuffer(credentialIdBytes),
     type: "public-key",
-    getClientExtensionResults: () =>
-      Object.freeze(
-        prfOutput
-          ? {
-              prf: {
-                supported: true,
-                results: { first: prfOutput.buffer },
-              },
-            }
-          : { prf: { supported: false } },
-      ),
+    getClientExtensionResults: () => {
+      if (ceremony === "authentication") {
+        return Object.freeze(
+          prfOutput
+            ? { prf: { results: { first: copyBuffer(prfOutput) } } }
+            : { prf: {} },
+        );
+      }
+      if (registration === "disabled")
+        return Object.freeze({ prf: { enabled: false } });
+      if (registration === "confirm" || !prfOutput)
+        return Object.freeze({ prf: { enabled: true } });
+      return Object.freeze({
+        prf: { enabled: true, results: { first: copyBuffer(prfOutput) } },
+      });
+    },
   });
 
   const makePlatform = (
@@ -372,7 +520,7 @@ describe("webauthn prf ceremonies (faithful platform double)", () => {
         | "cancel"
         | "no-credential"
         | "throw";
-      creationResult: "output" | "no-output" | "cancel";
+      creationResult: "output" | "confirm" | "disabled" | "cancel";
     }>,
   ) => {
     const seen: {
@@ -392,10 +540,10 @@ describe("webauthn prf ceremonies (faithful platform double)", () => {
             switch (behavior.assertionResult) {
               case "output": {
                 const output = await expectedPrfOutput(credentialIdBytes);
-                return makeCredential(output);
+                return makeCredential("authentication", output);
               }
               case "no-output":
-                return makeCredential(null);
+                return makeCredential("authentication", null);
               case "cancel":
                 throw new DOMException("cancelled", "NotAllowedError");
               case "no-credential":
@@ -411,10 +559,16 @@ describe("webauthn prf ceremonies (faithful platform double)", () => {
             seen.createOptions.push(options);
             if (behavior.creationResult === "cancel")
               throw new DOMException("cancelled", "NotAllowedError");
-            return makeCredential(
+            const output =
               behavior.creationResult === "output"
                 ? new Uint8Array(await expectedPrfOutput(credentialIdBytes))
-                : null,
+                : null;
+            return makeCredential(
+              "registration",
+              output,
+              behavior.creationResult === "cancel"
+                ? "output"
+                : behavior.creationResult,
             );
           },
           delete: async () => {
@@ -519,8 +673,8 @@ describe("webauthn prf ceremonies (faithful platform double)", () => {
     expect(error.code).toBe("no-matching-credential");
   });
 
-  test("passkey creation confirms PRF capability from the created credential", async () => {
-    const { platform } = makePlatform({
+  test("passkey creation uses a creation-time result when enabled", async () => {
+    const { platform, seen } = makePlatform({
       assertionResult: "output",
       creationResult: "output",
     });
@@ -533,18 +687,50 @@ describe("webauthn prf ceremonies (faithful platform double)", () => {
     expect(created.prfOutput).toEqual(
       await expectedPrfOutput(credentialIdBytes),
     );
+    expect(seen.getOptions).toHaveLength(0);
+  });
+
+  test("a creation response with enabled true and no result confirms through an assertion", async () => {
+    const { platform, seen } = makePlatform({
+      assertionResult: "output",
+      creationResult: "confirm",
+    });
+    const created = await createPasskeyWithPrf(
+      platform,
+      prfInputBytes,
+      new Uint8Array(16).fill(1),
+    );
+    expect(created.prfOutput).toEqual(
+      await expectedPrfOutput(credentialIdBytes),
+    );
+    expect(seen.getOptions).toHaveLength(1);
+    expect(seen.deleted).toBe(0);
+  });
+
+  test("a creation response with enabled false is discarded without an assertion", async () => {
+    const { platform, seen } = makePlatform({
+      assertionResult: "output",
+      creationResult: "disabled",
+    });
+    const error = await capture(
+      createPasskeyWithPrf(platform, prfInputBytes, new Uint8Array(16).fill(1)),
+    );
+    expect(error.code).toBe("unsupported");
+    expect(seen.getOptions).toHaveLength(0);
+    expect(seen.deleted).toBe(1);
   });
 
   test("a created passkey without PRF support is discarded and reported", async () => {
     const { platform, seen } = makePlatform({
       assertionResult: "no-output",
-      creationResult: "no-output",
+      creationResult: "confirm",
     });
     const error = await capture(
       createPasskeyWithPrf(platform, prfInputBytes, new Uint8Array(16).fill(1)),
     );
     expect(error.code).toBe("unsupported");
     expect(seen.deleted).toBe(1);
+    expect(seen.getOptions).toHaveLength(1);
   });
 });
 

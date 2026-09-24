@@ -58,7 +58,9 @@ export {
   PasskeyPrfError,
   type PasskeyPrfErrorCode,
   type PasskeyPrfPlatform,
-  type PrfExtensionResult,
+  type PrfAuthenticationOutput,
+  type PrfEvaluationResults,
+  type PrfRegistrationOutput,
   passkeyPrfSupported,
   runPasskeyAssertion,
 } from "./account/webauthn-prf";

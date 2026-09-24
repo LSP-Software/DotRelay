@@ -1,3 +1,7 @@
+// Browser-interface simulation of WebAuthn Level 3 PRF outputs.
+// Registration reports prf.enabled and may include results.first.
+// Authentication reports prf.results.first and does not report enabled.
+// This is not a passkey hardware test.
 (() => {
   const mode = globalThis.__dotrelayPasskeyMode ?? "prf";
   const stableCredentialId = new Uint8Array([
@@ -66,21 +70,32 @@
     }
   }
 
-  const unsupportedCredential = (credentialId) =>
-    new FakePublicKeyCredential(copyBuffer(credentialId), {
-      prf: { supported: false },
-    });
-
-  const credentialFor = async (credentialId, input) => {
+  const extensionFor = async (ceremony, credentialId, input) => {
+    if (ceremony === "authentication") {
+      if (
+        mode === "unsupported" ||
+        mode === "missing-output" ||
+        input.byteLength !== 32
+      )
+        return { prf: {} };
+      return { prf: { results: { first: await digest(credentialId, input) } } };
+    }
     if (mode === "unsupported" || input.byteLength !== 32)
-      return unsupportedCredential(credentialId);
-    return new FakePublicKeyCredential(copyBuffer(credentialId), {
+      return { prf: { enabled: false } };
+    if (mode === "confirm") return { prf: { enabled: true } };
+    return {
       prf: {
-        supported: true,
+        enabled: true,
         results: { first: await digest(credentialId, input) },
       },
-    });
+    };
   };
+
+  const credentialFor = async (ceremony, credentialId, input) =>
+    new FakePublicKeyCredential(
+      copyBuffer(credentialId),
+      await extensionFor(ceremony, credentialId, input),
+    );
 
   const credentials = {
     create: async (options) => {
@@ -89,9 +104,11 @@
           "The operation was cancelled.",
           "NotAllowedError",
         );
-      if (mode === "unsupported")
-        return unsupportedCredential(stableCredentialId);
-      return credentialFor(stableCredentialId, readPrfInput(options));
+      return credentialFor(
+        "registration",
+        stableCredentialId,
+        readPrfInput(options),
+      );
     },
     delete: async () => {
       globalThis.__dotrelayPasskeyDeleted += 1;
@@ -102,7 +119,11 @@
           "The operation was cancelled.",
           "NotAllowedError",
         );
-      return credentialFor(readCredentialId(options), readPrfInput(options));
+      return credentialFor(
+        "authentication",
+        readCredentialId(options),
+        readPrfInput(options),
+      );
     },
   };
 

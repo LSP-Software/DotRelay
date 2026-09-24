@@ -55,7 +55,8 @@ type BrowserGlobal = typeof globalThis & {
     readonly extract64Rejected: boolean;
     readonly extract16Rejected: boolean;
     readonly missingRejected: boolean;
-    readonly unsupportedFalseRejected: boolean;
+    readonly emptyResultsRejected: boolean;
+    readonly enabledWithoutResultRejected: boolean;
     readonly assertion32Length: number;
     readonly assertionInputBound: boolean;
     readonly assertionCarriesPrfEvalInput: boolean;
@@ -66,6 +67,9 @@ type BrowserGlobal = typeof globalThis & {
     readonly createViaConfirmation: boolean;
     readonly createDiscardedCode: string | null;
     readonly createDiscardedDeleted: number;
+    readonly createDisabledCode: string | null;
+    readonly createDisabledAssertions: number;
+    readonly createDisabledDeleted: number;
   }>;
   dotRelayClientPasswordWorkerRoundTrip: () => Promise<{
     readonly matches: boolean;
@@ -178,7 +182,7 @@ type PasskeyPrfBehavior = Readonly<{
     | "cancel"
     | "no-credential"
     | "null";
-  readonly creation: "output" | "no-output" | "cancel";
+  readonly creation: "output" | "confirm" | "disabled" | "cancel";
 }>;
 
 const makeFakePasskeyPlatform = (
@@ -222,21 +226,29 @@ const makeFakePasskeyPlatform = (
     const first = (evalInput as Record<string, unknown>)["first"];
     return first instanceof ArrayBuffer ? new Uint8Array(first) : null;
   };
-  const makeCredential = (output: Uint8Array | null) => ({
+  const makeCredential = (
+    ceremony: "authentication" | "registration",
+    output: Uint8Array | null,
+  ) => ({
     id: "fake-credential",
     rawId: toBuffer(credentialId),
     type: "public-key",
-    getClientExtensionResults: () =>
-      Object.freeze(
-        output
-          ? {
-              prf: {
-                supported: true,
-                results: { first: toBuffer(output) },
-              },
-            }
-          : { prf: { supported: false } },
-      ),
+    getClientExtensionResults: () => {
+      if (ceremony === "authentication") {
+        return Object.freeze(
+          output
+            ? { prf: { results: { first: toBuffer(output) } } }
+            : { prf: {} },
+        );
+      }
+      if (behavior.creation === "disabled")
+        return Object.freeze({ prf: { enabled: false } });
+      if (behavior.creation === "confirm" || !output)
+        return Object.freeze({ prf: { enabled: true } });
+      return Object.freeze({
+        prf: { enabled: true, results: { first: toBuffer(output) } },
+      });
+    },
   });
   const platform = {
     PublicKeyCredential: {
@@ -250,13 +262,14 @@ const makeFakePasskeyPlatform = (
           switch (behavior.assertion) {
             case "output":
               return makeCredential(
+                "authentication",
                 await digestOf(
                   credentialId,
                   requestedPrfInput(options) ?? new Uint8Array(0),
                 ),
               );
             case "no-output":
-              return makeCredential(null);
+              return makeCredential("authentication", null);
             case "cancel":
               throw new DOMException("cancelled", "NotAllowedError");
             case "no-credential":
@@ -275,6 +288,7 @@ const makeFakePasskeyPlatform = (
           if (behavior.creation === "cancel")
             throw new DOMException("cancelled", "NotAllowedError");
           return makeCredential(
+            "registration",
             behavior.creation === "output"
               ? await digestOf(
                   credentialId,
@@ -322,11 +336,9 @@ const dotRelayClientPasskeyPrf = async () => {
   // Real Chromium platform detection: the surface exists in the browser.
   const supported = passkeyPrfSupported();
   // Extraction from the client extension results record (Level 3 shape).
+  const specOutput = new ArrayBuffer(32);
   const ok = extractPasskeyPrfOutput({
-    prf: {
-      supported: true,
-      results: { first: new ArrayBuffer(32) },
-    },
+    prf: { results: { first: specOutput } },
   });
   const assertionPlatform = makeFakePasskeyPlatform(
     { assertion: "output", creation: "output" },
@@ -384,7 +396,7 @@ const dotRelayClientPasskeyPrf = async () => {
     new Uint8Array(16).fill(1),
   );
   const confirmPlatform = makeFakePasskeyPlatform(
-    { assertion: "output", creation: "no-output" },
+    { assertion: "output", creation: "confirm" },
     credentialId,
   );
   const confirmed = await createPasskeyWithPrf(
@@ -393,12 +405,23 @@ const dotRelayClientPasskeyPrf = async () => {
     new Uint8Array(16).fill(1),
   );
   const discardPlatform = makeFakePasskeyPlatform(
-    { assertion: "no-output", creation: "no-output" },
+    { assertion: "no-output", creation: "confirm" },
     credentialId,
   );
   const discardedCode = await capturePasskeyCode(
     createPasskeyWithPrf(
       discardPlatform.platform,
+      prfInput,
+      new Uint8Array(16).fill(1),
+    ),
+  );
+  const disabledPlatform = makeFakePasskeyPlatform(
+    { assertion: "output", creation: "disabled" },
+    credentialId,
+  );
+  const disabledCode = await capturePasskeyCode(
+    createPasskeyWithPrf(
+      disabledPlatform.platform,
       prfInput,
       new Uint8Array(16).fill(1),
     ),
@@ -411,21 +434,16 @@ const dotRelayClientPasskeyPrf = async () => {
     extract32Length: ok ? ok.length : -1,
     extract64Rejected:
       extractPasskeyPrfOutput({
-        prf: {
-          supported: true,
-          results: { first: new ArrayBuffer(64) },
-        },
+        prf: { results: { first: new ArrayBuffer(64) } },
       }) === null,
     extract16Rejected:
       extractPasskeyPrfOutput({
-        prf: {
-          supported: true,
-          results: { first: new ArrayBuffer(16) },
-        },
+        prf: { results: { first: new ArrayBuffer(16) } },
       }) === null,
     missingRejected: extractPasskeyPrfOutput({}) === null,
-    unsupportedFalseRejected:
-      extractPasskeyPrfOutput({ prf: { supported: false } }) === null,
+    emptyResultsRejected: extractPasskeyPrfOutput({ prf: {} }) === null,
+    enabledWithoutResultRejected:
+      extractPasskeyPrfOutput({ prf: { enabled: true } }) === null,
     assertion32Length: assertionOutput.length,
     assertionInputBound:
       (await expectedOutput(prfInput)).every(
@@ -446,6 +464,9 @@ const dotRelayClientPasskeyPrf = async () => {
       confirmed.prfOutput.length === 32 && confirmPlatform.seen.deleted === 0,
     createDiscardedCode: discardedCode,
     createDiscardedDeleted: discardPlatform.seen.deleted,
+    createDisabledCode: disabledCode,
+    createDisabledAssertions: disabledPlatform.seen.getInputs.length,
+    createDisabledDeleted: disabledPlatform.seen.deleted,
   });
 };
 

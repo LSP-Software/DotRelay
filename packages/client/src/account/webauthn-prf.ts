@@ -1,30 +1,34 @@
 import { PASSKEY_PRF_OUTPUT_LENGTH } from "./constants";
 
-// The WebAuthn `prf` extension is the platform mechanism that lets a passkey
-// contribute exactly 32 bytes of key material (HMAC-SHA256 over the
-// application-provided 32-byte PRF input) without exposing the credential
-// secret. WebAuthn Level 3 moved extension results off the assertion
-// response: the user agent surfaces them through
-// `PublicKeyCredential.getClientExtensionResults()`, where the `prf`
-// extension reports `{ supported, results: { first, second? } }` with each
-// result a 32-byte ArrayBuffer. The CTAP/WebAuthn spec fixes that output at
-// 32 bytes, so the pin here mirrors the platform guarantee rather than an
-// arbitrary choice.
+// The WebAuthn `prf` extension lets a passkey contribute exactly 32 bytes of
+// key material (HMAC-SHA256 over the application-provided 32-byte PRF input)
+// without exposing the credential secret. WebAuthn Level 3 reports extension
+// output through `PublicKeyCredential.getClientExtensionResults()`.
 //
-// The output is ephemeral key-derivation material: it is never stored or
-// transmitted, only fed to HKDF, so its size can change without a wire-format
-// change.
+// Registration (`credentials.create`) reports `prf.enabled`. `enabled: true`
+// means the new credential can evaluate the PRF. `results.first` may also be
+// present when the creation request included `prf.eval`, but a result is not
+// required at creation time. Authentication (`credentials.get`) does not
+// report `enabled`. A successful evaluation is `prf.results.first`, a 32-byte
+// ArrayBuffer. Neither response has a `supported` field.
+//
+// The output is ephemeral key-derivation material: it stays in this client
+// and is fed to HKDF. It is never stored or sent to the service.
 
-// The extension result the user agent reports for the `prf` extension.
-// `supported` is false when the platform could not evaluate the PRF (for
-// example, the authenticator does not support it), and `results.first`
-// carries the 32-byte output for the application's PRF input when the
-// evaluation succeeded.
-export type PrfExtensionResult = Readonly<{
-  readonly supported: boolean;
-  readonly results?: Readonly<{
-    readonly first?: ArrayBuffer;
-  }>;
+export type PrfEvaluationResults = Readonly<{
+  readonly first?: ArrayBuffer;
+  readonly second?: ArrayBuffer;
+}>;
+
+// Client extension output for `credentials.create`.
+export type PrfRegistrationOutput = Readonly<{
+  readonly enabled?: boolean;
+  readonly results?: PrfEvaluationResults;
+}>;
+
+// Client extension output for `credentials.get`.
+export type PrfAuthenticationOutput = Readonly<{
+  readonly results?: PrfEvaluationResults;
 }>;
 
 // The minimal shape of a WebAuthn credential the account-key flows consume.
@@ -85,35 +89,40 @@ type ProbedCredentialApi = Readonly<{
   readonly delete?: CredentialMethod;
 }>;
 
-// Read the PRF extension output from a credential's client extension results
-// and return it as a 32-byte Uint8Array. Returns null when the platform
-// reported no usable PRF output (extension unsupported or absent from the
-// result set) or when the output is not exactly 32 bytes. Callers treat null
-// as "PRF output unavailable" and fall back to the password or recovery-code
-// path. The parameter is typed `unknown` (not a record) because the browser
-// hands back `AuthenticationExtensionsClientOutputs`, which lacks the index
-// signature a record type would demand; the body narrows it field by field.
-export const extractPasskeyPrfOutput = (
+const prfExtension = (
   clientExtensionResults: unknown,
-): Uint8Array | null => {
+): Record<string, unknown> | null => {
   if (
     typeof clientExtensionResults !== "object" ||
     clientExtensionResults === null
   )
     return null;
-  const results = clientExtensionResults as Record<string, unknown>;
-  const prf = results["prf"];
-  if (typeof prf !== "object" || prf === null || !("supported" in prf))
-    return null;
-  if (prf.supported !== true) return null;
-  if (!("results" in prf)) return null;
-  const inner = prf.results;
-  if (typeof inner !== "object" || inner === null || !("first" in inner))
-    return null;
-  const first = inner.first;
+  const prf = (clientExtensionResults as Record<string, unknown>)["prf"];
+  if (typeof prf !== "object" || prf === null) return null;
+  return prf as Record<string, unknown>;
+};
+
+// Registration reports `enabled: true` only when the created credential can
+// evaluate the PRF. Authentication does not report this field.
+const prfRegistrationEnabled = (clientExtensionResults: unknown): boolean =>
+  prfExtension(clientExtensionResults)?.["enabled"] === true;
+
+// Read `prf.results.first` from a credential's client extension results.
+// Returns null when the result is absent or is not a 32-byte ArrayBuffer.
+// Callers treat null as "PRF output unavailable" and fall back to the
+// password or recovery-code path. `enabled` and any non-standard `supported`
+// flag are ignored here: authentication success is the result bytes alone.
+export const extractPasskeyPrfOutput = (
+  clientExtensionResults: unknown,
+): Uint8Array | null => {
+  const prf = prfExtension(clientExtensionResults);
+  if (!prf || !("results" in prf)) return null;
+  const inner = prf["results"];
+  if (typeof inner !== "object" || inner === null) return null;
+  const first = (inner as Record<string, unknown>)["first"];
   if (!(first instanceof ArrayBuffer)) return null;
-  const bytes = new Uint8Array(first);
-  return bytes.length === PASSKEY_PRF_OUTPUT_LENGTH ? bytes : null;
+  if (first.byteLength !== PASSKEY_PRF_OUTPUT_LENGTH) return null;
+  return new Uint8Array(first);
 };
 
 // Narrow the WebAuthn capability fields from a possibly-bare platform object
@@ -275,6 +284,7 @@ const prfAssertionOptions = (
           transports: ["internal", "hybrid"],
         },
       ],
+      userVerification: "required",
       extensions: { prf: { eval: { first: asBufferSource(input) } } },
     },
   });
@@ -316,14 +326,34 @@ export const runPasskeyAssertion = async (
   return output;
 };
 
-// Create a passkey that supports the PRF extension and confirm that concrete
-// credential can actually deliver a 32-byte PRF output for the given input.
-// The confirmation runs a real assertion with the same PRF input: an
-// authenticator that accepted the extension at creation time but cannot
-// evaluate it must not become a recovery method, because it could never
-// unlock the account. When the confirmation fails, the freshly created
-// credential is discarded (best effort) so the User is not left holding a
-// passkey that unlocks nothing.
+const discardPasskey = async (
+  credentials: ProbedCredentialApi,
+  rawId: ArrayBuffer,
+): Promise<void> => {
+  try {
+    await credentials.delete?.({
+      publicKey: {
+        allowCredentials: [
+          {
+            id: rawId,
+            type: "public-key",
+            transports: ["internal", "hybrid"],
+          },
+        ],
+      },
+    });
+  } catch {
+    // best effort: a credential that cannot deliver the PRF cannot unlock
+    // the account anyway
+  }
+};
+
+// Create a passkey and require WebAuthn Level 3 `prf.enabled === true`.
+// A creation-time `results.first` is used when the authenticator supplied
+// one. Otherwise a real assertion must return `results.first`. `enabled:
+// false` is discarded and is not registered. The credential and its
+// extension output stay in this client: only the wrapper bytes, which carry
+// the PRF input and not the output, reach the service.
 //
 // On success the caller derives the wrapper's key from the returned PRF
 // output and wraps the existing Account Master Key under it. The credential
@@ -375,33 +405,28 @@ export const createPasskeyWithPrf = async (
   }
   const newCredential = toPasskeyCredential(created);
   if (!newCredential) throw new PasskeyPrfError("unsupported");
-  const createdOutput = extractPasskeyPrfOutput(
-    newCredential.getClientExtensionResults(),
-  );
+  const creationResults = newCredential.getClientExtensionResults();
+  // `enabled: false`, or a creation response that does not report `enabled`,
+  // is not a usable recovery method. An immediate result is not enough, and
+  // a later assertion must not promote it.
+  if (!prfRegistrationEnabled(creationResults)) {
+    await discardPasskey(credentials, newCredential.rawId);
+    throw new PasskeyPrfError("unsupported");
+  }
+  const createdOutput = extractPasskeyPrfOutput(creationResults);
   if (createdOutput)
     return Object.freeze({
       credentialId: new Uint8Array(newCredential.rawId),
       prfOutput: createdOutput,
     });
-  // The platform accepted the PRF extension request but produced no output.
-  // Confirm with a real assertion (the W3C-conformant check): if that also
-  // fails, the authenticator cannot deliver PRF outputs, so discard the
-  // credential and report the platform as unable to support the method.
+  // `enabled: true` with no creation-time result. Confirm with a real
+  // assertion. If that also fails, the authenticator cannot deliver PRF
+  // outputs, so discard the credential.
   let confirmation: PasskeyCredential | null = null;
   try {
-    const confirmationResult: unknown = await credentials.get({
-      publicKey: {
-        challenge: asBufferSource(crypto.getRandomValues(new Uint8Array(32))),
-        allowCredentials: [
-          {
-            id: newCredential.rawId,
-            type: "public-key",
-            transports: ["internal", "hybrid"],
-          },
-        ],
-        extensions: { prf: { eval: { first: asBufferSource(input) } } },
-      },
-    });
+    const confirmationResult: unknown = await credentials.get(
+      prfAssertionOptions(crypto, new Uint8Array(newCredential.rawId), input),
+    );
     confirmation = toPasskeyCredential(confirmationResult);
   } catch {
     confirmation = null;
@@ -416,21 +441,6 @@ export const createPasskeyWithPrf = async (
         prfOutput: confirmed,
       });
   }
-  try {
-    await credentials.delete?.({
-      publicKey: {
-        allowCredentials: [
-          {
-            id: newCredential.rawId,
-            type: "public-key",
-            transports: ["internal", "hybrid"],
-          },
-        ],
-      },
-    });
-  } catch {
-    // best effort: a credential that cannot deliver the PRF cannot unlock
-    // the account anyway
-  }
+  await discardPasskey(credentials, newCredential.rawId);
   throw new PasskeyPrfError("unsupported");
 };
