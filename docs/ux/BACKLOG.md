@@ -693,3 +693,34 @@ the `project link` dispatch. Red-green proven: the new test (two
 remotes, no Device) fails on the old order (picker prompted) and passes
 on the new one; the live binary in a multi-remote worktree now reports
 exit 6 `device_bundle_missing` with no picker rendered.
+
+## UX-019 - Unreadable-terminal failures name no remedy; picker EOF is opaque
+Journey:
+AUTOMATION - any confirming command (`project rotate`, publication
+reviews) or repository picker run without a terminal (closed stdin).
+State:
+Non-TTY stdin (CI, pipes, `< /dev/null`), interactive mode (no
+`--no-input`).
+Severity:
+MEDIUM (dead-end `unexpected_failure` exit 8 for the picker; remedy-less
+exit 2 for confirmations)
+Observed:
+Two gaps. First, `terminalConfirm` reported "the terminal could not be
+read, so the interactive prompt went unanswered" with no next action,
+while the reverse direction (`--no-input` set) does say "remove
+--no-input to answer the prompt". Second, `selectOption` let
+`readTerminalLine`'s plain `Error("terminal input closed")` escape, so
+`diagnosticForError` masked it as exit 8 `unexpected_failure` "The
+command could not complete." - observed live when `project link` in a
+multi-remote worktree rendered its picker before checking enrollment.
+Expected:
+Both paths report the same fixed diagnostic naming the two ways out:
+run in an interactive terminal, or re-run with `--no-input`.
+Status:
+FIXED - shared `UNREADABLE_TERMINAL_MESSAGE` in `ui.ts` now backs
+`terminalConfirm` and the `selectOption` line-input path (closed stdin
+maps to it instead of escaping as a plain Error). `ask()` is
+deliberately unchanged: free-text/secret prompts are answered with
+`--*-file` flags or piped stdin, not `--no-input`, so the generic
+automation hint would mislead there. Red-green proven for the picker
+mapping; `bun test apps/cli/src/ui.test.ts` 27/27.

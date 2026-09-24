@@ -28,7 +28,11 @@ import type { NetworkPolicy } from "./network";
 import { atomicWriteProtectedFile } from "./output";
 import type { CliServerProfile, FetchFunction } from "./profile";
 import { readTerminalLine, type TerminalIo } from "./terminal";
-import { confirmAction, parseConfirmAnswer } from "./ui";
+import {
+  confirmAction,
+  parseConfirmAnswer,
+  UNREADABLE_TERMINAL_MESSAGE,
+} from "./ui";
 export type WorkflowOptions = Readonly<{
   readonly profile: CliServerProfile;
   readonly credentials: CredentialStore;
@@ -515,9 +519,7 @@ export const terminalConfirm = async (
     });
   } catch (error) {
     if (error instanceof CliInvocationError) throw error;
-    throw new CliInvocationError(
-      "the terminal could not be read, so the interactive prompt went unanswered",
-    );
+    throw new CliInvocationError(UNREADABLE_TERMINAL_MESSAGE);
   }
 };
 

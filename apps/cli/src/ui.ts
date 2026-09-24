@@ -23,6 +23,13 @@ export {
 
 type WritableTty = NodeJS.WritableStream & Partial<{ readonly isTTY: boolean }>;
 
+// Fixed diagnostic for an interactive prompt that cannot be read (closed
+// stdin, no TTY). The question itself is never echoed: it may carry
+// revealed Values, so only this fixed message - including the automation
+// remedy - may surface through the diagnostic.
+export const UNREADABLE_TERMINAL_MESSAGE =
+  "the terminal could not be read, so the interactive prompt went unanswered; run in an interactive terminal, or re-run with --no-input";
+
 export const rewriteRegion = (
   output: NodeJS.WritableStream,
   previousLines: number,
@@ -172,9 +179,19 @@ export const selectOption = async (
   }
   const output = terminal.output;
   output.write(renderSelect(title, choices, 0, false, options.defaultToFirst));
-  const line = options.prompt
-    ? await options.prompt(title)
-    : await readTerminalLine(title, terminal);
+  // A closed stdin rejects inside readTerminalLine with a plain Error that
+  // would otherwise be masked as an opaque unexpected_failure: map it to
+  // the fixed unreadable-terminal diagnostic instead.
+  let line: string;
+  if (options.prompt) {
+    line = await options.prompt(title);
+  } else {
+    try {
+      line = await readTerminalLine(title, terminal);
+    } catch {
+      throw new CliInvocationError(UNREADABLE_TERMINAL_MESSAGE);
+    }
+  }
   const trimmed = line.trim();
   if (trimmed.length === 0) {
     if (options.defaultToFirst === false)

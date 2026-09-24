@@ -75,6 +75,19 @@ describe("selectOption line input", () => {
       }),
     ).rejects.toThrow(new CliInvocationError("choose an option from the list"));
   });
+
+  test("reports an unreadable terminal with a remedy on closed stdin", async () => {
+    const terminal = selectTerminal();
+    terminal.input.end();
+    const error = await selectOption("Environment", choices, {
+      terminal,
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(CliInvocationError);
+    expect(String((error as Error).message)).toContain(
+      "the terminal could not be read",
+    );
+    expect(String((error as Error).message)).toContain("--no-input");
+  });
 });
 
 const rawSelectTerminal = () => {
