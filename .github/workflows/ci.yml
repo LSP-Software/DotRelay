@@ -152,6 +152,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
       # The harness drives the packaged native binary, so build it first.
       - run: bun run --cwd apps/cli build
       - run: bun run test:e2e:full
