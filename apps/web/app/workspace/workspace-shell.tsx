@@ -78,6 +78,9 @@ import {
 import {
   addEncryptionPassword,
   addPasskeyPrf,
+  commitPresentedRecoveryCode,
+  discardPresentedRecoveryCode,
+  type RecoveryCeremony,
   removeEncryptionPassword,
   removePasskeyPrf,
   rotateRecoveryCode,
@@ -607,9 +610,10 @@ export const WorkspaceShell = ({
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
-  // The Recovery Code shown exactly once after a setup or rotation publish.
-  // It is displayed in a dialog and never stored: the service holds the
-  // wrapper's ciphertext, and this browser holds only the in-memory key.
+  // The Recovery Code shown before it becomes the active recovery route.
+  // The ceremony stays in this ref until the user confirms, so a retry
+  // publishes the same key instead of minting another one.
+  const recoveryCeremony = useRef<RecoveryCeremony | null>(null);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [recoveryCodeNote, setRecoveryCodeNote] = useState<string | null>(null);
   const [unlockMethod, setUnlockMethod] = useState<
@@ -1192,10 +1196,31 @@ export const WorkspaceShell = ({
     );
 
   const setupAccountRecoveryHandler = () =>
-    setupAccountRecovery(recoveryInputs, recoveryFeedback, onRecoveryMutated);
+    setupAccountRecovery(
+      recoveryInputs,
+      recoveryFeedback,
+      onRecoveryMutated,
+      recoveryCeremony,
+    );
 
   const rotateRecoveryCodeHandler = () =>
-    rotateRecoveryCode(recoveryInputs, recoveryFeedback, onRecoveryMutated);
+    rotateRecoveryCode(
+      recoveryInputs,
+      recoveryFeedback,
+      onRecoveryMutated,
+      recoveryCeremony,
+    );
+
+  const confirmRecoveryCodeHandler = () =>
+    commitPresentedRecoveryCode(
+      recoveryInputs,
+      recoveryFeedback,
+      onRecoveryMutated,
+      recoveryCeremony,
+    );
+
+  const dismissRecoveryCodeHandler = () =>
+    discardPresentedRecoveryCode(recoveryCeremony, recoveryFeedback);
 
   const addEncryptionPasswordHandler = () =>
     addEncryptionPassword(
@@ -3394,12 +3419,12 @@ export const WorkspaceShell = ({
       </Dialog>
 
       <RecoveryCodeDialog
+        busy={recoveryBusy}
         code={recoveryCode}
+        error={recoveryError}
         note={recoveryCodeNote}
-        onRequestClose={() => {
-          setRecoveryCode(null);
-          setRecoveryCodeNote(null);
-        }}
+        onConfirm={confirmRecoveryCodeHandler}
+        onDismiss={dismissRecoveryCodeHandler}
       />
 
       <RemovePasswordDialog

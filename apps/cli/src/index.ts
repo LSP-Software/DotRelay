@@ -1,3 +1,4 @@
+import { unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   type CliDeviceStorage,
@@ -122,6 +123,7 @@ import {
   transferAccountKey,
   workspaceBoundaryFields,
 } from "./workflow";
+import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
 
 export { renderHelp, renderPowerHelp } from "./help";
 
@@ -2014,6 +2016,10 @@ if (import.meta.main) {
       : { stdoutIsTerminal: process.stdout.isTTY },
   );
   if (result.stdout) process.stdout.write(result.stdout);
+  if (result.exitCode === 0) {
+    const displayed = consumeDisplayedRecoveryCodePath();
+    if (displayed) await unlink(displayed).catch(() => {});
+  }
   if (result.stderr) process.stderr.write(result.stderr);
   if (typeof process.stdin.setRawMode === "function")
     process.stdin.setRawMode(false);

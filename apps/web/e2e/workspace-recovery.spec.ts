@@ -109,6 +109,9 @@ type RecoveryScenario = {
    * browser skip the self-mint that would hand it a real epoch key.
    */
   forceNoPeerEpochGrant: boolean;
+  wrapperPublishFailuresRemaining: number;
+  envelopePublishFailuresRemaining: number;
+  publishedWrapperIds: string[];
   onWrapperPublish: (body: Record<string, unknown>) => void;
 };
 
@@ -339,7 +342,14 @@ const installRecoveryRoutes = async (
       return;
     }
     if (!real) return;
-    const body = (await real.json()) as Record<string, unknown>;
+    let body: Record<string, unknown>;
+    try {
+      body = (await real.json()) as Record<string, unknown>;
+    } catch {
+      // A reload can dispose the fetched response before its body is read.
+      await route.abort().catch(() => {});
+      return;
+    }
     const device = body.device as Record<string, unknown> | undefined;
     if (device && device.active === true && scenario.deviceKeys) {
       device.encryptionPublicKey = scenario.deviceKeys.encryptionPublicKey;
@@ -376,6 +386,12 @@ const installRecoveryRoutes = async (
       string,
       unknown
     >;
+    if (scenario.wrapperPublishFailuresRemaining > 0) {
+      scenario.wrapperPublishFailuresRemaining -= 1;
+      return route.abort();
+    }
+    if (typeof body.wrapperId === "string")
+      scenario.publishedWrapperIds.push(body.wrapperId);
     scenario.onWrapperPublish(body);
     return route.fulfill({
       status: 201,
@@ -428,6 +444,10 @@ const installRecoveryRoutes = async (
             : [],
         },
       });
+    }
+    if (scenario.envelopePublishFailuresRemaining > 0) {
+      scenario.envelopePublishFailuresRemaining -= 1;
+      return route.abort();
     }
     const body = (route.request().postDataJSON() ?? {}) as {
       readonly object?: string;
@@ -634,6 +654,9 @@ const scenarioBase = (
   buildSyncPage: null,
   abortBoundary: false,
   forceNoPeerEpochGrant: options?.forceNoPeerEpochGrant ?? false,
+  wrapperPublishFailuresRemaining: 0,
+  envelopePublishFailuresRemaining: 0,
+  publishedWrapperIds: [],
   onWrapperPublish: options?.onWrapperPublish ?? (() => {}),
 });
 const installPasskeySimulation = async (
@@ -1358,6 +1381,206 @@ test.describe("workspace recovery", () => {
     await page.reload();
     await openRecoveryView(page);
     await unlockWith(page, "recovery-code", recoveryCode);
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("closing the tab before confirming a new recovery code leaves the account unchanged", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    let publishes = 0;
+    const scenario = scenarioBase({
+      forceNoPeerEpochGrant: true,
+      onWrapperPublish: () => {
+        publishes += 1;
+      },
+    });
+    await installRecoveryRoutes(page, scenario);
+    await enrollDevice(page);
+    await page.reload();
+    await openRecoveryView(page);
+    await page
+      .getByTestId("recovery-setup")
+      .getByRole("button", { name: "Create recovery code" })
+      .click();
+    await expect(page.getByTestId("recovery-code-dialog")).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(publishes).toBe(0);
+    await page.reload();
+    await openRecoveryView(page);
+    await expect(page.getByTestId("recovery-setup")).toBeVisible();
+    expect(publishes).toBe(0);
+    expect(scenario.wrappers).toHaveLength(0);
+  });
+
+  test("a lost recovery-code publish is retried as the same code", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const scenario = scenarioBase({
+      forceNoPeerEpochGrant: true,
+      onWrapperPublish: (body) => {
+        if (
+          typeof body.wrapperId === "string" &&
+          typeof body.object === "string"
+        ) {
+          scenario.wrappers = [
+            {
+              wrapperId: body.wrapperId,
+              type: "recovery-code",
+              object: body.object,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+        }
+      },
+    });
+    scenario.wrapperPublishFailuresRemaining = 1;
+    await installRecoveryRoutes(page, scenario);
+    await enrollDevice(page);
+    await page.reload();
+    await openRecoveryView(page);
+    await page
+      .getByTestId("recovery-setup")
+      .getByRole("button", { name: "Create recovery code" })
+      .click();
+    const codeDialog = page.getByTestId("recovery-code-dialog");
+    await expect(codeDialog).toBeVisible({ timeout: 30_000 });
+    const codeText = (
+      await codeDialog.getByTestId("recovery-code-value").innerText()
+    ).trim();
+    await codeDialog.getByTestId("recovery-code-saved").click();
+    await expect(codeDialog).toBeVisible();
+    await expect(
+      page
+        .getByTestId("recovery-code-dialog")
+        .getByRole("alert")
+        .filter({ hasText: "was not activated" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await codeDialog.getByTestId("recovery-code-saved").click();
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(scenario.publishedWrapperIds).toHaveLength(1);
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", codeText);
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("reloading before a recovery-code rotation is confirmed keeps the previous code", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const accountMasterKey = await generateAccountMasterKey();
+    const firstCode = await generateRecoveryCode();
+    const signer = await importSigningKey();
+    let publishes = 0;
+    const scenario = scenarioBase({
+      onWrapperPublish: () => {
+        publishes += 1;
+      },
+    });
+    await installRecoveryRoutes(page, scenario);
+    await enrollDevice(page);
+    const deviceKeys = capturedDeviceKeys(scenario);
+    scenario.wrappers = [
+      await buildRecoveryCodeWrapper({
+        accountMasterKey,
+        recoveryCode: firstCode,
+        deviceId: deviceKeys.id,
+        signer,
+      }),
+    ];
+    scenario.envelopeB64 = await buildEpochEnvelopeB64({
+      accountMasterKey,
+      deviceId: deviceKeys.id,
+      signer,
+    });
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", encodeRecoveryCode(firstCode));
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByTestId("rotate-recovery-code").click();
+    const codeDialog = page.getByTestId("recovery-code-dialog");
+    await expect(codeDialog).toBeVisible({ timeout: 30_000 });
+    const replacement = (
+      await codeDialog.getByTestId("recovery-code-value").innerText()
+    ).trim();
+    expect(publishes).toBe(0);
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", replacement);
+    await expect(
+      page.getByRole("alert").filter({ hasText: "couldn't unlock" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await unlockWith(page, "recovery-code", encodeRecoveryCode(firstCode));
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(publishes).toBe(0);
+  });
+
+  test("a failed project-key publish retries the same recovery code", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const scenario = scenarioBase({
+      forceNoPeerEpochGrant: true,
+      onWrapperPublish: (body) => {
+        if (
+          typeof body.wrapperId === "string" &&
+          typeof body.object === "string"
+        ) {
+          scenario.wrappers = [
+            {
+              wrapperId: body.wrapperId,
+              type: "recovery-code",
+              object: body.object,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+        }
+      },
+    });
+    scenario.envelopePublishFailuresRemaining = 1;
+    await installRecoveryRoutes(page, scenario);
+    await enrollDevice(page);
+    await page.reload();
+    await openRecoveryView(page);
+    await page
+      .getByTestId("recovery-setup")
+      .getByRole("button", { name: "Create recovery code" })
+      .click();
+    const codeDialog = page.getByTestId("recovery-code-dialog");
+    await expect(codeDialog).toBeVisible({ timeout: 30_000 });
+    const codeText = (
+      await codeDialog.getByTestId("recovery-code-value").innerText()
+    ).trim();
+    await codeDialog.getByTestId("recovery-code-saved").click();
+    await expect(
+      page
+        .getByTestId("recovery-code-dialog")
+        .getByRole("alert")
+        .filter({ hasText: "project key was not stored" }),
+    ).toBeVisible({ timeout: 30_000 });
+    expect(scenario.publishedWrapperIds).toHaveLength(1);
+    await codeDialog.getByTestId("recovery-code-saved").click();
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(scenario.envelopeB64).not.toBeNull();
+    expect(scenario.publishedWrapperIds).toHaveLength(1);
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", codeText);
     await expect(page.getByTestId("recovery-status")).toBeVisible({
       timeout: 30_000,
     });
