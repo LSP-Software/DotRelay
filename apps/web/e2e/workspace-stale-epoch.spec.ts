@@ -379,7 +379,12 @@ test("a rejected in-place repair reports the owner or admin actions that unblock
     page.getByText("can't recover the project's current keys on its own"),
   ).toBeVisible({ timeout: 15_000 });
   await expect(
-    page.getByText("LSP Software's Owners and Admins can also rotate"),
+    page.getByText(
+      "An Owner or Admin of LSP Software can rotate the project keys with",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Copy dotrelay project rotate" }),
   ).toBeVisible();
   await expect(
     page.getByText("Recover the account's key from the Recovery area"),
