@@ -138,6 +138,30 @@ describe("API foundation", () => {
     expect(domainCommitCount).toBe(1);
   });
 
+  test("answers unknown routes with a problem document, not plain text", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createApi({
+      database: {} as never,
+      profile,
+      auth: createInMemoryAuth(profile),
+    });
+
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/definitely-not-a-route`,
+      { headers: { Origin: profile.origin } },
+    );
+    const problem = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toContain(
+      "application/problem+json",
+    );
+    expect(problem).toMatchObject({
+      type: "https://dotrelay.dev/problems/v1",
+      code: "resource_not_found",
+    });
+  });
+
   test("returns a generic problem for uncaught route failures", async () => {
     const profile = loadServerProfileConfig({});
     const auth = createInMemoryAuth(profile);

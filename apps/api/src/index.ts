@@ -505,6 +505,11 @@ const createApi = ({
 
   app.onError((_error, context) => jsonProblem(context, "service_unavailable"));
 
+  // Unmatched routes answer with the same problem document shape as known
+  // routes (instead of the framework's plain-text 404) so API clients can
+  // always parse the failure.
+  app.notFound((context) => jsonProblem(context, "resource_not_found"));
+
   app.use("*", async (context, next) => {
     // Liveness probe: not a secure-request surface. Bypasses the TLS/proxy,
     // origin, and credential gates so the in-container health check (plain

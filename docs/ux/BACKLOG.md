@@ -751,3 +751,27 @@ origin it actually attempted). Unit pins updated and the device-auth
 test now asserts the detail; live binary against a dead origin reports
 both details with the origin. `bun test` on `auth.test.ts` and
 `profile.test.ts` 33/33.
+
+## UX-021 - Unknown API routes return plain-text 404, not a problem document
+Journey:
+API CLIENT - any client requesting a path the API does not define
+(typo, version drift, probe).
+State:
+Any unmatched route, e.g. `/api/v1/nonexistent`.
+Severity:
+LOW-MEDIUM (clients written against the problem-document contract get
+unparseable `404 Not Found` text)
+Observed:
+Known routes answer failures as `application/problem+json` documents
+(`type`, `title`, `status`, `code`, `detail`, `correlationId`), but
+unmatched routes fell through to the framework default: `404 Not Found`
+as `text/plain`. Every missing resource on a known route already maps
+to `resource_not_found`; only the fallthrough differed.
+Expected:
+Unmatched routes answer with the same problem document shape.
+Status:
+FIXED - `app.notFound` now answers `resource_not_found` via the shared
+`jsonProblem` helper (security gates still run first, so a disallowed
+origin on an unknown route still gets `forbidden`). Red-green proven:
+the new `index.test.ts` case fails on the old fallthrough and passes
+with the handler.
