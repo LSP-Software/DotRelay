@@ -22,7 +22,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { CommandText, InlineCommand } from "@/components/inline-command";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -2816,6 +2821,17 @@ export const WorkspaceShell = ({
                         <Alert className="border-destructive/30 bg-destructive/10">
                           <AlertTitle>Couldn't load team members</AlertTitle>
                           <AlertDescription>{membershipError}</AlertDescription>
+                          <AlertAction>
+                            <Button
+                              data-testid="retry-members"
+                              size="sm"
+                              type="button"
+                              variant="outline"
+                              onClick={refreshTeamAdministration}
+                            >
+                              Try again
+                            </Button>
+                          </AlertAction>
                         </Alert>
                       ) : membershipState === null ? (
                         <p className="py-6 text-center text-sm text-muted-foreground">

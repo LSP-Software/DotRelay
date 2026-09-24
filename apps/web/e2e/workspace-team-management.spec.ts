@@ -129,6 +129,53 @@ const openTeamView = async (page: Page) => {
   await page.locator("aside").getByRole("button", { name: "Team" }).click();
 };
 
+test("a failed Team member load can be retried from the error itself", async ({
+  page,
+}) => {
+  let up = false;
+  await page.route("**/api/v1/teams/*/memberships", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (!up)
+      return route.fulfill({
+        status: 503,
+        json: { code: "service_unavailable", title: "Service unavailable" },
+      });
+    return route.fulfill({
+      json: {
+        memberships: [
+          {
+            membershipId: "mem-owner",
+            userId: SESSION_USER,
+            name: "Ari Stone",
+            image: null,
+            githubSubject: "ari-stone",
+            role: "OWNER",
+            lifecycle: "ACTIVE",
+          },
+        ],
+        invitations: [],
+      },
+    });
+  });
+  await openTeamView(page);
+  const membersCard = page.getByTestId("members-card");
+  // The failed load names the problem...
+  await expect(membersCard.getByText("Couldn't load team members")).toBeVisible(
+    { timeout: 15_000 },
+  );
+  // ...and its "Try again" is real: the service recovers, one click
+  // re-loads the record...
+  up = true;
+  await membersCard.getByRole("button", { name: "Try again" }).click();
+  await expect(membersCard.getByText("Ari Stone")).toBeVisible({
+    timeout: 15_000,
+  });
+  // ...so the error goes away with it.
+  await expect(membersCard.getByText("Couldn't load team members")).toHaveCount(
+    0,
+  );
+});
+
 test("an owner changes roles and removes members, but never controls their own row", async ({
   page,
 }) => {

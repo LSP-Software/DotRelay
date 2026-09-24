@@ -902,3 +902,27 @@ FIXED - `workflow-account-key.ts` labels each choice
 `device.name ?? device.clientSummary ?? device.id`; `--to` still takes the
 Device id for automation. The red-green test offers a named CLI peer and an
 unlabeled one and pins the rendered picker.
+
+## UX-028 - Team member load failure said "try again" with no way to
+Journey:
+WEB - Team view, the Team service's membership read fails (transient 5xx or
+malformed reply) while the workspace connection stays online.
+State:
+Signed in, Team view open, membership read failed.
+Severity:
+LOW (dead end: the message instructs the user to try again, but nothing on
+screen re-runs the load; the refetch only fires on team switch, session
+change, or reconnect)
+Observed:
+The error card showed "Couldn't load team members" + "Something went wrong.
+Try again." with no control. Recovery and the Environment editor both offer
+explicit retry from their error states; the Team card was the one surface
+whose remedy sentence had no remedy.
+Expected:
+The error offers the retry it describes.
+Status:
+FIXED - the error card's AlertAction carries a "Try again" button that
+bumps the membership refetch trigger (the same `refreshTeamAdministration`
+mutations use). E2E pins it: a 503 membership read shows the card with the
+button; the service recovers, one click loads the record and the error goes
+away.
