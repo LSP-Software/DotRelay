@@ -106,6 +106,41 @@ test("the Devices table does not repeat this browser's OS in its summary line", 
   await expect(thisBrowserRow).not.toContainText("· Linux");
 });
 
+test("a reload of an enrolled browser keeps it out of the setup prompt", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.route("**/api/v1/devices/bootstrap**", (route) =>
+    route.fulfill({ json: {} }),
+  );
+  await page.route("**/api/v1/grants/bootstrap**", (route) =>
+    route.fulfill({ json: {} }),
+  );
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
+  await expect(
+    page.locator("#devices").getByText("This browser is set up", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 15_000 });
+  // A fresh page load has none of the in-session records, only the stored
+  // Device id and keys. The boundary it fetches with the stored id confirms
+  // the Device is active, so the view must keep saying the browser is set up
+  // instead of offering to create a second Device...
+  await page.reload();
+  await trustWorkspaceServer(page);
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
+  await expect(
+    page.locator("#devices").getByText("This browser is set up", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 15_000 });
+  // ...and the table names the row as this browser's.
+  await expect(page.getByRole("row", { name: /This browser/ })).toBeVisible();
+});
+
 test("device approval page asks to allow the CLI", async ({ page }) => {
   await page.goto("/device?user_code=ABCD-EFGH");
   await expect(

@@ -773,9 +773,13 @@ export const WorkspaceShell = ({
         : null,
     [boundary.profile.origin, boundary.profile.serverProfileId],
   );
+  // displayBoundary is fetched with this browser's stored Device id, so
+  // device.active is the server's confirmation that this browser is set up;
+  // it holds across reloads, where the in-memory records below are empty.
   const thisBrowserEnrolled =
     protectedPreview ||
     Boolean(protocolSession) ||
+    displayBoundary.device.active ||
     (currentPinKey !== null &&
       durableBrowserDeviceRef.current.has(currentPinKey));
   const enrolledDevices = enrolledDeviceRows(displayBoundary, {

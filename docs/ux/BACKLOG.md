@@ -850,3 +850,32 @@ FIXED - `workspace-shell.tsx` renders `clientSummary` alone (no `· osName`
 append; peer rows never had one). The e2e pins the row to
 "Chrome 126 on Linux" and asserts "· Linux" is absent; full e2e and
 `check` green.
+
+## UX-026 - Reloaded an enrolled browser was offered "Set up this browser" again
+Journey:
+WEB - reload /workspace and open Devices on a browser that is already set up.
+State:
+Browser Device enrolled (stored Device id and keys), fresh page load.
+Severity:
+MEDIUM (the Devices view denied the true state and offered a button that
+creates a second Device on the server)
+Observed:
+`thisBrowserEnrolled` was derived only from in-session records (an open
+Environment protocol session or the in-memory durable-device set, which is
+empty after a reload until an Environment session loads). So on a cold load
+the Devices view said "Set up this browser" and labeled this browser's row a
+bare "Device" - even though the boundary, fetched with this browser's stored
+Device id, reports the Device as active (the table even listed it with its
+project access). Clicking the offered button runs provisioning, which has no
+stored-Device guard, so it would enroll a duplicate Device for the same
+browser. Proven live: the e2e enrolls the fixture browser, reloads, and saw
+the setup prompt return.
+Expected:
+A fresh load keeps saying "This browser is set up" while the server confirms
+the stored Device is active.
+Status:
+FIXED - `thisBrowserEnrolled` now also holds while `displayBoundary.device`
+is active (the server's confirmation, true across reloads); the in-memory
+records still cover the in-session gap after provisioning. E2E pins the
+post-reload state: the "This browser is set up" card and the row named as
+this browser's.
