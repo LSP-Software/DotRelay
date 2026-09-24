@@ -774,7 +774,7 @@ export const nextSetupAction = (
     return {
       id: "pending-grants",
       title: "This browser doesn't have the project's keys yet",
-      body: "Open the Recovery area to unlock the account with your recovery code, or run `dotrelay pull` on this machine, to give this browser the project's keys.",
+      body: "Open the Recovery area to unlock with a recovery method, or accept a Transfer created by `dotrelay device transfer`, to give this browser the project's keys.",
       actionLabel: "Open recovery",
     };
   if (!state.resourceActive)

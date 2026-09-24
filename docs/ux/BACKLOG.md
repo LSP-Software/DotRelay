@@ -552,3 +552,50 @@ session now exits 6 `authentication_required` with "login is required for
 this Server Profile", while an existing session still gets the project-link
 invocation error. Covered by three workflow tests; live binary proof on a
 clean config (exit 6, no project-link mention).
+
+## UX-015 - Pending-grants gate names a remediation that cannot work
+Journey:
+WORKSPACE - opening a protected environment whose browser Device has no
+epoch grant (`grantsReady: false`).
+State:
+Any account where the browser enrolled but has no project grant yet;
+reproduced from the setup-gate state machine
+(`nextSetupAction` `pending-grants`).
+Severity:
+MEDIUM (half the remediation is false and the transfer path is invisible)
+Observed:
+The gate body read "Open the Recovery area to unlock the account with your
+recovery code, or run `dotrelay pull` on this machine, to give this browser
+the project's keys." But `dotrelay pull` only decrypts values into a worktree
+with the CLI Device's own keys (grants are counted per
+`recipientDeviceId`), so it can never give the browser keys; and the real
+second path - accepting an Account Key Transfer in Recovery (the UI's
+"From another device" method with its Transfer ID input, fed by
+`dotrelay device transfer`) - was not mentioned at all.
+Expected:
+The body names only paths that give THIS browser keys: any Recovery unlock
+method, or accepting a Transfer created by `dotrelay device transfer`.
+Status:
+FIXED - body rewritten to the Recovery + Transfer paths; unit test pins
+`dotrelay device transfer`, Recovery area, and the absence of
+`dotrelay pull`/`on this machine`.
+
+## UX-016 - Setup copy claims the CLI runs "on this machine"
+Journey:
+WORKSPACE - setup gates and the CLI hand-off prompts.
+State:
+Browser setup surfaces that suggest the CLI as an alternative
+(`environment-workflow.ts` crypto-unavailable/enroll-device,
+`workspace-shell.tsx` and `environment-editor.tsx` "Prefer the CLI?").
+Severity:
+LOW (P3 copy; prescriptive language can mislead in the remote-CLI flow)
+Observed:
+Several surfaces say "the CLI on this machine" / "It sets up the CLI on
+this machine" when the CLI may run elsewhere (--no-open/remote approval is
+a first-class flow; the same co-location claim was fixed on the device
+approval page as UX-012).
+Expected:
+Location-agnostic wording wherever the copy is not strictly describing
+where the user would run a copied command.
+Status:
+OPEN - logged for the current campaign.
