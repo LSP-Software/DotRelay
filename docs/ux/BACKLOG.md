@@ -546,4 +546,9 @@ the missing session; the user has to discover `dotrelay login` themselves.
 Expected:
 When no session exists, the remediation says to run `dotrelay login` first.
 Status:
-OPEN - logged for the current campaign.
+FIXED - session precheck before the project-link demand in both surfaces
+(`env use` dispatch and `loadWorkflowSession` label resolution); missing
+session now exits 6 `authentication_required` with "login is required for
+this Server Profile", while an existing session still gets the project-link
+invocation error. Covered by three workflow tests; live binary proof on a
+clean config (exit 6, no project-link mention).

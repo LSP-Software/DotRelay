@@ -1561,10 +1561,22 @@ const execute = async (
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readWorktreeContext(contextPath);
-    if (!context || context.projectId === undefined)
+    const credentials = localCredentials(runtime);
+    if (!context || context.projectId === undefined) {
+      // Environment resolution needs a signed-in session, so a missing
+      // session is reported before a missing link.
+      const token = await createSessionStore(credentials).get(profile.pin);
+      if (!token)
+        throw new CliError(
+          "authentication",
+          "login is required for this Server Profile",
+          {},
+          "authentication_required",
+        );
       throw new CliInvocationError(
         "No Project selected; use project link before selecting an Environment",
       );
+    }
     if (context.serverProfileId !== profile.pin.serverProfileId)
       throw new CliInvocationError(
         "worktree Project belongs to a different Server Profile",
@@ -1572,7 +1584,6 @@ const execute = async (
     const environmentReference = parsed.environment ?? parsed.positionals[0];
     if (!environmentReference)
       throw new Error("env use requires an Environment id or label");
-    const credentials = localCredentials(runtime);
     const admin = await createAdminClient(runtime, profile, credentials);
     const environment = await resolveEnvironmentReference(
       admin,

@@ -528,10 +528,12 @@ Each entry: status, evidence, impact.
   cosmetic; FIXED this campaign (config now requests only `repo`; live
   authorize URL verified deduplicated) (UX-013).
 - `dotrelay env use` with no session suggests project linking instead of
-  `dotrelay login` (UX-014).
+  `dotrelay login` (UX-014; FIXED this campaign).
 - **Disposition:** UX-011 FIXED this campaign (interactive wrapper picker +
   full id printed at creation/result + truthful help; args/workflow tests,
   CLI suite 379/379, live help/arg proof). UX-012 FIXED this campaign
   (location-agnostic approval copy, e2e pin). UX-013 FIXED this campaign
-  (scope deduplicated, live authorize-URL proof). UX-014 remains open as
-  the last recorded P3 candidate.
+  (scope deduplicated, live authorize-URL proof). UX-014 FIXED this campaign
+  (session precheck before the project-link demand in `env use` and
+  `loadWorkflowSession`; three workflow tests, live clean-config proof,
+  CLI suite 382/382) - all four findings in this entry are now closed.

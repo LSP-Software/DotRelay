@@ -662,6 +662,76 @@ describe("protected CLI workflows", () => {
     ]);
   });
 
+  test("env use names login before project link when no session is stored", async () => {
+    const runtime = await setup();
+    await createSessionStore(runtime.credentials).remove(profile.pin);
+    const result = await run(
+      ["env", "use", "development", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        worktreeConfig: `${runtime.stateDirectory}/no-context.json`,
+      },
+    );
+    expect(result.exitCode).toBe(6);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "authentication",
+      code: "authentication_required",
+      exitCode: 6,
+    });
+    expect(String(diagnostic.detail)).not.toContain("project link");
+  });
+
+  test("env use names project link when a session exists but no Project is linked", async () => {
+    const runtime = await setup();
+    const result = await run(
+      ["env", "use", "development", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        worktreeConfig: `${runtime.stateDirectory}/no-context.json`,
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "invocation",
+      exitCode: 2,
+    });
+    expect(String(diagnostic.detail)).toContain("project link");
+  });
+
+  test("pull with an Environment label and no session names login before project link", async () => {
+    const runtime = await setup();
+    await createSessionStore(runtime.credentials).remove(profile.pin);
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        "development",
+        "--output",
+        `${runtime.stateDirectory}/pulled.json`,
+        "--json",
+      ],
+      {
+        ...runtime,
+        worktreeConfig: `${runtime.stateDirectory}/no-context.json`,
+      },
+    );
+    expect(result.exitCode).toBe(6);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "authentication",
+      code: "authentication_required",
+      exitCode: 6,
+    });
+    expect(String(diagnostic.detail)).not.toContain("project link");
+  });
+
   test("init accepts an Environment label as its positional argument", async () => {
     const runtime = await setup();
     const contextPath = `${runtime.stateDirectory}/context.json`;
