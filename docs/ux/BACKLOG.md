@@ -799,3 +799,31 @@ FIXED - the three `workflow-session.ts` / `workflow-core.ts`
 (`loadAuthorizedDevice`) sites now use the "for this Server Profile"
 wording. No test pinned the old wording; `workflow.test.ts` 88/88
 green.
+
+## UX-024 - Interactive rollback prompts name no remedy without a terminal
+Journey:
+AUTOMATION - bare `dotrelay rollback` (or without `--variable`) on an
+enrolled machine with closed stdin.
+State:
+Authenticated and enrolled, non-TTY stdin, target Revision and/or
+Variables omitted.
+Severity:
+LOW (exit 2 names the proximate cause but not the documented automation
+flags)
+Observed:
+After syncing, the two free-text prompts ("Roll back to which
+Revision?", "Variables to roll back?") failed on closed stdin with the
+generic "the terminal could not be read, so the interactive prompt went
+unanswered", naming neither the positional nor `--variable`. The generic
+`--no-input` hint used for confirmations (UX-019) was deliberately not
+applied to `ask()`: secrets must never be suggested onto the command
+line - but rollback values are ids/ordinals/names, never secrets, so
+command-specific remedies are safe here.
+Expected:
+Name the positional for the target and `--variable` for the Variables.
+Status:
+FIXED - shared `isUnreadableTerminalError` predicate in `ui.ts`
+(matches both the base and remedied fixed messages); the two rollback
+call sites remap it to errors naming the positional and `--variable`
+(`ask()` itself unchanged, still the base fixed message). Red-green
+proven at dispatch level with closed-stdin terminals.

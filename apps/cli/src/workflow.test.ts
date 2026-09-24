@@ -3193,6 +3193,61 @@ describe("protected CLI workflows", () => {
     );
   });
 
+  test("rollback without a target names the positional on closed stdin", async () => {
+    const { runtime } = await seededHistory();
+    const input = new PassThrough();
+    input.end();
+    const result = await run(
+      [
+        "rollback",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--json",
+      ],
+      { ...runtime, terminal: { input, output: new PassThrough() } },
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "invocation",
+      code: "invocation",
+      exitCode: 2,
+    });
+    expect(String(diagnostic.detail)).toContain(
+      "pass the Revision id or #ordinal positionally",
+    );
+  });
+
+  test("rollback without Variables names --variable on closed stdin", async () => {
+    const { runtime } = await seededHistory();
+    const input = new PassThrough();
+    input.end();
+    const result = await run(
+      [
+        "rollback",
+        "#1",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--json",
+      ],
+      { ...runtime, terminal: { input, output: new PassThrough() } },
+    );
+    expect(result.exitCode).toBe(2);
+    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      ok: false,
+      category: "invocation",
+      code: "invocation",
+      exitCode: 2,
+    });
+    expect(String(diagnostic.detail)).toContain("pass at least one --variable");
+  });
+
   test("rollback --no-input accepts a Variable name and a bare ordinal", async () => {
     const { runtime } = await seededHistory();
     const rolled = await run(

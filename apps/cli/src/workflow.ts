@@ -5,7 +5,7 @@ import { diffDotenvEntries, parseDotenv, serializeDotenv } from "./dotenv";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import { pad, visibleWidth } from "./theme";
-import { paint } from "./ui";
+import { isUnreadableTerminalError, paint } from "./ui";
 import {
   destinationRows,
   pullConfirmQuestion,
@@ -320,12 +320,23 @@ export const runProtectedWorkflow = async (
     let targetReference = (parsed.positionals[0] ?? "").trim();
     if (!targetReference && !options.noInput) {
       terminalOutput.write(renderSyncedHistory(synced));
-      targetReference = (
-        await ask(
-          options,
-          "Roll back to which Revision (ordinal, #ordinal, or Revision id)?",
-        )
-      ).trim();
+      try {
+        targetReference = (
+          await ask(
+            options,
+            "Roll back to which Revision (ordinal, #ordinal, or Revision id)?",
+          )
+        ).trim();
+      } catch (error) {
+        // The prompt names only safe remedies: the Revision is an id or
+        // ordinal, never a secret, so naming the positional is safe here
+        // (unlike secret prompts, which must not suggest the command line).
+        if (isUnreadableTerminalError(error))
+          throw new CliInvocationError(
+            "rollback needs a terminal to choose the target Revision; pass the Revision id or #ordinal positionally, or re-run with --no-input",
+          );
+        throw error;
+      }
     }
     if (!targetReference)
       throw new CliInvocationError("rollback requires a target Revision");
@@ -351,12 +362,24 @@ export const runProtectedWorkflow = async (
           "",
         ].join("\n"),
       );
-      const answer = (
-        await ask(
-          options,
-          'Variables to roll back (comma-separated names, or "all")?',
-        )
-      ).trim();
+      const answer = await (async () => {
+        try {
+          return (
+            await ask(
+              options,
+              'Variables to roll back (comma-separated names, or "all")?',
+            )
+          ).trim();
+        } catch (error) {
+          // Variable names are operator-visible, never secrets, so naming
+          // the flag is safe here.
+          if (isUnreadableTerminalError(error))
+            throw new CliInvocationError(
+              "rollback needs a terminal to choose Variables; pass at least one --variable <variable-name-or-id>, or re-run with --no-input",
+            );
+          throw error;
+        }
+      })();
       references =
         answer === "all"
           ? live.map((variable) => variable.name)

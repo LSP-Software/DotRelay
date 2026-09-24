@@ -31,6 +31,7 @@ import { readTerminalLine, type TerminalIo } from "./terminal";
 import {
   confirmAction,
   parseConfirmAnswer,
+  UNREADABLE_TERMINAL_DETAIL,
   UNREADABLE_TERMINAL_MESSAGE,
 } from "./ui";
 export type WorkflowOptions = Readonly<{
@@ -497,9 +498,7 @@ export const ask = async (
   } catch {
     // The question may carry revealed Values; only a fixed message may
     // surface through the diagnostic.
-    throw new CliInvocationError(
-      "the terminal could not be read, so the interactive prompt went unanswered",
-    );
+    throw new CliInvocationError(UNREADABLE_TERMINAL_DETAIL);
   }
 };
 

@@ -25,10 +25,20 @@ type WritableTty = NodeJS.WritableStream & Partial<{ readonly isTTY: boolean }>;
 
 // Fixed diagnostic for an interactive prompt that cannot be read (closed
 // stdin, no TTY). The question itself is never echoed: it may carry
-// revealed Values, so only this fixed message - including the automation
-// remedy - may surface through the diagnostic.
-export const UNREADABLE_TERMINAL_MESSAGE =
-  "the terminal could not be read, so the interactive prompt went unanswered; run in an interactive terminal, or re-run with --no-input";
+// revealed Values, so only fixed messages may surface through the
+// diagnostic. The base form (no remedy) backs free-text prompts, where a
+// generic automation hint could mislead - secrets must never be suggested
+// onto the command line. The full form backs yes/no confirmations and
+// option pickers, where --no-input is always the automation path.
+export const UNREADABLE_TERMINAL_DETAIL =
+  "the terminal could not be read, so the interactive prompt went unanswered";
+export const UNREADABLE_TERMINAL_MESSAGE = `${UNREADABLE_TERMINAL_DETAIL}; run in an interactive terminal, or re-run with --no-input`;
+export const isUnreadableTerminalError = (
+  error: unknown,
+): error is CliInvocationError =>
+  error instanceof CliInvocationError &&
+  (error.message === UNREADABLE_TERMINAL_DETAIL ||
+    error.message === UNREADABLE_TERMINAL_MESSAGE);
 
 export const rewriteRegion = (
   output: NodeJS.WritableStream,
