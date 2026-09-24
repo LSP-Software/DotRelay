@@ -562,6 +562,31 @@ Each entry: status, evidence, impact.
   executes (43 pass, 0 fail, 8.35s, isolated uuid databases dropped after);
   a var-less forced run hashes differently (`ae989330…` vs `59442568…`) and
   the wrapper replays only the real 43-pass entry.
-- **Regression protection:** the task hash now covers the variables; no new
-  test needed (the failure mode was cache identity, observable only across
-  runs - verified live as above).
+ - **Regression protection:** the task hash now covers the variables; no new
+   test needed (the failure mode was cache identity, observable only across
+   runs - verified live as above).
+
+## F-019 (FIXED) PR #247 device name/summary rendering is invisible in the fixture and untested
+- **Status:** FIXED_AND_VERIFIED (this campaign)
+- **Symptom:** the newest merged surface — Devices rows showing a human name
+  and client summary instead of a bare UUID (PR #247) — renders nothing in the
+  development fixture: both fixture peers carry no `name`/`clientKind`/
+  `osName`/`clientSummary`, so every row shows the generic "Device" + UUID and
+  the summary line is never produced. No e2e test asserted a name or summary,
+  so a regression in the parse (`parsePeerDevices`/`enrolledDeviceRows`) or the
+  `workspace-shell.tsx` render could not be caught.
+- **Impact:** the feature is correct in production (the API reports real client
+  info) but entirely unverified by the suite; the render path at
+  `workspace-shell.tsx` (the `clientSummary`/`osName`/`name` branches) had zero
+  coverage.
+- **Fix:** the fixture's peer `…000000000041` now reports a realistic CLI
+  client (`name: "CatchOS"`, `clientKind: "cli"`, `osName: "Linux"`,
+  `clientSummary: "dotrelay-cli"`, matching `describeCliClient`); peer
+  `…000000000042` stays unlabeled to keep the "Device" fallback covered. The
+  `Devices lists other devices` e2e now asserts the labeled row shows "CatchOS"
+  and "dotrelay-cli" and the unlabeled row keeps "Device".
+- **Verification:** red-green — the new assertions fail against the unlabeled
+  fixture (row renders "Device<uuid>"), pass once the fixture reports the
+  metadata; full e2e 135/135, `bun run check` green.
+- **Regression protection:** the e2e assertion pins both the name/summary
+  render and the fallback, so a parse or render regression now fails the suite.

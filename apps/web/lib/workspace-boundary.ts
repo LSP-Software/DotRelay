@@ -475,12 +475,22 @@ export const e2eWorkspaceBoundary = (
       : { active: false, label: "No active Device" },
     peerDevices: [
       {
+        // A CLI enrolled on one of the account's machines, as
+        // describeCliClient reports it: the label is the machine hostname and
+        // the summary names the CLI, so the Devices table shows a human name
+        // instead of a bare UUID.
         id: "00000000-0000-4000-8000-000000000041",
         encryptionPublicKey: "11".repeat(32),
         signingPublicKey: "22".repeat(32),
         hasEpochGrant: true,
+        name: "CatchOS",
+        clientKind: "cli",
+        osName: "Linux",
+        clientSummary: "dotrelay-cli",
       },
       {
+        // Intentionally unlabeled so the table's generic "Device" fallback
+        // and bare-UUID rendering stay covered.
         id: "00000000-0000-4000-8000-000000000042",
         encryptionPublicKey: "33".repeat(32),
         signingPublicKey: "44".repeat(32),

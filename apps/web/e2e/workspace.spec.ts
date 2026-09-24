@@ -26,6 +26,17 @@ test("Devices lists other devices besides this browser", async ({ page }) => {
   await expect(devices).toContainText("00000000-0000-4000-8000-000000000042");
   await expect(devices).toContainText("Has project access");
   await expect(devices).toContainText("Waiting for project keys");
+  // A labeled device shows its machine name and client summary so a row is
+  // not just a bare UUID...
+  const labeledRow = page.getByTestId(
+    "enrolled-device-00000000-0000-4000-8000-000000000041",
+  );
+  await expect(labeledRow).toContainText("CatchOS");
+  await expect(labeledRow).toContainText("dotrelay-cli");
+  // ...while an unlabeled device keeps the generic "Device" label.
+  await expect(
+    page.getByTestId("enrolled-device-00000000-0000-4000-8000-000000000042"),
+  ).toContainText("Device");
 });
 
 test("device approval page asks to allow the CLI", async ({ page }) => {
