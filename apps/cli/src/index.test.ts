@@ -861,6 +861,44 @@ describe("command-to-HTTP administration", () => {
     }
   });
 
+  test("project link reports a missing Device before offering repositories", async () => {
+    const fixture = createAdminHttpFixture([deviceId]);
+    const state = await seedCommandState(fixture, { withDevice: false });
+    try {
+      let prompts = 0;
+      const result = await run(
+        ["project", "link", "--team", teamId, "--json"],
+        {
+          ...runtimeForCommandState(state),
+          readGitRemotes: async () => [
+            {
+              name: "origin",
+              url: "git@github.com:LSP-Software/DotRelay.git",
+            },
+            { name: "upstream", url: "git@github.com:other/fork.git" },
+          ],
+          prompt: async () => {
+            prompts += 1;
+            return "1";
+          },
+        },
+      );
+      expect(result.exitCode).toBe(6);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        ok: false,
+        category: "authentication",
+        code: "device_bundle_missing",
+        exitCode: 6,
+      });
+      expect(prompts).toBe(0);
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      fixture.stop();
+      await state.cleanup();
+    }
+  });
+
   test("protected commands prompt enrollment when no Device is enrolled locally", async () => {
     const fixture = createAdminHttpFixture([deviceId]);
     const state = await seedCommandState(fixture, { withDevice: false });

@@ -1543,12 +1543,14 @@ const execute = async (
     const contextPath =
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
     const context = await readStoredWorktreeContext(contextPath);
+    const credentials = localCredentials(runtime);
+    // Verify the enrolled Device before offering the repository picker, so
+    // a missing enrollment is reported instead of prompting first.
+    const admin = await createAdminClient(runtime, profile, credentials);
     const selection = await selectGitHubRepository(
       await (runtime.readGitRemotes ?? readGitRemotes)(),
       repositorySelectionOptions(parsed, runtime, context),
     );
-    const credentials = localCredentials(runtime);
-    const admin = await createAdminClient(runtime, profile, credentials);
     const resolved = await resolveSelectedRepository(admin, context, selection);
     const project = await linkProject(admin, {
       teamId: team,

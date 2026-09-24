@@ -666,3 +666,30 @@ Red-green proven: the new unit test fails on the old order (confirmation
 asked) and passes on the new one; live binary on a sessioned,
 device-less config now reports exit 6 `authentication_required` instead
 of the exit 2 terminal error.
+
+## UX-023 - `project link` offers repositories before checking enrollment
+Journey:
+FIRST USE - `dotrelay project link --team <id>` in a worktree with
+several Git remotes, signed in but with no Device enrolled.
+State:
+Server Profile selected, session present, no Device enrolled, more than
+one Git remote so the repository cannot be auto-picked.
+Severity:
+MEDIUM-HIGH (opaque exit 8 `unexpected_failure` "The command could not
+complete." instead of the enrollment remedy)
+Observed:
+The dispatch selected the GitHub repository before creating the admin
+client, so with several remotes the interactive picker rendered first.
+On a headless machine the closed stdin made the picker fail with exit 8
+`unexpected_failure`, hiding the real blocker. Protected commands
+(`pull`, `history`, …) already verify the enrolled Device before
+repository selection.
+Expected:
+Verify the enrolled Device before offering the repository picker, so a
+missing enrollment is reported first.
+Status:
+FIXED - `createAdminClient` now runs before `selectGitHubRepository` in
+the `project link` dispatch. Red-green proven: the new test (two
+remotes, no Device) fails on the old order (picker prompted) and passes
+on the new one; the live binary in a multi-remote worktree now reports
+exit 6 `device_bundle_missing` with no picker rendered.
