@@ -92,6 +92,10 @@ const fetchLiveBoundary = async (
               id?: unknown;
               active?: unknown;
               label?: unknown;
+              name?: unknown;
+              clientKind?: unknown;
+              osName?: unknown;
+              clientSummary?: unknown;
               encryptionPublicKey?: unknown;
               signingPublicKey?: unknown;
             };
@@ -159,6 +163,18 @@ const fetchLiveBoundary = async (
           : "No active Device",
       ...(typeof workspaceBody.device?.id === "string"
         ? { id: workspaceBody.device.id }
+        : {}),
+      ...(typeof workspaceBody.device?.name === "string"
+        ? { name: workspaceBody.device.name }
+        : {}),
+      ...(typeof workspaceBody.device?.clientKind === "string"
+        ? { clientKind: workspaceBody.device.clientKind }
+        : {}),
+      ...(typeof workspaceBody.device?.osName === "string"
+        ? { osName: workspaceBody.device.osName }
+        : {}),
+      ...(typeof workspaceBody.device?.clientSummary === "string"
+        ? { clientSummary: workspaceBody.device.clientSummary }
         : {}),
       ...(typeof workspaceBody.device?.encryptionPublicKey === "string"
         ? { encryptionPublicKey: workspaceBody.device.encryptionPublicKey }

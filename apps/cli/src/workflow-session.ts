@@ -25,6 +25,7 @@ import { createEnvironment, resolveEnvironmentReference } from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
 import { note } from "./components";
+import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
@@ -112,6 +113,28 @@ export const loadWorkflowSession = async (
       )
     ).id;
   }
+  // Best-effort display-name refresh before the boundary is read so the
+  // names shown for this Device and its peers reflect the current hostname.
+  if (knownDeviceId)
+    await admin
+      .post(
+        "/api/v1/devices/self",
+        (() => {
+          const client = describeCliClient();
+          return {
+            client: {
+              displayName: client.displayName,
+              clientKind: client.clientKind,
+              ...(client.osName ? { osName: client.osName } : {}),
+              ...(client.clientSummary
+                ? { clientSummary: client.clientSummary }
+                : {}),
+            },
+          };
+        })(),
+        ["name", "clientKind", "osName", "clientSummary", "nameOverridden"],
+      )
+      .catch(() => undefined);
   const boundary = parseBoundary(
     await admin.get(
       `/api/v1/workspace/boundary${requestedEnvironment ? `?environment=${encodeURIComponent(requestedEnvironment)}` : ""}`,

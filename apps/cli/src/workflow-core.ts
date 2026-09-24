@@ -16,6 +16,7 @@ import { sha384ToHex, uuidToBytes } from "@dotrelay/contracts";
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
 import type { ParsedArguments } from "./args";
 import type { CredentialStore } from "./credentials";
+import { describeCliClient } from "./device-describe";
 import {
   createFileDeviceRecordStore,
   deviceMetadataPath,
@@ -64,6 +65,10 @@ export type Boundary = Readonly<{
   readonly device: Readonly<{
     readonly active: boolean;
     readonly id?: string;
+    readonly name?: string;
+    readonly clientKind?: string;
+    readonly osName?: string;
+    readonly clientSummary?: string;
     readonly encryptionPublicKey?: string;
     readonly signingPublicKey?: string;
   }>;
@@ -82,6 +87,10 @@ export type Boundary = Readonly<{
     readonly encryptionPublicKey: string;
     readonly signingPublicKey: string;
     readonly hasEpochGrant: boolean;
+    readonly name?: string;
+    readonly clientKind?: string;
+    readonly osName?: string;
+    readonly clientSummary?: string;
   }>[];
 }>;
 
@@ -175,6 +184,14 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
     device: Object.freeze({
       active: device.active === true,
       ...(typeof device.id === "string" ? { id: device.id } : {}),
+      ...(typeof device.name === "string" ? { name: device.name } : {}),
+      ...(typeof device.clientKind === "string"
+        ? { clientKind: device.clientKind }
+        : {}),
+      ...(typeof device.osName === "string" ? { osName: device.osName } : {}),
+      ...(typeof device.clientSummary === "string"
+        ? { clientSummary: device.clientSummary }
+        : {}),
       ...(typeof device.encryptionPublicKey === "string"
         ? { encryptionPublicKey: device.encryptionPublicKey }
         : {}),
@@ -252,6 +269,16 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
                   ? entry.signingPublicKey
                   : "",
               hasEpochGrant: entry.hasEpochGrant === true,
+              ...(typeof entry.name === "string" ? { name: entry.name } : {}),
+              ...(typeof entry.clientKind === "string"
+                ? { clientKind: entry.clientKind }
+                : {}),
+              ...(typeof entry.osName === "string"
+                ? { osName: entry.osName }
+                : {}),
+              ...(typeof entry.clientSummary === "string"
+                ? { clientSummary: entry.clientSummary }
+                : {}),
             },
           ];
         })
@@ -713,6 +740,28 @@ export const loadAuthorizedDevice = async (
       "session_invalid",
     );
   const userId = requiredString(session.user.id, "User id");
+  // Best-effort display-name refresh: a hostname change or a first run
+  // after this feature ships is recorded without blocking the workflow.
+  // Failures are ignored — the boundary still loads with the stored name.
+  await admin
+    .post(
+      "/api/v1/devices/self",
+      (() => {
+        const client = describeCliClient();
+        return {
+          client: {
+            displayName: client.displayName,
+            clientKind: client.clientKind,
+            ...(client.osName ? { osName: client.osName } : {}),
+            ...(client.clientSummary
+              ? { clientSummary: client.clientSummary }
+              : {}),
+          },
+        };
+      })(),
+      ["name", "clientKind", "osName", "clientSummary", "nameOverridden"],
+    )
+    .catch(() => undefined);
   const boundary = parseBoundary(
     await admin.get("/api/v1/workspace/boundary", workspaceBoundaryFields),
   );

@@ -90,7 +90,11 @@ export type RecoveryAreaProps = Readonly<{
   readonly onTransferIdInput: (value: string) => void;
   readonly deviceId: string | undefined;
   readonly peerDevices:
-    | readonly Readonly<{ readonly id: string }>[]
+    | readonly Readonly<{
+        readonly id: string;
+        readonly name?: string;
+        readonly clientSummary?: string;
+      }>[]
     | undefined;
   readonly sentTransfer: Readonly<{
     readonly transferId: string;
@@ -730,7 +734,9 @@ export const RecoveryArea = ({
                   </option>
                   {peerDevices.map((peer) => (
                     <option key={peer.id} value={peer.id}>
-                      {peer.id}
+                      {peer.name ??
+                        peer.clientSummary ??
+                        peer.id.slice(0, 8).toUpperCase()}
                     </option>
                   ))}
                 </select>

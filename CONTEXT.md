@@ -11,7 +11,9 @@ authorize Devices. The same person on another Server Profile is a distinct User.
 _Avoid_: Account, developer
 
 **Device**:
-A client installation authorized by exactly one User to access that User's DotRelay data.
+A client installation authorized by exactly one User to access that User's DotRelay data. Each
+Device carries optional cleartext display metadata (auto or user-renamed name, CLI vs browser, OS,
+client summary) for labels only; it is never part of the signed Device certificate.
 _Avoid_: Session, computer
 
 **Account Master Key (AMK)**:

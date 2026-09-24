@@ -17,6 +17,7 @@ import {
 } from "@dotrelay/contracts";
 import { createStrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
+import { describeCliClient } from "./device-describe";
 import {
   deviceMetadataPath,
   readDeviceId,
@@ -61,6 +62,7 @@ const postBootstrap = async (
     readonly certificate: Uint8Array;
   }>,
 ): Promise<void> => {
+  const client = describeCliClient();
   let response: Response;
   try {
     // Deadline only: an enrollment attempt names a pending operation, so a
@@ -87,6 +89,14 @@ const postBootstrap = async (
             .join(""),
           keyId: sha384ToHex(input.keyId),
           certificate: Buffer.from(input.certificate).toString("base64"),
+          client: {
+            displayName: client.displayName,
+            clientKind: client.clientKind,
+            ...(client.osName ? { osName: client.osName } : {}),
+            ...(client.clientSummary
+              ? { clientSummary: client.clientSummary }
+              : {}),
+          },
         }),
       },
       options.networkPolicy ?? defaultNetworkPolicy,
@@ -219,6 +229,7 @@ export const enrollFirstDevice = async (
     deviceId: string;
     active: boolean;
     existing: boolean;
+    deviceName?: string;
   }>
 > => {
   const sessions = createSessionStore(options.credentials);
@@ -261,7 +272,12 @@ export const enrollFirstDevice = async (
         localDeviceId,
         "the local Device is not active on this Server Profile; run dotrelay device enroll or dotrelay device recover",
       );
-      return { deviceId: localDeviceId, active: true, existing: true };
+      return {
+        deviceId: localDeviceId,
+        active: true,
+        existing: true,
+        deviceName: describeCliClient().displayName,
+      };
     } catch (error) {
       // The recorded Device is not usable for this session: it was revoked
       // or replaced, or the Server Profile reports a different Device.
@@ -309,7 +325,12 @@ export const enrollFirstDevice = async (
     options.profile.pin,
     bootstrap.deviceId,
   );
-  return { deviceId: bootstrap.deviceId, active: true, existing: false };
+  return {
+    deviceId: bootstrap.deviceId,
+    active: true,
+    existing: false,
+    deviceName: describeCliClient().displayName,
+  };
 };
 
 export const enrollDevice = async (
@@ -321,11 +342,16 @@ export const enrollDevice = async (
     active: boolean;
     enrollmentId?: string;
     request?: string;
+    deviceName?: string;
   }>
 > => {
   const first = await enrollFirstDevice(options);
   if (first.existing) return beginDeviceEnrollment(options, output);
-  return { deviceId: first.deviceId, active: first.active };
+  return {
+    deviceId: first.deviceId,
+    active: first.active,
+    ...(first.deviceName ? { deviceName: first.deviceName } : {}),
+  };
 };
 
 const enrollmentStatePath = (directory: string, enrollmentId: string): string =>
@@ -439,6 +465,7 @@ export const beginDeviceEnrollment = async (
     deviceId: string;
     active: boolean;
     request: string;
+    deviceName?: string;
   }>
 > => {
   const authorized = await loadAuthorizedDevice(options);
@@ -510,6 +537,7 @@ export const beginDeviceEnrollment = async (
     deviceId: request.ids.deviceId,
     active: false,
     request: requestPath,
+    deviceName: describeCliClient().displayName,
   };
 };
 
@@ -575,7 +603,12 @@ export const completeDeviceEnrollment = async (
   options: WorkflowOptions,
   path: string,
 ): Promise<
-  Readonly<{ enrollmentId: string; deviceId: string; active: boolean }>
+  Readonly<{
+    enrollmentId: string;
+    deviceId: string;
+    active: boolean;
+    deviceName?: string;
+  }>
 > => {
   const artifact = await readEnrollmentArtifact(path);
   if (
@@ -687,6 +720,7 @@ export const completeDeviceEnrollment = async (
     );
   }
   const operationId = crypto.randomUUID();
+  const client = describeCliClient();
   await authorized.admin.post(
     `/api/v1/devices/enrollments/${encodeURIComponent(artifact.enrollmentId)}/complete`,
     {
@@ -702,6 +736,14 @@ export const completeDeviceEnrollment = async (
       x25519PublicKey: base64(x25519PublicKey),
       ed25519PublicKey: base64(ed25519PublicKey),
       keyId: base64(await sha384(x25519PublicKey)),
+      client: {
+        displayName: client.displayName,
+        clientKind: client.clientKind,
+        ...(client.osName ? { osName: client.osName } : {}),
+        ...(client.clientSummary
+          ? { clientSummary: client.clientSummary }
+          : {}),
+      },
     },
     ["deviceId", "active", "idempotent"],
     { idempotencyKey: operationId },
@@ -718,6 +760,7 @@ export const completeDeviceEnrollment = async (
     enrollmentId: artifact.enrollmentId,
     deviceId: artifact.deviceId,
     active: true,
+    deviceName: client.displayName,
   };
 };
 

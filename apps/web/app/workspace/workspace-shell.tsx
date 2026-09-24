@@ -576,6 +576,15 @@ export const WorkspaceShell = ({
     null,
   );
   const [deviceSetupInProgress, setDeviceSetupInProgress] = useState(false);
+  // Inline rename of this browser's Device. The server stops auto-updating
+  // the name once nameOverridden is true; a failed rename keeps the previous
+  // label visible and shows the error beside the control.
+  const [deviceRenameOpen, setDeviceRenameOpen] = useState(false);
+  const [deviceRenameValue, setDeviceRenameValue] = useState("");
+  const [deviceRenameBusy, setDeviceRenameBusy] = useState(false);
+  const [deviceRenameError, setDeviceRenameError] = useState<string | null>(
+    null,
+  );
   // The trust decision this browser recorded for the boundary's origin and
   // server identity: "unknown" until the stored pin for the pair is checked,
   // never "trusted" from a different origin or identity.
@@ -1815,6 +1824,58 @@ export const WorkspaceShell = ({
 
   const requestRetry = () => reconnectNowRef.current?.();
 
+  const renameCurrentDevice = useCallback(async () => {
+    const name = deviceRenameValue.trim();
+    if (!apiOrigin || !browserDeviceId || name.length === 0) return;
+    setDeviceRenameBusy(true);
+    setDeviceRenameError(null);
+    try {
+      const response = await fetch(`${apiOrigin}/api/v1/devices/self`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-DotRelay-Device-Id": browserDeviceId,
+        },
+        body: JSON.stringify({ displayName: name }),
+      });
+      if (!response.ok) {
+        setDeviceRenameError("Could not rename this Device");
+        return;
+      }
+      const body = (await response.json()) as {
+        name?: unknown;
+        clientKind?: unknown;
+        osName?: unknown;
+        clientSummary?: unknown;
+      };
+      const next = {
+        ...boundary,
+        device: {
+          ...boundary.device,
+          ...(typeof body.name === "string" && body.name
+            ? { name: body.name }
+            : {}),
+          ...(typeof body.clientKind === "string"
+            ? { clientKind: body.clientKind }
+            : {}),
+          ...(typeof body.osName === "string" ? { osName: body.osName } : {}),
+          ...(typeof body.clientSummary === "string"
+            ? { clientSummary: body.clientSummary }
+            : {}),
+        },
+      };
+      boundaryJsonRef.current = JSON.stringify(next);
+      setBoundary(next);
+      setDeviceRenameOpen(false);
+      setDeviceRenameValue("");
+    } catch {
+      setDeviceRenameError("Could not rename this Device");
+    } finally {
+      setDeviceRenameBusy(false);
+    }
+  }, [apiOrigin, browserDeviceId, boundary, deviceRenameValue]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: accountUnlocked mirrors accountMasterKeyRef, which the effect reads; recoveryGeneration is re-run state
   useEffect(() => {
     const loop = createWorkspaceRefreshLoop({
@@ -2988,11 +3049,101 @@ export const WorkspaceShell = ({
                               >
                                 <TableCell>
                                   <div className="font-medium">
-                                    {device.current ? "This browser" : "Device"}
+                                    {device.name ??
+                                      (device.current
+                                        ? "This browser"
+                                        : "Device")}
                                   </div>
                                   <div className="font-mono text-[10px] text-muted-foreground">
                                     {device.id}
                                   </div>
+                                  {device.current &&
+                                  device.osName &&
+                                  device.clientSummary ? (
+                                    <div className="text-xs text-muted-foreground">
+                                      {device.clientSummary}
+                                      {device.osName
+                                        ? ` · ${device.osName}`
+                                        : ""}
+                                    </div>
+                                  ) : device.clientSummary ? (
+                                    <div className="text-xs text-muted-foreground">
+                                      {device.clientSummary}
+                                    </div>
+                                  ) : null}
+                                  {device.current ? (
+                                    deviceRenameOpen ? (
+                                      <div className="mt-2 flex max-w-xs items-center gap-2">
+                                        <Input
+                                          aria-label="Device name"
+                                          className="h-8"
+                                          data-testid="device-rename-input"
+                                          maxLength={64}
+                                          value={deviceRenameValue}
+                                          onChange={(event) =>
+                                            setDeviceRenameValue(
+                                              event.target.value,
+                                            )
+                                          }
+                                          onKeyDown={(event) => {
+                                            if (event.key === "Enter")
+                                              void renameCurrentDevice();
+                                            if (event.key === "Escape")
+                                              setDeviceRenameOpen(false);
+                                          }}
+                                        />
+                                        <Button
+                                          disabled={
+                                            deviceRenameBusy ||
+                                            deviceRenameValue.trim().length ===
+                                              0
+                                          }
+                                          size="sm"
+                                          type="button"
+                                          data-testid="device-rename-save"
+                                          onClick={() =>
+                                            void renameCurrentDevice()
+                                          }
+                                        >
+                                          Save
+                                        </Button>
+                                        <Button
+                                          disabled={deviceRenameBusy}
+                                          size="sm"
+                                          type="button"
+                                          variant="ghost"
+                                          onClick={() => {
+                                            setDeviceRenameOpen(false);
+                                            setDeviceRenameError(null);
+                                          }}
+                                        >
+                                          Cancel
+                                        </Button>
+                                        {deviceRenameError ? (
+                                          <p className="text-xs text-destructive">
+                                            {deviceRenameError}
+                                          </p>
+                                        ) : null}
+                                      </div>
+                                    ) : (
+                                      <Button
+                                        className="mt-2"
+                                        size="sm"
+                                        type="button"
+                                        variant="outline"
+                                        data-testid="device-rename-open"
+                                        onClick={() => {
+                                          setDeviceRenameValue(
+                                            device.name ?? "",
+                                          );
+                                          setDeviceRenameError(null);
+                                          setDeviceRenameOpen(true);
+                                        }}
+                                      >
+                                        Rename
+                                      </Button>
+                                    )
+                                  ) : null}
                                 </TableCell>
                                 <TableCell>
                                   <Badge

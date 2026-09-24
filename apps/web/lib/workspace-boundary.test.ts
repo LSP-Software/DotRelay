@@ -244,7 +244,14 @@ test("enrolled Device rows include this browser and peer Devices", () => {
   expect(
     enrolledDeviceRows(
       {
-        device: { active: true, id: "00000000-0000-4000-8000-000000000040" },
+        device: {
+          active: true,
+          id: "00000000-0000-4000-8000-000000000040",
+          name: "Chrome on Windows",
+          clientKind: "browser",
+          osName: "Windows 10/11",
+          clientSummary: "Chrome 140 on Windows 10/11",
+        },
         grantsReady: true,
         peerDevices: [
           {
@@ -252,6 +259,10 @@ test("enrolled Device rows include this browser and peer Devices", () => {
             encryptionPublicKey: "aa",
             signingPublicKey: "bb",
             hasEpochGrant: false,
+            name: "CatchOS Main PC",
+            clientKind: "cli",
+            osName: "Linux",
+            clientSummary: "dotrelay-cli",
           },
         ],
       },
@@ -262,11 +273,66 @@ test("enrolled Device rows include this browser and peer Devices", () => {
       id: "00000000-0000-4000-8000-000000000040",
       current: true,
       hasEpochGrant: true,
+      name: "Chrome on Windows",
+      clientKind: "browser",
+      osName: "Windows 10/11",
+      clientSummary: "Chrome 140 on Windows 10/11",
     },
     {
       id: "00000000-0000-4000-8000-000000000041",
       current: false,
       hasEpochGrant: false,
+      name: "CatchOS Main PC",
+      clientKind: "cli",
+      osName: "Linux",
+      clientSummary: "dotrelay-cli",
+    },
+  ]);
+});
+
+test("enrolled Device rows stay valid without display metadata", () => {
+  expect(
+    enrolledDeviceRows(
+      {
+        device: { active: true, id: "00000000-0000-4000-8000-000000000040" },
+        grantsReady: false,
+        peerDevices: [],
+      },
+      { thisBrowserEnrolled: false },
+    ),
+  ).toEqual([
+    {
+      id: "00000000-0000-4000-8000-000000000040",
+      current: false,
+      hasEpochGrant: false,
+    },
+  ]);
+});
+
+test("parsePeerDevices keeps optional display fields", () => {
+  expect(
+    parsePeerDevices([
+      {
+        id: "00000000-0000-4000-8000-000000000041",
+        encryptionPublicKey: "aa",
+        signingPublicKey: "bb",
+        hasEpochGrant: true,
+        name: "CatchOS Main PC",
+        clientKind: "cli",
+        osName: "Linux",
+        clientSummary: "dotrelay-cli",
+      },
+    ]),
+  ).toEqual([
+    {
+      id: "00000000-0000-4000-8000-000000000041",
+      encryptionPublicKey: "aa",
+      signingPublicKey: "bb",
+      hasEpochGrant: true,
+      name: "CatchOS Main PC",
+      clientKind: "cli",
+      osName: "Linux",
+      clientSummary: "dotrelay-cli",
     },
   ]);
 });

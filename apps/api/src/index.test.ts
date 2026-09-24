@@ -2022,3 +2022,142 @@ describe("workspace boundary Device binding", () => {
     ]);
   });
 });
+
+describe("POST /api/v1/devices/self display metadata", () => {
+  const deviceId = "33333333-3333-4333-8333-333333333333";
+  const createSelfApp = (options?: { readonly nameOverridden?: boolean }) => {
+    const nameOverridden = options?.nameOverridden ?? false;
+    const row = {
+      displayName: nameOverridden ? "Renamed Box" : "CatchOS Main PC",
+      nameOverridden,
+      clientKind: "CLI" as const,
+      osName: "Linux",
+      clientSummary: "dotrelay-cli",
+    };
+    let updated = { ...row };
+    const database = {
+      authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
+      user: { upsert: async () => ({ id: "user-id" }) },
+      device: {
+        findFirst: async () => ({ id: deviceId }),
+        findUnique: async () => ({ ...updated }),
+        update: async ({ data }: { data: Record<string, unknown> }) => {
+          updated = { ...updated, ...data } as typeof updated;
+          return { ...updated };
+        },
+      },
+    } as never;
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+      },
+    } as never;
+    return createApi({ database, profile, auth });
+  };
+
+  const postSelf = async (
+    testApp: ReturnType<typeof createSelfApp>,
+    profile: ReturnType<typeof loadServerProfileConfig>,
+    body: Record<string, unknown>,
+  ) =>
+    testApp.request(`${profile.origin}/api/v1/devices/self`, {
+      method: "POST",
+      headers: {
+        Origin: profile.origin,
+        Authorization: "Bearer session-token",
+        "Content-Type": "application/json",
+        "X-DotRelay-Device-Id": deviceId,
+      },
+      body: JSON.stringify(body),
+    });
+
+  test("a describe payload refreshes an un-overridden auto name", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createSelfApp();
+    const response = await postSelf(testApp, profile, {
+      client: {
+        displayName: "New Host",
+        clientKind: "cli",
+        osName: "Linux",
+        clientSummary: "dotrelay-cli",
+      },
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      name: "New Host",
+      clientKind: "cli",
+      osName: "Linux",
+      clientSummary: "dotrelay-cli",
+      nameOverridden: false,
+    });
+  });
+
+  test("a describe payload does not clobber a renamed Device", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createSelfApp({ nameOverridden: true });
+    const response = await postSelf(testApp, profile, {
+      client: {
+        displayName: "New Host",
+        clientKind: "cli",
+        osName: "Linux",
+        clientSummary: "dotrelay-cli",
+      },
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      name: "Renamed Box",
+      nameOverridden: true,
+      clientKind: "cli",
+    });
+  });
+
+  test("a rename sets nameOverridden and accepts resetName", async () => {
+    const profile = loadServerProfileConfig({});
+    const renameApp = createSelfApp();
+    const renamed = await postSelf(renameApp, profile, {
+      displayName: "Living Room PC",
+    });
+    const renameBody = (await renamed.json()) as Record<string, unknown>;
+    expect(renamed.status).toBe(200);
+    expect(renameBody).toMatchObject({
+      name: "Living Room PC",
+      nameOverridden: true,
+    });
+
+    const resetApp = createSelfApp({ nameOverridden: true });
+    const reset = await postSelf(resetApp, profile, {
+      resetName: true,
+      client: {
+        displayName: "CatchOS Main PC",
+        clientKind: "cli",
+        osName: "Linux",
+        clientSummary: "dotrelay-cli",
+      },
+    });
+    const resetBody = (await reset.json()) as Record<string, unknown>;
+    expect(reset.status).toBe(200);
+    expect(resetBody).toMatchObject({
+      name: "CatchOS Main PC",
+      nameOverridden: false,
+    });
+  });
+
+  test("rejects an empty body and invalid client kind", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createSelfApp();
+    const empty = await postSelf(testApp, profile, {});
+    expect(empty.status).toBe(400);
+    expect(await empty.json()).toMatchObject({ code: "invalid_request" });
+
+    const badKind = await postSelf(testApp, profile, {
+      client: { displayName: "x", clientKind: "other" },
+    });
+    expect(badKind.status).toBe(400);
+    expect(await badKind.json()).toMatchObject({ code: "invalid_request" });
+  });
+});

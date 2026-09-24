@@ -5,6 +5,7 @@ import {
   createProblem,
   DEVICE_ID_HEADER,
   type ProtocolObject,
+  parseDeviceClientInfo,
   parseJsonObject,
   parseProtocolObject,
   parseSha384Hex,
@@ -166,6 +167,7 @@ const readBody = async (context: Context) => {
       "ciphertextLength",
       "intent",
       "signature",
+      "client",
     ]);
   } catch {
     throw new ContractError("invalid_request");
@@ -682,6 +684,7 @@ export const registerDeviceRoutes = (
           [enrollmentObject, certificateObject],
           profile.limits.stagingTtlSeconds,
         );
+        const client = parseDeviceClientInfo(body.client);
         const result = await devices.completeEnrollment(database, {
           operation: op,
           enrollmentId,
@@ -694,6 +697,17 @@ export const registerDeviceRoutes = (
           },
           enrollmentObject,
           certificateObject,
+          ...(client
+            ? {
+                client: {
+                  displayName: client.displayName,
+                  clientKind:
+                    client.clientKind === "cli" ? "CLI" : ("BROWSER" as const),
+                  osName: client.osName,
+                  clientSummary: client.clientSummary,
+                },
+              }
+            : {}),
         });
         return context.json(
           {

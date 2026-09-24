@@ -51,6 +51,18 @@ export {
   verifyProtocolObject,
 } from "./crypto";
 export {
+  DEVICE_CLIENT_SUMMARY_MAX_LENGTH,
+  DEVICE_NAME_MAX_LENGTH,
+  DEVICE_OS_NAME_MAX_LENGTH,
+  type DeviceClientInfo,
+  type DeviceClientKind,
+  deviceClientInfoPayload,
+  parseDeviceClientInfo,
+  sanitizeDeviceClientSummary,
+  sanitizeDeviceName,
+  sanitizeDeviceOsName,
+} from "./device-client";
+export {
   ContractError,
   contractError,
   createProblem,
