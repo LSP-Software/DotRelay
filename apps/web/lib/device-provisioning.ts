@@ -76,6 +76,44 @@ const toBase64 = (value: Uint8Array): string => {
   return btoa(binary);
 };
 
+// A user-facing provisioning failure: its message is shown verbatim on the
+// Devices card. Anything else that escapes the flow is unexpected, so it is
+// reported with a neutral retry message instead of leaking raw browser or
+// server text.
+class ProvisioningMessage extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProvisioningMessage";
+  }
+}
+
+// Every problem code the server's devices/bootstrap route can return,
+// mapped to what the person at this browser can do about it. Codes the
+// route cannot return fall through to the neutral retry message.
+export const bootstrapFailureMessage = (code: string | null): string => {
+  switch (code) {
+    case "authentication_required":
+      return "Sign in before setting up this browser.";
+    case "state_conflict":
+      return "We couldn't set up this browser. Try again.";
+    case "service_unavailable":
+      return "The server couldn't finish setting up this browser right now. Try again in a moment.";
+    case "rate_limited":
+      return "The server is limiting requests from this browser right now. Wait a moment, then try again.";
+    case "device_not_active":
+      return "This browser's device is no longer active on the server. It may have been revoked; check the Devices list, then try again.";
+    case "unsupported_api_version":
+    case "unsupported_crypto_suite":
+    case "unsupported_crypto_runtime":
+      return "This server uses an API or cryptography this browser can't use. Try a current version of your browser.";
+    case "invalid_request":
+    case "invalid_crypto_object":
+      return "The server didn't accept this browser's setup. Try again; if it keeps happening, this browser may not be compatible with the server.";
+    default:
+      return "We couldn't set up this browser. Try again; if it keeps failing, the server or your connection may be the problem.";
+  }
+};
+
 export const provisionBrowserDevice = async (
   ctx: DeviceProvisioningContext,
 ): Promise<void> => {
@@ -125,30 +163,34 @@ export const provisionBrowserDevice = async (
         pinKey,
         Object.freeze({ bootstrap, operationId }),
       );
-    const response = await fetch(`${apiOrigin}/api/v1/devices/bootstrap`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        operationId,
-        deviceId: bootstrap.deviceId,
-        identityGeneration: bootstrap.identityGeneration,
-        keyId: bytesToHex(bootstrap.keyId),
-        x25519PublicKey: bytesToHex(bootstrap.x25519PublicKey),
-        ed25519PublicKey: bytesToHex(bootstrap.ed25519PublicKey),
-        certificateId: bootstrap.certificate.id,
-        certificate: toBase64(bootstrap.certificate.canonicalBytes),
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${apiOrigin}/api/v1/devices/bootstrap`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationId,
+          deviceId: bootstrap.deviceId,
+          identityGeneration: bootstrap.identityGeneration,
+          keyId: bytesToHex(bootstrap.keyId),
+          x25519PublicKey: bytesToHex(bootstrap.x25519PublicKey),
+          ed25519PublicKey: bytesToHex(bootstrap.ed25519PublicKey),
+          certificateId: bootstrap.certificate.id,
+          certificate: toBase64(bootstrap.certificate.canonicalBytes),
+        }),
+      });
+    } catch {
+      throw new ProvisioningMessage(
+        "We couldn't reach the server. Check your connection and try again.",
+      );
+    }
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as {
         readonly code?: unknown;
       } | null;
-      if (body?.code === "authentication_required")
-        throw new Error("Sign in before setting up this browser.");
-      if (body?.code === "state_conflict")
-        throw new Error("We couldn't set up this browser. Try again.");
-      throw new Error("The server rejected this browser.");
+      const code = typeof body?.code === "string" ? body.code : null;
+      throw new ProvisioningMessage(bootstrapFailureMessage(code));
     }
     const persistDeviceLocally = async (): Promise<
       "complete" | "records" | "device-id"
@@ -278,9 +320,9 @@ export const provisionBrowserDevice = async (
     }
   } catch (error) {
     onMessage(
-      error instanceof Error
+      error instanceof ProvisioningMessage
         ? error.message
-        : "We couldn't finish setting up this browser.",
+        : "We couldn't finish setting up this browser. Try again.",
     );
   } finally {
     onInProgress(false);

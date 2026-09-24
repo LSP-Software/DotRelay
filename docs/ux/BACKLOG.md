@@ -411,3 +411,115 @@ authorisation matrix) and by
 views). Leaving a team is not a product capability (the policy matrix has
 no such operation), so it stays unimplemented. Committed on main. See
 DECISIONS.md (D-003).
+
+## UX-010 - Browser device setup collapses every server failure into "The server rejected this browser."
+Journey:
+FIRST USE - Devices area, "Set up browser" (first-run Device enrollment).
+State:
+Any Server Profile; reproduced against the fixture deployment (API origin
+returns a non-protocol response for `/api/v1/devices/bootstrap`) and pinned
+against real problem codes by interception.
+Severity:
+HIGH (first-use critical path: no cause, no next action)
+Observed:
+`apps/web/lib/device-provisioning.ts` handled only `authentication_required`
+and `state_conflict`; every other problem code from the
+`devices/bootstrap` route — `service_unavailable`, `rate_limited`,
+`device_not_active`, `unsupported_crypto_runtime`/`_suite`/`_api_version`,
+`invalid_request`, `invalid_crypto_object`, `payload_too_large` — rendered
+one opaque "The server rejected this browser." with no cause and no action.
+A network-level failure (server down mid-setup) leaked the raw browser text
+("Failed to fetch") into the message. The sibling stale-epoch repair flow in
+the same file already maps its codes (`device_not_active`, `stale_epoch`)
+and the team administration module maps its codes via `problemMessage`, so
+the provisioning path was the lone straggler.
+Expected:
+Each failure the server can return names the situation and the next action,
+matching the vocabulary the CLI already uses; a network failure says the
+server was unreachable; anything unexpected falls back to a neutral retry
+message that never dumps a raw code.
+Status:
+FIXED - `apps/web/lib/device-provisioning.ts` now maps the full code set the
+bootstrap route can return (signed out, conflict, server down, rate-limited,
+device revoked, incompatible API/cryptography, invalid request, unknown) to
+actionable copy, wraps the bootstrap fetch so a network failure reports
+"We couldn't reach the server." (same wording as `team-administration.ts`),
+and shows raw text only for intentional messages. Verified by
+`apps/web/lib/device-provisioning.test.ts` (code-to-copy mapping) and
+`apps/web/e2e/workspace-enrollment-failures.spec.ts` (seven real-browser
+scenarios: aborted request, 503/429/409/400 codes, an unknown code that
+must not be dumped, and the pinned `state_conflict` line); full e2e suite
+126/126. Committed on main.
+
+## UX-011 - `device revoke-wrapper` asks for an identifier no user surface ever shows
+Journey:
+RECOVERY - CLI `dotrelay device revoke-wrapper --wrapper-id <id>`.
+State:
+Any account with an Account Master Key; reproduced on a real deployment.
+Severity:
+MEDIUM (recovery command unusable as documented)
+Observed:
+The API revoke route (`apps/api/src/device-routes.ts`, POST
+`/api/v1/account-keys/wrappers/revoke`) parses `--wrapper-id` as a full
+16-byte hex value. But the CLI only ever prints the abbreviated form
+(12 hex chars, `abbreviateId` in `apps/cli/src/index.ts`), `dotrelay
+status` does not list wrappers, and no CLI command or web surface (the
+Recovery area manages named methods, not ids) shows a full wrapper id.
+The help text claims the id comes "from dotrelay status or a previous
+wrapper listing" — neither source exists.
+Expected:
+Either a listing surface that shows full wrapper ids (`dotrelay status`
+or a `device wrappers` command backed by the existing
+`GET /api/v1/account-keys/wrappers` endpoint) or the revoke command
+accepts the abbreviated id; help text must name a source that exists.
+Status:
+OPEN - next candidate for the current campaign.
+
+## UX-012 - Device approval copy says "this machine" when the CLI is on another host
+Journey:
+AUTHORIZATION - CLI `dotrelay setup` on a remote/SSH host with `--no-open`;
+the user approves from a laptop browser at `/device?user_code=…`.
+State:
+Reproduced: the approval page shows "The CLI on this machine is asking to
+sign in" while the machine whose browser the user holds is not the machine
+running the CLI.
+Severity:
+LOW (copy; the flow still works)
+Expected:
+Copy that is true for both cases, e.g. "A DotRelay CLI is asking to sign
+in" or naming the CLI's host when known.
+Status:
+OPEN - logged for the current campaign.
+
+## UX-013 - Duplicate `user:email` scope in the GitHub sign-in request
+Journey:
+SIGN IN - GitHub OAuth handshake.
+State:
+Any deployment with GitHub sign-in enabled; observed in the real OAuth
+redirect (scope `read:user+user:email+user:email+repo`).
+Severity:
+LOW (cosmetic; GitHub de-duplicates, no functional effect)
+Observed:
+`apps/api/src/auth.ts` requests `["user:email", "repo"]` and the provider
+defaults add `read:user` + `user:email` again, so the authorization URL
+lists `user:email` twice.
+Expected:
+The scope list de-duplicated at the source so the consent screen and logs
+show each scope once.
+Status:
+OPEN - logged for the current campaign.
+
+## UX-014 - `env use` with no session points at project linking instead of signing in
+Journey:
+FIRST USE - `dotrelay env use <environment>` before any `dotrelay login`.
+State:
+Reproduced on a real deployment (clean CLI config, API up).
+Severity:
+LOW (wrong next-action; the command still exits non-zero)
+Observed:
+The remediation text suggests linking a project, but the actual blocker is
+the missing session; the user has to discover `dotrelay login` themselves.
+Expected:
+When no session exists, the remediation says to run `dotrelay login` first.
+Status:
+OPEN - logged for the current campaign.
