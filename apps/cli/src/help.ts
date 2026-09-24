@@ -325,13 +325,20 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   "device revoke-wrapper": {
     about:
       "Retire an active account-key Recovery Code wrapper so the Recovery Code it seals can no longer unlock the account. At least one Recovery Code wrapper and at least one wrapper of any kind must remain active.",
+    notes: [
+      "Without --wrapper-id, the command lists this account's active wrappers and you choose one. --no-input requires --wrapper-id.",
+      "The full wrapper id is printed when a wrapper is created and in this command's result; pass it with --wrapper-id from either place.",
+    ],
     options: {
       wrapperId:
-        "wrapper id to revoke (from dotrelay status or a previous wrapper listing)",
+        "wrapper id to revoke (full id; omit to choose from the list; required with --no-input)",
       profile: "Server Profile to revoke on (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
-    examples: ["dotrelay device revoke-wrapper --wrapper-id <wrapper-id>"],
+    examples: [
+      "dotrelay device revoke-wrapper",
+      "dotrelay device revoke-wrapper --wrapper-id <wrapper-id>",
+    ],
   },
   "project link": {
     about:

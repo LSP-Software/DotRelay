@@ -473,8 +473,24 @@ or a `device wrappers` command backed by the existing
 `GET /api/v1/account-keys/wrappers` endpoint) or the revoke command
 accepts the abbreviated id; help text must name a source that exists.
 Status:
-OPEN - next candidate for the current campaign.
-
+FIXED - `dotrelay device revoke-wrapper` without `--wrapper-id` now lists
+this account's active wrappers (via the existing
+GET /api/v1/account-keys/wrappers) and you choose one; `--no-input` still
+requires `--wrapper-id` (args validation mirrors the device transfer
+contract). The list offers only wrappers whose revocation can succeed
+under ADR 0009 (at least one Recovery Code wrapper and one wrapper of any
+kind must remain), and with nothing revocable the command refuses with
+that rule named. The card prints the full wrapper id wherever one is
+produced (wrapper creation and this command's result), and the help text
+now names sources that exist instead of "dotrelay status or a previous
+wrapper listing". Verified by `apps/cli/src/args.test.ts` (bare invocation
+parses, --no-input requires the flag) and `apps/cli/src/workflow.test.ts`
+(picker lists full ids + types and revokes the chosen one, the last
+Recovery Code wrapper is never offered, --no-input contract, nothing-
+revocable refusal); full CLI suite 379/379; live binary: new help text,
+exit 2 with the new usage line under --no-input. Live picker against a
+real account is environment-blocked (GitHub sign-in requires a human).
+Committed on main.
 ## UX-012 - Device approval copy says "this machine" when the CLI is on another host
 Journey:
 AUTHORIZATION - CLI `dotrelay setup` on a remote/SSH host with `--no-open`;

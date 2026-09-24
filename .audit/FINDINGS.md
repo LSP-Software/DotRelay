@@ -526,5 +526,7 @@ Each entry: status, evidence, impact.
   cosmetic (UX-013).
 - `dotrelay env use` with no session suggests project linking instead of
   `dotrelay login` (UX-014).
-- **Disposition:** UX-011 is the next fix candidate of this campaign;
-  UX-012/013/014 are P3 candidates to batch if reached.
+- **Disposition:** UX-011 FIXED this campaign (interactive wrapper picker +
+  full id printed at creation/result + truthful help; args/workflow tests,
+  CLI suite 379/379, live help/arg proof). UX-012/013/014 remain open P3
+  candidates to batch if reached.

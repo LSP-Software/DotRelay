@@ -835,18 +835,65 @@ export const revokeAccountKeyWrapper = async (
   }>
 > => {
   const authorized = await loadAuthorizedDevice(options);
+  let id = wrapperId.trim();
+  if (!id) {
+    if (options.noInput)
+      throw new CliInvocationError(
+        "device revoke-wrapper requires --wrapper-id <id> with --no-input",
+      );
+    const active = await fetchActiveWrappers(authorized.admin);
+    // The service keeps at least one Recovery Code wrapper and at least one
+    // wrapper of any kind active (ADR 0009), so the list offers only the
+    // wrappers whose revocation can succeed.
+    const recoveryCodeCount = active.filter(
+      (wrapper) => wrapper.type === "recovery-code",
+    ).length;
+    const revocable = active.filter(
+      (wrapper) =>
+        active.length > 1 &&
+        (wrapper.type !== "recovery-code" || recoveryCodeCount > 1),
+    );
+    if (revocable.length === 0)
+      throw new CliError(
+        "conflict",
+        "this account must keep at least one Recovery Code wrapper and one wrapper of any kind active; there is no wrapper to revoke",
+        {},
+        "state_conflict",
+      );
+    id = await selectOption(
+      "Wrapper to revoke",
+      revocable.map((wrapper) => ({
+        id: wrapper.wrapperId,
+        label: wrapper.wrapperId,
+        detail:
+          wrapper.type === "recovery-code"
+            ? "Recovery Code wrapper"
+            : wrapper.type === "password"
+              ? "Password wrapper"
+              : "Passkey wrapper",
+      })),
+      {
+        ...(options.terminal ? { terminal: options.terminal } : {}),
+        ...(options.prompt ? { prompt: options.prompt } : {}),
+        noInput: options.noInput,
+        // Revoking the wrong wrapper retires a recovery route, so an empty
+        // answer does not pick the first row.
+        defaultToFirst: false,
+      },
+    );
+  }
   const operationId = crypto.randomUUID();
   const result = await authorized.admin.post(
     "/api/v1/account-keys/wrappers/revoke",
     {
       operationId,
-      wrapperId: wrapperId.toLowerCase(),
+      wrapperId: id.toLowerCase(),
     },
     ["revoked", "idempotent"],
     { idempotencyKey: operationId },
   );
   return {
-    wrapperId: wrapperId.toLowerCase(),
+    wrapperId: id.toLowerCase(),
     revoked: Boolean(result.revoked),
     idempotent: Boolean(result.idempotent),
     message: result.idempotent

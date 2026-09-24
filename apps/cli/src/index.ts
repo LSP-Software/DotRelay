@@ -518,7 +518,10 @@ const renderDeviceResult = (
   if (typeof value.wrapperId === "string")
     rows.push({
       key: "Wrapper",
-      value: abbreviateId(value.wrapperId),
+      // The person has to carry this value to this command's --wrapper-id,
+      // so the card prints it whole. Other ids on this card are labels and
+      // stay short.
+      value: value.wrapperId,
       tone: "muted",
     });
   if (typeof value.via === "string")

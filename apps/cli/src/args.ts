@@ -230,7 +230,7 @@ export const USAGE: Record<string, string> = {
     "dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
   "device setup": "dotrelay device setup",
   "device transfer": "dotrelay device transfer | --to <peer-device-id>",
-  "device revoke-wrapper": "dotrelay device revoke-wrapper --wrapper-id <id>",
+  "device revoke-wrapper": "dotrelay device revoke-wrapper | --wrapper-id <id>",
   "project link": "dotrelay project link --team <team-id>",
   "project rotate": "dotrelay project rotate",
   "env use":
@@ -535,10 +535,11 @@ const validateCommand = (parsed: MutableArguments) => {
   if (
     command === "device" &&
     parsed.subcommand === "revoke-wrapper" &&
+    parsed.noInput &&
     !parsed.wrapperId
   )
     throw new CliInvocationError(
-      `device revoke-wrapper requires --wrapper-id <id>; usage: ${usage}`,
+      `device revoke-wrapper requires --wrapper-id <id> with --no-input; usage: ${usage}`,
     );
   // Interactively the Variables to roll back are chosen by name from the
   // live Manifest; automation must name at least one.

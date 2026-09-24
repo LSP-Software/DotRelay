@@ -145,6 +145,13 @@ describe("CLI argument contract", () => {
     expect(() => parseArguments(["device", "transfer", "--no-input"])).toThrow(
       "--to",
     );
+    expect(parseArguments(["device", "revoke-wrapper"])).toMatchObject({
+      command: "device",
+      subcommand: "revoke-wrapper",
+    });
+    expect(() =>
+      parseArguments(["device", "revoke-wrapper", "--no-input"]),
+    ).toThrow("--wrapper-id");
     expect(
       parseArguments(["device", "recover", "--transfer", "abc123"]),
     ).toMatchObject({
