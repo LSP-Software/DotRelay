@@ -14,6 +14,16 @@ that User. Device lifecycle states are `PENDING` (enrollment in progress), `ACTI
 Revocation and Membership removal are logical lifecycle changes. DotRelay never claims to erase keys
 or plaintext that were already downloaded to a client.
 
+## Display metadata
+
+Each Device row may carry cleartext display metadata: `displayName` (auto hostname or browser
+summary until the owner renames it), `nameOverridden`, `clientKind` (`CLI` / `BROWSER`), `osName`,
+and `clientSummary`. Labels live outside the signed Device certificate (ADR 0012). The owning
+installation refreshes an un-overridden name on each session via `POST /api/v1/devices/self`; a
+rename freezes the label until `resetName`. Boundary responses expose optional `name`, `clientKind`,
+`osName`, and `clientSummary` on `device` and each `peerDevices` entry for the Devices table and
+recovery target picker.
+
 ## Initial trust bootstrap
 
 A Device for a client installation uses **`DeviceRepository.completeBootstrap`**. The User must have

@@ -74,6 +74,10 @@ export type WorkspaceBoundary = Readonly<{
     readonly active: boolean;
     readonly label?: string;
     readonly id?: string;
+    readonly name?: string;
+    readonly clientKind?: string;
+    readonly osName?: string;
+    readonly clientSummary?: string;
     readonly encryptionPublicKey?: string;
     readonly signingPublicKey?: string;
   }>;
@@ -90,6 +94,10 @@ export type WorkspaceBoundary = Readonly<{
     readonly encryptionPublicKey: string;
     readonly signingPublicKey: string;
     readonly hasEpochGrant: boolean;
+    readonly name?: string;
+    readonly clientKind?: string;
+    readonly osName?: string;
+    readonly clientSummary?: string;
   }>[];
   readonly crypto: Readonly<{
     readonly available: boolean;
@@ -200,6 +208,10 @@ export type EnrolledDeviceRow = Readonly<{
   readonly id: string;
   readonly current: boolean;
   readonly hasEpochGrant: boolean;
+  readonly name?: string;
+  readonly clientKind?: string;
+  readonly osName?: string;
+  readonly clientSummary?: string;
 }>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -214,12 +226,20 @@ export const parsePeerDevices = (
     const id = asString(entry.id);
     const encryptionPublicKey = asString(entry.encryptionPublicKey);
     if (!id || !encryptionPublicKey) return [];
+    const name = asString(entry.name);
+    const clientKind = asString(entry.clientKind);
+    const osName = asString(entry.osName);
+    const clientSummary = asString(entry.clientSummary);
     return [
       {
         id,
         encryptionPublicKey,
         signingPublicKey: asString(entry.signingPublicKey) ?? "",
         hasEpochGrant: entry.hasEpochGrant === true,
+        ...(name ? { name } : {}),
+        ...(clientKind ? { clientKind } : {}),
+        ...(osName ? { osName } : {}),
+        ...(clientSummary ? { clientSummary } : {}),
       },
     ];
   });
@@ -271,6 +291,14 @@ export const enrolledDeviceRows = (
       id: boundary.device.id,
       current: options.thisBrowserEnrolled,
       hasEpochGrant: boundary.grantsReady,
+      ...(boundary.device.name ? { name: boundary.device.name } : {}),
+      ...(boundary.device.clientKind
+        ? { clientKind: boundary.device.clientKind }
+        : {}),
+      ...(boundary.device.osName ? { osName: boundary.device.osName } : {}),
+      ...(boundary.device.clientSummary
+        ? { clientSummary: boundary.device.clientSummary }
+        : {}),
     });
   }
   for (const peer of boundary.peerDevices ?? []) {
@@ -280,6 +308,10 @@ export const enrolledDeviceRows = (
       id: peer.id,
       current: false,
       hasEpochGrant: peer.hasEpochGrant,
+      ...(peer.name ? { name: peer.name } : {}),
+      ...(peer.clientKind ? { clientKind: peer.clientKind } : {}),
+      ...(peer.osName ? { osName: peer.osName } : {}),
+      ...(peer.clientSummary ? { clientSummary: peer.clientSummary } : {}),
     });
   }
   return rows;

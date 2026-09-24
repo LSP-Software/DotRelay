@@ -20,6 +20,7 @@ import {
   loadDeviceSigningKey,
 } from "@/lib/account-recovery";
 import { readStoredBrowserDeviceId } from "@/lib/browser-storage";
+import { describeThisBrowser } from "@/lib/device-describe";
 import {
   environmentContextIdentity,
   environmentContextKey,
@@ -30,10 +31,41 @@ import {
 } from "@/lib/environment-protocol-session";
 import { resolveUserValueKey } from "@/lib/user-value-key";
 import {
+  BROWSER_DEVICE_ID_HEADER,
   fetchWorkspaceBoundary,
   type WorkspaceBoundary,
   type WorkspaceProfileId,
 } from "@/lib/workspace-boundary";
+
+// Best-effort self-describe: refreshes this browser's display name and
+// client fields on the Server Profile after the boundary is known. Failures
+// must not take the session offline; the next tick retries.
+const refreshDeviceDisplay = async (
+  apiOrigin: string,
+  deviceId: string,
+): Promise<void> => {
+  try {
+    const info = describeThisBrowser();
+    await fetch(`${apiOrigin}/api/v1/devices/self`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        [BROWSER_DEVICE_ID_HEADER]: deviceId,
+      },
+      body: JSON.stringify({
+        client: {
+          displayName: info.displayName,
+          clientKind: info.clientKind,
+          ...(info.osName ? { osName: info.osName } : {}),
+          ...(info.clientSummary ? { clientSummary: info.clientSummary } : {}),
+        },
+      }),
+    });
+  } catch {
+    // display metadata is cosmetic; ignore network and parse failures
+  }
+};
 
 // The workspace's session machinery: the periodic boundary refresh loop
 // (with its exponential reconnect backoff and the plain-refresh path that
@@ -130,6 +162,8 @@ export const createWorkspaceRefreshLoop = (
         setConnection("offline");
         return false;
       }
+      if (resolved.device.active && resolved.device.id && apiOrigin)
+        await refreshDeviceDisplay(apiOrigin, resolved.device.id);
       setVerifiedAt(Date.now());
       setConnection("online");
       const resolvedJson = JSON.stringify(resolved);

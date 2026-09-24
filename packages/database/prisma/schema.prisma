@@ -13,6 +13,11 @@ enum DeviceLifecycle {
   REVOKED
 }
 
+enum DeviceClientKind {
+  CLI
+  BROWSER
+}
+
 enum MembershipRole {
   OWNER
   ADMIN
@@ -301,6 +306,11 @@ model Device {
   keyId              Bytes           @db.ByteA
   x25519PublicKey    Bytes           @db.ByteA
   ed25519PublicKey   Bytes           @db.ByteA
+  displayName        String?         @db.VarChar(64)
+  nameOverridden     Boolean         @default(false)
+  clientKind         DeviceClientKind?
+  osName             String?         @db.VarChar(32)
+  clientSummary      String?         @db.VarChar(64)
   createdAt          DateTime        @default(now()) @db.Timestamptz(3)
   activatedAt        DateTime?       @db.Timestamptz(3)
   revokedAt          DateTime?       @db.Timestamptz(3)

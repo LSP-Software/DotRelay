@@ -325,13 +325,28 @@ const statusSessionLine = (session: string): StatusLine => {
   return { text: "not signed in", tone: "muted" };
 };
 
-const statusDeviceLine = (device: string): StatusLine => {
-  if (device === "active") return { text: "active · verified", tone: "brand" };
-  if (device === "not-active") return { text: "not active", tone: "danger" };
-  if (device === "unusable") return { text: "keys unusable", tone: "danger" };
-  if (device === "unverified")
-    return { text: "last known · not verified", tone: "warn" };
-  return { text: "not enrolled", tone: "muted" };
+const statusDeviceLine = (device: string, name?: string): StatusLine => {
+  const label =
+    device === "active"
+      ? name
+        ? `active · ${name}`
+        : "active · verified"
+      : device === "not-active"
+        ? "not active"
+        : device === "unusable"
+          ? "keys unusable"
+          : device === "unverified"
+            ? "last known · not verified"
+            : "not enrolled";
+  const tone =
+    device === "active"
+      ? "brand"
+      : device === "not-active" || device === "unusable"
+        ? "danger"
+        : device === "unverified"
+          ? "warn"
+          : "muted";
+  return { text: label, tone };
 };
 
 // The note names the stage that could not complete; once the service has
@@ -371,9 +386,13 @@ const renderStatusCard = (value: Record<string, unknown>): string => {
     typeof value.session === "string" ? value.session : "not-stored";
   const device =
     typeof value.device === "string" ? value.device : "not-enrolled";
+  const deviceName =
+    typeof value.deviceName === "string" && value.deviceName
+      ? value.deviceName
+      : undefined;
   const service = typeof value.service === "string" ? value.service : "skipped";
   const sessionLine = statusSessionLine(session);
-  const deviceLine = statusDeviceLine(device);
+  const deviceLine = statusDeviceLine(device, deviceName);
   const rows: KvRow[] = [
     { key: "Server Profile", value: profile || undefined },
     { key: "Origin", value: origin || undefined, tone: "muted" },
@@ -495,6 +514,8 @@ const renderDeviceResult = (
   const rows: KvRow[] = [];
   if (typeof value.deviceId === "string")
     rows.push({ key: "Device", value: abbreviateId(value.deviceId) });
+  if (typeof value.deviceName === "string" && value.deviceName)
+    rows.push({ key: "Name", value: sanitizeCliText(value.deviceName) });
   if (typeof value.enrollmentId === "string")
     rows.push({
       key: "Enrollment",
@@ -935,6 +956,7 @@ const loginAndEnroll = async (
     verificationUri: login.verificationUri,
     deviceId: enrollment.deviceId,
     device: enrollment.active ? "enrolled" : "not enrolled",
+    ...(enrollment.deviceName ? { deviceName: enrollment.deviceName } : {}),
     message: enrollment.existing
       ? `Signed in to ${profile.name}. Device already enrolled.`
       : `Signed in to ${profile.name}. Device enrolled.`,
@@ -1029,6 +1051,7 @@ const verifyStatus = async (
       ? "unverified"
       : "unusable"
     : "not-enrolled";
+  let deviceName: string | undefined;
   let service: "verified" | "offline" | "rejected" | "unavailable" | "skipped" =
     sessionToken ? "offline" : "skipped";
   let environmentLabel: string | null = null;
@@ -1114,6 +1137,10 @@ const verifyStatus = async (
           // service accepted this Device, so the service state stays
           // verified while the Device line reports the local break.
           deviceState = keysMatch ? "active" : "unusable";
+          if (keysMatch) {
+            const name = deviceRecord?.name;
+            if (typeof name === "string" && name) deviceName = name;
+          }
         }
         if (queriedEnvironment && context) {
           const boundaryEnvironment = boundary.environment;
@@ -1175,6 +1202,7 @@ const verifyStatus = async (
     service,
     session: sessionState,
     device: deviceState,
+    ...(deviceName ? { deviceName } : {}),
     nextAction,
     ...(context ? { projectId: context.projectId } : {}),
     ...(contextEnvironmentId

@@ -3,10 +3,14 @@ import {
   ContractError,
   createProblem,
   DEVICE_ID_HEADER,
+  type DeviceClientInfo,
   type ProblemCode,
   parseCapabilitiesDocument,
+  parseDeviceClientInfo,
+  parseJsonObject,
   parseProtocolObject,
   parseUuid,
+  sanitizeDeviceName,
   validateProtocolObject,
   verifyProtocolObject,
 } from "@dotrelay/contracts";
@@ -371,8 +375,43 @@ const parseBootstrapRequest = async (
     ed25519PublicKey,
     keyId,
     certificateBytes,
+    client: parseDeviceClientInfo(body.client),
   };
 };
+
+// Parsed wire client info → persistence metadata (Prisma enum casing).
+const toClientMetadata = (
+  client: DeviceClientInfo,
+): Readonly<{
+  displayName: string;
+  clientKind: "CLI" | "BROWSER";
+  osName: string | null;
+  clientSummary: string | null;
+}> => ({
+  displayName: client.displayName,
+  clientKind: client.clientKind === "cli" ? "CLI" : "BROWSER",
+  osName: client.osName,
+  clientSummary: client.clientSummary,
+});
+
+// Display fields carried on a Device row for the boundary response. Names
+// are optional so a Device enrolled before this metadata existed (or one
+// that has never refreshed) still lists cleanly.
+type DeviceDisplayRow = Readonly<{
+  readonly displayName: string | null;
+  readonly clientKind: "CLI" | "BROWSER" | null;
+  readonly osName: string | null;
+  readonly clientSummary: string | null;
+}>;
+
+const deviceDisplayFields = (row: DeviceDisplayRow) => ({
+  ...(row.displayName ? { name: row.displayName } : {}),
+  ...(row.clientKind
+    ? { clientKind: row.clientKind === "CLI" ? "cli" : "browser" }
+    : {}),
+  ...(row.osName ? { osName: row.osName } : {}),
+  ...(row.clientSummary ? { clientSummary: row.clientSummary } : {}),
+});
 
 const parseGrantBootstrapRequest = async (context: Context) => {
   const body = (await context.req.json()) as Record<string, unknown>;
@@ -576,6 +615,7 @@ const createApi = ({
   });
 
   app.use("/api/v1/devices/bootstrap", protocolCors(profile));
+  app.use("/api/v1/devices/self", protocolCors(profile));
   app.use("/api/v1/account-keys", protocolCors(profile));
   app.use("/api/v1/account-keys/*", protocolCors(profile));
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
@@ -642,6 +682,9 @@ const createApi = ({
               canonicalBytes: request.certificateBytes,
               digest: await sha384Digest(request.certificateBytes),
             },
+            ...(request.client
+              ? { client: toClientMetadata(request.client) }
+              : {}),
           },
         );
         return context.json(
@@ -959,7 +1002,15 @@ const createApi = ({
     const devices = await database.device.findMany({
       where: { userId: user.id, lifecycle: "ACTIVE" },
       orderBy: { createdAt: "asc" },
-      select: { id: true, x25519PublicKey: true, ed25519PublicKey: true },
+      select: {
+        id: true,
+        x25519PublicKey: true,
+        ed25519PublicKey: true,
+        displayName: true,
+        clientKind: true,
+        osName: true,
+        clientSummary: true,
+      },
     });
     // Resolve only the Device this client presents. A fallback to the first
     // active Device would let a new installation claim a Device it does not
@@ -1079,6 +1130,7 @@ const createApi = ({
                 signingPublicKey: bytesToHex(
                   new Uint8Array(device.ed25519PublicKey),
                 ),
+                ...deviceDisplayFields(device),
               }
             : {}),
         },
@@ -1124,6 +1176,7 @@ const createApi = ({
               new Uint8Array(candidate.ed25519PublicKey),
             ),
             hasEpochGrant: peerGrantRecipients.has(candidate.id),
+            ...deviceDisplayFields(candidate),
           })),
         grantsReady:
           deviceActive &&
@@ -1146,6 +1199,102 @@ const createApi = ({
       200,
       { "Cache-Control": "no-store" },
     );
+  });
+
+  // Display metadata for the Device this client presents. Two shapes share
+  // one route: a describe payload (auto name + kind/OS/summary) refreshes an
+  // un-overridden name and always updates the client fields; a displayName
+  // payload renames and sets nameOverridden so later describes stop
+  // clobbering it. Body has no Idempotency-Key: a repeated describe is
+  // idempotent by construction, and a repeated rename rewrites the same row.
+  app.post("/api/v1/devices/self", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const contentType = context.req.header("Content-Type")?.split(";", 1)[0];
+      if (contentType?.trim() !== "application/json")
+        return jsonProblem(context, "unsupported_media_type");
+      const body = parseJsonObject<{
+        client?: unknown;
+        displayName?: unknown;
+        resetName?: unknown;
+      }>(await context.req.json(), ["client", "displayName", "resetName"]);
+      const client = parseDeviceClientInfo(body.client);
+      const hasRename =
+        body.displayName !== undefined && body.displayName !== null;
+      const rename = hasRename
+        ? sanitizeDeviceName(String(body.displayName))
+        : null;
+      if (hasRename && !rename) return jsonProblem(context, "invalid_request");
+      if (
+        body.resetName !== undefined &&
+        body.resetName !== null &&
+        body.resetName !== true &&
+        body.resetName !== false
+      )
+        return jsonProblem(context, "invalid_request");
+      if (!client && !hasRename && body.resetName !== true)
+        return jsonProblem(context, "invalid_request");
+      const existing = await database.device.findUnique({
+        where: { id: actor.deviceId },
+        select: {
+          displayName: true,
+          nameOverridden: true,
+          clientKind: true,
+          osName: true,
+          clientSummary: true,
+        },
+      });
+      if (!existing) return jsonProblem(context, "device_not_active");
+      const data: Record<string, unknown> = {};
+      if (client) {
+        data.clientKind = client.clientKind === "cli" ? "CLI" : "BROWSER";
+        if (client.osName !== null) data.osName = client.osName;
+        if (client.clientSummary !== null)
+          data.clientSummary = client.clientSummary;
+        if (!existing.nameOverridden) data.displayName = client.displayName;
+      }
+      if (rename) {
+        data.displayName = rename;
+        data.nameOverridden = true;
+      } else if (body.resetName === true) {
+        data.nameOverridden = false;
+        if (client) data.displayName = client.displayName;
+      }
+      const result =
+        Object.keys(data).length === 0
+          ? existing
+          : await database.device.update({
+              where: { id: actor.deviceId },
+              data,
+              select: {
+                displayName: true,
+                clientKind: true,
+                osName: true,
+                clientSummary: true,
+                nameOverridden: true,
+              },
+            });
+      return context.json(
+        {
+          name: result.displayName,
+          clientKind: result.clientKind
+            ? result.clientKind === "CLI"
+              ? "cli"
+              : "browser"
+            : null,
+          osName: result.osName,
+          clientSummary: result.clientSummary,
+          nameOverridden: result.nameOverridden,
+        },
+        200,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      if (error instanceof ContractError)
+        return jsonProblem(context, error.code);
+      return jsonProblem(context, "service_unavailable");
+    }
   });
 
   registerAdministrationRoutes(app, {

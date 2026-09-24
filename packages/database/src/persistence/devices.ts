@@ -41,6 +41,7 @@ export type DeviceBootstrapInput = Readonly<{
     readonly ed25519PublicKey: Uint8Array;
   }>;
   readonly certificateObject: ProtocolObjectInput;
+  readonly client?: DeviceClientMetadata | null;
   readonly now?: Date;
 }>;
 
@@ -56,8 +57,36 @@ export type DeviceEnrollmentCompletionInput = Readonly<{
   }>;
   readonly enrollmentObject: ProtocolObjectInput;
   readonly certificateObject: ProtocolObjectInput;
+  readonly client?: DeviceClientMetadata | null;
   readonly now?: Date;
 }>;
+
+// Display metadata written with the Device row. displayName is the suggested
+// auto name at enrollment; nameOverridden starts false so a later session
+// refresh may replace it until the owner renames.
+export type DeviceClientMetadata = Readonly<{
+  readonly displayName: string;
+  readonly clientKind: "CLI" | "BROWSER";
+  readonly osName: string | null;
+  readonly clientSummary: string | null;
+}>;
+
+const clientCreateData = (
+  client: DeviceClientMetadata | null | undefined,
+): Readonly<{
+  displayName?: string;
+  clientKind?: "CLI" | "BROWSER";
+  osName?: string | null;
+  clientSummary?: string | null;
+}> =>
+  client
+    ? {
+        displayName: client.displayName,
+        clientKind: client.clientKind,
+        osName: client.osName,
+        clientSummary: client.clientSummary,
+      }
+    : {};
 
 export class DeviceRepository {
   private readonly operations = new OperationRepository();
@@ -233,6 +262,7 @@ export class DeviceRepository {
           ed25519PublicKey: databaseBytes(input.device.ed25519PublicKey),
           lifecycle: "ACTIVE",
           activatedAt: now,
+          ...clientCreateData(input.client),
         },
       });
       await transaction.deviceCertificateObject.create({
@@ -336,6 +366,7 @@ export class DeviceRepository {
           ed25519PublicKey: databaseBytes(input.device.ed25519PublicKey),
           lifecycle: "ACTIVE",
           activatedAt: now,
+          ...clientCreateData(input.client),
         },
       });
       await transaction.enrollmentObject.create({

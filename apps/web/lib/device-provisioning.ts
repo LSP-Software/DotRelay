@@ -15,6 +15,7 @@ import {
   readStoredBrowserDeviceId,
   writeStoredBrowserDeviceId,
 } from "@/lib/browser-storage";
+import { describeThisBrowser } from "@/lib/device-describe";
 import {
   fetchWorkspaceBoundary,
   type WorkspaceBoundary,
@@ -138,6 +139,17 @@ export const provisionBrowserDevice = async (
         ed25519PublicKey: bytesToHex(bootstrap.ed25519PublicKey),
         certificateId: bootstrap.certificate.id,
         certificate: toBase64(bootstrap.certificate.canonicalBytes),
+        client: (() => {
+          const info = describeThisBrowser();
+          return {
+            displayName: info.displayName,
+            clientKind: info.clientKind,
+            ...(info.osName ? { osName: info.osName } : {}),
+            ...(info.clientSummary
+              ? { clientSummary: info.clientSummary }
+              : {}),
+          };
+        })(),
       }),
     });
     if (!response.ok) {
