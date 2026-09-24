@@ -523,13 +523,15 @@ Each entry: status, evidence, impact.
   in" — false for the product's own `--no-open`/remote-CLI flow; FIXED
   this campaign (location-agnostic copy, pinned in the device approval e2e)
   (UX-012).
-- GitHub OAuth scope lists `user:email` twice
+- GitHub OAuth scope listed `user:email` twice
   (`apps/api/src/auth.ts` `["user:email","repo"]` + provider defaults) —
-  cosmetic (UX-013).
+  cosmetic; FIXED this campaign (config now requests only `repo`; live
+  authorize URL verified deduplicated) (UX-013).
 - `dotrelay env use` with no session suggests project linking instead of
   `dotrelay login` (UX-014).
 - **Disposition:** UX-011 FIXED this campaign (interactive wrapper picker +
   full id printed at creation/result + truthful help; args/workflow tests,
   CLI suite 379/379, live help/arg proof). UX-012 FIXED this campaign
-  (location-agnostic approval copy, e2e pin). UX-013/014 remain open P3
-  candidates to batch if reached.
+  (location-agnostic approval copy, e2e pin). UX-013 FIXED this campaign
+  (scope deduplicated, live authorize-URL proof). UX-014 remains open as
+  the last recorded P3 candidate.

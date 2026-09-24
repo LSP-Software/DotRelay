@@ -527,8 +527,12 @@ Expected:
 The scope list de-duplicated at the source so the consent screen and logs
 show each scope once.
 Status:
-OPEN - logged for the current campaign.
-
+FIXED - the configured scope is now just `repo`; the provider's own
+defaults (`read:user`, `user:email`) are no longer repeated in the
+config, so the consent screen and logs show each scope once. Effective
+permissions unchanged. Verified live against the running API:
+`POST /api/auth/sign-in/social` now returns an authorize URL with
+`scope=read:user user:email repo` (no duplicate). Committed on main.
 ## UX-014 - `env use` with no session points at project linking instead of signing in
 Journey:
 FIRST USE - `dotrelay env use <environment>` before any `dotrelay login`.
