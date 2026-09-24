@@ -31,6 +31,7 @@ import {
   createDatabaseClient,
   ensureServerProfile,
 } from "../packages/database/src/index";
+import { raceBrowserAndCliEstablishment } from "./race-browser-cli-establishment";
 
 const root = join(import.meta.dir, "..");
 const binary =
@@ -242,7 +243,10 @@ const base64url = (bytes: Uint8Array): string =>
 
 // Hono's signed-cookie scheme, which better-auth uses for its session cookie:
 // `value` plus a base64 HMAC-SHA256 signature of it under the auth secret.
-const signedSessionCookie = async (token: string, secret: string) => {
+const sessionCookieParts = async (
+  token: string,
+  secret: string,
+): Promise<Readonly<{ readonly header: string; readonly value: string }>> => {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -258,8 +262,15 @@ const signedSessionCookie = async (token: string, secret: string) => {
   const base64Signature = btoa(
     String.fromCharCode(...new Uint8Array(signature)),
   );
-  return `better-auth.session_token=${encodeURIComponent(`${token}.${base64Signature}`)}`;
+  const value = `${token}.${base64Signature}`;
+  return {
+    value,
+    header: `better-auth.session_token=${encodeURIComponent(value)}`,
+  };
 };
+
+const signedSessionCookie = async (token: string, secret: string) =>
+  (await sessionCookieParts(token, secret)).header;
 
 // Allocates a port and KEEPS it bound until release() is called, so no
 // concurrent process can claim it while the harness is still setting up.
@@ -298,6 +309,7 @@ const runWithDeviceApproval = async (
   args: readonly string[],
   environment: NodeJS.ProcessEnv,
   cwd: string,
+  sessionCookie = operatorSessionCookie,
 ): Promise<CliRunResult & { readonly approvals: number }> => {
   const child = Bun.spawn([binary, ...args], {
     cwd,
@@ -333,7 +345,7 @@ const runWithDeviceApproval = async (
       // the code for the approving user, then the approval confirms it.
       const approvalHeaders = {
         "Content-Type": "application/json",
-        Cookie: operatorSessionCookie,
+        Cookie: sessionCookie,
         Origin: profileOrigin,
       };
       const statusResponse = await fetch(
@@ -663,6 +675,23 @@ try {
     "origin",
     `https://github.com/${DEMO_GITHUB.owner}/${DEMO_GITHUB.name}.git`,
   ]);
+
+  console.log(
+    "→ browser and CLI: simultaneous first Account Master Key establishment",
+  );
+  await raceBrowserAndCliEstablishment({
+    database,
+    profileOrigin,
+    serverProfileId: profile.id,
+    isolatedDirectory,
+    sessionCookieFor: (token) =>
+      sessionCookieParts(token, process.env.BETTER_AUTH_SECRET ?? ""),
+    runWithDeviceApproval,
+    runBinary,
+    writeRecoveryCodeFile,
+    parseJsonLines,
+    requireString,
+  });
 
   console.log(
     "→ CLI: setup (device authorization approved through the real API)",
@@ -1822,7 +1851,7 @@ try {
     throw new Error("the audit trail recorded nothing for the demo user");
 
   console.log(
-    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin, and the full Account Master Key lifecycle (3-Device cross-device decrypt, live simultaneous device setup, User-defined Value opened on a second Device after AMK recovery, one-shot transfer, rotation, revocation guard) against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
+    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin, and the full Account Master Key lifecycle (3-Device cross-device decrypt, live simultaneous device setup, live browser-and-CLI first establishment, User-defined Value opened on a second Device after AMK recovery, one-shot transfer, rotation, revocation guard) against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
   );
 } finally {
   server?.stop(true);
