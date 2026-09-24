@@ -537,3 +537,31 @@ Each entry: status, evidence, impact.
   (session precheck before the project-link demand in `env use` and
   `loadWorkflowSession`; three workflow tests, live clean-config proof,
   CLI suite 382/382) - all four findings in this entry are now closed.
+
+## F-018 (FIXED) Integration-suite turbo cache insensitive to DATABASE_URL
+- **Status:** FIXED_AND_VERIFIED (this campaign)
+- **Symptom:** `test:integration` declared `DATABASE_URL`/`VALKEY_URL` under
+  turbo `passThroughEnv`, which provides the variables WITHOUT hashing them.
+  Any `turbo run test:integration` executed without the variables (49 tests
+  skip in ~50ms by design) wrote a skip-all result to the shared worktree
+  cache under the same hash as a real run - and a later `bun run
+  test:integration` (which does set the variables) replayed those skip logs
+  as a green pass. Reproduced live: poisoned the cache with a var-less
+  forced run, then watched the wrapper replay "49 skip" as success despite
+  printing "DATABASE_URL and VALKEY_URL reach the integration tasks".
+- **Impact:** the exact false-green `scripts/test-integration.ts`'s header
+  comment warns about, one layer deeper: every `verify` after a poisoned
+  cache would certify an untested database. The three `.integration.test.ts`
+  files fail closed nowhere - absence of the variable means `describe.skip`.
+- **Fix:** declare the two variables under turbo `env` (hashed inputs)
+  instead of `passThroughEnv` for `test:integration`, so present/absent (and
+  distinct values) hash differently and can never share a cache entry. The
+  `db:*` tasks keep `passThroughEnv`: their scripts throw without the
+  variables (fail closed), so no false green is possible there.
+- **Verification:** after the change the wrapper run cache-misses and really
+  executes (43 pass, 0 fail, 8.35s, isolated uuid databases dropped after);
+  a var-less forced run hashes differently (`ae989330…` vs `59442568…`) and
+  the wrapper replays only the real 43-pass entry.
+- **Regression protection:** the task hash now covers the variables; no new
+  test needed (the failure mode was cache identity, observable only across
+  runs - verified live as above).

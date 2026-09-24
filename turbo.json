@@ -52,7 +52,7 @@
       "outputs": []
     },
     "test:integration": {
-      "passThroughEnv": ["DATABASE_URL", "VALKEY_URL"],
+      "env": ["DATABASE_URL", "VALKEY_URL"],
       "outputs": []
     },
     "test:e2e": {
