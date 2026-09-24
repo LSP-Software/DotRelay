@@ -350,6 +350,10 @@ const setup = async (
       readonly id: string;
       readonly encryptionPublicKey: string;
       readonly hasEpochGrant: boolean;
+      readonly name?: string;
+      readonly clientKind?: string;
+      readonly osName?: string;
+      readonly clientSummary?: string;
     }>[];
   }> = {},
 ): Promise<{
@@ -4331,8 +4335,13 @@ describe("protected CLI workflows", () => {
           id: first.id,
           encryptionPublicKey: first.encryptionPublicKey,
           hasEpochGrant: true,
+          name: "CatchOS",
+          clientKind: "cli",
+          osName: "Linux",
+          clientSummary: "dotrelay-cli",
         },
         {
+          // Unlabeled: the picker falls back to the Device id.
           id: second.id,
           encryptionPublicKey: second.encryptionPublicKey,
           hasEpochGrant: false,
@@ -4367,7 +4376,10 @@ describe("protected CLI workflows", () => {
     expect(report.recipientDeviceId).toBe(second.id);
     const shown = rendered.join("");
     expect(shown).toContain("Device to receive the key");
-    expect(shown).toContain(first.id);
+    // A labeled peer is offered by its name, not by bare Device id...
+    expect(shown).toContain("CatchOS");
+    expect(shown).not.toContain(first.id);
+    // ...and an unlabeled one falls back to its Device id.
     expect(shown).toContain(second.id);
     expect(shown).toContain("holds the project key");
     expect(service.postedTransfers()[0]?.recipientDeviceId).toBe(second.id);

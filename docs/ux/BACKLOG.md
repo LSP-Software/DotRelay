@@ -879,3 +879,26 @@ is active (the server's confirmation, true across reloads); the in-memory
 records still cover the in-session gap after provisioning. E2E pins the
 post-reload state: the "This browser is set up" card and the row named as
 this browser's.
+
+## UX-027 - `device transfer` picker offered peer Devices as bare UUIDs
+Journey:
+CLI - `dotrelay device transfer` without `--to`, several Devices enrolled.
+State:
+Authenticated and enrolled, interactive terminal.
+Severity:
+MEDIUM (the picker exists to prevent sending the account key to the wrong
+Device; a bare UUID is the hardest label to match against the Devices table
+in the web app, which shows the machine name)
+Observed:
+The boundary already carries each peer's name and client summary (PR #247),
+and the web's transfer picker offers `name ?? clientSummary ?? id`, but the
+CLI's `selectOption` list labeled every peer with its raw Device id - even
+for a CLI that enrolled as "CatchOS".
+Expected:
+The same human labels the web picker shows: name, then client summary, then
+the Device id for unlabeled Devices.
+Status:
+FIXED - `workflow-account-key.ts` labels each choice
+`device.name ?? device.clientSummary ?? device.id`; `--to` still takes the
+Device id for automation. The red-green test offers a named CLI peer and an
+unlabeled one and pins the rendered picker.

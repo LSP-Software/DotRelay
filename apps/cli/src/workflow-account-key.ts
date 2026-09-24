@@ -746,7 +746,9 @@ export const transferAccountKey = async (
       "Device to receive the key",
       authorized.boundary.peerDevices.map((device) => ({
         id: device.id,
-        label: device.id,
+        // A human label where the Device has one (the Devices table in the
+        // web app shows the same), a bare id where it does not.
+        label: device.name ?? device.clientSummary ?? device.id,
         ...(device.hasEpochGrant ? { detail: "holds the project key" } : {}),
       })),
       {
