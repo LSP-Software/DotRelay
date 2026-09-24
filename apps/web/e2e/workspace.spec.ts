@@ -308,8 +308,9 @@ test("missing Device setup has one action and does not dump problem codes", asyn
   await expect(page.getByTestId("cli-setup-command")).toContainText(
     "dotrelay setup",
   );
+  await expect(page.getByText("CLI on this machine")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "Copy command" }),
+    page.getByRole("button", { name: "Set up browser" }),
   ).toBeVisible();
   await expect(page.getByText("crypto_provider_unavailable")).toHaveCount(0);
   await expect(page.getByText("Protected content is unavailable")).toHaveCount(
@@ -332,6 +333,7 @@ test("unsupported cryptography explains how to continue", async ({ page }) => {
   await expect(page.getByTestId("cli-setup-command")).toContainText(
     "dotrelay setup",
   );
+  await expect(page.getByText("CLI on this machine")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Copy command" }),
   ).toBeVisible();

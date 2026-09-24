@@ -598,4 +598,9 @@ Expected:
 Location-agnostic wording wherever the copy is not strictly describing
 where the user would run a copied command.
 Status:
-OPEN - logged for the current campaign.
+FIXED - the five false co-location claims now say "the CLI is a separate
+device" / "sets up the CLI, not this browser" / "or the CLI"; browser-key
+storage copy ("Keys stay on this machine") kept because it is true.
+Unit tests pin the absence of "CLI on this machine" in both setup-gate
+bodies; the two workspace e2e surfaces that show the CLI hand-off pin
+`getByText("CLI on this machine")` count 0.

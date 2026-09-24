@@ -760,14 +760,14 @@ export const nextSetupAction = (
     return {
       id: "crypto-unavailable",
       title: "This browser can't decrypt variables",
-      body: "DotRelay needs the Web Crypto API. Use an up-to-date Chrome, Firefox, or Safari, or the CLI on this machine.",
+      body: "DotRelay needs the Web Crypto API. Use an up-to-date Chrome, Firefox, or Safari, or the CLI.",
       actionLabel: "Copy CLI command",
     };
   if (!state.deviceActive)
     return {
       id: "enroll-device",
       title: "Set up this browser",
-      body: "This browser needs its own keys before it can read your values. The CLI on this machine is a separate device, so setting it up won't read variables here. Keys stay on this machine.",
+      body: "This browser needs its own keys before it can read your values. The CLI is a separate device, so setting it up won't read variables here. Keys stay on this machine.",
       actionLabel: "Set up browser",
     };
   if (!state.grantsReady)

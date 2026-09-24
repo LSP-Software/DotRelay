@@ -968,6 +968,13 @@ test("setup reports only the next action the person can take", () => {
       ...blockedSetup,
       sessionActive: true,
       profileTrusted: true,
+    })?.body,
+  ).not.toContain("CLI on this machine");
+  expect(
+    nextSetupAction({
+      ...blockedSetup,
+      sessionActive: true,
+      profileTrusted: true,
       cryptoAvailable: true,
     })?.id,
   ).toBe("enroll-device");
@@ -979,6 +986,14 @@ test("setup reports only the next action the person can take", () => {
       cryptoAvailable: true,
     })?.body,
   ).toContain("separate device");
+  expect(
+    nextSetupAction({
+      ...blockedSetup,
+      sessionActive: true,
+      profileTrusted: true,
+      cryptoAvailable: true,
+    })?.body,
+  ).not.toContain("CLI on this machine");
   expect(
     nextSetupAction({
       sessionActive: true,
