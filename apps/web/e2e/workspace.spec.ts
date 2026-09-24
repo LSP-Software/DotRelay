@@ -33,6 +33,11 @@ test("device approval page asks to allow the CLI", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Allow this CLI?" }),
   ).toBeVisible();
+  // The CLI may run on another host (dotrelay setup --no-open), so the
+  // copy never claims it is on this machine.
+  await expect(
+    page.getByText("A DotRelay CLI is asking to sign in"),
+  ).toBeVisible();
   await expect(page.getByText("ABCD-EFGH")).toBeVisible();
 });
 

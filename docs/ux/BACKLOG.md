@@ -505,8 +505,12 @@ Expected:
 Copy that is true for both cases, e.g. "A DotRelay CLI is asking to sign
 in" or naming the CLI's host when known.
 Status:
-OPEN - logged for the current campaign.
-
+FIXED - the approval page no longer claims the CLI is on this machine:
+"A DotRelay CLI is asking to sign in. Check that the code matches the one
+in its terminal" is true whether the CLI runs locally or over SSH with
+--no-open, and the page metadata description matches. Pinned by the
+existing device approval e2e in `apps/web/e2e/workspace.spec.ts`. Committed
+on main.
 ## UX-013 - Duplicate `user:email` scope in the GitHub sign-in request
 Journey:
 SIGN IN - GitHub OAuth handshake.
