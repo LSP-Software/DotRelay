@@ -775,3 +775,27 @@ FIXED - `app.notFound` now answers `resource_not_found` via the shared
 origin on an unknown route still gets `forbidden`). Red-green proven:
 the new `index.test.ts` case fails on the old fallthrough and passes
 with the handler.
+
+## UX-022 - Same missing-Device state reports two different messages
+Journey:
+FIRST USE - any command needing an enrolled Device with none enrolled.
+State:
+Server Profile selected, session present or not, no Device enrolled.
+Severity:
+LOW (both messages name the remedy; the states they describe differ
+only by command path)
+Observed:
+`pull`/`push`/`history`/`project link` reported "no Device is enrolled
+for this Server Profile; run dotrelay login or dotrelay device enroll"
+while `device transfer`, `device revoke-wrapper`, and the session-load
+paths reported "no Device is enrolled on this installation; …" for the
+same machine state. The enrollment record is per Server Profile
+(`deviceMetadataPath(stateDirectory, pin)`), so the profile-scoped
+wording is the precise one.
+Expected:
+One message for the state.
+Status:
+FIXED - the three `workflow-session.ts` / `workflow-core.ts`
+(`loadAuthorizedDevice`) sites now use the "for this Server Profile"
+wording. No test pinned the old wording; `workflow.test.ts` 88/88
+green.

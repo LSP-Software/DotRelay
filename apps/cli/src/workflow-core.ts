@@ -728,7 +728,7 @@ export const loadAuthorizedDevice = async (
   if (!knownDeviceId)
     throw new CliError(
       "authentication",
-      "no Device is enrolled on this installation; run dotrelay login or dotrelay device enroll",
+      "no Device is enrolled for this Server Profile; run dotrelay login or dotrelay device enroll",
       {},
       "device_bundle_missing",
     );
