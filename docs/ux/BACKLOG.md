@@ -636,3 +636,33 @@ messages still pass through. Red-green proven: the new e2e observed
 "Recovery needs attention The server rejected the request." before the
 fix and the written fallback after; four unit tests pin the helper.
 Full suite 127/127, `bun run check` green.
+
+## UX-018 - `project rotate` asks for confirmation before checking login
+Journey:
+FIRST USE / AUTOMATION - `dotrelay project rotate` without a session or
+enrolled Device.
+State:
+Server Profile selected, no session (or an expired one) and no Device
+enrolled; interactive terminal or not.
+Severity:
+MEDIUM (false first error; on a headless machine the reported problem is
+the terminal, not the missing login)
+Observed:
+`rotateProjectEpoch` called `confirmSilent` before `syncWorkflow`, so the
+destructive prompt came before any session/Device check. With a session
+but no Device, `project rotate --json` on a non-TTY failed with exit 2
+"the terminal could not be read, so the interactive prompt went
+unanswered", while `--no-input --force` on the same machine correctly
+reported exit 6 `authentication_required` "login is required for this
+Server Profile". On a TTY the user would confirm first and fail auth
+after. Publication (`publish`) already syncs before confirming.
+Expected:
+Verify the session, Device, and project context before asking for the
+destructive confirmation, so the real blocker is reported first.
+Status:
+FIXED - `syncWorkflow` now runs before `confirmSilent` in
+`rotateProjectEpoch` (the `--no-input`/`--force` guard stays first).
+Red-green proven: the new unit test fails on the old order (confirmation
+asked) and passes on the new one; live binary on a sessioned,
+device-less config now reports exit 6 `authentication_required` instead
+of the exit 2 terminal error.

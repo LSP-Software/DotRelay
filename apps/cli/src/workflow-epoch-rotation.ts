@@ -42,9 +42,12 @@ export const rotateProjectEpoch = async (
     throw new CliInvocationError(
       "project rotate changes the project's keys; re-run with --force to confirm",
     );
+  // Verify the session, Device, and project context before asking for the
+  // destructive confirmation, so a missing login or enrollment is reported
+  // instead of prompting first (publication confirms after syncing too).
+  const synced = await syncWorkflow(options, parsed);
   if (!options.noInput && !(await confirmSilent(options, ROTATE_QUESTION)))
     throw new CliInvocationError("project key rotation was declined");
-  const synced = await syncWorkflow(options, parsed);
   const context = synced.workflow.publicationContext;
   const headId = synced.page.currentHeadId;
   const headHash = synced.page.currentHeadHash;
