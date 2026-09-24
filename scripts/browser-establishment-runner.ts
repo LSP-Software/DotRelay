@@ -232,8 +232,7 @@ const unlockWinningRecoveryCode = async (
     ...authenticatedCreatorKeys(claimed, history),
   ];
   const signingPublicKey = bootstrap.keyMaterial.signingPublicKey;
-  if (!signingPublicKey)
-    throw new Error("browser device has no signing key");
+  if (!signingPublicKey) throw new Error("browser device has no signing key");
   const localSigningKey = await exportSigningPublicKey(signingPublicKey);
   const keys = [localSigningKey];
   const seen = new Set<string>([toHex(localSigningKey)]);
