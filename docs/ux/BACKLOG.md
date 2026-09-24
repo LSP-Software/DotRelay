@@ -724,3 +724,30 @@ deliberately unchanged: free-text/secret prompts are answered with
 `--*-file` flags or piped stdin, not `--no-input`, so the generic
 automation hint would mislead there. Red-green proven for the picker
 mapping; `bun test apps/cli/src/ui.test.ts` 27/27.
+
+## UX-020 - Unreachable-server diagnostics do not name the origin
+Journey:
+FIRST USE / AUTOMATION - `dotrelay login` or `profile add` against an
+unreachable Server Profile, with several profiles saved.
+State:
+Origin unreachable (server down, wrong host). `--json` or human output.
+Severity:
+LOW-MEDIUM (retryable error names an internal endpoint, not the server
+that failed)
+Observed:
+`login --json` reported "could not reach the device authorization
+endpoint after 3 attempts" and `profile add` reported "could not reach
+the Server Profile capabilities endpoint after 2 attempts" - neither
+names the origin, and the JSON diagnostic carries no origin field, so
+with several Server Profiles the operator cannot tell which server
+failed from the diagnostic alone.
+Expected:
+Name the origin that could not be reached.
+Status:
+FIXED - both subjects now include the attempted origin ("the device
+authorization endpoint at <origin>", "the Server Profile capabilities
+endpoint at <origin>"; the loopback-fallback path names the fallback
+origin it actually attempted). Unit pins updated and the device-auth
+test now asserts the detail; live binary against a dead origin reports
+both details with the origin. `bun test` on `auth.test.ts` and
+`profile.test.ts` 33/33.

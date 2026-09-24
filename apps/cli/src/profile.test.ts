@@ -114,7 +114,7 @@ describe("CLI Server Profile catalog", () => {
       code: "capabilities_unavailable",
     });
     expect(String((error as Error).message)).toContain(
-      "could not reach the Server Profile capabilities endpoint after 3 attempts",
+      "could not reach the Server Profile capabilities endpoint at https://relay.example after 3 attempts",
     );
     expect(calls).toBe(3);
   });

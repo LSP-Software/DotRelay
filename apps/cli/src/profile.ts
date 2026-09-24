@@ -359,7 +359,7 @@ export const addServerProfile = async (
         if (fallbackError instanceof NetworkAttemptError)
           throw networkFailureCliError(
             fallbackError,
-            "the Server Profile capabilities endpoint",
+            `the Server Profile capabilities endpoint at ${loopbackHttpFallback}`,
             "capabilities_unavailable",
           );
         throw fallbackError;
@@ -367,7 +367,7 @@ export const addServerProfile = async (
     } else if (error instanceof NetworkAttemptError) {
       throw networkFailureCliError(
         error,
-        "the Server Profile capabilities endpoint",
+        `the Server Profile capabilities endpoint at ${origin}`,
         "capabilities_unavailable",
       );
     } else {

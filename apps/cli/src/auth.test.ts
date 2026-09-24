@@ -419,24 +419,26 @@ describe("CLI device authorization", () => {
 
   test("an unreachable device authorization endpoint ends in a retryable error", async () => {
     let calls = 0;
-    await expect(
-      loginWithDeviceAuthorization(
-        profile,
-        createSessionStore(memoryCredentials()),
-        {
-          noOpen: true,
-          sleep: async () => undefined,
-          networkPolicy: fastPolicy,
-          fetch: async () => {
-            calls += 1;
-            throw new TypeError("fetch failed");
-          },
+    const error = await loginWithDeviceAuthorization(
+      profile,
+      createSessionStore(memoryCredentials()),
+      {
+        noOpen: true,
+        sleep: async () => undefined,
+        networkPolicy: fastPolicy,
+        fetch: async () => {
+          calls += 1;
+          throw new TypeError("fetch failed");
         },
-      ),
-    ).rejects.toMatchObject({
+      },
+    ).catch((caught) => caught);
+    expect(error).toMatchObject({
       category: "transient",
       code: "device_authorization_unavailable",
     });
+    expect(String((error as Error).message)).toContain(
+      "could not reach the device authorization endpoint at https://relay.example after 3 attempts",
+    );
     expect(calls).toBe(3);
   });
 });

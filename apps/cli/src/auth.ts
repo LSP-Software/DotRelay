@@ -202,8 +202,6 @@ const parseResponseBody = async (response: Response): Promise<unknown> => {
   }
 };
 
-const DEVICE_AUTH_SUBJECT = "the device authorization endpoint";
-
 // Obtaining the code is safe to repeat: a retry that the service answers
 // starts a fresh authorization, and nothing is shown to the operator until
 // one succeeds.
@@ -242,7 +240,7 @@ const requestDeviceCode = async (
     if (!(error instanceof NetworkAttemptError)) throw error;
     throw networkFailureCliError(
       error,
-      DEVICE_AUTH_SUBJECT,
+      `the device authorization endpoint at ${origin}`,
       "device_authorization_unavailable",
     );
   }
