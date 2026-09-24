@@ -232,6 +232,7 @@ export const USAGE: Record<string, string> = {
   "device transfer": "dotrelay device transfer --to <peer-device-id>",
   "device revoke-wrapper": "dotrelay device revoke-wrapper --wrapper-id <id>",
   "project link": "dotrelay project link --team <team-id>",
+  "project rotate": "dotrelay project rotate",
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
 };
@@ -335,6 +336,7 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "device transfer": ["profile", "noInput", "json", "to"],
   "device revoke-wrapper": ["profile", "noInput", "json", "wrapperId"],
   "project link": ["profile", "team", "remote", "noInput", "json"],
+  "project rotate": ["profile", "noInput", "force", "json"],
   "env use": ["profile", "environment", "json"],
 };
 
@@ -355,7 +357,7 @@ export const SUBCOMMANDS: Readonly<
     "transfer",
     "revoke-wrapper",
   ],
-  project: ["link"],
+  project: ["link", "rotate"],
   env: ["use"],
 };
 

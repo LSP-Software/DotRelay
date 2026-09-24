@@ -339,6 +339,23 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     ],
     examples: ["dotrelay project link --team <team-id>"],
   },
+  "project rotate": {
+    about:
+      "Advance the linked Project by one epoch and seal a new Project Epoch Key for this account's Devices. Use this when a Device holds a grant row for the current epoch but never received the key.",
+    options: {
+      profile: "Server Profile to rotate on (required with --no-input)",
+      noInput: "never prompt; requires --force",
+      force: "confirm the rotation when --no-input is set",
+    },
+    notes: [
+      "The Project must have exactly one active Environment, and that Environment must already have a Revision.",
+      "A Device that could not read the previous epoch receives the new key. Run dotrelay pull on that Device afterwards.",
+    ],
+    examples: [
+      "dotrelay project rotate",
+      "dotrelay project rotate --profile work --no-input --force",
+    ],
+  },
   "env use": {
     about:
       "Select the worktree Environment by id or operator-visible label, resolved within the worktree's Project. The selection is saved in the worktree context.",
@@ -583,6 +600,7 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["device revoke-wrapper", "Retire an active Recovery Code wrapper"],
   ["context", "Detect the GitHub Repository"],
   ["project link", "Link a Project explicitly"],
+  ["project rotate", "Advance the Project epoch and seal a new key"],
   ["env use", "Select an Environment by id or label"],
   ["history", "List verified Revisions with readable context"],
   ["rollback", "Append a lane-scoped Rollback Revision"],

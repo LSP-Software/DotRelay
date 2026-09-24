@@ -162,6 +162,11 @@ export {
   wrappingAssociatedData,
 } from "./storage/wrapping";
 export {
+  createEpochRotationArtifacts,
+  type EpochRotationArtifacts,
+  type EpochRotationInput,
+} from "./sync/epoch-rotation";
+export {
   type ManifestCounts,
   manifestCountsFromDescriptor,
   validateManifestDescriptor,
@@ -209,6 +214,9 @@ export {
   type BeginResult,
   type CancelInput,
   createProtocolTransport,
+  type EpochRotateInput,
+  type EpochRotateResult,
+  type EpochRotationTransportRequest,
   type FinalizeInput,
   type FinalizeResult,
   type ProtocolTransport,

@@ -20,10 +20,37 @@ export class ProtocolTransportError extends Error {
   }
 }
 
+export type EpochRotationTransportRequest = Readonly<{
+  readonly projectId: string;
+  readonly expectedEpoch: number;
+  readonly newEpoch: number;
+  readonly transitions: ReadonlyArray<
+    Readonly<{
+      readonly environmentId: string;
+      readonly expectedHeadId: string;
+      readonly newHeadId: string;
+      readonly protocolObjectId: string;
+      readonly publication: FinalizePublicationRequest;
+    }>
+  >;
+}>;
+
+export type EpochRotateInput = Readonly<{
+  readonly operationId: string;
+  readonly deviceId: string;
+  readonly request: EpochRotationTransportRequest;
+}>;
+
+export type EpochRotateResult = Readonly<{
+  readonly projectEpoch: string;
+  readonly idempotent: boolean;
+}>;
+
 export type ProtocolTransport = Readonly<{
   begin(input: BeginInput): Promise<BeginResult>;
   stage(input: StageInput): Promise<void>;
   finalize(input: FinalizeInput): Promise<FinalizeResult>;
+  epochRotate(input: EpochRotateInput): Promise<EpochRotateResult>;
   cancel(input: CancelInput): Promise<void>;
   sync(input: SyncInput): Promise<SyncPageWire>;
   syncAll(input: SyncInput): Promise<SyncPageWire>;
@@ -254,6 +281,45 @@ export const createProtocolTransport = (
       );
       await requireOk(response);
       return (await response.json()) as FinalizeResult;
+    },
+    epochRotate: async (request) => {
+      const response = await fetcher(
+        endpoint(`/api/v1/operations/${request.operationId}/epoch-transitions`),
+        {
+          method: "POST",
+          headers: jsonHeaders(request.deviceId),
+          body: JSON.stringify({
+            projectId: request.request.projectId,
+            expectedEpoch: request.request.expectedEpoch,
+            newEpoch: request.request.newEpoch,
+            transitions: request.request.transitions.map((transition) => ({
+              environmentId: transition.environmentId,
+              expectedHeadId: transition.expectedHeadId,
+              newHeadId: transition.newHeadId,
+              protocolObjectId: transition.protocolObjectId,
+              publication: serializeFinalize(transition.publication),
+            })),
+          }),
+          credentials: "include",
+        },
+      );
+      await requireOk(response);
+      const body = (await response.json()) as {
+        readonly projectEpoch?: unknown;
+        readonly idempotent?: unknown;
+      };
+      if (typeof body.projectEpoch !== "string")
+        throw new ProtocolTransportError({
+          type: "https://dotrelay.dev/problems/v1",
+          title: "Protocol request failed",
+          status: response.status,
+          code: "service_unavailable",
+          detail: "Epoch rotation returned no project epoch.",
+        });
+      return Object.freeze({
+        projectEpoch: body.projectEpoch,
+        idempotent: body.idempotent === true,
+      });
     },
     cancel: async (request) => {
       const response = await fetcher(

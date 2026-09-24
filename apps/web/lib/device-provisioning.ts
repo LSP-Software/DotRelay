@@ -453,7 +453,7 @@ export const repairStaleEpoch = async (
         ctx.selectedTeamName ??
         "your team";
       onMessage(
-        `This browser can't recover the project's current keys on its own. Recover the account's key from the Recovery area, or have another of your devices run \`dotrelay device transfer\` to hand this browser the key${teamName !== "your team" ? `; ${teamName}'s Owners and Admins can also rotate the project's keys` : ""}.`,
+        `This browser can't recover the project's current keys on its own. Recover the account's key from the Recovery area, or have another of your devices run \`dotrelay device transfer\` to hand this browser the key. An Owner or Admin${teamName !== "your team" ? ` of ${teamName}` : ""} can rotate the project keys with \`dotrelay project rotate\`.`,
       );
       return;
     }

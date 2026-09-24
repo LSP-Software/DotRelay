@@ -20,7 +20,10 @@ Valkey endpoint; non-production skips enforcement when neither URL is set.
    advancement through `PublicationRepository`.
 4. **Epoch transition** — `POST /api/v1/operations/:operationId/epoch-transitions`
    finalizes an `EPOCH_ROTATION` operation across every active Environment in a
-   Project through `ProjectEpochRepository.rotate`.
+   Project through `ProjectEpochRepository.rotate`. An Owner or Admin starts
+   that operation with `dotrelay project rotate` when the Project has one
+   active Environment. The command then seals a new Project Epoch Key for the
+   account's Devices.
 5. **Cancel** — `DELETE /api/v1/operations/:operationId` cancels an uncommitted
    staged operation.
 
