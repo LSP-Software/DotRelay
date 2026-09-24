@@ -3096,6 +3096,7 @@ export const WorkspaceShell = ({
                   recoveryMessage={recoveryMessage}
                   recoveryWrappers={recoveryWrappers}
                   sentTransfer={sentTransfer}
+                  deviceId={boundary.device.id}
                   sessionActive={sessionActive}
                   transferIdInput={transferIdInput}
                   transferTarget={transferTarget}

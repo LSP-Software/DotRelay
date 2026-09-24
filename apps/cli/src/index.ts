@@ -530,8 +530,10 @@ const renderDeviceResult = (
     });
   if (typeof value.transferId === "string")
     rows.push({
-      key: "Transfer",
-      value: abbreviateId(value.transferId),
+      key: "Transfer ID",
+      // The person has to carry this value to another device, so the card
+      // prints it whole. Other ids on this card are labels and stay short.
+      value: value.transferId,
       tone: "accent",
     });
   if (typeof value.recipientDeviceId === "string")

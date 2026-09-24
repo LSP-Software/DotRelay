@@ -1173,6 +1173,15 @@ test.describe("workspace recovery", () => {
       .getByTestId("recovery-unlock")
       .getByTestId("recovery-method-transfer")
       .click();
+    const transferHelp = receiverPage.getByTestId("recovery-unlock");
+    await expect(transferHelp.getByTestId("transfer-cli-command")).toHaveText(
+      `dotrelay device transfer --to ${receiverDeviceKeys.id}`,
+    );
+    await expect(transferHelp.getByText("From the CLI")).toBeVisible();
+    await expect(transferHelp.getByText("From another browser")).toBeVisible();
+    await expect(
+      transferHelp.getByText("Send the key to another device"),
+    ).toBeVisible();
 
     // An expired or unknown transfer is surfaced as such, not as a generic
     // failure.

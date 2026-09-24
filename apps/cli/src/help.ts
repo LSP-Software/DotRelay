@@ -307,15 +307,20 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     about:
       "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <id>. The key stays on this Device; transfers are an addition, not a move.",
     notes: [
-      "The receiving Device id comes from dotrelay status (or the service) and must be an active Device for the same account.",
+      "Without --to, the command lists this account's other Devices and you choose one. --no-input requires --to.",
+      "The receiving Device id comes from that list, from dotrelay status, or from the service, and must be an active Device for the same account.",
       "The transfer stays retryable until the receiving Device acknowledges it or it expires. A lost response can be accepted again; after acknowledgement, or once it expires, it must be created again.",
+      "The command prints the full transfer ID. Paste it into Recovery on the receiving device, or pass it to dotrelay device recover --transfer on that device.",
     ],
     options: {
-      to: "receiving Device id to seal the transfer for (required)",
+      to: "receiving Device id to seal the transfer for (required with --no-input)",
       profile: "Server Profile to transfer from (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
-    examples: ["dotrelay device transfer --to <peer-device-id>"],
+    examples: [
+      "dotrelay device transfer",
+      "dotrelay device transfer --to <peer-device-id>",
+    ],
   },
   "device revoke-wrapper": {
     about:

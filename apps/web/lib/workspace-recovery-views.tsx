@@ -88,6 +88,7 @@ export type RecoveryAreaProps = Readonly<{
   readonly onPassword: (value: string) => void;
   readonly transferIdInput: string;
   readonly onTransferIdInput: (value: string) => void;
+  readonly deviceId: string | undefined;
   readonly peerDevices:
     | readonly Readonly<{ readonly id: string }>[]
     | undefined;
@@ -134,6 +135,7 @@ export const RecoveryArea = ({
   onPassword,
   transferIdInput,
   onTransferIdInput,
+  deviceId,
   peerDevices,
   sentTransfer,
   transferTarget,
@@ -348,21 +350,82 @@ export const RecoveryArea = ({
                 </div>
               ) : null}
               {unlockMethod === "transfer" ? (
-                <div className="space-y-2">
-                  <Label htmlFor="transfer-id-input">Transfer ID</Label>
-                  <Input
-                    autoComplete="off"
-                    data-testid="transfer-id-input"
-                    disabled={recoveryBusy}
-                    id="transfer-id-input"
-                    onChange={(event) => onTransferIdInput(event.target.value)}
-                    placeholder="0123456789abcdef0123456789abcdef"
-                    value={transferIdInput}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    The sending device shares a short-lived transfer; it expires
-                    a few minutes after it was created.
-                  </p>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="transfer-id-input">Transfer ID</Label>
+                    <Input
+                      autoComplete="off"
+                      data-testid="transfer-id-input"
+                      disabled={recoveryBusy}
+                      id="transfer-id-input"
+                      onChange={(event) =>
+                        onTransferIdInput(event.target.value)
+                      }
+                      placeholder="0123456789abcdef0123456789abcdef"
+                      value={transferIdInput}
+                    />
+                  </div>
+                  <div className="space-y-4 text-sm text-muted-foreground">
+                    <p>
+                      A transfer ID is created by a device that already has this
+                      account unlocked. It works once, and only for a few
+                      minutes.
+                    </p>
+                    <div className="space-y-2">
+                      <p className="font-medium text-foreground">
+                        From the CLI
+                      </p>
+                      <p>
+                        On that device, run{" "}
+                        <InlineCommand value="dotrelay device transfer" /> and
+                        choose this browser from the list. It prints a transfer
+                        ID. Paste that ID in the field above. Or run this
+                        command, which already names this browser:
+                      </p>
+                      <CopyableCommand
+                        data-testid="transfer-cli-command"
+                        value={
+                          deviceId
+                            ? `dotrelay device transfer --to ${deviceId}`
+                            : "dotrelay device transfer --to <this-browser-device-id>"
+                        }
+                      />
+                      <p>
+                        The id after <InlineCommand value="--to" /> is this
+                        browser, not the device you run the command on.
+                        {deviceId
+                          ? null
+                          : " Replace the placeholder with this browser's device id."}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="font-medium text-foreground">
+                        From another browser
+                      </p>
+                      <ol className="list-decimal space-y-1 pl-5">
+                        <li>
+                          Open this Recovery page in a different browser that is
+                          already unlocked.
+                        </li>
+                        <li>Choose "Send the key to another device".</li>
+                        <li>
+                          {deviceId ? (
+                            <>
+                              {"Select this browser ("}
+                              <InlineCommand value={deviceId} />
+                              {'), then choose "Create transfer".'}
+                            </>
+                          ) : (
+                            'Select this browser, then choose "Create transfer".'
+                          )}
+                        </li>
+                        <li>
+                          Copy the transfer ID it shows and paste it in the
+                          field above.
+                        </li>
+                      </ol>
+                    </div>
+                  </div>
                 </div>
               ) : null}
               <div className="flex items-center gap-3">
@@ -621,8 +684,9 @@ export const RecoveryArea = ({
                 Other devices
               </CardTitle>
               <CardDescription>
-                Hand this account's key to another of your devices: it is sealed
-                to that device and redeemable once, for a few minutes.
+                Hand this account's key to another of your devices. Creating a
+                transfer shows a transfer ID sealed to that device. It works
+                once and expires after a few minutes.
               </CardDescription>
             </CardHeader>
             {sentTransfer ? (
@@ -631,17 +695,16 @@ export const RecoveryArea = ({
                   className="rounded-lg border border-primary/25 bg-primary/5 p-3"
                   role="status"
                 >
-                  <p className="text-sm font-medium">
-                    Transfer staged for {sentTransfer.recipientDeviceId}
-                  </p>
-                  <p className="mt-1 font-mono text-xs">
-                    {sentTransfer.transferId}
+                  <p className="text-sm font-medium">Transfer ID</p>
+                  <p className="mt-1">
+                    <InlineCommand value={sentTransfer.transferId} />
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Redeemable until{" "}
-                    {new Date(sentTransfer.expiresAt).toLocaleString()}. The
-                    receiving device enters it in its own Recovery area, or the
-                    CLI uses{" "}
+                    Sealed for {sentTransfer.recipientDeviceId}. Redeemable
+                    until {new Date(sentTransfer.expiresAt).toLocaleString()}.
+                    On the receiving device, paste this transfer ID into
+                    Recovery and choose From another device. On that device's
+                    CLI, run{" "}
                     <InlineCommand
                       value={`dotrelay device recover --transfer ${sentTransfer.transferId}`}
                     />

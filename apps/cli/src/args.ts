@@ -229,7 +229,7 @@ export const USAGE: Record<string, string> = {
   "device recover":
     "dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
   "device setup": "dotrelay device setup",
-  "device transfer": "dotrelay device transfer --to <peer-device-id>",
+  "device transfer": "dotrelay device transfer | --to <peer-device-id>",
   "device revoke-wrapper": "dotrelay device revoke-wrapper --wrapper-id <id>",
   "project link": "dotrelay project link --team <team-id>",
   "project rotate": "dotrelay project rotate",
@@ -523,9 +523,14 @@ const validateCommand = (parsed: MutableArguments) => {
         `device recover accepts either --recovery-code-file <path> or --transfer <transfer-id>, not both; usage: ${usage}`,
       );
   }
-  if (command === "device" && parsed.subcommand === "transfer" && !parsed.to)
+  if (
+    command === "device" &&
+    parsed.subcommand === "transfer" &&
+    parsed.noInput &&
+    !parsed.to
+  )
     throw new CliInvocationError(
-      `device transfer requires --to <peer-device-id>; usage: ${usage}`,
+      `device transfer requires --to <peer-device-id> with --no-input; usage: ${usage}`,
     );
   if (
     command === "device" &&

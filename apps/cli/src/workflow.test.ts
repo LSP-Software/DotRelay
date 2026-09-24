@@ -4187,6 +4187,58 @@ describe("protected CLI workflows", () => {
     expect(new Uint8Array(opened)).toEqual(new Uint8Array(amk));
   });
 
+  test("device transfer lets you choose the receiving Device", async () => {
+    const amk = generateAccountMasterKey();
+    const first = await peerX25519();
+    const second = await peerX25519();
+    const runtime = await setup({
+      peerDevices: [
+        {
+          id: first.id,
+          encryptionPublicKey: first.encryptionPublicKey,
+          hasEpochGrant: true,
+        },
+        {
+          id: second.id,
+          encryptionPublicKey: second.encryptionPublicKey,
+          hasEpochGrant: false,
+        },
+      ],
+    });
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const terminalInput = new PassThrough();
+    terminalInput.end();
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => rendered.push(chunk.toString("utf8")));
+    const result = await run(
+      ["device", "transfer", "--profile", "relay", "--json"],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+        terminal: { input: terminalInput, output: terminalOutput },
+        prompt: async (question) => {
+          if (question === "Device to receive the key") return "2";
+          throw new Error(`unexpected prompt: ${question}`);
+        },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report.recipientDeviceId).toBe(second.id);
+    const shown = rendered.join("");
+    expect(shown).toContain("Device to receive the key");
+    expect(shown).toContain(first.id);
+    expect(shown).toContain(second.id);
+    expect(shown).toContain("holds the project key");
+    expect(service.postedTransfers()[0]?.recipientDeviceId).toBe(second.id);
+  });
+
   test("device transfer refuses a recipient that is not an active Device", async () => {
     const amk = generateAccountMasterKey();
     const runtime = await setup();
