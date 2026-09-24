@@ -608,9 +608,10 @@ try {
       // A second Environment on the same Project, dedicated to the Account
       // Master Key lifecycle proof. It holds only shared Values, so every
       // Device that can open the Project Epoch Key (via the AMK envelope)
-      // decrypts it byte-identically; the production Environment above
-      // carries a user-defined Value sealed to Device 1 and is unreadable
-      // from any peer, which is why the cross-device comparison lives here.
+      // decrypts it byte-identically. The production Environment also
+      // carries a User-defined Value sealed to the owner's User Value Key,
+      // which a peer decrypts only after it recovers the same Account
+      // Master Key and opens that envelope.
       await tx.environment.create({
         data: {
           id: lifecycleEnvironmentId,
@@ -1056,6 +1057,79 @@ try {
   ).catch(() => "");
   if (!exclusion.includes("export.env"))
     throw new Error("pull did not record a Git exclusion for the output file");
+
+  // Device 1 published the User-defined Value. Device 2 already recovered
+  // the same Account Master Key, so it must open the generation-1 User Value
+  // Key and decrypt that value. Shared Values stay on the Project Epoch Key:
+  // the two lane scopes must not share a ciphertext.
+  const userValueEnvelopes = await database.accountKeyEnvelopeObject.findMany({
+    where: {
+      userId: demoUserId,
+      envelopeType: "USER_VALUE_KEY",
+      ownerUserId: demoUserId,
+      valueGeneration: 1n,
+      retiredAt: null,
+    },
+  });
+  if (userValueEnvelopes.length !== 1)
+    throw new Error(
+      `expected one active generation-1 User Value Key envelope, found ${userValueEnvelopes.length}`,
+    );
+  const productionLanes = await database.laneObject.findMany({
+    where: { environmentId: productionEnvironment.id },
+    select: { scope: true, ownerUserId: true, ciphertextHash: true },
+  });
+  const sharedLanes = productionLanes.filter(
+    (lane) => lane.scope === "SHARED_VALUE",
+  );
+  const userDefinedLanes = productionLanes.filter(
+    (lane) => lane.scope === "USER_DEFINED_VALUE",
+  );
+  if (sharedLanes.length === 0 || userDefinedLanes.length === 0)
+    throw new Error(
+      "production did not publish both a shared lane and a user-defined lane",
+    );
+  if (userDefinedLanes.some((lane) => lane.ownerUserId !== demoUserId))
+    throw new Error("a user-defined lane was not owned by the publishing user");
+  const sharedHashes = new Set(
+    sharedLanes.map((lane) => Buffer.from(lane.ciphertextHash).toString("hex")),
+  );
+  if (
+    userDefinedLanes.some((lane) =>
+      sharedHashes.has(Buffer.from(lane.ciphertextHash).toString("hex")),
+    )
+  )
+    throw new Error("a user-defined lane reused a shared-value ciphertext");
+  console.log(
+    "→ CLI: device 2 pull (User-defined Value decrypts after AMK recovery)",
+  );
+  const device2OutputPath = join(device2.repo, "export.env");
+  const device2Pull = await runBinary(
+    [
+      "pull",
+      ...profileFlag,
+      "--environment",
+      environmentId,
+      "--output",
+      device2OutputPath,
+      "--remote",
+      "origin",
+      "--no-input",
+      "--json",
+    ],
+    device2.env,
+    device2.repo,
+  );
+  if (device2Pull.exitCode !== 0)
+    throw new Error(
+      `device 2 pull failed with exit code ${device2Pull.exitCode}: ${device2Pull.stderr.trim()}`,
+    );
+  const device1Bytes = await readFile(outputPath);
+  const device2Bytes = await readFile(device2OutputPath);
+  if (Buffer.compare(device1Bytes, device2Bytes) !== 0)
+    throw new Error(
+      "device 2 did not decrypt the same shared and user-defined values as device 1",
+    );
 
   console.log("→ CLI: diff (matching and drifted)");
   const matchingDiff = await runBinary(
@@ -1693,7 +1767,7 @@ try {
     throw new Error("the audit trail recorded nothing for the demo user");
 
   console.log(
-    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin, and the full Account Master Key lifecycle (3-Device cross-device decrypt, one-shot transfer, rotation, revocation guard) against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
+    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin, and the full Account Master Key lifecycle (3-Device cross-device decrypt, User-defined Value opened on a second Device after AMK recovery, one-shot transfer, rotation, revocation guard) against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
   );
 } finally {
   server?.stop(true);
