@@ -96,6 +96,21 @@ export type AccountRecoveryFeedback = Readonly<{
 // session's project keys through the envelope path.
 export type AccountRecoveryOnMutated = () => void;
 
+// Transport-only failures - a server problem response (whose message is
+// always the internal "The server rejected the request.") and a failed
+// fetch (the browser's "Failed to fetch") - never carry copy a user
+// should read: the operation's own fallback is shown instead. Human-
+// authored errors (UNLOCK_FAILURE, local validation text) pass through.
+export const recoveryErrorMessage = (
+  error: unknown,
+  fallback: string,
+): string => {
+  if (error instanceof AccountKeyRequestError) return fallback;
+  if (error instanceof TypeError) return fallback;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+};
+
 const asArrayBuffer = (input: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(input.byteLength);
   copy.set(input);
@@ -486,9 +501,7 @@ export const setupAccountRecovery = (
         return;
       }
       feedback.setError(
-        error instanceof Error && error.message
-          ? error.message
-          : "We couldn't set up recovery. Try again.",
+        recoveryErrorMessage(error, "We couldn't set up recovery. Try again."),
       );
     } finally {
       feedback.setBusy(false);
@@ -526,9 +539,10 @@ export const rotateRecoveryCode = (
       presentCeremony(holder, feedback);
     } catch (error) {
       feedback.setError(
-        error instanceof Error && error.message
-          ? error.message
-          : "The rotation didn't complete. The old code still works.",
+        recoveryErrorMessage(
+          error,
+          "The rotation didn't complete. The old code still works.",
+        ),
       );
     } finally {
       feedback.setBusy(false);
@@ -733,9 +747,7 @@ export const addEncryptionPassword = (
       );
     } catch (error) {
       feedback.setError(
-        error instanceof Error && error.message
-          ? error.message
-          : "The password wasn't added. Try again.",
+        recoveryErrorMessage(error, "The password wasn't added. Try again."),
       );
     } finally {
       feedback.setBusy(false);
@@ -864,9 +876,7 @@ export const addPasskeyPrf = (
       feedback.setError(
         error instanceof PasskeyPrfError
           ? error.message
-          : error instanceof Error && error.message
-            ? error.message
-            : "The passkey wasn't added. Try again.",
+          : recoveryErrorMessage(error, "The passkey wasn't added. Try again."),
       );
     } finally {
       feedback.setBusy(false);
@@ -997,9 +1007,7 @@ export const sendAccountKeyTransfer = (
       );
     } catch (error) {
       feedback.setError(
-        error instanceof Error && error.message
-          ? error.message
-          : "The transfer wasn't sent. Try again.",
+        recoveryErrorMessage(error, "The transfer wasn't sent. Try again."),
       );
     } finally {
       feedback.setBusy(false);

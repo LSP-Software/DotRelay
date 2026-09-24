@@ -604,3 +604,35 @@ storage copy ("Keys stay on this machine") kept because it is true.
 Unit tests pin the absence of "CLI on this machine" in both setup-gate
 bodies; the two workspace e2e surfaces that show the CLI hand-off pin
 `getByText("CLI on this machine")` count 0.
+
+## UX-017 - Recovery mutations can surface the raw transport message
+Journey:
+RECOVERY - adding a password/passkey, setting up or rotating a recovery
+code, or staging a transfer when the request fails.
+State:
+Any non-`state_conflict` rejection (`authentication_required` on an
+expired session, rate limits, contract errors) or a failed fetch, during
+one of those five mutations.
+Severity:
+LOW-MEDIUM (user-visible internal jargon; the operation's own fallback
+copy exists but is unreachable)
+Observed:
+`jsonPost`/`fetchJson` throw `AccountKeyRequestError` whose message is
+always "The server rejected the request.", and five recovery catches
+(`setupAccountRecovery`, `rotateRecoveryCode`, `addEncryptionPassword`,
+`addPasskeyPrf`, `sendAccountKeyTransfer`) pass `error.message` through
+whenever it is non-empty - which it always is - so the per-operation
+fallbacks ("The password wasn't added. Try again." etc.) are dead code
+and a failed fetch leaks the browser's "Failed to fetch" the same way.
+Expected:
+Transport-only failures (server rejections, failed fetches) show the
+operation's written fallback; human-authored messages (`UNLOCK_FAILURE`,
+`PasskeyPrfError`) still pass through.
+Status:
+FIXED - shared `recoveryErrorMessage` helper now backs all five catches:
+server rejections (`AccountKeyRequestError`) and failed fetches
+(`TypeError`) show the operation's written fallback; human-authored
+messages still pass through. Red-green proven: the new e2e observed
+"Recovery needs attention The server rejected the request." before the
+fix and the written fallback after; four unit tests pin the helper.
+Full suite 127/127, `bun run check` green.

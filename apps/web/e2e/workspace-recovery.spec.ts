@@ -1029,6 +1029,65 @@ test.describe("workspace recovery", () => {
     });
   });
 
+  test("a rejected password publish shows the written fallback, not transport text", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const accountMasterKey = await generateAccountMasterKey();
+    const recoveryCode = await generateRecoveryCode();
+    const signer = await importSigningKey();
+    const scenario = scenarioBase();
+    await installRecoveryRoutes(page, scenario);
+    // Registered after the harness so it wins: answer the password publish
+    // the way an expired session would.
+    await page.route("**/api/v1/account-keys/wrappers", (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        json: { code: "authentication_required" },
+      });
+    });
+    await enrollDevice(page);
+    const deviceKeys = capturedDeviceKeys(scenario);
+    scenario.wrappers = [
+      await buildRecoveryCodeWrapper({
+        accountMasterKey,
+        recoveryCode,
+        deviceId: deviceKeys.id,
+        signer,
+      }),
+    ];
+    scenario.envelopeB64 = await buildEpochEnvelopeB64({
+      accountMasterKey,
+      deviceId: deviceKeys.id,
+      signer,
+    });
+    scenario.syncPage = await buildVerifiedFixturePage(
+      deviceKeys.encryptionPublicKey,
+    );
+    await page.reload();
+    await openRecoveryView(page);
+    await unlockWith(page, "recovery-code", encodeRecoveryCode(recoveryCode));
+    const status = page.getByTestId("recovery-status");
+    await expect(status).toBeVisible({ timeout: 30_000 });
+
+    await status.getByTestId("add-encryption-password").click();
+    await page
+      .getByTestId("add-encryption-password-input")
+      .fill("correct-horse-battery-9");
+    await page.getByTestId("add-encryption-password-confirm").click();
+    await expect(
+      page
+        .getByTestId("recovery-area")
+        .getByRole("alert")
+        .filter({ hasText: "wasn't added" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      page.getByText("The server rejected the request."),
+    ).toHaveCount(0);
+  });
+
   test("a device sends its key to another, which redeems it as a one-time transfer", async ({
     browser,
     page,
