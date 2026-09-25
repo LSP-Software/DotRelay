@@ -1,6 +1,7 @@
 import { Braces } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { oauthErrorMessage } from "@/lib/oauth-error";
 import {
   resolveApiOrigin,
   resolveOAuthCallbackUrl,
@@ -12,9 +13,14 @@ export const metadata: Metadata = {
   description: "Sign in to DotRelay with your GitHub account",
 };
 
-const SignInPage = () => {
+const SignInPage = async ({
+  searchParams,
+}: {
+  readonly searchParams: Promise<{ readonly error?: string }>;
+}) => {
   const apiOrigin = resolveApiOrigin() ?? "http://localhost:3001";
   const callbackUrl = resolveOAuthCallbackUrl();
+  const signInError = oauthErrorMessage((await searchParams).error);
 
   return (
     <main className="landing-grid grid min-h-screen place-items-center px-5 py-12">
@@ -43,10 +49,16 @@ const SignInPage = () => {
           Use your GitHub account to continue.
         </p>
 
-        <div className="mt-9 w-full">
+        <div className="mt-9 w-full space-y-3">
+          {signInError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {signInError}
+            </p>
+          ) : null}
           <GitHubSignInButton
             apiOrigin={apiOrigin}
             callbackUrl={callbackUrl}
+            errorCallbackURL={callbackUrl}
             className="h-11 shadow-[0_0_32px_-8px_var(--primary)]"
           />
         </div>

@@ -83,7 +83,11 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
           <p className="text-sm text-muted-foreground">
             Sign in to allow this CLI.
           </p>
-          <GitHubSignInButton apiOrigin={apiOrigin} callbackUrl={callbackUrl} />
+          <GitHubSignInButton
+            apiOrigin={apiOrigin}
+            callbackUrl={callbackUrl}
+            errorCallbackURL={callbackUrl}
+          />
         </div>
       );
     case "allow":

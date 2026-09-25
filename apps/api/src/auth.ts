@@ -74,10 +74,31 @@ const createAuthWithAdapter = (
           : {}),
       }),
     ],
+    // A failed GitHub return must land on the web app. The default sends the
+    // browser to this API's `/`, which is a JSON 404, and Back walks straight
+    // into GitHub again.
+    onAPIError: {
+      errorURL: `${profile.webOrigin}/sign-in`,
+    },
     rateLimit: {
       enabled: true,
       window: 60,
       max: 10,
+      customRules: {
+        // Device codes advertise a 5s poll. The per-code slow_down check is
+        // what stops a client polling early; this bucket only has to fit one
+        // CLI polling on that interval (plus a retry) without locking the
+        // sign-in out for the rest of the minute.
+        "/device/token": { window: 60, max: 120 },
+        // The plugin caps verification checks at 5 per code lifetime. Each
+        // GitHub round-trip reloads the approval page, so that cap turns a
+        // retry into a half-hour outage.
+        "/device": { window: 60, max: 60 },
+        "/device/approve": { window: 60, max: 30 },
+        "/device/deny": { window: 60, max: 30 },
+        "/get-session": { window: 60, max: 120 },
+        "/callback/*": { window: 60, max: 30 },
+      },
     },
   });
 };

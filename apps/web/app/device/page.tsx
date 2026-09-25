@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { oauthErrorMessage } from "@/lib/oauth-error";
 import { DeviceApproveCard } from "./device-approve-card";
 
 export const metadata: Metadata = {
@@ -19,9 +20,13 @@ export const metadata: Metadata = {
 const DevicePage = async ({
   searchParams,
 }: {
-  readonly searchParams: Promise<{ readonly user_code?: string }>;
+  readonly searchParams: Promise<{
+    readonly user_code?: string;
+    readonly error?: string;
+  }>;
 }) => {
-  const { user_code: userCode } = await searchParams;
+  const { user_code: userCode, error } = await searchParams;
+  const signInError = oauthErrorMessage(error);
 
   return (
     <main className="landing-grid grid min-h-screen place-items-center px-5 py-12">
@@ -48,6 +53,11 @@ const DevicePage = async ({
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
+            {signInError ? (
+              <p className="text-sm text-destructive" role="alert">
+                {signInError}
+              </p>
+            ) : null}
             {userCode ? (
               <>
                 <p className="rounded-lg border bg-background/60 px-3 py-2 text-center font-mono text-lg tracking-[0.3em]">

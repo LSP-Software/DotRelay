@@ -8,12 +8,14 @@ import { cn } from "@/lib/utils";
 type GitHubSignInButtonProps = Readonly<{
   readonly apiOrigin: string;
   readonly callbackUrl: string;
+  readonly errorCallbackURL?: string;
   readonly className?: string;
 }>;
 
 export const GitHubSignInButton = ({
   apiOrigin,
   callbackUrl,
+  errorCallbackURL,
   className,
 }: GitHubSignInButtonProps) => {
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +32,7 @@ export const GitHubSignInButton = ({
         body: JSON.stringify({
           provider: "github",
           callbackURL: callbackUrl,
+          ...(errorCallbackURL ? { errorCallbackURL } : {}),
         }),
       });
       const body = (await response.json().catch(() => null)) as {

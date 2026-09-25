@@ -175,6 +175,55 @@ const sanitizeAuthResponse = async (
   return jsonProblem(context, "service_unavailable");
 };
 
+// GitHub sends the browser to this API, which then redirects to the web app.
+// A session cookie set on that cross-site 302 is dropped by some browsers, so
+// the approval page loads signed-out and Continue with GitHub starts again.
+// Deliver the cookie on a document response, then navigate.
+const bridgeSessionRedirect = (
+  response: Response,
+  profile: ServerProfileConfig,
+): Response => {
+  if (response.status < 300 || response.status >= 400) return response;
+  const location = response.headers.get("location");
+  if (!location || !trustedBrowserRedirect(location, profile)) return response;
+  const cookies =
+    typeof response.headers.getSetCookie === "function"
+      ? response.headers.getSetCookie()
+      : [];
+  if (!cookies.some(setsSessionCookie)) return response;
+  const headers = new Headers();
+  for (const cookie of cookies) headers.append("set-cookie", cookie);
+  headers.set("content-type", "text/html; charset=utf-8");
+  headers.set("cache-control", "no-store");
+  const target = JSON.stringify(location).replaceAll("<", "\\u003c");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Returning to DotRelay</title><meta http-equiv="refresh" content="0;url=${escapeHtmlAttribute(location)}"></head><body><p>Signed in. Returning to DotRelay.</p><script>location.replace(${target})</script></body></html>`;
+  return new Response(html, { status: 200, headers });
+};
+
+const setsSessionCookie = (cookie: string): boolean =>
+  cookie.split(";", 1)[0]?.includes("session_token=") === true &&
+  !/max-age=0/i.test(cookie);
+
+const trustedBrowserRedirect = (
+  location: string,
+  profile: ServerProfileConfig,
+): boolean => {
+  if (location.startsWith("/") && !location.startsWith("//")) return true;
+  try {
+    const url = new URL(location);
+    return url.origin === profile.origin || url.origin === profile.webOrigin;
+  } catch {
+    return false;
+  }
+};
+
+const escapeHtmlAttribute = (value: string): string =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+
 const equalBytes = (left: Uint8Array, right: Uint8Array): boolean =>
   left.length === right.length &&
   left.every((value, index) => value === right[index]);
@@ -587,7 +636,10 @@ const createApi = ({
     try {
       const response = await auth.handler(context.req.raw);
       response.headers.set("Cache-Control", "no-store");
-      return sanitizeAuthResponse(context, response);
+      return bridgeSessionRedirect(
+        await sanitizeAuthResponse(context, response),
+        profile,
+      );
     } catch {
       return jsonProblem(context, "service_unavailable");
     }

@@ -479,6 +479,19 @@ describe("API foundation", () => {
     ).toContain("X-Retry-After");
   });
 
+  test("lets one CLI poll the device token endpoint on its advertised interval", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = createInMemoryAuth(profile);
+    const testApp = createApi({ database: {} as never, profile, auth });
+    const responses = [];
+    for (let request = 0; request < 15; request += 1) {
+      responses.push(
+        await deviceTokenRequest(testApp, profile, `poll-${request}`),
+      );
+    }
+    expect(responses.some((response) => response.status === 429)).toBe(false);
+  });
+
   test("uses the exact GitHub callback and secure browser state cookies", async () => {
     const profile = loadServerProfileConfig({
       NODE_ENV: "production",
@@ -520,7 +533,7 @@ describe("API foundation", () => {
     );
     expect(rejectedCallback.status).toBe(302);
     expect(rejectedCallback.headers.get("location")).toBe(
-      `${profile.origin}/api/auth/error?error=state_mismatch`,
+      `${profile.webOrigin}/sign-in?error=state_mismatch`,
     );
     expect(await rejectedCallback.text()).not.toContain("state.mjs");
   });
@@ -559,6 +572,57 @@ describe("API foundation", () => {
     );
     expect(splitResponse.status).toBe(200);
     expect(splitResponse.headers.get("set-cookie")).toContain("Domain=example");
+
+    const authorization = new URL(splitResponse.headers.get("location") ?? "");
+    const stateCookie = splitResponse.headers
+      .getSetCookie()
+      .find((cookie) => cookie.includes("oauth_state="));
+    expect(stateCookie).toBeDefined();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url.startsWith("https://github.com/login/oauth/access_token")) {
+        return Response.json({
+          access_token: "gho_test",
+          token_type: "bearer",
+        });
+      }
+      if (url === "https://api.github.com/user") {
+        return Response.json({
+          id: 42,
+          login: "octo",
+          name: "Octo",
+          avatar_url: "https://example.com/a.png",
+        });
+      }
+      if (url === "https://api.github.com/user/emails") {
+        return Response.json([
+          { email: "octo@example.com", primary: true, verified: true },
+        ]);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const completed = await splitApp.request(
+        `${splitProfile.origin}/api/auth/callback/github?code=test-code&state=${authorization.searchParams.get("state")}`,
+        { headers: { cookie: stateCookie?.split(";", 1)[0] ?? "" } },
+      );
+      const body = await completed.text();
+      expect(completed.status).toBe(200);
+      expect(completed.headers.get("location")).toBeNull();
+      expect(completed.headers.get("content-type")).toContain("text/html");
+      expect(completed.headers.get("set-cookie")).toContain("session_token=");
+      expect(completed.headers.get("set-cookie")).toContain("Domain=example");
+      expect(body).toContain(`${splitProfile.webOrigin}/workspace`);
+      expect(body).not.toContain("github.com/login");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("sanitizes Better Auth error responses", async () => {
