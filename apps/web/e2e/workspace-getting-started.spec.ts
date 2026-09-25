@@ -1,4 +1,4 @@
-import { type APIResponse, expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { trustWorkspaceServer } from "./trust-server";
 
 const emptyAccount = async (page: Page) => {
@@ -9,25 +9,24 @@ const emptyAccount = async (page: Page) => {
     route.fulfill({ json: { invitations: [], pendingMemberships: [] } }),
   );
   await page.route("**/api/workspace/boundary*", async (route) => {
-    // Same teardown race as the device-summary spec: an in-flight
-    // route.fetch rejects with "Test ended" and fails the next test.
-    let response: APIResponse;
+    // The workspace refreshes this boundary on a timer. Ending the test
+    // disposes an in-flight fetch, and reading that body rejects. Left
+    // uncaught, the rejection fails this test or the next one.
     try {
-      response = await route.fetch();
+      const response = await route.fetch();
+      const body = (await response.json()) as Record<string, unknown>;
+      await route.fulfill({
+        status: response.status(),
+        headers: response.headers(),
+        json: {
+          ...body,
+          catalog: { teams: [], projects: [] },
+          peerDevices: [],
+        },
+      });
     } catch {
       await route.abort().catch(() => {});
-      return;
     }
-    const body = (await response.json()) as Record<string, unknown>;
-    await route.fulfill({
-      status: response.status(),
-      headers: response.headers(),
-      json: {
-        ...body,
-        catalog: { teams: [], projects: [] },
-        peerDevices: [],
-      },
-    });
   });
 };
 

@@ -1,4 +1,4 @@
-import { type APIResponse, expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { trustWorkspaceServer } from "./trust-server";
 
 const openFirstProject = async (page: Page) => {
@@ -71,29 +71,27 @@ test("the Devices table does not repeat this browser's OS in its summary line", 
   // Linux"); the fixture's Device reports none, so the test stands in for the
   // real service's report.
   await page.route("**/api/workspace/boundary**", async (route) => {
-    // The workspace refreshes this boundary on a timer. A fetch still in
-    // flight when the test ends rejects with "Test ended", and that
-    // rejection fails the next test in the worker.
-    let real: APIResponse;
+    // The workspace refreshes this boundary on a timer. Ending the test
+    // disposes an in-flight fetch, and reading that body rejects. Left
+    // uncaught, the rejection fails this test or the next one.
     try {
-      real = await route.fetch();
+      const real = await route.fetch();
+      const body = (await real.json()) as Record<string, unknown>;
+      const device = body.device as Record<string, unknown> | undefined;
+      if (device && device.active === true && deviceKeys) {
+        device.encryptionPublicKey = deviceKeys.encryptionPublicKey;
+        device.signingPublicKey = deviceKeys.signingPublicKey;
+        device.osName = "Linux";
+        device.clientSummary = "Chrome 126 on Linux";
+      }
+      await route.fulfill({
+        status: real.status(),
+        contentType: "application/json",
+        json: body,
+      });
     } catch {
       await route.abort().catch(() => {});
-      return;
     }
-    const body = (await real.json()) as Record<string, unknown>;
-    const device = body.device as Record<string, unknown> | undefined;
-    if (device && device.active === true && deviceKeys) {
-      device.encryptionPublicKey = deviceKeys.encryptionPublicKey;
-      device.signingPublicKey = deviceKeys.signingPublicKey;
-      device.osName = "Linux";
-      device.clientSummary = "Chrome 126 on Linux";
-    }
-    await route.fulfill({
-      status: real.status(),
-      contentType: "application/json",
-      json: body,
-    });
   });
 
   await page.goto("/workspace");

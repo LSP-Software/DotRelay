@@ -1,10 +1,4 @@
-import {
-  type APIResponse,
-  expect,
-  type Locator,
-  type Page,
-  test,
-} from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
 // A 320 CSS-pixel phone rendered at 200% zoom lays out in 160 CSS pixels.
 const ZOOMED_VIEWPORT = { width: 160, height: 240 };
@@ -61,47 +55,46 @@ const setDialogScroll = (dialog: Locator, value: number) =>
 
 const addLongProjectList = async (page: Page, projectCount: number) => {
   await page.route("**/api/workspace/boundary*", async (route) => {
-    // Same teardown race as the device-summary spec: an in-flight
-    // route.fetch rejects with "Test ended" and fails the next test.
-    let response: APIResponse;
+    // The workspace refreshes this boundary on a timer. Ending the test
+    // disposes an in-flight fetch, and reading that body rejects. Left
+    // uncaught, the rejection fails this test or the next one.
     try {
-      response = await route.fetch();
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        catalog?: {
+          teams?: readonly unknown[];
+          projects?: readonly Record<string, unknown>[];
+        };
+      };
+      const projects = body.catalog?.projects ?? [];
+      const longList = Array.from({ length: projectCount }, (_, index) => ({
+        id: `00000000-0000-4000-8000-${String(100000 + index).padStart(8, "0")}`,
+        teamId: "00000000-0000-4000-8000-000000000011",
+        githubRepositoryId: String(900000 + index),
+        lifecycle: "ACTIVE",
+        environments: [
+          {
+            id: `00000000-0000-4000-8000-${String(200000 + index).padStart(8, "0")}`,
+            label: "production",
+            lifecycle: "ACTIVE",
+            currentHeadId: null,
+          },
+        ],
+      }));
+      await route.fulfill({
+        status: response.status(),
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...body,
+          catalog: {
+            ...body.catalog,
+            projects: [...longList, ...projects],
+          },
+        }),
+      });
     } catch {
       await route.abort().catch(() => {});
-      return;
     }
-    const body = (await response.json()) as {
-      catalog?: {
-        teams?: readonly unknown[];
-        projects?: readonly Record<string, unknown>[];
-      };
-    };
-    const projects = body.catalog?.projects ?? [];
-    const longList = Array.from({ length: projectCount }, (_, index) => ({
-      id: `00000000-0000-4000-8000-${String(100000 + index).padStart(8, "0")}`,
-      teamId: "00000000-0000-4000-8000-000000000011",
-      githubRepositoryId: String(900000 + index),
-      lifecycle: "ACTIVE",
-      environments: [
-        {
-          id: `00000000-0000-4000-8000-${String(200000 + index).padStart(8, "0")}`,
-          label: "production",
-          lifecycle: "ACTIVE",
-          currentHeadId: null,
-        },
-      ],
-    }));
-    await route.fulfill({
-      status: response.status(),
-      contentType: "application/json",
-      body: JSON.stringify({
-        ...body,
-        catalog: {
-          ...body.catalog,
-          projects: [...longList, ...projects],
-        },
-      }),
-    });
   });
 };
 
