@@ -1,14 +1,19 @@
 "use client";
 
 import { Check } from "lucide-react";
+import { useEffect, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { InlineCommand } from "@/components/inline-command";
 import { Button } from "@/components/ui/button";
 import {
   CLI_INIT_COMMAND,
-  CLI_INSTALL_COMMAND,
+  CLI_PACKAGE_MANAGERS,
+  type CliPackageManager,
+  cliInstallCommand,
   type GettingStartedModel,
   type GettingStartedStep,
+  readCliPackageManager,
+  writeCliPackageManager,
 } from "@/lib/getting-started";
 import { cn } from "@/lib/utils";
 
@@ -48,21 +53,27 @@ const stepTitle = (step: GettingStartedStep): string => {
 const StepBody = ({
   step,
   setupCommand,
+  installCommand,
+  packageManager,
   invited,
   offerCli,
   deviceSetupInProgress,
   deviceSetupMessage,
   onTrust,
   onEnroll,
+  onPackageManagerChange,
 }: Readonly<{
   step: GettingStartedStep;
   setupCommand: string;
+  installCommand: string;
+  packageManager: CliPackageManager;
   invited: boolean;
   offerCli: boolean;
   deviceSetupInProgress: boolean;
   deviceSetupMessage: string | null;
   onTrust: () => void;
   onEnroll: () => void;
+  onPackageManagerChange: (manager: CliPackageManager) => void;
 }>) => {
   if (step.status === "done") return null;
   if (step.status === "later") {
@@ -109,7 +120,30 @@ const StepBody = ({
           as its own device. It does not enroll this browser.
         </p>
         <div className="mt-3 grid gap-2">
-          <CopyableCommand value={CLI_INSTALL_COMMAND} />
+          <fieldset className="m-0 flex flex-wrap items-center gap-1.5 border-0 p-0">
+            <legend className="sr-only">Install the CLI with</legend>
+            <span className="mr-1 text-xs text-muted-foreground">
+              Install with
+            </span>
+            {CLI_PACKAGE_MANAGERS.map((manager) => (
+              <Button
+                aria-pressed={packageManager === manager}
+                className="h-6 px-2 font-mono text-xs"
+                data-testid={`getting-started-package-manager-${manager}`}
+                key={manager}
+                onClick={() => onPackageManagerChange(manager)}
+                size="xs"
+                type="button"
+                variant={packageManager === manager ? "default" : "outline"}
+              >
+                {manager}
+              </Button>
+            ))}
+          </fieldset>
+          <CopyableCommand
+            data-testid="getting-started-install-command"
+            value={installCommand}
+          />
           <CopyableCommand
             data-testid="getting-started-setup-command"
             value={setupCommand}
@@ -193,6 +227,18 @@ export const GettingStartedGuide = ({
 }>) => {
   const Title = standalone ? "h1" : "h2";
   const offerCli = !model.steps.some((step) => step.id === "cli");
+  const [packageManager, setPackageManager] =
+    useState<CliPackageManager>("npm");
+  useEffect(() => {
+    // Read after mount so the server render and the first client render
+    // agree on the npm default, then the saved machine preference wins.
+    setPackageManager(readCliPackageManager());
+  }, []);
+  const choosePackageManager = (manager: CliPackageManager) => {
+    if (manager === packageManager) return;
+    setPackageManager(manager);
+    writeCliPackageManager(manager);
+  };
   const guide = (
     <section className="mb-8" data-testid="getting-started">
       <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground">
@@ -251,10 +297,13 @@ export const GettingStartedGuide = ({
                   <StepBody
                     deviceSetupInProgress={deviceSetupInProgress}
                     deviceSetupMessage={deviceSetupMessage}
+                    installCommand={cliInstallCommand(packageManager)}
                     invited={invited}
                     offerCli={offerCli}
                     onEnroll={onEnroll}
+                    onPackageManagerChange={choosePackageManager}
                     onTrust={onTrust}
+                    packageManager={packageManager}
                     setupCommand={setupCommand}
                     step={step}
                   />

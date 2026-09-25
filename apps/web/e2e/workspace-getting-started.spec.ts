@@ -106,6 +106,41 @@ test("a new account is walked from the CLI install to the first team", async ({
   await expect(page.getByTestId("getting-started-continue")).toHaveCount(0);
 });
 
+test("the CLI install step offers package managers and keeps the choice", async ({
+  page,
+}) => {
+  await emptyAccount(page);
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  const guide = page.getByTestId("getting-started");
+  await expect(
+    guide.getByRole("heading", { name: "Set up the CLI" }),
+  ).toBeVisible();
+
+  const install = guide.getByTestId("getting-started-install-command");
+  await expect(install).toContainText("npm install -g dotrelay@latest");
+
+  const bunChoice = guide.getByRole("button", { name: "bun" });
+  await bunChoice.click();
+  await expect(install).toContainText("bun add -g dotrelay");
+  await expect(bunChoice).toHaveAttribute("aria-pressed", "true");
+
+  await page.reload();
+  await expect(page.getByTestId("workspace-loading")).toBeHidden({
+    timeout: 15_000,
+  });
+  await expect(
+    page.getByTestId("getting-started").getByRole("heading", {
+      name: "Set up the CLI",
+    }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByTestId("getting-started")
+      .getByTestId("getting-started-install-command"),
+  ).toContainText("bun add -g dotrelay");
+});
+
 test("a browser that is already trusted and enrolled skips the checklist", async ({
   page,
 }) => {

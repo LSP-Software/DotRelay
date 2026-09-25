@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test";
 import {
   buildGettingStarted,
+  cliInstallCommand,
+  cliPackageManagerKey,
   type GettingStartedInput,
   gettingStartedDismissedKey,
+  readCliPackageManager,
 } from "./getting-started";
 
 const fresh = (
@@ -91,4 +94,19 @@ test("the dismissal key is scoped to the user", () => {
   expect(gettingStartedDismissedKey("user-1")).not.toBe(
     gettingStartedDismissedKey("user-2"),
   );
+});
+
+test("each package manager maps to its global install command", () => {
+  expect(cliInstallCommand("npm")).toBe("npm install -g dotrelay@latest");
+  expect(cliInstallCommand("yarn")).toBe("yarn global add dotrelay");
+  expect(cliInstallCommand("pnpm")).toBe("pnpm add -g dotrelay");
+  expect(cliInstallCommand("bun")).toBe("bun add -g dotrelay");
+});
+
+test("the package manager key is not user-scoped", () => {
+  expect(cliPackageManagerKey).toBe("dotrelay.getting-started.package-manager");
+});
+
+test("without a browser the install preference falls back to npm", () => {
+  expect(readCliPackageManager()).toBe("npm");
 });
