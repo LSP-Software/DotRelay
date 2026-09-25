@@ -826,6 +826,9 @@ export const WorkspaceShell = ({
     profileTrusted,
     cryptoAvailable: displayBoundary.crypto.available,
     browserEnrolled: thisBrowserEnrolled,
+    recoveryConfigured: recoveryWrappers.some(
+      (wrapper) => wrapper.type === "recovery-code",
+    ),
     teamCount: teams.length,
     otherDeviceCount: displayBoundary.peerDevices?.length ?? 0,
     dismissed: gettingStartedDismissed,
@@ -2048,10 +2051,16 @@ export const WorkspaceShell = ({
       deviceSetupMessage={deviceSetupMessage}
       invited={(myInvitations?.invitations.length ?? 0) > 0}
       model={gettingStarted}
-      onContinue={teams.length > 0 ? dismissGettingStarted : null}
+      onContinue={
+        teams.length > 0 &&
+        recoveryWrappers.some((wrapper) => wrapper.type === "recovery-code")
+          ? dismissGettingStarted
+          : null
+      }
       onEnroll={() => {
         void provisionBrowserDevice();
       }}
+      onRecovery={() => setView("recovery")}
       onTrust={() => {
         setTrustBlocked(null);
         setTrustDialogOpen(true);
@@ -3662,6 +3671,7 @@ export const WorkspaceShell = ({
       </Dialog>
 
       <RecoveryCodeDialog
+        key={recoveryCode ?? "closed"}
         busy={recoveryBusy}
         code={recoveryCode}
         error={recoveryError}

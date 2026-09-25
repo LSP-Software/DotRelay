@@ -75,7 +75,12 @@ export const writeCliPackageManager = (manager: CliPackageManager): void => {
   }
 };
 
-export type GettingStartedStepId = "trust" | "cli" | "team" | "browser";
+export type GettingStartedStepId =
+  | "trust"
+  | "cli"
+  | "team"
+  | "browser"
+  | "recovery";
 
 export type GettingStartedStepStatus = "done" | "current" | "later";
 
@@ -84,6 +89,7 @@ export type GettingStartedInput = Readonly<{
   profileTrusted: boolean;
   cryptoAvailable: boolean;
   browserEnrolled: boolean;
+  recoveryConfigured: boolean;
   teamCount: number;
   otherDeviceCount: number;
   dismissed: boolean;
@@ -113,6 +119,8 @@ const stepDone = (
       return input.teamCount > 0;
     case "browser":
       return input.browserEnrolled;
+    case "recovery":
+      return input.recoveryConfigured;
     default: {
       const unreachable: never = id;
       return unreachable;
@@ -128,12 +136,17 @@ export const buildGettingStarted = (
   // browser path is trust then this browser's own keys. With no team, the
   // CLI has to create one before this browser has anything to read.
   const order: readonly GettingStartedStepId[] = hasTeam
-    ? ["trust", "browser"]
-    : ["trust", "cli", "team", "browser"];
-  const requiredDone = input.profileTrusted && input.browserEnrolled && hasTeam;
+    ? ["trust", "browser", "recovery"]
+    : ["trust", "cli", "recovery", "team", "browser"];
+  const requiredDone =
+    input.profileTrusted &&
+    input.browserEnrolled &&
+    input.recoveryConfigured &&
+    hasTeam;
   const eligible = input.sessionActive && input.cryptoAvailable;
-  const visible = eligible && !requiredDone && !(input.dismissed && hasTeam);
-  const resumable = eligible && !requiredDone && input.dismissed && hasTeam;
+  const canDismiss = input.dismissed && hasTeam && input.recoveryConfigured;
+  const visible = eligible && !requiredDone && !canDismiss;
+  const resumable = eligible && !requiredDone && canDismiss;
   let currentAssigned = false;
   const steps: GettingStartedStep[] = order.map((id) => {
     if (stepDone(input, id)) return { id, status: "done" };

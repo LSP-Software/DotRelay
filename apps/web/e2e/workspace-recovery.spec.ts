@@ -793,6 +793,10 @@ test.describe("workspace recovery", () => {
     expect(codeText).toMatch(
       /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){12}$/,
     );
+    await expect(
+      codeDialog.getByRole("button", { name: "I saved it" }),
+    ).toBeDisabled();
+    await codeDialog.getByTestId("recovery-code-confirmation").fill(codeText);
     await codeDialog.getByRole("button", { name: "I saved it" }).click();
     await expect(codeDialog).toBeHidden();
     // The status view replaces the one-time display: the code is never
@@ -1604,6 +1608,7 @@ test.describe("workspace recovery", () => {
     const codeText = (
       await codeDialog.getByTestId("recovery-code-value").innerText()
     ).trim();
+    await codeDialog.getByTestId("recovery-code-confirmation").fill(codeText);
     await codeDialog.getByTestId("recovery-code-saved").click();
     await expect(codeDialog).toBeVisible();
     await expect(
@@ -1716,6 +1721,7 @@ test.describe("workspace recovery", () => {
     const codeText = (
       await codeDialog.getByTestId("recovery-code-value").innerText()
     ).trim();
+    await codeDialog.getByTestId("recovery-code-confirmation").fill(codeText);
     await codeDialog.getByTestId("recovery-code-saved").click();
     await expect(
       page
@@ -1782,6 +1788,7 @@ test.describe("workspace recovery at phone width", () => {
     expect(codeText).toMatch(
       /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){12}$/,
     );
+    await codeDialog.getByTestId("recovery-code-confirmation").fill(codeText);
     // The dialog content stays inside the phone viewport, so the one-time
     // code is fully readable without horizontal scrolling.
     const box = await codeDialog.boundingBox();

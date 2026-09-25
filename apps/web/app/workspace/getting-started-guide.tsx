@@ -28,6 +28,8 @@ const stepTitle = (step: GettingStartedStep): string => {
         return "Team created";
       case "browser":
         return "This browser is set up";
+      case "recovery":
+        return "Recovery code saved";
       default: {
         const unreachable: never = step.id;
         return unreachable;
@@ -43,6 +45,8 @@ const stepTitle = (step: GettingStartedStep): string => {
       return "Create your team";
     case "browser":
       return "Set up this browser";
+    case "recovery":
+      return "Save your recovery code";
     default: {
       const unreachable: never = step.id;
       return unreachable;
@@ -61,6 +65,7 @@ const StepBody = ({
   deviceSetupMessage,
   onTrust,
   onEnroll,
+  onRecovery,
   onPackageManagerChange,
 }: Readonly<{
   step: GettingStartedStep;
@@ -73,6 +78,7 @@ const StepBody = ({
   deviceSetupMessage: string | null;
   onTrust: () => void;
   onEnroll: () => void;
+  onRecovery: () => void;
   onPackageManagerChange: (manager: CliPackageManager) => void;
 }>) => {
   if (step.status === "done") return null;
@@ -91,6 +97,9 @@ const StepBody = ({
         ) : null}
         {step.id === "browser"
           ? "Set up this browser so it can read values, then save a recovery code. If every device is lost and there is no recovery code, the values stay unreadable."
+          : null}
+        {step.id === "recovery"
+          ? "Save the code during CLI setup, or set up this browser and create one in Recovery. GitHub sign-in cannot restore encrypted values."
           : null}
       </p>
     );
@@ -111,13 +120,29 @@ const StepBody = ({
     );
   }
 
+  if (step.id === "recovery") {
+    return (
+      <>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Create a recovery code and store it somewhere safe before adding
+          secrets. If you lose every unlocked device and the code, your
+          encrypted values cannot be recovered, even after signing in again.
+        </p>
+        <Button className="mt-3" onClick={onRecovery} type="button">
+          Open Recovery
+        </Button>
+      </>
+    );
+  }
+
   if (step.id === "cli") {
     return (
       <>
         <p className="mt-1 text-sm text-muted-foreground">
           Teams are created from the CLI, not in this browser. Install it, then
           run setup against this server. Setup signs the CLI in and enrolls it
-          as its own device. It does not enroll this browser.
+          as its own device and shows a recovery code you must save. It does not
+          enroll this browser.
         </p>
         <div className="mt-3 grid gap-2">
           <fieldset className="m-0 flex flex-wrap items-center gap-1.5 border-0 p-0">
@@ -213,6 +238,7 @@ export const GettingStartedGuide = ({
   deviceSetupMessage,
   onTrust,
   onEnroll,
+  onRecovery,
   onContinue,
 }: Readonly<{
   model: GettingStartedModel;
@@ -223,6 +249,7 @@ export const GettingStartedGuide = ({
   deviceSetupMessage: string | null;
   onTrust: () => void;
   onEnroll: () => void;
+  onRecovery: () => void;
   onContinue: (() => void) | null;
 }>) => {
   const Title = standalone ? "h1" : "h2";
@@ -301,6 +328,7 @@ export const GettingStartedGuide = ({
                     invited={invited}
                     offerCli={offerCli}
                     onEnroll={onEnroll}
+                    onRecovery={onRecovery}
                     onPackageManagerChange={choosePackageManager}
                     onTrust={onTrust}
                     packageManager={packageManager}

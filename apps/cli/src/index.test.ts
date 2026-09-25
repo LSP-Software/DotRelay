@@ -3025,6 +3025,7 @@ const createLoginFixture = async (
   const revokedDevices = new Set<string>();
   let localDeviceId: string | null = null;
   let bootstrapCalls = 0;
+  const accountWrappers: Array<Record<string, unknown>> = [];
   let poll = 0;
   const fetch: FetchFunction = async (input, init) => {
     const request = new Request(input as never, init);
@@ -3055,6 +3056,19 @@ const createLoginFixture = async (
     }
     if (url.pathname === "/api/v1/session")
       return Response.json({ authenticated: true, user: { id: loginUserId } });
+    if (url.pathname === "/api/v1/account-keys/wrappers") {
+      if (request.method === "GET")
+        return Response.json({ wrappers: accountWrappers });
+      if (request.method === "POST") {
+        const body = (await request.json()) as Record<string, unknown>;
+        accountWrappers.push({
+          wrapperId: body.wrapperId,
+          type: "recovery-code",
+          object: body.object,
+        });
+        return Response.json({ wrapperId: body.wrapperId, idempotent: false });
+      }
+    }
     if (
       request.method === "POST" &&
       url.pathname === "/api/v1/devices/bootstrap"
@@ -3173,6 +3187,8 @@ describe("CLI sign-in display", () => {
       expect(output).toContain("in 10 minutes");
       expect(output).toContain("Open the URL above to complete sign-in");
       expect(result.stdout).toContain("Signed in to relay. Device enrolled.");
+      expect(result.stdout).toContain("RECOVERY CODE — SAVE THIS NOW");
+      expect(result.stdout).toContain("without it or another unlocked device");
       expect(fixture.bootstrapCount()).toBe(1);
     } finally {
       await fixture.cleanup();
@@ -3419,6 +3435,9 @@ describe("CLI sign-in display", () => {
         ok: true,
         profile: "relay.example",
         device: "enrolled",
+        recoveryCode: expect.stringMatching(
+          /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){12}$/,
+        ),
       });
       const events = stderrEvents(captured.text());
       expect(events[0]).toMatchObject({

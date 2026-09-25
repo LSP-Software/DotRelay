@@ -4,6 +4,7 @@ import {
   MonitorSmartphone,
   WifiOff,
 } from "lucide-react";
+import { useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { InlineCommand } from "@/components/inline-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -791,51 +792,70 @@ export const RecoveryCodeDialog = ({
   busy,
   onConfirm,
   onDismiss,
-}: RecoveryCodeDialogProps) => (
-  <Dialog
-    onOpenChange={(open) => {
-      if (open) return;
-      onDismiss();
-    }}
-    open={code !== null}
-  >
-    <DialogContent data-testid="recovery-code-dialog" role="alertdialog">
-      <DialogHeader>
-        <DialogTitle>Save this recovery code</DialogTitle>
-        <DialogDescription>
-          {note ??
-            "This code unlocks the account's key if every device is lost."}
-        </DialogDescription>
-      </DialogHeader>
-      <div className="space-y-3">
-        <Label>Your recovery code</Label>
-        <CopyableCommand data-testid="recovery-code-value" value={code ?? ""} />
-        <p className="text-sm text-muted-foreground">
-          The code is shown once and is never stored in this browser. If you
-          lose it, and every other recovery method, the account's content
-          becomes unrecoverable.
-        </p>
-        {error ? (
-          <Alert role="alert">
-            <AlertTitle>The code is not active yet</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-      </div>
-      <DialogFooter>
-        <Button
-          data-testid="recovery-code-saved"
-          disabled={busy}
-          onClick={() => {
-            onConfirm();
-          }}
-        >
-          {busy ? "Saving…" : "I saved it"}
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>
-);
+}: RecoveryCodeDialogProps) => {
+  const [confirmation, setConfirmation] = useState("");
+  return (
+    <Dialog
+      onOpenChange={(open) => {
+        if (open) return;
+        onDismiss();
+      }}
+      open={code !== null}
+    >
+      <DialogContent data-testid="recovery-code-dialog" role="alertdialog">
+        <DialogHeader>
+          <DialogTitle>Save this recovery code</DialogTitle>
+          <DialogDescription>
+            {note ??
+              "This code unlocks the account's key if every device is lost."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <Label>Your recovery code</Label>
+          <CopyableCommand
+            data-testid="recovery-code-value"
+            value={code ?? ""}
+          />
+          <p className="text-sm text-muted-foreground">
+            The code is shown once and is never stored in this browser. If you
+            lose it, and every other recovery method, the account's content
+            becomes unrecoverable.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="recovery-code-confirmation">
+              Confirm the code from where you saved it
+            </Label>
+            <Input
+              autoComplete="off"
+              data-testid="recovery-code-confirmation"
+              id="recovery-code-confirmation"
+              onChange={(event) => setConfirmation(event.target.value)}
+              spellCheck={false}
+              value={confirmation}
+            />
+          </div>
+          {error ? (
+            <Alert role="alert">
+              <AlertTitle>The code is not active yet</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button
+            data-testid="recovery-code-saved"
+            disabled={busy || confirmation.trim().toUpperCase() !== code}
+            onClick={() => {
+              onConfirm();
+            }}
+          >
+            {busy ? "Saving…" : "I saved it"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
 
 export type RemovePasswordDialogProps = Readonly<{
   readonly open: boolean;

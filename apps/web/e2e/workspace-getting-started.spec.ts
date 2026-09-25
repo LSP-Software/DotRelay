@@ -56,30 +56,21 @@ test("a signed-in browser that is not set up opens on the setup checklist", asyn
   await expect(page.getByText("CLI on this machine")).toHaveCount(0);
 });
 
-test("continuing to projects keeps the trust gate and stays dismissed", async ({
+test("the checklist cannot be dismissed before a recovery code exists", async ({
   page,
 }) => {
   await page.goto("/workspace");
   await expect(page.getByTestId("getting-started")).toBeVisible({
     timeout: 15_000,
   });
-  await page.getByTestId("getting-started-continue").click();
-  await expect(page.getByTestId("getting-started")).toHaveCount(0);
-  await expect(
-    page.getByRole("heading", { name: "Trust this server" }),
-  ).toBeVisible();
-  await expect(page.getByTestId("getting-started-collapsed")).toBeVisible();
-
+  await expect(page.getByTestId("getting-started-continue")).toHaveCount(0);
   await page.reload();
   await expect(page.getByTestId("workspace-loading")).toBeHidden({
     timeout: 15_000,
   });
-  await expect(page.getByTestId("getting-started")).toHaveCount(0);
-  await expect(page.getByTestId("getting-started-collapsed")).toBeVisible();
-
-  await page.getByRole("button", { name: "Show setup steps" }).click();
   await expect(page.getByTestId("getting-started")).toBeVisible();
   await trustWorkspaceServer(page);
+  await expect(page.getByTestId("getting-started-continue")).toHaveCount(0);
   await expect(
     page.getByTestId("getting-started").getByRole("heading", {
       name: "Set up this browser",

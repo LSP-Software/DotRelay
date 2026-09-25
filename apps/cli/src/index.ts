@@ -608,6 +608,14 @@ const renderSuccess = (
   if (parsed.command === "context") return renderContextCard(value);
   if (parsed.command === "device" && parsed.subcommand)
     return renderDeviceResult(parsed.subcommand, value);
+  if (parsed.command === "login" || parsed.command === "setup") {
+    const message = sanitizeCliText(String(value.message ?? ""));
+    const code = value.recoveryCode;
+    const warning = sanitizeCliText(String(value.nextAction ?? ""));
+    return code
+      ? `${message}\n\nRECOVERY CODE — SAVE THIS NOW\n${code}\n\n${warning}\n`
+      : `${message}\n${warning}\n`;
+  }
   if (typeof value.message === "string") {
     const message = sanitizeCliText(value.message);
     if (parsed.command === "logout")
@@ -955,6 +963,16 @@ const loginAndEnroll = async (
     stepDone(
       enrollment.existing ? "Device already enrolled" : "Device enrolled",
     );
+  const recovery = await setupDeviceAccountKey(
+    deviceWorkflowOptions(parsed, runtime, profile, credentials),
+  ).catch((error: unknown) => {
+    if (
+      error instanceof CliError &&
+      error.code === "account_key_already_exists"
+    )
+      return null;
+    throw error;
+  });
   return {
     profile: profile.name,
     userCode: login.userCode,
@@ -962,9 +980,15 @@ const loginAndEnroll = async (
     deviceId: enrollment.deviceId,
     device: enrollment.active ? "enrolled" : "not enrolled",
     ...(enrollment.deviceName ? { deviceName: enrollment.deviceName } : {}),
+    ...(recovery?.recoveryCode ? { recoveryCode: recovery.recoveryCode } : {}),
     message: enrollment.existing
       ? `Signed in to ${profile.name}. Device already enrolled.`
       : `Signed in to ${profile.name}. Device enrolled.`,
+    nextAction: recovery?.recoveryCode
+      ? "Save the recovery code now. It is shown once; without it or another unlocked device, encrypted values cannot be recovered."
+      : recovery === null
+        ? "This account already has encryption keys. Run dotrelay device recover to unlock this device using a saved recovery code or another device."
+        : "Keep your saved recovery code safe. If it was lost but this device is still unlocked, run dotrelay device backup to replace it. GitHub sign-in cannot recover encrypted values.",
   };
 };
 

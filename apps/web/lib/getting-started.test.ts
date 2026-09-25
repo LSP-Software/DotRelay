@@ -15,6 +15,7 @@ const fresh = (
   profileTrusted: false,
   cryptoAvailable: true,
   browserEnrolled: false,
+  recoveryConfigured: false,
   teamCount: 0,
   otherDeviceCount: 0,
   dismissed: false,
@@ -41,6 +42,7 @@ test("a new account starts at trusting the server, then the CLI, then a team", (
   expect(model.steps.map((step) => step.id)).toEqual([
     "trust",
     "cli",
+    "recovery",
     "team",
     "browser",
   ]);
@@ -49,8 +51,17 @@ test("a new account starts at trusting the server, then the CLI, then a team", (
     "cli",
   );
   expect(current(fresh({ profileTrusted: true, otherDeviceCount: 1 }))).toBe(
-    "team",
+    "recovery",
   );
+  expect(
+    current(
+      fresh({
+        profileTrusted: true,
+        otherDeviceCount: 1,
+        recoveryConfigured: true,
+      }),
+    ),
+  ).toBe("team");
 });
 
 test("dismissal does not hide the checklist while there is no team", () => {
@@ -59,15 +70,36 @@ test("dismissal does not hide the checklist while there is no team", () => {
   expect(model.resumable).toBe(false);
 });
 
+test("a team cannot hide the recovery step before a code exists", () => {
+  const model = buildGettingStarted(
+    fresh({
+      teamCount: 1,
+      profileTrusted: true,
+      browserEnrolled: true,
+      dismissed: true,
+    }),
+  );
+  expect(model.visible).toBe(true);
+  expect(
+    current(
+      fresh({ teamCount: 1, profileTrusted: true, browserEnrolled: true }),
+    ),
+  ).toBe("recovery");
+});
+
 test("an account with a team skips CLI creation and can dismiss the checklist", () => {
   const model = buildGettingStarted(fresh({ teamCount: 1 }));
-  expect(model.steps.map((step) => step.id)).toEqual(["trust", "browser"]);
+  expect(model.steps.map((step) => step.id)).toEqual([
+    "trust",
+    "browser",
+    "recovery",
+  ]);
   expect(current(fresh({ teamCount: 1, profileTrusted: true }))).toBe(
     "browser",
   );
 
   const dismissed = buildGettingStarted(
-    fresh({ teamCount: 1, dismissed: true }),
+    fresh({ teamCount: 1, dismissed: true, recoveryConfigured: true }),
   );
   expect(dismissed.visible).toBe(false);
   expect(dismissed.resumable).toBe(true);
@@ -80,6 +112,7 @@ test("the checklist leaves once the server is trusted, this browser is enrolled,
       teamCount: 2,
       profileTrusted: true,
       browserEnrolled: true,
+      recoveryConfigured: true,
       otherDeviceCount: 1,
     }),
   );
