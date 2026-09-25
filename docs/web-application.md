@@ -51,6 +51,16 @@ survives reloads, is never carried over to a different origin or identity, and a
 either asks the user to confirm again. Only the development fixture keeps a Server Profile
 preview selector, so hosted and self-hosted behavior can both be exercised locally.
 
+A signed-in browser that cannot yet read values opens on a first-run checklist rather than the
+project list. The checklist names one current step: confirm the server, and, when the account has
+no Team, install the CLI and run `dotrelay init` in a repository (an invitation is the other way
+onto a Team). This browser is enrolled as its own Device after that. The checklist says to save a
+recovery code once the browser is set up, and that losing every Device and the code leaves values
+unreadable. It leaves once the server is trusted, this browser is enrolled, and a Team exists.
+With a Team already present, the person can continue to the project list; the checklist can be
+opened again until those steps are done. Signing in is not one of the steps that decrypts
+anything.
+
 When the v3 runtime or provider is unavailable, the shell reports the stable
 `unsupported_crypto_runtime` or `crypto_provider_unavailable` problem and does not request or
 render Manifest lanes, Variable names, Shared Values, or User-defined Values. The permitted surface

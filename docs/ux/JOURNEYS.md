@@ -8,8 +8,10 @@ issues.
 ## FIRST USE
 
 - First sign in - CLEAN-PASS-1 (GitHub OAuth itself needs a real account; the
-  sign-in page was reviewed in #225 and the signed-out state it lands on now
-  presents the Sign in action with a working link, UX-008)
+  sign-in page was reviewed in #225. After sign-in, a browser that is not yet
+  usable opens on the first-run checklist instead of the project list, UX-029.
+  The signed-out state still presents the Sign in action with a working link,
+  UX-008)
 - Zero teams - CLEAN-PASS-1 (UX-003 fixed: the dead empty "Choose a team"
   selector is gone; a signed-in, zero-Teams user sees one "No teams yet" action
   pointing at `dotrelay init`)

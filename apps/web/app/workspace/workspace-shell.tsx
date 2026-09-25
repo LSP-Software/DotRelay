@@ -113,6 +113,11 @@ import {
   type SetupAction,
 } from "@/lib/environment-workflow";
 import {
+  buildGettingStarted,
+  readGettingStartedDismissed,
+  writeGettingStartedDismissed,
+} from "@/lib/getting-started";
+import {
   acceptTeamInvitation,
   changeEnvironmentLifecycle,
   changeProjectLifecycle,
@@ -160,6 +165,10 @@ import {
   loadWorkspaceSession,
 } from "@/lib/workspace-session";
 import { EnvironmentEditor } from "./environment-editor";
+import {
+  GettingStartedGuide,
+  GettingStartedResume,
+} from "./getting-started-guide";
 
 type ProfileId = WorkspaceProfileId;
 type ConnectionState = "loading" | "online" | "offline";
@@ -597,6 +606,7 @@ export const WorkspaceShell = ({
     "unknown" | "trusted" | "untrusted"
   >("unknown");
   const [trustDialogOpen, setTrustDialogOpen] = useState(false);
+  const [gettingStartedDismissed, setGettingStartedDismissed] = useState(false);
   const [trustDialogBusy, setTrustDialogBusy] = useState(false);
   const [trustBlocked, setTrustBlocked] = useState<string | null>(null);
   // Approval gate for a Device replacement: replacing the Device discards the
@@ -801,6 +811,35 @@ export const WorkspaceShell = ({
       ? displayBoundary.device.id
       : undefined;
   const sessionActive = displayBoundary.session.active;
+  const gettingStartedUserId = displayBoundary.session.userId;
+  useEffect(() => {
+    if (!gettingStartedUserId) {
+      setGettingStartedDismissed(false);
+      return;
+    }
+    setGettingStartedDismissed(
+      readGettingStartedDismissed(gettingStartedUserId),
+    );
+  }, [gettingStartedUserId]);
+  const gettingStarted = buildGettingStarted({
+    sessionActive,
+    profileTrusted,
+    cryptoAvailable: displayBoundary.crypto.available,
+    browserEnrolled: thisBrowserEnrolled,
+    teamCount: teams.length,
+    otherDeviceCount: displayBoundary.peerDevices?.length ?? 0,
+    dismissed: gettingStartedDismissed,
+  });
+  const dismissGettingStarted = () => {
+    if (gettingStartedUserId)
+      writeGettingStartedDismissed(gettingStartedUserId, true);
+    setGettingStartedDismissed(true);
+  };
+  const resumeGettingStarted = () => {
+    if (gettingStartedUserId)
+      writeGettingStartedDismissed(gettingStartedUserId, false);
+    setGettingStartedDismissed(false);
+  };
 
   // Recover the trust decision this browser recorded for the pair the
   // boundary just verified. The lookup keys on the pair, so a pin recorded
@@ -2003,6 +2042,25 @@ export const WorkspaceShell = ({
   const provisionBrowserDevice = () =>
     provisionBrowserDeviceFlow(provisioningContext);
 
+  const gettingStartedGuide = gettingStarted.visible ? (
+    <GettingStartedGuide
+      deviceSetupInProgress={deviceSetupInProgress}
+      deviceSetupMessage={deviceSetupMessage}
+      invited={(myInvitations?.invitations.length ?? 0) > 0}
+      model={gettingStarted}
+      onContinue={teams.length > 0 ? dismissGettingStarted : null}
+      onEnroll={() => {
+        void provisionBrowserDevice();
+      }}
+      onTrust={() => {
+        setTrustBlocked(null);
+        setTrustDialogOpen(true);
+      }}
+      setupCommand={cliCommand}
+      standalone={teams.length === 0}
+    />
+  ) : null;
+
   const repairStaleEpoch = () =>
     repairStaleEpochFlow({
       apiOrigin: resolveApiOrigin() ?? boundary.profile.origin,
@@ -2587,19 +2645,25 @@ export const WorkspaceShell = ({
                       </Card>
                     </section>
                   ) : teams.length === 0 ? (
-                    <div className="mb-6" data-testid="no-teams-empty">
-                      <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                        No teams yet
-                      </h1>
-                      <p className="mt-2 max-w-2xl text-muted-foreground">
-                        A Team is where the projects that share your environment
-                        variables live. Run this in a GitHub repository to
-                        create your first Team, Project, and Environment:{" "}
-                        <InlineCommand value="dotrelay init" />.
-                      </p>
-                    </div>
+                    (gettingStartedGuide ?? (
+                      <div className="mb-6" data-testid="no-teams-empty">
+                        <h1 className="font-heading text-3xl font-semibold tracking-tight">
+                          No teams yet
+                        </h1>
+                        <p className="mt-2 max-w-2xl text-muted-foreground">
+                          A Team is where the projects that share your
+                          environment variables live. Run this in a GitHub
+                          repository to create your first Team, Project, and
+                          Environment: <InlineCommand value="dotrelay init" />.
+                        </p>
+                      </div>
+                    ))
                   ) : (
                     <>
+                      {gettingStartedGuide}
+                      {gettingStarted.resumable ? (
+                        <GettingStartedResume onShow={resumeGettingStarted} />
+                      ) : null}
                       <div className="mb-6">
                         <p className="text-sm text-muted-foreground">Team</p>
                         <h1 className="font-heading text-3xl font-semibold tracking-tight">
@@ -2610,7 +2674,8 @@ export const WorkspaceShell = ({
                           secrets. Switch teams using the team menu.
                         </p>
                       </div>
-                      {setupAction &&
+                      {!gettingStarted.visible &&
+                      setupAction &&
                       (setupAction.id === "sign-in" ||
                         setupAction.id === "trust-profile" ||
                         setupAction.id === "crypto-unavailable") ? (

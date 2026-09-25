@@ -31,7 +31,12 @@ cryptography. Being signed in does not authorize a Device. Being known to GitHub
 Membership.
 
 The workspace shows only the next action the person can take. It does not stack overlapping
-warnings or API problem codes. Enroll this browser, trust this Server Profile, sign in, or copy the
+warnings or API problem codes. A signed-in browser that is not yet usable opens on a first-run
+checklist instead of the project list: confirm this server, install and set up the CLI when no
+Team exists yet, create the Team with `dotrelay init` (or accept an invitation), then enroll this
+browser. The highlighted step is the one to do now. Once this server is trusted, this browser is
+enrolled, and a Team exists, the checklist leaves. Someone who already has a Team can continue to
+the project list and bring the checklist back. Enroll this browser, trust this Server Profile, sign in, or copy the
 CLI command. Command snippets include a Copy control. `dotrelay setup <origin>` enrolls the CLI
 Device. Enroll browser enrolls this browser as its own Device, including after the CLI is already
 enrolled.

@@ -51,11 +51,14 @@ test("a signed-in user with zero Teams is pointed at the CLI, not an empty selec
   // sidebar or the header.
   await expect(page.getByRole("combobox", { name: "Team" })).toHaveCount(0);
 
-  // Instead, a single clear next action pointing at the CLI.
+  // Instead of a dead selector, the first-run checklist points at the CLI.
   const empty = page.getByTestId("no-teams-empty");
   await expect(empty).toBeVisible();
   await expect(
-    empty.getByRole("heading", { name: "No teams yet" }),
+    empty.getByRole("heading", { name: "Get started" }),
+  ).toBeVisible();
+  await expect(
+    empty.getByRole("heading", { name: "Create your team" }),
   ).toBeVisible();
   await expect(empty).toContainText("dotrelay init");
 

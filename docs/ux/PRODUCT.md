@@ -99,7 +99,8 @@ UX copy most often gets wrong:
 
 See `docs/ux/DECISIONS.md`: D-001 sign-out placement; D-002 no web team
 creation; D-003 member management scope (no leave-team); D-004 the recovery
-state matrix; D-005 AMK in browser memory only; D-006 prebuilt argon2 worker.
+state matrix; D-005 AMK in browser memory only; D-006 prebuilt argon2 worker;
+D-007 first-run checklist instead of the project list.
 
 ## Voice
 

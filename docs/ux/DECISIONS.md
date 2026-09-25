@@ -184,3 +184,41 @@ Rejected:
 
 Verification: the e2e scenarios complete the KDF through the worker
 path; the main-thread fallback is covered by unit tests.
+
+## D-007 - First sign-in opens a checklist, not the project list
+
+Date: 2026-09-25
+Problem: GitHub sign-in returned the browser to `/workspace`, which rendered
+the project list (or a one-line "No teams yet") with trust, CLI install,
+team creation, browser enrollment, and recovery scattered across other
+views (UX-029).
+Chosen:
+- While the signed-in browser cannot yet read values, the projects view
+  opens on a checklist. One step is current. The others stay visible so the
+  path is obvious.
+- No Team yet: confirm this server, install the CLI and run
+  `dotrelay setup <origin>`, run `dotrelay init` in the repository (or
+  accept an invitation), then enroll this browser. There is no "continue"
+  control, because the checklist is the page.
+- A Team already exists: confirm this server, then enroll this browser.
+  "Continue to projects" hides the checklist in this browser for this user
+  and can be opened again. The project list stays on the page under the
+  checklist so an existing account is not trapped.
+- The checklist leaves once the server is trusted, this browser is
+  enrolled, and a Team exists. Saving a recovery code is named on the
+  browser step, including the lockout if every device and the code are
+  lost. It does not gate the project list.
+- Dismissal is `localStorage`, keyed by user id. It is ignored when there
+  is no Team.
+Rejected:
+- A web form that creates a Team. Rejected: D-002. The CLI still creates
+  the Team, Project, and Environment.
+- Replacing the project list for an account that is already trusted,
+  enrolled, and on a Team. Rejected: that person is past first run.
+- Holding the checklist open until a recovery code exists. Rejected:
+  recovery is optional, and the browser cannot know the wrappers until
+  this browser has a Device.
+
+Verification: `apps/web/lib/getting-started.test.ts` and
+`apps/web/e2e/workspace-getting-started.spec.ts`. The zero-Teams spec
+expects the checklist instead of the old one-line empty state.

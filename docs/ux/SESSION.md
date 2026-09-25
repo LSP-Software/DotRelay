@@ -2,6 +2,39 @@
 
 Rolling log of audit sessions. Newest first.
 
+## 2026-09-25 - First sign-in checklist (UX-029)
+
+Skills: ux-audit (first-run journey against the recorded product path),
+impeccable not installed in this worktree; copy follows `docs/ux/PRODUCT.md`.
+
+Scope:
+- Sign-in returns to `/workspace`. With a Team, that page is the project
+  list. With no Team, it was one sentence about `dotrelay init`. Trust,
+  CLI install, browser enrollment, and recovery were on other views.
+
+Changed:
+- `apps/web/lib/getting-started.ts`: the checklist model. No Team means
+  trust, CLI, `dotrelay init`, then this browser. A Team means trust, then
+  this browser. Dismissal is per user and does not apply with no Team.
+- `apps/web/app/workspace/getting-started-guide.tsx` and the projects view
+  in `workspace-shell.tsx`. The existing trust dialog is the confirm step,
+  so the projects view does not also render the trust card while the
+  checklist is up.
+- e2e: `workspace-getting-started.spec.ts`; the zero-Teams spec now expects
+  the checklist.
+- Docs: `docs/web-application.md`, `docs/wiki/web-application.md`,
+  `docs/ux/PRODUCT.md`, `docs/ux/JOURNEYS.md`, `docs/ux/BACKLOG.md`,
+  `docs/ux/DECISIONS.md` (D-007).
+
+Verified:
+- Unit tests for the step order. Playwright for the checklist, dismiss and
+  restore, the empty account's CLI commands, and a ready browser skipping
+  it.
+
+Remaining:
+- GitHub OAuth itself still needs a real account. The checklist is the
+  page that OAuth already returns to.
+
 ## 2026-09-23 - In-browser Recovery area shipped (Phase 5 of #231)
 
 Skills: none (implementation session; `bun run check` plus the Playwright

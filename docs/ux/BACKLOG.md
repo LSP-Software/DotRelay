@@ -926,3 +926,33 @@ bumps the membership refetch trigger (the same `refreshTeamAdministration`
 mutations use). E2E pins it: a 503 membership read shows the card with the
 button; the service recovers, one click loads the record and the error goes
 away.
+
+## UX-029 - First sign-in drops the user on the project list
+Journey:
+FIRST USE - first sign in.
+State:
+Signed in, this browser not yet able to read values. Either no Teams, or a
+Team exists but this browser has not confirmed the server and enrolled.
+Severity:
+HIGH (no ordered next action on the first screen a new user sees)
+Observed:
+OAuth returns to `/workspace`. An account with Teams sees the team name and
+project cards immediately. An account with no Teams sees one sentence
+pointing at `dotrelay init`, without install, `dotrelay setup`, server
+trust, this browser's keys, or a recovery code. Those steps exist, on
+Devices, Recovery, and the environment gate, and the user has to find them.
+Expected:
+The first screen is a short checklist. One step is current. It follows the
+real order: confirm this server, create a Team from the CLI when none
+exists, enroll this browser, and say what a missing recovery code costs.
+The project list is the page once that browser can actually use it.
+Status:
+FIXED - the projects view renders the checklist from
+`buildGettingStarted` until the server is trusted, this browser is
+enrolled, and a Team exists. With a Team, "Continue to projects" dismisses
+it for that user in this browser and "Show setup steps" brings it back.
+No Team keeps the checklist on screen. Copy states that sign-in does not
+create a Team or decrypt values, and that losing every device and the
+recovery code leaves values unreadable. Verified by
+`apps/web/lib/getting-started.test.ts` and
+`apps/web/e2e/workspace-getting-started.spec.ts`. See DECISIONS.md (D-007).
