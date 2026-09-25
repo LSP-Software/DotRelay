@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { type APIResponse, expect, type Page, test } from "@playwright/test";
 import { trustWorkspaceServer } from "./trust-server";
 
 const openFirstProject = async (page: Page) => {
@@ -71,7 +71,16 @@ test("the Devices table does not repeat this browser's OS in its summary line", 
   // Linux"); the fixture's Device reports none, so the test stands in for the
   // real service's report.
   await page.route("**/api/workspace/boundary**", async (route) => {
-    const real = await route.fetch();
+    // The workspace refreshes this boundary on a timer. A fetch still in
+    // flight when the test ends rejects with "Test ended", and that
+    // rejection fails the next test in the worker.
+    let real: APIResponse;
+    try {
+      real = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
     const body = (await real.json()) as Record<string, unknown>;
     const device = body.device as Record<string, unknown> | undefined;
     if (device && device.active === true && deviceKeys) {

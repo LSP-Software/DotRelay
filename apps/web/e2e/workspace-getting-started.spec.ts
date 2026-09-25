@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { type APIResponse, expect, type Page, test } from "@playwright/test";
 import { trustWorkspaceServer } from "./trust-server";
 
 const emptyAccount = async (page: Page) => {
@@ -8,20 +8,27 @@ const emptyAccount = async (page: Page) => {
   await page.route("**/api/v1/invitations", (route) =>
     route.fulfill({ json: { invitations: [], pendingMemberships: [] } }),
   );
-  await page.route("**/api/workspace/boundary*", (route) =>
-    route.fetch().then(async (response) => {
-      const body = (await response.json()) as Record<string, unknown>;
-      return route.fulfill({
-        status: response.status(),
-        headers: response.headers(),
-        json: {
-          ...body,
-          catalog: { teams: [], projects: [] },
-          peerDevices: [],
-        },
-      });
-    }),
-  );
+  await page.route("**/api/workspace/boundary*", async (route) => {
+    // Same teardown race as the device-summary spec: an in-flight
+    // route.fetch rejects with "Test ended" and fails the next test.
+    let response: APIResponse;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      json: {
+        ...body,
+        catalog: { teams: [], projects: [] },
+        peerDevices: [],
+      },
+    });
+  });
 };
 
 test("a signed-in browser that is not set up opens on the setup checklist", async ({

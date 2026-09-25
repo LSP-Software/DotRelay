@@ -1,4 +1,10 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import {
+  type APIResponse,
+  expect,
+  type Locator,
+  type Page,
+  test,
+} from "@playwright/test";
 
 // A 320 CSS-pixel phone rendered at 200% zoom lays out in 160 CSS pixels.
 const ZOOMED_VIEWPORT = { width: 160, height: 240 };
@@ -55,7 +61,15 @@ const setDialogScroll = (dialog: Locator, value: number) =>
 
 const addLongProjectList = async (page: Page, projectCount: number) => {
   await page.route("**/api/workspace/boundary*", async (route) => {
-    const response = await route.fetch();
+    // Same teardown race as the device-summary spec: an in-flight
+    // route.fetch rejects with "Test ended" and fails the next test.
+    let response: APIResponse;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
     const body = (await response.json()) as {
       catalog?: {
         teams?: readonly unknown[];
