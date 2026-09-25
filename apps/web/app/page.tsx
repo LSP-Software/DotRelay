@@ -5,6 +5,7 @@ import {
   GitBranch,
   KeyRound,
 } from "lucide-react";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -17,8 +18,25 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { resolveLiveApiOrigin } from "@/lib/workspace-boundary";
 
-const HomePage = () => {
+// Only a 200 from the session relay proves the visitor is signed in; a
+// signed-out, unreachable, or undeployed relay all fall back to offering
+// sign-in, so a degraded API never flips the landing page out of its
+// public state.
+const isSessionActive = async (): Promise<boolean> => {
+  const apiOrigin = resolveLiveApiOrigin();
+  if (!apiOrigin) return false;
+  const cookie = (await headers()).get("cookie");
+  const response = await fetch(`${apiOrigin}/api/v1/session`, {
+    headers: cookie ? { cookie } : {},
+    cache: "no-store",
+  }).catch(() => undefined);
+  return response?.status === 200;
+};
+
+const HomePage = async () => {
+  const signedIn = await isSessionActive();
   return (
     <main className="landing-grid min-h-screen overflow-hidden">
       <nav
@@ -46,9 +64,9 @@ const HomePage = () => {
           </a>
           <Link
             className={buttonVariants({ variant: "outline", size: "sm" })}
-            href="/sign-in"
+            href={signedIn ? "/workspace" : "/sign-in"}
           >
-            Sign in
+            {signedIn ? "Workspace" : "Sign in"}
           </Link>
         </div>
       </nav>
@@ -73,9 +91,10 @@ const HomePage = () => {
                 buttonVariants({ size: "lg" }),
                 "shadow-[0_0_32px_-8px_var(--primary)]",
               )}
-              href="/sign-in"
+              href={signedIn ? "/workspace" : "/sign-in"}
             >
-              Get started <ArrowRight aria-hidden="true" />
+              {signedIn ? "Open workspace" : "Get started"}{" "}
+              <ArrowRight aria-hidden="true" />
             </Link>
             <a
               className={buttonVariants({ variant: "outline", size: "lg" })}
