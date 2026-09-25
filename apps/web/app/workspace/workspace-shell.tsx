@@ -2060,6 +2060,47 @@ export const WorkspaceShell = ({
       standalone={teams.length === 0}
     />
   ) : null;
+  // No selected Team means the membership request is never sent. The members
+  // table treats a null record as "still loading", so a fresh account with an
+  // empty catalog would spin forever. Show the same next step as Projects.
+  const signInRequired = (
+    <section className="mx-auto max-w-xl py-24" data-testid="sign-in-required">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <LockKeyhole className="size-5 text-amber-300" aria-hidden="true" />
+            <h1 className="font-heading text-3xl font-semibold tracking-tight">
+              Sign in
+            </h1>
+          </CardTitle>
+          <CardDescription>
+            GitHub only identifies you. Sign in to see your teams, projects, and
+            environments.
+          </CardDescription>
+        </CardHeader>
+        <CardFooter>
+          <a
+            className="inline-flex h-8 items-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
+            href="/sign-in"
+          >
+            Sign in
+          </a>
+        </CardFooter>
+      </Card>
+    </section>
+  );
+  const noTeamsEmpty = gettingStartedGuide ?? (
+    <div className="mb-6" data-testid="no-teams-empty">
+      <h1 className="font-heading text-3xl font-semibold tracking-tight">
+        No teams yet
+      </h1>
+      <p className="mt-2 max-w-2xl text-muted-foreground">
+        A Team is where the projects that share your environment variables live.
+        Run this in a GitHub repository to create your first Team, Project, and
+        Environment: <InlineCommand value="dotrelay init" />.
+      </p>
+    </div>
+  );
 
   const repairStaleEpoch = () =>
     repairStaleEpochFlow({
@@ -2614,50 +2655,9 @@ export const WorkspaceShell = ({
               {view === "projects" ? (
                 <section>
                   {!sessionActive ? (
-                    <section
-                      className="mx-auto max-w-xl py-24"
-                      data-testid="sign-in-required"
-                    >
-                      <Card>
-                        <CardHeader>
-                          <CardTitle className="flex items-center gap-2">
-                            <LockKeyhole
-                              className="size-5 text-amber-300"
-                              aria-hidden="true"
-                            />
-                            <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                              Sign in
-                            </h1>
-                          </CardTitle>
-                          <CardDescription>
-                            GitHub only identifies you. Sign in to see your
-                            teams, projects, and environments.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardFooter>
-                          <a
-                            className="inline-flex h-8 items-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
-                            href="/sign-in"
-                          >
-                            Sign in
-                          </a>
-                        </CardFooter>
-                      </Card>
-                    </section>
+                    signInRequired
                   ) : teams.length === 0 ? (
-                    (gettingStartedGuide ?? (
-                      <div className="mb-6" data-testid="no-teams-empty">
-                        <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                          No teams yet
-                        </h1>
-                        <p className="mt-2 max-w-2xl text-muted-foreground">
-                          A Team is where the projects that share your
-                          environment variables live. Run this in a GitHub
-                          repository to create your first Team, Project, and
-                          Environment: <InlineCommand value="dotrelay init" />.
-                        </p>
-                      </div>
-                    ))
+                    noTeamsEmpty
                   ) : (
                     <>
                       {gettingStartedGuide}
@@ -2818,286 +2818,298 @@ export const WorkspaceShell = ({
               ) : null}
 
               {view === "team" ? (
-                <section id="administration">
-                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <h1 className="font-heading text-3xl font-semibold">
-                        {selectedTeam?.name ?? "Team"}
-                      </h1>
-                      <p className="mt-2 text-muted-foreground">
-                        {roleDisclosure[effectiveRole]}
-                      </p>
-                    </div>
-                    {displayBoundary.source === "fixture" ||
-                    preview === "admin" ? (
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor="preview-role">Preview role</Label>
-                        <select
-                          aria-label="Preview role"
-                          className="h-9 rounded-lg border border-input bg-input/30 px-3 text-sm"
-                          id="preview-role"
-                          onChange={(event) =>
-                            setRole(event.target.value as MembershipRole)
-                          }
-                          value={role}
-                        >
-                          <option value="OWNER">Owner</option>
-                          <option value="ADMIN">Admin</option>
-                          <option value="MEMBER">Member</option>
-                        </select>
-                      </div>
-                    ) : null}
-                  </div>
-                  <Alert className="mb-4 bg-card/60">
-                    <Users aria-hidden="true" className="text-primary" />
-                    <AlertTitle>Your team permissions</AlertTitle>
-                    <AlertDescription>
-                      {roleDisclosure[effectiveRole]}
-                    </AlertDescription>
-                  </Alert>
-                  <Card data-testid="members-card">
-                    <CardHeader>
-                      <CardTitle>Members</CardTitle>
-                      <CardDescription>
-                        The team's members and pending invitations, straight
-                        from its record. Invitations go to a GitHub account and
-                        expire after seven days.
-                      </CardDescription>
-                      <CardAction>
-                        <Button
-                          data-testid="invite-member"
-                          disabled={!canAdminister}
-                          onClick={openInvitationDialog}
-                        >
-                          <Users aria-hidden="true" /> Invite member
-                        </Button>
-                      </CardAction>
-                    </CardHeader>
-                    <CardContent>
-                      {!apiOrigin ? (
-                        <Alert className="bg-card/60">
-                          <AlertTitle>Team data unavailable</AlertTitle>
-                          <AlertDescription>
-                            This deployment doesn't expose a team service, so
-                            the member list can't be loaded.
-                          </AlertDescription>
-                        </Alert>
-                      ) : membershipError ? (
-                        <Alert className="border-destructive/30 bg-destructive/10">
-                          <AlertTitle>Couldn't load team members</AlertTitle>
-                          <AlertDescription>{membershipError}</AlertDescription>
-                          <AlertAction>
-                            <Button
-                              data-testid="retry-members"
-                              size="sm"
-                              type="button"
-                              variant="outline"
-                              onClick={refreshTeamAdministration}
-                            >
-                              Try again
-                            </Button>
-                          </AlertAction>
-                        </Alert>
-                      ) : membershipState === null ? (
-                        <p className="py-6 text-center text-sm text-muted-foreground">
-                          Loading members…
+                !sessionActive ? (
+                  signInRequired
+                ) : !selectedTeam ? (
+                  noTeamsEmpty
+                ) : (
+                  <section id="administration">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <h1 className="font-heading text-3xl font-semibold">
+                          {selectedTeam?.name ?? "Team"}
+                        </h1>
+                        <p className="mt-2 text-muted-foreground">
+                          {roleDisclosure[effectiveRole]}
                         </p>
-                      ) : (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>User</TableHead>
-                              {canAdminister ? (
-                                <TableHead>Role</TableHead>
-                              ) : null}
-                              <TableHead>Status</TableHead>
-                              {canAdminister ? (
-                                <TableHead>Actions</TableHead>
-                              ) : null}
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {membershipState.memberships.map((member) => (
-                              <TableRow
-                                key={member.membershipId}
-                                data-testid={`member-row-${member.membershipId}`}
+                      </div>
+                      {displayBoundary.source === "fixture" ||
+                      preview === "admin" ? (
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="preview-role">Preview role</Label>
+                          <select
+                            aria-label="Preview role"
+                            className="h-9 rounded-lg border border-input bg-input/30 px-3 text-sm"
+                            id="preview-role"
+                            onChange={(event) =>
+                              setRole(event.target.value as MembershipRole)
+                            }
+                            value={role}
+                          >
+                            <option value="OWNER">Owner</option>
+                            <option value="ADMIN">Admin</option>
+                            <option value="MEMBER">Member</option>
+                          </select>
+                        </div>
+                      ) : null}
+                    </div>
+                    <Alert className="mb-4 bg-card/60">
+                      <Users aria-hidden="true" className="text-primary" />
+                      <AlertTitle>Your team permissions</AlertTitle>
+                      <AlertDescription>
+                        {roleDisclosure[effectiveRole]}
+                      </AlertDescription>
+                    </Alert>
+                    <Card data-testid="members-card">
+                      <CardHeader>
+                        <CardTitle>Members</CardTitle>
+                        <CardDescription>
+                          The team's members and pending invitations, straight
+                          from its record. Invitations go to a GitHub account
+                          and expire after seven days.
+                        </CardDescription>
+                        <CardAction>
+                          <Button
+                            data-testid="invite-member"
+                            disabled={!canAdminister}
+                            onClick={openInvitationDialog}
+                          >
+                            <Users aria-hidden="true" /> Invite member
+                          </Button>
+                        </CardAction>
+                      </CardHeader>
+                      <CardContent>
+                        {!apiOrigin ? (
+                          <Alert className="bg-card/60">
+                            <AlertTitle>Team data unavailable</AlertTitle>
+                            <AlertDescription>
+                              This deployment doesn't expose a team service, so
+                              the member list can't be loaded.
+                            </AlertDescription>
+                          </Alert>
+                        ) : membershipError ? (
+                          <Alert className="border-destructive/30 bg-destructive/10">
+                            <AlertTitle>Couldn't load team members</AlertTitle>
+                            <AlertDescription>
+                              {membershipError}
+                            </AlertDescription>
+                            <AlertAction>
+                              <Button
+                                data-testid="retry-members"
+                                size="sm"
+                                type="button"
+                                variant="outline"
+                                onClick={refreshTeamAdministration}
                               >
-                                <TableCell>
-                                  <div className="font-medium">
-                                    {member.name ??
-                                      `GitHub ${member.githubSubject}`}
-                                  </div>
-                                </TableCell>
+                                Try again
+                              </Button>
+                            </AlertAction>
+                          </Alert>
+                        ) : membershipState === null ? (
+                          <p className="py-6 text-center text-sm text-muted-foreground">
+                            Loading members…
+                          </p>
+                        ) : (
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>User</TableHead>
                                 {canAdminister ? (
-                                  <TableCell>
-                                    {roleLabel(member.role)}
-                                  </TableCell>
+                                  <TableHead>Role</TableHead>
                                 ) : null}
-                                <TableCell>
-                                  {member.lifecycle === "ACTIVE" ? (
-                                    <Badge variant="outline">Active</Badge>
-                                  ) : member.lifecycle === "REMOVED" ? (
-                                    <Badge variant="secondary">Removed</Badge>
-                                  ) : (
+                                <TableHead>Status</TableHead>
+                                {canAdminister ? (
+                                  <TableHead>Actions</TableHead>
+                                ) : null}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {membershipState.memberships.map((member) => (
+                                <TableRow
+                                  key={member.membershipId}
+                                  data-testid={`member-row-${member.membershipId}`}
+                                >
+                                  <TableCell>
+                                    <div className="font-medium">
+                                      {member.name ??
+                                        `GitHub ${member.githubSubject}`}
+                                    </div>
+                                  </TableCell>
+                                  {canAdminister ? (
+                                    <TableCell>
+                                      {roleLabel(member.role)}
+                                    </TableCell>
+                                  ) : null}
+                                  <TableCell>
+                                    {member.lifecycle === "ACTIVE" ? (
+                                      <Badge variant="outline">Active</Badge>
+                                    ) : member.lifecycle === "REMOVED" ? (
+                                      <Badge variant="secondary">Removed</Badge>
+                                    ) : (
+                                      <Badge
+                                        className="border-amber-300/25 text-amber-200"
+                                        variant="outline"
+                                      >
+                                        Waiting for encryption keys
+                                      </Badge>
+                                    )}
+                                  </TableCell>
+                                  {canAdminister ? (
+                                    <TableCell>
+                                      {member.lifecycle === "ACTIVE" &&
+                                      member.userId !==
+                                        displayBoundary.session.userId &&
+                                      (effectiveRole === "OWNER" ||
+                                        member.role === "MEMBER") ? (
+                                        <div className="flex flex-col gap-2">
+                                          <div className="flex items-center gap-2">
+                                            {effectiveRole === "OWNER" ? (
+                                              <select
+                                                aria-label={`Role for ${
+                                                  member.name ??
+                                                  `GitHub ${member.githubSubject}`
+                                                }`}
+                                                className="h-8 rounded-lg border border-input bg-input/30 px-2 text-sm"
+                                                disabled={
+                                                  memberMutation !== null
+                                                }
+                                                value={member.role ?? "MEMBER"}
+                                                onChange={(event) =>
+                                                  void changeMemberRole(
+                                                    member.membershipId,
+                                                    event.target
+                                                      .value as MembershipRole,
+                                                  )
+                                                }
+                                              >
+                                                <option value="OWNER">
+                                                  Owner
+                                                </option>
+                                                <option value="ADMIN">
+                                                  Admin
+                                                </option>
+                                                <option value="MEMBER">
+                                                  Member
+                                                </option>
+                                              </select>
+                                            ) : null}
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              disabled={memberMutation !== null}
+                                              onClick={() =>
+                                                void removeMember(
+                                                  member.membershipId,
+                                                )
+                                              }
+                                            >
+                                              Remove member
+                                            </Button>
+                                          </div>
+                                          {memberMutationError?.membershipId ===
+                                          member.membershipId ? (
+                                            <p className="text-xs text-destructive">
+                                              {memberMutationError.message}
+                                            </p>
+                                          ) : null}
+                                        </div>
+                                      ) : null}
+                                    </TableCell>
+                                  ) : null}
+                                </TableRow>
+                              ))}
+                              {membershipState.invitations.map((invitation) => (
+                                <TableRow key={invitation.invitationId}>
+                                  <TableCell>
+                                    <div className="font-medium">
+                                      Invitation
+                                    </div>
+                                    <div className="font-mono text-[10px] text-muted-foreground">
+                                      GitHub {invitation.providerSubject}
+                                    </div>
+                                  </TableCell>
+                                  {canAdminister ? (
+                                    <TableCell>Member</TableCell>
+                                  ) : null}
+                                  {canAdminister ? <TableCell /> : null}
+                                  <TableCell>
                                     <Badge
                                       className="border-amber-300/25 text-amber-200"
                                       variant="outline"
                                     >
-                                      Waiting for encryption keys
+                                      Invitation pending · expires{" "}
+                                      {formatDate(invitation.expiresAt)}
                                     </Badge>
-                                  )}
-                                </TableCell>
-                                {canAdminister ? (
-                                  <TableCell>
-                                    {member.lifecycle === "ACTIVE" &&
-                                    member.userId !==
-                                      displayBoundary.session.userId &&
-                                    (effectiveRole === "OWNER" ||
-                                      member.role === "MEMBER") ? (
-                                      <div className="flex flex-col gap-2">
-                                        <div className="flex items-center gap-2">
-                                          {effectiveRole === "OWNER" ? (
-                                            <select
-                                              aria-label={`Role for ${
-                                                member.name ??
-                                                `GitHub ${member.githubSubject}`
-                                              }`}
-                                              className="h-8 rounded-lg border border-input bg-input/30 px-2 text-sm"
-                                              disabled={memberMutation !== null}
-                                              value={member.role ?? "MEMBER"}
-                                              onChange={(event) =>
-                                                void changeMemberRole(
-                                                  member.membershipId,
-                                                  event.target
-                                                    .value as MembershipRole,
-                                                )
-                                              }
-                                            >
-                                              <option value="OWNER">
-                                                Owner
-                                              </option>
-                                              <option value="ADMIN">
-                                                Admin
-                                              </option>
-                                              <option value="MEMBER">
-                                                Member
-                                              </option>
-                                            </select>
-                                          ) : null}
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            disabled={memberMutation !== null}
-                                            onClick={() =>
-                                              void removeMember(
-                                                member.membershipId,
-                                              )
-                                            }
-                                          >
-                                            Remove member
-                                          </Button>
-                                        </div>
-                                        {memberMutationError?.membershipId ===
-                                        member.membershipId ? (
-                                          <p className="text-xs text-destructive">
-                                            {memberMutationError.message}
-                                          </p>
-                                        ) : null}
-                                      </div>
-                                    ) : null}
                                   </TableCell>
-                                ) : null}
-                              </TableRow>
-                            ))}
-                            {membershipState.invitations.map((invitation) => (
-                              <TableRow key={invitation.invitationId}>
-                                <TableCell>
-                                  <div className="font-medium">Invitation</div>
-                                  <div className="font-mono text-[10px] text-muted-foreground">
-                                    GitHub {invitation.providerSubject}
-                                  </div>
-                                </TableCell>
-                                {canAdminister ? (
-                                  <TableCell>Member</TableCell>
-                                ) : null}
-                                {canAdminister ? <TableCell /> : null}
-                                <TableCell>
-                                  <Badge
-                                    className="border-amber-300/25 text-amber-200"
-                                    variant="outline"
+                                </TableRow>
+                              ))}
+                              {membershipState.memberships.length === 0 &&
+                              membershipState.invitations.length === 0 ? (
+                                <TableRow>
+                                  <TableCell
+                                    colSpan={canAdminister ? 4 : 2}
+                                    className="text-muted-foreground"
                                   >
-                                    Invitation pending · expires{" "}
-                                    {formatDate(invitation.expiresAt)}
-                                  </Badge>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                            {membershipState.memberships.length === 0 &&
-                            membershipState.invitations.length === 0 ? (
-                              <TableRow>
-                                <TableCell
-                                  colSpan={canAdminister ? 4 : 2}
-                                  className="text-muted-foreground"
-                                >
-                                  No members yet.
-                                </TableCell>
-                              </TableRow>
-                            ) : null}
-                          </TableBody>
-                        </Table>
-                      )}
-                    </CardContent>
-                  </Card>
-                  {selectedProject ? (
-                    <>
-                      <Card className="mt-4">
-                        <CardHeader>
-                          <CardTitle>
-                            {projectDisplayName(selectedProject)}
-                          </CardTitle>
-                          <CardDescription>
-                            Archive this project to let another project use its
-                            GitHub repository.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className="flex items-center justify-between gap-4">
-                          <Badge
-                            data-testid="project-lifecycle"
-                            variant={
-                              projectLifecycle === "ACTIVE"
-                                ? "default"
-                                : "secondary"
-                            }
-                          >
-                            {projectLifecycle === "ACTIVE"
-                              ? "Active"
-                              : "Archived"}
-                          </Badge>
-                          <LifecycleDialog
-                            disabled={!canAdminister}
-                            lifecycle={projectLifecycle}
-                            onConfirm={() =>
-                              void persistProjectLifecycle(
+                                    No members yet.
+                                  </TableCell>
+                                </TableRow>
+                              ) : null}
+                            </TableBody>
+                          </Table>
+                        )}
+                      </CardContent>
+                    </Card>
+                    {selectedProject ? (
+                      <>
+                        <Card className="mt-4">
+                          <CardHeader>
+                            <CardTitle>
+                              {projectDisplayName(selectedProject)}
+                            </CardTitle>
+                            <CardDescription>
+                              Archive this project to let another project use
+                              its GitHub repository.
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="flex items-center justify-between gap-4">
+                            <Badge
+                              data-testid="project-lifecycle"
+                              variant={
                                 projectLifecycle === "ACTIVE"
-                                  ? "archive"
-                                  : "restore",
-                              )
-                            }
-                            resource="Project"
-                          />
-                        </CardContent>
-                      </Card>
-                      {lifecycleError?.resource === "project" ? (
-                        <p
-                          role="alert"
-                          className="mt-2 text-xs font-medium text-destructive"
-                        >
-                          {lifecycleError.message}
-                        </p>
-                      ) : null}
-                    </>
-                  ) : null}
-                </section>
+                                  ? "default"
+                                  : "secondary"
+                              }
+                            >
+                              {projectLifecycle === "ACTIVE"
+                                ? "Active"
+                                : "Archived"}
+                            </Badge>
+                            <LifecycleDialog
+                              disabled={!canAdminister}
+                              lifecycle={projectLifecycle}
+                              onConfirm={() =>
+                                void persistProjectLifecycle(
+                                  projectLifecycle === "ACTIVE"
+                                    ? "archive"
+                                    : "restore",
+                                )
+                              }
+                              resource="Project"
+                            />
+                          </CardContent>
+                        </Card>
+                        {lifecycleError?.resource === "project" ? (
+                          <p
+                            role="alert"
+                            className="mt-2 text-xs font-medium text-destructive"
+                          >
+                            {lifecycleError.message}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </section>
+                )
               ) : null}
 
               {view === "devices" ? (

@@ -62,6 +62,19 @@ test("a signed-in user with zero Teams is pointed at the CLI, not an empty selec
   ).toBeVisible();
   await expect(empty).toContainText("dotrelay init");
 
+  // The Team nav is still reachable with an empty catalog. Memberships are
+  // never requested without a Team, so this must not sit on "Loading members…".
+  await page
+    .getByRole("navigation", { name: "Workspace navigation" })
+    .getByRole("button", { name: "Team" })
+    .click();
+  await expect(page.getByText("Loading members…")).toHaveCount(0);
+  await expect(page.getByTestId("members-card")).toHaveCount(0);
+  await expect(page.getByTestId("no-teams-empty")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Get started" }),
+  ).toBeVisible();
+
   const shot = await page.screenshot();
   console.log(`[verify] zero-teams shot=${shot}`);
 });
