@@ -2,6 +2,7 @@ import {
   createAccountKeyEnvelope,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
+  createProjectEpochGrantBootstrap,
   createPublicationArtifacts,
   encodeRecoveryCode,
   generateAccountMasterKey,
@@ -298,7 +299,7 @@ const installRecoveryRoutes = async (
   page: Page,
   scenario: RecoveryScenario,
 ): Promise<void> => {
-  await page.route("**/api/v1/devices/bootstrap**", (route) => {
+  await page.route("**/api/v1/devices/bootstrap**", async (route) => {
     if (route.request().method() === "POST") {
       const body = route.request().postData();
       if (body) {
@@ -318,6 +319,25 @@ const installRecoveryRoutes = async (
             encryptionPublicKey: parsed.x25519PublicKey,
             signingPublicKey: parsed.ed25519PublicKey,
           };
+          if (scenario.simulateBootstrapGrant) {
+            // The fixture's existing peer has the Project key. Give the new
+            // browser a matching direct grant before recovery setup starts.
+            const grant = await createProjectEpochGrantBootstrap({
+              serverProfileId: fixtureIds.serverProfileId,
+              teamId: fixtureIds.teamId,
+              projectId: fixtureIds.projectId,
+              projectEpoch: 1,
+              senderDeviceId: fixtureIds.actorDeviceId,
+              recipientDeviceId: parsed.deviceId,
+              recipientX25519PublicKey: hexToBytes(parsed.x25519PublicKey),
+              recipientEncryptionPublicKey: await importX25519PublicKey(
+                parsed.x25519PublicKey,
+              ),
+              signingPrivateKey: await importSigningKey(),
+              plaintextKey: EPOCH_KEY,
+            });
+            scenario.epochGrantB64 = bytesToBase64(grant.canonicalBytes);
+          }
         }
       }
     }
@@ -326,7 +346,7 @@ const installRecoveryRoutes = async (
   // The intercepted Device does not exist on the Server Profile, so the
   // grant bootstrap the shell sends after durable enrollment is stubbed too.
   await page.route("**/api/v1/grants/bootstrap**", (route) => {
-    if (scenario.simulateBootstrapGrant) {
+    if (scenario.simulateBootstrapGrant && !scenario.epochGrantB64) {
       const body = route.request().postDataJSON() as { grant?: string };
       scenario.epochGrantB64 = body.grant ?? null;
     }
@@ -371,7 +391,8 @@ const installRecoveryRoutes = async (
     if (scenario.liveBoundary) body.source = "live";
     if (scenario.forceNoPeerEpochGrant) {
       const peers = body.peerDevices as
-        ReadonlyArray<Record<string, unknown>> | undefined;
+        | ReadonlyArray<Record<string, unknown>>
+        | undefined;
       if (Array.isArray(peers))
         for (const peer of peers) peer.hasEpochGrant = false;
     }
@@ -762,7 +783,6 @@ test.describe("workspace recovery", () => {
     const scenario = scenarioBase({
       liveBoundary: true,
       simulateBootstrapGrant: true,
-      forceNoPeerEpochGrant: true,
     });
     scenario.onWrapperPublish = (body) =>
       rememberPublishedWrapper(scenario, body);
