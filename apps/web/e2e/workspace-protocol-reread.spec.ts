@@ -228,7 +228,7 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
 
   await expect(
     editor().getByText(
-      "This browser couldn't read the current environment. Try reading it again.",
+      "The server couldn't send this environment. Check your connection and retry; no values were changed.",
     ),
   ).toBeVisible({
     timeout: 30_000,

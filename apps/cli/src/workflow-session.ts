@@ -259,6 +259,7 @@ export const loadWorkflowSession = async (
     accountMasterKey = null;
   }
   let epochKey: Uint8Array | undefined;
+  let epochEnvelopePublished = false;
   if (
     accountMasterKey !== null &&
     boundary.accountKeyEnvelope !== undefined &&
@@ -350,6 +351,7 @@ export const loadWorkflowSession = async (
         ["objectId", "idempotent"],
         { idempotencyKey: operationId },
       );
+      epochEnvelopePublished = true;
     } catch (error) {
       if (error instanceof CliError && error.code === "state_conflict")
         throw new CliError(
@@ -381,6 +383,49 @@ export const loadWorkflowSession = async (
   } else if (epochKey === undefined && !boundary.grantsReady) {
     pendingActions.push(
       "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+    );
+  }
+  // Older or independently bootstrapped Devices can hold a valid grant
+  // without an Account Key Envelope. Publish the real key before claiming
+  // that recovery on another Device will open this Project.
+  if (
+    epochKey &&
+    accountMasterKey &&
+    !boundary.accountKeyEnvelope &&
+    !epochEnvelopePublished &&
+    boundary.environment.projectId &&
+    boundary.session.userId
+  ) {
+    const envelope = await createAccountKeyEnvelope({
+      serverProfileId: options.profile.pin.serverProfileId,
+      userId: uuidToBytes(boundary.session.userId),
+      deviceId: uuidToBytes(deviceId),
+      createdAtMs: Date.now(),
+      accountMasterKey,
+      signingPrivateKey: keys.signingPrivateKey,
+      kind: {
+        type: "projectEpochKey",
+        projectId: uuidToBytes(boundary.environment.projectId),
+        projectEpoch: safeProjectEpoch(boundary.environment.projectEpoch),
+        contentKey: epochKey,
+      },
+    });
+    const operationId = crypto.randomUUID();
+    await createDeviceAdmin(options, deviceId).post(
+      "/api/v1/account-keys/envelopes",
+      {
+        operationId,
+        objectId: crypto.randomUUID(),
+        object: base64(encodeProtocolObject(envelope.object)),
+        projectId: boundary.environment.projectId,
+        projectEpoch: String(
+          safeProjectEpoch(boundary.environment.projectEpoch),
+        ),
+        ciphertextHash: sha384ToHex(await sha384(envelope.ciphertext)),
+        ciphertextLength: envelope.ciphertext.length,
+      },
+      ["objectId", "idempotent"],
+      { idempotencyKey: operationId },
     );
   }
   // A locked Device's missing Account Master Key is surfaced by the device

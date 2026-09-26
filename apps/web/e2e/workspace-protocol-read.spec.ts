@@ -24,7 +24,7 @@ const expectFailedRead = async (page: Page) => {
   await expect(page.getByTestId("environment-read-failed")).toBeVisible();
   await expect(
     page.getByText(
-      "This browser couldn't read the current environment. Try reading it again.",
+      "The server couldn't send this environment. Check your connection and retry; no values were changed.",
     ),
   ).toBeVisible();
   await expectEmptyClaimAbsent(page);

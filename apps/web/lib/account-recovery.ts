@@ -4,6 +4,7 @@ import {
   createPasskeyWithPrf,
   deviceHistorySigningKeys,
   loadDeviceKeyMaterial,
+  openProjectEpochGrant,
   PasskeyPrfError,
   parseAccountKeyWrapper,
   runPasskeyAssertion,
@@ -307,7 +308,7 @@ export const unlockAccount = async (
     accountMasterKey.write(accountMasterKeyBytes);
     feedback.setAccountUnlocked(true);
     feedback.setMessage(
-      "This account is unlocked for this browser session. The key stays in memory and is gone when the tab closes; unlock it again next time with one of the methods below.",
+      "This browser can now open your account's encryption key. Keep your recovery code safe for another device or cleared browser storage.",
     );
     onMutated();
   } catch (error) {
@@ -419,11 +420,28 @@ const prepareRecoveryCeremony = async (
         },
       )) ?? null;
     if (
-      !boundary.grantsReady &&
-      !peerHoldsEpochKey &&
-      existingEnvelope === null
+      existingEnvelope === null &&
+      (boundary.epochGrant || (!boundary.grantsReady && !peerHoldsEpochKey))
     ) {
-      const epochKey = globalThis.crypto.getRandomValues(new Uint8Array(32));
+      const epochKey = boundary.epochGrant
+        ? await openProjectEpochGrant(
+            akFromBase64(boundary.epochGrant),
+            (
+              await loadDeviceKeyMaterial(
+                await createBrowserDeviceStorage({
+                  serverProfileId: profile.serverProfileId ?? "",
+                  origin: profile.origin,
+                }).load({
+                  pin: {
+                    serverProfileId: profile.serverProfileId ?? "",
+                    origin: profile.origin,
+                  },
+                  deviceId: uuidToBytes(device.id ?? ""),
+                }),
+              )
+            ).encryptionPrivateKey,
+          )
+        : globalThis.crypto.getRandomValues(new Uint8Array(32));
       envelopeProjectEpoch = Number(environment.projectEpoch ?? 1);
       envelopeProjectId = environment.projectId;
       envelopeOperationId = globalThis.crypto.randomUUID();
@@ -632,7 +650,7 @@ export const commitPresentedRecoveryCode = (
       feedback.setMessage(
         ceremony.purpose === "rotation"
           ? "Your recovery code was rotated."
-          : "Recovery is on. This browser keeps the account's key in memory for this session only; the next visit unlocks it again with the code or another method below.",
+          : "Recovery is on. Keep this code safe: it can unlock your account on a new device or after this browser's storage is cleared.",
       );
     } catch (error) {
       if (

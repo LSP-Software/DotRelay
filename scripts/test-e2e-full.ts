@@ -745,6 +745,14 @@ try {
   const enrollPeerDevice = async (
     index: number,
   ): Promise<{ env: NodeJS.ProcessEnv; repo: string; deviceId: string }> => {
+    const enrolledBefore = new Set(
+      (
+        await database.device.findMany({
+          where: { userId: demoUserId },
+          select: { id: true },
+        })
+      ).map((device) => device.id),
+    );
     const deviceHome = join(baseDirectory, `device${index}`);
     const repo = join(baseDirectory, `device${index}-repo`);
     const env: NodeJS.ProcessEnv = {
@@ -780,23 +788,31 @@ try {
       env,
       repo,
     );
-    if (enrolled.exitCode !== 0)
+    // OAuth and Device enrollment persist, but setup must reject an existing
+    // account until this Device opens the same AMK through recovery or transfer.
+    if (
+      enrolled.exitCode !== 6 ||
+      parseJsonLines(enrolled.stderr).at(-1)?.code !==
+        "account_key_not_unlocked"
+    )
       throw new Error(
-        `device${index} setup failed: exit=${enrolled.exitCode} ${enrolled.stderr.trim()}`,
+        `device${index} setup did not require key recovery: exit=${enrolled.exitCode} ${enrolled.stderr.trim()}`,
       );
     if (enrolled.approvals !== 1)
       throw new Error(
         `device${index} setup performed ${enrolled.approvals} authorizations`,
       );
-    const result = parseJsonLines(enrolled.stdout).at(-1) ?? {};
-    if (result.device !== "enrolled")
+    const newDevices = await database.device.findMany({
+      where: { userId: demoUserId, id: { notIn: [...enrolledBefore] } },
+    });
+    if (newDevices.length !== 1 || newDevices[0]?.lifecycle !== "ACTIVE")
       throw new Error(
-        `device${index} did not enroll: ${JSON.stringify(result)}`,
+        `device${index} did not persist an active Device after the key gate`,
       );
     return {
       env,
       repo,
-      deviceId: requireString(result.deviceId, `device${index} id`),
+      deviceId: newDevices[0].id,
     };
   };
 

@@ -264,6 +264,7 @@ export const EnvironmentEditor = ({
     const load = async () => {
       setLoadPhase("loading");
       setAddOpen(false);
+      let stage: "fetch" | "verify" | "decrypt" = "fetch";
       try {
         const context = session.context;
         if (!context.trustedRevisionId || !context.trustedRevisionHash) {
@@ -279,10 +280,12 @@ export const EnvironmentEditor = ({
             pagination: {},
           },
         });
+        stage = "verify";
         await verifySyncPage(page, sessionSigningTrust(session), {
           actorUserId: context.actorUserId,
         });
         if (cancelled) return;
+        stage = "decrypt";
         const decoded = session.decodeVariables
           ? await session.decodeVariables(page, [])
           : undefined;
@@ -316,9 +319,13 @@ export const EnvironmentEditor = ({
           setPublishMessage(
             error instanceof UnreadableLaneError
               ? error.laneKind === "USER_DEFINED_VALUE"
-                ? "This browser's keys can't read some of the environment's latest values. They were encrypted for the device that published them, and `dotrelay pull` can't re-share a User-defined Value. Re-publish the affected Values from that Device (or run dotrelay device recover for it), then use Retry reading."
-                : "This browser's keys can't decrypt the environment's latest values. An owner or admin can re-share the Project's keys by running dotrelay pull from the CLI on their machine; afterwards use Retry reading."
-              : "This browser couldn't read the current environment. Try reading it again.",
+                ? "This browser can open the account, but not a user-defined value in this environment. Open DotRelay on the device that last published it and run `dotrelay pull`, then retry here. Your values have not been changed."
+                : "This browser can open the account, but not this project's values. On a device that can still read this project, run `dotrelay pull` to publish its key for recovery, then retry here. Your values have not been changed."
+              : stage === "fetch"
+                ? "The server couldn't send this environment. Check your connection and retry; no values were changed."
+                : stage === "verify"
+                  ? "The environment response failed integrity verification. No values were shown or changed. Retry, and contact the server administrator if it persists."
+                  : "This browser couldn't decrypt the verified environment. Open Recovery to check this account's key, then retry. No values were changed.",
           );
           setLoadPhase("failed");
         }
