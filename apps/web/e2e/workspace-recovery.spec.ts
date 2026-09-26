@@ -371,8 +371,7 @@ const installRecoveryRoutes = async (
     if (scenario.liveBoundary) body.source = "live";
     if (scenario.forceNoPeerEpochGrant) {
       const peers = body.peerDevices as
-        | ReadonlyArray<Record<string, unknown>>
-        | undefined;
+        ReadonlyArray<Record<string, unknown>> | undefined;
       if (Array.isArray(peers))
         for (const peer of peers) peer.hasEpochGrant = false;
     }
@@ -768,13 +767,15 @@ test.describe("workspace recovery", () => {
     scenario.onWrapperPublish = (body) =>
       rememberPublishedWrapper(scenario, body);
     await installRecoveryRoutes(page, scenario);
-    await page.goto("/workspace");
+    await page.goto(
+      `/workspace?profile=hosted&team=${fixtureIds.teamId}&project=${fixtureIds.projectId}&environment=${fixtureIds.environmentId}&view=environment`,
+    );
     await trustWorkspaceServer(page);
     const gate = page.getByTestId("account-key-gate");
     await expect(gate).toBeVisible();
     await gate.getByRole("button", { name: "Set up browser" }).click();
     await expect(gate.getByTestId("recovery-setup")).toBeVisible();
-    expect(scenario.epochGrantB64).not.toBeNull();
+    await expect.poll(() => scenario.epochGrantB64).not.toBeNull();
 
     await gate.getByRole("button", { name: "Create recovery code" }).click();
     const dialog = page.getByTestId("recovery-code-dialog");
