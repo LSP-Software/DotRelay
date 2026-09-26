@@ -93,6 +93,24 @@ test("an unreachable API renders an honest offline boundary, not the e2e fixture
   }
 });
 
+test("a session service error is unavailable rather than signed out", async () => {
+  const restoreEnv = withoutWorkspaceEnv();
+  const restoreFetch = stubUpstream((url) =>
+    url.includes("/api/v1/session")
+      ? new Response("unavailable", { status: 503 })
+      : undefined,
+  );
+  try {
+    const response = await GET(boundaryRequest());
+    const body = (await response.json()) as BoundaryBody;
+    expect(body.connection).toBe("offline");
+    expect(body.session).toEqual({ active: false });
+  } finally {
+    restoreFetch();
+    restoreEnv();
+  }
+});
+
 test("explicit dev fixture mode still serves the e2e boundary", async () => {
   const restoreEnv = withoutWorkspaceEnv();
   process.env.DOTRELAY_WORKSPACE_FIXTURE = "1";

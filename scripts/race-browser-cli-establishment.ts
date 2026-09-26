@@ -62,11 +62,9 @@ const callPage = async (
     argument === undefined ? { method } : { method, argument },
   );
 
-// A Chromium page and the packaged CLI both observe zero wrappers for one
-// new account, then publish a first Account Master Key at the same time.
-// Exactly one wrapper remains. The loser discards its candidate and can
-// still open the winner. Recovery codes are written only to a mode-600 file
-// the CLI already knows how to read; they are not printed.
+// CLI setup now establishes the first Account Master Key and shows its
+// recovery code. A separate browser Device must refuse a second key, then
+// unlock the established one with that code.
 export const raceBrowserAndCliEstablishment = async (
   deps: BrowserCliRaceDeps,
 ): Promise<void> => {
@@ -143,11 +141,7 @@ export const raceBrowserAndCliEstablishment = async (
     );
   }
   const enrolledResult = deps.parseJsonLines(enrolled.stdout).at(-1) ?? {};
-  const profileName = deps.requireString(
-    enrolledResult.profile,
-    "browser-race profile",
-  );
-  const profileFlag = ["--profile", profileName] as const;
+  deps.requireString(enrolledResult.profile, "browser-race profile");
 
   const bundleDirectory = await mkdtemp(
     join(tmpdir(), "dotrelay-browser-race-"),
@@ -196,94 +190,31 @@ export const raceBrowserAndCliEstablishment = async (
     if (browserDevice?.lifecycle !== "ACTIVE")
       throw new Error("the API did not activate the browser device");
 
-    const [browserRace, cliRace] = await Promise.all([
-      callPage(page, "dotRelayEstablishFromBrowser").then(readRaceResult),
-      deps.runBinary(
-        ["device", "setup", ...profileFlag, "--no-input", "--json"],
-        cliEnvironment,
-        cliRepo,
-      ),
-    ]);
+    // CLI setup now establishes the account key and presents its recovery
+    // code before returning. A browser arriving afterward must refuse a
+    // second key and must still be able to unlock the CLI's wrapper.
+    const browserRace = readRaceResult(
+      await callPage(page, "dotRelayEstablishFromBrowser"),
+    );
+    if (browserRace.outcome !== "lost")
+      throw new Error("the browser established a second Account Master Key");
     const wrappers = await deps.database.accountKeyWrapperObject.findMany({
       where: { userId, wrapperType: "RECOVERY_CODE", retiredAt: null },
     });
     if (wrappers.length !== 1)
-      throw new Error(
-        `browser and CLI establishment kept ${wrappers.length} recovery wrappers`,
-      );
+      throw new Error(`CLI setup kept ${wrappers.length} recovery wrappers`);
     const winnerWrapperId = Buffer.from(wrappers[0]?.wrapperId ?? []).toString(
       "hex",
     );
-    if (browserRace.outcome === "won") {
-      if (browserRace.wrapperId !== winnerWrapperId)
-        throw new Error(
-          "the browser's wrapper is not the single active recovery wrapper",
-        );
-      if (cliRace.exitCode !== 4)
-        throw new Error(
-          `CLI did not refuse the browser's Account Master Key: exit=${cliRace.exitCode}`,
-        );
-      if (
-        deps.parseJsonLines(cliRace.stderr).at(-1)?.code !==
-        "account_key_already_exists"
-      )
-        throw new Error("CLI refusal was not account_key_already_exists");
-      if (cliRace.stdout.includes("recoveryCode"))
-        throw new Error("the losing CLI printed a recovery code");
-      const recovered = await deps.runBinary(
-        [
-          "device",
-          "recover",
-          ...profileFlag,
-          "--recovery-code-file",
-          await deps.writeRecoveryCodeFile(
-            deps.isolatedDirectory,
-            browserRace.recoveryCode,
-            "browser-race-winner",
-          ),
-          "--no-input",
-          "--json",
-        ],
-        cliEnvironment,
-        cliRepo,
-      );
-      if (recovered.exitCode !== 0)
-        throw new Error(
-          `CLI could not recover the browser's Account Master Key: exit=${recovered.exitCode}`,
-        );
-      if (deps.parseJsonLines(recovered.stdout).at(-1)?.via !== "recovery-code")
-        throw new Error("CLI recovery did not use the recovery code");
-      const unlockedLength = readUnlockLength(
-        await callPage(
-          page,
-          "dotRelayUnlockWinningRecoveryCode",
-          browserRace.recoveryCode,
-        ),
-      );
-      if (unlockedLength !== 32)
-        throw new Error(
-          "the browser did not open a 32-byte Account Master Key from the recovery code",
-        );
-      console.log(
-        "→ browser won first establishment; the CLI discarded its candidate and recovered the browser's key",
-      );
-      return;
-    }
-    if (cliRace.exitCode !== 0)
-      throw new Error(
-        `both browser and CLI lost first establishment: cli exit=${cliRace.exitCode}`,
-      );
-    const cliResult = deps.parseJsonLines(cliRace.stdout).at(-1) ?? {};
-    const cliWrapperId = deps.requireString(
-      cliResult.wrapperId,
-      "CLI recovery wrapper",
-    );
-    if (cliWrapperId !== winnerWrapperId)
+    if (
+      deps.requireString(enrolledResult.wrapperId, "CLI recovery wrapper") !==
+      winnerWrapperId
+    )
       throw new Error(
         "the CLI wrapper is not the single active recovery wrapper",
       );
     const recoveryCode = deps.requireString(
-      cliResult.recoveryCode,
+      enrolledResult.recoveryCode,
       "CLI recovery code",
     );
     const unlockedLength = readUnlockLength(
@@ -294,7 +225,7 @@ export const raceBrowserAndCliEstablishment = async (
         "the browser did not open a 32-byte Account Master Key from the CLI recovery code",
       );
     console.log(
-      "→ CLI won first establishment; the browser discarded its candidate and opened the CLI key",
+      "→ CLI setup created the first key; the browser refused a second and opened the CLI key",
     );
   } finally {
     await browser.close();

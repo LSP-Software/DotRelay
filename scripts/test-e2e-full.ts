@@ -677,7 +677,7 @@ try {
   ]);
 
   console.log(
-    "→ browser and CLI: simultaneous first Account Master Key establishment",
+    "→ browser and CLI: first-use key setup and cross-device recovery",
   );
   await raceBrowserAndCliEstablishment({
     database,
@@ -814,58 +814,16 @@ try {
     };
   };
 
-  console.log("→ CLI: simultaneous device setup (one Account Master Key wins)");
-  const device2 = await enrollPeerDevice(2);
-  const [setupDevice1, setupPeer] = await Promise.all([
-    runBinary(
-      ["device", "setup", ...profileFlag, "--no-input", "--json"],
-      cliEnvironment,
-      repositoryDirectory,
-    ),
-    runBinary(
-      ["device", "setup", ...profileFlag, "--no-input", "--json"],
-      device2.env,
-      device2.repo,
-    ),
-  ]);
-  const simultaneous = [
-    { label: "device 1", deviceId, run: setupDevice1 },
-    { label: "device 2", deviceId: device2.deviceId, run: setupPeer },
-  ];
-  const winners = simultaneous.filter((entry) => entry.run.exitCode === 0);
-  const losers = simultaneous.filter((entry) => entry.run.exitCode !== 0);
-  if (winners.length !== 1 || losers.length !== 1)
-    throw new Error(
-      `simultaneous device setup expected one winner and one refusal, got exits ${setupDevice1.exitCode} and ${setupPeer.exitCode}`,
-    );
-  const winner = winners[0];
-  const loser = losers[0];
-  if (!winner || !loser)
-    throw new Error("simultaneous device setup did not classify a winner");
-  if (loser.run.exitCode !== 4)
-    throw new Error(
-      `${loser.label} refusal exited ${loser.run.exitCode}, expected 4`,
-    );
-  if (
-    parseJsonLines(loser.run.stderr).at(-1)?.code !==
-    "account_key_already_exists"
-  )
-    throw new Error(`${loser.label} did not report account_key_already_exists`);
-  if (loser.run.stdout.includes("recoveryCode"))
-    throw new Error(`${loser.label} printed a recovery code after losing`);
-  const setupAkResult = parseJsonLines(winner.run.stdout).at(-1) ?? {};
+  console.log("→ CLI: setup created one Account Master Key and recovery code");
   const amkRecoveryCode = requireString(
-    setupAkResult.recoveryCode,
+    setupResult.recoveryCode,
     "initial recovery code",
   );
   const setupWrapperId = requireString(
-    setupAkResult.wrapperId,
+    setupResult.wrapperId,
     "initial recovery-code wrapper id",
   );
-  if (setupAkResult.deviceId !== winner.deviceId)
-    throw new Error(
-      `${winner.label} reported a different Device than the one that ran setup`,
-    );
+  const device2 = await enrollPeerDevice(2);
   let activeRecoveryWrappers = await database.accountKeyWrapperObject.findMany({
     where: {
       userId: demoUserId,
@@ -881,37 +839,8 @@ try {
     ) !== setupWrapperId
   )
     throw new Error(
-      "simultaneous device setup did not keep exactly one active recovery-code wrapper",
+      "CLI setup did not keep exactly one active recovery-code wrapper",
     );
-  // The loser discarded its candidate. Device 1 must hold the winning key
-  // before the rest of the journey, so recover it when Device 1 lost.
-  if (winner.deviceId !== deviceId) {
-    const recoverWinner = await runBinary(
-      [
-        "device",
-        "recover",
-        ...profileFlag,
-        "--recovery-code-file",
-        await writeRecoveryCodeFile(
-          isolatedDirectory,
-          amkRecoveryCode,
-          "device1-race",
-        ),
-        "--no-input",
-        "--json",
-      ],
-      cliEnvironment,
-      repositoryDirectory,
-    );
-    if (recoverWinner.exitCode !== 0)
-      throw new Error(
-        `device 1 could not recover the winning Account Master Key: exit=${recoverWinner.exitCode}`,
-      );
-    if (parseJsonLines(recoverWinner.stdout).at(-1)?.via !== "recovery-code")
-      throw new Error(
-        "device 1 did not recover the winning key with the recovery code",
-      );
-  }
   // The command is idempotent on the Device that already stores the AMK: it
   // reports the Device and mints no second wrapper.
   const setupAgain = await runBinary(
@@ -1818,40 +1747,23 @@ try {
     throw new Error(
       `operations were not committed: ${JSON.stringify(operations)}`,
     );
-  // Two commands can be rejected after the API has staged them, and a
-  // rejected command stays staged until its TTL expires. The revocation
-  // guard always stages. The losing simultaneous setup stages only when it
-  // passes the client pre-check and loses inside the establishment
-  // transaction; a loss at the pre-check leaves no operation.
-  const staged = operations
-    .filter((operation) => operation.status === "STAGED")
-    .sort(
-      (left, right) => left.createdAt.getTime() - right.createdAt.getTime(),
-    );
-  const revocation = staged.at(-1);
+  // The guarded revocation stages an operation that remains until its TTL.
+  const staged = operations.filter(
+    (operation) => operation.status === "STAGED",
+  );
   if (
-    (staged.length !== 1 && staged.length !== 2) ||
-    revocation === undefined ||
-    revocation.kind !== "ACCOUNT_KEY" ||
-    revocation.actorDeviceId !== deviceId
+    staged.length !== 1 ||
+    staged[0]?.kind !== "ACCOUNT_KEY" ||
+    staged[0]?.actorDeviceId !== deviceId
   )
     throw new Error(
-      `expected the guarded revocation to be the last staged operation, found ${staged.length}`,
-    );
-  const losingSetup = staged.length === 2 ? staged[0] : undefined;
-  if (
-    losingSetup &&
-    (losingSetup.kind !== "ACCOUNT_KEY" ||
-      losingSetup.actorDeviceId !== loser.deviceId)
-  )
-    throw new Error(
-      "the extra staged operation is not the losing device setup",
+      `expected one guarded revocation operation, found ${staged.length}`,
     );
   if (auditEvents < 1)
     throw new Error("the audit trail recorded nothing for the demo user");
 
   console.log(
-    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin, and the full Account Master Key lifecycle (3-Device cross-device decrypt, live simultaneous device setup, live browser-and-CLI first establishment, User-defined Value opened on a second Device after AMK recovery, one-shot transfer, rotation, revocation guard) against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
+    `✓ full-stack e2e passed: setup, init, push, pull, diff, history, rollback, TTY safety, logout/relogin, and the full Account Master Key lifecycle (3-Device cross-device decrypt, first-use recovery code, browser refusal of a second key, User-defined Value opened on a second Device after AMK recovery, one-shot transfer, rotation, revocation guard) against real API + PostgreSQL + Valkey (${operations.length} committed operations, ${auditEvents} audit events)`,
   );
 } finally {
   server?.stop(true);

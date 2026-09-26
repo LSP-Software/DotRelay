@@ -47,6 +47,8 @@ export const requireProtocolActor = async (
     const user = await resolveDotRelayUser(database, {
       serverProfileId: profile.id,
       authSubject: session.user.id,
+      serverProfileOrigin: profile.origin,
+      allowRebind: profile.allowRebind,
     });
     if (!user) return serviceUnavailable(context);
     const deviceId = context.req.header(DEVICE_ID_HEADER);
@@ -92,6 +94,8 @@ export const requireWebActor = async (
     const user = await resolveDotRelayUser(database, {
       serverProfileId: profile.id,
       authSubject: session.user.id,
+      serverProfileOrigin: profile.origin,
+      allowRebind: profile.allowRebind,
     });
     if (!user) return serviceUnavailable(context);
     return Object.freeze({

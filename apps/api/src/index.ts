@@ -653,6 +653,8 @@ const createApi = ({
     const user = await resolveDotRelayUser(database, {
       serverProfileId: profile.id,
       authSubject: session.user.id,
+      serverProfileOrigin: profile.origin,
+      allowRebind: profile.allowRebind,
     });
     if (!user) return jsonProblem(context, "service_unavailable");
     return context.json(
@@ -699,6 +701,8 @@ const createApi = ({
       const user = await resolveDotRelayUser(database, {
         serverProfileId: profile.id,
         authSubject: session.user.id,
+        serverProfileOrigin: profile.origin,
+        allowRebind: profile.allowRebind,
       });
       if (!user) return jsonProblem(context, "service_unavailable");
       try {
@@ -954,6 +958,8 @@ const createApi = ({
     const user = await resolveDotRelayUser(database, {
       serverProfileId: profile.id,
       authSubject: session.user.id,
+      serverProfileOrigin: profile.origin,
+      allowRebind: profile.allowRebind,
     });
     if (!user) return jsonProblem(context, "service_unavailable");
 

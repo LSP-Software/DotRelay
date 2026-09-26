@@ -919,6 +919,9 @@ test.describe("workspace recovery", () => {
       await codeDialog.getByTestId("recovery-code-value").innerText()
     ).trim();
     expect(rotatedCode).not.toBe(encodeRecoveryCode(firstCode));
+    await codeDialog
+      .getByTestId("recovery-code-confirmation")
+      .fill(rotatedCode);
     await codeDialog.getByRole("button", { name: "I saved it" }).click();
 
     // The retired code is rejected; the rotation is permanent, so the next

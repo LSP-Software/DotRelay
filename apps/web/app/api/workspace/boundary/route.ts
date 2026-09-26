@@ -34,6 +34,10 @@ const fetchLiveBoundary = async (
   }).catch(() => undefined);
   if (!sessionResponse)
     return emptyWorkspaceBoundary(profileId, { origin: apiOrigin });
+  // A 5xx from identity lookup is an unavailable service, not proof that
+  // the browser signed out. Keep the retry state instead of a sign-in loop.
+  if (!sessionResponse.ok && sessionResponse.status !== 401)
+    return emptyWorkspaceBoundary(profileId, { origin: apiOrigin });
   const sessionActive = sessionResponse.ok;
   const sessionBody = sessionActive
     ? ((await sessionResponse.json().catch(() => undefined)) as

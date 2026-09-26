@@ -27,4 +27,37 @@ describe("DotRelay identity persistence", () => {
       select: { accountId: true },
     });
   });
+
+  test("restores the Server Profile after an in-process development database reset", async () => {
+    let profileExists = false;
+    let attempts = 0;
+    const database = {
+      authAccount: {
+        findFirst: async () => ({ accountId: "github-account" }),
+      },
+      serverProfile: {
+        findUnique: async () =>
+          profileExists ? { origin: "https://dev-api.dotrelay.dev" } : null,
+        create: async () => {
+          profileExists = true;
+        },
+      },
+      user: {
+        upsert: async () => {
+          attempts += 1;
+          if (!profileExists) throw { code: "P2003" };
+          return { id: "user-id" };
+        },
+      },
+    } as never;
+
+    const user = await resolveDotRelayUser(database, {
+      serverProfileId: "00000000-0000-4000-8000-000000000042",
+      serverProfileOrigin: "https://dev-api.dotrelay.dev",
+      authSubject: "auth-subject",
+    });
+    expect(user).toEqual({ id: "user-id" });
+    expect(attempts).toBe(2);
+    expect(profileExists).toBe(true);
+  });
 });
