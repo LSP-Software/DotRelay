@@ -68,6 +68,7 @@ export type RecoveryAreaProps = Readonly<{
   readonly onDeviceSetup: () => void;
   readonly onRetry: () => void;
   readonly recoveryBusy: boolean;
+  readonly recoveryLoaded?: boolean;
   readonly recoveryMessage: string | null;
   readonly recoveryError: string | null;
   readonly recoveryWrappers: readonly AccountKeyWrapperEntry[];
@@ -124,6 +125,7 @@ export const RecoveryArea = ({
   onDeviceSetup,
   onRetry,
   recoveryBusy,
+  recoveryLoaded = true,
   recoveryMessage,
   recoveryError,
   recoveryWrappers,
@@ -238,6 +240,21 @@ export const RecoveryArea = ({
             </Button>
           </CardFooter>
         </Card>
+      ) : !recoveryLoaded ? (
+        <Card className="mt-6" data-testid="recovery-loading">
+          <CardHeader>
+            <CardTitle>Checking encryption keys</CardTitle>
+            <CardDescription>
+              Waiting for the server to confirm this account's recovery methods.
+              If this takes too long, check the connection and try again.
+            </CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <Button onClick={onRetry} variant="outline">
+              Try again
+            </Button>
+          </CardFooter>
+        </Card>
       ) : recoveryWrappers.length === 0 ? (
         <div data-testid="recovery-setup">
           <Card className="mt-6">
@@ -265,9 +282,9 @@ export const RecoveryArea = ({
                 saved recovery code is the one thing that can.
               </p>
               <p>
-                The key this browser creates stays in memory for this session
-                only; the next time you visit, unlock the account again with the
-                code or another method.
+                This browser saves a copy encrypted with its device key. Keep
+                the recovery code safe so you can set up another device if this
+                browser is lost or its storage is cleared.
               </p>
             </CardContent>
             <CardFooter>
@@ -291,8 +308,8 @@ export const RecoveryArea = ({
                 </span>
               </CardTitle>
               <CardDescription>
-                Choose how this browser unlocks the account. The key stays in
-                memory for this session only; it is never stored in the browser.
+                Choose how this browser unlocks the account. It will save a copy
+                encrypted with this browser's device key for next time.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -486,9 +503,8 @@ export const RecoveryArea = ({
                 </span>
               </CardTitle>
               <CardDescription>
-                This account is unlocked in this browser for the session. The
-                key is held in memory only and is gone when the tab closes;
-                unlock it again next time with one of these methods.
+                This browser can open your account's encryption key. Keep your
+                recovery code safe for a new device or cleared browser storage.
               </CardDescription>
             </CardHeader>
             <CardContent>

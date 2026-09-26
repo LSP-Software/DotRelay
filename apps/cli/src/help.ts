@@ -46,7 +46,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   login: {
     about:
-      "Sign in to the Server Profile and enroll this machine when it has no Device yet. The verification URL, user code, and code expiry are shown before the CLI starts waiting.",
+      "Verify with GitHub, enroll this machine, and unlock its encryption key before setup completes. A new machine joining an existing account prompts for the Recovery Code. The verification URL, user code, and code expiry are shown before the CLI starts waiting.",
     options: {
       profile:
         "Server Profile to sign in to (default: the globally selected profile)",

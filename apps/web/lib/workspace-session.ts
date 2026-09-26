@@ -489,6 +489,47 @@ export const loadWorkspaceSession = (
           sharedValueSecret = undefined;
         }
       }
+      // A direct grant can predate recovery setup. Once the account key is
+      // unlocked, seal that exact Project key for future devices; never mint
+      // a replacement for an existing encrypted environment.
+      const grantKeyMaster = accountMasterKey.get();
+      if (
+        sharedValueSecret &&
+        grantKeyMaster &&
+        !boundary.accountKeyEnvelope &&
+        recoveryActor &&
+        environment.projectId
+      ) {
+        try {
+          const envelope = await createAccountKeyEnvelope({
+            serverProfileId: profile.serverProfileId,
+            userId: bundle.userId,
+            deviceId: uuidToBytes(device.id),
+            createdAtMs: Date.now(),
+            accountMasterKey: grantKeyMaster,
+            signingPrivateKey: keyMaterial.signingPrivateKey,
+            kind: {
+              type: "projectEpochKey",
+              projectId: uuidToBytes(environment.projectId),
+              projectEpoch: Number(environment.projectEpoch ?? 1),
+              contentKey: sharedValueSecret,
+            },
+          });
+          await publishAccountKeyEnvelope(
+            recoveryActor,
+            globalThis.crypto.randomUUID(),
+            envelope,
+            {
+              envelopeType: "PROJECT_EPOCH_KEY",
+              projectId: environment.projectId,
+              projectEpoch: Number(environment.projectEpoch ?? 1),
+            },
+          );
+        } catch {
+          // Another Device may have published first. The direct grant still
+          // opens this environment; a refresh will show the winning envelope.
+        }
+      }
       // A session that unlocked the Account Master Key in this browser
       // (setup or unlock in the Recovery area) reads the project's
       // current epoch key from the boundary's Account Key Envelope, so a

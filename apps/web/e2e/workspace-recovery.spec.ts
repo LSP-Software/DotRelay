@@ -109,6 +109,9 @@ type RecoveryScenario = {
    * browser skip the self-mint that would hand it a real epoch key.
    */
   forceNoPeerEpochGrant: boolean;
+  liveBoundary: boolean;
+  simulateBootstrapGrant: boolean;
+  epochGrantB64: string | null;
   wrapperPublishFailuresRemaining: number;
   envelopePublishFailuresRemaining: number;
   publishedWrapperIds: string[];
@@ -322,9 +325,13 @@ const installRecoveryRoutes = async (
   });
   // The intercepted Device does not exist on the Server Profile, so the
   // grant bootstrap the shell sends after durable enrollment is stubbed too.
-  await page.route("**/api/v1/grants/bootstrap**", (route) =>
-    route.fulfill({ json: {} }),
-  );
+  await page.route("**/api/v1/grants/bootstrap**", (route) => {
+    if (scenario.simulateBootstrapGrant) {
+      const body = route.request().postDataJSON() as { grant?: string };
+      scenario.epochGrantB64 = body.grant ?? null;
+    }
+    return route.fulfill({ json: {} });
+  });
   // The fixture boundary reports the enrolled Device's keys as the boundary's
   // own (hard-coded) placeholders; the real keys from the bootstrap capture
   // are what the browser's verification actually needs.
@@ -358,7 +365,10 @@ const installRecoveryRoutes = async (
     // Every recovery journey establishes the project's key through the
     // Account Key Envelope, never through the per-Device grant tally the
     // fixture's device option would otherwise report as ready.
-    body.grantsReady = false;
+    body.grantsReady =
+      scenario.simulateBootstrapGrant && scenario.epochGrantB64 !== null;
+    if (scenario.epochGrantB64) body.epochGrant = scenario.epochGrantB64;
+    if (scenario.liveBoundary) body.source = "live";
     if (scenario.forceNoPeerEpochGrant) {
       const peers = body.peerDevices as
         | ReadonlyArray<Record<string, unknown>>
@@ -644,6 +654,8 @@ const unlockWith = async (
 const scenarioBase = (
   options?: Readonly<{
     readonly forceNoPeerEpochGrant?: boolean;
+    readonly liveBoundary?: boolean;
+    readonly simulateBootstrapGrant?: boolean;
     readonly onWrapperPublish?: (body: Record<string, unknown>) => void;
   }>,
 ): RecoveryScenario => ({
@@ -654,6 +666,9 @@ const scenarioBase = (
   buildSyncPage: null,
   abortBoundary: false,
   forceNoPeerEpochGrant: options?.forceNoPeerEpochGrant ?? false,
+  liveBoundary: options?.liveBoundary ?? false,
+  simulateBootstrapGrant: options?.simulateBootstrapGrant ?? false,
+  epochGrantB64: null,
   wrapperPublishFailuresRemaining: 0,
   envelopePublishFailuresRemaining: 0,
   publishedWrapperIds: [],
@@ -741,6 +756,76 @@ const capturedDeviceKeys = (scenario: RecoveryScenario): DeviceKeys => {
 };
 
 test.describe("workspace recovery", () => {
+  test("first browser setup wraps its existing grant, resumes after reload, and gates a cleared browser", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const scenario = scenarioBase({
+      liveBoundary: true,
+      simulateBootstrapGrant: true,
+      forceNoPeerEpochGrant: true,
+    });
+    scenario.onWrapperPublish = (body) =>
+      rememberPublishedWrapper(scenario, body);
+    await installRecoveryRoutes(page, scenario);
+    await page.goto("/workspace");
+    await trustWorkspaceServer(page);
+    const gate = page.getByTestId("account-key-gate");
+    await expect(gate).toBeVisible();
+    await gate.getByRole("button", { name: "Set up browser" }).click();
+    await expect(gate.getByTestId("recovery-setup")).toBeVisible();
+    expect(scenario.epochGrantB64).not.toBeNull();
+
+    await gate.getByRole("button", { name: "Create recovery code" }).click();
+    const dialog = page.getByTestId("recovery-code-dialog");
+    await expect(dialog).toBeVisible();
+    const code = (
+      await dialog.getByTestId("recovery-code-value").innerText()
+    ).trim();
+    await dialog.getByTestId("recovery-code-confirmation").fill(code);
+    await dialog.getByRole("button", { name: "I saved it" }).click();
+    await expect(gate).toBeHidden();
+
+    const keys = capturedDeviceKeys(scenario);
+    const wrapper = scenario.wrappers[0];
+    if (!wrapper || !scenario.envelopeB64)
+      throw new Error("setup did not publish the project key");
+    const epochKey = await testSideProjectKeys(
+      keys,
+      code,
+      wrapper,
+      scenario.envelopeB64,
+    );
+    scenario.buildSyncPage = () =>
+      buildVerifiedFixturePage(keys.encryptionPublicKey, epochKey);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Object.keys(localStorage).some((key) =>
+            key.startsWith("dotrelay.account-key:v1:"),
+          ),
+        ),
+      )
+      .toBe(true);
+    await page.reload();
+    await expect(gate).toBeHidden({ timeout: 30_000 });
+    await page
+      .locator("aside")
+      .getByRole("button", { name: "LSP-Software / DotRelay" })
+      .click();
+    await sharedValueVisible(page);
+
+    await page.evaluate(() => {
+      for (const key of Object.keys(localStorage))
+        if (key.startsWith("dotrelay.account-key:v1:"))
+          localStorage.removeItem(key);
+    });
+    await page.reload();
+    await expect(gate.getByTestId("recovery-unlock")).toBeVisible();
+    await unlockWith(page, "recovery-code", code);
+    await expect(gate).toBeHidden();
+  });
+
   test("setup shows the recovery code once, and a later visit unlocks and decrypts with it", async ({
     page,
   }) => {

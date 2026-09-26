@@ -4707,6 +4707,54 @@ describe("protected CLI workflows", () => {
       service.publishedEnvelopes().filter((id) => id.startsWith("project:")),
     ).toHaveLength(1);
   });
+
+  test("an unlocked Device with an older grant publishes its existing key for recovery", async () => {
+    const amk = generateAccountMasterKey();
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const publicKey = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!publicKey) throw new Error("Device public key missing");
+    const grant = await createProjectEpochGrantBootstrap({
+      serverProfileId: profile.pin.serverProfileId,
+      teamId: ids.team,
+      projectId: ids.project,
+      projectEpoch: 1,
+      senderDeviceId: ids.device,
+      recipientDeviceId: ids.device,
+      recipientX25519PublicKey: bootstrap.x25519PublicKey,
+      recipientEncryptionPublicKey: publicKey,
+      signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+    });
+    const runtime = await setup({
+      bootstrap,
+      grantsReady: true,
+      epochGrant: Buffer.from(grant.canonicalBytes).toString("base64"),
+    });
+    await runtime.deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
+      amk,
+    );
+    const service = accountKeyService(runtime.admin);
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, admin: service.admin },
+    );
+    expect(history.exitCode).toBe(0);
+    expect(
+      service.publishedEnvelopes().filter((id) => id.startsWith("project:")),
+    ).toHaveLength(1);
+  });
 });
 
 describe("peer grant provisioning during ordinary reads", () => {

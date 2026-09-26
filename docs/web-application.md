@@ -111,6 +111,10 @@ re-runs the approved publication against the re-anchored head rather than only r
  cryptographic artifact builder but is explicitly local and never reports a service publication.
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
+The live workspace also gates navigation until a usable browser Device and Account Master Key are
+present. A returning browser opens a locally sealed copy with its durable Device key; a new browser
+sets up its Device and unlocks with a recovery method before it enters the workspace. A lost local
+Device key offers replacement instead of leaving the browser in a misleading enrolled state.
 A stale Project epoch offers key recovery behind its gate action: the repair re-verifies the
 boundary first, so a current grant provisioned by another of the User's Devices or by the CLI
 is reused without a new bootstrap. If the keys are still missing, the stored Device keys sign
@@ -241,7 +245,8 @@ Members table reads the Team's persisted record and survives reloads and Team sw
 and an invitee who has not joined a Team sees the invitation addressed to them and, after
 the service confirms acceptance, the record moves to the pending key-grant state.
 `apps/web/e2e/workspace-recovery.spec.ts` covers the in-browser Recovery area: the one-time recovery
-code displays in an `alertdialog` and a later visit unlocks and decrypts with it, a wrong secret fails
+code displays in an `alertdialog`, a returning browser restores its locally sealed key, and a cleared
+browser unlocks and decrypts with the saved code. A wrong secret fails
 with one uniform alert that never names which check rejected it, rotating the recovery code retires
 the previous one so it stops unlocking, an encryption password can be added, used after a reload, and
 removed, a transfer crosses two browsers (the sender stages a transfer ID, the receiver is shown how to get that ID from an unlocked device's CLI with `dotrelay device transfer --to` this browser or from this Recovery page in another unlocked browser, the receiver redeems it as a one-time

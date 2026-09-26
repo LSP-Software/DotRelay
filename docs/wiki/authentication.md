@@ -52,6 +52,13 @@ Device authority, decryption ability, or mutation permission. Encrypted operatio
 active Device and the application-level signed protocol checks. Session expiry, logout, and remote
 revocation are database-backed and take effect on the next request.
 
+The user-facing login journey continues after GitHub verification. The browser gates the workspace
+until it has a durable Device key and can open the Account Master Key; returning browsers restore a
+Device-sealed local copy. CLI login enrolls and unlocks the Device before reporting success. In
+noninteractive CLI setup of an existing account, it exits with a specific locked-key error and the
+`dotrelay device recover` command to finish the journey. An OAuth session may briefly exist during
+these steps because it is required to fetch encrypted wrappers; it never grants decryption by itself.
+
 Better Auth permits ten requests to one authentication route in a 60-second window. Device codes
 expire after 30 minutes and the CLI must wait at least five seconds between token polls; an early
 poll returns `slow_down`. The limiter uses per-process memory. A single API process is suitable for

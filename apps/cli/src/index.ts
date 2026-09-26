@@ -906,7 +906,7 @@ const loginAndEnroll = async (
     if (!parsed.json && waitLines > 0)
       waitLines = rewriteRegion(output, waitLines, "");
   }
-  if (!parsed.json) stepDone(`Signed in to ${profile.name}`);
+  if (!parsed.json) stepDone(`GitHub verified for ${profile.name}`);
   const enrollment = await enrollFirstDevice(
     deviceWorkflowOptions(parsed, runtime, profile, credentials),
   );
@@ -924,6 +924,24 @@ const loginAndEnroll = async (
       return null;
     throw error;
   });
+  // OAuth identification alone is not a completed DotRelay login. A new
+  // machine joining an existing account must open the same Account Master
+  // Key before setup reports success or offers protected commands.
+  if (recovery === null && parsed.noInput)
+    throw new CliError(
+      "authentication",
+      "GitHub verified and this Device enrolled, but its encryption key is still locked. Run dotrelay device recover --recovery-code-file <path> (or use a Device transfer) to finish setup.",
+      {},
+      "account_key_not_unlocked",
+    );
+  const recovered =
+    recovery === null
+      ? await recoverAccountKey(
+          deviceWorkflowOptions(parsed, runtime, profile, credentials),
+          {},
+        )
+      : null;
+  if (!parsed.json) stepDone("Encryption keys ready");
   return {
     profile: profile.name,
     userCode: login.userCode,
@@ -933,13 +951,15 @@ const loginAndEnroll = async (
     ...(enrollment.deviceName ? { deviceName: enrollment.deviceName } : {}),
     ...(recovery?.recoveryCode ? { recoveryCode: recovery.recoveryCode } : {}),
     ...(recovery?.wrapperId ? { wrapperId: recovery.wrapperId } : {}),
-    message: enrollment.existing
-      ? `Signed in to ${profile.name}. Device already enrolled.`
-      : `Signed in to ${profile.name}. Device enrolled.`,
+    message: recovered
+      ? `Signed in to ${profile.name}. Device enrolled and encryption keys unlocked.`
+      : enrollment.existing
+        ? `Signed in to ${profile.name}. Device already enrolled.`
+        : `Signed in to ${profile.name}. Device enrolled.`,
     nextAction: recovery?.recoveryCode
       ? "Save the recovery code now. It is shown once; without it or another unlocked device, encrypted values cannot be recovered."
-      : recovery === null
-        ? "This account already has encryption keys. Run dotrelay device recover to unlock this device using a saved recovery code or another device."
+      : recovered
+        ? "This device can decrypt your values. Keep your saved recovery code safe for another device."
         : "Keep your saved recovery code safe. If it was lost but this device is still unlocked, run dotrelay device backup to replace it. GitHub sign-in cannot recover encrypted values.",
   };
 };

@@ -55,6 +55,13 @@ recovers with a passkey, an encryption password, or the Recovery Code. No flow e
 existing Devices, and no flow transmits the AMK in plaintext through the service; a trusted
 Device or an unlocked browser sends only ciphertext sealed to the new Device's key.
 
+A browser that has unlocked the AMK saves a local copy sealed to its durable Device X25519 key.
+The ciphertext is bound to the Server Profile, User, Device, and active Recovery Code wrapper.
+It resumes automatically after a reload when those identities still match. Clearing browser
+storage or replacing the Device requires an unlock method again. The web workspace remains gated
+until the browser has both a usable Device key and the Account Master Key. GitHub authentication
+is a prerequisite for fetching wrappers, not completion of the workspace sign-in journey.
+
 ## Supersedes the Recovery Kit
 
 The client-file Recovery Kit (Recovery Envelope, Recovery plaintext bundle, Recovery challenge

@@ -26,10 +26,9 @@ import type { WorkspaceBoundary } from "./workspace-boundary";
 // operationId stable across retries of the same logical attempt so a failed
 // commit replays instead of double-publishing.
 //
-// The browser never stores the Account Master Key: the caller (the
-// workspace shell) keeps it in memory for the page session, so a reload
-// returns the user to a locked state they re-enter through one of the
-// wrappers (or a transfer from another Device).
+// The workspace shell keeps plaintext in memory. A returning browser may
+// restore a local copy sealed to its durable Device key; a new browser must
+// use a wrapper or a transfer before entering the workspace.
 
 export type AccountKeyActor = Readonly<{
   readonly origin: string;

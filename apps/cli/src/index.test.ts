@@ -3257,7 +3257,7 @@ describe("CLI sign-in display", () => {
     }
   });
 
-  test("an installation whose Device was deactivated enrolls a replacement", async () => {
+  test("a replacement Device cannot complete login without the account key", async () => {
     const fixture = await createLoginFixture({
       remoteDeviceId: loginDeviceId,
     });
@@ -3282,8 +3282,10 @@ describe("CLI sign-in display", () => {
         ["login", "--profile", "relay", "--no-open", "--no-input"],
         runtime,
       );
-      expect(second.exitCode).toBe(0);
-      expect(second.stdout).toContain("Signed in to relay. Device enrolled.");
+      expect(second.exitCode).toBe(6);
+      expect(second.stderr).toContain(
+        "dotrelay device recover --recovery-code-file",
+      );
       expect(fixture.bootstrapCount()).toBe(2);
       const replacementDeviceId = fixture.enrolledDeviceId();
       expect(replacementDeviceId).not.toBe(firstDeviceId);

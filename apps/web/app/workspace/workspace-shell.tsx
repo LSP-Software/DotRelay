@@ -85,6 +85,7 @@ import {
   addPasskeyPrf,
   commitPresentedRecoveryCode,
   discardPresentedRecoveryCode,
+  loadDeviceSigningKey,
   type RecoveryCeremony,
   removeEncryptionPassword,
   removePasskeyPrf,
@@ -94,6 +95,10 @@ import {
   unlockAccount,
   unlockMethods,
 } from "@/lib/account-recovery";
+import {
+  restoreBrowserAccountKey,
+  saveBrowserAccountKey,
+} from "@/lib/browser-account-key";
 import {
   type PendingEnrollment,
   provisionBrowserDevice as provisionBrowserDeviceFlow,
@@ -612,15 +617,21 @@ export const WorkspaceShell = ({
   const [replacementDialogOpen, setReplacementDialogOpen] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [browserCrypto, setBrowserCrypto] = useState(true);
-  // In-browser Account Key recovery. The Account Master Key never reaches
-  // persistent storage on a browser device: policy keeps it in memory only,
-  // so an unlocked state lasts for this page session and the next visit
-  // starts locked again (unlock via Recovery Code, Encryption Password,
-  // passkey, or a transfer). A ref keeps the key bytes out of state: they
-  // must not re-render or churn the session-load effect, which re-runs on
-  // the generation counter instead.
+  // Hold plaintext only in memory. A device-key-encrypted local copy lets a
+  // returning browser resume without repeatedly entering the recovery code.
   const accountMasterKeyRef = useRef<Uint8Array | null>(null);
   const [accountUnlocked, setAccountUnlocked] = useState(false);
+  const [recoveryLoaded, setRecoveryLoaded] = useState(false);
+  const [localKeyChecked, setLocalKeyChecked] = useState(false);
+  const [localDeviceReady, setLocalDeviceReady] = useState<boolean | null>(
+    null,
+  );
+  const unlockedScopeRef = useRef<string | null>(null);
+  const accountScope = `${boundary.profile.serverProfileId}:${boundary.session.userId}:${boundary.device.id}`;
+  const accountReady =
+    accountUnlocked &&
+    unlockedScopeRef.current === accountScope &&
+    (boundary.source !== "live" || localDeviceReady === true);
   const [recoveryGeneration, setRecoveryGeneration] = useState(0);
   // The account's active Account Key Wrappers, listed by the service.
   const [recoveryWrappers, setRecoveryWrappers] = useState<
@@ -698,7 +709,7 @@ export const WorkspaceShell = ({
     // combination as ready instead of stranding the user on "pending
     // grants".
     const envelopeReady =
-      accountUnlocked &&
+      accountReady &&
       !protectedPreview &&
       !boundary.grantsReady &&
       boundary.accountKeyEnvelope !== undefined &&
@@ -729,7 +740,7 @@ export const WorkspaceShell = ({
     browserCrypto,
     noCryptoPreview,
     protectedPreview,
-    accountUnlocked,
+    accountReady,
   ]);
   // Only the verified identity pinned for this origin can unlock protected views.
   const profileTrusted = protectedPreview || profileTrust === "trusted";
@@ -940,9 +951,11 @@ export const WorkspaceShell = ({
       read: () => accountMasterKeyRef.current,
       write: (key: Uint8Array) => {
         accountMasterKeyRef.current = key;
+        unlockedScopeRef.current = `${boundary.profile.serverProfileId}:${boundary.session.userId}:${boundary.device.id}`;
       },
       clear: () => {
         accountMasterKeyRef.current = null;
+        unlockedScopeRef.current = null;
       },
     },
     passkeyAvailable,
@@ -984,6 +997,7 @@ export const WorkspaceShell = ({
       !boundary.session.active
     ) {
       setRecoveryWrappers([]);
+      setRecoveryLoaded(false);
       return;
     }
     const actor = recoveryActor as AccountKeyActor;
@@ -993,9 +1007,11 @@ export const WorkspaceShell = ({
         const wrappers = await fetchAccountKeyWrappers(actor);
         if (cancelled) return;
         setRecoveryWrappers(wrappers);
+        setRecoveryLoaded(true);
         if (!generationTriggered) setRecoveryError(null);
       } catch {
         if (cancelled) return;
+        setRecoveryLoaded(false);
         setRecoveryError(
           "We couldn't load this account's recovery options. Retry, or check the connection.",
         );
@@ -1011,6 +1027,82 @@ export const WorkspaceShell = ({
     recoveryGeneration,
     view,
   ]);
+
+  const recoveryWrapperId = recoveryWrappers.find(
+    (wrapper) => wrapper.type === "recovery-code",
+  )?.wrapperId;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: accountScope keys the async storage probe to the selected account and Device; periodic boundary refreshes do not change that identity.
+  useEffect(() => {
+    if (boundary.source !== "live" || !boundary.device.active) {
+      setLocalDeviceReady(null);
+      return;
+    }
+    let cancelled = false;
+    setLocalDeviceReady(null);
+    void loadDeviceSigningKey(boundary).then((key) => {
+      if (!cancelled) setLocalDeviceReady(key !== null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountScope, boundary.device.active, boundary.source]);
+  // Restore only after the server confirms which account and recovery wrapper
+  // are active. A DB reset, account switch, or new device cannot reuse a stale
+  // encrypted local copy as if it belonged to the newly signed-in account.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: accountScope and wrapper id key the cache; a periodic boundary refresh must not restart an in-flight restore.
+  useEffect(() => {
+    if (
+      boundary.source !== "live" ||
+      !boundary.session.active ||
+      localDeviceReady !== true ||
+      !recoveryLoaded
+    ) {
+      setLocalKeyChecked(false);
+      return;
+    }
+    let cancelled = false;
+    setLocalKeyChecked(false);
+    void (async () => {
+      if (unlockedScopeRef.current !== accountScope) {
+        accountMasterKeyRef.current = null;
+        setAccountUnlocked(false);
+        unlockedScopeRef.current = null;
+      }
+      if (!accountMasterKeyRef.current && recoveryWrapperId) {
+        const restored = await restoreBrowserAccountKey(
+          boundary,
+          recoveryWrapperId,
+        );
+        if (!cancelled && restored) {
+          accountMasterKeyRef.current = restored;
+          unlockedScopeRef.current = accountScope;
+          setAccountUnlocked(true);
+          setRecoveryGeneration((generation) => generation + 1);
+        }
+      }
+      if (!cancelled) setLocalKeyChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountScope, recoveryLoaded, recoveryWrapperId, localDeviceReady]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: accountScope and wrapper id identify this local cache entry; background boundary refreshes must not re-encrypt it.
+  useEffect(() => {
+    const key = accountMasterKeyRef.current;
+    if (
+      boundary.source !== "live" ||
+      !accountReady ||
+      !key ||
+      !recoveryWrapperId
+    )
+      return;
+    void saveBrowserAccountKey(boundary, recoveryWrapperId, key).catch(() => {
+      setRecoveryError(
+        "This browser couldn't save its encryption key. Keep your recovery code safe; you'll need it again after a reload.",
+      );
+    });
+  }, [accountReady, accountScope, recoveryWrapperId]);
 
   // The periodic boundary refresh also establishes the project's Account Key
   // Envelope after an in-session unlock or rotation, so it re-runs on
@@ -2054,6 +2146,55 @@ export const WorkspaceShell = ({
   // No selected Team means the membership request is never sent. The members
   // table treats a null record as "still loading", so a fresh account with an
   // empty catalog would spin forever. Show the same next step as Projects.
+  const accountSetupRequired =
+    sessionActive && boundary.source === "live" && !accountReady;
+  const recoveryArea = (
+    <RecoveryArea
+      accountUnlocked={accountReady}
+      addPassword={addPassword}
+      addPasswordOpen={addPasswordOpen}
+      connection={connection}
+      deviceActive={boundary.device.active && localDeviceReady !== false}
+      deviceSetupInProgress={deviceSetupInProgress}
+      onAddPassword={setAddPassword}
+      onAddPasswordOpen={setAddPasswordOpen}
+      onAddEncryptionPassword={addEncryptionPasswordHandler}
+      onAddPasskey={addPasskeyHandler}
+      onDeviceSetup={provisionBrowserDevice}
+      onPassword={setPassword}
+      password={password}
+      onRemovePasskeyDialogOpen={setRemovePasskeyDialogOpen}
+      onRemovePasswordDialogOpen={setRemovePasswordDialogOpen}
+      onRetry={requestRetry}
+      onRotateRecoveryCode={rotateRecoveryCodeHandler}
+      onSendTransfer={sendAccountKeyTransferHandler}
+      onSetupRecovery={setupAccountRecoveryHandler}
+      onTransferIdInput={setTransferIdInput}
+      onTransferTarget={setTransferTarget}
+      onUnlock={unlockAccountHandler}
+      onUnlockInput={setUnlockInput}
+      onUnlockMethodSelected={(method) => {
+        setUnlockMethod(method);
+        setRecoveryError(null);
+      }}
+      passkeyAvailable={passkeyAvailable}
+      peerDevices={boundary.peerDevices}
+      recoveryBusy={recoveryBusy}
+      recoveryLoaded={recoveryLoaded}
+      recoveryError={recoveryError}
+      recoveryMessage={recoveryMessage}
+      recoveryWrappers={recoveryWrappers}
+      sentTransfer={sentTransfer}
+      deviceId={boundary.device.id}
+      sessionActive={sessionActive}
+      transferIdInput={transferIdInput}
+      transferTarget={transferTarget}
+      unlockInput={unlockInput}
+      unlockMethod={unlockMethod}
+      unlockMethodOffers={unlockMethodOffers}
+    />
+  );
+
   const signInRequired = (
     <section className="mx-auto max-w-xl py-24" data-testid="sign-in-required">
       <Card>
@@ -2146,6 +2287,7 @@ export const WorkspaceShell = ({
     // The in-memory Account Master Key is bound to the User on the profile
     // being left; a rebind must never carry it to another server.
     accountMasterKeyRef.current = null;
+    unlockedScopeRef.current = null;
     setAccountUnlocked(false);
     setRecoveryWrappers([]);
     setRecoveryCode(null);
@@ -2255,7 +2397,12 @@ export const WorkspaceShell = ({
         Skip to workspace
       </a>
 
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r bg-sidebar lg:flex lg:flex-col">
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 hidden w-64 border-r bg-sidebar lg:flex lg:flex-col",
+          accountSetupRequired && "lg:hidden",
+        )}
+      >
         <div className="flex h-16 items-center gap-3 border-b px-5">
           <span className="grid size-8 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-primary">
             <Braces aria-hidden="true" className="size-4" />
@@ -2367,7 +2514,7 @@ export const WorkspaceShell = ({
         </div>
       </aside>
 
-      <div className="lg:pl-64">
+      <div className={accountSetupRequired ? undefined : "lg:pl-64"}>
         <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur-xl">
           <div className="flex min-h-16 items-center gap-3 px-4 sm:px-6">
             <Sheet onOpenChange={setMobileOpen} open={mobileOpen}>
@@ -2375,7 +2522,10 @@ export const WorkspaceShell = ({
                 render={
                   <Button
                     aria-label="Open navigation"
-                    className="lg:hidden"
+                    className={cn(
+                      "lg:hidden",
+                      accountSetupRequired && "hidden",
+                    )}
                     size="icon"
                     variant="outline"
                   />
@@ -2439,7 +2589,7 @@ export const WorkspaceShell = ({
               </SheetContent>
             </Sheet>
 
-            {selectedTeam ? (
+            {selectedTeam && !accountSetupRequired ? (
               <div className="hidden min-w-0 items-center gap-2 text-sm sm:flex">
                 <span className="truncate">{selectedTeam.name}</span>
                 {selectedProject ? (
@@ -2469,7 +2619,17 @@ export const WorkspaceShell = ({
                 fixture, where it previews hosted and self-hosted deployments.
                 A live deployment is bound to the backend it is served from,
                 so the browser offers no choice of server. */}
-            {WORKSPACE_FIXTURE ? (
+            {accountSetupRequired ? (
+              <Button
+                className="ml-auto"
+                onClick={() => void signOut()}
+                size="sm"
+                variant="outline"
+              >
+                <LogOut aria-hidden="true" /> Sign out
+              </Button>
+            ) : null}
+            {WORKSPACE_FIXTURE && !accountSetupRequired ? (
               <div className="ml-auto flex items-center gap-2">
                 <Label className="sr-only" htmlFor="server-profile">
                   Server
@@ -2543,6 +2703,29 @@ export const WorkspaceShell = ({
                   Try again
                 </Button>
               </div>
+            </section>
+          ) : accountSetupRequired ? (
+            <section
+              className="mx-auto max-w-2xl"
+              data-testid="account-key-gate"
+            >
+              <p className="text-sm text-muted-foreground">
+                Finish setting up this browser's encryption keys to open your
+                workspace. Keep your recovery code safe for another device or
+                cleared browser storage.
+              </p>
+              {boundary.device.active &&
+              (localDeviceReady === null ||
+                (localDeviceReady === true &&
+                  recoveryLoaded &&
+                  !localKeyChecked)) ? (
+                <p role="status">Checking this browser's encryption keys…</p>
+              ) : (
+                recoveryArea
+              )}
+              {deviceSetupMessage ? (
+                <p role="status">{deviceSetupMessage}</p>
+              ) : null}
             </section>
           ) : (
             <>
@@ -3313,51 +3496,7 @@ export const WorkspaceShell = ({
                   </Card>
                 </section>
               ) : null}
-              {view === "recovery" ? (
-                <RecoveryArea
-                  accountUnlocked={accountUnlocked}
-                  addPassword={addPassword}
-                  addPasswordOpen={addPasswordOpen}
-                  connection={connection}
-                  deviceActive={boundary.device.active}
-                  deviceSetupInProgress={deviceSetupInProgress}
-                  onAddPassword={setAddPassword}
-                  onAddPasswordOpen={setAddPasswordOpen}
-                  onAddEncryptionPassword={addEncryptionPasswordHandler}
-                  onAddPasskey={addPasskeyHandler}
-                  onDeviceSetup={provisionBrowserDevice}
-                  onPassword={setPassword}
-                  password={password}
-                  onRemovePasskeyDialogOpen={setRemovePasskeyDialogOpen}
-                  onRemovePasswordDialogOpen={setRemovePasswordDialogOpen}
-                  onRetry={requestRetry}
-                  onRotateRecoveryCode={rotateRecoveryCodeHandler}
-                  onSendTransfer={sendAccountKeyTransferHandler}
-                  onSetupRecovery={setupAccountRecoveryHandler}
-                  onTransferIdInput={setTransferIdInput}
-                  onTransferTarget={setTransferTarget}
-                  onUnlock={unlockAccountHandler}
-                  onUnlockInput={setUnlockInput}
-                  onUnlockMethodSelected={(method) => {
-                    setUnlockMethod(method);
-                    setRecoveryError(null);
-                  }}
-                  passkeyAvailable={passkeyAvailable}
-                  peerDevices={boundary.peerDevices}
-                  recoveryBusy={recoveryBusy}
-                  recoveryError={recoveryError}
-                  recoveryMessage={recoveryMessage}
-                  recoveryWrappers={recoveryWrappers}
-                  sentTransfer={sentTransfer}
-                  deviceId={boundary.device.id}
-                  sessionActive={sessionActive}
-                  transferIdInput={transferIdInput}
-                  transferTarget={transferTarget}
-                  unlockInput={unlockInput}
-                  unlockMethod={unlockMethod}
-                  unlockMethodOffers={unlockMethodOffers}
-                />
-              ) : null}
+              {view === "recovery" ? recoveryArea : null}
 
               <section
                 aria-hidden={envVisible ? undefined : true}
