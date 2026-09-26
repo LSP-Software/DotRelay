@@ -120,14 +120,7 @@ export const raceBrowserAndCliEstablishment = async (
   await mkdir(join(cliHome, "cli", "credentials"), { recursive: true });
   await mkdir(cliRepo, { recursive: true });
   const enrolled = await deps.runWithDeviceApproval(
-    [
-      "setup",
-      deps.profileOrigin,
-      "--accept-profile",
-      deps.serverProfileId,
-      "--no-input",
-      "--json",
-    ],
+    ["setup", deps.profileOrigin, "--no-input", "--json"],
     cliEnvironment,
     cliRepo,
     session.header,

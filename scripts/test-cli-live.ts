@@ -724,16 +724,7 @@ try {
   await sessions.save(pin, token);
   sessionSaved = true;
   await runJson(
-    [
-      "profile",
-      "add",
-      "live",
-      origin,
-      "--accept-profile",
-      serverProfileId,
-      "--no-input",
-      "--json",
-    ],
+    ["profile", "add", "live", origin, "--no-input", "--json"],
     environment,
   );
   await runJson(["profile", "use", "live", "--json"], environment);

@@ -697,14 +697,7 @@ try {
     "→ CLI: setup (device authorization approved through the real API)",
   );
   const setup = await runWithDeviceApproval(
-    [
-      "setup",
-      profileOrigin,
-      "--accept-profile",
-      profile.id,
-      "--no-input",
-      "--json",
-    ],
+    ["setup", profileOrigin, "--no-input", "--json"],
     cliEnvironment,
     repositoryDirectory,
   );
@@ -783,14 +776,7 @@ try {
       `https://github.com/${DEMO_GITHUB.owner}/${DEMO_GITHUB.name}.git`,
     ]);
     const enrolled = await runWithDeviceApproval(
-      [
-        "setup",
-        profileOrigin,
-        "--accept-profile",
-        profile.id,
-        "--no-input",
-        "--json",
-      ],
+      ["setup", profileOrigin, "--no-input", "--json"],
       env,
       repo,
     );
