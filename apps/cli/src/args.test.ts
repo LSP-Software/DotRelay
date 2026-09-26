@@ -23,17 +23,18 @@ describe("CLI argument contract", () => {
     });
   });
 
-  test("requires an exact Server Profile id for profile trust confirmation", () => {
+  test("setup and profile add need no server identity flag", () => {
     expect(
+      parseArguments(["setup", "https://relay.example", "--no-input"]).noInput,
+    ).toBe(true);
+    expect(() =>
       parseArguments([
-        "profile",
-        "add",
-        "work",
+        "setup",
         "https://relay.example",
         "--accept-profile",
-        "00000000-0000-4000-8000-000000000042",
-      ]).acceptProfile,
-    ).toBe("00000000-0000-4000-8000-000000000042");
+        "id",
+      ]),
+    ).toThrow();
   });
 
   test("rejects insecure and credential-bearing flags", () => {
@@ -418,13 +419,5 @@ describe("CLI argument contract", () => {
     expect(
       parseArguments(["push", "--from", ".env", "--team", "team-1"]).team,
     ).toBe("team-1");
-    expect(
-      parseArguments([
-        "setup",
-        "https://relay.example",
-        "--accept-profile",
-        "00000000-0000-4000-8000-000000000042",
-      ]).acceptProfile,
-    ).toBe("00000000-0000-4000-8000-000000000042");
   });
 });

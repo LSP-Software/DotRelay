@@ -3,6 +3,7 @@ import "./fake-indexeddb.js";
 import type { ServerProfilePin } from "@dotrelay/contracts";
 import {
   createBrowserProfilePinStore,
+  profilePinKey,
   resetMemoryProfilePinStore,
 } from "./profile-pin";
 
@@ -51,6 +52,28 @@ const otherIdentityPin = Object.freeze<ServerProfilePin>({
 });
 
 describe("browser profile pin store", () => {
+  test("an existing pair-only pin blocks a changed identity during migration", async () => {
+    const keys = new Set([profilePinKey(pin)]);
+    const store = createBrowserProfilePinStore({
+      recordStore: {
+        read: async (key) => keys.has(key),
+        keysForOrigin: async (origin) =>
+          [...keys]
+            .filter((key) => key.startsWith(`pin\0${origin}\0`))
+            .map((key) => key.split("\0")[2] ?? ""),
+        write: async (key) => {
+          keys.add(key);
+        },
+        remove: async (key) => {
+          keys.delete(key);
+        },
+      },
+    });
+    expect(await store.checkOrigin(otherIdentityPin)).toBe("changed");
+    await expect(store.set(otherIdentityPin)).rejects.toThrow(
+      "server identity changed",
+    );
+  });
   test("a memory-only fallback works in-page but is not claimed as durable", async () => {
     fakeIndexedDb.uninstall();
     resetMemoryProfilePinStore();
@@ -89,6 +112,10 @@ describe("browser profile pin store", () => {
       expect(await store.has(pin)).toBe(true);
       expect(await store.has(otherOriginPin)).toBe(false);
       expect(await store.has(otherIdentityPin)).toBe(false);
+      expect(await store.checkOrigin(otherIdentityPin)).toBe("changed");
+      await expect(store.set(otherIdentityPin)).rejects.toThrow(
+        "server identity changed",
+      );
     } finally {
       fakeIndexedDb.handle?.reset();
       fakeIndexedDb.uninstall();

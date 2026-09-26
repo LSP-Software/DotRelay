@@ -28,7 +28,6 @@ export type ParsedArguments = Readonly<{
   readonly subcommand?: string;
   readonly positionals: readonly string[];
   readonly profile?: string;
-  readonly acceptProfile?: string;
   readonly environment?: string;
   readonly output?: string;
   readonly from?: string;
@@ -57,7 +56,6 @@ type MutableArguments = {
   subcommand?: string;
   positionals: string[];
   profile?: string;
-  acceptProfile?: string;
   environment?: string;
   output?: string;
   from?: string;
@@ -82,7 +80,6 @@ type MutableArguments = {
 
 const valueFlags = new Set([
   "--profile",
-  "--accept-profile",
   "--environment",
   "--output",
   "--from",
@@ -118,7 +115,6 @@ export const rejectForbiddenFlags = (args: readonly string[]): void => {
 
 const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   if (flag === "--profile") parsed.profile = value;
-  else if (flag === "--accept-profile") parsed.acceptProfile = value;
   else if (flag === "--environment") parsed.environment = value;
   else if (flag === "--output") parsed.output = value;
   else if (flag === "--from") parsed.from = value;
@@ -156,7 +152,6 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
 
 export const FLAG_KEYS = [
   "profile",
-  "acceptProfile",
   "environment",
   "output",
   "from",
@@ -182,7 +177,6 @@ export type FlagKey = (typeof FLAG_KEYS)[number];
 
 export const FLAG_TOKENS: Record<FlagKey, string> = {
   profile: "--profile",
-  acceptProfile: "--accept-profile",
   environment: "--environment",
   output: "--output",
   from: "--from",
@@ -241,7 +235,7 @@ export const USAGE: Record<string, string> = {
 // rejected so an invocation can never act on a flag it silently ignored.
 // --debug is the one exception: it shapes diagnostics for every command.
 export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
-  setup: ["acceptProfile", "noOpen", "noInput", "json"],
+  setup: ["noOpen", "noInput", "json"],
   login: ["profile", "noOpen", "noInput", "json"],
   logout: ["profile", "json"],
   init: [
@@ -317,7 +311,7 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "reveal",
   ],
   help: [],
-  "profile add": ["acceptProfile", "noInput", "json"],
+  "profile add": ["noInput", "json"],
   "profile use": ["json"],
   "profile list": ["json"],
   "device enroll": ["profile", "noInput", "json", "output"],

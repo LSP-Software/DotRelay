@@ -8,7 +8,9 @@ import type { ServerProfilePin } from "@dotrelay/contracts";
  */
 export type ProfilePinRecordStore = Readonly<{
   readonly read: (key: string) => Promise<boolean>;
-  readonly write: (key: string) => Promise<void>;
+  readonly get?: (key: string) => Promise<unknown>;
+  readonly keysForOrigin?: (origin: string) => Promise<readonly string[]>;
+  readonly write: (key: string, serverProfileId?: string) => Promise<void>;
   readonly remove: (key: string) => Promise<void>;
 }>;
 
@@ -20,6 +22,9 @@ export type BrowserProfilePinStore = Readonly<{
    */
   readonly durable: boolean;
   readonly has: (pin: ServerProfilePin) => Promise<boolean>;
+  readonly checkOrigin: (
+    pin: ServerProfilePin,
+  ) => Promise<"new" | "same" | "changed">;
   readonly set: (pin: ServerProfilePin) => Promise<void>;
   readonly remove: (pin: ServerProfilePin) => Promise<void>;
 }>;
@@ -35,6 +40,7 @@ type IndexedRequest<T> = {
 };
 type IndexedStore = {
   get(key: string): IndexedRequest<unknown>;
+  getAll(): IndexedRequest<unknown[]>;
   put(value: unknown): IndexedRequest<unknown>;
   delete(key: string): IndexedRequest<unknown>;
 };
@@ -134,12 +140,30 @@ const createIndexedDbProfilePinStore = (): ProfilePinRecordStore => {
     });
   };
   return Object.freeze({
+    keysForOrigin: async (origin) => {
+      const records = await transact<unknown[]>("readonly", (store) =>
+        store.getAll(),
+      );
+      const prefix = `pin\0${origin}\0`;
+      return records
+        .filter(
+          (record): record is { key: string } =>
+            typeof record === "object" &&
+            record !== null &&
+            "key" in record &&
+            typeof record.key === "string" &&
+            record.key.startsWith(prefix),
+        )
+        .map((record) => record.key.slice(prefix.length));
+    },
+    get: async (key) =>
+      await transact<unknown>("readonly", (store) => store.get(key)),
     read: async (key) =>
       (await transact<unknown>("readonly", (store) => store.get(key))) !==
       undefined,
-    write: async (key) => {
+    write: async (key, serverProfileId) => {
       await transact<unknown>("readwrite", (store) =>
-        store.put({ [PIN_RECORD_KEY]: key }),
+        store.put({ [PIN_RECORD_KEY]: key, serverProfileId }),
       );
     },
     remove: async (key) => {
@@ -149,20 +173,36 @@ const createIndexedDbProfilePinStore = (): ProfilePinRecordStore => {
 };
 
 const memoryPins = new Set<string>();
+const memoryOriginIds = new Map<string, string>();
 
 const createMemoryProfilePinStore = (): ProfilePinRecordStore =>
   Object.freeze({
+    get: async (key) =>
+      memoryOriginIds.has(key)
+        ? { key, serverProfileId: memoryOriginIds.get(key) }
+        : memoryPins.has(key)
+          ? { key }
+          : undefined,
     read: async (key) => memoryPins.has(key),
-    write: async (key) => {
+    keysForOrigin: async (origin) => {
+      const prefix = `pin\0${origin}\0`;
+      return [...memoryPins]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length));
+    },
+    write: async (key, serverProfileId) => {
       memoryPins.add(key);
+      if (serverProfileId) memoryOriginIds.set(key, serverProfileId);
     },
     remove: async (key) => {
       memoryPins.delete(key);
+      memoryOriginIds.delete(key);
     },
   });
 
 export const resetMemoryProfilePinStore = (): void => {
   memoryPins.clear();
+  memoryOriginIds.clear();
 };
 
 export const createBrowserProfilePinStore = (
@@ -177,8 +217,39 @@ export const createBrowserProfilePinStore = (
   return Object.freeze({
     durable: options?.recordStore === undefined && defaultIndexedDb,
     has: async (pin) => recordStore.read(profilePinKey(pin)),
+    checkOrigin: async (pin) => {
+      const key = `origin\0${pin.origin}`;
+      const record = await recordStore.get?.(key);
+      if (record && typeof record === "object" && "serverProfileId" in record)
+        return record.serverProfileId === pin.serverProfileId
+          ? "same"
+          : "changed";
+      if (
+        (await recordStore.keysForOrigin?.(pin.origin))?.some(
+          (id) => id !== pin.serverProfileId,
+        )
+      )
+        return "changed";
+      return (await recordStore.read(profilePinKey(pin))) ? "same" : "new";
+    },
     set: async (pin) => {
+      if (
+        (await (async () => {
+          const record = await recordStore.get?.(`origin\0${pin.origin}`);
+          return (
+            record &&
+            typeof record === "object" &&
+            "serverProfileId" in record &&
+            record.serverProfileId !== pin.serverProfileId
+          );
+        })()) ||
+        (await recordStore.keysForOrigin?.(pin.origin))?.some(
+          (id) => id !== pin.serverProfileId,
+        )
+      )
+        throw new Error("server identity changed");
       await recordStore.write(profilePinKey(pin));
+      await recordStore.write(`origin\0${pin.origin}`, pin.serverProfileId);
       // Verify from a fresh read that the pin is kept before the trust
       // decision is claimed; a write that silently drops is not a pin.
       if (!(await recordStore.read(profilePinKey(pin))))
@@ -186,6 +257,7 @@ export const createBrowserProfilePinStore = (
     },
     remove: async (pin) => {
       await recordStore.remove(profilePinKey(pin));
+      await recordStore.remove(`origin\0${pin.origin}`);
     },
   });
 };

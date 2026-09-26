@@ -641,55 +641,6 @@ const profileOptions = (runtime: CliRuntime) => ({
   ...(runtime.networkPolicy ? { networkPolicy: runtime.networkPolicy } : {}),
 });
 
-const confirmProfileTrust = async (
-  parsed: ParsedArguments,
-  runtime: CliRuntime,
-  candidate: Readonly<{
-    readonly origin: string;
-    readonly pin: { readonly serverProfileId: string };
-  }>,
-): Promise<boolean> => {
-  if (parsed.acceptProfile === candidate.pin.serverProfileId) return true;
-  if (parsed.noInput) return false;
-  const output = runtime.terminal?.output ?? process.stderr;
-  const frame = reviewFrame({
-    title: "Trust this Server Profile",
-    body: [
-      kv([
-        { key: "Origin", value: candidate.origin },
-        {
-          key: "Id",
-          value: abbreviateId(candidate.pin.serverProfileId),
-          tone: "faint",
-        },
-      ]),
-    ].join("\n"),
-    question: "Trust this Server Profile? [Y/n]",
-  });
-  output.write(`${frame}\n`);
-  if (runtime.confirm)
-    return await runtime.confirm(`Trust ${candidate.origin}? [Y/n]`);
-  if (
-    !runtime.prompt &&
-    supportsRawMode(runtime.terminal?.input ?? process.stdin)
-  )
-    return await confirmAction(`Trust ${candidate.origin}?`, {
-      ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
-      silent: true,
-      default: "yes",
-    });
-  const { readTerminalLine } = await import("./terminal");
-  const answer = runtime.prompt
-    ? await runtime.prompt(`Trust ${candidate.origin}? [Y/n]`)
-    : await readTerminalLine(
-        `Trust ${candidate.origin}? [Y/n]`,
-        runtime.terminal,
-        false,
-      );
-  const trimmed = answer.trim().toLowerCase();
-  return trimmed === "" || trimmed === "y" || trimmed === "yes";
-};
-
 const deviceWorkflowOptions = (
   parsed: ParsedArguments,
   runtime: CliRuntime,
@@ -1305,15 +1256,17 @@ const execute = async (
     const existing = catalog.profiles.find(
       (profile) => profile.origin === origin,
     );
-    const profile =
-      existing ??
-      (await addServerProfile(store, profileNameFromOrigin(origin), origin, {
+    const profile = await addServerProfile(
+      store,
+      existing?.name ?? profileNameFromOrigin(origin),
+      origin,
+      {
         ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
         ...(runtime.networkPolicy
           ? { networkPolicy: runtime.networkPolicy }
           : { networkPolicy: probeNetworkPolicy }),
-        confirm: (candidate) => confirmProfileTrust(parsed, runtime, candidate),
-      }));
+      },
+    );
     const selected = (await store.read()).selected;
     if (selected !== profile.name) await useServerProfile(store, profile.name);
     return { value: await loginAndEnroll(parsed, runtime, profile) };
@@ -1327,14 +1280,12 @@ const execute = async (
       ...(runtime.networkPolicy
         ? { networkPolicy: runtime.networkPolicy }
         : { networkPolicy: probeNetworkPolicy }),
-      confirm: (candidate) => confirmProfileTrust(parsed, runtime, candidate),
     });
     return {
       value: {
         profile: profile.name,
         origin: profile.origin,
-        serverProfileId: profile.pin.serverProfileId,
-        message: `Trusted ${profile.origin}`,
+        message: `Saved ${profile.origin}`,
       },
     };
   }
@@ -1350,10 +1301,9 @@ const execute = async (
     const catalog = await store.read();
     return {
       value: {
-        profiles: catalog.profiles.map(({ name, origin, pin }) => ({
+        profiles: catalog.profiles.map(({ name, origin }) => ({
           name,
           origin,
-          serverProfileId: pin.serverProfileId,
         })),
         ...(catalog.selected ? { selected: catalog.selected } : {}),
       },

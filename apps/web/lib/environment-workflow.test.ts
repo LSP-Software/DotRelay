@@ -954,7 +954,7 @@ const blockedSetup = {
 test("setup reports only the next action the person can take", () => {
   expect(nextSetupAction(blockedSetup)?.id).toBe("sign-in");
   expect(nextSetupAction({ ...blockedSetup, sessionActive: true })?.id).toBe(
-    "trust-profile",
+    "server-check",
   );
   expect(
     nextSetupAction({

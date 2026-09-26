@@ -278,7 +278,9 @@ export const addServerProfile = async (
   // explicit scheme is honored exactly as typed.
   const schemeWasImplicit = !explicitHttpScheme.test(requestedOrigin.trim());
   const catalog = await store.read();
-  const existing = catalog.profiles.find((profile) => profile.name === name);
+  const existing = catalog.profiles.find(
+    (profile) => profile.name === name || profile.origin === origin,
+  );
   const policy = options.networkPolicy ?? defaultNetworkPolicy;
   const fetcher = options.fetch ?? fetch;
 

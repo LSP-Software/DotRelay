@@ -35,18 +35,17 @@ test("a signed-out or crypto-unavailable browser does not get the checklist", ()
   );
 });
 
-test("a new account starts at trusting the server, then the CLI, then a team", () => {
+test("a new account starts at the CLI, then recovery, then a team", () => {
   const model = buildGettingStarted(fresh());
   expect(model.visible).toBe(true);
   expect(model.resumable).toBe(false);
   expect(model.steps.map((step) => step.id)).toEqual([
-    "trust",
     "cli",
     "recovery",
     "team",
     "browser",
   ]);
-  expect(current(fresh())).toBe("trust");
+  expect(current(fresh())).toBe("cli");
   expect(current(fresh({ profileTrusted: true, otherDeviceCount: 0 }))).toBe(
     "cli",
   );
@@ -89,11 +88,7 @@ test("a team cannot hide the recovery step before a code exists", () => {
 
 test("an account with a team skips CLI creation and can dismiss the checklist", () => {
   const model = buildGettingStarted(fresh({ teamCount: 1 }));
-  expect(model.steps.map((step) => step.id)).toEqual([
-    "trust",
-    "browser",
-    "recovery",
-  ]);
+  expect(model.steps.map((step) => step.id)).toEqual(["browser", "recovery"]);
   expect(current(fresh({ teamCount: 1, profileTrusted: true }))).toBe(
     "browser",
   );

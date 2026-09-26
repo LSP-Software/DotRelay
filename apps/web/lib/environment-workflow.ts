@@ -724,7 +724,7 @@ export type ProtectedWorkflowState = Readonly<{
 
 export type SetupActionId =
   | "sign-in"
-  | "trust-profile"
+  | "server-check"
   | "crypto-unavailable"
   | "enroll-device"
   | "pending-grants"
@@ -751,10 +751,10 @@ export const nextSetupAction = (
     };
   if (!state.profileTrusted)
     return {
-      id: "trust-profile",
-      title: "Trust this server",
-      body: "Make sure this is the DotRelay server you meant to use.",
-      actionLabel: "Trust this server",
+      id: "server-check",
+      title: "Checking this server",
+      body: "Checking the saved connection before opening encrypted values.",
+      actionLabel: "Wait",
     };
   if (!state.cryptoAvailable)
     return {

@@ -20,8 +20,6 @@ import { cn } from "@/lib/utils";
 const stepTitle = (step: GettingStartedStep): string => {
   if (step.status === "done") {
     switch (step.id) {
-      case "trust":
-        return "Server confirmed";
       case "cli":
         return "CLI enrolled";
       case "team":
@@ -37,8 +35,6 @@ const stepTitle = (step: GettingStartedStep): string => {
     }
   }
   switch (step.id) {
-    case "trust":
-      return "Trust this server";
     case "cli":
       return "Set up the CLI";
     case "team":
@@ -63,7 +59,6 @@ const StepBody = ({
   offerCli,
   deviceSetupInProgress,
   deviceSetupMessage,
-  onTrust,
   onEnroll,
   onRecovery,
   onPackageManagerChange,
@@ -76,7 +71,6 @@ const StepBody = ({
   offerCli: boolean;
   deviceSetupInProgress: boolean;
   deviceSetupMessage: string | null;
-  onTrust: () => void;
   onEnroll: () => void;
   onRecovery: () => void;
   onPackageManagerChange: (manager: CliPackageManager) => void;
@@ -102,21 +96,6 @@ const StepBody = ({
           ? "Save the code during CLI setup, or set up this browser and create one in Recovery. GitHub sign-in cannot restore encrypted values."
           : null}
       </p>
-    );
-  }
-
-  if (step.id === "trust") {
-    return (
-      <>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Check that the origin and server identity in the dialog are the server
-          you meant. This browser saves that decision for this pair only, and a
-          change to either asks again.
-        </p>
-        <Button className="mt-3" onClick={onTrust} type="button">
-          Trust this server
-        </Button>
-      </>
     );
   }
 
@@ -236,7 +215,6 @@ export const GettingStartedGuide = ({
   standalone,
   deviceSetupInProgress,
   deviceSetupMessage,
-  onTrust,
   onEnroll,
   onRecovery,
   onContinue,
@@ -247,7 +225,6 @@ export const GettingStartedGuide = ({
   standalone: boolean;
   deviceSetupInProgress: boolean;
   deviceSetupMessage: string | null;
-  onTrust: () => void;
   onEnroll: () => void;
   onRecovery: () => void;
   onContinue: (() => void) | null;
@@ -330,7 +307,6 @@ export const GettingStartedGuide = ({
                     onEnroll={onEnroll}
                     onRecovery={onRecovery}
                     onPackageManagerChange={choosePackageManager}
-                    onTrust={onTrust}
                     packageManager={packageManager}
                     setupCommand={setupCommand}
                     step={step}

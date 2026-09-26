@@ -3416,15 +3416,7 @@ describe("CLI sign-in display", () => {
     const captured = captureTerminal();
     try {
       const result = await run(
-        [
-          "setup",
-          loginOrigin,
-          "--accept-profile",
-          loginProfileId,
-          "--no-open",
-          "--no-input",
-          "--json",
-        ],
+        ["setup", loginOrigin, "--no-open", "--no-input", "--json"],
         {
           ...fixture.runtime,
           terminal: captured.terminal,

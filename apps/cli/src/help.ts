@@ -27,21 +27,21 @@ export type CommandHelpEntry = Readonly<{
 export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   setup: {
     about:
-      "Trust this Server Profile, sign in, and enroll this machine. The capabilities document is fetched from the origin and verified before the profile is trusted, saved, and selected.",
+      "Connect to the supplied server, sign in, and enroll this machine. Its identity is saved automatically and checked on later visits.",
     positional: [
       "<origin>  The Server Profile origin; a missing scheme defaults to https.",
     ],
     options: {
-      noInput: "never prompt; requires --accept-profile <server-profile-id>",
+      noInput: "never prompt for input",
       noOpen: "do not open the verification page in a browser",
     },
     notes: [
-      "A changed profile identity or origin is never re-trusted silently; it requires a new trust decision.",
+      "A changed server identity at a saved origin stops setup; resolve the replacement before continuing.",
       "On a loopback host, an HTTPS endpoint that cannot be reached is retried once over plain HTTP.",
     ],
     examples: [
       "dotrelay setup relay.example",
-      "dotrelay setup https://relay.example --no-input --accept-profile <server-profile-id>",
+      "dotrelay setup https://relay.example --no-input",
     ],
   },
   login: {
@@ -196,13 +196,13 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   "profile add": {
     about:
-      "Trust and save a Server Profile. Its capabilities document is fetched from the origin and verified before the profile is trusted.",
+      "Save a server connection. Its identity is checked automatically on later visits.",
     positional: [
       "<name>  Local name for the profile.",
       "<origin>  The Server Profile origin; a missing scheme defaults to https.",
     ],
     options: {
-      noInput: "never prompt; requires --accept-profile <server-profile-id>",
+      noInput: "never prompt for input",
     },
     examples: ["dotrelay profile add work https://relay.example"],
   },
@@ -398,8 +398,6 @@ const GROUP_ABOUT: Readonly<Partial<Record<CommandName, string>>> = {
 
 const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
   profile: "Server Profile to use (default: the globally selected profile)",
-  acceptProfile:
-    "exact Server Profile id to trust without prompting; required with --no-input",
   environment: "Environment id or label (default: the worktree selection)",
   output: "output file",
   from: "input file",
@@ -427,7 +425,6 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
 
 const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   profile: " <name>",
-  acceptProfile: " <server-profile-id>",
   environment: " <environment-id-or-label>",
   output: " <file>",
   from: " <file>",
@@ -586,7 +583,7 @@ export const renderCommandHelp = (label: string): string => {
 // usage table (the primary form, before any " | " alternative) so the
 // directory can never drift from what the parser accepts.
 const EVERYDAY_COMMANDS: ReadonlyArray<readonly [string, string]> = [
-  ["setup", "Trust a Server Profile, sign in, and enroll this machine"],
+  ["setup", "Connect to a server, sign in, and enroll this machine"],
   ["login", "Sign in and enroll this machine"],
   ["init", "Publish this repository's .env for the first time"],
   ["push", "Publish changes from .env"],
@@ -597,7 +594,7 @@ const EVERYDAY_COMMANDS: ReadonlyArray<readonly [string, string]> = [
 
 const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["help", "Show this list, or the help for one command"],
-  ["profile add", "Trust and save a Server Profile"],
+  ["profile add", "Save a server connection"],
   ["profile use", "Select the global Server Profile"],
   ["profile list", "List saved Server Profiles"],
   ["logout", "Remove the local session"],

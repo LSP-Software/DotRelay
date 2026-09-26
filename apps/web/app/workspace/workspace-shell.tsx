@@ -603,12 +603,9 @@ export const WorkspaceShell = ({
   // server identity: "unknown" until the stored pin for the pair is checked,
   // never "trusted" from a different origin or identity.
   const [profileTrust, setProfileTrust] = useState<
-    "unknown" | "trusted" | "untrusted"
+    "unknown" | "trusted" | "changed" | "unavailable"
   >("unknown");
-  const [trustDialogOpen, setTrustDialogOpen] = useState(false);
   const [gettingStartedDismissed, setGettingStartedDismissed] = useState(false);
-  const [trustDialogBusy, setTrustDialogBusy] = useState(false);
-  const [trustBlocked, setTrustBlocked] = useState<string | null>(null);
   // Approval gate for a Device replacement: replacing the Device discards the
   // keys this browser holds for the current Device, so it is proposed only
   // after the in-place key repairs have been ruled out.
@@ -734,9 +731,7 @@ export const WorkspaceShell = ({
     protectedPreview,
     accountUnlocked,
   ]);
-  // Trust is a browser-side decision: a pin this browser recorded for the
-  // exact origin and server identity the boundary verified, or the explicit
-  // development preview. It is never implied by the deployment alone.
+  // Only the verified identity pinned for this origin can unlock protected views.
   const profileTrusted = protectedPreview || profileTrust === "trusted";
 
   const teams = displayBoundary.catalog.teams;
@@ -844,55 +839,30 @@ export const WorkspaceShell = ({
     setGettingStartedDismissed(false);
   };
 
-  // Recover the trust decision this browser recorded for the pair the
-  // boundary just verified. The lookup keys on the pair, so a pin recorded
-  // for another origin or server identity is never read. The state resets
-  // to "unknown" the moment the pair changes, so a changed origin or server
-  // identity is never shown trusted on the strength of a decision recorded
-  // for a different pair while the lookup for the new pair is in flight.
+  // Pin the verified identity on first use. A different identity at the same
+  // origin blocks access; there is deliberately no one-click replacement.
   useEffect(() => {
     setProfileTrust("unknown");
     if (currentPinKey === null || serverPin === null) return;
     let cancelled = false;
     void (async () => {
       try {
-        const trusted = await pinStore.has(serverPin);
-        if (!cancelled) setProfileTrust(trusted ? "trusted" : "untrusted");
+        const result = await pinStore.checkOrigin(serverPin);
+        if (cancelled) return;
+        if (result === "changed") {
+          setProfileTrust("changed");
+          return;
+        }
+        await pinStore.set(serverPin);
+        if (!cancelled) setProfileTrust("trusted");
       } catch {
-        if (!cancelled) setProfileTrust("untrusted");
+        if (!cancelled) setProfileTrust("unavailable");
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [currentPinKey, pinStore, serverPin]);
-
-  // Record the trust decision after the user has seen the exact origin and
-  // server identity. A decision that cannot be kept durably is not claimed:
-  // it would vanish on the next reload, which is the in-memory trust this
-  // confirmation exists to replace.
-  const confirmTrust = async () => {
-    if (serverPin === null) return;
-    setTrustDialogBusy(true);
-    setTrustBlocked(null);
-    try {
-      if (!pinStore.durable) {
-        setTrustBlocked(
-          "This browser can't save the trust decision durably, so we haven't trusted this server. Allow site storage, then try again.",
-        );
-        return;
-      }
-      await pinStore.set(serverPin);
-      setProfileTrust("trusted");
-      setTrustDialogOpen(false);
-    } catch {
-      setTrustBlocked(
-        "We couldn't save the trust decision in this browser. Allow site storage, then try again.",
-      );
-    } finally {
-      setTrustDialogBusy(false);
-    }
-  };
 
   // Keep the selected Team's persisted membership record current: refetch on
   // Team or session change, on reconnecting, and after a mutation (tick).
@@ -1325,17 +1295,33 @@ export const WorkspaceShell = ({
   // The unlock methods, in display order.
   const unlockMethodOffers = unlockMethods(recoveryWrappers, passkeyAvailable);
 
-  const setupAction = nextSetupAction({
-    sessionActive: displayBoundary.session.active,
-    profileTrusted,
-    cryptoAvailable: displayBoundary.crypto.available,
-    deviceActive: displayBoundary.device.active,
-    grantsReady: displayBoundary.grantsReady,
-    resourceActive:
-      projectLifecycle === "ACTIVE" && environmentLifecycle === "ACTIVE",
-    epochCurrent: displayBoundary.epochCurrent,
-    rotationRequired: displayBoundary.rotationRequired,
-  });
+  const setupAction =
+    profileTrust === "changed"
+      ? {
+          id: "server-check" as const,
+          title: "DotRelay’s server identity changed",
+          body: "This installation differs from the one this browser previously used. Your encrypted data and device keys are tied to the previous installation. Stop here unless the server was intentionally replaced or restored. Contact your server administrator before resetting this browser.",
+          actionLabel: "Wait",
+        }
+      : profileTrust === "unavailable"
+        ? {
+            id: "server-check" as const,
+            title: "Couldn’t save this server connection",
+            body: "Allow site storage and reload to continue. DotRelay needs to remember this installation to detect a replacement later.",
+            actionLabel: "Wait",
+          }
+        : nextSetupAction({
+            sessionActive: displayBoundary.session.active,
+            profileTrusted,
+            cryptoAvailable: displayBoundary.crypto.available,
+            deviceActive: displayBoundary.device.active,
+            grantsReady: displayBoundary.grantsReady,
+            resourceActive:
+              projectLifecycle === "ACTIVE" &&
+              environmentLifecycle === "ACTIVE",
+            epochCurrent: displayBoundary.epochCurrent,
+            rotationRequired: displayBoundary.rotationRequired,
+          });
   const localDeviceBlockers =
     displayBoundary.device.active &&
     !protectedPreview &&
@@ -2061,10 +2047,6 @@ export const WorkspaceShell = ({
         void provisionBrowserDevice();
       }}
       onRecovery={() => setView("recovery")}
-      onTrust={() => {
-        setTrustBlocked(null);
-        setTrustDialogOpen(true);
-      }}
       setupCommand={cliCommand}
       standalone={teams.length === 0}
     />
@@ -2132,13 +2114,7 @@ export const WorkspaceShell = ({
       void repairStaleEpoch();
       return;
     }
-    if (editorSetupAction.id === "trust-profile") {
-      // Trusting is a deliberate decision: the dialog names the exact origin
-      // and stable server identity before the user confirms.
-      setTrustBlocked(null);
-      setTrustDialogOpen(true);
-      return;
-    }
+
     if (editorSetupAction.id === "enroll-device") {
       void provisionBrowserDevice();
       return;
@@ -2193,8 +2169,6 @@ export const WorkspaceShell = ({
     setMembershipError(null);
     setAcceptError(null);
     setProfileTrust("unknown");
-    setTrustDialogOpen(false);
-    setTrustBlocked(null);
     setReplacementDialogOpen(false);
     setProjectId(null);
     setEnvironmentId(null);
@@ -2246,6 +2220,34 @@ export const WorkspaceShell = ({
 
   return (
     <div className="min-h-screen bg-background">
+      {profileTrust === "changed" ? (
+        <div
+          className="fixed inset-x-4 top-4 z-[110] mx-auto max-w-2xl rounded-lg border border-destructive bg-background p-5 shadow-xl"
+          role="alert"
+        >
+          <h2 className="font-semibold">DotRelay’s server identity changed</h2>
+          <p className="mt-2 text-sm">
+            This installation differs from the one this browser previously used.
+            Your encrypted data and device keys are tied to the previous
+            installation. Stop here unless the server was intentionally replaced
+            or restored. Contact your server administrator before resetting this
+            browser.
+          </p>
+        </div>
+      ) : null}
+      {profileTrust === "unavailable" ? (
+        <div
+          className="fixed inset-x-4 top-4 z-[110] mx-auto max-w-2xl rounded-lg border bg-background p-5 shadow-xl"
+          role="alert"
+        >
+          <h2 className="font-semibold">
+            Couldn’t save this server connection
+          </h2>
+          <p className="mt-2 text-sm">
+            Allow site storage and reload to continue.
+          </p>
+        </div>
+      ) : null}
       <a
         className="fixed left-4 top-4 z-[100] -translate-y-24 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground focus:translate-y-0"
         href="#workspace-content"
@@ -2686,7 +2688,7 @@ export const WorkspaceShell = ({
                       {!gettingStarted.visible &&
                       setupAction &&
                       (setupAction.id === "sign-in" ||
-                        setupAction.id === "trust-profile" ||
+                        setupAction.id === "server-check" ||
                         setupAction.id === "crypto-unavailable") ? (
                         <div className="mb-6">
                           <EnvironmentEditor
@@ -3570,69 +3572,6 @@ export const WorkspaceShell = ({
               }}
             >
               {switchRebinding ? "Discard and switch" : "Discard changes"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        onOpenChange={(open) => {
-          if (open) return;
-          setTrustDialogOpen(false);
-          setTrustBlocked(null);
-        }}
-        open={trustDialogOpen}
-      >
-        <DialogContent data-testid="trust-server-dialog">
-          <DialogHeader>
-            <DialogTitle>Confirm server trust</DialogTitle>
-            <DialogDescription>
-              This records a trust decision in this browser for the exact server
-              below. It is saved for that origin and server identity only, never
-              reused for a different one, and a change to either asks you to
-              confirm again.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label>Server origin</Label>
-              <p className="font-mono text-sm">{boundary.profile.origin}</p>
-            </div>
-            <div>
-              <Label>Server identity</Label>
-              <p className="font-mono text-sm">
-                {boundary.profile.serverProfileId ?? "unavailable"}
-              </p>
-            </div>
-            {boundary.profile.serverProfileId === undefined ? (
-              <Alert className="border-amber-300/30 bg-amber-300/5">
-                <AlertTitle>Identity unavailable</AlertTitle>
-                <AlertDescription>
-                  This server didn't report a stable identity, so this browser
-                  can't trust it.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            {trustBlocked ? (
-              <Alert className="border-destructive/30 bg-destructive/10">
-                <AlertTitle>Couldn't save the trust decision</AlertTitle>
-                <AlertDescription>{trustBlocked}</AlertDescription>
-              </Alert>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>
-              Cancel
-            </DialogClose>
-            <Button
-              data-testid="trust-server-confirm"
-              disabled={
-                trustDialogBusy ||
-                boundary.profile.serverProfileId === undefined
-              }
-              onClick={() => void confirmTrust()}
-            >
-              {trustDialogBusy ? "Saving…" : "Confirm trust"}
             </Button>
           </DialogFooter>
         </DialogContent>

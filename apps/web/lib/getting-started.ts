@@ -75,12 +75,7 @@ export const writeCliPackageManager = (manager: CliPackageManager): void => {
   }
 };
 
-export type GettingStartedStepId =
-  | "trust"
-  | "cli"
-  | "team"
-  | "browser"
-  | "recovery";
+export type GettingStartedStepId = "cli" | "team" | "browser" | "recovery";
 
 export type GettingStartedStepStatus = "done" | "current" | "later";
 
@@ -111,8 +106,6 @@ const stepDone = (
   id: GettingStartedStepId,
 ): boolean => {
   switch (id) {
-    case "trust":
-      return input.profileTrusted;
     case "cli":
       return input.otherDeviceCount > 0;
     case "team":
@@ -136,8 +129,8 @@ export const buildGettingStarted = (
   // browser path is trust then this browser's own keys. With no team, the
   // CLI has to create one before this browser has anything to read.
   const order: readonly GettingStartedStepId[] = hasTeam
-    ? ["trust", "browser", "recovery"]
-    : ["trust", "cli", "recovery", "team", "browser"];
+    ? ["browser", "recovery"]
+    : ["cli", "recovery", "team", "browser"];
   const requiredDone =
     input.profileTrusted &&
     input.browserEnrolled &&
