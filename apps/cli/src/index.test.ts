@@ -3438,6 +3438,7 @@ describe("CLI sign-in display", () => {
         recoveryCode: expect.stringMatching(
           /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){12}$/,
         ),
+        wrapperId: expect.any(String),
       });
       const events = stderrEvents(captured.text());
       expect(events[0]).toMatchObject({

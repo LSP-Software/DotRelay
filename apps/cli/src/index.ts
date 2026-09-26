@@ -981,6 +981,7 @@ const loginAndEnroll = async (
     device: enrollment.active ? "enrolled" : "not enrolled",
     ...(enrollment.deviceName ? { deviceName: enrollment.deviceName } : {}),
     ...(recovery?.recoveryCode ? { recoveryCode: recovery.recoveryCode } : {}),
+    ...(recovery?.wrapperId ? { wrapperId: recovery.wrapperId } : {}),
     message: enrollment.existing
       ? `Signed in to ${profile.name}. Device already enrolled.`
       : `Signed in to ${profile.name}. Device enrolled.`,
