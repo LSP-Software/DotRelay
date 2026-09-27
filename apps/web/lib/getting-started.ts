@@ -1,7 +1,6 @@
-// First-run checklist for a signed-in browser. GitHub sign-in only
-// identifies the user: a team still comes from `dotrelay init` (or an
-// invitation), and this browser still needs its own trust decision and
-// device keys. The checklist is the projects landing until those are done.
+// First-run guide shows only remaining actions. A team still comes from
+// `dotrelay init` (or an invitation); browser keys and recovery are handled
+// by the account setup gate before a live workspace opens.
 // Dismissal is per user, in this browser, and only applies once a team
 // exists — with no team the checklist is the only next action.
 
@@ -86,7 +85,7 @@ export type GettingStartedInput = Readonly<{
   browserEnrolled: boolean;
   recoveryConfigured: boolean;
   teamCount: number;
-  otherDeviceCount: number;
+  cliEnrolled: boolean;
   dismissed: boolean;
 }>;
 
@@ -107,7 +106,7 @@ const stepDone = (
 ): boolean => {
   switch (id) {
     case "cli":
-      return input.otherDeviceCount > 0;
+      return input.cliEnrolled;
     case "team":
       return input.teamCount > 0;
     case "browser":
@@ -130,7 +129,7 @@ export const buildGettingStarted = (
   // CLI has to create one before this browser has anything to read.
   const order: readonly GettingStartedStepId[] = hasTeam
     ? ["browser", "recovery"]
-    : ["cli", "recovery", "team", "browser"];
+    : ["cli", "team", "browser", "recovery"];
   const requiredDone =
     input.profileTrusted &&
     input.browserEnrolled &&
@@ -141,14 +140,15 @@ export const buildGettingStarted = (
   const visible = eligible && !requiredDone && !canDismiss;
   const resumable = eligible && !requiredDone && canDismiss;
   let currentAssigned = false;
-  const steps: GettingStartedStep[] = order.map((id) => {
-    if (stepDone(input, id)) return { id, status: "done" };
-    if (!currentAssigned) {
-      currentAssigned = true;
-      return { id, status: "current" };
-    }
-    return { id, status: "later" };
-  });
+  const steps: GettingStartedStep[] = order
+    .filter((id) => !stepDone(input, id))
+    .map((id) => {
+      if (!currentAssigned) {
+        currentAssigned = true;
+        return { id, status: "current" };
+      }
+      return { id, status: "later" };
+    });
   return {
     visible,
     resumable,

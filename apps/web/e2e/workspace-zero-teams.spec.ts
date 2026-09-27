@@ -51,16 +51,20 @@ test("a signed-in user with zero Teams is pointed at the CLI, not an empty selec
   // sidebar or the header.
   await expect(page.getByRole("combobox", { name: "Team" })).toHaveCount(0);
 
-  // The CLI is enrolled, but a code is still required before creating a Team.
+  // The CLI and browser recovery are already set up. Show the remaining Team
+  // action without repeating completed setup work.
   const empty = page.getByTestId("no-teams-empty");
   await expect(empty).toBeVisible();
   await expect(
     empty.getByRole("heading", { name: "Get started" }),
   ).toBeVisible();
   await expect(
-    empty.getByRole("heading", { name: "Save your recovery code" }),
+    empty.getByRole("heading", { name: "Create your team" }),
   ).toBeVisible();
-  await expect(empty).toContainText("Open Recovery");
+  await expect(empty).toContainText("dotrelay init");
+  await expect(
+    empty.getByRole("heading", { name: "Save your recovery code" }),
+  ).toHaveCount(0);
 
   // The Team nav is still reachable with an empty catalog. Memberships are
   // never requested without a Team, so this must not sit on "Loading members…".

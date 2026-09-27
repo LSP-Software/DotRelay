@@ -1,6 +1,5 @@
 "use client";
 
-import { Check } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { InlineCommand } from "@/components/inline-command";
@@ -18,22 +17,6 @@ import {
 import { cn } from "@/lib/utils";
 
 const stepTitle = (step: GettingStartedStep): string => {
-  if (step.status === "done") {
-    switch (step.id) {
-      case "cli":
-        return "CLI enrolled";
-      case "team":
-        return "Team created";
-      case "browser":
-        return "This browser is set up";
-      case "recovery":
-        return "Recovery code saved";
-      default: {
-        const unreachable: never = step.id;
-        return unreachable;
-      }
-    }
-  }
   switch (step.id) {
     case "cli":
       return "Set up the CLI";
@@ -75,7 +58,6 @@ const StepBody = ({
   onRecovery: () => void;
   onPackageManagerChange: (manager: CliPackageManager) => void;
 }>) => {
-  if (step.status === "done") return null;
   if (step.status === "later") {
     return (
       <p className="mt-1 text-sm text-muted-foreground">
@@ -89,11 +71,9 @@ const StepBody = ({
             In the repository, run <InlineCommand value={CLI_INIT_COMMAND} />.
           </>
         ) : null}
-        {step.id === "browser"
-          ? "Set up this browser so it can read values, then save a recovery code. If every device is lost and there is no recovery code, the values stay unreadable."
-          : null}
+        {step.id === "browser" ? "This browser needs its own keys." : null}
         {step.id === "recovery"
-          ? "Save the code during CLI setup, or set up this browser and create one in Recovery. GitHub sign-in cannot restore encrypted values."
+          ? "Save a code to unlock your account later."
           : null}
       </p>
     );
@@ -103,9 +83,7 @@ const StepBody = ({
     return (
       <>
         <p className="mt-1 text-sm text-muted-foreground">
-          Create a recovery code and store it somewhere safe before adding
-          secrets. If you lose every unlocked device and the code, your
-          encrypted values cannot be recovered, even after signing in again.
+          Save a recovery code somewhere safe before adding values.
         </p>
         <Button className="mt-3" onClick={onRecovery} type="button">
           Open Recovery
@@ -118,10 +96,7 @@ const StepBody = ({
     return (
       <>
         <p className="mt-1 text-sm text-muted-foreground">
-          Teams are created from the CLI, not in this browser. Install it, then
-          run setup against this server. Setup signs the CLI in and enrolls it
-          as its own device and shows a recovery code you must save. It does not
-          enroll this browser.
+          Install the CLI and sign in to this server.
         </p>
         <div className="mt-3 grid gap-2">
           <fieldset className="m-0 flex flex-wrap items-center gap-1.5 border-0 p-0">
@@ -161,8 +136,8 @@ const StepBody = ({
     return (
       <>
         <p className="mt-1 text-sm text-muted-foreground">
-          In the Git repository, publish its .env for the first time. That
-          creates the Team, Project, and Environment.
+          Run this in your Git repository to create your team and first
+          environment.
           {invited
             ? " If a team invited you, accept that invitation above instead. You stay pending until a device receives the project's keys."
             : null}
@@ -175,9 +150,7 @@ const StepBody = ({
   return (
     <>
       <p className="mt-1 text-sm text-muted-foreground">
-        {offerCli
-          ? "This browser needs its own keys before it can read values. The keys stay in this browser. The CLI is a separate device, so setting it up does not read values here. After this, open Recovery and save a recovery code. If every device is lost and there is no recovery code, the values stay unreadable."
-          : "This browser needs its own keys before it can read values. The keys stay in this browser. After this, open Recovery and save a recovery code. If every device is lost and there is no recovery code, the values stay unreadable."}
+        This browser needs its own keys to read values.
       </p>
       {offerCli ? (
         <>
@@ -187,7 +160,7 @@ const StepBody = ({
             value={setupCommand}
           />
           <p className="mt-2 text-sm text-muted-foreground">
-            Prefer the CLI? It sets up the CLI, not this browser.
+            You can also set up the CLI separately.
           </p>
         </>
       ) : null}
@@ -252,8 +225,9 @@ export const GettingStartedGuide = ({
         Get started
       </Title>
       <p className="mt-2 max-w-2xl text-muted-foreground">
-        GitHub sign-in only identifies you. It does not create a team, enroll a
-        device, or decrypt anything. Do the highlighted step, then the next one.
+        {model.steps[0]?.id === "cli"
+          ? "Install the CLI, then create your first team from your repository."
+          : "Finish these steps to open your workspace."}
       </p>
       <ol className="mt-6 grid list-none gap-3 p-0">
         {model.steps.map((step, index) => {
@@ -265,7 +239,6 @@ export const GettingStartedGuide = ({
                 "rounded-xl border px-4 py-3",
                 step.status === "current" &&
                   "border-amber-300/40 bg-amber-300/5",
-                step.status === "done" && "border-primary/25",
                 step.status === "later" && "border-border",
               )}
               key={step.id}
@@ -275,19 +248,13 @@ export const GettingStartedGuide = ({
                   aria-hidden="true"
                   className={cn(
                     "mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border font-mono text-[11px]",
-                    step.status === "done" &&
-                      "border-primary/40 bg-primary/15 text-primary",
                     step.status === "current" &&
                       "border-amber-300/40 text-amber-200",
                     step.status === "later" &&
                       "border-border text-muted-foreground",
                   )}
                 >
-                  {step.status === "done" ? (
-                    <Check className="size-3.5" />
-                  ) : (
-                    index + 1
-                  )}
+                  {index + 1}
                 </span>
                 <div className="min-w-0 flex-1">
                   <Heading

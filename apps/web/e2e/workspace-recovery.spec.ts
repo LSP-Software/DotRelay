@@ -793,7 +793,6 @@ test.describe("workspace recovery", () => {
     await trustWorkspaceServer(page);
     const gate = page.getByTestId("account-key-gate");
     await expect(gate).toBeVisible();
-    await gate.getByRole("button", { name: "Set up browser" }).click();
     await expect(gate.getByTestId("recovery-setup")).toBeVisible();
     await expect.poll(() => scenario.epochGrantB64).not.toBeNull();
 

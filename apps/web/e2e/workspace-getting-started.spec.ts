@@ -42,7 +42,9 @@ test("a signed-in browser that is not set up opens on the setup checklist", asyn
   await expect(
     guide.getByRole("heading", { name: "Get started" }),
   ).toBeVisible();
-  await expect(guide).toContainText("GitHub sign-in only identifies you");
+  await expect(guide).toContainText(
+    "Finish these steps to open your workspace",
+  );
   await expect(
     guide.getByRole("heading", { name: "Set up this browser" }),
   ).toBeVisible();

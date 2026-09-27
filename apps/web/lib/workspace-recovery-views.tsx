@@ -61,6 +61,7 @@ const recoveryFormatDate = (iso: string | undefined): string => {
 };
 
 export type RecoveryAreaProps = Readonly<{
+  readonly setupMode?: boolean;
   readonly sessionActive: boolean;
   readonly deviceActive: boolean;
   readonly connection: "loading" | "online" | "offline";
@@ -118,6 +119,7 @@ export type RecoveryAreaProps = Readonly<{
 }>;
 
 export const RecoveryArea = ({
+  setupMode = false,
   sessionActive,
   deviceActive,
   connection,
@@ -160,11 +162,15 @@ export const RecoveryArea = ({
 }: RecoveryAreaProps) => {
   return (
     <section id="recovery" data-testid="recovery-area">
-      <h1 className="font-heading text-3xl font-semibold">Recovery</h1>
-      <p className="mt-2 max-w-2xl text-muted-foreground">
-        Your account's encryption key stays on your devices. If every device is
-        lost, one of the recovery methods below unlocks it again.
-      </p>
+      {setupMode ? null : (
+        <>
+          <h1 className="font-heading text-3xl font-semibold">Recovery</h1>
+          <p className="mt-2 max-w-2xl text-muted-foreground">
+            Your account's encryption key stays on your devices. If every device
+            is lost, one of the recovery methods below unlocks it again.
+          </p>
+        </>
+      )}
       {recoveryError ? (
         <Alert
           className="mt-4 border-destructive/30 bg-destructive/10"
@@ -174,7 +180,7 @@ export const RecoveryArea = ({
           <AlertDescription>{recoveryError}</AlertDescription>
         </Alert>
       ) : null}
-      {recoveryMessage ? (
+      {!setupMode && recoveryMessage ? (
         <p
           className="mt-4 rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 text-sm text-primary"
           role="status"
@@ -206,19 +212,23 @@ export const RecoveryArea = ({
           <CardHeader>
             <CardTitle>Set up this browser</CardTitle>
             <CardDescription>
-              Recovery methods act on this browser's Device, which doesn't exist
-              yet. Set up this browser first; it takes a moment and stores its
-              keys on this machine.
+              This browser needs its own keys to open your workspace.
             </CardDescription>
           </CardHeader>
-          <CardFooter>
-            <Button
-              disabled={deviceSetupInProgress}
-              onClick={() => void onDeviceSetup()}
+          {deviceSetupInProgress ? (
+            <CardContent
+              role="status"
+              className="text-sm text-muted-foreground"
             >
-              {deviceSetupInProgress ? "Setting up…" : "Set up browser"}
-            </Button>
-          </CardFooter>
+              Setting up this browser…
+            </CardContent>
+          ) : (
+            <CardFooter>
+              <Button onClick={() => void onDeviceSetup()}>
+                Set up browser
+              </Button>
+            </CardFooter>
+          )}
         </Card>
       ) : connection === "offline" ? (
         <Card className="mt-6" data-testid="recovery-offline">
@@ -269,24 +279,10 @@ export const RecoveryArea = ({
                 </span>
               </CardTitle>
               <CardDescription>
-                This account has no recovery methods yet. Setting up creates the
-                account's key in this browser and a recovery code that can
-                unlock it again if every device is lost.
+                Save a recovery code so you can unlock your account if you lose
+                this browser.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm text-muted-foreground">
-              <p>
-                Your values are stored as ciphertext on the server. Signing in
-                with GitHub never decrypts them, and if every recovery method
-                and every device is ever lost, the content can't be recovered. A
-                saved recovery code is the one thing that can.
-              </p>
-              <p>
-                This browser saves a copy encrypted with its device key. Keep
-                the recovery code safe so you can set up another device if this
-                browser is lost or its storage is cleared.
-              </p>
-            </CardContent>
             <CardFooter>
               <Button disabled={recoveryBusy} onClick={() => onSetupRecovery()}>
                 {recoveryBusy ? "Setting up…" : "Create recovery code"}
