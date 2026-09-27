@@ -17,7 +17,7 @@ const fresh = (
   browserEnrolled: false,
   recoveryConfigured: false,
   teamCount: 0,
-  otherDeviceCount: 0,
+  cliEnrolled: false,
   dismissed: false,
   ...overrides,
 });
@@ -35,32 +35,41 @@ test("a signed-out or crypto-unavailable browser does not get the checklist", ()
   );
 });
 
-test("a new account starts at the CLI, then recovery, then a team", () => {
+test("a new account shows the remaining actions in order", () => {
   const model = buildGettingStarted(fresh());
   expect(model.visible).toBe(true);
   expect(model.resumable).toBe(false);
   expect(model.steps.map((step) => step.id)).toEqual([
     "cli",
-    "recovery",
     "team",
     "browser",
+    "recovery",
   ]);
   expect(current(fresh())).toBe("cli");
-  expect(current(fresh({ profileTrusted: true, otherDeviceCount: 0 }))).toBe(
+  expect(current(fresh({ profileTrusted: true, cliEnrolled: false }))).toBe(
     "cli",
   );
-  expect(current(fresh({ profileTrusted: true, otherDeviceCount: 1 }))).toBe(
-    "recovery",
+  expect(current(fresh({ profileTrusted: true, cliEnrolled: true }))).toBe(
+    "team",
   );
   expect(
     current(
       fresh({
         profileTrusted: true,
-        otherDeviceCount: 1,
+        cliEnrolled: true,
         recoveryConfigured: true,
       }),
     ),
   ).toBe("team");
+  expect(
+    buildGettingStarted(
+      fresh({
+        profileTrusted: true,
+        browserEnrolled: true,
+        recoveryConfigured: true,
+      }),
+    ).steps.map((step) => step.id),
+  ).toEqual(["cli", "team"]);
 });
 
 test("dismissal does not hide the checklist while there is no team", () => {
@@ -108,7 +117,7 @@ test("the checklist leaves once the server is trusted, this browser is enrolled,
       profileTrusted: true,
       browserEnrolled: true,
       recoveryConfigured: true,
-      otherDeviceCount: 1,
+      cliEnrolled: true,
     }),
   );
   expect(model.visible).toBe(false);

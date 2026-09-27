@@ -99,6 +99,7 @@ import {
   restoreBrowserAccountKey,
   saveBrowserAccountKey,
 } from "@/lib/browser-account-key";
+import { readStoredBrowserDeviceId } from "@/lib/browser-storage";
 import {
   type PendingEnrollment,
   provisionBrowserDevice as provisionBrowserDeviceFlow,
@@ -680,6 +681,7 @@ export const WorkspaceShell = ({
   const pendingEnrollmentRef = useRef<Map<string, PendingEnrollment>>(
     new Map(),
   );
+  const autoEnrollmentAttemptedRef = useRef<Set<string>>(new Set());
   // Server Profile pins for which durable browser enrollment holds in this
   // page load: enrollment completed with verified persistent storage, or the
   // stored Device bundle was loaded from durable storage. A memory-only
@@ -836,7 +838,9 @@ export const WorkspaceShell = ({
       (wrapper) => wrapper.type === "recovery-code",
     ),
     teamCount: teams.length,
-    otherDeviceCount: displayBoundary.peerDevices?.length ?? 0,
+    cliEnrolled:
+      displayBoundary.peerDevices?.some((peer) => peer.clientKind === "cli") ??
+      false,
     dismissed: gettingStartedDismissed,
   });
   const dismissGettingStarted = () => {
@@ -2123,6 +2127,35 @@ export const WorkspaceShell = ({
   const provisionBrowserDevice = () =>
     provisionBrowserDeviceFlow(provisioningContext);
 
+  const autoEnrollmentKey = `${boundary.profile.origin}:${boundary.profile.serverProfileId}:${boundary.session.userId}`;
+  const autoEnrollmentEligible =
+    boundary.source === "live" &&
+    boundary.session.active &&
+    Boolean(boundary.session.userId) &&
+    !boundary.device.active &&
+    connection === "online" &&
+    profileTrusted &&
+    browserCrypto &&
+    boundary.crypto.available &&
+    Boolean(boundary.profile.serverProfileId) &&
+    !readStoredBrowserDeviceId(
+      boundary.profile.origin,
+      boundary.profile.serverProfileId ?? "",
+    );
+  // A new browser needs no input to create its device keys. Never silently
+  // re-enroll a browser that remembers a stale or revoked Device; its manual
+  // recovery path stays available. The ref also guards StrictMode effects.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: primitive identity and trust fields key one automatic attempt; boundary refreshes must not restart it.
+  useEffect(() => {
+    if (
+      !autoEnrollmentEligible ||
+      autoEnrollmentAttemptedRef.current.has(autoEnrollmentKey)
+    )
+      return;
+    autoEnrollmentAttemptedRef.current.add(autoEnrollmentKey);
+    void provisionBrowserDevice();
+  }, [autoEnrollmentEligible, autoEnrollmentKey]);
+
   const gettingStartedGuide = gettingStarted.visible ? (
     <GettingStartedGuide
       deviceSetupInProgress={deviceSetupInProgress}
@@ -2155,7 +2188,10 @@ export const WorkspaceShell = ({
       addPasswordOpen={addPasswordOpen}
       connection={connection}
       deviceActive={boundary.device.active && localDeviceReady !== false}
-      deviceSetupInProgress={deviceSetupInProgress}
+      deviceSetupInProgress={
+        deviceSetupInProgress || (autoEnrollmentEligible && !deviceSetupMessage)
+      }
+      setupMode={accountSetupRequired}
       onAddPassword={setAddPassword}
       onAddPasswordOpen={setAddPasswordOpen}
       onAddEncryptionPassword={addEncryptionPasswordHandler}
@@ -2709,11 +2745,14 @@ export const WorkspaceShell = ({
               className="mx-auto max-w-2xl"
               data-testid="account-key-gate"
             >
-              <p className="text-sm text-muted-foreground">
-                Finish setting up this browser's encryption keys to open your
-                workspace. Keep your recovery code safe for another device or
-                cleared browser storage.
+              <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground">
+                ACCOUNT SETUP
               </p>
+              <h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight">
+                {recoveryLoaded && recoveryWrappers.length > 0
+                  ? "Unlock your account"
+                  : "Set up your account"}
+              </h1>
               {boundary.device.active &&
               (localDeviceReady === null ||
                 (localDeviceReady === true &&
@@ -2723,7 +2762,7 @@ export const WorkspaceShell = ({
               ) : (
                 recoveryArea
               )}
-              {deviceSetupMessage ? (
+              {!boundary.device.active && deviceSetupMessage ? (
                 <p role="status">{deviceSetupMessage}</p>
               ) : null}
             </section>
