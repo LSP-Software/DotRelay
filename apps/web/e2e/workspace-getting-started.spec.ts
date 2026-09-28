@@ -142,3 +142,79 @@ test("a browser that is already trusted and enrolled skips the checklist", async
   await expect(page.getByTestId("getting-started-collapsed")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Variables" })).toBeVisible();
 });
+
+test("returning to the tab advances each unfinished setup step", async ({
+  page,
+}) => {
+  // Freeze timers so the ordinary poll cannot be what moves the checklist.
+  // Coming back to the tab has to refresh on its own.
+  await page.clock.install();
+  let peerDevices: readonly Record<string, unknown>[] = [];
+  let teams: readonly Record<string, unknown>[] = [];
+  await page.route("**/api/v1/teams/*/memberships", (route) =>
+    route.fulfill({ json: { memberships: [] } }),
+  );
+  await page.route("**/api/v1/invitations", (route) =>
+    route.fulfill({ json: { invitations: [], pendingMemberships: [] } }),
+  );
+  await page.route("**/api/workspace/boundary*", async (route) => {
+    try {
+      const response = await route.fetch();
+      const body = (await response.json()) as Record<string, unknown>;
+      await route.fulfill({
+        status: response.status(),
+        headers: response.headers(),
+        json: {
+          ...body,
+          catalog: { teams, projects: [] },
+          peerDevices,
+        },
+      });
+    } catch {
+      await route.abort().catch(() => {});
+    }
+  });
+
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  const guide = page.getByTestId("getting-started");
+  await expect(
+    guide.getByRole("heading", { name: "Set up the CLI" }),
+  ).toBeVisible();
+
+  const showAgain = () =>
+    page.evaluate(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+  peerDevices = [
+    {
+      id: "00000000-0000-4000-8000-000000000041",
+      encryptionPublicKey: "11".repeat(32),
+      signingPublicKey: "22".repeat(32),
+      hasEpochGrant: false,
+      name: "dev",
+      clientKind: "cli",
+    },
+  ];
+  await showAgain();
+  await expect(guide.getByText("CLI enrolled")).toBeVisible();
+  await expect(
+    guide.getByRole("heading", { name: "Create your team" }),
+  ).toBeVisible();
+
+  teams = [
+    {
+      id: "00000000-0000-4000-8000-0000000000aa",
+      name: "Relay",
+      role: "OWNER",
+    },
+  ];
+  await showAgain();
+  await expect(
+    guide.getByRole("heading", { name: "Set up this browser" }),
+  ).toBeVisible();
+  await expect(
+    guide.getByRole("heading", { name: "Create your team" }),
+  ).toHaveCount(0);
+});

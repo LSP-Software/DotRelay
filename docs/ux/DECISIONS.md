@@ -204,6 +204,9 @@ Chosen:
   "Continue to projects" hides the checklist in this browser for this user
   and can be opened again. The project list stays on the page under the
   checklist so an existing account is not trapped.
+- While the checklist is unfinished, the workspace boundary refreshes every
+  two seconds and again when the tab becomes visible, so a CLI step finished
+  elsewhere (setup, sign-in, or init) shows up without a reload.
 - The checklist leaves once the server is trusted, this browser is
   enrolled, and a Team exists. Saving a recovery code is named on the
   browser step, including the lockout if every device and the code are

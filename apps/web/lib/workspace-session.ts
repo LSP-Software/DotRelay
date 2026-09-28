@@ -82,8 +82,17 @@ const WORKSPACE_REFRESH_MS = Math.max(
   Number(process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_REFRESH_MS ?? 0) || 30_000,
   1_000,
 );
+// First-run steps finish in another window (CLI setup, sign-in, init).
+// The ordinary interval is too slow, and a background tab may not run it
+// at all, so an unfinished checklist polls on this shorter cadence.
+const SETUP_BOUNDARY_REFRESH_MS = 2_000;
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
+
+export const workspaceBoundaryRefreshMs = (setupPending: boolean): number =>
+  setupPending
+    ? Math.min(WORKSPACE_REFRESH_MS, SETUP_BOUNDARY_REFRESH_MS)
+    : WORKSPACE_REFRESH_MS;
 
 type WorkspaceRefreshContext = Readonly<{
   readonly profileId: WorkspaceProfileId;
@@ -100,6 +109,7 @@ type WorkspaceRefreshContext = Readonly<{
     readonly set: (value: string) => void;
   };
   readonly accountMasterKey: { readonly get: () => Uint8Array | null };
+  readonly refreshMs: number;
   readonly reconnectNowRef: { current: (() => void) | null };
   readonly setConnection: (
     connection: "loading" | "online" | "offline",
@@ -125,6 +135,7 @@ export const createWorkspaceRefreshLoop = (
     apiOrigin,
     boundaryJson,
     accountMasterKey,
+    refreshMs,
     reconnectNowRef,
     setConnection,
     setVerifiedAt,
@@ -278,7 +289,7 @@ export const createWorkspaceRefreshLoop = (
     if (stale(run)) return;
     if (online) {
       reconnectDelay = RECONNECT_BASE_MS;
-      timer = setTimeout(() => void tick(), WORKSPACE_REFRESH_MS);
+      timer = setTimeout(() => void tick(), refreshMs);
     } else {
       timer = setTimeout(() => void tick(), reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);

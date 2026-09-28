@@ -40,6 +40,8 @@ the project list and bring the checklist back. Enroll this browser, trust this S
 CLI command. Command snippets include a Copy control. `dotrelay setup <origin>` enrolls the CLI
 Device. Enroll browser enrolls this browser as its own Device, including after the CLI is already
 enrolled.
+While that checklist is unfinished, the page refreshes every few seconds and again when the tab
+becomes visible, so setup, sign-in, and init each show as done without a reload.
 
 There is no reduced-security mode, alternate cryptographic suite, provider fallback, or server-side
 plaintext rendering.

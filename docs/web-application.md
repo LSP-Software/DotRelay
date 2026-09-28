@@ -61,6 +61,13 @@ With a Team already present, the person can continue to the project list; the ch
 opened again until those steps are done. Signing in is not one of the steps that decrypts
 anything.
 
+While that checklist is unfinished, the shell refreshes the workspace boundary every two seconds,
+and again as soon as the browser tab becomes visible. A step finished in another window — CLI
+setup or sign-in enrolling a device, or `dotrelay init` creating the team — moves the highlighted
+step without a reload. Creating the team also changes the selected project and restarts the
+refresh; later steps do not, so they use the same short poll. After the checklist is finished, the
+boundary returns to its ordinary refresh interval.
+
 When the v3 runtime or provider is unavailable, the shell reports the stable
 `unsupported_crypto_runtime` or `crypto_provider_unavailable` problem and does not request or
 render Manifest lanes, Variable names, Shared Values, or User-defined Values. The permitted surface

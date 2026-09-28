@@ -169,6 +169,7 @@ import {
 import {
   createWorkspaceRefreshLoop,
   loadWorkspaceSession,
+  workspaceBoundaryRefreshMs,
 } from "@/lib/workspace-session";
 import { EnvironmentEditor } from "./environment-editor";
 import {
@@ -843,6 +844,11 @@ export const WorkspaceShell = ({
       false,
     dismissed: gettingStartedDismissed,
   });
+  // Unfinished first-run keeps polling after the step that created the
+  // team. Init changes the selected team and restarts the loop; later CLI
+  // steps (sign-in, device enrollment) do not, so they need their own cadence.
+  const setupPending = gettingStarted.visible || gettingStarted.resumable;
+  const boundaryRefreshMs = workspaceBoundaryRefreshMs(setupPending);
   const dismissGettingStarted = () => {
     if (gettingStartedUserId)
       writeGettingStartedDismissed(gettingStartedUserId, true);
@@ -2029,6 +2035,7 @@ export const WorkspaceShell = ({
       accountMasterKey: {
         get: () => accountMasterKeyRef.current,
       },
+      refreshMs: boundaryRefreshMs,
       reconnectNowRef,
       setConnection,
       setVerifiedAt,
@@ -2043,7 +2050,22 @@ export const WorkspaceShell = ({
     environmentId,
     removeSessionByKey,
     recoveryGeneration,
+    boundaryRefreshMs,
   ]);
+
+  // A background tab throttles the poll, so coming back to this tab refreshes
+  // immediately. That covers every unfinished step, not only the team created
+  // by init (which also restarts the loop by changing the selection).
+  useEffect(() => {
+    if (!setupPending) return;
+    const refreshOnReturn = () => {
+      if (document.visibilityState !== "visible") return;
+      reconnectNowRef.current?.();
+    };
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    return () =>
+      document.removeEventListener("visibilitychange", refreshOnReturn);
+  }, [setupPending]);
 
   // Bound the open-ended loading state: a healthy load of a profile resolves
   // in well under a second, so if it is still unverified after the stall
