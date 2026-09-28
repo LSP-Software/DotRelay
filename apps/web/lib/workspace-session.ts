@@ -175,6 +175,9 @@ export const createWorkspaceRefreshLoop = (
       }
       if (resolved.device.active && resolved.device.id && apiOrigin)
         await refreshDeviceDisplay(apiOrigin, resolved.device.id);
+      // A newer refresh may have finished while this one was still reading
+      // the server. Committing now would put the checklist back a step.
+      if (stale(run)) return false;
       setVerifiedAt(Date.now());
       setConnection("online");
       const resolvedJson = JSON.stringify(resolved);

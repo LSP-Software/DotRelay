@@ -198,7 +198,9 @@ test("returning to the tab advances each unfinished setup step", async ({
     },
   ];
   await showAgain();
-  await expect(guide.getByText("CLI enrolled")).toBeVisible();
+  await expect(
+    guide.getByRole("heading", { name: "Set up the CLI" }),
+  ).toHaveCount(0);
   await expect(
     guide.getByRole("heading", { name: "Create your team" }),
   ).toBeVisible();
