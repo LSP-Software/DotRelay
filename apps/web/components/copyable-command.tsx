@@ -67,7 +67,7 @@ export const CopyableCommand = ({
         $
       </span>
       <code
-        className="min-w-0 flex-1 overflow-x-auto whitespace-pre font-mono text-xs leading-5 text-foreground select-all"
+        className="min-w-0 flex-1 overflow-x-auto whitespace-pre font-mono text-xs leading-5 text-foreground select-text"
         data-testid={testId}
         ref={codeRef}
       >

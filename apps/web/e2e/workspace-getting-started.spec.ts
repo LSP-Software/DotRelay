@@ -131,6 +131,45 @@ test("the CLI install step offers package managers and keeps the choice", async 
   ).toContainText("bun add -g dotrelay");
 });
 
+test("highlighting part of a command stays on that part", async ({ page }) => {
+  await emptyAccount(page);
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  const command = page
+    .getByTestId("getting-started")
+    .getByTestId("getting-started-install-command");
+  await expect(command).toContainText("npm install -g dotrelay@latest");
+  await command.scrollIntoViewIfNeeded();
+
+  // Setting a Range in script does not expand under user-select: all.
+  // The drag is the gesture the browser rewrites into the whole command.
+  const portion = "install";
+  const box = await command.evaluate((el, needle) => {
+    const textNode = el.firstChild;
+    if (textNode === null || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error("command text missing");
+    }
+    const full = textNode.textContent ?? "";
+    const start = full.indexOf(needle);
+    if (start < 0) throw new Error(`missing ${needle}`);
+    const range = document.createRange();
+    range.setStart(textNode, start);
+    range.setEnd(textNode, start + needle.length);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  }, portion);
+
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + 2, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 2, y, { steps: 12 });
+  await page.mouse.up();
+
+  expect(
+    await page.evaluate(() => window.getSelection()?.toString() ?? ""),
+  ).toBe(portion);
+});
+
 test("a browser that is already trusted and enrolled skips the checklist", async ({
   page,
 }) => {
