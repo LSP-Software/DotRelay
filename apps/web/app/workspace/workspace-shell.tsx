@@ -2829,7 +2829,9 @@ export const WorkspaceShell = ({
                     selectedProject &&
                     selectedProject.environments.length === 0
                       ? "The project has no environments. Run this in the project's repository to create the first one: dotrelay init."
-                      : missingResourceCopy[missingResource.kind].description}
+                      : missingResource.kind === "team" && teams.length === 0
+                        ? "It may have been deleted, or you may have lost access. There is no team to open yet."
+                        : missingResourceCopy[missingResource.kind].description}
                   </AlertDescription>
                 </Alert>
               ) : null}
