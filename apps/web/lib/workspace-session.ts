@@ -630,7 +630,9 @@ export const loadWorkspaceSession = (
         }
       }
       const session = createEnvironmentProtocolSession({
-        context,
+        context: sharedValueSecret
+          ? { ...context, sharedValueSecret }
+          : context,
         transport,
         sharedValuePrivateKey: keyMaterial.encryptionPrivateKey,
         userDefinedValuePrivateKey: keyMaterial.encryptionPrivateKey,

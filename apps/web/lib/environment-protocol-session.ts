@@ -36,12 +36,26 @@ export const createEnvironmentProtocolSession = (input: {
       : input.context.revisionSigningPublicKey
         ? [input.context.revisionSigningPublicKey]
         : [];
+  // Reading and publishing must use the same content keys. The workspace
+  // resolves the Project epoch key after it builds the publication context
+  // and passes that key beside the context; a publish that omits it seals
+  // Shared Values to this browser Device, which no other Device can open.
+  const context: PublicationContext = {
+    ...input.context,
+    ...(input.sharedValueSecret
+      ? { sharedValueSecret: input.sharedValueSecret }
+      : {}),
+    ...(input.userDefinedValueSecret
+      ? { userDefinedValueSecret: input.userDefinedValueSecret }
+      : {}),
+  };
   const session = createVerifiedEnvironmentSession({
     ...input,
+    context,
     ...(signingTrustKeys.length > 0 ? { signingTrustKeys } : {}),
   });
   return Object.freeze({
-    context: input.context,
+    context,
     transport: input.transport,
     signingTrustKeys,
     decodeVariables: async (page, previousVariables) => {
