@@ -208,6 +208,8 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
+      # braces (GHSA-vfj7-8cjw-p6xm) has no patched release. The script ignores
+      # that one advisory; it is only reached through shadcn's glob matcher.
       - run: bun run security:audit
       - run: bun run tracked-tree:clean
   deploy-dev:

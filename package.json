@@ -38,7 +38,7 @@
     "db:cutover-guard": "bun scripts/guard-legacy-recovery-cutover.ts",
     "docs:validate": "bun scripts/validate-docs.ts",
     "tracked-tree:clean": "bun scripts/check-tracked-tree.ts",
-    "security:audit": "bun audit",
+    "security:audit": "bun audit --ignore GHSA-vfj7-8cjw-p6xm",
     "postinstall": "bun run prisma:generate",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run boundaries && bun run openapi:check && bun run vectors:verify-sources && bun run test:unit",
     "verify": "bun run check && bun run build && bun run smoke && bun run test:integration && bun run test:e2e && bun run test:cli && bun run test:cli:live && bun run db:validate && bun run db:migrate-check && bun run docs:validate && bun run tracked-tree:clean"
@@ -65,7 +65,7 @@
     "fast-uri": "3.1.8",
     "mysql2": "3.24.2",
     "postcss": "8.5.23",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "valibot": "1.4.2"
   }
 }
