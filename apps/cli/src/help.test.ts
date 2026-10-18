@@ -60,8 +60,11 @@ describe("command help contract", () => {
       const subcommands = command
         ? SUBCOMMANDS[command as CommandName]
         : undefined;
-      if (subcommands) expect(subcommands, label).toContain(sub ?? "");
-      else expect(sub, label).toBeUndefined();
+      if (subcommands) {
+        if (sub === undefined)
+          expect(() => parseArguments([command ?? ""]), label).not.toThrow();
+        else expect(subcommands, label).toContain(sub);
+      } else expect(sub, label).toBeUndefined();
     }
   });
 

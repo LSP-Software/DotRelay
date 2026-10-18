@@ -34,6 +34,7 @@ const categoryExitCode: Record<CliErrorCategory, number> = {
 const safeDiagnosticKeys = new Set([
   "requestPath",
   "correlationId",
+  "variableNames",
   "retryAfterSeconds",
   "count",
   "variableCount",
@@ -41,6 +42,7 @@ const safeDiagnosticKeys = new Set([
   "userDefinedValueCount",
   "missingCount",
   "changedCount",
+  "conflictCount",
 ]);
 const safeDiagnosticNumericKeys = new Set(safeDiagnosticKeys);
 
@@ -56,6 +58,10 @@ const safeDiagnosticCodes = new Set([
   "account_key_unlock_failed",
   "archived_resource",
   "artifact_invalid",
+  "baseline_invalid",
+  "baseline_read_failed",
+  "baseline_unverifiable",
+  "baseline_write_failed",
   "artifact_read_failed",
   "artifact_too_large",
   "auth_response_invalid",
@@ -160,6 +166,7 @@ const safeDiagnosticCodes = new Set([
   "unsupported_media_type",
   "user_mismatch",
   "unexpected_failure",
+  "variable_conflict",
 ]);
 
 export const sanitizeCliText = (detail: string): string =>
@@ -444,8 +451,12 @@ export const diagnosticForError = (
     const safeDetails = Object.fromEntries(
       Object.entries(error.details).filter(([key, value]) => {
         if (!safeDiagnosticKeys.has(key)) return false;
-        if (key === "requestPath" || key === "correlationId")
-          return typeof value === "string" && value.length <= 256;
+        if (
+          key === "requestPath" ||
+          key === "correlationId" ||
+          key === "variableNames"
+        )
+          return typeof value === "string" && value.length <= 512;
         return (
           safeDiagnosticNumericKeys.has(key) &&
           typeof value === "number" &&

@@ -336,11 +336,17 @@ const validateContext = (value: unknown): WorktreeContext => {
     throw new CliInvocationError(
       "worktree context must contain only opaque ids",
     );
-  // Before a Project is linked a worktree may hold only the explicit
-  // repository choice; otherwise the profile and Project ids are required.
+  // Navigation (Project and Environment) can be cleared without dropping the
+  // Server Profile pin or a complete repository choice. An Environment still
+  // requires its Project, and a Project still requires its profile.
+  const hasChoice = choiceKeys.length === 3;
+  const hasProfile = keys.includes("serverProfileId");
+  const hasProject = keys.includes("projectId");
+  const hasEnvironment = keys.includes("environmentId");
   if (
-    choiceKeys.length !== 3 &&
-    (!keys.includes("serverProfileId") || !keys.includes("projectId"))
+    (hasEnvironment && !hasProject) ||
+    (hasProject && !hasProfile) ||
+    (!hasChoice && !hasProfile)
   )
     throw new CliInvocationError(
       "worktree context must contain only opaque ids",

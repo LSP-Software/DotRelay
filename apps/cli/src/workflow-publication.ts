@@ -2,16 +2,25 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   assertPublicationAccepted,
+  type BaselineConflict,
+  type BaselineResolution,
+  changedVariableIdsSinceBaseline,
   createPublicationArtifacts,
   type DecodedVariable,
   decodeSyncVariables,
   type PublicationContext,
+  reconcilePublicationBaseline,
   reviewPublication,
   type SyncPageWire,
+  withResolvedConflicts,
 } from "@dotrelay/client";
 import { generateEncryptionKeyPair, sha384 } from "@dotrelay/contracts";
 import { listEnvironments, listTeams } from "./admin";
 import type { ParsedArguments } from "./args";
+import {
+  readPublicationBaseline,
+  writePublicationBaseline,
+} from "./baseline-store";
 import { classifyVariablesInteractively } from "./classify-ui";
 import { reviewFrame, stepDone } from "./components";
 import {
@@ -41,6 +50,8 @@ import {
 } from "./value-diff";
 import {
   adminClient,
+  ask,
+  bytesToHex,
   confirmSilent,
   safeProjectEpoch,
   type WorkflowOptions,
@@ -135,7 +146,9 @@ export const variablesFromDotenv = (
     ...existing
       .filter((variable) => !used.has(variable.id) && !variable.tombstone)
       .map((variable) =>
-        Object.freeze({ ...variable, value: null, tombstone: true }),
+        variable.value === null
+          ? Object.freeze({ ...variable })
+          : Object.freeze({ ...variable, value: null, tombstone: true }),
       ),
   ]);
 };
@@ -223,20 +236,312 @@ export const destinationFor = async (
   });
 };
 
+export type PublicationReconciliation = Readonly<{
+  readonly baseline: readonly DecodedVariable[];
+  readonly draft: readonly DecodedVariable[];
+  readonly baselineRevisionId: string;
+  readonly baselineHash: Uint8Array;
+  readonly emptyAnchor: boolean;
+  readonly environmentId: string;
+  readonly actorUserId: string;
+}>;
+
+const sameHash = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1)
+    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  return difference === 0;
+};
+
+const baselineStillVerifiable = (
+  page: SyncPageWire,
+  reconciliation: PublicationReconciliation,
+): boolean => {
+  if (reconciliation.emptyAnchor) return true;
+  return page.revisions.some(
+    (revision) =>
+      revision.id === reconciliation.baselineRevisionId &&
+      sameHash(revision.digest, reconciliation.baselineHash),
+  );
+};
+
+const maskConflictValue = (
+  value: string | null | undefined,
+  reveal: boolean,
+  unreadable: boolean,
+): string => {
+  if (unreadable)
+    return "changed on another Device; value not readable on this Device";
+  if (value === undefined) return "absent";
+  if (value === null) return "not set";
+  return reveal ? value : "••••";
+};
+
+const conflictLines = (
+  conflict: BaselineConflict,
+  reveal: boolean,
+): readonly string[] => {
+  const ownership =
+    conflict.local?.ownership ?? conflict.remote?.ownership ?? "SHARED_VALUE";
+  const label = ownership === "SHARED_VALUE" ? "shared" : "user-defined";
+  return [
+    `${conflict.name} (${label}) conflicts: ${conflict.kinds.join(", ")}`,
+    `  base: ${maskConflictValue(conflict.base?.tombstone ? undefined : conflict.base?.value, reveal, false)}`,
+    `  local: ${maskConflictValue(conflict.local?.tombstone ? undefined : conflict.local?.value, reveal, false)}`,
+    `  remote: ${maskConflictValue(
+      conflict.remote?.tombstone ? undefined : conflict.remote?.value,
+      reveal,
+      conflict.remoteUnreadable,
+    )}`,
+    conflict.otherUserOwned
+      ? "  This Value is owned by another User. The only choice is keep remote."
+      : `  Choose ${conflict.choices.join(", ")}.`,
+  ];
+};
+
+const normalizeResolution = (
+  answer: string,
+  choices: readonly BaselineResolution[],
+): BaselineResolution | null => {
+  const normalized = answer.trim().toLowerCase().replace(/\s+/g, " ");
+  const choice = (
+    normalized === "keep local"
+      ? "local"
+      : normalized === "keep remote"
+        ? "remote"
+        : normalized
+  ) as BaselineResolution;
+  return choices.includes(choice) ? choice : null;
+};
+
+const resolveConflicts = async (
+  options: WorkflowOptions,
+  parsed: ParsedArguments,
+  conflicts: readonly BaselineConflict[],
+): Promise<ReadonlyMap<string, BaselineResolution>> => {
+  if (conflicts.length === 0) return new Map();
+  const names = conflicts.map((conflict) => conflict.name).join(", ");
+  if (options.noInput)
+    throw new CliError(
+      "conflict",
+      `publication paused because ${names} changed both locally and on the Server Profile. Nothing was published and the input file is unchanged. Re-run without --no-input to choose which side to keep.`,
+      {
+        conflictCount: conflicts.length,
+        variableNames: names.slice(0, 512),
+      },
+      "variable_conflict",
+    );
+  const output = options.terminal?.output ?? process.stderr;
+  const choices = new Map<string, BaselineResolution>();
+  for (const conflict of conflicts) {
+    output.write(`${conflictLines(conflict, parsed.reveal).join("\n")}\n`);
+    const answer = await ask(
+      options,
+      `Choose for ${conflict.name} (${conflict.choices.join(" / ")})`,
+    );
+    const choice = normalizeResolution(answer, conflict.choices);
+    if (!choice)
+      throw new CliInvocationError(
+        `choose one of ${conflict.choices.join(", ")} for ${conflict.name}`,
+      );
+    choices.set(conflict.key, choice);
+  }
+  return choices;
+};
+
+const zeroHash = (): Uint8Array => new Uint8Array(48);
+
+const hashFromHex = (hex: string): Uint8Array => {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1)
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  return bytes;
+};
+
+export const preparePublicationBaseline = async (
+  options: WorkflowOptions,
+  synced: Awaited<ReturnType<typeof syncWorkflow>>,
+  inputPath: string,
+): Promise<
+  Readonly<{
+    readonly snapshot: readonly DecodedVariable[];
+    readonly notice: string | null;
+    readonly reconciliation: Omit<PublicationReconciliation, "draft">;
+  }>
+> => {
+  const environmentId = synced.page.environmentId;
+  const currentId = synced.page.currentHeadId ?? environmentId;
+  const currentHash = synced.page.currentHeadHash ?? zeroHash();
+  const currentEmpty = synced.page.currentHeadId === null;
+  const recorded = await readPublicationBaseline(
+    options.stateDirectory,
+    environmentId,
+    inputPath,
+  );
+  const recordedEmpty =
+    recorded !== null &&
+    recorded.revisionId === environmentId &&
+    recorded.headHash === "0".repeat(96);
+  const recordedVerifiable =
+    recorded !== null &&
+    (recordedEmpty ||
+      synced.page.revisions.some(
+        (revision) =>
+          revision.id === recorded.revisionId &&
+          bytesToHex(revision.digest) === recorded.headHash,
+      ));
+  const fallbackNotice =
+    "The recorded Publication Baseline is no longer in verified history, so this publication is reconciled against the Environment as it is now.";
+  const persistFallback = async (
+    notice: string | null,
+  ): Promise<
+    Readonly<{
+      readonly snapshot: readonly DecodedVariable[];
+      readonly notice: string | null;
+      readonly reconciliation: Omit<PublicationReconciliation, "draft">;
+    }>
+  > => {
+    await writePublicationBaseline(options.stateDirectory, {
+      environmentId,
+      inputPath,
+      revisionId: currentId,
+      headHash: bytesToHex(currentHash),
+    });
+    return Object.freeze({
+      snapshot: synced.variables,
+      notice,
+      reconciliation: Object.freeze({
+        baseline: synced.variables,
+        baselineRevisionId: currentId,
+        baselineHash: currentHash,
+        emptyAnchor: currentEmpty,
+        environmentId,
+        actorUserId: synced.workflow.publicationContext.actorUserId,
+      }),
+    });
+  };
+  if (!recorded || !recordedVerifiable)
+    return persistFallback(recorded ? fallbackNotice : null);
+  if (recordedEmpty)
+    return Object.freeze({
+      snapshot: Object.freeze([]),
+      notice: null,
+      reconciliation: Object.freeze({
+        baseline: Object.freeze([]),
+        baselineRevisionId: environmentId,
+        baselineHash: zeroHash(),
+        emptyAnchor: true,
+        environmentId,
+        actorUserId: synced.workflow.publicationContext.actorUserId,
+      }),
+    });
+  const snapshot = synced.workflow.session
+    .revisionSnapshots()
+    .get(recorded.revisionId);
+  if (!snapshot) return persistFallback(fallbackNotice);
+  return Object.freeze({
+    snapshot,
+    notice: null,
+    reconciliation: Object.freeze({
+      baseline: snapshot,
+      baselineRevisionId: recorded.revisionId,
+      baselineHash: hashFromHex(recorded.headHash),
+      emptyAnchor: false,
+      environmentId,
+      actorUserId: synced.workflow.publicationContext.actorUserId,
+    }),
+  });
+};
+
+const draftForRollback = (
+  remote: readonly DecodedVariable[],
+  prepared: readonly DecodedVariable[],
+  rollback: Readonly<{
+    target: string;
+    ids: readonly string[];
+    values: ReadonlyMap<string, string | null>;
+  }>,
+): readonly PublicationDraft[] => {
+  const selected = new Set(rollback.ids);
+  const remoteIds = new Set(remote.map((variable) => variable.id));
+  const fromRemote = remote.map((variable) => {
+    if (!selected.has(variable.id))
+      return Object.freeze({ ...variable, hasDraftChange: false });
+    const value = rollback.values.get(variable.id);
+    const next = Object.freeze({
+      ...variable,
+      value: value === undefined ? variable.value : value,
+    });
+    return toPublicationVariable(next, remote);
+  });
+  const restored = prepared
+    .filter(
+      (variable) => selected.has(variable.id) && !remoteIds.has(variable.id),
+    )
+    .map((variable) =>
+      Object.freeze({
+        ...variable,
+        value: rollback.values.get(variable.id) ?? variable.value,
+        hasDraftChange: true,
+      }),
+    );
+  return Object.freeze([...fromRemote, ...restored]);
+};
+
 export const publish = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
   variables: readonly DecodedVariable[],
   mutation: "GENESIS" | "MANIFEST_UPDATE" | "ROLLBACK",
-  rollback?: Readonly<{ target: string; ids: readonly string[] }>,
+  rollback?: Readonly<{
+    target: string;
+    ids: readonly string[];
+    values: ReadonlyMap<string, string | null>;
+  }>,
+  reconciliation?: PublicationReconciliation,
 ): Promise<Record<string, unknown>> => {
   const synced = await syncWorkflow(options, parsed);
+  let draftVariables: readonly PublicationDraft[];
+  if (mutation === "ROLLBACK" && rollback)
+    draftVariables = draftForRollback(synced.variables, variables, rollback);
+  else if (reconciliation) {
+    if (!baselineStillVerifiable(synced.page, reconciliation))
+      throw new CliError(
+        "conflict",
+        "the recorded Publication Baseline is no longer in verified history. Nothing was published and the input file is unchanged. Run dotrelay pull, then try again.",
+        {},
+        "baseline_unverifiable",
+      );
+    const outcome = reconcilePublicationBaseline({
+      baseline: reconciliation.baseline,
+      draft: reconciliation.draft,
+      remote: synced.variables,
+      remoteChangedVariableIds: changedVariableIdsSinceBaseline(
+        synced.page,
+        reconciliation.baselineRevisionId,
+        reconciliation.emptyAnchor,
+      ),
+      actorUserId: reconciliation.actorUserId,
+    });
+    const choices = await resolveConflicts(options, parsed, outcome.conflicts);
+    draftVariables = withResolvedConflicts(outcome, choices);
+  } else
+    draftVariables = variables.map((variable) =>
+      toPublicationVariable(variable, synced.variables),
+    );
+  const effectiveMutation =
+    mutation === "ROLLBACK"
+      ? "ROLLBACK"
+      : synced.page.currentHeadId === null
+        ? "GENESIS"
+        : "MANIFEST_UPDATE";
   const context: PublicationContext = {
     ...synced.workflow.publicationContext,
     expectedHeadId: synced.page.currentHeadId,
     expectedHeadHash: synced.page.currentHeadHash,
     projectEpoch: safeProjectEpoch(synced.page.projectEpoch),
-    mutation,
+    mutation: effectiveMutation,
     ...(rollback
       ? {
           rollbackTargetId: rollback.target,
@@ -244,15 +549,12 @@ export const publish = async (
         }
       : {}),
   };
-  const draftVariables = variables.map((variable) =>
-    toPublicationVariable(variable, synced.variables),
-  );
   if (!draftVariables.some((variable) => variable.hasDraftChange))
     return {
       revision: synced.page.currentHeadId,
       lanes: 0,
       tombstones: 0,
-      message: "Already published",
+      message: "up to date, nothing to publish",
       ...pendingActionsField(synced.workflow.pendingActions),
     };
   const changes = draftVariables
@@ -377,9 +679,11 @@ export const publish = async (
         : "transient";
     throw new CliError(
       category,
-      category === "conflict"
-        ? "the publication conflicts with current Server Profile state"
-        : `the Server Profile could not publish the Revision (${code})`,
+      code === "stale_head"
+        ? "the Environment changed after this publication was reconciled. Nothing further was published. Run the command again to reconcile from the recorded baseline."
+        : category === "conflict"
+          ? "the publication conflicts with current Server Profile state"
+          : `the Server Profile could not publish the Revision (${code})`,
       {},
       code,
     );

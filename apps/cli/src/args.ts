@@ -208,11 +208,13 @@ export const USAGE: Record<string, string> = {
   diff: "dotrelay diff",
   status: "dotrelay status",
   context: "dotrelay context",
+  "context reselect": "dotrelay context reselect",
   history: "dotrelay history",
   rollback:
     "dotrelay rollback <revision-id-or-ordinal> --variable <variable-name-or-id>…",
   help: "dotrelay help",
   "profile add": "dotrelay profile add <name> <origin>",
+  "profile rebind": "dotrelay profile rebind <name> <origin>",
   "profile use": "dotrelay profile use <name>",
   "profile list": "dotrelay profile list",
   "device enroll": "dotrelay device enroll",
@@ -290,6 +292,14 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   ],
   status: ["profile", "json"],
   context: ["profile", "environment", "remote", "noInput", "json"],
+  "context reselect": [
+    "profile",
+    "environment",
+    "remote",
+    "noInput",
+    "force",
+    "json",
+  ],
   history: [
     "profile",
     "environment",
@@ -312,6 +322,7 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   ],
   help: [],
   "profile add": ["noInput", "json"],
+  "profile rebind": ["noInput", "force", "json"],
   "profile use": ["json"],
   "profile list": ["json"],
   "device enroll": ["profile", "noInput", "json", "output"],
@@ -339,7 +350,8 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
 export const SUBCOMMANDS: Readonly<
   Partial<Record<CommandName, readonly string[]>>
 > = {
-  profile: ["add", "use", "list"],
+  profile: ["add", "rebind", "use", "list"],
+  context: ["reselect"],
   device: [
     "enroll",
     "begin",
@@ -398,9 +410,23 @@ const validateCommand = (parsed: MutableArguments) => {
   const label = `${command}${parsed.subcommand ? ` ${parsed.subcommand}` : ""}`;
   const usage = usageForLabel(label);
   const allowed = SUBCOMMANDS[command];
-  if (allowed && (!parsed.subcommand || !allowed.includes(parsed.subcommand)))
+  const subcommandOptional = command === "context";
+  if (
+    allowed &&
+    !subcommandOptional &&
+    (!parsed.subcommand || !allowed.includes(parsed.subcommand))
+  )
     throw new CliInvocationError(
       `${command} requires one of: ${allowed.join(", ")}; usage: ${usage}`,
+    );
+  if (
+    allowed &&
+    subcommandOptional &&
+    parsed.subcommand &&
+    !allowed.includes(parsed.subcommand)
+  )
+    throw new CliInvocationError(
+      `${command} does not accept ${parsed.subcommand}; usage: ${usageForLabel(command)}`,
     );
   if (!allowed && parsed.subcommand)
     throw new CliInvocationError(
@@ -461,7 +487,11 @@ const validateCommand = (parsed: MutableArguments) => {
     Record<CommandName, number | readonly number[]>
   > = {
     profile:
-      parsed.subcommand === "add" ? 2 : parsed.subcommand === "use" ? 1 : 0,
+      parsed.subcommand === "add" || parsed.subcommand === "rebind"
+        ? 2
+        : parsed.subcommand === "use"
+          ? 1
+          : 0,
     device: 0,
     project: 0,
     env: parsed.subcommand === "use" && parsed.environment ? 0 : 1,
@@ -614,7 +644,8 @@ export const parseArguments = (
       (parsed.command === "profile" ||
         parsed.command === "device" ||
         parsed.command === "project" ||
-        parsed.command === "env") &&
+        parsed.command === "env" ||
+        parsed.command === "context") &&
       !parsed.subcommand
     ) {
       parsed.subcommand = token;

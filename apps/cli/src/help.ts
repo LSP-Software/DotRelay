@@ -154,6 +154,15 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     },
     examples: ["dotrelay context"],
   },
+  "context reselect": {
+    about:
+      "Clear a stale Project or Environment selection in this worktree. Device keys and trusted Revision history stay where they are. An invalid context file is backed up before it is removed.",
+    options: {
+      noInput: "never prompt; requires --force to approve the change",
+      force: "approve clearing the selection without a prompt",
+    },
+    examples: ["dotrelay context reselect"],
+  },
   history: {
     about:
       "List the verified Revisions of the Environment with readable dates, per-Revision change context, and a #ordinal per Revision. history --json keeps the documented revision metadata for automation.",
@@ -215,6 +224,19 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   "profile list": {
     about: "List the saved Server Profiles and mark the selected one.",
     examples: ["dotrelay profile list"],
+  },
+  "profile rebind": {
+    about:
+      "Point a saved Server Profile at a moved origin or a restored service. The command shows the old and new origin and server identity, keeps Device keys, and resets trusted Revision continuity only for Environments whose history no longer verifies.",
+    positional: [
+      "<name>  The saved profile name.",
+      "<origin>  The origin to pin; a missing scheme defaults to https.",
+    ],
+    options: {
+      noInput: "never prompt; requires --force to approve the rebind",
+      force: "approve the rebind without a prompt",
+    },
+    examples: ["dotrelay profile rebind work https://relay.example"],
   },
   "device enroll": {
     about:
@@ -574,7 +596,13 @@ const renderGroupHelp = (command: CommandName): string => {
 
 export const renderCommandHelp = (label: string): string => {
   const [command, sub] = label.split(" ");
-  if (command && SUBCOMMANDS[command as CommandName] && !sub)
+  // `context` still runs with no subcommand. Only its repair verb is nested.
+  if (
+    command &&
+    command !== "context" &&
+    SUBCOMMANDS[command as CommandName] &&
+    !sub
+  )
     return renderGroupHelp(command as CommandName);
   return renderLeafHelp(label);
 };
@@ -597,6 +625,7 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["profile add", "Save a server connection"],
   ["profile use", "Select the global Server Profile"],
   ["profile list", "List saved Server Profiles"],
+  ["profile rebind", "Re-pin a Server Profile after its origin moves"],
   ["logout", "Remove the local session"],
   ["device enroll", "Bootstrap or begin Device enrollment"],
   ["device begin", "Begin dual-control enrollment"],
@@ -608,6 +637,7 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["device transfer", "Hand the account key to another Device"],
   ["device revoke-wrapper", "Retire an active Recovery Code wrapper"],
   ["context", "Detect the GitHub Repository"],
+  ["context reselect", "Clear a stale Project or Environment selection"],
   ["project link", "Link a Project explicitly"],
   ["project rotate", "Advance the Project epoch and seal a new key"],
   ["env use", "Select an Environment by id or label"],

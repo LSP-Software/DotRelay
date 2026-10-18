@@ -164,6 +164,17 @@ export {
   wrappingAssociatedData,
 } from "./storage/wrapping";
 export {
+  applyBaselineResolution,
+  type BaselineConflict,
+  type BaselineConflictKind,
+  type BaselineReconciliation,
+  type BaselineResolution,
+  changedVariableIdsSinceBaseline,
+  type ReconciledVariable,
+  reconcilePublicationBaseline,
+  withResolvedConflicts,
+} from "./sync/baseline";
+export {
   createEpochRotationArtifacts,
   type EpochRotationArtifacts,
   type EpochRotationInput,

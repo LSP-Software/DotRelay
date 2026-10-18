@@ -4,9 +4,11 @@ import type { NetworkPolicy } from "./network";
 import {
   addServerProfile,
   createFileProfileCatalog,
+  rebindServerProfile,
   resolveServerProfile,
   useServerProfile,
 } from "./profile";
+import { resetTrustedEnvironmentHistory } from "./repair";
 import { defaultOrigin } from "./version";
 
 describe("CLI Server Profile catalog", () => {
@@ -364,6 +366,63 @@ describe("CLI Server Profile catalog", () => {
       await (await import("node:fs/promises"))
         .unlink(path)
         .catch(() => undefined);
+    }
+  });
+
+  test("rebind shows the old and new identity and resets history only after approval", async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const directory = `${import.meta.dir}/.tmp-rebind-${crypto.randomUUID()}`;
+    const path = `${directory}/profiles.json`;
+    await mkdir(directory);
+    const store = createFileProfileCatalog(path);
+    const current = createCapabilitiesDocument({
+      origin: "https://relay.example",
+      serverProfileId: "00000000-0000-4000-8000-000000000042",
+    });
+    const moved = createCapabilitiesDocument({
+      origin: "https://moved.example",
+      serverProfileId: "00000000-0000-4000-8000-000000000042",
+    });
+    const head = `${directory}/head-00000000-0000-4000-8000-000000000099.json`;
+    const device = `${directory}/device-00000000-0000-4000-8000-000000000042.json`;
+    await writeFile(head, "{}\n");
+    await writeFile(device, "{}\n");
+    try {
+      await addServerProfile(store, "work", current.origin, {
+        fetch: async () => Response.json(current),
+      });
+      await expect(
+        rebindServerProfile(store, "work", moved.origin, {
+          fetch: async () => Response.json(moved),
+          approve: async () => false,
+          catalogContents: async () => Bun.file(path).text(),
+          backupCatalog: async () => `${directory}/unused.json`,
+        }),
+      ).rejects.toThrow("declined");
+      expect((await store.read()).profiles[0]?.origin).toBe(current.origin);
+      const rebound = await rebindServerProfile(store, "work", moved.origin, {
+        fetch: async () => Response.json(moved),
+        approve: async (statement) => {
+          expect(statement).toContain("was origin https://relay.example");
+          expect(statement).toContain("origin https://moved.example");
+          expect(statement).toContain("Device keys are preserved");
+          return true;
+        },
+        catalogContents: async () => Bun.file(path).text(),
+        backupCatalog: async (contents) => {
+          const backup = `${directory}/profile-catalog-backup.json`;
+          await Bun.write(backup, contents);
+          return backup;
+        },
+      });
+      expect(rebound.identityChanged).toBe(true);
+      expect((await store.read()).profiles[0]?.origin).toBe(moved.origin);
+      expect(await resetTrustedEnvironmentHistory(directory)).toBe(1);
+      expect(await Bun.file(head).exists()).toBe(false);
+      expect(await Bun.file(device).exists()).toBe(true);
+    } finally {
+      const { rm } = await import("node:fs/promises");
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });
