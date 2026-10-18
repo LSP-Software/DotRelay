@@ -7,11 +7,6 @@ export type PullValueGroups = Readonly<{
   readonly unreadable: readonly DecodedVariable[];
 }>;
 
-const byName = (
-  variables: readonly DecodedVariable[],
-): readonly DecodedVariable[] =>
-  [...variables].sort((left, right) => left.name.localeCompare(right.name));
-
 export const classifyPullValues = (
   variables: readonly DecodedVariable[],
   actorUserId: string | undefined,
@@ -35,11 +30,13 @@ export const classifyPullValues = (
     else if (variable.required) requiredMissing.push(variable);
     else optionalAbsent.push(variable);
   }
+  // Keep the Environment's order. Pull writes these groups straight into
+  // the dotenv file, and sorting them by name changes that file.
   return Object.freeze({
-    present: Object.freeze(byName(present)),
-    optionalAbsent: Object.freeze(byName(optionalAbsent)),
-    requiredMissing: Object.freeze(byName(requiredMissing)),
-    unreadable: Object.freeze(byName(unreadable)),
+    present: Object.freeze(present),
+    optionalAbsent: Object.freeze(optionalAbsent),
+    requiredMissing: Object.freeze(requiredMissing),
+    unreadable: Object.freeze(unreadable),
   });
 };
 

@@ -291,7 +291,7 @@ export const reconcilePublicationBaseline = (
   }
 
   return Object.freeze({
-    merged: Object.freeze(sortVariables(merged)),
+    merged: Object.freeze(merged),
     conflicts: Object.freeze(
       [...conflicts].sort((left, right) =>
         left.name === right.name
@@ -301,15 +301,6 @@ export const reconcilePublicationBaseline = (
     ),
   });
 };
-
-const sortVariables = (
-  variables: readonly ReconciledVariable[],
-): ReconciledVariable[] =>
-  [...variables].sort((left, right) =>
-    left.name === right.name
-      ? left.id.localeCompare(right.id)
-      : left.name.localeCompare(right.name),
-  );
 
 export const applyBaselineResolution = (
   conflict: BaselineConflict,
@@ -369,7 +360,7 @@ export const withResolvedConflicts = (
     if (!choice) throw new TypeError(`conflict ${conflict.key} is unresolved`);
     resolved.push(...applyBaselineResolution(conflict, choice));
   }
-  return Object.freeze(sortVariables(resolved));
+  return Object.freeze(resolved);
 };
 
 export const changedVariableIdsSinceBaseline = (

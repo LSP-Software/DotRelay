@@ -41,4 +41,20 @@ describe("pull value classification", () => {
     ]);
     expect(groups.unreadable.map((entry) => entry.name)).toEqual(["THEIRS"]);
   });
+
+  test("keeps Environment order so a pull file is not alphabetical", () => {
+    const groups = classifyPullValues(
+      [
+        variable("SHARED_VALUE", "two"),
+        variable("USER_VALUE", "secret"),
+        variable("EMPTY", ""),
+      ],
+      "actor",
+    );
+    expect(groups.present.map((entry) => entry.name)).toEqual([
+      "SHARED_VALUE",
+      "USER_VALUE",
+      "EMPTY",
+    ]);
+  });
 });
