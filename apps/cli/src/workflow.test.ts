@@ -1166,7 +1166,7 @@ describe("protected CLI workflows", () => {
     expect(JSON.parse(retried.stdout)).toMatchObject({
       ok: true,
       lanes: 0,
-      message: "Already published",
+      message: "up to date, nothing to publish",
     });
     const history = await run(
       [
@@ -1210,6 +1210,21 @@ describe("protected CLI workflows", () => {
       ok: true,
       message: "Published",
     });
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
     await Bun.write(input, "DATABASE_URL=postgres://rotated\n");
     const retried = await run(publishArgs, runtime);
     expect(retried.exitCode).toBe(0);
@@ -2743,7 +2758,7 @@ describe("protected CLI workflows", () => {
     }
   });
 
-  test("push --no-input refuses to publish removed Variables without --force", async () => {
+  test("push keeps a Variable this file published before a pull recorded it", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "DATABASE_URL=postgres://secret\nAPI_KEY=tok\n");
@@ -2781,16 +2796,11 @@ describe("protected CLI workflows", () => {
       ],
       runtime,
     );
-    expect(result.exitCode).toBe(2);
-    const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
-    expect(diagnostic).toMatchObject({
-      ok: false,
-      category: "invocation",
-      code: "deletion_requires_approval",
-      changedCount: 1,
-      exitCode: 2,
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      message: "up to date, nothing to publish",
     });
-    expect(String(diagnostic.detail)).toContain("--force");
     const history = await run(
       [
         "history",
@@ -2832,7 +2842,41 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(initialized.exitCode).toBe(0);
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
     await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const refused = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(refused.exitCode).toBe(2);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      ok: false,
+      code: "deletion_requires_approval",
+    });
     const result = await run(
       [
         "push",
@@ -3550,7 +3594,7 @@ describe("protected CLI workflows", () => {
     expect(rolled.exitCode).toBe(0);
     const body = JSON.parse(rolled.stdout) as Record<string, unknown>;
     expect(body.ok).toBe(true);
-    expect(body.message).toBe("Already published");
+    expect(body.message).toBe("up to date, nothing to publish");
   });
 
   test("a bare rollback refuses a Variable answer that names nothing", async () => {
@@ -5518,5 +5562,329 @@ describe("pull against an unreadable Manifest", () => {
     });
     expect(String(diagnostic.detail)).toContain("device enroll");
     expect(result.stdout).not.toContain("actor-secret");
+  });
+});
+
+describe("publication baseline reconciliation", () => {
+  const apiToken = "77777777-7777-4777-8777-777777777777";
+  const databaseUrl = "88888888-8888-4888-8888-888888888888";
+
+  const sealEpochGrant = async (
+    bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
+    plaintextKey: Uint8Array,
+  ): Promise<string> => {
+    const publicKey = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!publicKey) throw new Error("Device encryption public key is missing");
+    const grant = await createProjectEpochGrantBootstrap({
+      serverProfileId: profile.pin.serverProfileId,
+      teamId: ids.team,
+      projectId: ids.project,
+      projectEpoch: 1,
+      senderDeviceId: ids.device,
+      recipientDeviceId: ids.device,
+      recipientX25519PublicKey: new Uint8Array(
+        await crypto.subtle.exportKey("raw", publicKey),
+      ),
+      recipientEncryptionPublicKey: publicKey,
+      signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
+      plaintextKey,
+    });
+    return Buffer.from(grant.canonicalBytes).toString("base64");
+  };
+
+  const revisionWireFor = async (
+    artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
+    parentId: string | null,
+    parentHash: Uint8Array | null,
+  ) => {
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    const parsedRevision = parseProtocolObject(revisionObject.bytes);
+    const digest = await sha384(revisionObject.bytes);
+    return {
+      id: artifacts.request.revision.id,
+      digest,
+      parentId,
+      parentHash,
+      mutation: parsedRevision.get(35) as number,
+      projectEpoch: 1n,
+      authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
+      rollbackTargetId: null,
+      objects: await Promise.all(
+        artifacts.stagedObjects.map(async (object) => ({
+          objectId: object.objectId,
+          canonicalBytes: object.bytes,
+          digest: await sha384(object.bytes),
+        })),
+      ),
+    };
+  };
+
+  const scriptSyncPage = (
+    runtime: Awaited<ReturnType<typeof setup>>,
+    page: Parameters<typeof encodeSyncPage>[0],
+  ) => {
+    const fetcher: FetchFunction = async (input, init) => {
+      const request = new Request(input as never, init);
+      if (new URL(request.url).pathname.endsWith("/sync"))
+        return new Response(encodeSyncPage(page));
+      return runtime.fetch(input, init);
+    };
+    return fetcher;
+  };
+
+  const seededRuntime = async (
+    second: Readonly<{
+      readonly name: string;
+      readonly value: string;
+      readonly id: string;
+      readonly hasDraftChange: boolean;
+    }>[],
+  ) => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const encryption = bootstrap.keyMaterial.encryptionPublicKey;
+    if (!encryption) throw new Error("Device encryption public key is missing");
+    const signing = await generateSigningKeyPair();
+    const heldKey = crypto.getRandomValues(new Uint8Array(32));
+    const baseContext = {
+      serverProfileId: profile.pin.serverProfileId,
+      teamId: ids.team,
+      projectId: ids.project,
+      environmentId: ids.environment,
+      actorUserId: ids.user,
+      actorDeviceId: ids.device,
+      projectEpoch: 1,
+      valueRecipientPublicKey: encryption,
+      signingPrivateKey: signing.privateKey,
+      sharedValueSecret: heldKey,
+    };
+    const first = await createPublicationArtifacts(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          description: "",
+          ownership: "SHARED_VALUE",
+          value: "one",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        ...baseContext,
+        expectedHeadId: ids.environment,
+        expectedHeadHash: new Uint8Array(48),
+      },
+    );
+    const firstWire = await revisionWireFor(
+      first,
+      ids.environment,
+      new Uint8Array(48),
+    );
+    const firstObject = first.stagedObjects.find(
+      (object) => object.objectId === first.request.revision.protocolObjectId,
+    );
+    if (!firstObject) throw new Error("revision object is missing");
+    const chainedVariables = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        description: string;
+        ownership: "SHARED_VALUE";
+        value: string;
+        required: true;
+        hasDraftChange: boolean;
+      }
+    >([
+      [
+        apiToken,
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          description: "",
+          ownership: "SHARED_VALUE",
+          value: "one",
+          required: true,
+          hasDraftChange: false,
+        },
+      ],
+    ]);
+    for (const variable of second)
+      chainedVariables.set(variable.id, {
+        id: variable.id,
+        name: variable.name,
+        description: "",
+        ownership: "SHARED_VALUE",
+        value: variable.value,
+        required: true,
+        hasDraftChange: variable.hasDraftChange,
+      });
+    const chained = await createPublicationArtifacts(
+      [...chainedVariables.values()],
+      {
+        ...baseContext,
+        expectedHeadId: first.request.revision.id,
+        expectedHeadHash: await sha384(firstObject.bytes),
+        mutation: "MANIFEST_UPDATE",
+      },
+    );
+    const secondWire = await revisionWireFor(
+      chained,
+      first.request.revision.id,
+      firstWire.digest,
+    );
+    const runtime = await setup({
+      bootstrap,
+      signingTrustKeys: [
+        bytesToHex(await rawSigningPublicKey(signing.publicKey)),
+      ],
+      epochGrant: await sealEpochGrant(bootstrap, heldKey),
+      revisions: [firstWire],
+    });
+    return { runtime, firstWire, secondWire };
+  };
+
+  test("a pulled baseline keeps a teammate's addition when pushing an unrelated edit", async () => {
+    const { runtime, firstWire, secondWire } = await seededRuntime([
+      {
+        id: databaseUrl,
+        name: "DATABASE_URL",
+        value: "postgres",
+        hasDraftChange: true,
+      },
+    ]);
+    const output = `${runtime.stateDirectory}/dotenv`;
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
+    const baseline = await Bun.file(
+      `${runtime.stateDirectory}/baselines.json`,
+    ).text();
+    expect(baseline).toContain(firstWire.id);
+    await Bun.write(output, 'API_TOKEN="two"\n');
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        gitTrackingProbe: gitOutside,
+        fetch: scriptSyncPage(runtime, {
+          environmentId: ids.environment,
+          trustedRevisionId: ids.environment,
+          trustedRevisionHash: new Uint8Array(48),
+          currentHeadId: secondWire.id,
+          currentHeadHash: secondWire.digest,
+          projectEpoch: 1n,
+          revisions: [firstWire, secondWire],
+          nextCursor: null,
+        }),
+      },
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout)).toMatchObject({
+      ok: true,
+      message: "Published",
+    });
+    expect(pushed.stderr).not.toContain("deletion_requires_approval");
+  });
+
+  test("a same-value conflict under --no-input leaves the file and baseline untouched", async () => {
+    const { runtime, firstWire, secondWire } = await seededRuntime([
+      {
+        id: apiToken,
+        name: "API_TOKEN",
+        value: "three",
+        hasDraftChange: true,
+      },
+    ]);
+    const output = `${runtime.stateDirectory}/dotenv`;
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
+    await Bun.write(output, 'API_TOKEN="two"\n');
+    const baselineBefore = await Bun.file(
+      `${runtime.stateDirectory}/baselines.json`,
+    ).text();
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        gitTrackingProbe: gitOutside,
+        fetch: scriptSyncPage(runtime, {
+          environmentId: ids.environment,
+          trustedRevisionId: ids.environment,
+          trustedRevisionHash: new Uint8Array(48),
+          currentHeadId: secondWire.id,
+          currentHeadHash: secondWire.digest,
+          projectEpoch: 1n,
+          revisions: [firstWire, secondWire],
+          nextCursor: null,
+        }),
+      },
+    );
+    expect(pushed.exitCode).toBe(4);
+    expect(JSON.parse(pushed.stderr)).toMatchObject({
+      ok: false,
+      category: "conflict",
+      code: "variable_conflict",
+      variableNames: "API_TOKEN",
+    });
+    expect(await Bun.file(output).text()).toBe('API_TOKEN="two"\n');
+    expect(
+      await Bun.file(`${runtime.stateDirectory}/baselines.json`).text(),
+    ).toBe(baselineBefore);
+    expect(pushed.stderr).not.toContain("two");
+    expect(pushed.stderr).not.toContain("three");
   });
 });

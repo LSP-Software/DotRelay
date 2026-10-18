@@ -1,4 +1,4 @@
-import { unlink } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   type CliDeviceStorage,
@@ -43,7 +43,6 @@ import {
   kv,
   note,
   paint,
-  reviewFrame,
   statusCard,
   stepDone,
   type Tone,
@@ -97,17 +96,18 @@ import {
   type FetchFunction,
   profileCatalogPath,
   profileNameFromOrigin,
+  rebindServerProfile,
   resolveServerProfile,
   useServerProfile,
   withDefaultProtocol,
 } from "./profile";
-import type { TerminalIo } from "./terminal";
 import {
-  confirmAction,
-  rewriteRegion,
-  selectOption,
-  supportsRawMode,
-} from "./ui";
+  backupMetadataContents,
+  reselectWorktreeNavigation,
+  resetTrustedEnvironmentHistory,
+} from "./repair";
+import type { TerminalIo } from "./terminal";
+import { confirmAction, rewriteRegion, selectOption } from "./ui";
 import { defaultOrigin, version } from "./version";
 import {
   approveDeviceEnrollment,
@@ -1309,6 +1309,62 @@ const execute = async (
       },
     };
   }
+  if (parsed.command === "profile" && parsed.subcommand === "rebind") {
+    const [name, origin] = parsed.positionals;
+    if (!name || !origin)
+      throw new CliInvocationError("profile rebind requires a name and origin");
+    const profilePath = runtime.profilePath ?? profileCatalogPath();
+    const stateDirectory = runtime.stateDirectory ?? dirname(profilePath);
+    const output = runtime.terminal?.output ?? process.stderr;
+    const rebound = await rebindServerProfile(store, name, origin, {
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.networkPolicy
+        ? { networkPolicy: runtime.networkPolicy }
+        : { networkPolicy: probeNetworkPolicy }),
+      approve: async (statement) => {
+        output.write(`${statement}\n`);
+        if (parsed.force) return true;
+        if (parsed.noInput) return false;
+        if (runtime.confirm) return runtime.confirm(statement);
+        return confirmAction(statement, {
+          ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+          ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+          silent: true,
+        });
+      },
+      catalogContents: async () => {
+        try {
+          return await readFile(profilePath, "utf8");
+        } catch {
+          return "";
+        }
+      },
+      backupCatalog: (contents) =>
+        backupMetadataContents(stateDirectory, "profile-catalog", contents),
+    });
+    if (!rebound.identityChanged)
+      return {
+        value: {
+          profile: rebound.profile.name,
+          origin: rebound.profile.origin,
+          serverProfileId: rebound.profile.pin.serverProfileId,
+          identityChanged: false,
+          message: "Server Profile identity is unchanged",
+        },
+      };
+    const resetCount = await resetTrustedEnvironmentHistory(stateDirectory);
+    return {
+      value: {
+        profile: rebound.profile.name,
+        origin: rebound.profile.origin,
+        serverProfileId: rebound.profile.pin.serverProfileId,
+        identityChanged: true,
+        backupPath: rebound.backupPath,
+        historyResetCount: resetCount,
+        message: `${rebound.statement} Backup: ${rebound.backupPath}. Reset trusted history for ${resetCount} Environment record${resetCount === 1 ? "" : "s"}.`,
+      },
+    };
+  }
   if (parsed.command === "profile" && parsed.subcommand === "use") {
     const name = parsed.positionals[0];
     if (!name) throw new Error("profile use requires a name");
@@ -1372,6 +1428,39 @@ const execute = async (
     const credentials = localCredentials(runtime);
     await createSessionStore(credentials).remove(profile.pin);
     return { value: { profile: profile.name, loggedOut: true } };
+  }
+  if (parsed.command === "context" && parsed.subcommand === "reselect") {
+    const profilePath = runtime.profilePath ?? profileCatalogPath();
+    const stateDirectory = runtime.stateDirectory ?? dirname(profilePath);
+    const contextPath =
+      runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+    const output = runtime.terminal?.output ?? process.stderr;
+    const reselected = await reselectWorktreeNavigation({
+      contextPath,
+      stateDirectory,
+      approve: async (statement) => {
+        output.write(`${statement}\n`);
+        if (parsed.force) return true;
+        if (parsed.noInput) return false;
+        if (runtime.confirm) return runtime.confirm(statement);
+        return confirmAction(statement, {
+          ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+          ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+          silent: true,
+        });
+      },
+    });
+    return {
+      value: {
+        backupPath: reselected.backupPath,
+        removed: reselected.removed,
+        projectCleared: reselected.projectCleared,
+        environmentCleared: reselected.environmentCleared,
+        message: reselected.removed
+          ? `Removed the invalid worktree context. Backup: ${reselected.backupPath}. Device keys and trusted Revision history were kept.`
+          : `Cleared the Project and Environment selection. Backup: ${reselected.backupPath}. Device keys and trusted Revision history were kept.`,
+      },
+    };
   }
   if (parsed.command === "context") {
     const profile = await resolveServerProfile(

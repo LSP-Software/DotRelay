@@ -9,6 +9,7 @@ import {
   writeWorktreeContext,
 } from "./context";
 import { CliError, CliInvocationError } from "./errors";
+import { reselectWorktreeNavigation } from "./repair";
 
 describe("repository and worktree context", () => {
   test("normalizes SSH and HTTPS remotes to one GitHub identity", () => {
@@ -104,6 +105,40 @@ describe("repository and worktree context", () => {
       await (await import("node:fs/promises"))
         .unlink(file)
         .catch(() => undefined);
+    }
+  });
+
+  test("reselect clears navigation and keeps device trust files", async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const directory = `${import.meta.dir}/.tmp-reselect-${crypto.randomUUID()}`;
+    const contextPath = `${directory}/config`;
+    const headPath = `${directory}/head-00000000-0000-4000-8000-000000000099.json`;
+    const devicePath = `${directory}/device-00000000-0000-4000-8000-000000000001.json`;
+    await mkdir(directory);
+    await writeWorktreeContext(contextPath, {
+      serverProfileId: "00000000-0000-4000-8000-000000000001",
+      projectId: "00000000-0000-4000-8000-000000000002",
+      environmentId: "00000000-0000-4000-8000-000000000003",
+    });
+    await writeFile(headPath, "{}\n");
+    await writeFile(devicePath, "{}\n");
+    try {
+      const result = await reselectWorktreeNavigation({
+        contextPath,
+        stateDirectory: directory,
+        approve: async () => true,
+      });
+      expect(result.projectCleared).toBe(true);
+      expect(result.environmentCleared).toBe(true);
+      expect(await readWorktreeContext(contextPath)).toEqual({
+        serverProfileId: "00000000-0000-4000-8000-000000000001",
+      });
+      expect(await Bun.file(headPath).exists()).toBe(true);
+      expect(await Bun.file(devicePath).exists()).toBe(true);
+      expect(await Bun.file(result.backupPath).text()).toContain("projectId");
+    } finally {
+      const { rm } = await import("node:fs/promises");
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

@@ -470,3 +470,210 @@ export const resolveServerProfile = async (
     );
   return profile;
 };
+
+const readCatalogForRepair = async (
+  store: ProfileCatalogStore,
+): Promise<Readonly<{ catalog: ProfileCatalog; invalid: boolean }>> => {
+  try {
+    return Object.freeze({ catalog: await store.read(), invalid: false });
+  } catch (error) {
+    if (
+      error instanceof CliError &&
+      (error.code === "profile_catalog_invalid" ||
+        error.code === "profile_selection_invalid")
+    )
+      return Object.freeze({ catalog: emptyCatalog(), invalid: true });
+    throw error;
+  }
+};
+
+const discoverUnpinnedProfile = async (
+  requestedOrigin: string,
+  options: Readonly<{
+    readonly fetch?: FetchFunction;
+    readonly runtime?: Crypto;
+    readonly networkPolicy?: NetworkPolicy;
+  }>,
+): Promise<Readonly<{ origin: string; pin: ServerProfilePin }>> => {
+  const origin = validateOrigin(withDefaultProtocol(requestedOrigin));
+  const schemeWasImplicit = !explicitHttpScheme.test(requestedOrigin.trim());
+  const policy = options.networkPolicy ?? defaultNetworkPolicy;
+  const fetcher = options.fetch ?? fetch;
+  const attempt = async (
+    profileOrigin: string,
+  ): Promise<Readonly<{ origin: string; pin: ServerProfilePin }>> => {
+    const response = (
+      await fetchWithinBudget(
+        fetcher,
+        `${profileOrigin}/api/v1/capabilities`,
+        {
+          method: "GET",
+          redirect: "error",
+          headers: { Accept: "application/json" },
+        },
+        {
+          policy,
+          retry: {
+            verdict: (candidate) =>
+              transientResponseVerdict(candidate, policy.now),
+          },
+        },
+      )
+    ).response;
+    if (!response.ok)
+      throw new CliError(
+        "transient",
+        "could not read Server Profile capabilities",
+        {},
+        "capabilities_unavailable",
+      );
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new CliError(
+        "crypto",
+        "Server Profile capabilities were not valid JSON",
+        {},
+        "capabilities_invalid",
+      );
+    }
+    try {
+      const trusted = await establishServerProfileTrust(body, {
+        requestedOrigin: profileOrigin,
+        allowRebind: true,
+        ...(options.runtime ? { runtime: options.runtime } : {}),
+      });
+      return Object.freeze({ origin: profileOrigin, pin: trusted.pin });
+    } catch (error) {
+      if (error instanceof CliError) throw error;
+      const code =
+        error instanceof Error && "code" in error
+          ? String(error.code)
+          : "trust_failed";
+      throw new CliError(
+        "crypto",
+        "Server Profile trust could not be established",
+        {},
+        code,
+      );
+    }
+  };
+  const loopbackHttpFallback =
+    schemeWasImplicit && origin.startsWith("https://") && isLoopbackHost(origin)
+      ? `http://${new URL(origin).host}`
+      : undefined;
+  try {
+    return await attempt(origin);
+  } catch (error) {
+    if (error instanceof NetworkAttemptError && loopbackHttpFallback) {
+      try {
+        return await attempt(loopbackHttpFallback);
+      } catch (fallbackError) {
+        if (fallbackError instanceof NetworkAttemptError)
+          throw networkFailureCliError(
+            fallbackError,
+            `the Server Profile capabilities endpoint at ${loopbackHttpFallback}`,
+            "capabilities_unavailable",
+          );
+        throw fallbackError;
+      }
+    }
+    if (error instanceof NetworkAttemptError)
+      throw networkFailureCliError(
+        error,
+        `the Server Profile capabilities endpoint at ${origin}`,
+        "capabilities_unavailable",
+      );
+    throw error;
+  }
+};
+
+export const rebindStatement = (
+  name: string,
+  current: CliServerProfile | null,
+  next: Readonly<{ origin: string; pin: ServerProfilePin }>,
+  invalid: boolean,
+): string => {
+  const nextIdentity = `origin ${next.origin} with server profile ${next.pin.serverProfileId}`;
+  if (invalid || !current)
+    return `The stored profile catalog is invalid and will be replaced. Re-trust profile ${name} at ${nextIdentity}. Device keys are preserved; trusted Revision continuity for Environments whose history is no longer verifiable is reset per Environment.`;
+  return `Re-trust profile ${name} at ${nextIdentity} (was origin ${current.origin} with server profile ${current.pin.serverProfileId}). Device keys are preserved; trusted Revision continuity for Environments whose history is no longer verifiable is reset per Environment.`;
+};
+
+export const rebindServerProfile = async (
+  store: ProfileCatalogStore,
+  name: string,
+  requestedOrigin: string,
+  options: Readonly<{
+    readonly fetch?: FetchFunction;
+    readonly runtime?: Crypto;
+    readonly networkPolicy?: NetworkPolicy;
+    readonly approve: (statement: string) => Promise<boolean>;
+    readonly backupCatalog: (contents: string) => Promise<string>;
+    readonly catalogContents: () => Promise<string>;
+  }>,
+): Promise<
+  Readonly<{
+    readonly profile: CliServerProfile;
+    readonly backupPath: string;
+    readonly identityChanged: boolean;
+    readonly statement: string;
+  }>
+> => {
+  if (!profileName.test(name))
+    throw new CliInvocationError(
+      "profile name must contain only letters, digits, ., _, or -",
+    );
+  const { catalog, invalid } = await readCatalogForRepair(store);
+  const current =
+    catalog.profiles.find((profile) => profile.name === name) ?? null;
+  if (!invalid && !current)
+    throw new CliInvocationError("Server Profile not found");
+  const discovered = await discoverUnpinnedProfile(requestedOrigin, options);
+  const identityChanged =
+    invalid ||
+    current === null ||
+    current.origin !== discovered.origin ||
+    current.pin.serverProfileId !== discovered.pin.serverProfileId ||
+    current.pin.origin !== discovered.pin.origin;
+  const statement = rebindStatement(name, current, discovered, invalid);
+  if (!identityChanged)
+    return Object.freeze({
+      profile: current ?? Object.freeze({ name, ...discovered }),
+      backupPath: "",
+      identityChanged: false,
+      statement,
+    });
+  if (!(await options.approve(statement)))
+    throw new CliInvocationError(
+      "profile rebind was declined; nothing was saved",
+    );
+  const backupPath = await options.backupCatalog(
+    await options.catalogContents(),
+  );
+  const profile = Object.freeze({
+    name,
+    origin: discovered.origin,
+    pin: discovered.pin,
+  });
+  const profiles = invalid
+    ? Object.freeze([profile])
+    : Object.freeze([
+        ...catalog.profiles.filter((candidate) => candidate.name !== name),
+        profile,
+      ]);
+  await store.write(
+    Object.freeze({
+      version: 1,
+      profiles,
+      selected: catalog.selected ?? name,
+    }),
+  );
+  return Object.freeze({
+    profile,
+    backupPath,
+    identityChanged: true,
+    statement,
+  });
+};

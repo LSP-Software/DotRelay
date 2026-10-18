@@ -112,6 +112,15 @@ requires the profile to be supplied explicitly and never guesses a Team or Envir
 the worktree, while `init` and `push` may additionally use the Project's single active
 Environment.
 
+`dotrelay context reselect` clears a stale Project or Environment selection. It copies the
+worktree context into the state directory before replacing it, and it never deletes Device
+keys or trusted Revision history. `--no-input` requires `--force`.
+
+`dotrelay profile rebind <name> <origin>` re-pins a saved profile after its origin or server
+identity moves. The approval names the previous and next origin and server profile id, keeps
+Device keys, and resets trusted Revision continuity only for Environments whose saved head is
+no longer in verified history. `--no-input` requires `--force`.
+
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. The Server Profile creates a default Environment in the same transaction when the
 Project is new, and returns the existing Project and Environment on retry. It requires an
@@ -133,8 +142,16 @@ every Variable name (never Values) and lets you toggle Team vs Only you before c
 shows that board only for names that are not already in the Environment; existing Variables keep
 their ownership. JSON and `--classify` still use `shared` and `user-defined`. `--classify NAME=shared`
 or `--classify NAME=user-defined` skips the board when every new Variable is covered, and is required
-under `--no-input` for unclassified names. Existing Variable ids are retained, omitted Variables
-become signed tombstones, and empty Values remain Values rather than being dropped.
+under `--no-input` for unclassified names. Existing Variable ids are retained, and empty Values
+remain Values rather than being dropped. A push is reconciled against the Publication Baseline
+recorded for that file. `pull` records the head it wrote, including a pull that finds no
+changes. A file with no baseline uses the head at the start of that push. A teammate's addition
+or edit to a Variable this file did not change is kept. The same Variable changed on both sides
+pauses the publication until the operator chooses keep local, keep remote, or, when the
+definition also differs, merge. Under `--no-input` that conflict fails, names the Variables,
+and leaves the file and the baseline untouched. A successful publication does not move the
+baseline. A Variable that is in the baseline and absent from the file becomes a signed
+tombstone.
 
 Interactive `init` and `push` confirm only Variables that will change. The default review is
 masked: each change lists the Variable name, its ownership (shared or user-defined), and the
@@ -181,15 +198,20 @@ file differs from the Environment, `--no-input` alone retains the file and fails
 actionable diagnostic (`output_conflict`) that points at `--force`. With `--force` under
 `--no-input`, or with the interactive confirmation, the replacement is written and the prior file
 is retained at `<path>.previous` so it stays recoverable. `pull --output <path>` and
-`pull --stdout` first verify the complete v3 history from genesis. A missing Value fails the
-export before any output is written. Terminal stdout requires explicit `--reveal` and
-confirmation; ordinary diagnostics never contain Values.
+`pull --stdout` first verify the complete v3 history from genesis. A Value this Device cannot
+decrypt fails the export before anything is written and names the Variables. A required
+Variable with no value is named too: interactive pull asks for it without echoing, and
+`--no-input` says to add it to a dotenv file and push. Optional Variables with no value are
+left out of the file, and the report counts them. Terminal stdout requires explicit `--reveal`
+and confirmation; ordinary diagnostics never contain Values.
 
 `diff` compares `.env` with the decrypted Environment and prints added, updated, and removed
 Variables as names, ownership, and change types, with no Values. `--reveal` prints the unified
 Value diff for that one run instead. Unchanged Variables are omitted. `--from <dotenv>` selects
-another file. JSON reports only names and counts, with or without `--reveal`. A missing Value
-fails the comparison before any output is written.
+another file. JSON reports only names and counts, with or without `--reveal`. Optional
+Variables with no value are omitted and counted. A required Variable with no value, or a Value
+this Device cannot decrypt, fails the comparison before any output is written and names the
+Variables.
 
 `history` renders the verified Revisions in a readable form: each Revision gets a `#ordinal`,
 a readable UTC date, its mutation (Genesis, Update, or Rollback, naming the target Revision

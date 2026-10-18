@@ -1,18 +1,25 @@
 import { readFile, stat } from "node:fs/promises";
 import type { ParsedArguments } from "./args";
-import { kv, reviewFrame } from "./components";
+import { writePublicationBaseline } from "./baseline-store";
+import { kv, note, reviewFrame } from "./components";
 import { diffDotenvEntries, parseDotenv, serializeDotenv } from "./dotenv";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
+import { classifyPullValues, pullVariableNames } from "./pull-values";
 import { pad, visibleWidth } from "./theme";
-import { isUnreadableTerminalError, paint } from "./ui";
+import { isUnreadableTerminalError, paint, readTerminalSecret } from "./ui";
 import {
   destinationRows,
   pullConfirmQuestion,
   renderEnvDiff,
   reviewBody,
 } from "./value-diff";
-import type { WorkflowOptions } from "./workflow-core";
+import {
+  ask,
+  bytesToHex,
+  confirmSilent,
+  type WorkflowOptions,
+} from "./workflow-core";
 import { renderSyncedHistory } from "./workflow-history";
 import {
   classificationFromOwnership,
@@ -21,6 +28,7 @@ import {
   guardPullOutputAgainstGit,
   localPullChanges,
   pendingActionsField,
+  preparePublicationBaseline,
   publish,
   resolveRollbackTarget,
   resolveVariableReferences,
@@ -46,7 +54,6 @@ export {
   enrollFirstDevice,
 } from "./workflow-device-enrollment";
 
-import { ask, confirmSilent } from "./workflow-core";
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -80,21 +87,28 @@ export const runProtectedWorkflow = async (
     }
     const local = parseDotenv(source);
     const synced = await syncWorkflow(options, parsed);
-    const missing = synced.variables.filter(
-      (variable) => !variable.tombstone && variable.value === null,
+    const groups = classifyPullValues(
+      synced.variables,
+      synced.workflow.publicationContext.actorUserId,
     );
-    if (missing.length > 0)
+    if (groups.unreadable.length > 0 || groups.requiredMissing.length > 0) {
+      const blocking =
+        groups.unreadable.length > 0
+          ? groups.unreadable
+          : groups.requiredMissing;
+      const names = pullVariableNames(blocking);
       throw new CliError(
         "incomplete-export",
-        "the Environment has Values that are not available on this Device",
-        { missingCount: missing.length },
+        groups.unreadable.length > 0
+          ? `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask an owner or admin to provision access, then try again.`
+          : `${names} are required and have no value. Add them with dotrelay push, or run dotrelay pull to enter them.`,
+        { missingCount: blocking.length, variableNames: names.slice(0, 512) },
         "missing_values",
       );
-    const remote = synced.variables
-      .filter((variable) => !variable.tombstone)
-      .map((variable) =>
-        Object.freeze({ name: variable.name, value: variable.value ?? "" }),
-      );
+    }
+    const remote = groups.present.map((variable) =>
+      Object.freeze({ name: variable.name, value: variable.value ?? "" }),
+    );
     const changes = withOwnership(
       diffDotenvEntries(local, remote),
       synced.variables,
@@ -119,15 +133,21 @@ export const runProtectedWorkflow = async (
       changes.filter(
         (change) => change.kind === "added" || change.kind === "updated",
       ).length;
+    const optionalOmitted = groups.optionalAbsent.length;
     if (parsed.json)
       return {
         added,
         updated,
         removed,
         unchangedCount,
+        ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
         ...pendingActionsField(synced.workflow.pendingActions),
       };
-    return { stdout: renderEnvDiff(changes, parsed.reveal) };
+    const omission =
+      optionalOmitted > 0
+        ? `\n${optionalOmitted} optional ${optionalOmitted === 1 ? "Variable has" : "Variables have"} no value and were omitted\n`
+        : "";
+    return { stdout: `${renderEnvDiff(changes, parsed.reveal)}${omission}` };
   }
   if (parsed.command === "pull") {
     const outputPath = parsed.stdout ? undefined : (parsed.output ?? ".env");
@@ -140,23 +160,77 @@ export const runProtectedWorkflow = async (
     if (outputPath)
       gitExclusion = await guardPullOutputAgainstGit(options, outputPath);
     const synced = await syncWorkflow(options, parsed);
-    const missing = synced.variables.filter(
-      (variable) => !variable.tombstone && variable.value === null,
+    const groups = classifyPullValues(
+      synced.variables,
+      synced.workflow.publicationContext.actorUserId,
     );
-    if (missing.length > 0)
+    if (groups.unreadable.length > 0) {
+      const names = pullVariableNames(groups.unreadable);
       throw new CliError(
         "incomplete-export",
-        "the Environment has Values that are not available on this Device",
-        { missingCount: missing.length },
+        `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask an owner or admin to provision access, then pull again. Nothing was written.`,
+        {
+          missingCount: groups.unreadable.length,
+          variableNames: names.slice(0, 512),
+        },
         "missing_values",
       );
+    }
+    const supplied = new Map<string, string>();
+    if (groups.requiredMissing.length > 0) {
+      const names = pullVariableNames(groups.requiredMissing);
+      if (options.noInput)
+        throw new CliError(
+          "incomplete-export",
+          `${names} are required and have no value. Add them to a dotenv file and run dotrelay push, or re-run pull without --no-input to enter them. Nothing was written.`,
+          {
+            missingCount: groups.requiredMissing.length,
+            variableNames: names.slice(0, 512),
+          },
+          "missing_values",
+        );
+      (options.terminal?.output ?? process.stderr).write(
+        `${note(
+          `${names} are required and have no value. Enter each one; the input stays hidden.`,
+        )}\n`,
+      );
+      for (const variable of groups.requiredMissing) {
+        supplied.set(
+          variable.name,
+          await readTerminalSecret(`Value for ${variable.name}`, {
+            ...(options.terminal ? { terminal: options.terminal } : {}),
+            ...(options.prompt ? { prompt: options.prompt } : {}),
+            noInput: options.noInput,
+          }),
+        );
+      }
+    }
     await shareEnvironmentWithPeerDevices(synced);
-    const entries = synced.variables
-      .filter((variable) => !variable.tombstone)
-      .map((variable) => ({
+    const entries = [
+      ...groups.present.map((variable) => ({
         name: variable.name,
         value: variable.value ?? "",
-      }));
+      })),
+      ...groups.requiredMissing.map((variable) => ({
+        name: variable.name,
+        value: supplied.get(variable.name) ?? "",
+      })),
+    ];
+    const optionalOmitted = groups.optionalAbsent.length;
+    const omissionNote =
+      optionalOmitted > 0
+        ? `; ${optionalOmitted} optional ${optionalOmitted === 1 ? "Variable has" : "Variables have"} no value and were omitted`
+        : "";
+    const rememberBaseline = async (): Promise<void> => {
+      if (!outputPath) return;
+      const hash = synced.page.currentHeadHash ?? new Uint8Array(48);
+      await writePublicationBaseline(options.stateDirectory, {
+        environmentId: synced.page.environmentId,
+        inputPath: outputPath,
+        revisionId: synced.page.currentHeadId ?? synced.page.environmentId,
+        headHash: bytesToHex(hash),
+      });
+    };
     const contents = serializeDotenv(entries);
     if (parsed.stdout && parsed.reveal && !options.noInput) {
       const destination = await destinationFor(
@@ -194,14 +268,17 @@ export const runProtectedWorkflow = async (
           entries,
           synced.variables,
         );
-        if (changes !== null && changes.length === 0)
+        if (changes !== null && changes.length === 0) {
+          await rememberBaseline();
           return {
             output: outputPath,
             unchanged: true,
+            ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
             ...(gitExclusion ? { gitExclusion } : {}),
             ...pendingActionsField(synced.workflow.pendingActions),
-            message: "No changes found",
+            message: `No changes found${omissionNote}`,
           };
+        }
         if (options.noInput) {
           if (!options.force)
             throw new CliError(
@@ -239,10 +316,12 @@ export const runProtectedWorkflow = async (
       terminal: options.stdoutIsTerminal,
       reveal: parsed.reveal,
     });
-    if (outputPath)
+    if (outputPath) {
       await atomicWriteProtectedFile(outputPath, contents, {
         ...(replaceExisting ? { retainPrevious: true } : {}),
       });
+      await rememberBaseline();
+    }
     const exclusionNote =
       gitExclusion === "established"
         ? `; ${outputPath} is excluded from Git via .git/info/exclude so it will not be tracked`
@@ -257,9 +336,10 @@ export const runProtectedWorkflow = async (
           ...(gitExclusion ? { gitExclusion } : {}),
           ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
           ...pendingActionsField(synced.workflow.pendingActions),
+          ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
           message: replaceExisting
-            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous${exclusionNote}`
-            : `Wrote ${entries.length} values to ${outputPath}${exclusionNote}`,
+            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
+            : `Wrote ${entries.length} values to ${outputPath}${exclusionNote}${omissionNote}`,
         };
   }
   if (parsed.command === "init" || parsed.command === "push") {
@@ -276,20 +356,33 @@ export const runProtectedWorkflow = async (
       );
     }
     const synced = await syncWorkflow(options, parsed);
-    const empty = synced.page.currentHeadId === null;
-    const existing = synced.variables;
+    const prepared = await preparePublicationBaseline(
+      options,
+      synced,
+      inputPath,
+    );
+    if (prepared.notice)
+      (options.terminal?.output ?? process.stderr).write(
+        `${note(prepared.notice)}\n`,
+      );
+    // Classification and draft ids follow the Environment this invocation
+    // just verified. The Publication Baseline is only the third side of
+    // reconciliation; using it here would treat a teammate's later publish
+    // as a brand-new Variable.
     const entries = await classify(
       options,
       parsed,
       parseDotenv(source),
-      existing,
+      synced.variables,
     );
-    const variables = variablesFromDotenv(entries, existing);
+    const variables = variablesFromDotenv(entries, synced.variables);
     const result = await publish(
       options,
       parsed,
       variables,
-      empty ? "GENESIS" : "MANIFEST_UPDATE",
+      synced.page.currentHeadId === null ? "GENESIS" : "MANIFEST_UPDATE",
+      undefined,
+      { ...prepared.reconciliation, draft: variables },
     );
     // The worktree selection is persisted only after a successful
     // publication, so the Environment created by init is reused by later
@@ -438,6 +531,7 @@ export const runProtectedWorkflow = async (
     return publish(options, parsed, variables, "ROLLBACK", {
       target,
       ids: selectedIds,
+      values: targetValues,
     });
   }
   throw new CliInvocationError(
