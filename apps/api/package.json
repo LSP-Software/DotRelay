@@ -14,8 +14,8 @@
   "dependencies": {
     "@dotrelay/contracts": "workspace:*",
     "@dotrelay/database": "workspace:*",
-    "better-auth": "^1.7.1",
-    "hono": "4.13.7",
+    "better-auth": "^1.7.9",
+    "hono": "4.13.13",
     "ioredis": "^5.11.1"
   }
 }
