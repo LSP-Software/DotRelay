@@ -19,7 +19,7 @@ Two surfaces, one protocol:
   `pull`, `diff`, `status` are the everyday commands; power commands
   (`device backup`, `device recover`, `device begin/approve/complete`,
   `project link`, `env use`, `context`, `history`, `rollback`, `profile
-  add/use/list/remove`, `project rotate`) are listed by `dotrelay help`. The
+add/use/list/remove`, `project rotate`) are listed by `dotrelay help`. The
   CLI is how Teams and Projects get created (`dotrelay init`); the web app
   has no team/project creation surface (decision D-002).
 - **Web app**: manages the variables of existing Projects (view, edit,
@@ -61,7 +61,7 @@ adjectives, and verify claims against code.
   the client's memory. The browser holds the Account Master Key in memory
   only for the session (decision D-005); every new session re-unlocks it.
 - **Revocation is logical, not erasure.** A revoked Device's and a removed
-  member's *already-downloaded* plaintext cannot be erased. Copy must say so
+  member's _already-downloaded_ plaintext cannot be erased. Copy must say so
   instead of implying cleanup.
 - **Classical crypto, explicitly.** The v3 suite (X25519, Ed25519,
   HKDF-SHA-384, AES-256-GCM, SHA-384, native Web Crypto) provides no
@@ -83,17 +83,17 @@ adjectives, and verify claims against code.
 Use the `CONTEXT.md` definitions and avoid its listed alternatives. The ones
 UX copy most often gets wrong:
 
-| Term | Precise meaning | Never call it |
-|------|-----------------|---------------|
-| Account Master Key | the 256-bit anchor key, per User per Server Profile | master password, account password |
-| Recovery Code | the one-time, human-held, 13x4 emergency secret | backup password, recovery key file |
-| Encryption Password | a secret that only unlocks the AMK, never authenticates | login password, master password |
-| Device | a client installation authorized by one User | session, computer, "device" for a tab |
-| Publication | the staged, signed operation that creates a Revision | commit, push (in copy aimed at the concept), upload |
-| Rollback | a new Revision restoring earlier content, history preserved | revert, restore, delete |
-| Shared Value / User-defined Value | the two ownership kinds of a Variable's value | global value / personal value |
-| Server Profile | a named hosted or self-hosted service the client selects | instance, endpoint, "environment" |
-| Revision | an immutable recorded Manifest state | version, snapshot |
+| Term                              | Precise meaning                                             | Never call it                                       |
+| --------------------------------- | ----------------------------------------------------------- | --------------------------------------------------- |
+| Account Master Key                | the 256-bit anchor key, per User per Server Profile         | master password, account password                   |
+| Recovery Code                     | the one-time, human-held, 13x4 emergency secret             | backup password, recovery key file                  |
+| Encryption Password               | a secret that only unlocks the AMK, never authenticates     | login password, master password                     |
+| Device                            | a client installation authorized by one User                | session, computer, "device" for a tab               |
+| Publication                       | the staged, signed operation that creates a Revision        | commit, push (in copy aimed at the concept), upload |
+| Rollback                          | a new Revision restoring earlier content, history preserved | revert, restore, delete                             |
+| Shared Value / User-defined Value | the two ownership kinds of a Variable's value               | global value / personal value                       |
+| Server Profile                    | a named hosted or self-hosted service the client selects    | instance, endpoint, "environment"                   |
+| Revision                          | an immutable recorded Manifest state                        | version, snapshot                                   |
 
 ## Established UX decisions (do not relitigate)
 

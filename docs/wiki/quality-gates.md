@@ -1,6 +1,6 @@
 # Quality gates
 
-The fast gate runs formatting, Biome linting, strict TypeScript checks, workspace-boundary checks,
+The fast gate runs formatting, linting, strict TypeScript checks, workspace-boundary checks,
 the checked OpenAPI output comparison, and unit tests:
 
 ```sh
@@ -38,8 +38,9 @@ packages cannot import applications, all workspace dependencies use `workspace:*
 use public exports, undeclared imports and cycles are rejected, and runtime-neutral packages may
 not use browser-only or server-only facilities.
 
-The repository uses Biome as its sole formatter and linter. ESLint and Prettier are not part of the
-toolchain.
+The repository uses Bun's built-in `bun fmt` and `bun lint` as its formatter and linter. ESLint and
+Prettier are not part of the toolchain. Bun's canary channel is pinned because the built-in linter
+is not enabled in stable releases yet; `bun check` and `bun fmt` work on both.
 
 The required security gate is `bun run security:audit`; CI runs it with network access to the Bun
 advisory service. Dependency updates are never auto-merged.

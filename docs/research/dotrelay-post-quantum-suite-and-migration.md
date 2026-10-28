@@ -11,16 +11,16 @@ fixture; do not silently change what v1 means.
 
 Freeze v2 around this closed suite:
 
-| Purpose | `dotrelay-e2ee-v2` choice |
-| --- | --- |
-| Device and User recovery-wrapping encryption keys | Independent ML-KEM-768 and X25519 key pairs |
-| Grants and public-key envelopes | A composite ML-KEM-768 + X25519 KEM following NIST SP 800-227 section 4.6, then HKDF-SHA-384 and XChaCha20-Poly1305-IETF |
-| Device and User identity signatures | Independent ML-DSA-65 and Ed25519 signatures over the same canonical bytes; v2 verification requires both |
-| Content encryption | Existing XChaCha20-Poly1305-IETF with 256-bit keys and random 192-bit nonces |
-| Content-key derivation | HKDF-SHA-384 with the existing complete identifier and lane context |
-| Commitments and revision chain | Existing SHA-384 commitments |
-| Encoding | Existing closed deterministic-CBOR schemas, extended with a fixed suite and migration state |
-| Recovery Kit | Existing random 256-bit recovery secret and AEAD envelope, updated to contain v2 keys and a v2 suite floor |
+| Purpose                                           | `dotrelay-e2ee-v2` choice                                                                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Device and User recovery-wrapping encryption keys | Independent ML-KEM-768 and X25519 key pairs                                                                              |
+| Grants and public-key envelopes                   | A composite ML-KEM-768 + X25519 KEM following NIST SP 800-227 section 4.6, then HKDF-SHA-384 and XChaCha20-Poly1305-IETF |
+| Device and User identity signatures               | Independent ML-DSA-65 and Ed25519 signatures over the same canonical bytes; v2 verification requires both                |
+| Content encryption                                | Existing XChaCha20-Poly1305-IETF with 256-bit keys and random 192-bit nonces                                             |
+| Content-key derivation                            | HKDF-SHA-384 with the existing complete identifier and lane context                                                      |
+| Commitments and revision chain                    | Existing SHA-384 commitments                                                                                             |
+| Encoding                                          | Existing closed deterministic-CBOR schemas, extended with a fixed suite and migration state                              |
+| Recovery Kit                                      | Existing random 256-bit recovery secret and AEAD envelope, updated to contain v2 keys and a v2 suite floor               |
 
 ML-KEM and ML-DSA are final NIST standards, not experimental algorithms. FIPS 203 defines
 ML-KEM-768, and FIPS 204 defines ML-DSA-65

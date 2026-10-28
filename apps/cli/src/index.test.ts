@@ -95,7 +95,9 @@ describe("CLI foundation", () => {
       expect(requested).toEqual(["https://relay.example/api/v1/session"]);
       expect(result.stdout).not.toContain("session-token");
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
     }
@@ -163,7 +165,9 @@ describe("CLI foundation", () => {
       });
       expect(requested).toEqual(["https://other.example/api/v1/session"]);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
     }
@@ -207,10 +211,14 @@ describe("CLI foundation", () => {
         code: "repository_missing",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -260,10 +268,14 @@ describe("CLI foundation", () => {
       // the next run starts from the Git configuration again.
       expect(await Bun.file(contextPath).exists()).toBe(false);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -334,10 +346,14 @@ describe("CLI foundation", () => {
         '{"serverProfileId":"00000000-0000-4000-8000-000000000042","projectId":"00000000-0000-4000-8000-000000000002","repositoryRemote":"origin","repositoryOwner":"LSP-Software","repositoryName":"DotRelay","repositoryIdentity":"1311418611"}\n',
       );
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -410,10 +426,14 @@ describe("CLI foundation", () => {
         environmentId: "00000000-0000-4000-8000-000000000003",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -486,10 +506,14 @@ describe("CLI foundation", () => {
         environmentId: "00000000-0000-4000-8000-000000000003",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -553,10 +577,14 @@ describe("CLI foundation", () => {
       });
       expect(await Bun.file(contextPath).text()).toBe(saved);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -2405,10 +2433,14 @@ describe("explicit GitHub repository choice", () => {
         repositoryIdentity: "1311418612",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -2444,10 +2476,14 @@ describe("explicit GitHub repository choice", () => {
         githubRepositoryId: "1311418611",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -2480,10 +2516,14 @@ describe("explicit GitHub repository choice", () => {
       expect(result.stdout).not.toContain("-undefined");
       expect(result.stdout).not.toContain("undefined");
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -2517,10 +2557,14 @@ describe("explicit GitHub repository choice", () => {
       expect(detail).not.toContain("git@");
       expect(await Bun.file(contextPath).exists()).toBe(false);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -2566,10 +2610,14 @@ describe("explicit GitHub repository choice", () => {
         repositoryName: "DotRelay",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -2610,10 +2658,14 @@ describe("explicit GitHub repository choice", () => {
         repositoryIdentity: "1311418611",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -2677,10 +2729,14 @@ describe("explicit GitHub repository choice", () => {
         repositoryIdentity: "1311418612",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(contextPath)
         .catch(() => undefined);
     }
@@ -4182,7 +4238,9 @@ describe("status verifies the session and this Device", () => {
         nextAction: "run dotrelay setup <origin>",
       });
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(profilePath)
         .catch(() => undefined);
     }

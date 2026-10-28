@@ -266,10 +266,7 @@ export {
   verifyRevisionIntegrity,
   verifySignedProtocolObject,
 } from "./trust/verify";
-export {
-  type InlineValueHunk,
-  splitInlineValueDiff,
-} from "./values/diff";
+export { type InlineValueHunk, splitInlineValueDiff } from "./values/diff";
 export {
   absentUserDefinedValue,
   classifyUserDefinedValue,

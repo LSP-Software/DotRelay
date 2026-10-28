@@ -62,10 +62,7 @@ import type { WorkspaceBoundary } from "@/lib/workspace-boundary";
 // half-applied state.
 
 export type AccountRecoveryUnlockMethod =
-  | "recovery-code"
-  | "password"
-  | "passkey-prf"
-  | "transfer";
+  "recovery-code" | "password" | "passkey-prf" | "transfer";
 
 // The in-memory Account Master Key, held by the page in a ref and
 // accessed through this adapter so the key bytes never enter React state.

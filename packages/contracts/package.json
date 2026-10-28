@@ -5,10 +5,10 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "format": "biome format . --write",
-    "format:check": "biome format .",
-    "lint": "biome lint .",
-    "typecheck": "tsc --project tsconfig.json",
+    "format": "bun fmt",
+    "format:check": "bun fmt --check",
+    "lint": "bun lint",
+    "typecheck": "bun check",
     "test:unit": "bun test ../../scripts/contracts-unit.test.ts src/crypto.test.ts src/server-profile.test.ts src/protocol-api.test.ts src/account-key-ack.test.ts src/device-client.test.ts"
   },
   "dotrelay": {

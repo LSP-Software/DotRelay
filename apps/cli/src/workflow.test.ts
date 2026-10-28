@@ -388,9 +388,8 @@ const setup = async (
     }));
   await deviceStorage.save(bootstrap.bundle);
   // A completed enrollment always records its Device id next to the bundle.
-  const { writeDeviceId, deviceMetadataPath } = await import(
-    "./device-storage"
-  );
+  const { writeDeviceId, deviceMetadataPath } =
+    await import("./device-storage");
   await writeDeviceId(
     deviceMetadataPath(stateDirectory, profile.pin),
     profile.pin,
@@ -3728,7 +3727,9 @@ describe("protected CLI workflows", () => {
     expect(completePost?.body.certificateObjectId).toBe(
       artifact.certificateObjectId,
     );
-    await (await import("node:fs/promises"))
+    await (
+      await import("node:fs/promises")
+    )
       .unlink(requestPath)
       .catch(() => undefined);
   });

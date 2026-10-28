@@ -106,35 +106,35 @@ work and reports those limits instead of treating a stopped queue as success.
 
 All durations below are seconds.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `BASE_BRANCH` | `main` | PR target |
-| `MERGE_METHOD` | `squash` | `squash`, `merge`, or `rebase` |
-| `MERGE_ADMIN` | `0` | Explicit branch-protection bypass |
-| `OPENCODE_MODEL` | OpenCode default | Provider/model selection |
-| `OPENCODE_AGENT` | OpenCode default | Agent selection |
-| `MAX_SESSION_ATTEMPTS` | `3` | Fresh sessions before deferring an issue |
-| `SESSION_RETRY_DELAY` | `10` | Delay between fresh sessions |
-| `SESSION_TIMEOUT` | `3600` | Maximum time per OpenCode session |
-| `COMMAND_TIMEOUT` | `120` | Maximum time per Git/GitHub command |
-| `ISSUE_TIMEOUT` | `21600` | Maximum time per worker attempt, including CI |
-| `MAX_ISSUE_ATTEMPTS` | `3` | Task failures before local blocking |
-| `ISSUE_RETRY_DELAY` | `300` | Delay after a task failure |
-| `OUTAGE_RETRY_DELAY` | `60` | Initial outage retry delay |
-| `OUTAGE_RETRY_CAP` | `1800` | Maximum outage retry delay |
-| `MAX_REPAIR_ATTEMPTS` | `5` | Persisted successful repair-session budget |
-| `GH_RETRY_ATTEMPTS` | `6` | Worker command/read attempts |
-| `GH_RETRY_DELAY` | `2` | Initial worker command retry delay |
-| `CHECK_DISCOVERY_TIMEOUT` | `600` | Time for CI checks to appear |
-| `CHECK_TIMEOUT` | `7200` | Time for CI to finish in one worker attempt |
-| `CHECK_POLL_INTERVAL` | `10` | CI and merge polling interval |
-| `CHECK_SETTLE_SECONDS` | `30` | Wait for late-registering CI jobs |
-| `CI_RERUN_START_TIMEOUT` | `180` | Time for a workflow rerun to register |
-| `MERGE_TIMEOUT` | `3600` | Time to confirm the merge |
-| `ISSUE_CLOSE_TIMEOUT` | `300` | Time to confirm linked issue closure |
-| `ADVISORY_CHECK_REGEX` | `^CodeRabbit$` | Checks excluded from project CI |
-| `ALLOW_NO_CHECKS` | `0` | Explicitly allow a repository without CI |
-| `LOG_VIEW` | `pretty` | `pretty` or raw `json` output |
+| Variable                  | Default          | Purpose                                       |
+| ------------------------- | ---------------- | --------------------------------------------- |
+| `BASE_BRANCH`             | `main`           | PR target                                     |
+| `MERGE_METHOD`            | `squash`         | `squash`, `merge`, or `rebase`                |
+| `MERGE_ADMIN`             | `0`              | Explicit branch-protection bypass             |
+| `OPENCODE_MODEL`          | OpenCode default | Provider/model selection                      |
+| `OPENCODE_AGENT`          | OpenCode default | Agent selection                               |
+| `MAX_SESSION_ATTEMPTS`    | `3`              | Fresh sessions before deferring an issue      |
+| `SESSION_RETRY_DELAY`     | `10`             | Delay between fresh sessions                  |
+| `SESSION_TIMEOUT`         | `3600`           | Maximum time per OpenCode session             |
+| `COMMAND_TIMEOUT`         | `120`            | Maximum time per Git/GitHub command           |
+| `ISSUE_TIMEOUT`           | `21600`          | Maximum time per worker attempt, including CI |
+| `MAX_ISSUE_ATTEMPTS`      | `3`              | Task failures before local blocking           |
+| `ISSUE_RETRY_DELAY`       | `300`            | Delay after a task failure                    |
+| `OUTAGE_RETRY_DELAY`      | `60`             | Initial outage retry delay                    |
+| `OUTAGE_RETRY_CAP`        | `1800`           | Maximum outage retry delay                    |
+| `MAX_REPAIR_ATTEMPTS`     | `5`              | Persisted successful repair-session budget    |
+| `GH_RETRY_ATTEMPTS`       | `6`              | Worker command/read attempts                  |
+| `GH_RETRY_DELAY`          | `2`              | Initial worker command retry delay            |
+| `CHECK_DISCOVERY_TIMEOUT` | `600`            | Time for CI checks to appear                  |
+| `CHECK_TIMEOUT`           | `7200`           | Time for CI to finish in one worker attempt   |
+| `CHECK_POLL_INTERVAL`     | `10`             | CI and merge polling interval                 |
+| `CHECK_SETTLE_SECONDS`    | `30`             | Wait for late-registering CI jobs             |
+| `CI_RERUN_START_TIMEOUT`  | `180`            | Time for a workflow rerun to register         |
+| `MERGE_TIMEOUT`           | `3600`           | Time to confirm the merge                     |
+| `ISSUE_CLOSE_TIMEOUT`     | `300`            | Time to confirm linked issue closure          |
+| `ADVISORY_CHECK_REGEX`    | `^CodeRabbit$`   | Checks excluded from project CI               |
+| `ALLOW_NO_CHECKS`         | `0`              | Explicitly allow a repository without CI      |
+| `LOG_VIEW`                | `pretty`         | `pretty` or raw `json` output                 |
 
 Run `bun run test:runner` for regression tests. They use temporary Git repositories
 and fake GitHub/OpenCode commands. They exercise the real controller and worker

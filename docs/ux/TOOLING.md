@@ -11,12 +11,12 @@ Last verified: 2026-09-24 (campaign-2 bootstrap: the post-AMK audit).
 The toolchain is intentionally small. Do not merge these roles or add parallel
 UX/design tooling.
 
-| Layer | Role | Owned by |
-| --- | --- | --- |
-| Real browser | Experiencing the running app: navigating journeys, reproducing states, clicking through flows, inspecting rendered output, screenshots, verification after fixes | Oh My Pi native `browser` eval prelude (Puppeteer-backed) |
-| UX audit | User journeys, flow problems, onboarding, information architecture, navigation, empty states, missing actions, dead ends, confusing interactions, evidence-based findings, severity/prioritisation, "can the user accomplish the goal" | `ux-audit` skill |
-| Design guidance | Design guidance, UX writing, visual hierarchy, consistency, component-level UX, visual polish, interaction quality, accessibility considerations, anti-pattern detection, implementation guidance | `impeccable` skill |
-| Source code | Understanding why an observed problem exists; implementing fixes | normal repository work |
+| Layer           | Role                                                                                                                                                                                                                                   | Owned by                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Real browser    | Experiencing the running app: navigating journeys, reproducing states, clicking through flows, inspecting rendered output, screenshots, verification after fixes                                                                       | Oh My Pi native `browser` eval prelude (Puppeteer-backed) |
+| UX audit        | User journeys, flow problems, onboarding, information architecture, navigation, empty states, missing actions, dead ends, confusing interactions, evidence-based findings, severity/prioritisation, "can the user accomplish the goal" | `ux-audit` skill                                          |
+| Design guidance | Design guidance, UX writing, visual hierarchy, consistency, component-level UX, visual polish, interaction quality, accessibility considerations, anti-pattern detection, implementation guidance                                      | `impeccable` skill                                        |
+| Source code     | Understanding why an observed problem exists; implementing fixes                                                                                                                                                                       | normal repository work                                    |
 
 Source code is NOT a substitute for experiencing the product. A finding that was
 not observed in the running app (or in committed evidence such as the Playwright
@@ -34,20 +34,20 @@ REAL BROWSER (browser prelude)
 
 ## Installed tooling
 
-| Tool | Where | Version | Notes |
-| --- | --- | --- | --- |
-| Oh My Pi | `omp` v18.2.6 (global, `~/.bun/bin/omp`) | 18.2.6 | Harness for OMP-run sessions |
-| Opencode + T3 Code preview | opencode CLI (this environment) | — | Harness for the 2026-09-24 campaign; its `t3-code_preview_*` tools are the session's native browser driver (navigate, snapshot with ARIA text, click/type/press, resize, appearance, screenshots) |
-| Pi (standalone) | `pi` v0.85.1 (global) | 0.85.1 | Same skill runtime; `pi` also reads `.pi/skills/` (not needed here) |
-| Native browser | OMP `browser` eval prelude (Puppeteer/CDP via cmux) or the T3 Code preview browser above, whichever the running harness provides | — | **Do not install pi-playwright** unless a running harness provides no browser at all |
-| Impeccable | `.agents/skills/impeccable/` (project) | skill 4.3.1, launcher 4.0.0 (engine v0.1.5) | Design guidance skill + deterministic detectors + live-variant mode |
-| UX Audit skill | `.agents/skills/ux-audit/` (project) | 1.4.0 | Evidence-based audit methodology, 16 dimensions, reference material, `scripts/contrast-check.py` |
-| Product Marketing Context | `.agents/skills/product-marketing/` (project) | 2.1.0 (upstream coreyhaines31/marketingskills @ 5b2c000, 2026-09-04) | Maintains `.agents/product-marketing.md` |
-| Copywriting | `.agents/skills/copywriting/` (project) | 2.0.2 (same upstream/commit) | New explanatory copy only |
-| Copy Editing | `.agents/skills/copy-editing/` (project) | 2.0.0 (same upstream/commit) | Seven-sweeps diagnostic pass |
-| Developer Audience Context | `.agents/skills/developer-audience-context/` (project) | 1.0.0 (upstream jonathimer/devmarketing-skills @ 500b44b, 2026-03-03) | Maintains `.agents/developer-audience-context.md` |
-| Humanizer | `.agents/skills/humanizer/` (project) | upstream Aboudjem/humanizer-skill @ a58df06, 2026-09-06 | 55-pattern AI-tell detection, technical-voice final prose pass |
-| Docker | host Docker + Compose | 29.7.2 / v5.4.0 (2026-09-18; 29.1.3/v5.4.0 on the 2026-09-24 machine) | Postgres + Valkey backing services |
+| Tool                       | Where                                                                                                                            | Version                                                               | Notes                                                                                                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Oh My Pi                   | `omp` v18.2.6 (global, `~/.bun/bin/omp`)                                                                                         | 18.2.6                                                                | Harness for OMP-run sessions                                                                                                                                                                      |
+| Opencode + T3 Code preview | opencode CLI (this environment)                                                                                                  | —                                                                     | Harness for the 2026-09-24 campaign; its `t3-code_preview_*` tools are the session's native browser driver (navigate, snapshot with ARIA text, click/type/press, resize, appearance, screenshots) |
+| Pi (standalone)            | `pi` v0.85.1 (global)                                                                                                            | 0.85.1                                                                | Same skill runtime; `pi` also reads `.pi/skills/` (not needed here)                                                                                                                               |
+| Native browser             | OMP `browser` eval prelude (Puppeteer/CDP via cmux) or the T3 Code preview browser above, whichever the running harness provides | —                                                                     | **Do not install pi-playwright** unless a running harness provides no browser at all                                                                                                              |
+| Impeccable                 | `.agents/skills/impeccable/` (project)                                                                                           | skill 4.3.1, launcher 4.0.0 (engine v0.1.5)                           | Design guidance skill + deterministic detectors + live-variant mode                                                                                                                               |
+| UX Audit skill             | `.agents/skills/ux-audit/` (project)                                                                                             | 1.4.0                                                                 | Evidence-based audit methodology, 16 dimensions, reference material, `scripts/contrast-check.py`                                                                                                  |
+| Product Marketing Context  | `.agents/skills/product-marketing/` (project)                                                                                    | 2.1.0 (upstream coreyhaines31/marketingskills @ 5b2c000, 2026-09-04)  | Maintains `.agents/product-marketing.md`                                                                                                                                                          |
+| Copywriting                | `.agents/skills/copywriting/` (project)                                                                                          | 2.0.2 (same upstream/commit)                                          | New explanatory copy only                                                                                                                                                                         |
+| Copy Editing               | `.agents/skills/copy-editing/` (project)                                                                                         | 2.0.0 (same upstream/commit)                                          | Seven-sweeps diagnostic pass                                                                                                                                                                      |
+| Developer Audience Context | `.agents/skills/developer-audience-context/` (project)                                                                           | 1.0.0 (upstream jonathimer/devmarketing-skills @ 500b44b, 2026-03-03) | Maintains `.agents/developer-audience-context.md`                                                                                                                                                 |
+| Humanizer                  | `.agents/skills/humanizer/` (project)                                                                                            | upstream Aboudjem/humanizer-skill @ a58df06, 2026-09-06               | 55-pattern AI-tell detection, technical-voice final prose pass                                                                                                                                    |
+| Docker                     | host Docker + Compose                                                                                                            | 29.7.2 / v5.4.0 (2026-09-18; 29.1.3/v5.4.0 on the 2026-09-24 machine) | Postgres + Valkey backing services                                                                                                                                                                |
 
 The 2026-09-24 bootstrap installed the five non-DotRelay skills above from the
 upstream repositories listed (fetched, inspected for unsafe content, and copied
@@ -84,8 +84,7 @@ bun x prisma migrate deploy --config packages/database/prisma.config.ts
 bun run dev
 ```
 
-`bun run dev` runs `turbo run dev --parallel`: Next.js web (`apps/web`, port
-3000) and the Hono API (`apps/api`, port 3001). The web app loads the root
+`bun run dev` runs `turbo run dev --parallel`: Next.js web (`apps/web`, port 3000) and the Hono API (`apps/api`, port 3001). The web app loads the root
 `.env` itself (see `apps/web/next.config.ts`) and defaults its live API origin
 to `http://localhost:3001` (`apps/web/lib/workspace-boundary.ts` →
 `resolveLiveApiOrigin`).

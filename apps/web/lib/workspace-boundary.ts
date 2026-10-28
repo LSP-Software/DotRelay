@@ -102,8 +102,7 @@ export type WorkspaceBoundary = Readonly<{
   readonly crypto: Readonly<{
     readonly available: boolean;
     readonly problemCode?:
-      | "crypto_provider_unavailable"
-      | "unsupported_crypto_runtime";
+      "crypto_provider_unavailable" | "unsupported_crypto_runtime";
   }>;
 }>;
 

@@ -3,7 +3,7 @@
 Evidence record per surface category. "Live" = exercised against the real running
 API (:3001) / web (:3000) / CLI / Postgres / Valkey in this campaign (2026-09-21).
 "Unit/e2e" = covered by the scripted suites (part of `bun run check` / `bun run verify`).
-Residual state that is *intended* behaviour (not a gap) is listed at the end.
+Residual state that is _intended_ behaviour (not a gap) is listed at the end.
 Campaign close-out 2026-09-21: the final `bun run verify` (after the last code change)
 is green and every INVENTORY.md surface is in a terminal state (PASS / BLOCKED /
 NOT_APPLICABLE), with all ten findings resolved or deliberately blocked on product
@@ -19,6 +19,7 @@ on a lost finalize, no publication record) — already tracked as F-015 / GitHub
 e2e 102, CLI + live CLI round trips, docs, tracked tree).
 
 ## WEB (browser, live self-hosted)
+
 - Sign-out landing, sign-in (OAuth redirect with PKCE + correct scope), session
   persistence, /workspace shell (signed-in and signed-out) — live.
 - Zero-teams onboarding (user A after seed; user B) and populated Audit Team state
@@ -50,11 +51,12 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   split: the read path, sealed-lane alerts, and the History section render on the real
   deployment (live); add/edit/delete/publish/rollback/reveal are pinned by the e2e
   suite on the scripted service; real publication/rollback/history were proven live via
-  the CLI. A live *browser mutation* pass is infeasible, not skipped (D-020): the main
+  the CLI. A live _browser mutation_ pass is infeasible, not skipped (D-020): the main
   environment's table is hidden by the correct E2EE residual (residual 2) and the
   scratch environment is archived + headless + grant-less.
 
 ## API (live :3001)
+
 - /health, capabilities (ETag + correlationId), teams (401 unauth / 400
   session-without-device / 200 with device) — live.
 - Team creation (CLI init → POST /api/v1/teams with Idempotency-Key) — live.
@@ -80,6 +82,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   now pinned for a maximally-privileged actor, not just a nonexistent id.
 
 ## PROTO (live, via CLI + curl)
+
 - Device bootstrap (first device) 201 — live (CLI setup + manual client).
 - Device enrollment + approval (CLI setup → browser approval) — live.
 - Sync read (pull): decrypts all lanes byte-identical; "No changes found" when in sync — live.
@@ -113,6 +116,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   (which checks only owner presence, validation.ts:299-315) or reorder the checks.
 
 ## CLI (live, DOTRELAY_CONFIG_DIR=/tmp/cli-audit, profile live)
+
 - Pull output contract (F-011, this campaign): every `dotrelay pull` output variant —
   history, diff, file-write, `unchanged`, and `--stdout` JSON — now carries the
   pending grant remediations (`pendingActionsField`), so the F-009 missing-grant
@@ -151,6 +155,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   surfaces already implement the pattern, workflow.ts:2030-2105 / 2476-2520).
 
 ## SEC (live)
+
 - Values never stored in plaintext: the live head's lane columns are ciphertext; the
   pull decrypts client-side (E2EE). Verified by the byte-identical pull + the DB lane
   columns being ciphertext (SEC-CRYPTO-001/002 live via the F-009/F-008 passes).
@@ -163,11 +168,12 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
 - Cookie scoping (SEC-COOKIE-001): live `page.cookies()` probe (2026-09-21) —
   `better-auth.session_token` scoped to the API host, path `/`, session cookie,
   `secure: false` on plain-HTTP dev (correct: `useSecureCookies =
-  profile.isProduction`, auth.ts); production flags unit-pinned (apps/api/src/
+profile.isProduction`, auth.ts); production flags unit-pinned (apps/api/src/
   index.test.ts:458 Secure + SameSite=Lax + HttpOnly, :504-538 parent-domain scoping
   for split web/api origins, :241 Origin required on cookie state changes).
 
 ## DB
+
 - db:validate + db:migrate-check green in the final verify against the deployed
   migration history on the live compose Postgres (DB-SCHEMA-001; DB-MIGRATE-001: all
   9 migrations applied on the fresh DB 2026-09-21, then the whole campaign ran on it).
@@ -181,6 +187,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   material in the DB or in API logs/observability events (SEC-CRYPTO/SEC-LEAK live).
 
 ## CFG / deployment
+
 - Env validation (CFG-ENV-001): `loadServerProfileConfig` fail-fast (profile.ts:122-248
   — production requires SERVER_PROFILE_ID / BETTER_AUTH_SECRET >= 32 / the GITHUB
   pair; a trust-proxy list is required when the flag is on) unit-pinned
@@ -218,7 +225,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   it runs on every PR and gates `deploy-dev`/`build-cli-dev` and, in release.yml,
   gates `build-images`/`build-cli` so prod images and the published CLI cannot ship
   until the full flow passes. CI-only deltas: the `security` job (`bun run
-  security:audit` = `bun audit`) has no local verify step — it passes locally (no
+security:audit` = `bun audit`) has no local verify step — it passes locally (no
   vulnerabilities, 590 packages checked) — and the npm publish step requires the
   `NPM_TOKEN` registry secret.
 - CLI deployment (CFG-CLI-DEPLOY-001): `package:cli` produced the working 81MB
@@ -228,6 +235,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   is a CI-only delta recorded here, not a defect.
 
 ## TEST
+
 - check gate (format/lint/typecheck/boundaries/openapi/vectors/unit) and production
   builds green (TEST-UNIT-001 / TEST-BUILD-001).
 - Playwright suite: 101 passed mid-campaign; the campaign's final verify re-ran the
@@ -238,8 +246,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
 - test:integration (TEST-INTEG-001) genuinely executed in the final verify: 19 pass /
   0 fail, `0 cached, 1 total`, against local postgres/valkey, including the new
   epoch-rotation test 92f99ba and the F-009 bootstrap-intercept test. **Correction
-  (F-012):** every earlier local "test:integration green" was vacuous — `bun run
-  <script>` loads `.env` in-process only and never exported `DATABASE_URL` to the
+  (F-012):** every earlier local "test:integration green" was vacuous — `bun run <script>` loads `.env` in-process only and never exported `DATABASE_URL` to the
   `turbo` child, so the suites' `describe.skip` gate skipped the entire stage and
   turbo cached that all-skip as green (23 skip / 0 pass in each local verify log);
   only CI (job-level env) and the one-off direct runs (e.g. /tmp/integration.txt,
@@ -247,14 +254,15 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   `scripts/test-integration.ts` wrapper loads `.env`, fails fast on a missing URL,
   verifies both services, and spawns turbo with the full environment, so a broken
   environment can no longer degrade to a silent all-skip.
+
 - Final-verify hygiene (this campaign): an earlier closeout verify showed a turbo-cache
   false green — `@dotrelay/cli#test:unit` was replayed from cache while the F-009 test
   was non-hermetic (its pass depended on whether a leftover gitignored `apps/cli/.env`
   existed, which selected between pull's write path and its `unchanged` path; the
   latter dropped the remediation — F-011). The F-009 test is now hermetic (temp output
-  + pinned Git probe) and the campaign's final verify invalidates the turbo cache so
-  `@dotrelay/cli#test:unit` is re-executed, not replayed; that fresh run is green
-  (TEST-CLI-001 / TEST-UNIT-001).
+  - pinned Git probe) and the campaign's final verify invalidates the turbo cache so
+    `@dotrelay/cli#test:unit` is re-executed, not replayed; that fresh run is green
+    (TEST-CLI-001 / TEST-UNIT-001).
 - Quality pass (TEST-QUALITY-001): missing coverage added during the campaign —
   epoch rotation (92f99ba), the F-009 bootstrap intercept, the F-008 user-defined
   branch alert, and the decode contract pinned at publication-artifacts.test.ts:976
@@ -263,6 +271,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
   gap (why the suites missed it) are documented in FINDINGS.md.
 
 ## Residuals (intended behaviour — not gaps, do not scrub)
+
 1. **Append-only grant log.** `grant_objects` is immutable (trigger
    `dotrelay_reject_immutable_row` rejects UPDATE/DELETE). The F-009 spurious
    self-minted grant row `01a055d2` (stuck browser Device `40a0a545`) is therefore
@@ -273,7 +282,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
 2. **E2EE residual for User-defined Values.** Owner-A's 2 User-defined Values stay
    sealed to the CLI publisher Device's per-device key and are NOT readable by any other
    Device (including a browser that holds the project epoch key). `dotrelay pull`
-   re-shares the *project epoch* key only, never user-defined keys. The web editor
+   re-shares the _project epoch_ key only, never user-defined keys. The web editor
    surfaces the correct re-publish/device-recover remedy (F-008). Correct by design.
    Re-probed 2026-09-21 (zero-noise pass): the resulting live page state — sealed-lane
    alert, hidden variable table, rendered History — is exactly the pinned fail-closed
@@ -282,7 +291,7 @@ e2e 102, CLI + live CLI round trips, docs, tracked tree).
    publication-artifacts.test.ts:976, while other users' unreadable values stay null —
    fail-open — at :935). Boundary healthy, CLI in sync, 0 console errors / failed
    requests. Only re-publishing those two values from the CLI device (or `dotrelay
-   device recover`) restores the table on other devices.
+device recover`) restores the table on other devices.
 3. **Live env head is a rollback revision.** The audit's push→rollback left the
    environment head at the lane-scoped rollback revision `189320f0` (values identical
    to the genesis revision). Append-only rollback semantics — correct, not a defect.

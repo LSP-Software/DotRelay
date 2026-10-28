@@ -515,11 +515,7 @@ describe("webauthn prf ceremonies (faithful platform double)", () => {
   const makePlatform = (
     behavior: Readonly<{
       assertionResult:
-        | "output"
-        | "no-output"
-        | "cancel"
-        | "no-credential"
-        | "throw";
+        "output" | "no-output" | "cancel" | "no-credential" | "throw";
       creationResult: "output" | "confirm" | "disabled" | "cancel";
     }>,
   ) => {

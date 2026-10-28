@@ -5,10 +5,10 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "format": "biome format . --write",
-    "format:check": "biome format .",
-    "lint": "biome lint .",
-    "typecheck": "bun x prisma generate --config prisma.config.ts && tsc --project tsconfig.json",
+    "format": "bun fmt",
+    "format:check": "bun fmt --check",
+    "lint": "bun lint",
+    "typecheck": "bun x prisma generate --config prisma.config.ts && bun check",
     "test:unit": "bun test src",
     "test:integration": "bun test src/persistence/account-key.integration.test.ts src/persistence/postgres.integration.test.ts src/persistence/trust.integration.test.ts",
     "db:validate": "bun ../../scripts/validate-prisma.ts",

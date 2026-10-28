@@ -92,7 +92,9 @@ test("lock rejects a second controller and can be reacquired after release", asy
   const release = await acquireLock(path);
   await expect(acquireLock(path)).rejects.toThrow("Another controller");
   await release();
-  await (await acquireLock(path))();
+  await (
+    await acquireLock(path)
+  )();
 });
 
 test("a lock with no owner cannot be stolen during startup", async () => {

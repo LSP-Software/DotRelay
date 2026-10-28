@@ -1043,15 +1043,12 @@ const verifyStatus = async (
   let sessionState: "verified" | "expired" | "unverified" | "not-stored" =
     sessionToken ? "unverified" : "not-stored";
   let deviceState:
-    | "active"
-    | "not-active"
-    | "unusable"
-    | "unverified"
-    | "not-enrolled" = storedDeviceId
-    ? deviceKeysUsable
-      ? "unverified"
-      : "unusable"
-    : "not-enrolled";
+    "active" | "not-active" | "unusable" | "unverified" | "not-enrolled" =
+    storedDeviceId
+      ? deviceKeysUsable
+        ? "unverified"
+        : "unusable"
+      : "not-enrolled";
   let deviceName: string | undefined;
   let service: "verified" | "offline" | "rejected" | "unavailable" | "skipped" =
     sessionToken ? "offline" : "skipped";

@@ -177,11 +177,7 @@ const dotRelayClientAccountKeyRoundTrip = async () => {
 // serialization boundary.
 type PasskeyPrfBehavior = Readonly<{
   readonly assertion:
-    | "output"
-    | "no-output"
-    | "cancel"
-    | "no-credential"
-    | "null";
+    "output" | "no-output" | "cancel" | "no-credential" | "null";
   readonly creation: "output" | "confirm" | "disabled" | "cancel";
 }>;
 

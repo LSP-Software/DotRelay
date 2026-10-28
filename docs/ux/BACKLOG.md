@@ -5,9 +5,11 @@ Every finding lists enough state to reproduce it in the running application
 blocked user > no obvious next action > wrong flow > missing core action >
 misleading/dangerous behaviour > broken state handling > navigation/IA >
 large friction > confusing interaction > terminology/copy > visual hierarchy
+
 > minor polish.
 
 ## UX-001 - Signed-in users have no way to sign out
+
 Journey:
 ACCOUNT / SECURITY - account menu, sign out.
 State:
@@ -46,6 +48,7 @@ sign out and land on /sign-in) and by browser observation. Committed on main.
 See DECISIONS.md (D-001) for the chosen shape and the security notes.
 
 ## UX-002 - Long "Loading workspace..." after reload (environment quirk, not shipped behaviour)
+
 Journey:
 NORMAL USE - sign in / return to workspace after reload.
 State:
@@ -85,6 +88,7 @@ workspace; a healthy load settles instantly and never trips the stall.
 Committed on main.
 
 ## UX-003 - Signed-in user with zero Teams is shown a dead "Choose a team" selector
+
 Journey:
 FIRST USE - sign in, zero teams.
 State:
@@ -124,6 +128,7 @@ e2e (the zero-Teams state points at the CLI and shows no team selector; a
 user with Teams keeps the selector). Committed on main. See DECISIONS.md (D-002).
 
 ## UX-004 - Environment view's setup card contradicts itself (browser vs CLI)
+
 Journey:
 FIRST USE / NORMAL USE - open a project's environment before this browser has
 enrolled a device.
@@ -137,8 +142,8 @@ Observed:
 The locked-environment card is titled "Set up this browser" and its button says
 "Set up browser", but the label above the visible command said "Use the CLI on
 this machine instead of this browser:" followed by `dotrelay setup …`. Three
-signals pointed in different directions: the card is about setting up *this
-browser*, yet its body told the user to use the CLI *instead of* this browser.
+signals pointed in different directions: the card is about setting up _this
+browser_, yet its body told the user to use the CLI _instead of_ this browser.
 The shell's Devices view framed the same CLI alternative correctly ("Prefer the
 CLI? It sets up the CLI on this machine, not this browser."), so the two
 surfaces were inconsistent.
@@ -164,6 +169,7 @@ so the CLI escape hatch still works. Verified by browser observation and the
 environment/trust/enrollment e2e specs. Committed on main.
 
 ## UX-005 - Environment page: "Archive environment" renders as a full-width red bar
+
 Journey:
 NORMAL USE - open a project environment (the core screen for managing variables).
 State:
@@ -209,6 +215,7 @@ full-width bar) and at 1440px (right-aligned row, unchanged), plus the
 environment/permissions e2e specs (20 passed). Committed on main.
 
 ## UX-006 - "Add variable" dialog masks the value with no way to check what was typed
+
 Journey:
 NORMAL USE - Add variable (dialog).
 State:
@@ -220,7 +227,7 @@ Observed:
 The dialog's "Initial value" field is always `type="password"`, so whatever the
 user types is rendered as dots with no reveal control. Every variable row in the
 Variables card has an eye / eye-off reveal toggle (and a global "Reveal values"
-control in the header), but the one place a value is *created* has none: the
+control in the header), but the one place a value is _created_ has none: the
 user is typing a secret blind and cannot verify a character, a pasted token, or
 a typo before the row is added to the draft. The placeholder also claims an
 empty input saves "an empty string", which is true only while "Require a value"
@@ -251,6 +258,7 @@ and the value is stored exactly as typed either way. Verified in the browser
 states) and by the add-variable e2e specs. Committed on main.
 
 ## UX-007 - Opening a project with no environments silently reverts to the projects list
+
 Journey:
 FIRST USE - create/connect first project (a Project linked without any Environment yet).
 State:
@@ -302,6 +310,7 @@ URL) and by `apps/web/e2e/workspace-no-environments.spec.ts` plus the
 `resolveWorkspaceLocation` unit tests. Committed on main.
 
 ## UX-008 - Signed-out state on a real deployment dead-ends on "No teams yet"
+
 Journey:
 FAILURE STATES - Authentication expiry; also FIRST USE - First sign in (a
 returning user whose session expired).
@@ -358,6 +367,7 @@ flight expiry while an environment was open) and by the permanent
 spec still passes unchanged. Committed on main.
 
 ## UX-009 - Team view promises member management it does not offer
+
 Journey:
 TEAM USE - Change permissions, Remove teammate, Leave team where supported.
 State:
@@ -413,6 +423,7 @@ no such operation), so it stays unimplemented. Committed on main. See
 DECISIONS.md (D-003).
 
 ## UX-010 - Browser device setup collapses every server failure into "The server rejected this browser."
+
 Journey:
 FIRST USE - Devices area, "Set up browser" (first-run Device enrollment).
 State:
@@ -452,6 +463,7 @@ must not be dumped, and the pinned `state_conflict` line); full e2e suite
 126/126. Committed on main.
 
 ## UX-011 - `device revoke-wrapper` asks for an identifier no user surface ever shows
+
 Journey:
 RECOVERY - CLI `dotrelay device revoke-wrapper --wrapper-id <id>`.
 State:
@@ -491,7 +503,9 @@ revocable refusal); full CLI suite 379/379; live binary: new help text,
 exit 2 with the new usage line under --no-input. Live picker against a
 real account is environment-blocked (GitHub sign-in requires a human).
 Committed on main.
+
 ## UX-012 - Device approval copy says "this machine" when the CLI is on another host
+
 Journey:
 AUTHORIZATION - CLI `dotrelay setup` on a remote/SSH host with `--no-open`;
 the user approves from a laptop browser at `/device?user_code=…`.
@@ -511,7 +525,9 @@ in its terminal" is true whether the CLI runs locally or over SSH with
 --no-open, and the page metadata description matches. Pinned by the
 existing device approval e2e in `apps/web/e2e/workspace.spec.ts`. Committed
 on main.
+
 ## UX-013 - Duplicate `user:email` scope in the GitHub sign-in request
+
 Journey:
 SIGN IN - GitHub OAuth handshake.
 State:
@@ -533,7 +549,9 @@ config, so the consent screen and logs show each scope once. Effective
 permissions unchanged. Verified live against the running API:
 `POST /api/auth/sign-in/social` now returns an authorize URL with
 `scope=read:user user:email repo` (no duplicate). Committed on main.
+
 ## UX-014 - `env use` with no session points at project linking instead of signing in
+
 Journey:
 FIRST USE - `dotrelay env use <environment>` before any `dotrelay login`.
 State:
@@ -554,6 +572,7 @@ invocation error. Covered by three workflow tests; live binary proof on a
 clean config (exit 6, no project-link mention).
 
 ## UX-015 - Pending-grants gate names a remediation that cannot work
+
 Journey:
 WORKSPACE - opening a protected environment whose browser Device has no
 epoch grant (`grantsReady: false`).
@@ -581,6 +600,7 @@ FIXED - body rewritten to the Recovery + Transfer paths; unit test pins
 `dotrelay pull`/`on this machine`.
 
 ## UX-016 - Setup copy claims the CLI runs "on this machine"
+
 Journey:
 WORKSPACE - setup gates and the CLI hand-off prompts.
 State:
@@ -606,6 +626,7 @@ bodies; the two workspace e2e surfaces that show the CLI hand-off pin
 `getByText("CLI on this machine")` count 0.
 
 ## UX-017 - Recovery mutations can surface the raw transport message
+
 Journey:
 RECOVERY - adding a password/passkey, setting up or rotating a recovery
 code, or staging a transfer when the request fails.
@@ -638,6 +659,7 @@ fix and the written fallback after; four unit tests pin the helper.
 Full suite 127/127, `bun run check` green.
 
 ## UX-018 - `project rotate` asks for confirmation before checking login
+
 Journey:
 FIRST USE / AUTOMATION - `dotrelay project rotate` without a session or
 enrolled Device.
@@ -668,6 +690,7 @@ device-less config now reports exit 6 `authentication_required` instead
 of the exit 2 terminal error.
 
 ## UX-023 - `project link` offers repositories before checking enrollment
+
 Journey:
 FIRST USE - `dotrelay project link --team <id>` in a worktree with
 several Git remotes, signed in but with no Device enrolled.
@@ -695,6 +718,7 @@ on the new one; the live binary in a multi-remote worktree now reports
 exit 6 `device_bundle_missing` with no picker rendered.
 
 ## UX-019 - Unreadable-terminal failures name no remedy; picker EOF is opaque
+
 Journey:
 AUTOMATION - any confirming command (`project rotate`, publication
 reviews) or repository picker run without a terminal (closed stdin).
@@ -726,6 +750,7 @@ automation hint would mislead there. Red-green proven for the picker
 mapping; `bun test apps/cli/src/ui.test.ts` 27/27.
 
 ## UX-020 - Unreachable-server diagnostics do not name the origin
+
 Journey:
 FIRST USE / AUTOMATION - `dotrelay login` or `profile add` against an
 unreachable Server Profile, with several profiles saved.
@@ -753,6 +778,7 @@ both details with the origin. `bun test` on `auth.test.ts` and
 `profile.test.ts` 33/33.
 
 ## UX-021 - Unknown API routes return plain-text 404, not a problem document
+
 Journey:
 API CLIENT - any client requesting a path the API does not define
 (typo, version drift, probe).
@@ -777,6 +803,7 @@ the new `index.test.ts` case fails on the old fallthrough and passes
 with the handler.
 
 ## UX-022 - Same missing-Device state reports two different messages
+
 Journey:
 FIRST USE - any command needing an enrolled Device with none enrolled.
 State:
@@ -801,6 +828,7 @@ wording. No test pinned the old wording; `workflow.test.ts` 88/88
 green.
 
 ## UX-024 - Interactive rollback prompts name no remedy without a terminal
+
 Journey:
 AUTOMATION - bare `dotrelay rollback` (or without `--variable`) on an
 enrolled machine with closed stdin.
@@ -829,6 +857,7 @@ call sites remap it to errors naming the positional and `--variable`
 proven at dispatch level with closed-stdin terminals.
 
 ## UX-025 - Devices table repeated this browser's OS in its summary line
+
 Journey:
 WEB - Devices view, the row for this browser after setting it up.
 State:
@@ -852,6 +881,7 @@ append; peer rows never had one). The e2e pins the row to
 `check` green.
 
 ## UX-026 - Reloaded an enrolled browser was offered "Set up this browser" again
+
 Journey:
 WEB - reload /workspace and open Devices on a browser that is already set up.
 State:
@@ -881,6 +911,7 @@ post-reload state: the "This browser is set up" card and the row named as
 this browser's.
 
 ## UX-027 - `device transfer` picker offered peer Devices as bare UUIDs
+
 Journey:
 CLI - `dotrelay device transfer` without `--to`, several Devices enrolled.
 State:
@@ -904,6 +935,7 @@ Device id for automation. The red-green test offers a named CLI peer and an
 unlabeled one and pins the rendered picker.
 
 ## UX-028 - Team member load failure said "try again" with no way to
+
 Journey:
 WEB - Team view, the Team service's membership read fails (transient 5xx or
 malformed reply) while the workspace connection stays online.
@@ -928,6 +960,7 @@ button; the service recovers, one click loads the record and the error goes
 away.
 
 ## UX-029 - First sign-in drops the user on the project list
+
 Journey:
 FIRST USE - first sign in.
 State:

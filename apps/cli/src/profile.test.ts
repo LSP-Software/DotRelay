@@ -33,7 +33,9 @@ describe("CLI Server Profile catalog", () => {
       await useServerProfile(store, "work");
       expect((await resolveServerProfile(store)).name).toBe("work");
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }
@@ -88,7 +90,9 @@ describe("CLI Server Profile catalog", () => {
       expect(profile.pin.serverProfileId).toBe(capabilities.serverProfileId);
       expect(calls).toBe(3);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }
@@ -139,7 +143,9 @@ describe("CLI Server Profile catalog", () => {
       expect(profile.origin).toBe("https://relay.example");
       expect(seen).toEqual(["https://relay.example/api/v1/capabilities"]);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }
@@ -175,7 +181,9 @@ describe("CLI Server Profile catalog", () => {
         "http://127.0.0.1:8443/api/v1/capabilities",
       ]);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }
@@ -259,7 +267,9 @@ describe("CLI Server Profile catalog", () => {
         devOrigin,
       ]);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }
@@ -268,7 +278,9 @@ describe("CLI Server Profile catalog", () => {
   test("selects a saved default-origin profile without re-fetching", async () => {
     const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
     const store = createFileProfileCatalog(path);
-    await (await import("node:fs/promises")).writeFile(
+    await (
+      await import("node:fs/promises")
+    ).writeFile(
       path,
       JSON.stringify({
         version: 1,
@@ -291,7 +303,9 @@ describe("CLI Server Profile catalog", () => {
       expect(profile.origin).toBe(devOrigin);
       expect((await store.read()).selected).toBe("dev-api.dotrelay.dev");
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }
@@ -300,7 +314,9 @@ describe("CLI Server Profile catalog", () => {
   test("an explicit profile override still wins over the default origin", async () => {
     const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
     const store = createFileProfileCatalog(path);
-    await (await import("node:fs/promises")).writeFile(
+    await (
+      await import("node:fs/promises")
+    ).writeFile(
       path,
       JSON.stringify({
         version: 1,
@@ -326,7 +342,9 @@ describe("CLI Server Profile catalog", () => {
       expect(profile.name).toBe("work");
       expect(profile.origin).toBe("https://relay.example");
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }
@@ -363,7 +381,9 @@ describe("CLI Server Profile catalog", () => {
       ).rejects.toThrow("confirmation");
       expect((await store.read()).profiles).toEqual([]);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(path)
         .catch(() => undefined);
     }

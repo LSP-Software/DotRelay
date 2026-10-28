@@ -12,7 +12,9 @@ permissions:
   contents: write
 
 env:
-  BUN_VERSION: 1.4.2
+  # Canary channel: the built-in `bun lint` linter is not enabled in stable
+  # releases yet (it is gated behind the canary build flavor).
+  BUN_VERSION: canary
 
 jobs:
   verify:

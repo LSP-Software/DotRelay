@@ -11,9 +11,7 @@ export type ServerProfilePin = Readonly<{
 }>;
 
 export type ServerProfileTrustErrorCode =
-  | "identity_changed"
-  | "origin_mismatch"
-  | "rebind_required";
+  "identity_changed" | "origin_mismatch" | "rebind_required";
 
 export class ServerProfileTrustError extends Error {
   readonly code: ServerProfileTrustErrorCode;

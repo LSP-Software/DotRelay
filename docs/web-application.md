@@ -35,12 +35,12 @@ on narrow viewports, and a skip link moves focus directly to the workspace.
 
 These states must not be collapsed into one signed-in indicator:
 
-| State | Meaning | Permitted surface |
-| --- | --- | --- |
-| Server Profile pinned | This browser recorded a verified trust decision naming the server's canonical origin and stable identity; the decision is stored for that origin-and-identity pair and is never reused for a different one | Credentials may be considered for that profile |
-| Session active | Better Auth resolved one server-local User | Non-secret identity and eligible administration only |
-| Active Device | This client installation is authorized for that User | Protected operations may proceed if all other gates pass |
-| v3 cryptography available | The closed v3 WebCrypto suite is supported | Protected bytes may be requested and processed locally |
+| State                     | Meaning                                                                                                                                                                                                    | Permitted surface                                        |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Server Profile pinned     | This browser recorded a verified trust decision naming the server's canonical origin and stable identity; the decision is stored for that origin-and-identity pair and is never reused for a different one | Credentials may be considered for that profile           |
+| Session active            | Better Auth resolved one server-local User                                                                                                                                                                 | Non-secret identity and eligible administration only     |
+| Active Device             | This client installation is authorized for that User                                                                                                                                                       | Protected operations may proceed if all other gates pass |
+| v3 cryptography available | The closed v3 WebCrypto suite is supported                                                                                                                                                                 | Protected bytes may be requested and processed locally   |
 
 A session never implies an active Device. A GitHub identity never implies a DotRelay Membership.
 A web deployment is bound to the Server Profile behind it, and the browser offers no choice of
@@ -103,19 +103,19 @@ explicit reveal, labels whether the difference is a Value, a definition (ownersh
 a deletion, and explains the Value and definition consequence of each Keep mine / Use theirs /
 Keep my value choice. A choice can be revisited before publication, and retrying the publish
 re-runs the approved publication against the re-anchored head rather than only re-arming the
- publish gate. Rollback is lane-scoped and always publishes a new Revision, so the current head
- remains in immutable history. The History card lists the verified Revisions with their authored
- time, change kind (naming the target of a Rollback), and author where the protocol provides
- them, an honest unavailable label where it does not, and a short id suffix so a Revision can be
- referenced without memorizing its full id. The rollback dialog identifies the target Revision and
- previews the masked consequence of the selected lanes — a new Rollback revision that restores
- only the chosen Variables — before it is staged. Reading a target Revision's Values shows
- progress while the Device resolves them. If the Revision is missing from the Device's verified
- history, or an integrity or decryption check fails, the dialog reports the failure with a retry
- instead of claiming the Revision is unchanged: only a Variable verified absent from the Revision
- is left out of the preview, and a partial read names every Variable it could not resolve so it
- cannot imply a complete comparison. The development protected preview uses the same
- cryptographic artifact builder but is explicitly local and never reports a service publication.
+publish gate. Rollback is lane-scoped and always publishes a new Revision, so the current head
+remains in immutable history. The History card lists the verified Revisions with their authored
+time, change kind (naming the target of a Rollback), and author where the protocol provides
+them, an honest unavailable label where it does not, and a short id suffix so a Revision can be
+referenced without memorizing its full id. The rollback dialog identifies the target Revision and
+previews the masked consequence of the selected lanes — a new Rollback revision that restores
+only the chosen Variables — before it is staged. Reading a target Revision's Values shows
+progress while the Device resolves them. If the Revision is missing from the Device's verified
+history, or an integrity or decryption check fails, the dialog reports the failure with a retry
+instead of claiming the Revision is unchanged: only a Variable verified absent from the Revision
+is left out of the preview, and a partial read names every Variable it could not resolve so it
+cannot imply a complete comparison. The development protected preview uses the same
+cryptographic artifact builder but is explicitly local and never reports a service publication.
 Archived resources, stale epochs, missing grants, inactive Devices, unsupported crypto, and
 untrusted profiles keep the live workflow locked and disclose only actionable gate state.
 The live workspace also gates navigation until a usable browser Device and Account Master Key are

@@ -93,7 +93,9 @@ describe("CLI output safety", () => {
       if (process.platform !== "win32")
         expect((await Bun.file(file).stat()).mode & 0o777).toBe(0o600);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }

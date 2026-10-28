@@ -9,12 +9,12 @@ repository admission and GitHub permissions never grant DotRelay access.
 Creating a Team atomically creates its first active owner, and every Team must retain an active
 owner. A Membership is `PENDING_KEY_GRANT`, `ACTIVE`, or `REMOVED`; only `ACTIVE` authorizes access.
 
-| Capability | Owner | Admin | Member |
-| --- | --- | --- | --- |
-| View Team content | yes | yes | yes |
-| Invite/remove Members | yes | yes | no |
-| Manage admins and owners | yes | no | no |
-| Administer Projects and Environments | yes | yes | no |
+| Capability                           | Owner | Admin | Member |
+| ------------------------------------ | ----- | ----- | ------ |
+| View Team content                    | yes   | yes   | yes    |
+| Invite/remove Members                | yes   | yes   | no     |
+| Manage admins and owners             | yes   | no    | no     |
+| Administer Projects and Environments | yes   | yes   | no     |
 
 Membership Invitations target a stable GitHub provider subject, expire exactly seven days after
 creation, and are single-use. The matching User accepts the invitation to create a

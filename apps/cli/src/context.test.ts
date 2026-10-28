@@ -50,7 +50,9 @@ describe("repository and worktree context", () => {
       await writeWorktreeContext(file, context);
       expect(await readWorktreeContext(file)).toEqual(context);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }
@@ -86,7 +88,9 @@ describe("repository and worktree context", () => {
       expect(await readWorktreeContext(file)).toEqual(context);
     } finally {
       await Bun.write(file, "").catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }
@@ -102,7 +106,9 @@ describe("repository and worktree context", () => {
       await writeWorktreeContext(file, context);
       expect(await readWorktreeContext(file)).toEqual(context);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }
@@ -334,7 +340,9 @@ describe("explicit GitHub repository choice", () => {
       });
     } finally {
       await Bun.write(file, "").catch(() => undefined);
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }
@@ -354,7 +362,9 @@ describe("explicit GitHub repository choice", () => {
       await writeWorktreeContext(file, context);
       expect(await readWorktreeContext(file)).toEqual(context);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }
@@ -371,7 +381,9 @@ describe("explicit GitHub repository choice", () => {
         }),
       ).rejects.toThrow(CliInvocationError);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }
@@ -388,7 +400,9 @@ describe("explicit GitHub repository choice", () => {
         }),
       ).rejects.toThrow(CliInvocationError);
     } finally {
-      await (await import("node:fs/promises"))
+      await (
+        await import("node:fs/promises")
+      )
         .unlink(file)
         .catch(() => undefined);
     }

@@ -12,14 +12,14 @@ least one active owner. Memberships move forward from `PENDING_KEY_GRANT` to `AC
 `REMOVED`; removed Memberships are durable records and are not reactivated. Only active
 Memberships authorize reads or mutations.
 
-| Capability | Owner | Admin | Member |
-| --- | --- | --- | --- |
-| View Team and active Project/Environment content | yes | yes | yes |
-| Invite a Member | yes | yes | no |
-| Remove a Member | yes | yes | no |
-| Change Member/Admin/owner roles | yes | no | no |
-| Create, archive, or restore a Project | yes | yes | no |
-| Create, archive, or restore an Environment | yes | yes | no |
+| Capability                                       | Owner | Admin | Member |
+| ------------------------------------------------ | ----- | ----- | ------ |
+| View Team and active Project/Environment content | yes   | yes   | yes    |
+| Invite a Member                                  | yes   | yes   | no     |
+| Remove a Member                                  | yes   | yes   | no     |
+| Change Member/Admin/owner roles                  | yes   | no    | no     |
+| Create, archive, or restore a Project            | yes   | yes   | no     |
+| Create, archive, or restore an Environment       | yes   | yes   | no     |
 
 An admin cannot promote itself, manage owners/admins, or bypass last-owner protection. Role does
 not broaden encrypted Value ownership: owners and admins cannot receive another User's User-defined

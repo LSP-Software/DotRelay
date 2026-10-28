@@ -11,12 +11,7 @@ type CodeStatus =
 type SessionState = "signed-in" | "signed-out" | "unavailable";
 
 type ApprovalOutcome =
-  | "success"
-  | "expired"
-  | "forbidden"
-  | "stale"
-  | "signed-out"
-  | "unavailable";
+  "success" | "expired" | "forbidden" | "stale" | "signed-out" | "unavailable";
 
 type DeviceFlowState = Readonly<{
   readonly status: CodeStatus;

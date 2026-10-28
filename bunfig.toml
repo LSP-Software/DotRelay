@@ -1,0 +1,15 @@
+# Options for the built-in `bun fmt` and `bun lint` commands.
+#
+# .agents and the prebuilt argon2 worker were also excluded from the old
+# Biome config; everything else (node_modules, .next, dist, coverage,
+# test-results, generated, ...) is skipped by both commands because it is
+# gitignored.
+
+[fmt]
+ignorePatterns = [".agents", "apps/web/public/argon2-worker.js"]
+
+[lint]
+ignorePatterns = [".agents", "apps/web/public/argon2-worker.js"]
+# Biome's recommended preset flagged this; keep it enforced so the existing
+# eslint-disable in label.tsx stays meaningful.
+rules = { "jsx-a11y/label-has-associated-control" = "error", "eslint/prefer-arrow-callback" = "error" }
