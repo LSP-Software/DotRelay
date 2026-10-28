@@ -129,7 +129,7 @@ export class PublicationRepository {
     await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
     const existingOperation = await transaction.operation.findUnique({
       where: { id: input.operation.id },
-      include: { revision: true },
+      include: { revisions: true },
     });
     if (existingOperation) {
       if (
@@ -141,11 +141,14 @@ export class PublicationRepository {
         )
       )
         throw new OperationConflictError();
-      if (
-        existingOperation.status === "COMMITTED" &&
-        existingOperation.revision
-      )
-        return { revision: existingOperation.revision, idempotent: true };
+      // One operation can publish a revision into several Environments (a
+      // Project epoch rotation). Only this Environment's own revision makes
+      // a replay idempotent; the other Environments still need theirs.
+      const existingRevision = existingOperation.revisions.find(
+        (revision) => revision.id === input.revision.id,
+      );
+      if (existingOperation.status === "COMMITTED" && existingRevision)
+        return { revision: existingRevision, idempotent: true };
     }
 
     const environment = await transaction.environment.findUnique({
