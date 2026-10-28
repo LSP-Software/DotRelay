@@ -28,6 +28,14 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
+      - name: debug fmt skew (temporary)
+        run: |
+          bun --revision
+          echo "LANG=[$LANG] LC_ALL=[$LC_ALL]"
+          cp apps/api/src/protocol/context.ts /tmp/context-before.ts
+          bun fmt apps/api/src/protocol/context.ts
+          diff -u /tmp/context-before.ts apps/api/src/protocol/context.ts || true
+          git status --porcelain
       - run: bunx playwright install --with-deps chromium
       - run: bun run check
       - run: bun run tracked-tree:clean
