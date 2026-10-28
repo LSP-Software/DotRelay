@@ -65,3 +65,13 @@ use their first prerelease identifier (`alpha`, `beta`, `rc`, or `dev`). An alph
 replace the stable channel. Before announcing, verify the GitHub publish job succeeds and test
 `npx dotrelay@alpha --version` in a clean environment. This change does not publish a package or
 create a production release tag.
+
+## Dependency audit
+
+The alpha changes also refresh the lockfile for the current dependency advisories, including
+Better Auth, Next.js, Hono, the shadcn tooling chain, and the issue panel's HTML sanitizer. The
+`fast-uri` override advances to the patched 3.1.9 release. `deepmerge` is temporarily pinned to
+4.1.2 because the current 4.3.1 release is affected by GHSA-gcqx-w48m-w2h4 and has no patched 4.x
+successor; Bun's audit resolver identifies 4.1.2 as the unaffected fallback. Keep that override
+until a fixed release is available. Run the sanitizer/panel regressions and the dependency audit
+before changing it.

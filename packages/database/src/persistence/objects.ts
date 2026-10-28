@@ -90,6 +90,11 @@ export class StagedObjectRepository {
         throw new OperationNotFoundError();
       // Serialize quotas across all Devices and pending operations of one User.
       await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${operation.actorUserId} FOR UPDATE`;
+      await transaction.$executeRaw`SELECT "id" FROM "operations" WHERE "id" = ${input.operationId} FOR UPDATE`;
+      const currentOperation = await transaction.operation.findUnique({
+        where: { id: input.operationId },
+      });
+      if (!currentOperation) throw new OperationNotFoundError();
       const existing = await transaction.stagedObject.findUnique({
         where: {
           operationId_objectId: {
@@ -108,8 +113,9 @@ export class StagedObjectRepository {
         return existing;
       }
       if (
-        operation.status !== "STAGED" ||
-        (operation.expiresAt && operation.expiresAt <= input.createdAt)
+        currentOperation.status !== "STAGED" ||
+        (currentOperation.expiresAt &&
+          currentOperation.expiresAt <= input.createdAt)
       )
         throw new OperationNotCancellableError();
       const [usage] = await transaction.$queryRaw<
