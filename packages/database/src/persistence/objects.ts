@@ -8,11 +8,13 @@ import {
   type PersistenceClient,
   requireActiveDevice,
   StagedObjectConflictError,
+  StagingQuotaExceededError,
   sameBytes,
 } from "./repository-core";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import {
   copyBytes,
+  PERSISTENCE_LIMITS,
   validateDigest,
   validateProtocolProjection,
   validateSha384Digest,
@@ -66,6 +68,7 @@ export type StageObjectInput = Readonly<{
   readonly digest: Uint8Array;
   readonly createdAt: Date;
   readonly expiresAt: Date;
+  readonly limits?: Readonly<{ stagingObjects: number; stagingBytes: number }>;
 }>;
 
 export class StagedObjectRepository {
@@ -80,6 +83,56 @@ export class StagedObjectRepository {
       input.digest,
     );
     return inPersistenceTransaction(database, async (transaction) => {
+      const operation = await transaction.operation.findUnique({
+        where: { id: input.operationId },
+      });
+      if (!operation || operation.actorDeviceId !== input.actorDeviceId)
+        throw new OperationNotFoundError();
+      // Serialize quotas across all Devices and pending operations of one User.
+      await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${operation.actorUserId} FOR UPDATE`;
+      const existing = await transaction.stagedObject.findUnique({
+        where: {
+          operationId_objectId: {
+            operationId: input.operationId,
+            objectId: input.objectId,
+          },
+        },
+      });
+      if (existing) {
+        if (
+          existing.actorDeviceId !== input.actorDeviceId ||
+          !sameBytes(existing.digest, requestedDigest) ||
+          !sameBytes(existing.canonicalBytes, canonicalBytes)
+        )
+          throw new StagedObjectConflictError();
+        return existing;
+      }
+      if (
+        operation.status !== "STAGED" ||
+        (operation.expiresAt && operation.expiresAt <= input.createdAt)
+      )
+        throw new OperationNotCancellableError();
+      const [usage] = await transaction.$queryRaw<
+        Array<{ count: bigint; bytes: bigint }>
+      >`
+        SELECT COUNT(*) AS "count", COALESCE(SUM(octet_length(s."canonicalBytes")), 0) AS "bytes"
+        FROM "staged_objects" s JOIN "devices" d ON d."id" = s."actorDeviceId"
+        WHERE d."userId" = ${operation.actorUserId}
+          AND s."committedAt" IS NULL AND s."expiresAt" > ${input.createdAt}`;
+      const maxObjects = Math.min(
+        input.limits?.stagingObjects ?? PERSISTENCE_LIMITS.maxStagingObjects,
+        PERSISTENCE_LIMITS.maxStagingObjects,
+      );
+      const maxBytes = Math.min(
+        input.limits?.stagingBytes ?? PERSISTENCE_LIMITS.maxStagingBytes,
+        PERSISTENCE_LIMITS.maxStagingBytes,
+      );
+      if (
+        !usage ||
+        usage.count >= BigInt(maxObjects) ||
+        usage.bytes + BigInt(canonicalBytes.length) > BigInt(maxBytes)
+      )
+        throw new StagingQuotaExceededError();
       await transaction.stagedObject.createMany({
         data: [
           {

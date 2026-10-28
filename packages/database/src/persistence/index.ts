@@ -60,6 +60,7 @@ export {
   OperationNotCancellableError,
   OperationNotFoundError,
   StagedObjectConflictError,
+  StagingQuotaExceededError,
   StaleEpochError,
   StaleHeadError,
 } from "./repository-core";

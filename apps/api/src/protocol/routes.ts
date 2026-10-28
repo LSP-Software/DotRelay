@@ -170,16 +170,29 @@ export const registerProtocolRoutes = (
   const publications = new PublicationRepository();
   const synchronization = new SyncRepository();
   const epochRotations = new ProjectEpochRepository();
+  const rateLimit = createProtocolRateLimit(profile.isProduction, (context) =>
+    requireProtocolActor(context, database, profile, auth),
+  );
 
+  app.use("/api/v1/operations/*", rateLimit);
+  app.use("/api/v1/environments/*", rateLimit);
+  app.use("/api/v1/projects/*", rateLimit);
   app.use(
     "/api/v1/operations/*",
-    createProtocolRateLimit(profile.isProduction),
+    bodyLimit({
+      maxSize: Math.min(
+        profile.limits.protocolObjectBytes,
+        profile.limits.stagingBytes,
+      ),
+      onError: (context) => {
+        const body = createProblem("payload_too_large");
+        return context.json(body, 413, {
+          "Content-Type": "application/problem+json",
+          "Cache-Control": "no-store",
+        });
+      },
+    }),
   );
-  app.use(
-    "/api/v1/environments/*",
-    createProtocolRateLimit(profile.isProduction),
-  );
-  app.use("/api/v1/projects/*", createProtocolRateLimit(profile.isProduction));
 
   const adminJsonLimit = bodyLimit({
     maxSize: profile.limits.adminBodyBytes,
@@ -275,6 +288,7 @@ export const registerProtocolRoutes = (
         digest: commandDigest,
         createdAt,
         expiresAt,
+        limits: profile.limits,
       });
       return context.json(
         {
@@ -355,6 +369,7 @@ export const registerProtocolRoutes = (
           digest,
           createdAt,
           expiresAt,
+          limits: profile.limits,
         });
         return context.json({ operationId, objectId }, 200, {
           "Cache-Control": "no-store",

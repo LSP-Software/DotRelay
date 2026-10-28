@@ -120,6 +120,12 @@ export class PublicationRepository {
     transaction: PersistenceClient,
     input: RevisionPublicationInput,
   ) {
+    const projectScope = await transaction.environment.findUnique({
+      where: { id: input.environmentId },
+      select: { projectId: true },
+    });
+    if (!projectScope) throw new Error("Environment not found");
+    await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${projectScope.projectId} FOR UPDATE`;
     await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
     const existingOperation = await transaction.operation.findUnique({
       where: { id: input.operation.id },

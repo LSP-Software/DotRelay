@@ -6,6 +6,7 @@ import {
   DEVICE_ID_HEADER,
   type ProtocolObject,
   parseDeviceClientInfo,
+  parseIdempotencyKey,
   parseJsonObject,
   parseProtocolObject,
   parseSha384Hex,
@@ -361,6 +362,36 @@ export const registerDeviceRoutes = (
   app.use("/api/v1/devices/enrollments/*", jsonLimit);
   app.use("/api/v1/account-keys", jsonLimit);
   app.use("/api/v1/account-keys/*", jsonLimit);
+
+  app.post("/api/v1/devices/:deviceId/revoke", jsonLimit, async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const deviceId = parseUuid(context.req.param("deviceId"), "deviceId");
+      const operationId = parseIdempotencyKey(
+        context.req.header("Idempotency-Key"),
+      );
+      const bytes = new TextEncoder().encode(
+        JSON.stringify({ action: "device.revoke", deviceId }),
+      );
+      await devices.revoke(database, {
+        deviceId,
+        operation: {
+          id: operationId,
+          actorUserId: actor.userId,
+          actorDeviceId: actor.deviceId,
+          kind: "DEVICE_REVOCATION",
+          commandBytes: bytes,
+          commandDigest: await sha384Digest(bytes),
+        },
+      });
+      return context.json({ revoked: true, signedOutEverywhere: true }, 200, {
+        "Cache-Control": "no-store",
+      });
+    } catch (error) {
+      return problem(context, mapError(error));
+    }
+  });
 
   app.post("/api/v1/devices/enrollments", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);

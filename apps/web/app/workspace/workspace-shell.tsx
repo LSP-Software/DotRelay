@@ -123,6 +123,7 @@ import {
   readGettingStartedDismissed,
   writeGettingStartedDismissed,
 } from "@/lib/getting-started";
+import { provisionTeamMember } from "@/lib/membership-provisioning";
 import {
   acceptTeamInvitation,
   changeEnvironmentLifecycle,
@@ -566,12 +567,16 @@ export const WorkspaceShell = ({
   // Membership so the row's controls can stay busy while it runs.
   const [memberMutation, setMemberMutation] = useState<{
     readonly membershipId: string;
-    readonly kind: "role" | "remove";
+    readonly kind: "role" | "remove" | "provision";
   } | null>(null);
   const [memberMutationError, setMemberMutationError] = useState<{
     readonly membershipId: string;
     readonly message: string;
   } | null>(null);
+  const [revokingDevice, setRevokingDevice] = useState<string | null>(null);
+  const [revokeDeviceError, setRevokeDeviceError] = useState<string | null>(
+    null,
+  );
   const [myInvitations, setMyInvitations] = useState<MyInvitations | null>(
     null,
   );
@@ -1239,6 +1244,69 @@ export const WorkspaceShell = ({
 
   // Removes the Member from the Team. A failure leaves the Membership in
   // place and shows the service's explanation on the row.
+  const provisionMember = async (membershipId: string) => {
+    if (!apiOrigin || !selectedTeam?.id || memberMutation) return;
+    setMemberMutation({ membershipId, kind: "provision" });
+    setMemberMutationError(null);
+    try {
+      await provisionTeamMember({
+        apiOrigin,
+        profileId,
+        boundary: displayBoundary,
+        teamId: selectedTeam.id,
+        membershipId,
+        accountMasterKey: accountMasterKeyRef.current,
+        wrappers: recoveryWrappers,
+      });
+      refreshTeamAdministration();
+    } catch (error) {
+      setMemberMutationError({
+        membershipId,
+        message:
+          error instanceof Error
+            ? error.message
+            : "We couldn't share this member's project keys. Try again.",
+      });
+    } finally {
+      setMemberMutation(null);
+    }
+  };
+
+  const revokeDevice = async (deviceId: string) => {
+    if (!apiOrigin || !browserDeviceId || revokingDevice) return;
+    if (
+      !window.confirm(
+        "Revoke this device and sign out all your browsers and CLI sessions? Previously downloaded secrets cannot be erased.",
+      )
+    )
+      return;
+    setRevokingDevice(deviceId);
+    setRevokeDeviceError(null);
+    try {
+      const response = await fetch(
+        `${apiOrigin}/api/v1/devices/${deviceId}/revoke`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "X-DotRelay-Device-Id": browserDeviceId,
+            "Idempotency-Key": crypto.randomUUID(),
+          },
+        },
+      );
+      if (!response.ok) throw new Error();
+      accountMasterKeyRef.current?.fill(0);
+      accountMasterKeyRef.current = null;
+      window.location.assign("/sign-in");
+    } catch {
+      setRevokeDeviceError(
+        "We couldn't revoke this device. Refresh and try again.",
+      );
+    } finally {
+      setRevokingDevice(null);
+    }
+  };
+
   const removeMember = async (membershipId: string) => {
     const selectedTeamId = selectedTeam?.id;
     if (!apiOrigin || !selectedTeamId || memberMutation) return;
@@ -3213,6 +3281,38 @@ export const WorkspaceShell = ({
                                   </TableCell>
                                   {canAdminister ? (
                                     <TableCell>
+                                      {member.lifecycle !== "REMOVED" &&
+                                      member.userId !==
+                                        displayBoundary.session.userId &&
+                                      (effectiveRole === "OWNER" ||
+                                        member.role === "MEMBER") ? (
+                                        <div className="flex flex-col gap-2">
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={
+                                              memberMutation !== null ||
+                                              !browserDeviceId
+                                            }
+                                            onClick={() =>
+                                              void provisionMember(
+                                                member.membershipId,
+                                              )
+                                            }
+                                          >
+                                            {memberMutation?.membershipId ===
+                                            member.membershipId
+                                              ? "Sharing keys…"
+                                              : "Share project keys"}
+                                          </Button>
+                                          {memberMutationError?.membershipId ===
+                                          member.membershipId ? (
+                                            <p className="text-xs text-destructive">
+                                              {memberMutationError.message}
+                                            </p>
+                                          ) : null}
+                                        </div>
+                                      ) : null}
                                       {member.lifecycle === "ACTIVE" &&
                                       member.userId !==
                                         displayBoundary.session.userId &&
@@ -3393,6 +3493,7 @@ export const WorkspaceShell = ({
                             <TableRow>
                               <TableHead>Device</TableHead>
                               <TableHead>Project access</TableHead>
+                              <TableHead>Actions</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -3508,10 +3609,31 @@ export const WorkspaceShell = ({
                                       : "Waiting for project keys"}
                                   </Badge>
                                 </TableCell>
+                                <TableCell>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={
+                                      revokingDevice !== null ||
+                                      !browserDeviceId ||
+                                      protectedPreview
+                                    }
+                                    onClick={() => void revokeDevice(device.id)}
+                                  >
+                                    {revokingDevice === device.id
+                                      ? "Revoking…"
+                                      : "Revoke device"}
+                                  </Button>
+                                </TableCell>
                               </TableRow>
                             ))}
                           </TableBody>
                         </Table>
+                        {revokeDeviceError ? (
+                          <p className="mt-2 text-sm text-destructive">
+                            {revokeDeviceError}
+                          </p>
+                        ) : null}
                       </CardContent>
                     </Card>
                   ) : null}

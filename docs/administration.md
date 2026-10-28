@@ -35,6 +35,15 @@ Server Profile. It creates a Member Membership in `PENDING_KEY_GRANT`; GitHub ad
 not create or activate a Membership. Provisioning the complete required grant set and its signed
 activation object moves that Membership to `ACTIVE`.
 
+An unlocked owner/admin uses **Share project keys** in the Members view to provision every
+initialized active Project to the invitee's active Devices and activate the Membership atomically.
+The signed activation identifies the exact recipients and grant digests; the service derives the
+required coverage from current persisted state instead of trusting a client-supplied count. The
+same action on an active Member shares keys for newly initialized Projects or new Devices while
+preserving the initial activation record. User-defined Value keys are never shared by this action.
+See [alpha release operations](alpha-release.md) for admission, bounded request sizes, and Device
+revocation procedures.
+
 ## Project and GitHub Repository identity
 
 A Project belongs permanently to one Team and identifies one GitHub Repository by GitHub's stable

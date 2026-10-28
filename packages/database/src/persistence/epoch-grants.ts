@@ -12,6 +12,8 @@ import {
 } from "./publication";
 import {
   databaseBytes,
+  inPersistenceTransaction,
+  type PersistenceClient,
   requireTeamAction,
   StaleEpochError,
   StaleHeadError,
@@ -198,8 +200,8 @@ export class GrantRepository {
   private readonly protocolObjects = new ProtocolObjectRepository();
   private readonly stagedObjects = new StagedObjectRepository();
 
-  async create(database: TransactionDatabase, input: GrantCreationInput) {
-    return inShortTransaction(database, async (transaction) => {
+  async create(database: PersistenceClient, input: GrantCreationInput) {
+    return inPersistenceTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.grant.projectId} FOR UPDATE`;
       const project = await transaction.project.findUnique({
         where: { id: input.grant.projectId },
@@ -236,7 +238,8 @@ export class GrantRepository {
         if (
           !membership ||
           membership.teamId !== input.grant.teamId ||
-          membership.lifecycle !== "PENDING_KEY_GRANT"
+          (membership.lifecycle !== "PENDING_KEY_GRANT" &&
+            membership.lifecycle !== "ACTIVE")
         )
           throw new Error("grant membership is not pending key grants");
       }

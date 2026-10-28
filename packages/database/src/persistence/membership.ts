@@ -6,13 +6,18 @@ import {
   ProtocolObjectRepository,
   StagedObjectRepository,
 } from "./objects";
-import { managedRoleAction, requireTeamAction } from "./repository-core";
-import { inShortTransaction, type TransactionDatabase } from "./transaction";
+import {
+  inPersistenceTransaction,
+  managedRoleAction,
+  type PersistenceClient,
+  requireTeamAction,
+} from "./repository-core";
 export type MembershipActivationInput = Readonly<{
   readonly operation: OperationInput & { readonly actorDeviceId: string };
   readonly teamId: string;
   readonly membershipId: string;
   readonly requiredGrantCount: number;
+  readonly grantObjectIds?: readonly string[];
   readonly activationObject: ProtocolObjectInput;
   readonly now?: Date;
 }>;
@@ -23,10 +28,10 @@ export class MembershipRepository {
   private readonly stagedObjects = new StagedObjectRepository();
 
   async activate(
-    database: TransactionDatabase,
+    database: PersistenceClient,
     input: MembershipActivationInput,
   ) {
-    return inShortTransaction(database, async (transaction) => {
+    return inPersistenceTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
       const operation = await this.operations.begin(
         transaction,
@@ -45,10 +50,18 @@ export class MembershipRepository {
         input.teamId,
         managedRoleAction(membership.role),
       );
-      if (membership.lifecycle !== "PENDING_KEY_GRANT")
+      if (
+        membership.lifecycle !== "PENDING_KEY_GRANT" &&
+        !(membership.lifecycle === "ACTIVE" && input.grantObjectIds)
+      )
         throw new Error("Membership is not pending key grants");
       const grantCount = await transaction.grantObject.count({
-        where: { membershipId: input.membershipId },
+        where: {
+          membershipId: input.membershipId,
+          ...(input.grantObjectIds
+            ? { protocolObjectId: { in: [...input.grantObjectIds] } }
+            : {}),
+        },
       });
       if (grantCount !== input.requiredGrantCount)
         throw new Error("required Membership grant set is incomplete");
@@ -70,17 +83,21 @@ export class MembershipRepository {
         transaction,
         input.activationObject,
       );
-      const activated = await transaction.membership.update({
-        where: { id: input.membershipId },
-        data: { lifecycle: "ACTIVE", activatedAt: now },
-      });
-      await transaction.membershipActivationObject.create({
-        data: {
-          protocolObjectId: protocolObject.id,
-          membershipId: membership.id,
-          teamId: input.teamId,
-        },
-      });
+      const activated =
+        membership.lifecycle === "ACTIVE"
+          ? membership
+          : await transaction.membership.update({
+              where: { id: input.membershipId },
+              data: { lifecycle: "ACTIVE", activatedAt: now },
+            });
+      if (membership.lifecycle === "PENDING_KEY_GRANT")
+        await transaction.membershipActivationObject.create({
+          data: {
+            protocolObjectId: protocolObject.id,
+            membershipId: membership.id,
+            teamId: input.teamId,
+          },
+        });
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
@@ -94,7 +111,7 @@ export class MembershipRepository {
           : {}),
         entityKind: "MEMBERSHIP",
         entityId: membership.id,
-        priorLifecycle: "PENDING_KEY_GRANT",
+        priorLifecycle: membership.lifecycle,
         newLifecycle: "ACTIVE",
         outcomeObjectId: protocolObject.id,
       });

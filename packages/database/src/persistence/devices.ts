@@ -421,7 +421,8 @@ export class DeviceRepository {
       const device = await transaction.device.findUnique({
         where: { id: input.deviceId },
       });
-      if (!device) throw new Error("Device not found");
+      if (!device || device.userId !== input.operation.actorUserId)
+        throw new Error("Device not found");
       await requireActiveDevice(
         transaction,
         input.operation.actorUserId,
@@ -436,6 +437,18 @@ export class DeviceRepository {
       const revoked = await transaction.device.update({
         where: { id: device.id },
         data: { lifecycle: "REVOKED", revokedAt: now },
+      });
+      // Sessions are not bound to Devices. A stolen session could otherwise
+      // bootstrap a replacement Device immediately after revocation.
+      const user = await transaction.user.findUniqueOrThrow({
+        where: { id: input.operation.actorUserId },
+        select: { authSubject: true },
+      });
+      await transaction.authSession.deleteMany({
+        where: { userId: user.authSubject },
+      });
+      await transaction.authDeviceCode.deleteMany({
+        where: { userId: user.authSubject },
       });
       await transaction.operation.update({
         where: { id: operation.operation.id },
