@@ -709,6 +709,84 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     expect(adminMembership.role).toBe("ADMIN");
   });
 
+  test("rejects accepting an invitation after its team is archived", async () => {
+    const {
+      device,
+      serverProfile,
+      user: owner,
+    } = await createAuthorizedDeviceFixture();
+    const teamId = crypto.randomUUID();
+    const administration = new AdministrationRepository();
+    const memberships = new MembershipAdministrationRepository();
+    await administration.createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: owner.id,
+      name: "archived-invitation",
+      operation: {
+        ...(await createOperationInput(owner.id, "archived-invitation-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const invited = await createUserAndDevice(serverProfile.id);
+    const invitedAt = new Date();
+    const invitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invited.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "owner-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in invitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+
+    await database.team.update({
+      where: { id: teamId },
+      data: { lifecycle: "ARCHIVED", archivedAt: new Date() },
+    });
+
+    await expect(
+      memberships.accept(database, {
+        invitationId: invitation.invitation.id,
+        userId: invited.user.id,
+        operation: {
+          ...(await createOperationInput(
+            invited.user.id,
+            "accept-after-archival",
+            "INVITATION",
+          )),
+          actorDeviceId: invited.device.id,
+        },
+        now: invitedAt,
+      }),
+    ).rejects.toThrow("Team is not active");
+
+    expect(
+      await database.membership.count({
+        where: { teamId, userId: invited.user.id },
+      }),
+    ).toBe(0);
+    expect(
+      await database.membershipInvitation.findUnique({
+        where: { id: invitation.invitation.id },
+        select: { acceptedAt: true, acceptedByUserId: true },
+      }),
+    ).toMatchObject({ acceptedAt: null, acceptedByUserId: null });
+
+    await expect(
+      memberships.invite(database, {
+        teamId,
+        providerSubject: invited.user.githubSubject,
+        operation: {
+          ...(await createOperationInput(owner.id, "invite-archived-team")),
+          actorDeviceId: device.id,
+        },
+      }),
+    ).rejects.toThrow("Team is not active");
+  });
+
   test("preserves Project identity and safely discloses Environment metadata and lanes", async () => {
     const {
       device,

@@ -417,10 +417,12 @@ export class MembershipAdministrationRepository {
         throw new Error("Membership invitation is expired or already used");
       if (user.githubSubject !== invitation.providerSubject)
         throw new Error("Membership invitation is addressed to another User");
+      await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${invitation.teamId} FOR UPDATE`;
       const team = await transaction.team.findUnique({
         where: { id: invitation.teamId },
-        select: { serverProfileId: true },
+        select: { serverProfileId: true, lifecycle: true },
       });
+      if (team?.lifecycle !== "ACTIVE") throw new Error("Team is not active");
       if (!team || team.serverProfileId !== user.serverProfileId)
         throw new Error(
           "Membership invitation belongs to another Server Profile",
