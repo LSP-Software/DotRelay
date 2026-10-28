@@ -6,6 +6,7 @@ import {
   OperationNotCancellableError,
   OperationNotFoundError,
   StagedObjectConflictError,
+  StagingQuotaExceededError,
   StaleEpochError,
   StaleHeadError,
   SyncIntegrityError,
@@ -33,6 +34,8 @@ export const mapPersistenceError = (
     return { code: "operation_conflict" };
   if (error instanceof StagedObjectConflictError)
     return { code: "state_conflict" };
+  if (error instanceof StagingQuotaExceededError)
+    return { code: "payload_too_large" };
   if (error instanceof SyncIntegrityError) return { code: "state_conflict" };
   if (error instanceof OperationNotFoundError)
     return { code: "resource_not_found" };

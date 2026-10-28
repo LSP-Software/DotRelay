@@ -92,6 +92,13 @@ export class StagedObjectConflictError extends Error {
   }
 }
 
+export class StagingQuotaExceededError extends Error {
+  constructor() {
+    super("staging quota exceeded");
+    this.name = "StagingQuotaExceededError";
+  }
+}
+
 export class StaleHeadError extends Error {
   readonly currentHeadId: string | null;
 

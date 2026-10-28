@@ -93,6 +93,10 @@ export {
   type ProjectEpochGrantBootstrap,
 } from "./device/grant-bootstrap";
 export {
+  createMembershipProvisioning,
+  type MembershipProvisioningPlan,
+} from "./device/membership-provisioning";
+export {
   assertRevealBoundary,
   type CorrelationId,
   createCorrelationId,

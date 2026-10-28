@@ -21,6 +21,7 @@ import {
   PublicationRepository,
   SecurityRequestLogRepository,
   StagedObjectRepository,
+  StagingQuotaExceededError,
   StaleHeadError,
   SyncRepository,
   sha384Digest,
@@ -375,6 +376,68 @@ integrationDescribe("PostgreSQL persistence integration", () => {
         where: { operationId: stagedOperation.id },
       }),
     ).toBe(1);
+  });
+
+  test("serializes staging quotas across concurrent operations and Devices of one User", async () => {
+    const { device, user } = await createAuthorizedDeviceFixture();
+    const peerKey = crypto.getRandomValues(new Uint8Array(32));
+    const peer = await database.device.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        lifecycle: "ACTIVE",
+        identityGeneration: 1n,
+        keyId: new Uint8Array(await sha384Digest(peerKey)),
+        x25519PublicKey: peerKey,
+        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+        activatedAt: new Date(),
+      },
+    });
+    const operations = new OperationRepository();
+    const staging = new StagedObjectRepository();
+    const inputs = await Promise.all(
+      Array.from({ length: 4 }, async (_, index) => {
+        const actorDeviceId = index % 2 === 0 ? device.id : peer.id;
+        const operation = {
+          ...(await createOperationInput(user.id, `quota-${index}`)),
+          actorDeviceId,
+        };
+        await operations.begin(database, operation);
+        const canonicalBytes = new Uint8Array([0xa0]);
+        const createdAt = new Date();
+        return {
+          operationId: operation.id,
+          objectId: crypto.randomUUID(),
+          actorDeviceId,
+          canonicalBytes,
+          digest: await sha384Digest(canonicalBytes),
+          createdAt,
+          expiresAt: new Date(createdAt.getTime() + 60000),
+          limits: { stagingObjects: 2, stagingBytes: 2 },
+        };
+      }),
+    );
+    const outcomes = await Promise.allSettled(
+      inputs.map((input) => staging.put(database, input)),
+    );
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(2);
+    for (const outcome of outcomes)
+      if (outcome.status === "rejected")
+        expect(outcome.reason).toBeInstanceOf(StagingQuotaExceededError);
+    const accepted =
+      inputs[outcomes.findIndex((outcome) => outcome.status === "fulfilled")];
+    if (!accepted) throw new Error("no staged object accepted");
+    // A retry at the limit consumes no extra quota.
+    await expect(staging.put(database, accepted)).resolves.toMatchObject({
+      objectId: accepted.objectId,
+    });
+    expect(
+      await database.stagedObject.count({
+        where: { actorDevice: { userId: user.id } },
+      }),
+    ).toBe(2);
   });
 
   test("records operation cancellation as an unsampled Audit Fact", async () => {

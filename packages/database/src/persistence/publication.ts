@@ -120,6 +120,12 @@ export class PublicationRepository {
     transaction: PersistenceClient,
     input: RevisionPublicationInput,
   ) {
+    const projectScope = await transaction.environment.findUnique({
+      where: { id: input.environmentId },
+      select: { projectId: true },
+    });
+    if (!projectScope) throw new Error("Environment not found");
+    await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${projectScope.projectId} FOR UPDATE`;
     await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
     const existingOperation = await transaction.operation.findUnique({
       where: { id: input.operation.id },
@@ -570,6 +576,12 @@ export class EnvironmentRepository {
     )
       throw new Error("Environment genesis context does not match its actor");
     return inShortTransaction(database, async (transaction) => {
+      // Lock the Project row before the Environment insert: the foreign key
+      // on environments.projectId would otherwise take a key-share lock on
+      // the Project row that deadlocks against the FOR UPDATE taken later
+      // inside publishRevisionInTransaction when two genesis creations run
+      // concurrently in the same Project.
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
       const project = await transaction.project.findUnique({
         where: { id: input.projectId },
         select: { lifecycle: true, teamId: true },

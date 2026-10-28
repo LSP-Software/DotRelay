@@ -35,6 +35,41 @@ Server Profile. It creates a Member Membership in `PENDING_KEY_GRANT`; GitHub ad
 not create or activate a Membership. Provisioning the complete required grant set and its signed
 activation object moves that Membership to `ACTIVE`.
 
+An unlocked owner/admin uses **Share project keys** in the Members view to provision every
+initialized active Project to the invitee's active Devices and activate the Membership atomically.
+The signed activation identifies the exact recipients and grant digests; the service derives the
+required coverage from current persisted state instead of trusting a client-supplied count. The
+same action on an active Member shares keys for newly initialized Projects or new Devices while
+preserving the initial activation record. User-defined Value keys are never shared by this action.
+See [alpha release operations](alpha-release.md) for admission, bounded request sizes, and Device
+revocation procedures.
+
+### Provisioning key trust
+
+A Device that is not created by initial trust bootstrap joins through dual-control enrollment:
+one trusted Device signs the enrollment transcript, a second, different trusted Device approves
+it, and the Server Profile verifies both signatures against its stored trusted-Device keys before
+it persists the new Device's self-signed certificate and X25519/Ed25519 keys. Initial trust
+bootstrap is a separate, documented path: it requires only an authenticated session and creates
+the Device as `ACTIVE` without a dual-control record, because a User's first Device has no trusted
+Device that could sign its enrollment (see
+[initial trust bootstrap](wiki/trust.md#initial-trust-bootstrap) and
+[ADR 0010](adr/0010-session-bootstrapped-devices-are-fully-active.md)). Revocation, re-approval,
+and every later protocol boundary reuse those persisted keys.
+
+**Share project keys** relies on the key binding the Server Profile has established for each
+Device. The provisioning plan reports each recipient Device's X25519 public key as persisted for
+that Device, and the owner's browser seals each Project key to the reported key. The browser
+therefore trusts the Server Profile as the authority for Device key binding — the same trust it
+places in the persisted Device keys the service discloses elsewhere (Device lists, peer Devices,
+the workspace signing trust set). At commit time the service re-derives the plan from persisted
+state inside the same transaction and rejects the activation unless every sealed grant names one
+of the recipient Device's persisted X25519 keys, so a plan and its grants cannot be mixed across
+Devices or Profiles. That re-derivation checks consistency within the service's own state: a
+dishonest Server Profile that controls the stored keys could still steer a sealed Project key to
+a key it controls. Enrollment or initial trust bootstrap is the trust anchor that makes a stored
+key meaningful, and provisioning adds no trust subject beyond the Server Profile itself.
+
 ## Project and GitHub Repository identity
 
 A Project belongs permanently to one Team and identifies one GitHub Repository by GitHub's stable
