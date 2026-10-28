@@ -819,17 +819,30 @@ export const guardPullOutputAgainstGit = async (
   outputPath: string,
 ): Promise<"established" | "present" | undefined> => {
   const probe = options.gitTracking ?? createGitTrackingProbe();
-  const tracking = await probe(resolve(outputPath));
-  if (tracking.state === "tracked")
-    throw new CliError(
-      "conflict",
-      trackedPullOutputDetail(outputPath),
-      {},
-      "output_tracked",
-    );
-  if (tracking.state === "untracked") return ensureLocalGitExclusion(tracking);
-  if (tracking.state === "ignored") return "present";
-  return undefined;
+  // The recoverable copy contains just as much plaintext as the output.
+  // Check both before changing either file, including a previously tracked
+  // backup which an ignore pattern cannot protect.
+  const paths = [outputPath, `${outputPath}.previous`];
+  const tracking = await Promise.all(paths.map((path) => probe(resolve(path))));
+  for (const [index, info] of tracking.entries()) {
+    if (info.state === "tracked")
+      throw new CliError(
+        "conflict",
+        trackedPullOutputDetail(paths[index] ?? outputPath),
+        {},
+        "output_tracked",
+      );
+  }
+  let result: "established" | "present" | undefined;
+  for (const info of tracking) {
+    if (info.state === "untracked") {
+      const exclusion = await ensureLocalGitExclusion(info);
+      if (result !== "established") result = exclusion;
+    } else if (info.state === "ignored" && result === undefined) {
+      result = "present";
+    }
+  }
+  return result;
 };
 
 export const localPullChanges = async (

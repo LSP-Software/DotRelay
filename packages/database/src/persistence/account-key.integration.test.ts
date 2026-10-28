@@ -132,7 +132,8 @@ const stageObject = async (input: {
 }) => {
   const staging = new StagedObjectRepository();
   const operations = new OperationRepository();
-  await operations.begin(database, input.operation);
+  const begun = await operations.begin(database, input.operation);
+  if (begun.idempotent) return;
   const createdAt = new Date();
   await staging.put(database, {
     operationId: input.operation.id,
@@ -501,8 +502,8 @@ integrationDescribe("account key persistence invariants", () => {
     });
     if (!("wrapper" in first))
       throw new Error("addWrapper did not return a wrapper");
-    // Re-run the exact same operation (same command digest, fresh staging of
-    // the same protocol object) and expect idempotent deduplication.
+    // Re-run the same command digest. A committed operation needs no staging
+    // and must not accept additional objects; the retry is a persistence no-op.
     const accountKeys = new AccountKeyRepository();
     const replayObject = await createProtocolObjectInput(20);
     const replayOperation = {

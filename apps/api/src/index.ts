@@ -36,6 +36,7 @@ import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
 import { registerDeviceRoutes } from "./device-routes";
 import { lookupGitHubRepositoryDisplay } from "./github-repository";
+import { registerMembershipProvisioningRoutes } from "./membership-provisioning-routes";
 import { registerMembershipRoutes } from "./membership-routes";
 import {
   API_CORRELATION_HEADER,
@@ -604,6 +605,37 @@ const createApi = ({
     }),
   );
 
+  app.use("*", async (context, next) => {
+    const allowed = profile.allowedGitHubIds;
+    if (
+      allowed === undefined ||
+      context.req.method === "OPTIONS" ||
+      context.req.path === "/health" ||
+      context.req.path === "/api/v1/capabilities" ||
+      context.req.path === "/api/auth/sign-out"
+    ) {
+      await next();
+      return;
+    }
+    const session = await auth.api.getSession({
+      headers: context.req.raw.headers,
+    });
+    if (session) {
+      const account = await database.authAccount.findFirst({
+        where: { userId: session.user.id, providerId: "github" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: { accountId: true },
+      });
+      if (!account || !allowed.includes(account.accountId)) {
+        context.header("Cache-Control", "no-store");
+        return jsonProblem(context, "forbidden");
+      }
+    } else if (context.req.path.startsWith("/api/v1/")) {
+      return jsonProblem(context, "authentication_required");
+    }
+    await next();
+  });
+
   app.get("/health", (context) => context.json({ status: "ok" }));
   app.get("/api/v1/capabilities", async (context) => {
     const etag = await getCapabilitiesEtag();
@@ -674,6 +706,7 @@ const createApi = ({
 
   app.use("/api/v1/devices/bootstrap", protocolCors(profile));
   app.use("/api/v1/devices/self", protocolCors(profile));
+  app.use("/api/v1/devices/*/revoke", protocolCors(profile));
   app.use("/api/v1/account-keys", protocolCors(profile));
   app.use("/api/v1/account-keys/*", protocolCors(profile));
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
@@ -1373,6 +1406,7 @@ const createApi = ({
   });
 
   registerDeviceRoutes(app, { database, profile, auth });
+  registerMembershipProvisioningRoutes(app, { database, profile, auth });
 
   registerProtocolRoutes(app, { database, profile, auth });
 

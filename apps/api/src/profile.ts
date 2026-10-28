@@ -26,6 +26,7 @@ export type ServerProfileConfig = Readonly<{
   readonly trustProxy: boolean;
   readonly trustedProxies: readonly TrustedProxy[];
   readonly allowRebind: boolean;
+  readonly allowedGitHubIds?: readonly string[];
 }>;
 
 const defaultProfileId = "00000000-0000-4000-8000-000000000001";
@@ -169,6 +170,17 @@ export const loadServerProfileConfig = (
     );
   }
   const allowRebind = environment.SERVER_PROFILE_REBIND === "true";
+  // Unset disables the alpha gate; explicitly empty denies everyone.
+  const allowedGitHubIds =
+    environment.ALPHA_GITHUB_IDS === undefined
+      ? undefined
+      : environment.ALPHA_GITHUB_IDS.split(",")
+          .map((id) => id.trim())
+          .filter(Boolean);
+  if (allowedGitHubIds?.some((id) => !/^[1-9][0-9]{0,18}$/.test(id)))
+    throw new Error(
+      "ALPHA_GITHUB_IDS must contain stable numeric GitHub user ids",
+    );
   return Object.freeze({
     id: validateProfileId(environment.SERVER_PROFILE_ID ?? defaultProfileId),
     origin,
@@ -244,6 +256,9 @@ export const loadServerProfileConfig = (
     trustProxy,
     trustedProxies,
     allowRebind,
+    ...(allowedGitHubIds === undefined
+      ? {}
+      : { allowedGitHubIds: Object.freeze(allowedGitHubIds) }),
   });
 };
 

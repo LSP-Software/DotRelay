@@ -6,6 +6,8 @@ export const PERSISTENCE_LIMITS = Object.freeze({
   maxProtocolBytes: 64 * 1024 * 1024,
   maxGrantPlaintextBytes: 4 * 1024,
   maxLaneCommitments: 100_000,
+  maxStagingObjects: 256,
+  maxStagingBytes: 16 * 1024 * 1024,
 });
 
 const LENGTHS = Object.freeze({

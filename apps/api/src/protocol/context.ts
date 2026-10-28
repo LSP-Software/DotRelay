@@ -35,6 +35,10 @@ export const requireProtocolActor = async (
   profile: ServerProfileConfig,
   auth: DotRelayAuth,
 ): Promise<ProtocolActor | Response> => {
+  const cached = context.get("protocolActor" as never) as
+    | ProtocolActor
+    | undefined;
+  if (cached) return cached;
   try {
     const session = await auth.api.getSession({
       headers: context.req.raw.headers,
@@ -66,11 +70,13 @@ export const requireProtocolActor = async (
         "Cache-Control": "no-store",
         "Content-Type": "application/problem+json",
       });
-    return Object.freeze({
+    const actor = Object.freeze({
       userId: user.id,
       deviceId: device.id,
       authSubject: session.user.id,
     });
+    context.set("protocolActor" as never, actor as never);
+    return actor;
   } catch {
     return serviceUnavailable(context);
   }

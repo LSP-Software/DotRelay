@@ -358,9 +358,7 @@ jobs:
       - name: publish npm dev selector
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
-          npm publish ./packages/dotrelay --access public --tag dev
+        run: bun scripts/publish-cli.ts
 
   tracked-tree-clean:
     name: tracked tree cleanliness

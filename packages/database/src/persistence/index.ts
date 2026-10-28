@@ -36,6 +36,7 @@ export type {
 } from "./objects";
 export {
   AuditFactRepository,
+  beginOperationWithCommand,
   OperationRepository,
   ProtocolObjectRepository,
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
@@ -60,6 +61,7 @@ export {
   OperationNotCancellableError,
   OperationNotFoundError,
   StagedObjectConflictError,
+  StagingQuotaExceededError,
   StaleEpochError,
   StaleHeadError,
 } from "./repository-core";
