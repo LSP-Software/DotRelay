@@ -13,7 +13,9 @@ import {
   createDatabaseClient,
   EnvironmentRepository,
   GenesisExistsError,
+  GrantRepository,
   MembershipAdministrationRepository,
+  MembershipRepository,
   OperationConflictError,
   OperationRepository,
   ProjectRepository,
@@ -709,26 +711,24 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     expect(adminMembership.role).toBe("ADMIN");
   });
 
-  test("revives a removed membership on re-acceptance and rejects an existing member", async () => {
+  test("revives a removed membership via re-acceptance, re-activates it, and rejects an existing member", async () => {
     const {
       device,
-      serverProfile,
-      user: owner,
-    } = await createAuthorizedDeviceFixture();
-    const teamId = crypto.randomUUID();
-    const administration = new AdministrationRepository();
-    const memberships = new MembershipAdministrationRepository();
-    await administration.createTeamWithOwner(database, {
+      projectId,
       teamId,
-      serverProfileId: serverProfile.id,
-      ownerUserId: owner.id,
-      name: "rejoin-policy",
-      operation: {
-        ...(await createOperationInput(owner.id, "rejoin-team")),
-        actorDeviceId: device.id,
-      },
+      user: owner,
+    } = await createProjectFixture("rejoin-activation");
+    const team = await database.team.findUniqueOrThrow({
+      where: { id: teamId },
     });
-    const invitee = await createUserAndDevice(serverProfile.id);
+    const environment = await database.environment.findFirstOrThrow({
+      where: { projectId, lifecycle: "ACTIVE" },
+    });
+    const memberships = new MembershipAdministrationRepository();
+    const grants = new GrantRepository();
+    const activations = new MembershipRepository();
+    const staging = new StagedObjectRepository();
+    const invitee = await createUserAndDevice(team.serverProfileId);
     const invitedAt = new Date("2026-08-28T12:00:00.000Z");
     const invitation = await memberships.invite(database, {
       teamId,
@@ -760,10 +760,98 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       lifecycle: "PENDING_KEY_GRANT",
       role: "MEMBER",
     });
-    await database.membership.update({
-      where: { id: accepted.membership.id },
-      data: { lifecycle: "ACTIVE", activatedAt: invitedAt },
-    });
+    const provisionGrant = async (label: string, membershipId: string) => {
+      const grantObject = await createProtocolObjectInput(
+        7,
+        projectId,
+        environment.id,
+      );
+      const grantOperation = {
+        ...(await createOperationInput(owner.id, label)),
+        actorDeviceId: device.id,
+      };
+      await new OperationRepository().begin(database, grantOperation);
+      const stagedAt = new Date();
+      await staging.put(database, {
+        operationId: grantOperation.id,
+        objectId: grantObject.id,
+        actorDeviceId: device.id,
+        canonicalBytes: grantObject.canonicalBytes,
+        digest: grantObject.digest,
+        createdAt: stagedAt,
+        expiresAt: new Date(stagedAt.getTime() + 60_000),
+      });
+      await grants.create(database, {
+        operation: grantOperation,
+        grant: {
+          protocolObject: grantObject,
+          projectId,
+          teamId,
+          membershipId,
+          senderDeviceId: device.id,
+          recipientDeviceId: invitee.device.id,
+          ownerUserId: invitee.user.id,
+          keyKind: "PROJECT_EPOCH",
+          grantKind: "CURRENT_PROJECT_EPOCH",
+          projectEpoch: 1n,
+          plaintextLength: 32,
+          ciphertextLength: 48,
+          ciphertextHash: new Uint8Array(48),
+          recipientDeviceIds: [invitee.device.id],
+        },
+      });
+    };
+    const activateMembership = async (
+      label: string,
+      requiredGrantCount: number,
+    ) => {
+      const activationObject = await createProtocolObjectInput(
+        6,
+        projectId,
+        environment.id,
+      );
+      const activateOperation = {
+        ...(await createOperationInput(owner.id, label)),
+        actorDeviceId: device.id,
+      };
+      await new OperationRepository().begin(database, activateOperation);
+      const stagedAt = new Date();
+      await staging.put(database, {
+        operationId: activateOperation.id,
+        objectId: activationObject.id,
+        actorDeviceId: device.id,
+        canonicalBytes: activationObject.canonicalBytes,
+        digest: activationObject.digest,
+        createdAt: stagedAt,
+        expiresAt: new Date(stagedAt.getTime() + 60_000),
+      });
+      const result = await activations.activate(database, {
+        operation: activateOperation,
+        teamId,
+        membershipId: accepted.membership.id,
+        requiredGrantCount,
+        activationObject,
+      });
+      if (!("membership" in result))
+        throw new Error("activation was unexpectedly idempotent");
+      return { result, activationObject };
+    };
+
+    await provisionGrant("rejoin-grant", accepted.membership.id);
+    const { result: activated, activationObject: firstActivationObject } =
+      await activateMembership("rejoin-activation", 1);
+    expect(activated.membership.lifecycle).toBe("ACTIVE");
+    expect(
+      await database.membershipActivationObject.findMany({
+        where: { membershipId: accepted.membership.id },
+      }),
+    ).toHaveLength(1);
+    expect(
+      await database.membershipActivationObject.findFirst({
+        where: { membershipId: accepted.membership.id },
+      }),
+    ).toMatchObject({ protocolObjectId: firstActivationObject.id });
+
     const activeInvitation = await memberships.invite(database, {
       teamId,
       providerSubject: invitee.user.githubSubject,
@@ -835,9 +923,190 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       activatedAt: null,
       removedAt: null,
     });
+
+    await provisionGrant("rejoin-second-grant", rejoined.membership.id);
+    const { result: reactivated, activationObject: secondActivationObject } =
+      await activateMembership("rejoin-second-activation", 2);
+    expect(reactivated.membership).toMatchObject({
+      id: rejoined.membership.id,
+      lifecycle: "ACTIVE",
+    });
+    const activationHistory =
+      await database.membershipActivationObject.findMany({
+        where: { membershipId: rejoined.membership.id },
+      });
+    expect(activationHistory).toHaveLength(2);
+    expect(activationHistory.map((row) => row.protocolObjectId)).toEqual(
+      expect.arrayContaining([
+        firstActivationObject.id,
+        secondActivationObject.id,
+      ]),
+    );
     expect(
       await database.membership.count({
         where: { teamId, userId: invitee.user.id },
+      }),
+    ).toBe(1);
+  });
+
+  test("serializes concurrent revivals of one removed membership on the Team row", async () => {
+    const {
+      device,
+      serverProfile,
+      user: owner,
+    } = await createAuthorizedDeviceFixture();
+    const teamId = crypto.randomUUID();
+    const administration = new AdministrationRepository();
+    const memberships = new MembershipAdministrationRepository();
+    await administration.createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: owner.id,
+      name: "concurrent-revival",
+      operation: {
+        ...(await createOperationInput(owner.id, "concurrent-revival-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const invitee = await createUserAndDevice(serverProfile.id);
+    const invitedAt = new Date("2026-08-28T12:00:00.000Z");
+    const seedInvitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(
+          owner.id,
+          "concurrent-revival-invitation",
+        )),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in seedInvitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const seeded = await memberships.accept(database, {
+      invitationId: seedInvitation.invitation.id,
+      userId: invitee.user.id,
+      operation: {
+        ...(await createOperationInput(
+          invitee.user.id,
+          "concurrent-revival-acceptance",
+          "INVITATION",
+        )),
+        actorDeviceId: invitee.device.id,
+      },
+      now: invitedAt,
+    });
+    if (!("membership" in seeded))
+      throw new Error("invitation acceptance was unexpectedly idempotent");
+    await database.membership.update({
+      where: { id: seeded.membership.id },
+      data: { lifecycle: "ACTIVE", activatedAt: invitedAt },
+    });
+    const removed = await memberships.remove(database, {
+      teamId,
+      membershipId: seeded.membership.id,
+      operation: {
+        ...(await createOperationInput(owner.id, "concurrent-revival-removal")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("membership" in removed))
+      throw new Error("membership removal was unexpectedly idempotent");
+    const concurrentInvitations = await Promise.all(
+      [1, 2].map(async (index) =>
+        memberships.invite(database, {
+          teamId,
+          providerSubject: invitee.user.githubSubject,
+          now: invitedAt,
+          operation: {
+            ...(await createOperationInput(
+              owner.id,
+              `concurrent-revival-invitation-${index}`,
+            )),
+            actorDeviceId: device.id,
+          },
+        }),
+      ),
+    );
+    const [firstConcurrent, secondConcurrent] = concurrentInvitations;
+    if (!firstConcurrent || !secondConcurrent)
+      throw new Error("expected two concurrent invitations");
+    if (
+      !("invitation" in firstConcurrent) ||
+      !("invitation" in secondConcurrent)
+    )
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const race = async (invitationId: string, label: string) => {
+      try {
+        const result = await memberships.accept(database, {
+          invitationId,
+          userId: invitee.user.id,
+          operation: {
+            ...(await createOperationInput(
+              invitee.user.id,
+              label,
+              "INVITATION",
+            )),
+            actorDeviceId: invitee.device.id,
+          },
+          now: invitedAt,
+        });
+        return "membership" in result
+          ? {
+              outcome: "revived" as const,
+              membershipId: result.membership.id,
+              invitationId: result.membership.invitationId,
+            }
+          : ({ outcome: "idempotent" } as const);
+      } catch (error) {
+        return {
+          outcome: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+    const results = await Promise.all([
+      race(
+        firstConcurrent.invitation.id,
+        "concurrent-revival-first-acceptance",
+      ),
+      race(
+        secondConcurrent.invitation.id,
+        "concurrent-revival-second-acceptance",
+      ),
+    ]);
+    expect(
+      results.filter((result) => result.outcome === "revived"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.outcome === "rejected"),
+    ).toHaveLength(1);
+    expect(
+      (
+        results.find((result) => result.outcome === "rejected") as {
+          message: string;
+        }
+      ).message,
+    ).toBe("User is already a member of the Team");
+    const revived = await database.membership.findUniqueOrThrow({
+      where: { teamId_userId: { teamId, userId: invitee.user.id } },
+    });
+    const winner = results.find((result) => result.outcome === "revived") as {
+      membershipId: string;
+      invitationId: string;
+    };
+    expect(revived.id).toBe(winner.membershipId);
+    expect(revived.invitationId).toBe(winner.invitationId);
+    expect(revived.lifecycle).toBe("PENDING_KEY_GRANT");
+    expect(
+      await database.membershipInvitation.count({
+        where: {
+          id: {
+            in: [firstConcurrent.invitation.id, secondConcurrent.invitation.id],
+          },
+          acceptedAt: { not: null },
+        },
       }),
     ).toBe(1);
   });

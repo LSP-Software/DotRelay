@@ -425,6 +425,7 @@ export class MembershipAdministrationRepository {
         throw new Error(
           "Membership invitation belongs to another Server Profile",
         );
+      await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${invitation.teamId} FOR UPDATE`;
       const now = input.now ?? new Date();
       const priorMembership = await transaction.membership.findUnique({
         where: {
