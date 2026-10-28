@@ -379,7 +379,12 @@ export const registerMembershipRoutes = (
         context.req.header("Idempotency-Key"),
       );
       const commandBytes = new TextEncoder().encode(
-        JSON.stringify({ action: "team.invite", teamId, providerSubject }),
+        JSON.stringify({
+          action: "team.invite",
+          teamId,
+          providerSubject,
+          operationId,
+        }),
       );
       const result = await memberships.invite(database, {
         teamId,

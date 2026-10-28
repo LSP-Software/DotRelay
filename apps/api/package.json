@@ -19,6 +19,8 @@
     "ioredis": "^5.11.1"
   },
   "devDependencies": {
-    "@dotrelay/client": "workspace:*"
+    "@dotrelay/client": "workspace:*",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1"
   }
 }
