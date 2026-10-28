@@ -12,6 +12,7 @@ import {
 } from "./publication";
 import {
   databaseBytes,
+  DeviceNotActiveError,
   inPersistenceTransaction,
   type PersistenceClient,
   requireTeamAction,
@@ -227,7 +228,10 @@ export class GrantRepository {
         const recipient = await transaction.device.findFirst({
           where: { id: recipientDeviceId, lifecycle: "ACTIVE" },
         });
-        if (!recipient) throw new Error("grant recipient device is not active");
+        if (!recipient)
+          throw new DeviceNotActiveError(
+            "grant recipient device is not active",
+          );
       }
       if (input.grant.membershipId) {
         const membership = await transaction.membership.findUnique({

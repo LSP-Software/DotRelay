@@ -1,7 +1,10 @@
 import { decideLaneDisclosure } from "../administration";
 import type { MutationKind } from "../generated/prisma/client";
 import { AdministrationDisclosureRepository } from "./disclosure";
-import type { PersistenceClient } from "./repository-core";
+import {
+  MembershipNotActiveError,
+  type PersistenceClient,
+} from "./repository-core";
 import { copyBytes } from "./validation";
 
 export class SyncIntegrityError extends Error {
@@ -107,7 +110,7 @@ export class SyncRepository {
       },
       select: { role: true, lifecycle: true },
     });
-    if (!membership) throw new Error("Membership is not active");
+    if (!membership) throw new MembershipNotActiveError();
     const isEnvironmentGenesis =
       input.trustedRevisionId === input.environmentId &&
       sameBytes(input.trustedRevisionHash, new Uint8Array(48));

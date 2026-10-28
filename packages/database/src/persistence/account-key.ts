@@ -6,7 +6,12 @@ import {
   ProtocolObjectRepository,
   StagedObjectRepository,
 } from "./objects";
-import { databaseBytes, requireActiveDevice } from "./repository-core";
+import {
+  AccountKeyWrapperNotActiveError,
+  databaseBytes,
+  DeviceNotActiveError,
+  requireActiveDevice,
+} from "./repository-core";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import { validateDigest } from "./validation";
 
@@ -242,8 +247,7 @@ export class AccountKeyRepository {
           retiredAt: null,
         },
       });
-      if (!wrapper)
-        throw new Error("account key wrapper is not active for this user");
+      if (!wrapper) throw new AccountKeyWrapperNotActiveError();
       const activeCount = await transaction.accountKeyWrapperObject.count({
         where: { userId: input.operation.actorUserId, retiredAt: null },
       });
@@ -503,7 +507,9 @@ export class AccountKeyRepository {
         },
       });
       if (!recipient)
-        throw new Error("transfer recipient device is not active");
+        throw new DeviceNotActiveError(
+          "transfer recipient device is not active",
+        );
       const operation = await this.operations.begin(
         transaction,
         input.operation,

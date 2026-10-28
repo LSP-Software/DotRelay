@@ -18,6 +18,7 @@ import {
   createBetterAuthDatabaseAdapter,
   createDatabaseClient,
   type DatabaseClient,
+  DeviceNotActiveError,
   DeviceRepository,
   ensureServerProfile,
   GrantRepository,
@@ -850,7 +851,7 @@ const createApi = ({
             userId: true,
           },
         });
-        if (!sender) throw new Error("Device is not active");
+        if (!sender) throw new DeviceNotActiveError();
         const recipient =
           recipientDeviceId === actor.deviceId
             ? sender
@@ -866,7 +867,10 @@ const createApi = ({
                   userId: true,
                 },
               });
-        if (!recipient) throw new Error("grant recipient device is not active");
+        if (!recipient)
+          throw new DeviceNotActiveError(
+            "grant recipient device is not active",
+          );
         if (
           !equalBytes(
             requiredBytes(39, 32),
@@ -971,6 +975,8 @@ const createApi = ({
           return jsonProblem(context, error.code);
         if (error instanceof OperationConflictError)
           return jsonProblem(context, "operation_conflict");
+        if (error instanceof DeviceNotActiveError)
+          return jsonProblem(context, "device_not_active");
         if (error instanceof Error && error.message.includes("not active"))
           return jsonProblem(context, "device_not_active");
         if (error instanceof Error && error.message.includes("not authorized"))

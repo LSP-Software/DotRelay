@@ -54,16 +54,22 @@ export type {
 export { EnvironmentRepository, PublicationRepository } from "./publication";
 export type { PersistenceClient } from "./repository-core";
 export {
+  AccountKeyWrapperNotActiveError,
   DEFAULT_ENVIRONMENT_LABEL,
+  DeviceNotActiveError,
+  EnvironmentNotActiveError,
   GenesisExistsError,
+  MembershipNotActiveError,
   normalizeEnvironmentLabel,
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
+  ProjectNotActiveError,
   StagedObjectConflictError,
   StagingQuotaExceededError,
   StaleEpochError,
   StaleHeadError,
+  TeamNotActiveError,
 } from "./repository-core";
 export type { SyncInput, SyncObject, SyncPage, SyncRevision } from "./sync";
 export { mutationToWire, SyncIntegrityError, SyncRepository } from "./sync";
