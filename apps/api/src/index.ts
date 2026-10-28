@@ -71,8 +71,7 @@ export type ApiDependencies = Readonly<{
 
 const jsonProblem = (context: Context, code: ProblemCode) => {
   const correlationId = context.get("correlationId" as never) as
-    | string
-    | undefined;
+    string | undefined;
   const problem = createProblem(code, {
     ...(correlationId === undefined ? {} : { correlationId }),
   });

@@ -4,10 +4,12 @@ Decisions made during UX work, with the tradeoffs considered, so later
 sessions don't relitigate them.
 
 ## D-001 - Sign out lives in the sidebar account menu (and the mobile sheet)
+
 Date: 2026-09-18
 Problem: Signed-in users had no sign-out control anywhere in the workspace UI
 (UX-001).
 Chosen:
+
 - Desktop: the sidebar account block (avatar + name + "Signed in") is now a
   `DropdownMenu` trigger; the menu contains a single "Sign out" item.
 - Mobile: the navigation sheet gains a "Sign out" button in its footer.
@@ -16,7 +18,7 @@ Chosen:
   `/sign-in` in a `finally` block so navigation happens even when the API is
   unreachable.
 - The signed-out state keeps the old static block (no menu for a dead session).
-Tradeoffs considered:
+  Tradeoffs considered:
 - A dedicated "Account" page or settings screen was rejected: it would add a
   route and a concept (account management) that doesn't exist in the product
   yet. The menu can grow (profile, API keys) without a page.
@@ -28,26 +30,28 @@ Tradeoffs considered:
   it intact, and reusing it means the next sign-in restores the same browser
   without re-enrolling (no re-trust, no re-keying). Signing out must not
   destroy credentials the user didn't ask to destroy.
-Rejected options:
+  Rejected options:
 - A "Sign out" link in the landing page footer: only reachable after
   navigating away from the workspace; the natural place is where the account
   is shown.
 - A confirm dialog: signing out is easily reversible (just sign back in), and
   a dialog adds friction for a one-step action.
-Verification: `apps/web/e2e/workspace-account.spec.ts` covers the desktop menu
-and the mobile sheet; both sign out and land on `/sign-in`.
+  Verification: `apps/web/e2e/workspace-account.spec.ts` covers the desktop menu
+  and the mobile sheet; both sign out and land on `/sign-in`.
 
 ## D-002 - Zero-Teams state hides the selector and points at the CLI (no web team-creation)
+
 Date: 2026-09-18
 Problem: A signed-in user with zero Teams saw a dead empty "Choose a team"
 selector and a misleading heading (UX-003).
 Chosen:
+
 - When `catalog.teams` is empty, the workspace removes every "choose a team"
   control (the sidebar team `<select>`, the mobile-sheet team `<select>`, and
   the header team crumb) and shows a single "No teams yet" empty state whose
   one action is to run `dotrelay init`.
 - The normal (one-or-more-Teams) view is unchanged.
-Why not a web "Create team" form:
+  Why not a web "Create team" form:
 - By DotRelay's product model, Teams and Projects are created by the CLI:
   `dotrelay init` "creates the missing Team, Project, and Environment" (CLI
   help). The web UI is the surface for managing the environment variables of
@@ -60,20 +64,21 @@ Why not a web "Create team" form:
   leave the browser to populate, splitting one workflow across two surfaces.
 - Adding web team-creation would also make the web and CLI diverge as two
   sources of truth for Team creation.
-Tradeoffs considered:
+  Tradeoffs considered:
 - A "Create team" dialog in the web UI (the API supports it). Rejected for the
   reasons above; revisit only if the product adds a browser project-creation
   flow that makes a bare web-created Team useful.
 - Rewording the heading to "No teams" while keeping the empty selector.
   Rejected: the empty selector is still a dead control; the structural fix is
   to remove it, not to relabel it.
-Verification: `apps/web/e2e/workspace-zero-teams.spec.ts` - a zero-Teams
-boundary shows no team selector and a "No teams yet" state pointing at
-`dotrelay init`; a boundary with Teams keeps the selector.
+  Verification: `apps/web/e2e/workspace-zero-teams.spec.ts` - a zero-Teams
+  boundary shows no team selector and a "No teams yet" state pointing at
+  `dotrelay init`; a boundary with Teams keeps the selector.
 
 ## D-003 - Member management is Owner/Admin API mutations; no self-leave
 
 Context:
+
 - UX-009 found the Team view promised member management (its disclosure
   says owners "manage team members") while the API exposed none of it:
   only resolve / create-invitation / list-invitations / list-memberships /
@@ -84,6 +89,7 @@ Context:
   documented operations rather than re-scope the docs down to invite-only.
 
 Decision:
+
 - Two new protocol routes under the Team, POST + Idempotency-Key (the
   convention every other Team mutation in this codebase uses - the API
   has zero PUT/DELETE/PATCH):
@@ -111,6 +117,7 @@ Decision:
   JOURNEYS.md rather than shipped or documented as a feature.
 
 Rejected:
+
 - PUT/DELETE verbs. Rejected: the whole API is POST + Idempotency-Key;
   introducing a first PUT/DELETE would create a second, unreferenced
   convention for the same class of mutation.
@@ -127,9 +134,11 @@ own-row and removed-row cases).
 ## D-004 - The in-browser Recovery area renders one state matrix
 
 Context:
+
 - The recovery UX needs one consistent surface for every browser state.
 
 Decision:
+
 - The Recovery area renders from a matrix: no session shows the sign-in
   prompt; a signed-in session without an active Device shows the
   device-setup prompt; a Device without an account key shows setup (the
@@ -143,10 +152,12 @@ state's anchor.
 ## D-005 - The Account Master Key lives in browser memory only
 
 Context:
+
 - Key material in a browser: the browser unlocks the Account Master Key
   from the user's wrapper, so the key lands in the page's process.
 
 Decision:
+
 - The browser never persists the Account Master Key or wrapper key
   material; the key lives in memory for the session and dies with the tab.
 - Every new session must unlock again via a wrapper (recovery code,
@@ -154,6 +165,7 @@ Decision:
 - The UI states this.
 
 Rejected:
+
 - Local key persistence (IndexedDB or an encrypted vault) as a v1
   surface. Rejected: it would put durable key material in the browser, the
   risk the in-memory policy removes.
@@ -165,10 +177,12 @@ Verification: the e2e reload-without-recovery-code scenarios in
 ## D-006 - The Argon2 worker ships as a prebuilt IIFE
 
 Context:
+
 - The argon2id KDF must run off the main thread, but Next.js can't
   bundle a custom worker through the web app cleanly.
 
 Decision:
+
 - A prebuilt IIFE at `apps/web/public/argon2-worker.js`, generated by
   `apps/web/scripts/build-argon2-worker.ts` (the dev script regenerates
   it; the artifact is checked in so `next build` and e2e need no build
@@ -177,6 +191,7 @@ Decision:
   `runArgon2id` falls back to the main-thread noble implementation.
 
 Rejected:
+
 - A runtime-compiled worker URL. Rejected: the client would still carry
   the KDF source on the main thread, which is what the worker removes.
 - A separate npm package. Rejected: the KDF belongs to the client's
@@ -193,6 +208,7 @@ the project list (or a one-line "No teams yet") with trust, CLI install,
 team creation, browser enrollment, and recovery scattered across other
 views (UX-029).
 Chosen:
+
 - While the signed-in browser cannot yet read values, the projects view
   opens on a checklist. One step is current. The others stay visible so the
   path is obvious.
@@ -213,7 +229,7 @@ Chosen:
   lost. It does not gate the project list.
 - Dismissal is `localStorage`, keyed by user id. It is ignored when there
   is no Team.
-Rejected:
+  Rejected:
 - A web form that creates a Team. Rejected: D-002. The CLI still creates
   the Team, Project, and Environment.
 - Replacing the project list for an account that is already trusted,

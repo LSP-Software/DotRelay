@@ -16,9 +16,11 @@ if (devTag) {
 } else if (releaseTag) {
   // A release stamps a real version into the compiled binary, so the
   // unpublished 0.0.0 placeholder is not a valid release tag.
-  if (
-    !(releaseTag[1] === "0" && releaseTag[2] === "0" && releaseTag[3] === "0")
-  )
+  if (!(
+    releaseTag[1] === "0" &&
+    releaseTag[2] === "0" &&
+    releaseTag[3] === "0"
+  ))
     version = releaseTag[0].replace(/^v/, "");
 }
 if (version === null)

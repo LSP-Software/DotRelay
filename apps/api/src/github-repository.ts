@@ -84,8 +84,7 @@ export type GitHubIdentityFailure =
   | Readonly<{ readonly code: "github_unavailable" }>;
 
 export type GitHubIdentityOutcome =
-  | GitHubIdentityResolution
-  | GitHubIdentityFailure;
+  GitHubIdentityResolution | GitHubIdentityFailure;
 
 export type GitHubIdentityOptions = Readonly<{
   readonly fetch?: typeof fetch;

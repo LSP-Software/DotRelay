@@ -41,8 +41,7 @@ export const createFileDeviceRecordStore = (
         ) as Record<string, unknown>;
         const storedScope = value.scope as Record<string, unknown> | undefined;
         const storedPin = storedScope?.pin as
-          | Record<string, unknown>
-          | undefined;
+          Record<string, unknown> | undefined;
         const storedDeviceId = decode(storedScope?.deviceId);
         if (
           !storedPin ||

@@ -786,12 +786,10 @@ try {
   const initialVariableId = initialRevisionObject
     ? parseProtocolObject(initialRevisionObject.canonicalBytes).get(54)
     : undefined;
-  if (
-    !(
-      Array.isArray(initialVariableId) &&
-      initialVariableId[0] instanceof Uint8Array
-    )
-  )
+  if (!(
+    Array.isArray(initialVariableId) &&
+    initialVariableId[0] instanceof Uint8Array
+  ))
     throw new Error("packaged CLI genesis did not expose changed Variables");
   const sharedVariableId = bytesToUuid(initialVariableId[0]);
   await Bun.write(dotenvPath, "SHARED_VALUE=two\nUSER_VALUE=secret\nEMPTY=\n");

@@ -391,8 +391,7 @@ const installRecoveryRoutes = async (
     if (scenario.liveBoundary) body.source = "live";
     if (scenario.forceNoPeerEpochGrant) {
       const peers = body.peerDevices as
-        | ReadonlyArray<Record<string, unknown>>
-        | undefined;
+        ReadonlyArray<Record<string, unknown>> | undefined;
       if (Array.isArray(peers))
         for (const peer of peers) peer.hasEpochGrant = false;
     }

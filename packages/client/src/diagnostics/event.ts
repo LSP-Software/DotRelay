@@ -35,11 +35,7 @@ const DIAGNOSTIC_OUTCOMES = new Set([
   "cancelled",
 ]);
 export type DiagnosticOutcome =
-  | "success"
-  | "failure"
-  | "rejected"
-  | "denied"
-  | "cancelled";
+  "success" | "failure" | "rejected" | "denied" | "cancelled";
 export type DiagnosticProblemCode = Exclude<
   ProblemCode,
   | "invalid_crypto_object"

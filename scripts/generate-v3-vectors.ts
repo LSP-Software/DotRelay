@@ -188,15 +188,12 @@ const files: Record<string, string> = {
 for (const [name, contents] of Object.entries(files))
   await writeFile(`${directory}/${name}`, contents);
 
-const formatter = Bun.spawn(
-  ["bun", "x", "biome", "format", directory, "--write"],
-  {
-    stderr: "inherit",
-    stdout: "ignore",
-  },
-);
+const formatter = Bun.spawn(["bun", "fmt", directory], {
+  stderr: "inherit",
+  stdout: "ignore",
+});
 if ((await formatter.exited) !== 0)
-  throw new Error("Biome failed while formatting the v3 vector corpus");
+  throw new Error("Bun fmt failed while formatting the v3 vector corpus");
 
 const manifestFiles = await Promise.all(
   Object.keys(files)

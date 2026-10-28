@@ -13,7 +13,10 @@ permissions:
   contents: read
 
 env:
-  BUN_VERSION: 1.4.2
+  # Canary channel: the built-in `bun lint` linter is not enabled in stable
+  # releases yet (it is gated behind the canary build flavor). `bun check`
+  # and `bun fmt` work on both; the canary pin keeps all three built-ins.
+  BUN_VERSION: canary
 
 jobs:
   check:
@@ -216,7 +219,19 @@ jobs:
     name: deploy dev (Coolify)
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, e2e-full, prisma, docs, security]
+    needs:
+      [
+        check,
+        build-smoke,
+        unit,
+        integration,
+        browser-e2e,
+        cli-round-trip,
+        e2e-full,
+        prisma,
+        docs,
+        security,
+      ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
@@ -265,7 +280,19 @@ jobs:
     name: build dev CLI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, e2e-full, prisma, docs, security]
+    needs:
+      [
+        check,
+        build-smoke,
+        unit,
+        integration,
+        browser-e2e,
+        cli-round-trip,
+        e2e-full,
+        prisma,
+        docs,
+        security,
+      ]
     strategy:
       fail-fast: false
       matrix:
@@ -330,7 +357,22 @@ jobs:
   tracked-tree-clean:
     name: tracked tree cleanliness
     runs-on: ubuntu-latest
-    needs: [check, build-smoke, unit, integration, browser-e2e, cli-round-trip, e2e-full, prisma, docs, security, deploy-dev, build-cli-dev, publish-cli-dev]
+    needs:
+      [
+        check,
+        build-smoke,
+        unit,
+        integration,
+        browser-e2e,
+        cli-round-trip,
+        e2e-full,
+        prisma,
+        docs,
+        security,
+        deploy-dev,
+        build-cli-dev,
+        publish-cli-dev,
+      ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }

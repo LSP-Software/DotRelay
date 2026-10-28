@@ -13,19 +13,19 @@ application-security, or release approval.
 
 The authoritative inputs are:
 
-| Authority | Effect on this packet |
-| --- | --- |
-| [`CONTEXT.md`](../../CONTEXT.md) | DotRelay vocabulary and security-boundary terminology. |
-| [`AGENTS.md`](../../AGENTS.md) | Repository rules, including Bun package management and code-style constraints. |
-| [Wayfinder map #1](https://github.com/LSP-Software/DotRelay/issues/1) | `dotrelay-e2ee-v2` is the only first-release suite; no earlier suite, migration, suite floor, or transition object is implementation scope. |
-| [Completed decision #17](https://github.com/LSP-Software/DotRelay/issues/17) | Frozen v2 wire suite, encodings, derivations, ceilings, generic rejection behavior, and provider-neutral contract requirements. |
-| [Completed decision #18](https://github.com/LSP-Software/DotRelay/issues/18) | Source-pinned portable-C Wasm provider selection and the provider production gates. |
-| [Completed decision #19](https://github.com/LSP-Software/DotRelay/issues/19) | Conditional security claim, exclusions, evidence requirements, compatibility errors, and hard no-waiver release gate. |
-| [Open integration issue #26](https://github.com/LSP-Software/DotRelay/issues/26) | Concrete provider implementation acceptance criteria: exact artifact, source/build evidence, complete vectors/oracle/matrix, lifecycle, and performance gates. |
-| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30) | Provider-independent contract, deterministic-CBOR registry, and immutable-corpus acceptance criteria. Its live scope explicitly assigns provider execution and the independent approval gate to #26. |
-| [Open final gate #36](https://github.com/LSP-Software/DotRelay/issues/36) | Requires this version-bound dossier and separate independent cryptographic/application-security review before any secret-capable release. |
-| [`docs/research/dotrelay-browser-bun-post-quantum-provider.md`](dotrelay-browser-bun-post-quantum-provider.md) | Primary-source-backed provider research and explicit statement that selection is not production approval. |
-| [`test-vectors/e2ee/v2/README.md`](../../test-vectors/e2ee/v2/README.md) and [`packages/contracts`](../../packages/contracts/src/registry.ts) | Checked-in immutable deterministic-CBOR contract corpus and registry. |
+| Authority                                                                                                                                     | Effect on this packet                                                                                                                                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`CONTEXT.md`](../../CONTEXT.md)                                                                                                              | DotRelay vocabulary and security-boundary terminology.                                                                                                                                               |
+| [`AGENTS.md`](../../AGENTS.md)                                                                                                                | Repository rules, including Bun package management and code-style constraints.                                                                                                                       |
+| [Wayfinder map #1](https://github.com/LSP-Software/DotRelay/issues/1)                                                                         | `dotrelay-e2ee-v2` is the only first-release suite; no earlier suite, migration, suite floor, or transition object is implementation scope.                                                          |
+| [Completed decision #17](https://github.com/LSP-Software/DotRelay/issues/17)                                                                  | Frozen v2 wire suite, encodings, derivations, ceilings, generic rejection behavior, and provider-neutral contract requirements.                                                                      |
+| [Completed decision #18](https://github.com/LSP-Software/DotRelay/issues/18)                                                                  | Source-pinned portable-C Wasm provider selection and the provider production gates.                                                                                                                  |
+| [Completed decision #19](https://github.com/LSP-Software/DotRelay/issues/19)                                                                  | Conditional security claim, exclusions, evidence requirements, compatibility errors, and hard no-waiver release gate.                                                                                |
+| [Open integration issue #26](https://github.com/LSP-Software/DotRelay/issues/26)                                                              | Concrete provider implementation acceptance criteria: exact artifact, source/build evidence, complete vectors/oracle/matrix, lifecycle, and performance gates.                                       |
+| [Open contract/vector issue #30](https://github.com/LSP-Software/DotRelay/issues/30)                                                          | Provider-independent contract, deterministic-CBOR registry, and immutable-corpus acceptance criteria. Its live scope explicitly assigns provider execution and the independent approval gate to #26. |
+| [Open final gate #36](https://github.com/LSP-Software/DotRelay/issues/36)                                                                     | Requires this version-bound dossier and separate independent cryptographic/application-security review before any secret-capable release.                                                            |
+| [`docs/research/dotrelay-browser-bun-post-quantum-provider.md`](dotrelay-browser-bun-post-quantum-provider.md)                                | Primary-source-backed provider research and explicit statement that selection is not production approval.                                                                                            |
+| [`test-vectors/e2ee/v2/README.md`](../../test-vectors/e2ee/v2/README.md) and [`packages/contracts`](../../packages/contracts/src/registry.ts) | Checked-in immutable deterministic-CBOR contract corpus and registry.                                                                                                                                |
 
 The issue tracker was queried read-only on the review date with the ordered command below:
 
@@ -49,9 +49,9 @@ Decision #18 selects one minimal portable-C WebAssembly provider built from the 
 sources, with only ML-KEM-768, ML-DSA-65, and the SHA3-384 combiner operation exposed. The exact
 reviewed source revisions are:
 
-| Component | Exact revision | Release context | Evidence status |
-| --- | --- | --- | --- |
-| `mlkem-native` | `2cf613b6857ccec80b372814a0f387c8facbfea6` | After stable `v1.2.0` | **Recorded source baseline; not vendored or built in this repository.** |
+| Component      | Exact revision                             | Release context                        | Evidence status                                                             |
+| -------------- | ------------------------------------------ | -------------------------------------- | --------------------------------------------------------------------------- |
+| `mlkem-native` | `2cf613b6857ccec80b372814a0f387c8facbfea6` | After stable `v1.2.0`                  | **Recorded source baseline; not vendored or built in this repository.**     |
 | `mldsa-native` | `6e65c6e8a4d54d453bd78399d16fe42527ff9e87` | Latest cited release is `v1.0.0-beta2` | **Recorded pre-release source baseline; stable-release gate remains open.** |
 
 The revisions are recorded in [decision #18](https://github.com/LSP-Software/DotRelay/issues/18) and
@@ -123,16 +123,16 @@ toolchain therefore does not establish a reproducible provider build.
 
 The reviewer should not accept a build until this record is complete:
 
-| Field | Builder A | Builder B | Required comparison |
-| --- | --- | --- | --- |
-| Host/image identity and digest | `<fill>` | `<fill>` | Different isolated environments. |
-| Source manifest digest | `<fill>` | `<fill>` | Exact match. |
-| Toolchain/image digest | `<fill>` | `<fill>` | Pinned and independently recorded. |
-| Compiler/linker flags | `<fill>` | `<fill>` | Exact match. |
-| Exported symbols | `<fill>` | `<fill>` | Exact closed operation set. |
-| Raw Wasm SHA-256 | `<fill>` | `<fill>` | **Byte-identical.** |
-| Rebuild log hash | `<fill>` | `<fill>` | Retained for audit. |
-| Reviewer conclusion | `<fill>` | `<fill>` | Pass / fail / finding ID. |
+| Field                          | Builder A | Builder B | Required comparison                |
+| ------------------------------ | --------- | --------- | ---------------------------------- |
+| Host/image identity and digest | `<fill>`  | `<fill>`  | Different isolated environments.   |
+| Source manifest digest         | `<fill>`  | `<fill>`  | Exact match.                       |
+| Toolchain/image digest         | `<fill>`  | `<fill>`  | Pinned and independently recorded. |
+| Compiler/linker flags          | `<fill>`  | `<fill>`  | Exact match.                       |
+| Exported symbols               | `<fill>`  | `<fill>`  | Exact closed operation set.        |
+| Raw Wasm SHA-256               | `<fill>`  | `<fill>`  | **Byte-identical.**                |
+| Rebuild log hash               | `<fill>`  | `<fill>`  | Retained for audit.                |
+| Reviewer conclusion            | `<fill>`  | `<fill>`  | Pass / fail / finding ID.          |
 
 ## 4. SBOM, provenance, and supply-chain evidence
 
@@ -227,12 +227,12 @@ Decision #18 requires all of the following matrix cells, with every cell executi
 the complete frozen corpus, malformed-input tests, browser↔Bun round trips, concurrency tests, and
 repeated initialize/destroy cycles ([provider research, lines 99–129](dotrelay-browser-bun-post-quantum-provider.md#L99-L129)):
 
-| Surface | Required targets |
-| --- | --- |
+| Surface  | Required targets                                                                       |
+| -------- | -------------------------------------------------------------------------------------- |
 | Chromium | Current and previous stable Chrome and Edge on Windows x64, macOS arm64, and Linux x64 |
-| Firefox | Current and ESR on Windows x64, macOS arm64, and Linux x64 |
-| WebKit | Current and previous Safari on supported macOS; current iOS/iPadOS arm64 |
-| Bun CLI | Pinned Bun on Linux x64/arm64, macOS x64/arm64, and Windows x64/arm64 |
+| Firefox  | Current and ESR on Windows x64, macOS arm64, and Linux x64                             |
+| WebKit   | Current and previous Safari on supported macOS; current iOS/iPadOS arm64               |
+| Bun CLI  | Pinned Bun on Linux x64/arm64, macOS x64/arm64, and Windows x64/arm64                  |
 
 ### Evidence actually present
 
@@ -252,15 +252,15 @@ cannot be promoted to a full matrix result.
 
 ## 7. Malformed-input, timing, concurrency, zeroization, and performance evidence
 
-| Area | Evidence present | Gate status |
-| --- | --- | --- |
-| Contract malformed input | 21 frozen malformed CBOR/object cases; all passed with `invalid_crypto_object` except unsupported suite. Canonical decoding rejects noncanonical integers, indefinite lengths, duplicate/unknown fields, tags, floats, invalid UTF-8, truncation, bad lengths, and invalid conditional fields ([CBOR decoder](../../packages/contracts/src/cbor.ts#L183-L274), [negative corpus](../../test-vectors/e2ee/v2/negative.json#L1-L110)). | **Partial:** codec only. |
-| Provider malformed input | No ML-KEM key/ciphertext, ML-DSA encoding, signature, all-zero X25519, truncated provider buffer, or adapter error corpus. | **Missing; blocks.** |
-| Timing / generated code | Upstream portable-C CBMC, compiler-barrier, constant-time-pattern, and Valgrind claims are documented, with power/EM/speculative/fault attacks outside upstream scope ([research, lines 71–97](dotrelay-browser-bun-post-quantum-provider.md#L71-L97)). | **Missing:** no exact Wasm generated-code timing evidence. |
-| Concurrency | No provider implementation or concurrent initialize/operation/destroy test. | **Missing; blocks.** |
-| Zeroization | The design requires wiping seeds, expanded keys, signing randomness, and shared secrets on success and every failure path, and inspecting copies, allocator reuse, exceptions, growth, worker transfer, and teardown ([research, lines 199–213](dotrelay-browser-bun-post-quantum-provider.md#L199-L213)). | **Missing; blocks.** |
-| Performance / memory | Upstream static allocation bounds are recorded, but no combined Wasm size, compression, initialization, peak Wasm/JS memory, p50/p95/p99 latency, low-tier device, or long-history measurements exist ([research, lines 131–152](dotrelay-browser-bun-post-quantum-provider.md#L131-L152)). | **Missing; blocks.** |
-| Stable error behavior | The contract now declares `invalid_crypto_object`, `unsupported_crypto_suite`, `unsupported_crypto_runtime` (`422`), and `crypto_provider_unavailable` (`503`) ([errors](../../packages/contracts/src/errors.ts#L1-L60)); the provider still has no implementation or runtime result record. | **Contract present; provider evidence missing and blocks.** |
+| Area                     | Evidence present                                                                                                                                                                                                                                                                                                                                                                                                                     | Gate status                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| Contract malformed input | 21 frozen malformed CBOR/object cases; all passed with `invalid_crypto_object` except unsupported suite. Canonical decoding rejects noncanonical integers, indefinite lengths, duplicate/unknown fields, tags, floats, invalid UTF-8, truncation, bad lengths, and invalid conditional fields ([CBOR decoder](../../packages/contracts/src/cbor.ts#L183-L274), [negative corpus](../../test-vectors/e2ee/v2/negative.json#L1-L110)). | **Partial:** codec only.                                    |
+| Provider malformed input | No ML-KEM key/ciphertext, ML-DSA encoding, signature, all-zero X25519, truncated provider buffer, or adapter error corpus.                                                                                                                                                                                                                                                                                                           | **Missing; blocks.**                                        |
+| Timing / generated code  | Upstream portable-C CBMC, compiler-barrier, constant-time-pattern, and Valgrind claims are documented, with power/EM/speculative/fault attacks outside upstream scope ([research, lines 71–97](dotrelay-browser-bun-post-quantum-provider.md#L71-L97)).                                                                                                                                                                              | **Missing:** no exact Wasm generated-code timing evidence.  |
+| Concurrency              | No provider implementation or concurrent initialize/operation/destroy test.                                                                                                                                                                                                                                                                                                                                                          | **Missing; blocks.**                                        |
+| Zeroization              | The design requires wiping seeds, expanded keys, signing randomness, and shared secrets on success and every failure path, and inspecting copies, allocator reuse, exceptions, growth, worker transfer, and teardown ([research, lines 199–213](dotrelay-browser-bun-post-quantum-provider.md#L199-L213)).                                                                                                                           | **Missing; blocks.**                                        |
+| Performance / memory     | Upstream static allocation bounds are recorded, but no combined Wasm size, compression, initialization, peak Wasm/JS memory, p50/p95/p99 latency, low-tier device, or long-history measurements exist ([research, lines 131–152](dotrelay-browser-bun-post-quantum-provider.md#L131-L152)).                                                                                                                                          | **Missing; blocks.**                                        |
+| Stable error behavior    | The contract now declares `invalid_crypto_object`, `unsupported_crypto_suite`, `unsupported_crypto_runtime` (`422`), and `crypto_provider_unavailable` (`503`) ([errors](../../packages/contracts/src/errors.ts#L1-L60)); the provider still has no implementation or runtime result record.                                                                                                                                         | **Contract present; provider evidence missing and blocks.** |
 
 The existing contract rejects server-visible private seed fields and validates fixed lengths, but no
 provider lifecycle exists to prove that the seeds remain encrypted at rest, are expanded only inside
@@ -353,22 +353,22 @@ artifact digest in the checklist must match the release dossier's artifact ident
 
 Copy one row per finding and attach the supporting report or test log by immutable hash.
 
-| Field | Value |
-| --- | --- |
-| Finding ID | `ASR-<YYYYMMDD>-<NNN>` |
-| Title | `<short description>` |
-| Severity | `Critical / High / Medium / Low / Informational` |
-| Affected artifact | `<release tag + Wasm SHA-256 + adapter revision>` |
-| Affected scope | `source / build / adapter / protocol / runtime / storage / release / documentation` |
-| Evidence | `<report, test, log, or trace link and SHA-256>` |
-| Reproduction | `<exact command, matrix cell, input/vector ID, and observed result>` |
-| Security impact | `<confidentiality / authenticity / availability / metadata / none>` |
-| Disposition | `Fix / Mitigate / Accept / Reject / Duplicate / Not reproducible` |
-| Rationale | `<why disposition is valid against #18/#19>` |
-| Owner | `<named owner or external reviewer>` |
-| Due date | `<date>` |
-| Verification evidence | `<new artifact/test/report hash>` |
-| Reviewer decision | `Open / Closed / Blocked` |
+| Field                 | Value                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| Finding ID            | `ASR-<YYYYMMDD>-<NNN>`                                                              |
+| Title                 | `<short description>`                                                               |
+| Severity              | `Critical / High / Medium / Low / Informational`                                    |
+| Affected artifact     | `<release tag + Wasm SHA-256 + adapter revision>`                                   |
+| Affected scope        | `source / build / adapter / protocol / runtime / storage / release / documentation` |
+| Evidence              | `<report, test, log, or trace link and SHA-256>`                                    |
+| Reproduction          | `<exact command, matrix cell, input/vector ID, and observed result>`                |
+| Security impact       | `<confidentiality / authenticity / availability / metadata / none>`                 |
+| Disposition           | `Fix / Mitigate / Accept / Reject / Duplicate / Not reproducible`                   |
+| Rationale             | `<why disposition is valid against #18/#19>`                                        |
+| Owner                 | `<named owner or external reviewer>`                                                |
+| Due date              | `<date>`                                                                            |
+| Verification evidence | `<new artifact/test/report hash>`                                                   |
+| Reviewer decision     | `Open / Closed / Blocked`                                                           |
 
 Release rule: Critical and High findings block release. An unresolved Medium finding in the
 cryptographic boundary blocks release. A Low finding may remain only with documented ownership,

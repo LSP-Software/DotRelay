@@ -8,11 +8,13 @@ Skills: ux-audit (first-run journey against the recorded product path),
 impeccable not installed in this worktree; copy follows `docs/ux/PRODUCT.md`.
 
 Scope:
+
 - Sign-in returns to `/workspace`. With a Team, that page is the project
   list. With no Team, it was one sentence about `dotrelay init`. Trust,
   CLI install, browser enrollment, and recovery were on other views.
 
 Changed:
+
 - `apps/web/lib/getting-started.ts`: the checklist model. No Team means
   trust, CLI, `dotrelay init`, then this browser. A Team means trust, then
   this browser. Dismissal is per user and does not apply with no Team.
@@ -27,11 +29,13 @@ Changed:
   `docs/ux/DECISIONS.md` (D-007).
 
 Verified:
+
 - Unit tests for the step order. Playwright for the checklist, dismiss and
   restore, the empty account's CLI commands, and a ready browser skipping
   it.
 
 Remaining:
+
 - GitHub OAuth itself still needs a real account. The checklist is the
   page that OAuth already returns to.
 
@@ -41,10 +45,12 @@ Skills: none (implementation session; `bun run check` plus the Playwright
 e2e suite as the verification surface).
 
 Scope:
+
 - Phase 5 of campaign #231: the in-browser Recovery & Security area in
   the workspace shell, replacing the CLI-side Recovery Kit entry.
 
 Changed:
+
 - Boundary account-key envelope passthrough, so the browser opens the
   account-key objects it verifies.
 - `apps/web/lib/account-keys.ts` client module: setup, unlock by recovery
@@ -72,12 +78,14 @@ Changed:
   stale comment in `apps/web/e2e/workspace-enrollment-storage.spec.ts`.
 
 Verified:
+
 - `bun run check` green.
 - Full Playwright e2e suite green on the dedicated fixture port 8300
   (`E2E_WEB_PORT`); `workspace-recovery.spec.ts` 6/6.
 - `biome ci` clean.
 
 Remaining:
+
 - No e2e coverage for passkey-PRF unlock: the Playwright virtual
   authenticator exposes no PRF, so that path stays unit-covered.
 - Phase 6 of #231 is the maintainability pass that follows.
@@ -89,11 +97,13 @@ session; Playwright e2e plus the API unit suite as the verification
 surface).
 
 Scope:
+
 - Built the two Team operations `docs/administration.md` already promised
   and the web UI withheld: change a Member's role (Owner only) and remove
   a Member (Owner and Admin, members only), per the D-003 decision.
 
 Changed:
+
 - `packages/contracts`: new stable problem code `last_owner_protection`
   (409) - the service keeps a Team's last active owner in place with a
   database trigger, and the UI needed a message it can act on rather than
@@ -101,10 +111,10 @@ Changed:
 - `apps/api/src/membership-routes.ts`: two new protocol routes,
   `POST .../memberships/:membershipId/role` and `.../remove`, both
   `requireProtocolActor` (session + active browser Device) + Idempotency-Key
-  + `MEMBERSHIP_CHANGE` operations, reusing the existing repository's
-  `changeRole`/`remove` (authorisation, idempotency, audit already
-  implemented there). Their error mapper reports the trigger as
-  `last_owner_protection`.
+  - `MEMBERSHIP_CHANGE` operations, reusing the existing repository's
+    `changeRole`/`remove` (authorisation, idempotency, audit already
+    implemented there). Their error mapper reports the trigger as
+    `last_owner_protection`.
 - `apps/api/src/membership-routes.test.ts`: the fixture Team A now has a
   second active Owner (TEAM_B keeps its single owner) so the guard is
   testable; the stub mirrors the trigger; the new describe covers role
@@ -128,6 +138,7 @@ Changed:
   not a product capability), `docs/ux/DECISIONS.md` (D-003), this file.
 
 Verified:
+
 - `bun x biome check` clean and `tsc` clean in both apps;
   `apps/web && bun run test:e2e`: 100 passed, 1 failed - the pre-existing
   `workspace-small-viewport.spec.ts:182` failure that predates this work
@@ -135,6 +146,7 @@ Verified:
   `apps/api && bun test`: 121 passed, 0 failed; contracts suite 121 passed.
 
 Remaining:
+
 - UX-009 is closed. Leaving a team stays out of scope by design (D-003):
   the policy matrix has no such operation.
 
@@ -146,6 +158,7 @@ Playwright DOM/ARIA walks; the cmux relay was down, so no screenshots
 were surfaced to the model).
 
 Scope:
+
 - Every UNREVIEWED journey left after UX-008 was walked or otherwise
   adjudicated, so JOURNEYS.md has no UNREVIEWED line left:
   - FIRST USE: Create first team, CLI setup, Publish first environment,
@@ -159,11 +172,13 @@ Scope:
     context, 390x844).
 
 Changed:
+
 - No code changed this session. `docs/ux/BACKLOG.md` (UX-009, new OPEN
   finding), `docs/ux/JOURNEYS.md` (all remaining lines flipped with
   evidence), and this file.
 
 Verified:
+
 - Browser walks (DOM/ARIA only): mobile sheet + onboarding/project/team
   views on a 390x844 mobile context; Team view as OWNER, ADMIN, and
   MEMBER (Invite gating, Role-column hiding, no management controls at
@@ -179,13 +194,13 @@ Verified:
   today.
 
 Remaining:
+
 - UX-009 is OPEN and needs a product decision: implement the
   documented management operations (remove member, change role, leave
   team) per `docs/administration.md`, or re-scope the `roleDisclosure`
   copy and the docs to the invite-only reality.
 - No UNREVIEWED journeys remain; CLEAN-PASS-2 sweeps or a revisit of any
   journey can start on demand.
-
 
 ## 2026-09-20 - Signed-out dead end on a real deployment (UX-008)
 
@@ -195,12 +210,13 @@ walks; the cmux relay was down, so no screenshots were surfaced to the
 model).
 
 Scope:
+
 - Audited the remaining FIRST USE / FAILURE STATES journeys. Invalid input,
   deleted/missing resources, and the clean parts of authentication expiry
   passed (details in JOURNEYS.md). One HIGH finding remained: the signed-
   out state as a real deployment serves it.
 - Mechanism found: a real deployment's boundary relay (`apps/web/app/api/
-  workspace/boundary/route.ts`) keeps answering online, but when the API
+workspace/boundary/route.ts`) keeps answering online, but when the API
   session is gone it returns the API's `authentication_required` shape via
   `emptyWorkspaceBoundary` - an empty catalog and `session.active: false`.
   The shell's projects view branched on `teams.length === 0` alone, so a
@@ -213,6 +229,7 @@ Scope:
   populated.
 
 Changed:
+
 - `apps/web/app/workspace/workspace-shell.tsx`:
   - The projects view now checks the session first: an online, signed-out
     user sees a "Sign in" state (test id `sign-in-required`) with a
@@ -233,6 +250,7 @@ Changed:
   resources), and this file.
 
 Verified:
+
 - `bun run typecheck` green; `bun x biome check` clean on the touched
   files; `bun run test:e2e`: 97 passed, 1 failed - the one failure
   (`workspace-small-viewport.spec.ts:182`) is the known pre-existing
@@ -245,12 +263,12 @@ Verified:
   unchanged (its e2e passes).
 
 Remaining:
+
 - UNREVIEWED journeys left: Create first team, CLI setup, Publish first
   environment, First pull/push (the fixture-side half of FIRST USE); the
   TEAM USE group; ACCOUNT/SECURITY Recovery; and the FAILURE STATES group
   (Empty states, Network/API failure, Forbidden access, Server
   unavailable, Stale state).
-
 
 ## 2026-09-19 - NORMAL USE variable editing: clean pass (edit, delete, pull, push, user-specific)
 
@@ -260,12 +278,14 @@ state-handling review). The running app remained the source of truth
 surfaced to the model).
 
 Scope:
+
 - Walked the remaining NORMAL USE variable journeys end-to-end in a real
   browser (fixture user, production environment) and judged each against
   the backlog priority order. No new issues: every state the design can
   reach presents a correct next action, and the value model is consistent.
 
 Verified:
+
 - **Edit variable**: typing into `API_ORIGIN` shows the per-row "Draft
   change" badge and enables Save changes; the review dialog lists the change
   with the new value masked ("+ ••••••••") behind "Show values", which
@@ -298,10 +318,10 @@ Verified:
   e2e-covered in `workspace-role-permissions.spec.ts`.
 
 Remaining:
+
 - The remaining UNREVIEWED journeys are first-use and failure-state ones
   (publish first environment, first pull/push, CLI setup, team flows, and
   the FAILURE STATES group). NORMAL USE is now fully covered.
-
 
 ## 2026-09-19 - Zero-environment project dead end (UX-007)
 
@@ -311,6 +331,7 @@ walk; the cmux relay was down, so no screenshots were surfaced to the
 model).
 
 Scope:
+
 - Continued the FIRST USE walk: zero teams (UX-003, fixed earlier) and
   zero projects were sound, so the next state was the one in between: a
   Project that exists but has no Environments. That state is real and
@@ -328,6 +349,7 @@ Scope:
   `selectedEnvironment`. A deep link with `view=environment` did the same.
 
 Changed:
+
 - `apps/web/lib/workspace-location.ts`: the view downgrade now only applies
   when there is no Project (`projectId === null`); a valid Project with no
   Environments keeps the environment view. The resolver's doc comment was
@@ -357,6 +379,7 @@ Changed:
   create/connect first project), and this file.
 
 Verified:
+
 - `bun run typecheck` green (6/6 tasks); `bun x biome check` clean on the
   touched files (the one `useExhaustiveDependencies` complaint in
   workspace-shell.tsx exists on the clean tree too - pre-existing).
@@ -374,10 +397,10 @@ Verified:
   init"; the zero-projects state is unchanged.
 
 Remaining:
+
 - FIRST USE publish first environment / first pull / first push are still
   UNREVIEWED; then NORMAL USE edit/delete/pull/push variables, and the
   remaining FAILURE STATES journeys.
-
 
 ## 2026-09-19 - "Add variable" dialog: masked value with no reveal, fixed from a reset working tree (UX-006)
 
@@ -385,6 +408,7 @@ Skills: ux-audit (evidence + consistency), impeccable (affordance parity).
 The running app remained the source of truth.
 
 Scope:
+
 - This session resumed from Git after a context reset. The working tree
   already held an in-progress version of this fix from the previous session:
   the "Add variable" dialog's "Initial value" field gained a reveal toggle,
@@ -393,7 +417,7 @@ Scope:
   left in the setup card's CLI block. Both were repaired before committing.
 - Finding: every value surface on the environment screen — each variable
   row, the diff and conflict views — offers an eye / eye-off reveal toggle,
-  but the one place a value is *created* (the dialog's `type="password"`
+  but the one place a value is _created_ (the dialog's `type="password"`
   field) had none. A user types a secret blind and can only discover a
   mis-typed or mis-pasted value after publishing, on a device that consumes
   it. The reveal button's `aria-label` ("Reveal initial value") also
@@ -401,6 +425,7 @@ Scope:
   five existing e2e locators used; they now scope to the input by role.
 
 Changed:
+
 - `apps/web/app/workspace/environment-editor.tsx`:
   - `AddVariableDialog` (arrow function, per convention) keeps the value
     masked by default (correct for a shared machine); the field gains a
@@ -424,6 +449,7 @@ Changed:
   this file.
 
 Verified:
+
 - `bun run typecheck` green (6/6 tasks); `bun x biome check` clean on the
   touched files.
 - `bun run test:e2e` (full web suite): 91 passed, 1 failed. The one failure
@@ -435,10 +461,10 @@ Verified:
   labels); no screenshots were surfaced to the model.
 
 Remaining:
+
 - FIRST USE: create first team / zero projects / first publish are the next
   priority per the audit brief; then NORMAL USE edit/delete/pull/push
   variables.
-
 
 ## 2026-09-19 - Bounded initial loading state with a retry (UX-002)
 
@@ -449,6 +475,7 @@ fix in the working tree (a duplicated JSX fragment in the connection
 branches) - the orphan was removed and the rest of the feature recovered.
 
 Scope:
+
 - The workspace shell shows "Loading workspace…" while the initial boundary
   fetch is in flight. If that fetch hangs (device provisioning stuck, a hung
   request, a server that accepts connections but never answers), the user was
@@ -461,6 +488,7 @@ Scope:
   (Playwright `page.route`, never fulfilled).
 
 Changed:
+
 - `apps/web/app/workspace/workspace-shell.tsx`:
   - A `LOADING_STALL_MS` (8s) threshold - generous: a healthy load of a
     profile resolves in well under a second (the boundary is a single
@@ -480,6 +508,7 @@ Changed:
   CLEAN-PASS-1), and this file.
 
 Verified:
+
 - `bun run typecheck` green; `bun x biome check` clean on the touched file.
 - Real browser (Playwright against the running app, `DOTRELAY_WORKSPACE_FIXTURE=1`):
   - Hung fetch: reload with the first two boundary fetches held pending →
@@ -496,6 +525,7 @@ Verified:
   the UX-003 and UX-004 sessions).
 
 Environment notes (for the next session):
+
 - The cmux browser relay was down in this session (`open` failed with
   "did not return a surface_id"); verification used Playwright directly,
   including a throwaway script (`page.route` hang) that was deleted after
@@ -509,11 +539,11 @@ Environment notes (for the next session):
   spinner.
 
 Remaining:
+
 - Every other journey in JOURNEYS.md is still UNREVIEWED; FIRST USE
   (create first team / zero projects / first publish) is the next priority
   per the audit brief, followed by NORMAL USE variable editing (add / edit /
   delete / pull / push).
-
 
 ## 2026-09-19 - Environment page: full-width "Archive environment" bar (UX-005)
 
@@ -521,6 +551,7 @@ Skills: ux-audit (evidence + severity), impeccable (visual hierarchy). The
 running app remained the source of truth.
 
 Scope:
+
 - Re-walked the environment page (the core screen for managing variables) in a
   fresh profile: trusted the server, opened LSP-Software/DotRelay, production
   environment. At this width the header is a column (`flex-col` below the `lg`
@@ -530,6 +561,7 @@ Scope:
   on the screen, above the Variables card.
 
 Changed:
+
 - `apps/web/app/workspace/workspace-shell.tsx`: the environment page header
   gained `items-start` for the sub-`lg` column (overridden by the existing
   `lg:items-end lg:justify-between` on desktop), so the archive/restore trigger
@@ -539,6 +571,7 @@ Changed:
   and this file.
 
 Verified:
+
 - `bun run typecheck` green; `bun run lint` clean.
 - Playwright measurement (throwaway spec, deleted after): at an 800px viewport
   the button is 178px wide and left-aligned (a full-width bar would be ~700px
@@ -553,6 +586,7 @@ Skills: ux-audit (journey + evidence), impeccable (hierarchy + copy). The
 running app remained the source of truth.
 
 Scope:
+
 - Re-walked FIRST USE / NORMAL USE in a fresh browser profile (no stored trust
   or device). Trusted the server, opened the LSP-Software/DotRelay project
   environment. The environment is locked until this browser enrolls a device,
@@ -566,6 +600,7 @@ Scope:
   surfaces disagreed.
 
 Changed:
+
 - `apps/web/app/workspace/environment-editor.tsx`: the locked-environment card's
   CLI label now reads "Prefer the CLI? It sets up the CLI on this machine, not
   this browser." (matching the Devices view), so the command is an optional
@@ -575,6 +610,7 @@ Changed:
 - `docs/ux/BACKLOG.md` (UX-004) and this file.
 
 Verified:
+
 - `bun run typecheck` green; `bun run lint` clean (72 files).
 - Browser: the card now reads "Set up this browser" → body → "Prefer the CLI?
   …not this browser." → `dotrelay setup` → "Set up browser"; no contradiction.
@@ -586,6 +622,7 @@ Verified:
   change stashed, i.e. it is pre-existing and unrelated to this copy change.
 
 Environment notes (for the next session):
+
 - A fresh browser profile (the cmux relay profile) has no stored trust decision,
   so the workspace shows a "Trust this server" gate first; confirm it before
   walking the project environment. The gate is well designed (shows origin +
@@ -599,6 +636,7 @@ Skills: ux-audit (journey scoping + evidence), impeccable (empty-state
 writing and hierarchy). The running app remained the source of truth.
 
 Scope:
+
 - Walked the FIRST USE journey up to "zero teams". The web app has no
   team-creation surface, so the realistic zero-Teams state is a signed-in
   user who has not run the CLI yet. Reproduced it in e2e by intercepting
@@ -609,6 +647,7 @@ Scope:
   "No projects yet / run dotrelay init" card below.
 
 Changed:
+
 - `apps/web/app/workspace/workspace-shell.tsx`:
   - The zero-Teams projects view now renders a single "No teams yet" empty
     state pointing at `dotrelay init` (the one real next action), instead of
@@ -624,6 +663,7 @@ Changed:
   `docs/ux/JOURNEYS.md`, and this file.
 
 Verified:
+
 - `bun x biome check` clean on the touched files; repo-wide lint baseline
   unchanged (184 errors, all pre-existing).
 - `bun run typecheck` green (6/6 tasks).
@@ -643,6 +683,7 @@ Skills used for design/flow: both installed skills consulted; the app itself
 remained the source of truth.
 
 Scope:
+
 - Walked the ACCOUNT / SECURITY journey in the browser: account block in the
   sidebar (desktop) and in the mobile navigation sheet.
 - Confirmed the account block was a static, non-interactive display while
@@ -650,6 +691,7 @@ Scope:
   closing the browser.
 
 Changed:
+
 - `apps/web/components/ui/dropdown-menu.tsx` (new): minimal Base UI Menu
   wrapper matching the repo's other `components/ui` wrappers (Portal,
   Positioner, Popup, Item), consistent with the existing shadcn-style
@@ -670,6 +712,7 @@ Changed:
   this file created from the intended-file layout in `docs/ux/README.md`.
 
 Verified:
+
 - `bun x biome check` clean on the touched files.
 - `bun run typecheck` green (6/6 tasks).
 - `bun run test:e2e`: 88 passed, 1 failed. The one failure
@@ -678,6 +721,7 @@ Verified:
   stashed, i.e. it is pre-existing and unrelated to this change.
 
 Environment notes (for the next session):
+
 - `bun run dev` at the repo root runs `turbo run dev --parallel`; the CLI
   package is named `@dotrelay/cli`, so `--filter=!dotrelay-cli` is invalid.
   To run only the web app, run `bun run dev --hostname localhost` from
@@ -689,6 +733,7 @@ Environment notes (for the next session):
   state; open a fresh tab to recover. Fresh tabs settle to signed-in.
 
 Remaining:
+
 - UX-002 (bounded loading state with a retry) is the next candidate; it
   first needs reproduction outside the fixture environment.
 - Every other journey in JOURNEYS.md is still UNREVIEWED; FIRST USE is the

@@ -118,8 +118,7 @@ export const deviceApprovalView = (
 };
 
 export type DeviceApprovalResolution =
-  | DeviceApprovalView
-  | { readonly kind: "recheck" };
+  DeviceApprovalView | { readonly kind: "recheck" };
 
 export const deviceApprovalAttemptView = (
   attempt: DeviceApprovalAttempt,

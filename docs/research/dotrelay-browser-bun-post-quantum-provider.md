@@ -117,12 +117,12 @@ Portable C90 with no native backend is a realistic Wasm source, but neither sele
 claims a browser or Bun support matrix. Consequently the following matrix is a release gate, not
 current validation:
 
-| Surface | Required production validation |
-| --- | --- |
-| Chromium | Current and previous stable Chrome and Edge on Windows x64, macOS arm64, and Linux x64 |
-| Firefox | Current and ESR on Windows x64, macOS arm64, and Linux x64 |
-| WebKit | Current and previous Safari on supported macOS, plus current iOS/iPadOS arm64 |
-| CLI | The pinned Bun release on every DotRelay-distributed Bun target: Linux x64/arm64, macOS x64/arm64, and Windows x64/arm64 |
+| Surface  | Required production validation                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Chromium | Current and previous stable Chrome and Edge on Windows x64, macOS arm64, and Linux x64                                   |
+| Firefox  | Current and ESR on Windows x64, macOS arm64, and Linux x64                                                               |
+| WebKit   | Current and previous Safari on supported macOS, plus current iOS/iPadOS arm64                                            |
+| CLI      | The pinned Bun release on every DotRelay-distributed Bun target: Linux x64/arm64, macOS x64/arm64, and Windows x64/arm64 |
 
 Every cell must run NIST vectors, the complete frozen DotRelay corpus, malformed-input tests,
 browser-to-Bun and Bun-to-browser round trips, concurrency tests, and repeated initialize/destroy
@@ -239,16 +239,16 @@ matrix results.
 
 ## Candidate disposition
 
-| Candidate | Disposition |
-| --- | --- |
-| PQ Code Package portable C compiled once to Wasm | **Selected, subject to the explicit audit/build/runtime gates.** It has exact seed and hedged-signing APIs, final FIPS behavior, small vendorable surfaces, CBMC safety evidence, and timing-oriented design. |
-| `mlkem-wasm` + `mldsa-wasm` | Reject as the production artifact. Technically close and useful as a reference, but both wrappers declare beta status and lack independent wrapper/build audit and trusted reproducible provenance ([ML-KEM](https://github.com/dchest/mlkem-wasm), [ML-DSA](https://github.com/dchest/mldsa-wasm)). |
-| `@noble/post-quantum` | Reject for production; retain only as an optional vector oracle. Its project explicitly says it has not been independently audited and has no side-channel protection, despite convenient deterministic seeds and a small JavaScript surface ([security statement](https://github.com/paulmillr/noble-post-quantum#security)). |
-| `liboqs` / `@oqs/liboqs-js` | Reject. liboqs says it is for prototyping and does not recommend protecting sensitive production data; the JS wrapper says it has no formal audit and requires manual object destruction ([liboqs status](https://github.com/open-quantum-safe/liboqs#status), [JS security](https://github.com/open-quantum-safe/liboqs-js#security-considerations)). |
-| PQClean / `node-pqclean` | Reject. PQClean's own project is preparing for archival, and independent Crucible testing found FIPS 203 modulus-check gaps in its ML-KEM public API ([PQClean status](https://github.com/PQClean/PQClean), [Crucible finding](https://symbolic.software/blog/2026-03-23-crucible/)). |
-| libcrux Wasm | Reject for this release. Its security policy still calls the project pre-release with no supported versions, and a 2025 advisory affected ML-KEM and ML-DSA output on AArch64 through an unverified intrinsic fallback ([security policy](https://github.com/celabshq/libcrux/blob/main/SECURITY.md), [advisory](https://github.com/advisories/GHSA-2cgv-28vr-rv6j)). |
+| Candidate                                           | Disposition                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PQ Code Package portable C compiled once to Wasm    | **Selected, subject to the explicit audit/build/runtime gates.** It has exact seed and hedged-signing APIs, final FIPS behavior, small vendorable surfaces, CBMC safety evidence, and timing-oriented design.                                                                                                                                                                                 |
+| `mlkem-wasm` + `mldsa-wasm`                         | Reject as the production artifact. Technically close and useful as a reference, but both wrappers declare beta status and lack independent wrapper/build audit and trusted reproducible provenance ([ML-KEM](https://github.com/dchest/mlkem-wasm), [ML-DSA](https://github.com/dchest/mldsa-wasm)).                                                                                          |
+| `@noble/post-quantum`                               | Reject for production; retain only as an optional vector oracle. Its project explicitly says it has not been independently audited and has no side-channel protection, despite convenient deterministic seeds and a small JavaScript surface ([security statement](https://github.com/paulmillr/noble-post-quantum#security)).                                                                |
+| `liboqs` / `@oqs/liboqs-js`                         | Reject. liboqs says it is for prototyping and does not recommend protecting sensitive production data; the JS wrapper says it has no formal audit and requires manual object destruction ([liboqs status](https://github.com/open-quantum-safe/liboqs#status), [JS security](https://github.com/open-quantum-safe/liboqs-js#security-considerations)).                                        |
+| PQClean / `node-pqclean`                            | Reject. PQClean's own project is preparing for archival, and independent Crucible testing found FIPS 203 modulus-check gaps in its ML-KEM public API ([PQClean status](https://github.com/PQClean/PQClean), [Crucible finding](https://symbolic.software/blog/2026-03-23-crucible/)).                                                                                                         |
+| libcrux Wasm                                        | Reject for this release. Its security policy still calls the project pre-release with no supported versions, and a 2025 advisory affected ML-KEM and ML-DSA output on AArch64 through an unverified intrinsic fallback ([security policy](https://github.com/celabshq/libcrux/blob/main/SECURITY.md), [advisory](https://github.com/advisories/GHSA-2cgv-28vr-rv6j)).                         |
 | OpenSSL, BoringSSL, AWS-LC, Botan, CIRCL, wolfCrypt | Do not select as the cross-runtime provider. They are credible native implementations or independent oracles, but none publishes one supported browser-and-Bun artifact with DotRelay's raw-seed and hedged-signing contract. BoringSSL also explicitly makes no API/ABI stability guarantees ([BoringSSL README](https://boringssl.googlesource.com/boringssl/+/refs/heads/main/README.md)). |
-| Native WebCrypto | Defer. Current exposure is experimental and not interoperable across the supported browser/Bun matrix ([WICG proposal](https://wicg.github.io/webcrypto-modern-algos/), [Chrome origin trial](https://developer.chrome.com/blog/chrome-151-beta)). |
+| Native WebCrypto                                    | Defer. Current exposure is experimental and not interoperable across the supported browser/Bun matrix ([WICG proposal](https://wicg.github.io/webcrypto-modern-algos/), [Chrome origin trial](https://developer.chrome.com/blog/chrome-151-beta)).                                                                                                                                            |
 
 ## Native WebCrypto replacement and fallback
 

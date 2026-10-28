@@ -16,7 +16,7 @@ issues.
   selector is gone; a signed-in, zero-Teams user sees one "No teams yet" action
   pointing at `dotrelay init`)
 - Create first team - CLEAN-PASS-1 (team creation is CLI-driven - `dotrelay
-  init` in the repository; the web-side state a zero-team user lands on is
+init` in the repository; the web-side state a zero-team user lands on is
   the fixed UX-003 card, so nothing for the web UI to present differently)
 - Zero projects - CLEAN-PASS-1 (a signed-in team with no projects shows the
   "No projects yet" card pointing at `dotrelay init`)
@@ -53,8 +53,7 @@ issues.
 - Teammate first login - CLEAN-PASS-1 (a freshly accepted member is the
   PENDING_KEY_GRANT lifecycle the UI renders as "Waiting for encryption
   keys"; once the grant set lands they land on the normal workspace - the
-  signed-out/empty states they could otherwise hit are fixed by UX-003/007/
-  008)
+  signed-out/empty states they could otherwise hit are fixed by UX-003/007/ 008)
 - Teammate first successful pull - CLEAN-PASS-1 (identical pull protocol to
   "First successful pull"; the member-role gating a teammate hits is
   e2e-covered in workspace-role-permissions.spec.ts)

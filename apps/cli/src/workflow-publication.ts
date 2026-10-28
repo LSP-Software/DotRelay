@@ -212,8 +212,7 @@ export const destinationFor = async (
   // A missing metadata lookup degrades the review to opaque ids; it must
   // never block an operation the operator is about to confirm.
   let environment:
-    | Awaited<ReturnType<typeof listEnvironments>>[number]
-    | undefined;
+    Awaited<ReturnType<typeof listEnvironments>>[number] | undefined;
   let team: Awaited<ReturnType<typeof listTeams>>[number] | undefined;
   try {
     const admin = adminClient(options);

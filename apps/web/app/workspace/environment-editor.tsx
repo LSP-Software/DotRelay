@@ -257,7 +257,7 @@ export const EnvironmentEditor = ({
     setStaleHeadRevision(null);
     setLoadPhase("loading");
   }, [session]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt is a retry trigger whose value is intentionally not read inside the effect
+  // loadAttempt is a retry trigger whose value is intentionally not read inside the effect
   useEffect(() => {
     if (!session || !available) return;
     let cancelled = false;

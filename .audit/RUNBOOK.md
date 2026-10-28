@@ -4,12 +4,12 @@ Working commands and environment procedures discovered during the audit.
 
 ## Services
 
-| Service | How to start | Notes |
-|---|---|---|
-| Postgres 17 | `docker compose up -d postgres` (or already on 127.0.0.1:5432) | db `dotrelay`, user `dotrelay`/`dotrelay`; shadow db `dotrelay_shadow` |
-| Valkey 8 | `docker compose up -d valkey` | redis protocol on 127.0.0.1:6379 |
-| API (Hono) | `hub start api` → `bun --env-file=../../.env run src/index.ts` in `apps/api` | listens on :3001, readiness log `listening` |
-| Web (Next dev) | `hub start web` → `npx next dev -p 3000 -H 127.0.0.1` in `apps/web` | :3000 |
+| Service        | How to start                                                                 | Notes                                                                  |
+| -------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Postgres 17    | `docker compose up -d postgres` (or already on 127.0.0.1:5432)               | db `dotrelay`, user `dotrelay`/`dotrelay`; shadow db `dotrelay_shadow` |
+| Valkey 8       | `docker compose up -d valkey`                                                | redis protocol on 127.0.0.1:6379                                       |
+| API (Hono)     | `hub start api` → `bun --env-file=../../.env run src/index.ts` in `apps/api` | listens on :3001, readiness log `listening`                            |
+| Web (Next dev) | `hub start web` → `npx next dev -p 3000 -H 127.0.0.1` in `apps/web`          | :3000                                                                  |
 
 ## Database lifecycle (fresh checkout)
 
@@ -17,13 +17,14 @@ Working commands and environment procedures discovered during the audit.
 cd packages/database
 bun x prisma migrate deploy --config prisma.config.ts   # apply all migrations
 ```
+
 API crashes on boot without migrations (`TableDoesNotExist` on `server_profiles`).
 `bun x prisma generate --config prisma.config.ts` for the client (runs on postinstall).
 
 ## Key URLs
 
 - Web: http://localhost:3000 (sign-in at /sign-in, device approval under /device, workspace under /workspace)
-- API: http://localhost:3001 (`/health` = `{"status":"ok"}`, better-auth under /api/auth/*, protocol under /api/protocol/*)
+- API: http://localhost:3001 (`/health` = `{"status":"ok"}`, better-auth under /api/auth/_, protocol under /api/protocol/_)
 - Server profile id `00000000-0000-4000-8000-000000000001`, origin http://localhost:3001 (hosted=false in dev .env → self-hosted profile)
 
 ## Verification commands (repo root)

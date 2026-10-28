@@ -93,9 +93,7 @@ export type PublicationVariable = Readonly<{
 }>;
 
 export type PublicationMutationKind =
-  | "GENESIS"
-  | "MANIFEST_UPDATE"
-  | "ROLLBACK";
+  "GENESIS" | "MANIFEST_UPDATE" | "ROLLBACK";
 
 export type PublicationContext = Readonly<{
   readonly serverProfileId: string;
@@ -142,9 +140,7 @@ export type RevisionSigningTrustEntry = Readonly<{
 }>;
 
 export type RevisionSigningTrust =
-  | Uint8Array
-  | readonly Uint8Array[]
-  | readonly RevisionSigningTrustEntry[];
+  Uint8Array | readonly Uint8Array[] | readonly RevisionSigningTrustEntry[];
 
 export type StagedPublicationObject = Readonly<{
   readonly objectId: string;
@@ -174,9 +170,7 @@ export type DecodedVariable = Readonly<{
 }>;
 
 export type UnreadableLaneKind =
-  | "VARIABLE_DEFINITION"
-  | "SHARED_VALUE"
-  | "USER_DEFINED_VALUE";
+  "VARIABLE_DEFINITION" | "SHARED_VALUE" | "USER_DEFINED_VALUE";
 
 /**
  * A lane the verified page covers but this Device cannot decrypt: the

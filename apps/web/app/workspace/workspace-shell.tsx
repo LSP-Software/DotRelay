@@ -887,7 +887,7 @@ export const WorkspaceShell = ({
 
   // Keep the selected Team's persisted membership record current: refetch on
   // Team or session change, on reconnecting, and after a mutation (tick).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: membershipTick and displayBoundary.connection are refetch triggers (post-mutation and reconnect) whose values are intentionally not read inside the effect
+  // membershipTick and displayBoundary.connection are refetch triggers (post-mutation and reconnect) whose values are intentionally not read inside the effect
   useEffect(() => {
     const selectedTeamId = selectedTeam?.id;
     if (!apiOrigin || !selectedTeamId || !sessionActive) {
@@ -919,7 +919,7 @@ export const WorkspaceShell = ({
 
   // Keep the invitations addressed to the signed-in User current, so an
   // invitee who has not yet joined a Team still sees the invitation they hold.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: membershipTick and displayBoundary.connection are refetch triggers whose values are intentionally not read inside the effect
+  // membershipTick and displayBoundary.connection are refetch triggers whose values are intentionally not read inside the effect
   useEffect(() => {
     if (!apiOrigin || !sessionActive) {
       setMyInvitations(null);
@@ -996,7 +996,6 @@ export const WorkspaceShell = ({
   // reconnect and view-driven refreshes keep clearing stale alerts.
   const lastRecoveryGenerationRef = useRef(recoveryGeneration);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: recoveryActor is derived from the depended-on keys (deviceId, api origin, device active) and is rebuilt each render
   useEffect(() => {
     const generationTriggered =
       recoveryGeneration !== lastRecoveryGenerationRef.current;
@@ -1030,6 +1029,7 @@ export const WorkspaceShell = ({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- recoveryActor is derived from the depended-on keys (deviceId, api origin, device active) and is rebuilt each render
   }, [
     connection,
     recoveryActorKey,
@@ -1041,7 +1041,6 @@ export const WorkspaceShell = ({
   const recoveryWrapperId = recoveryWrappers.find(
     (wrapper) => wrapper.type === "recovery-code",
   )?.wrapperId;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: accountScope keys the async storage probe to the selected account and Device; periodic boundary refreshes do not change that identity.
   useEffect(() => {
     if (boundary.source !== "live" || !boundary.device.active) {
       setLocalDeviceReady(null);
@@ -1055,11 +1054,11 @@ export const WorkspaceShell = ({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- accountScope keys the async storage probe to the selected account and Device; periodic boundary refreshes do not change that identity.
   }, [accountScope, boundary.device.active, boundary.source]);
   // Restore only after the server confirms which account and recovery wrapper
   // are active. A DB reset, account switch, or new device cannot reuse a stale
   // encrypted local copy as if it belonged to the newly signed-in account.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: accountScope and wrapper id key the cache; a periodic boundary refresh must not restart an in-flight restore.
   useEffect(() => {
     if (
       boundary.source !== "live" ||
@@ -1095,9 +1094,9 @@ export const WorkspaceShell = ({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- accountScope and wrapper id key the cache; a periodic boundary refresh must not restart an in-flight restore.
   }, [accountScope, recoveryLoaded, recoveryWrapperId, localDeviceReady]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: accountScope and wrapper id identify this local cache entry; background boundary refreshes must not re-encrypt it.
   useEffect(() => {
     const key = accountMasterKeyRef.current;
     if (
@@ -1112,6 +1111,7 @@ export const WorkspaceShell = ({
         "This browser couldn't save its encryption key. Keep your recovery code safe; you'll need it again after a reload.",
       );
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- accountScope and wrapper id identify this local cache entry; background boundary refreshes must not re-encrypt it.
   }, [accountReady, accountScope, recoveryWrapperId]);
 
   // The periodic boundary refresh also establishes the project's Account Key
@@ -2015,7 +2015,6 @@ export const WorkspaceShell = ({
     }
   }, [apiOrigin, browserDeviceId, boundary, deviceRenameValue]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: accountUnlocked mirrors accountMasterKeyRef, which the effect reads; recoveryGeneration is re-run state
   useEffect(() => {
     const loop = createWorkspaceRefreshLoop({
       profileId,
@@ -2043,6 +2042,7 @@ export const WorkspaceShell = ({
       removeSessionByKey,
     });
     return () => loop.dispose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- accountUnlocked mirrors accountMasterKeyRef, which the effect reads; recoveryGeneration is re-run state
   }, [
     profileId,
     teamId,
@@ -2072,7 +2072,7 @@ export const WorkspaceShell = ({
   // threshold the fetch has hung. A profile change rebinds the shell and
   // restarts the episode; key the timer on it so a slow-but-healthy load of
   // the new profile is not reported as stalled by the previous episode.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: profileId re-keys the stall timer on profile change and is intentionally not read inside the effect
+  // profileId re-keys the stall timer on profile change and is intentionally not read inside the effect
   useEffect(() => {
     if (connection !== "loading" || verifiedAt !== null) {
       setLoadingStalled(false);
@@ -2082,7 +2082,6 @@ export const WorkspaceShell = ({
     return () => clearTimeout(timer);
   }, [connection, verifiedAt, profileId]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: recoveryActor and the verification helpers are derived from the depended-on boundary keys and read fresh, so each boundary commit already re-runs the loader with current values
   useEffect(() => {
     let cancelled = false;
     loadWorkspaceSession(
@@ -2111,6 +2110,7 @@ export const WorkspaceShell = ({
     // rotation (recoveryGeneration) re-derives the project's shared value
     // secret through the envelope, so the loader runs whenever that state
     // changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- recoveryActor and the verification helpers are derived from the depended-on boundary keys and read fresh, so each boundary commit already re-runs the loader with current values
   }, [
     boundary,
     profileId,
@@ -2167,7 +2167,6 @@ export const WorkspaceShell = ({
   // A new browser needs no input to create its device keys. Never silently
   // re-enroll a browser that remembers a stale or revoked Device; its manual
   // recovery path stays available. The ref also guards StrictMode effects.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: primitive identity and trust fields key one automatic attempt; boundary refreshes must not restart it.
   useEffect(() => {
     if (
       !autoEnrollmentEligible ||
@@ -2176,6 +2175,7 @@ export const WorkspaceShell = ({
       return;
     autoEnrollmentAttemptedRef.current.add(autoEnrollmentKey);
     void provisionBrowserDevice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- primitive identity and trust fields key one automatic attempt; boundary refreshes must not restart it.
   }, [autoEnrollmentEligible, autoEnrollmentKey]);
 
   const gettingStartedGuide = gettingStarted.visible ? (

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 function Label({ className, ...props }: React.ComponentProps<"label">) {
   return (
     // A generic primitive receives its association through caller-provided htmlFor.
-    // biome-ignore lint/a11y/noLabelWithoutControl: association is supplied by component consumers
+    // eslint-disable-next-line jsx-a11y/label-has-associated-control -- association is supplied by component consumers
     <label
       data-slot="label"
       className={cn(

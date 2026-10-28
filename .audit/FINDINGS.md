@@ -6,6 +6,7 @@ Each entry: status, evidence, impact.
 ---
 
 ## F-001 (FIXED) Stale OpenAPI document in `packages/contracts/openapi.json`
+
 - **Status:** FIXED_AND_VERIFIED (commit this campaign)
 - **Symptom:** `bun run openapi:check` (part of `bun run check`) failed on a clean checkout:
   `packages/contracts/openapi.json` was missing the `last_owner_protection` problem code that
@@ -21,9 +22,10 @@ Each entry: status, evidence, impact.
   The gap is process (no `openapi:generate` script). See D-003.
 
 ## F-002 (FINDING) No OpenAPI generation script — only a checker
+
 - **Status:** FINDING (improvement opportunity)
-- The repo ships `scripts/check-openapi.ts` which *validates* `openapi.json` against
-  `OPENAPI_DOCUMENT`, but there is no `scripts/generate-openapi.ts` to *produce* it. Maintainers
+- The repo ships `scripts/check-openapi.ts` which _validates_ `openapi.json` against
+  `OPENAPI_DOCUMENT`, but there is no `scripts/generate-openapi.ts` to _produce_ it. Maintainers
   must hand-edit the JSON, which is exactly how F-001 happened. A one-line
   `bun run openapi:generate` that writes `JSON.stringify(OPENAPI_DOCUMENT)` would make the
   checked-in file trivially regenerable.
@@ -31,20 +33,21 @@ Each entry: status, evidence, impact.
   Low risk, high value. Not done in this campaign to keep the fix surgical.
 
 ## F-003 (FIXED) Archive/Restore UI was a no-op; no API endpoint existed
+
 - **Status:** FIXED_AND_VERIFIED (this campaign)
 - **Symptom (as found):** the web `LifecycleDialog` (`apps/web/app/workspace/workspace-shell.tsx`)
   only flipped local React state on confirm; that state is re-derived from the boundary
   catalog on the next refresh, so archive/restore silently reverted. No HTTP endpoint
   existed to change Project or Environment lifecycle, and there is no CLI command.
 - **Evidence (as found):** the DB layer was complete and correct — `archiveProject/
-  restoreProject/archiveEnvironment/restoreEnvironment`
+restoreProject/archiveEnvironment/restoreEnvironment`
   (`packages/database/src/persistence/repositories.ts:701/754/807/864`) with row locks,
   lifecycle guards, `requireTeamAction`, and audit facts — but was reachable only from
   `postgres.integration.test.ts`. `docs/web-application.md` described confirmed
   archive/restore operations, so a documented, user-visible feature did nothing.
 - **Corrected root-cause note:** this finding originally claimed `restoreProject` lacks the
   documented fail-closed check and that the `projects_githubRepositoryId` index is
-  non-unique. That is wrong: a conflicting *active* re-link is blocked fail-closed by the
+  non-unique. That is wrong: a conflicting _active_ re-link is blocked fail-closed by the
   partial unique index `projects_active_team_repository_key`
   (`migrations/20260817100000_persistence/migration.sql:1065-1067`,
   `WHERE "lifecycle" = 'ACTIVE'`). Archiving the original releases the index slot, so a
@@ -67,6 +70,7 @@ Each entry: status, evidence, impact.
   membership-command re-execution variants are recorded in F-006 / D-009.
 
 ## F-004 (FIXED) `?preview=` URL parameters are honored in live (non-fixture) deployments
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; live self-hosted browser probe 2026-09-21)
 - **Symptom:** `workspace-shell.tsx` reads `preview` from the URL unconditionally in the
   hydration effect (~:1244-1250). `protectedPreview` (:597-619, `displayBoundary`) forces
@@ -94,6 +98,7 @@ Each entry: status, evidence, impact.
   ignores `preview` in live mode, and the live branch is verified by the direct probe above.
 
 ## F-005 (FIXED) CLI identifier abbreviation renders `xxxxxxxx-undefined`
+
 - **Status:** FIXED_AND_VERIFIED (this campaign)
 - **Symptom:** Every abbreviated identifier the CLI displays — server profile id in the
   `profile add` trust frame ("Id 00000000-undefined"), project/environment ids in
@@ -105,20 +110,21 @@ Each entry: status, evidence, impact.
   defect lived quietly on every human-rendered screen.
 - **Fix:** one token, `match[5]` → `match[2]`. Verified live: `dotrelay profile add`
   trust frame shows `Id 00000000-0000`; `dotrelay context` shows `Project
-  1a04be60-eba5`.
+1a04be60-eba5`.
 - **Regression:** `index.test.ts` "context card abbreviates identifiers without leaking
   undefined fragments" renders the real context card and asserts `verified
-  (1311418611)`, `1a04be60-0000`, and the absence of `undefined`; proven red on the
+(1311418611)`, `1a04be60-0000`, and the absence of `undefined`; proven red on the
   pre-fix code and green on the fix.
 
 ## F-006 (DEFECT, FIXED) Re-executed administration commands fail with `operation_conflict`
+
 - **Status:** FIXED for the re-link/re-create surfaces and both lifecycle routes (verified live); the membership-command variants are a product question (D-009), not an un-fixed defect
 - **Symptom:** After archiving the original project, re-linking the same GitHub repository
   (`POST /api/v1/projects`, `project.link`) returned `409 operation_conflict` and created nothing.
   The same failure pattern applies to any administration command that can legitimately be
   re-executed after its prior effect has been undone.
 - **Root cause:** every JSON administration route computes `commandDigest =
-  sha384(commandBytes)` where `commandBytes` is a *logical* description of the command that
+sha384(commandBytes)` where `commandBytes` is a _logical_ description of the command that
   omits the per-execution `operationId` (`apps/api/src/administration-routes.ts`
   `team.create`/`project.link`/`environment.create`; `membership-routes.ts`
   `team.invite`/`membership.change_role`/`membership.remove`/`invitation.accept`). The
@@ -142,13 +148,14 @@ Each entry: status, evidence, impact.
   replacement → restore original, all as `postgres.integration.test.ts:707-746` specifies).
 - **Open product question (not changed here):** `team.create`, `team.invite`,
   `membership.change_role`, `membership.remove`, `invitation.accept` use the same
-  deterministic-bytes pattern. For these, a repeat of an *identical* command (e.g. re-inviting
+  deterministic-bytes pattern. For these, a repeat of an _identical_ command (e.g. re-inviting
   the same provider subject, or re-issuing the same role change after a revert) currently
   409s because the digest is already consumed. Whether that duplicate-prevention is intended
   or the same defect is a product decision — filed as a GitHub issue rather than changed, so
   the F-003 fix stays surgical. See DECISIONS.md D-009.
 
 ## F-007 (FIXED) Self-hosted browser lifecycle archive/restore silently no-ops (no API origin inlined)
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; found and verified in a live self-hosted browser pass)
 - **Symptom:** In a self-hosted deployment that declares no build-inlined API origin
   (no `NEXT_PUBLIC_DOTRELAY_API_ORIGIN` / `DOTRELAY_API_ORIGIN`), the workspace's
@@ -157,15 +164,15 @@ Each entry: status, evidence, impact.
   stayed `ACTIVE` in the DB.
 - **Root cause:** `workspace-shell.tsx` computes a shell-level
   `const apiOrigin = resolveApiOrigin()` (no fallback) for the membership/invitation
-  surfaces, which are *intentionally* skipped when no origin is declared (the "Team data
+  surfaces, which are _intentionally_ skipped when no origin is declared (the "Team data
   unavailable" alert). The two lifecycle handlers copied that bare `apiOrigin` and guarded
   `if (!apiOrigin || !target) return;`. But the sibling device-bootstrap and key-recovery
-  handlers fall back to the *verified* Server Profile origin (`resolveApiOrigin() ??
-  boundary.profile.origin`), so in the same browser device bootstrap succeeded while the
+  handlers fall back to the _verified_ Server Profile origin (`resolveApiOrigin() ??
+boundary.profile.origin`), so in the same browser device bootstrap succeeded while the
   lifecycle buttons bailed. `resolveApiOrigin()` reads `NEXT_PUBLIC_*` / build-inlined vars,
   none of which exist in a pure self-hosted client bundle, so it is `undefined` there.
 - **Why the suites missed it:** the API unit tests always pass a defined `apiOrigin`, and the
-  Playwright e2e runs in fixture mode which *does* set `NEXT_PUBLIC_DOTRELAY_API_ORIGIN` (so
+  Playwright e2e runs in fixture mode which _does_ set `NEXT_PUBLIC_DOTRELAY_API_ORIGIN` (so
   `resolveApiOrigin()` is defined and the request goes to the intercepted endpoint). Only a
   real live self-hosted browser — no inlined origin, real trusted profile — exposes the
   undefined value.
@@ -183,13 +190,14 @@ Each entry: status, evidence, impact.
   change (environment stayed `ACTIVE` in the DB), confirming the silent no-op.
 
 ## F-008 (FIXED) Web environment editor shows the wrong remediation for User-defined Value decode failures
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; found in the live self-hosted browser pass, fixed in code)
 - **Symptom:** When this Device cannot decrypt the environment head, the web editor collapsed
   every `UnreadableLaneError` into one message: "Run dotrelay pull in the CLI on this
   machine to re-share the project's keys." That is correct only for Variable definitions
   and Shared Values (sealed to the Project epoch key, which `pull` re-wraps to peer
   devices). For User-defined Values it names a remedy that does not exist: they are
-  sealed to the *publisher Device's* user-defined key, which `pull`'s re-share
+  sealed to the _publisher Device's_ user-defined key, which `pull`'s re-share
   (`wrapEpochKeyToPeers`, `apps/cli/src/workflow.ts:634-682`) never re-wraps.
 - **Root cause:** `environment-editor.tsx` matched `error instanceof UnreadableLaneError`
   without inspecting `laneKind`, while the CLI already distinguishes the two cases
@@ -204,7 +212,7 @@ Each entry: status, evidence, impact.
   `UnreadableLaneError.laneKind` contract (`packages/client/src/sync/publication.ts:172-207`);
   `bun run check` and the e2e suite pass; the e2e decrypt-failure specs assert only the
   `crypto-unavailable` heading and no test pinned the old flat string. The live browser pass
-  that surfaced this finding actually failed on *definition* lanes (the browser lacked the
+  that surfaced this finding actually failed on _definition_ lanes (the browser lacked the
   real Project epoch key — see F-009), so the pull-remedy branch rendered there; the
   user-defined branch is exercised by the two owner-A User-defined Value lanes at the head,
   which stay sealed to the CLI publisher Device's per-device key for the browser Device.
@@ -213,28 +221,29 @@ Each entry: status, evidence, impact.
   alert verbatim for the two owner-A lanes — live proof of the branch, not just code review.
 
 ## F-009 (FIXED) Newly enrolling Device self-mints a spurious Project epoch grant that can never decrypt pre-existing content and permanently blocks peer re-share
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; live self-hosted browser re-enrollment pass after the fix)
-- **Symptom:** A freshly enrolled browser Device that already has a *different* Device
+- **Symptom:** A freshly enrolled browser Device that already has a _different_ Device
   (e.g. a CLI) holding the Project's real epoch key cannot read the environment's
   definitions or Shared Values, while the boundary reports `grantsReady: true` so no
   repair prompt is offered. The documented remediation — an owner/admin running
   `dotrelay pull` to re-share the key — is a proven no-op for that Device.
 - **Root cause:** enrollment self-mints a `CURRENT_PROJECT_EPOCH` grant containing a
-  *fresh random* key (`grant-bootstrap.ts:48-50`, `plaintextKey ?? getRandomValues(32)`)
-  whenever no *presented* Device exists (`workspace-shell.tsx` enrollment gate checks only
+  _fresh random_ key (`grant-bootstrap.ts:48-50`, `plaintextKey ?? getRandomValues(32)`)
+  whenever no _presented_ Device exists (`workspace-shell.tsx` enrollment gate checks only
   `boundary.device`, which is absent for a fresh browser — it never consults
   `boundary.peerDevices`, which reports the CLI Device with `hasEpochGrant: true`). The
   head's lanes were sealed with the publisher's (CLI's) epoch key; the browser's spurious
   key can never match it, so every definition/Shared Value lane is unreadable. Because the
-  boundary's `grantsReady` only counts *some* current-epoch grant for the presented Device,
+  boundary's `grantsReady` only counts _some_ current-epoch grant for the presented Device,
   the spurious grant suppresses the `pending-grants` repair; and `wrapEpochKeyToPeers`
   (`apps/cli/src/workflow.ts:651`) skips peers with `hasEpochGrant`, so the re-share never
   reaches the browser. The same self-mint flaw exists in the CLI mirror
   (`apps/cli/src/workflow.ts:2726`), so a second CLI Device on an existing project repeats
   it. The service cannot distinguish a spurious grant from a real one (both are validly
   signed and sealed to the recipient), so the gate belongs client-side.
-- **Why the suites missed it:** the e2e fixtures script *both* the boundary and the grant
-  bootstrap and seal the *same* epoch key into the scripted grant
+- **Why the suites missed it:** the e2e fixtures script _both_ the boundary and the grant
+  bootstrap and seal the _same_ epoch key into the scripted grant
   (`workspace-stale-epoch.spec.ts` et al.), so the key mismatch — which requires a real
   publisher key plus a real second Device — cannot occur in fixtures.
 - **Fix (this campaign, D-011):** a newly enrolling Device must not self-mint an epoch grant
@@ -244,7 +253,7 @@ Each entry: status, evidence, impact.
   (`workflow.ts`) skips the bootstrap and instead reports a pending action telling an owner
   or admin to run `dotrelay pull` from their own Device. The web `repairStaleEpoch`
   self-mint is deliberately left un-gated (D-011): it is only reached on a stale-epoch
-  boundary and mints for the *new* epoch, which is the correct first-device recovery after
+  boundary and mints for the _new_ epoch, which is the correct first-device recovery after
   a rotation.
 - **Verification (live, this campaign):** on the live self-hosted deployment the stuck
   browser Device's local key storage was cleared and the browser re-enrolled a fresh Device
@@ -259,7 +268,7 @@ Each entry: status, evidence, impact.
   sealed to the CLI publisher Device's per-device key and surface the F-008
   user-defined-branch alert — the correct E2EE residual, not a defect.
 - **Regressions:** CLI unit `pull does not mint a spurious key when a peer holds the epoch
-  key` (workflow.test.ts: served boundary `grantsReady: false` plus a peer with
+key` (workflow.test.ts: served boundary `grantsReady: false` plus a peer with
   `hasEpochGrant: true` → zero grant-bootstrap calls, pending action surfaced); web e2e
   `enrollment skips the self-issued epoch grant when a peer holds the key`
   (workspace-enrollment-storage.spec.ts: intercepts `grants/bootstrap`, asserts zero POSTs
@@ -273,6 +282,7 @@ Each entry: status, evidence, impact.
   re-publish. The fix prevents the dead-end for every future enrollment.
 
 ## F-010 (PRODUCT GAP) No user-facing trigger for Project epoch key rotation — owner/admin recovery path unreachable
+
 - **Status:** BLOCKED (product decision; GitHub issue #229, 2026-09-21)
 - **Symptom:** the web recovery copy (`workspace-shell.tsx:2194-2196`) tells users "Owners
   and Admins can also rotate the project's keys", and `docs/wiki/synchronization.md:21-23`
@@ -301,11 +311,12 @@ Each entry: status, evidence, impact.
   the F-009 dead-end Device is unrecoverable at epoch 1.
 
 ## F-011 (FIXED) `dotrelay pull`'s unchanged and `--stdout` output variants drop pending grant remediation actions
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; hermetic CLI unit regression plus fresh full verify)
 - **Symptom:** in the F-009 scenario (the Device holds no Project epoch grant while a peer
-  Device holds the real key), the remediation pending action — *"This Device is missing
+  Device holds the real key), the remediation pending action — _"This Device is missing
   the Project epoch grant; an owner or admin can provision it by running `dotrelay pull`
-  from their own Device"* — is silently dropped whenever `dotrelay pull` reports
+  from their own Device"_ — is silently dropped whenever `dotrelay pull` reports
   "No changes found" (the common in-sync case) or is run with `--stdout`, so the user
   is told the pull succeeded with no hint that the Device still cannot read the
   environment.
@@ -337,6 +348,7 @@ Each entry: status, evidence, impact.
   `@dotrelay/cli#test:unit` (not a cache replay) green.
 
 ## F-012 (FIXED) Local `test:integration` stage skipped every test — silent all-skip false green
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; fresh 19 pass / 0 fail run with the turbo cache invalidated)
 - **Symptom:** every local `bun run verify` run reported `test:integration` as green, but the
   suite actually executed zero tests: `23 skip / 0 pass / 0 fail` (`/tmp/verify-final.log`,
@@ -379,11 +391,12 @@ Each entry: status, evidence, impact.
   and COVERAGE.
 
 ## F-013 (FIXED) e2e `workspace-invitations` spec races the workspace trust settle on a cold dev server
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; 4/4 pass on a cold server start, full e2e suite 102 pass / 0 fail)
 - **Symptom:** the fresh full verify (`/tmp/verify-final4.log`) failed in `test:e2e`
   (1 failed / 101 passed): `workspace-invitations.spec.ts › resolving an unknown GitHub
-  login keeps the form and reports the problem` — `TimeoutError: locator.click: Timeout
-  5000ms exceeded` while clicking `getByRole("button", { name: "Invite member" })`. The
+login keeps the form and reports the problem` — `TimeoutError: locator.click: Timeout
+5000ms exceeded` while clicking `getByRole("button", { name: "Invite member" })`. The
   error-context snapshot showed the workspace **trust gate still rendered** ("Trust this
   server" card, the `trust-profile` setup action) and the main view still on the Team
   landing state, while the sidebar had already selected Team — the click raced the
@@ -415,6 +428,7 @@ Each entry: status, evidence, impact.
   start. No assertion was weakened.
 
 ## F-014 (PRODUCT GAP) No surface provisions member key grants or activates PENDING_KEY_GRANT memberships
+
 - **Status:** BLOCKED (product decision — already tracked as GitHub issue #133 `ready-for-agent`,
   decision-settled to spec #209; recorded in this ledger 2026-09-21 because the prior
   campaign captured the analogous epoch-rotation gap as F-010/#229 but never recorded this one)
@@ -451,6 +465,7 @@ Each entry: status, evidence, impact.
   F-010/#229 but left this member-provisioning gap unrecorded.
 
 ## F-015 (RECORD, TRACED IN #137) CLI re-mints the publication operation on an uncertain finalize
+
 - **Status:** BLOCKED (tracked — open GitHub issue #137 "Reconcile uncertain publication outcomes before
   asking users to publish again", `bug` + `ready-for-agent`, design settled in spec #209 decision 11;
   recorded in this ledger 2026-09-21 by the second-pass CLI sweep; no code change in this audit)
@@ -486,6 +501,7 @@ Each entry: status, evidence, impact.
   CLI sweep's finding because the sweep is new to this session (2026-09-21).
 
 ## F-016 (FIXED) Browser device setup hid every non-conflict server failure behind "The server rejected this browser."
+
 - **Status:** FIXED_AND_VERIFIED (this campaign; cross-referenced as UX-010)
 - **Symptom:** on first-run Device enrollment, any `devices/bootstrap`
   problem code other than `authentication_required`/`state_conflict`
@@ -511,6 +527,7 @@ Each entry: status, evidence, impact.
   pinned behaviour unchanged; full suite 126/126; typecheck + biome clean.
 
 ## F-017 (RECORD) Second-pass sweep: CLI wrapper-id dead-end + three P3 copy/scope nits
+
 - **Status:** RECORD (no code change this entry)
 - `dotrelay device revoke-wrapper` requires a full 16-byte wrapper id that
   no user surface ever shows: the CLI prints only the 12-char abbreviation,
@@ -539,13 +556,14 @@ Each entry: status, evidence, impact.
   CLI suite 382/382) - all four findings in this entry are now closed.
 
 ## F-018 (FIXED) Integration-suite turbo cache insensitive to DATABASE_URL
+
 - **Status:** FIXED_AND_VERIFIED (this campaign)
 - **Symptom:** `test:integration` declared `DATABASE_URL`/`VALKEY_URL` under
   turbo `passThroughEnv`, which provides the variables WITHOUT hashing them.
   Any `turbo run test:integration` executed without the variables (49 tests
   skip in ~50ms by design) wrote a skip-all result to the shared worktree
   cache under the same hash as a real run - and a later `bun run
-  test:integration` (which does set the variables) replayed those skip logs
+test:integration` (which does set the variables) replayed those skip logs
   as a green pass. Reproduced live: poisoned the cache with a var-less
   forced run, then watched the wrapper replay "49 skip" as success despite
   printing "DATABASE_URL and VALKEY_URL reach the integration tasks".
@@ -562,11 +580,12 @@ Each entry: status, evidence, impact.
   executes (43 pass, 0 fail, 8.35s, isolated uuid databases dropped after);
   a var-less forced run hashes differently (`ae989330…` vs `59442568…`) and
   the wrapper replays only the real 43-pass entry.
- - **Regression protection:** the task hash now covers the variables; no new
-   test needed (the failure mode was cache identity, observable only across
-   runs - verified live as above).
+- **Regression protection:** the task hash now covers the variables; no new
+  test needed (the failure mode was cache identity, observable only across
+  runs - verified live as above).
 
 ## F-019 (FIXED) PR #247 device name/summary rendering is invisible in the fixture and untested
+
 - **Status:** FIXED_AND_VERIFIED (this campaign)
 - **Symptom:** the newest merged surface — Devices rows showing a human name
   and client summary instead of a bare UUID (PR #247) — renders nothing in the

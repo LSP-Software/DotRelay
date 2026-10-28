@@ -42,8 +42,7 @@ export type Argon2WorkerReply = Readonly<{
 // `DedicatedWorkerGlobalScope`, so the runtime behavior is unchanged.
 type Argon2WorkerScope = {
   onmessage:
-    | ((event: Readonly<{ readonly data: Argon2WorkerRequest }>) => void)
-    | null;
+    ((event: Readonly<{ readonly data: Argon2WorkerRequest }>) => void) | null;
   postMessage(
     message: Argon2WorkerReply,
     transfer: readonly ArrayBuffer[],

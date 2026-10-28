@@ -388,9 +388,8 @@ export const runProtectedWorkflow = async (
     // publication, so the Environment created by init is reused by later
     // invocations instead of a second one being created.
     if (parsed.command === "init" && synced.workflow.createdEnvironmentId) {
-      const { readStoredWorktreeContext, writeWorktreeContext } = await import(
-        "./context"
-      );
+      const { readStoredWorktreeContext, writeWorktreeContext } =
+        await import("./context");
       // Preserve the explicit repository choice recorded for this worktree;
       // the selection was made against the current Git remotes before the
       // workflow started.

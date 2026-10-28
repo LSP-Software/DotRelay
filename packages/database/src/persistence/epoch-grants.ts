@@ -169,9 +169,7 @@ export type GrantCreationInput = Readonly<{
     readonly recipientDeviceId: string;
     readonly ownerUserId?: string;
     readonly keyKind:
-      | "PROJECT_EPOCH"
-      | "USER_DEFINED_VALUE"
-      | "USER_TRUST_BUNDLE";
+      "PROJECT_EPOCH" | "USER_DEFINED_VALUE" | "USER_TRUST_BUNDLE";
     readonly grantKind:
       | "CURRENT_PROJECT_EPOCH"
       | "HISTORICAL_PROJECT_EPOCH"

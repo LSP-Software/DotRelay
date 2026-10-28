@@ -663,7 +663,10 @@ export const AddVariableDialog = ({
             <legend className="text-sm font-medium">
               Who can read the value
             </legend>
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5">
+            <label
+              aria-label="Shared value"
+              className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5"
+            >
               <input
                 checked={draft.ownership === "SHARED_VALUE"}
                 name="new-variable-ownership"
@@ -680,7 +683,10 @@ export const AddVariableDialog = ({
                 </span>
               </span>
             </label>
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5">
+            <label
+              aria-label="User-defined value"
+              className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5"
+            >
               <input
                 checked={draft.ownership === "USER_DEFINED_VALUE"}
                 name="new-variable-ownership"

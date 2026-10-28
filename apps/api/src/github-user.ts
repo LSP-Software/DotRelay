@@ -24,8 +24,7 @@ export type GitHubUserIdentityFailure =
   | Readonly<{ readonly code: "github_unavailable" }>;
 
 export type GitHubUserIdentityOutcome =
-  | GitHubUserIdentityResolution
-  | GitHubUserIdentityFailure;
+  GitHubUserIdentityResolution | GitHubUserIdentityFailure;
 
 export type GitHubUserIdentityOptions = Readonly<{
   readonly fetch?: typeof fetch;
