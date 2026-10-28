@@ -30,28 +30,32 @@ A User's **first** Device uses **`DeviceRepository.completeBootstrap`**. The Use
 an authenticated session and no other `ACTIVE` Device: bootstrap is first-Device-only
 (ADR 0010), and a second bootstrap for a User that already has an `ACTIVE` Device is rejected —
 "already been bootstrapped; use enrollment". It commits a Device certificate protocol object and
-creates the Device as `ACTIVE` without a dual-control enrollment record. A
+creates the Device as `ACTIVE` without an enrollment record. A
 session-bootstrapped Device is a fully active Device (ADR 0010): it satisfies the same
 `ACTIVE` lifecycle gate as an enrolled Device and may act on the User's behalf, including
-approving an enrollment that a different Device initiated. A byte-identical retry of a
+approving an enrollment that a prospective Device self-started. A byte-identical retry of a
 committed bootstrap returns idempotently instead of being rejected. A Device whose only Device
 was revoked may bootstrap again, since revoked Devices are not counted.
 
 Dual-control enrollment is the only path for additional Devices — for example the browser
-joining after the CLI is already active — and remains the CLI handoff for a Device whose keys
-are generated on an already enrolled installation. It is not a gate a bootstrap Device must
-pass.
+joining after the CLI is already active. The new installation or browser generates its keys and
+self-starts the enrollment; one of the User's existing Devices approves it. It is not a gate a
+bootstrap Device must pass.
 
 ## Dual-control enrollment
 
 Additional Devices use a three-step server workflow:
 
-1. **`beginEnrollment`** — an existing active Device initiates enrollment, recording transcript and
-   challenge hashes with an expiry time.
-2. **`approveEnrollment`** — a different active Device records an enrollment approval object. The
-   initiator and approver must not be the same Device.
-3. **`completeEnrollment`** — after approval, the initiator finalizes staged enrollment and
-   certificate objects, creating the new Device as `ACTIVE`.
+1. **`beginEnrollment`** — the prospective Device self-starts its own enrollment with an
+   authenticated session, recorded as a `PENDING` Device together with transcript and
+   challenge hashes and an expiry time. The User must have at least one `ACTIVE` Device that
+   can approve it; a User with none must bootstrap instead.
+2. **`approveEnrollment`** — an existing `ACTIVE` Device records an enrollment approval
+   object, which activates the prospective Device and records its self-signed certificate.
+   The approver is always a different Device from the prospective initiator; when the User
+   has a single Device, that sole Device approves.
+3. **`completeEnrollment`** — after approval, the now-`ACTIVE` prospective Device confirms
+   the staged enrollment object, closing the enrollment record.
 
 Expired, replayed, or unapproved enrollments fail closed. Operations are idempotent on byte-identical
 retries and conflict when an operation id or digest is reused with different bytes.

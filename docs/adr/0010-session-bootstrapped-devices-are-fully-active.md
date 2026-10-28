@@ -15,9 +15,9 @@ requirement for a Device to become usable.
 
 A Device created by `completeBootstrap` is `ACTIVE` for every purpose that an
 enrolled Device is: it satisfies the `requireActiveDevice` gate, so the User
-can act with it on its own behalf, and it may approve a dual-control
-enrollment initiated by a different Device. `PENDING` exists only for a
-Device whose dual-control enrollment is still in flight; there is no separate
+can act with it on its own behalf, and it may approve an enrollment that a
+prospective Device self-started. `PENDING` exists only for a
+Device whose enrollment is still in flight; there is no separate
 "limited" or "bootstrap-only" lifecycle state.
 
 ## Bootstrap is first-Device-only
@@ -27,11 +27,13 @@ Under the per-User row lock, after the idempotent-replay early return, it
 counts the User's `ACTIVE` Devices and rejects the bootstrap with "a device
 has already been bootstrapped; use enrollment to add another device" when the
 count is nonzero. Additional Devices therefore join exclusively through
-dual-control enrollment, whose `beginEnrollment` gate already requires at
-least one `ACTIVE` Device. The two gates are complementary: a User with zero
-`ACTIVE` Devices can only bootstrap, and a User with at least one can only
-enroll (with a different Device approving, since initiator and approver must
-differ).
+enrollment: the prospective Device self-starts its own self-signed request,
+which is recorded as a `PENDING` Device, and one of the User's existing
+`ACTIVE` Devices approves it, which activates it. The `beginEnrollment` gate
+requires at least one `ACTIVE` Device to approve the request. The two gates
+are complementary: a User with zero `ACTIVE` Devices can only bootstrap, and
+a User with at least one can only enroll — a User with a single Device
+approves the enrollment with that same sole Device.
 
 - A byte-identical retry of an already-committed bootstrap returns
   idempotent before the count check, so the restriction never rejects a
@@ -59,12 +61,14 @@ differ).
   Restricting bootstrap to the first Device closes the gap where a user who
   already trusted a Device could bootstrap a second one without any peer
   approval.
-- The dual-control enrollment gate is enforced exactly where it must be:
-  `beginEnrollment`, `approveEnrollment`, and `completeEnrollment` each run
-  `requireActiveDevice`, and `approveEnrollment` rejects an approver that is
-  the same Device as the initiator. Bootstrap Devices satisfy the same
-  "active" gate as enrolled Devices, so the authorization layer is consistent
-  without a special case.
+- The enrollment gates are enforced exactly where they must be:
+  `beginEnrollment` requires the User to have an `ACTIVE` Device that can
+  approve the request, and `approveEnrollment` and `completeEnrollment` each
+  run `requireActiveDevice`. The initiator is the prospective Device itself,
+  so the approving existing Device is always a different one; a User with a
+  single Device approves the request with that same sole Device. Bootstrap
+  Devices satisfy the same "active" gate as enrolled Devices, so the
+  authorization layer is consistent without a special case.
 
 ## Consequences
 
@@ -80,4 +84,6 @@ differ).
   Device succeeds, a second bootstrap for the same User is rejected, and a
   byte-identical replay of the committed bootstrap returns idempotent. A
   session-bootstrapped Device is `ACTIVE` and can approve an enrollment that
-  a different Device initiated.
+  a prospective Device self-started; a User with exactly one Device adds a
+  second by approving with that sole Device, and a User with zero Devices
+  cannot enroll at all.

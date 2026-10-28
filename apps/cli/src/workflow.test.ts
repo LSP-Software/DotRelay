@@ -3628,7 +3628,7 @@ describe("protected CLI workflows", () => {
     );
   });
 
-  test("completes a dual-control enrollment from a protected handoff", async () => {
+  test("completes a Device enrollment from a protected handoff", async () => {
     const runtime = await setup();
     const requestPath = `${import.meta.dir}/.tmp-enrollment-request`;
     const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -3698,10 +3698,34 @@ describe("protected CLI workflows", () => {
       { ...runtime, admin: approverAdmin, deviceId: ids.approver },
     );
     expect(approve.exitCode).toBe(0);
-    expect(approverPosts.some((post) => post.path.endsWith("/approve"))).toBe(
-      true,
+    const approvePost = approverPosts.find((post) =>
+      post.path.endsWith("/approve"),
     );
+    // The approval activates the enrolled Device and records its
+    // self-signed certificate.
+    expect(approvePost?.body.certificateObjectId).toBe(
+      artifact.certificateObjectId,
+    );
+    expect(typeof approvePost?.body.certificateObject).toBe("string");
 
+    // Completion is performed by the prospective Device itself (the one that
+    // self-started the enrollment), which `begin` recorded as this
+    // installation's Device and which the approval activated. The boundary
+    // must therefore report that Device as active.
+    const prospectiveId = String(artifact.deviceId);
+    const completeAdmin: StrictJsonClient = {
+      get: async (path) => {
+        if (path === "/api/v1/session")
+          return { authenticated: true, user: { id: ids.user } };
+        return { ...boundary, device: { active: true, id: prospectiveId } };
+      },
+      post: async (path, body) => {
+        posts.push({ path, body });
+        if (path.endsWith("/complete"))
+          return { deviceId: prospectiveId, active: true, idempotent: false };
+        return { approved: true, idempotent: false };
+      },
+    };
     const complete = await run(
       [
         "device",
@@ -3713,7 +3737,7 @@ describe("protected CLI workflows", () => {
         "--no-input",
         "--json",
       ],
-      { ...runtime, admin },
+      { ...runtime, admin: completeAdmin },
     );
     expect(complete.exitCode).toBe(0);
     expect(posts.some((post) => post.path.endsWith("/complete"))).toBe(true);
@@ -3724,9 +3748,10 @@ describe("protected CLI workflows", () => {
     expect(completePost?.body.enrollmentObjectId).not.toBe(
       artifact.enrollmentId,
     );
-    expect(completePost?.body.certificateObjectId).toBe(
-      artifact.certificateObjectId,
-    );
+    // Completion only confirms the self-signed request; the Device and its
+    // certificate were recorded when the enrollment started and was approved.
+    expect(completePost?.body).not.toHaveProperty("certificateObjectId");
+    expect(completePost?.body).not.toHaveProperty("certificateObject");
     await (
       await import("node:fs/promises")
     )

@@ -78,10 +78,24 @@ const createOperationInput = async <
   } as const;
 };
 
+// Encodes the shared sequence as a canonical CBOR unsigned integer, with
+// length prefixes once the suite generates more than 23 objects.
+const sequenceBytes = (sequence: number): number[] =>
+  sequence < 24
+    ? [sequence]
+    : sequence < 256
+      ? [0x18, sequence]
+      : [0x19, sequence >> 8, sequence & 0xff];
+
 const createProtocolObjectInput = async (
   kind: number,
 ): Promise<ProtocolObjectInput> => {
-  const canonicalBytes = new Uint8Array([0xa1, 0x00, protocolSequence++]);
+  const sequence = protocolSequence++;
+  const canonicalBytes = new Uint8Array([
+    0xa1,
+    0x00,
+    ...sequenceBytes(sequence),
+  ]);
   return {
     id: crypto.randomUUID(),
     suite: "dotrelay-e2ee-v3-classical-webcrypto",
@@ -93,8 +107,7 @@ const createProtocolObjectInput = async (
 };
 
 // Like createProtocolObjectInput, but binds the object to a Project and
-// Environment (required when the object is published in a revision) and
-// encodes the sequence with full CBOR length prefixes.
+// Environment (required when the object is published in a revision).
 const createBoundProtocolObject = async (
   kind: number,
   projectId: string,
@@ -104,11 +117,7 @@ const createBoundProtocolObject = async (
   const canonicalBytes = new Uint8Array([
     0xa1,
     0x00,
-    ...(sequence < 24
-      ? [sequence]
-      : sequence < 256
-        ? [0x18, sequence]
-        : [0x19, sequence >> 8, sequence & 0xff]),
+    ...sequenceBytes(sequence),
   ]);
   return {
     id: crypto.randomUUID(),
@@ -381,30 +390,149 @@ integrationDescribe("trust workflow integration", () => {
     expect(await database.device.count({ where: { userId: user.id } })).toBe(1);
   });
 
-  test("completes dual-control enrollment with approval", async () => {
-    const user = await createUserFixture();
-    const initiator = await createActiveDevice(user.id);
-    const approver = await createActiveDevice(user.id);
-    const devices = new DeviceRepository();
+  // Runs the full prospective-Device enrollment cycle: the prospective
+  // Device self-starts the enrollment, an existing ACTIVE Device approves
+  // it (which activates the prospective Device), and the now-active
+  // prospective Device completes it.
+  const completeEnrollmentCycle = async (input: {
+    readonly user: Readonly<{ readonly id: string }>;
+    readonly devices: DeviceRepository;
+    readonly prospectiveId: string;
+    readonly x25519PublicKey: Uint8Array;
+    readonly ed25519PublicKey: Uint8Array;
+    readonly approverDeviceId: string;
+    readonly labelPrefix: string;
+  }) => {
     const enrollmentId = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 60_000);
+    const beginOperation = {
+      ...(await createOperationInput(
+        input.user.id,
+        `${input.labelPrefix}-begin`,
+        "DEVICE_ENROLLMENT",
+      )),
+      actorDeviceId: input.prospectiveId,
+    };
+    await input.devices.beginEnrollment(database, {
+      operation: beginOperation,
+      enrollmentId,
+      userId: input.user.id,
+      initiatorDeviceId: input.prospectiveId,
+      transcriptHash: new Uint8Array(48),
+      challengeHash: new Uint8Array(48),
+      expiresAt: new Date(Date.now() + 60_000),
+      device: {
+        id: input.prospectiveId,
+        identityGeneration: 1n,
+        keyId: new Uint8Array(await sha384Digest(input.x25519PublicKey)),
+        x25519PublicKey: input.x25519PublicKey,
+        ed25519PublicKey: input.ed25519PublicKey,
+      },
+    });
+    const approvalObject = await createProtocolObjectInput(5);
+    const certificateObject = await createProtocolObjectInput(2);
+    const approveOperation = {
+      ...(await createOperationInput(
+        input.user.id,
+        `${input.labelPrefix}-approve`,
+        "DEVICE_ENROLLMENT",
+      )),
+      actorDeviceId: input.approverDeviceId,
+    };
+    for (const protocolObject of [approvalObject, certificateObject]) {
+      await stageObject({
+        operation: approveOperation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+    }
+    await input.devices.approveEnrollment(database, {
+      operation: approveOperation,
+      enrollmentId,
+      approvalObject,
+      certificateObject,
+    });
+    const enrollmentObject = await createProtocolObjectInput(4);
+    const completeOperation = {
+      ...(await createOperationInput(
+        input.user.id,
+        `${input.labelPrefix}-complete`,
+        "DEVICE_ENROLLMENT",
+      )),
+      actorDeviceId: input.prospectiveId,
+    };
+    await stageObject({
+      operation: completeOperation,
+      objectId: enrollmentObject.id,
+      canonicalBytes: enrollmentObject.canonicalBytes,
+      digest: enrollmentObject.digest,
+    });
+    await input.devices.completeEnrollment(database, {
+      operation: completeOperation,
+      enrollmentId,
+      enrollmentObject,
+    });
+  };
+
+  // A User with exactly one Device adds a second: the prospective Device
+  // self-starts the enrollment, the single existing Device approves it, and
+  // the prospective Device completes it. Both end ACTIVE.
+  test("a single Device approves the second Device's self-enrollment", async () => {
+    const user = await createUserFixture();
+    const devices = new DeviceRepository();
+    const firstKey = crypto.getRandomValues(new Uint8Array(32));
+    const first = await devices.completeBootstrap(database, {
+      operation: await createOperationInput(
+        user.id,
+        "bootstrap-first-device",
+        "DEVICE_ENROLLMENT",
+      ),
+      device: {
+        id: crypto.randomUUID(),
+        identityGeneration: 1n,
+        keyId: new Uint8Array(await sha384Digest(firstKey)),
+        x25519PublicKey: firstKey,
+        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      },
+      certificateObject: await createProtocolObjectInput(2),
+    });
+    if (!("device" in first))
+      throw new Error("bootstrap did not return a device");
+    const prospectiveId = crypto.randomUUID();
+    const secondKey = crypto.getRandomValues(new Uint8Array(32));
+    const secondSigningKey = crypto.getRandomValues(new Uint8Array(32));
+    const enrollmentId = crypto.randomUUID();
     const beginOperation = {
       ...(await createOperationInput(
         user.id,
-        "begin-enrollment",
+        "enroll-second-device",
         "DEVICE_ENROLLMENT",
       )),
-      actorDeviceId: initiator.id,
+      actorDeviceId: prospectiveId,
     };
-    await devices.beginEnrollment(database, {
+    const begin = await devices.beginEnrollment(database, {
       operation: beginOperation,
       enrollmentId,
       userId: user.id,
-      initiatorDeviceId: initiator.id,
+      initiatorDeviceId: prospectiveId,
       transcriptHash: new Uint8Array(48),
       challengeHash: new Uint8Array(48),
-      expiresAt,
+      expiresAt: new Date(Date.now() + 60_000),
+      device: {
+        id: prospectiveId,
+        identityGeneration: 1n,
+        keyId: new Uint8Array(await sha384Digest(secondKey)),
+        x25519PublicKey: secondKey,
+        ed25519PublicKey: secondSigningKey,
+      },
     });
+    if ("idempotent" in begin && begin.idempotent)
+      throw new Error("fresh enrollment begin was a replay");
+    // The prospective Device exists but is pending until approval.
+    const pending = await database.device.findUnique({
+      where: { id: prospectiveId },
+    });
+    expect(pending?.lifecycle).toBe("PENDING");
     expect(
       await database.auditEvent.count({
         where: {
@@ -414,25 +542,34 @@ integrationDescribe("trust workflow integration", () => {
       }),
     ).toBe(1);
     const approvalObject = await createProtocolObjectInput(5);
+    const secondCertificateObject = await createProtocolObjectInput(2);
     const approveOperation = {
       ...(await createOperationInput(
         user.id,
-        "approve-enrollment",
+        "approve-second-device",
         "DEVICE_ENROLLMENT",
       )),
-      actorDeviceId: approver.id,
+      actorDeviceId: first.device.id,
     };
-    await stageObject({
-      operation: approveOperation,
-      objectId: approvalObject.id,
-      canonicalBytes: approvalObject.canonicalBytes,
-      digest: approvalObject.digest,
-    });
+    for (const protocolObject of [approvalObject, secondCertificateObject]) {
+      await stageObject({
+        operation: approveOperation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+    }
     await devices.approveEnrollment(database, {
       operation: approveOperation,
       enrollmentId,
       approvalObject,
+      certificateObject: secondCertificateObject,
     });
+    // Approval activates the prospective Device.
+    const approved = await database.device.findUnique({
+      where: { id: prospectiveId },
+    });
+    expect(approved?.lifecycle).toBe("ACTIVE");
     expect(
       await database.auditEvent.count({
         where: {
@@ -441,17 +578,14 @@ integrationDescribe("trust workflow integration", () => {
         },
       }),
     ).toBe(1);
-    const newDeviceId = crypto.randomUUID();
-    const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
     const enrollmentObject = await createProtocolObjectInput(4);
-    const certificateObject = await createProtocolObjectInput(2);
     const completeOperation = {
       ...(await createOperationInput(
         user.id,
-        "complete-enrollment",
+        "complete-second-device",
         "DEVICE_ENROLLMENT",
       )),
-      actorDeviceId: initiator.id,
+      actorDeviceId: prospectiveId,
     };
     await stageObject({
       operation: completeOperation,
@@ -459,34 +593,125 @@ integrationDescribe("trust workflow integration", () => {
       canonicalBytes: enrollmentObject.canonicalBytes,
       digest: enrollmentObject.digest,
     });
-    await stageObject({
-      operation: completeOperation,
-      objectId: certificateObject.id,
-      canonicalBytes: certificateObject.canonicalBytes,
-      digest: certificateObject.digest,
-    });
-    const completed = await devices.completeEnrollment(database, {
+    await devices.completeEnrollment(database, {
       operation: completeOperation,
       enrollmentId,
+      enrollmentObject,
+    });
+    const completed = await database.deviceEnrollment.findUniqueOrThrow({
+      where: { id: enrollmentId },
+    });
+    expect(completed.completedAt).not.toBeNull();
+    expect(approved?.lifecycle).toBe("ACTIVE");
+    const firstAfter = await database.device.findUniqueOrThrow({
+      where: { id: first.device.id },
+    });
+    expect(firstAfter.lifecycle).toBe("ACTIVE");
+    expect(
+      await database.device.count({
+        where: { userId: user.id, lifecycle: "ACTIVE" },
+      }),
+    ).toBe(2);
+  });
+
+  // Once the User has two Devices, a third joins the same way: it
+  // self-starts, and one of the two existing Devices approves.
+  test("a third Device enrolls with approval from an existing Device", async () => {
+    const user = await createUserFixture();
+    const devices = new DeviceRepository();
+    const firstKey = crypto.getRandomValues(new Uint8Array(32));
+    const first = await devices.completeBootstrap(database, {
+      operation: await createOperationInput(
+        user.id,
+        "bootstrap-third-test-first",
+        "DEVICE_ENROLLMENT",
+      ),
       device: {
-        id: newDeviceId,
+        id: crypto.randomUUID(),
         identityGeneration: 1n,
-        keyId: new Uint8Array(await sha384Digest(x25519PublicKey)),
-        x25519PublicKey,
+        keyId: new Uint8Array(await sha384Digest(firstKey)),
+        x25519PublicKey: firstKey,
         ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
       },
-      enrollmentObject,
-      certificateObject,
+      certificateObject: await createProtocolObjectInput(2),
     });
-    if (!("device" in completed))
-      throw new Error("enrollment did not return a device");
-    expect(completed.device.lifecycle).toBe("ACTIVE");
+    if (!("device" in first))
+      throw new Error("bootstrap did not return a device");
+    await completeEnrollmentCycle({
+      user,
+      devices,
+      prospectiveId: crypto.randomUUID(),
+      x25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      approverDeviceId: first.device.id,
+      labelPrefix: "enroll-second",
+    });
+    expect(
+      await database.device.count({
+        where: { userId: user.id, lifecycle: "ACTIVE" },
+      }),
+    ).toBe(2);
+    const second = (
+      await database.device.findMany({
+        where: { userId: user.id, lifecycle: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+      })
+    ).find((device) => device.id !== first.device.id);
+    if (!second) throw new Error("second Device was not created");
+    await completeEnrollmentCycle({
+      user,
+      devices,
+      prospectiveId: crypto.randomUUID(),
+      x25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      approverDeviceId: second.id,
+      labelPrefix: "enroll-third",
+    });
+    expect(
+      await database.device.count({
+        where: { userId: user.id, lifecycle: "ACTIVE" },
+      }),
+    ).toBe(3);
+  });
+
+  // Enrollment needs an existing ACTIVE Device to approve the request; a
+  // User with none must use initial trust bootstrap for the first Device.
+  test("rejects an enrollment nobody can approve", async () => {
+    const user = await createUserFixture();
+    const devices = new DeviceRepository();
+    const prospectiveId = crypto.randomUUID();
+    const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
+    await expect(
+      devices.beginEnrollment(database, {
+        operation: {
+          ...(await createOperationInput(
+            user.id,
+            "enroll-without-approver",
+            "DEVICE_ENROLLMENT",
+          )),
+          actorDeviceId: prospectiveId,
+        },
+        enrollmentId: crypto.randomUUID(),
+        userId: user.id,
+        initiatorDeviceId: prospectiveId,
+        transcriptHash: new Uint8Array(48),
+        challengeHash: new Uint8Array(48),
+        expiresAt: new Date(Date.now() + 60_000),
+        device: {
+          id: prospectiveId,
+          identityGeneration: 1n,
+          keyId: new Uint8Array(await sha384Digest(x25519PublicKey)),
+          x25519PublicKey,
+          ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+        },
+      }),
+    ).rejects.toThrow("use initial trust bootstrap");
   });
 
   // ADR 0010: a Device created by initial trust bootstrap is fully ACTIVE.
-  // It may perform device-level authorization on its own behalf, including
-  // approving an enrollment that a different Device initiated. The
-  // lifecycle gate is "active", not "enrolled through dual control".
+  // It may approve an enrollment on its own behalf — here the prospective
+  // Device's self-started request, which activates it. The lifecycle gate
+  // is "active", not "enrolled through dual control".
   test("a session-bootstrapped Device is ACTIVE and can approve an enrollment", async () => {
     const user = await createUserFixture();
     const devices = new DeviceRepository();
@@ -509,26 +734,34 @@ integrationDescribe("trust workflow integration", () => {
     if (!("device" in bootstrap))
       throw new Error("bootstrap did not return a device");
     expect(bootstrap.device.lifecycle).toBe("ACTIVE");
-    const initiator = await createActiveDevice(user.id);
+    const prospectiveId = crypto.randomUUID();
     const enrollmentId = crypto.randomUUID();
-    const beginOperation = {
-      ...(await createOperationInput(
-        user.id,
-        "begin-bootstrap-approval",
-        "DEVICE_ENROLLMENT",
-      )),
-      actorDeviceId: initiator.id,
-    };
+    const prospectiveKey = crypto.getRandomValues(new Uint8Array(32));
     await devices.beginEnrollment(database, {
-      operation: beginOperation,
+      operation: {
+        ...(await createOperationInput(
+          user.id,
+          "begin-bootstrap-approval",
+          "DEVICE_ENROLLMENT",
+        )),
+        actorDeviceId: prospectiveId,
+      },
       enrollmentId,
       userId: user.id,
-      initiatorDeviceId: initiator.id,
+      initiatorDeviceId: prospectiveId,
       transcriptHash: new Uint8Array(48),
       challengeHash: new Uint8Array(48),
       expiresAt: new Date(Date.now() + 60_000),
+      device: {
+        id: prospectiveId,
+        identityGeneration: 1n,
+        keyId: new Uint8Array(await sha384Digest(prospectiveKey)),
+        x25519PublicKey: prospectiveKey,
+        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      },
     });
     const approvalObject = await createProtocolObjectInput(5);
+    const prospectiveCertificateObject = await createProtocolObjectInput(2);
     const approveOperation = {
       ...(await createOperationInput(
         user.id,
@@ -537,16 +770,22 @@ integrationDescribe("trust workflow integration", () => {
       )),
       actorDeviceId: bootstrap.device.id,
     };
-    await stageObject({
-      operation: approveOperation,
-      objectId: approvalObject.id,
-      canonicalBytes: approvalObject.canonicalBytes,
-      digest: approvalObject.digest,
-    });
+    for (const protocolObject of [
+      approvalObject,
+      prospectiveCertificateObject,
+    ]) {
+      await stageObject({
+        operation: approveOperation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+    }
     await devices.approveEnrollment(database, {
       operation: approveOperation,
       enrollmentId,
       approvalObject,
+      certificateObject: prospectiveCertificateObject,
     });
     expect(
       await database.auditEvent.count({
@@ -556,6 +795,10 @@ integrationDescribe("trust workflow integration", () => {
         },
       }),
     ).toBe(1);
+    const activated = await database.device.findUnique({
+      where: { id: prospectiveId },
+    });
+    expect(activated?.lifecycle).toBe("ACTIVE");
   });
 
   test("provisions grants and activates a pending Membership", async () => {

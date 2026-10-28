@@ -10,6 +10,8 @@ import {
   verifySignedProtocolObject,
 } from "@dotrelay/client";
 import {
+  generateEncryptionKeyPair,
+  generateSigningKeyPair,
   parseProtocolObject,
   sha384,
   sha384ToHex,
@@ -345,7 +347,16 @@ export const enrollDevice = async (
     deviceName?: string;
   }>
 > => {
-  const first = await enrollFirstDevice(options);
+  let first;
+  try {
+    first = await enrollFirstDevice(options);
+  } catch (error) {
+    // Bootstrap creates the User's first Device only; when the User already
+    // has an active Device this installation joins through enrollment.
+    if (!(error instanceof CliError) || error.code !== "state_conflict")
+      throw error;
+    return beginDeviceEnrollment(options, output);
+  }
   if (first.existing) return beginDeviceEnrollment(options, output);
   return {
     deviceId: first.deviceId,
@@ -468,26 +479,56 @@ export const beginDeviceEnrollment = async (
     deviceName?: string;
   }>
 > => {
-  const authorized = await loadAuthorizedDevice(options);
-  if (!authorized.keys.signingPublicKey)
+  // The prospective (not yet active) Device starts its own enrollment: it
+  // generates its keys, self-signs the request, and hands the artifact to an
+  // existing Device for approval, so a login alone is enough here.
+  const sessions = createSessionStore(options.credentials);
+  const token = await sessions.get(options.profile.pin);
+  if (!token)
     throw new CliError(
-      "crypto",
-      "the active Device has no signing public key",
+      "authentication",
+      "login is required before Device enrollment",
       {},
-      "device_bundle_invalid",
+      "authentication_required",
     );
+  const admin =
+    options.admin ??
+    createStrictJsonClient(options.profile.pin, options.credentials, {
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.networkPolicy
+        ? { networkPolicy: options.networkPolicy }
+        : {}),
+    });
+  const session = await admin.get("/api/v1/session", ["authenticated", "user"]);
+  if (!isRecord(session.user))
+    throw new CliError(
+      "authentication",
+      "the Server Profile returned no User identity",
+      {},
+      "session_invalid",
+    );
+  const userId = requiredString(session.user.id, "User id");
+  const deviceId = crypto.randomUUID();
+  const encryption = await generateEncryptionKeyPair();
+  const signing = await generateSigningKeyPair();
+  const keyMaterial = Object.freeze({
+    encryptionPrivateKey: encryption.privateKey,
+    signingPrivateKey: signing.privateKey,
+    encryptionPublicKey: encryption.publicKey,
+    signingPublicKey: signing.publicKey,
+  });
   const expiresAtMs = Date.now() + 10 * 60 * 1000;
   const request = await createDeviceEnrollmentRequest({
     serverProfileId: options.profile.pin.serverProfileId,
     origin: options.profile.origin,
-    userId: authorized.userId,
-    identityGeneration: authorized.bundle.userIdentityGeneration,
-    initiatorDeviceId: authorized.deviceId,
-    initiatorSigningPrivateKey: authorized.keys.signingPrivateKey,
-    initiatorSigningPublicKey: await exportSigningPublicKey(
-      authorized.keys.signingPublicKey,
-    ),
+    userId,
+    identityGeneration: 1,
+    initiatorDeviceId: deviceId,
+    initiatorSigningPrivateKey: signing.privateKey,
+    initiatorSigningPublicKey: await exportSigningPublicKey(signing.publicKey),
     expiresAtMs,
+    deviceId,
+    keyMaterial,
   });
   const operationId = crypto.randomUUID();
   const certificateObjectId = crypto.randomUUID();
@@ -501,32 +542,78 @@ export const beginDeviceEnrollment = async (
   const completeArtifact = Object.freeze({
     ...artifact,
   });
+  const x25519PublicKey = await rawPublicKey(encryption.publicKey);
+  const ed25519PublicKey = await rawPublicKey(signing.publicKey);
+  const client = describeCliClient();
+  let response: Response;
+  try {
+    response = await fetchWithDeadline(
+      options.fetch ?? fetch,
+      `${options.profile.origin}/api/v1/devices/enrollments`,
+      {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "Idempotency-Key": operationId,
+        },
+        body: JSON.stringify({
+          operationId,
+          enrollmentId: request.ids.enrollmentId,
+          userId,
+          transcriptHash: sha384ToHex(request.transcriptHash),
+          challengeHash: sha384ToHex(await sha384(request.challenge)),
+          expiresAt: artifact.expiresAt,
+          deviceId: request.ids.deviceId,
+          identityGeneration: String(request.bundle.userIdentityGeneration),
+          x25519PublicKey: base64(x25519PublicKey),
+          ed25519PublicKey: base64(ed25519PublicKey),
+          keyId: base64(await sha384(x25519PublicKey)),
+          certificateObjectId,
+          certificateObject: base64(request.certificateBytes),
+          client: {
+            displayName: client.displayName,
+            clientKind: client.clientKind,
+            ...(client.osName ? { osName: client.osName } : {}),
+            ...(client.clientSummary
+              ? { clientSummary: client.clientSummary }
+              : {}),
+          },
+        }),
+      },
+      options.networkPolicy ?? defaultNetworkPolicy,
+    );
+  } catch (error) {
+    if (error instanceof NetworkAttemptError)
+      throw networkFailureCliError(
+        error,
+        "the Device enrollment endpoint",
+        "device_enrollment_unavailable",
+      );
+    throw error;
+  }
+  if (!response.ok) {
+    const body = await responseJson(response).catch(() => undefined);
+    const code =
+      typeof body?.code === "string" ? body.code : "device_enrollment_failed";
+    throw new CliError(
+      categoryForProblem(code),
+      "Device enrollment was rejected",
+      {},
+      code,
+    );
+  }
   const storage = resolveDeviceStorage(options);
   await storage.save(request.bundle);
-  const response = await authorized.admin.post(
-    "/api/v1/devices/enrollments",
-    {
-      operationId,
-      enrollmentId: request.ids.enrollmentId,
-      userId: authorized.userId,
-      transcriptHash: sha384ToHex(request.transcriptHash),
-      challengeHash: sha384ToHex(await sha384(request.challenge)),
-      expiresAt: artifact.expiresAt,
-    },
-    ["enrollmentId", "expiresAt", "idempotent"],
-    { idempotencyKey: operationId },
+  // The new Device becomes this installation's Device: it is pending until
+  // an existing Device approves it.
+  await writeDeviceId(
+    deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    options.profile.pin,
+    deviceId,
   );
-  if (
-    response.enrollmentId !== undefined &&
-    requiredString(response.enrollmentId, "enrollment id") !==
-      request.ids.enrollmentId
-  )
-    throw new CliError(
-      "crypto",
-      "the Server Profile returned the wrong enrollment id",
-      {},
-      "response_invalid",
-    );
   const requestPath = await writeEnrollmentArtifact(
     options,
     completeArtifact,
@@ -588,6 +675,13 @@ export const approveDeviceEnrollment = async (
       enrolledDeviceId: artifact.deviceId,
       objectId: crypto.randomUUID(),
       object: base64(approval.canonicalBytes),
+      // The approval activates the enrolled Device and records its
+      // self-signed certificate, so the handoff's certificate travels with
+      // it.
+      certificateObjectId: artifact.certificateObjectId,
+      certificateObject: base64(
+        fromBase64(artifact.certificate, "Device certificate"),
+      ),
     },
     ["approved", "idempotent"],
     { idempotencyKey: operationId },
@@ -721,6 +815,8 @@ export const completeDeviceEnrollment = async (
   }
   const operationId = crypto.randomUUID();
   const client = describeCliClient();
+  // The Device and its certificate were recorded when the enrollment was
+  // started and approved; completion only confirms the self-signed request.
   await authorized.admin.post(
     `/api/v1/devices/enrollments/${encodeURIComponent(artifact.enrollmentId)}/complete`,
     {
@@ -729,13 +825,6 @@ export const completeDeviceEnrollment = async (
       enrollmentObject: base64(
         fromBase64(artifact.transcript, "enrollment transcript"),
       ),
-      certificateObjectId: artifact.certificateObjectId,
-      certificateObject: base64(certificateBytes),
-      deviceId: artifact.deviceId,
-      identityGeneration: String(artifact.identityGeneration),
-      x25519PublicKey: base64(x25519PublicKey),
-      ed25519PublicKey: base64(ed25519PublicKey),
-      keyId: base64(await sha384(x25519PublicKey)),
       client: {
         displayName: client.displayName,
         clientKind: client.clientKind,
