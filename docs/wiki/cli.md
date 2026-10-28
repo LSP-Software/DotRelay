@@ -269,7 +269,8 @@ line or the next command to run. It never dumps key:value local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle
 in the local credential store, with a protected local record for its profile and Device id.
-The browser is a separate Device. Session bootstrap may enroll it after the CLI is already active.
+The browser is a separate Device. Bootstrap is first-Device-only, so once the CLI is already
+active the browser joins through dual-control enrollment instead.
 `device enroll` still begins the dual-control flow when adding a Device whose keys are generated on
 an already enrolled installation. The explicit form is `device begin --output <request>`. Move that
 signed request artifact to a second authorized installation and run `device approve --from

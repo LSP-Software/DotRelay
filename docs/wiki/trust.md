@@ -26,16 +26,21 @@ recovery target picker.
 
 ## Initial trust bootstrap
 
-A Device for a client installation uses **`DeviceRepository.completeBootstrap`**. The User must have
-an authenticated session. CLI and browser are distinct Devices, so bootstrap may run again for this
-browser after the CLI is already enrolled. It commits a Device certificate protocol object and
+A User's **first** Device uses **`DeviceRepository.completeBootstrap`**. The User must have
+an authenticated session and no other `ACTIVE` Device: bootstrap is first-Device-only
+(ADR 0010), and a second bootstrap for a User that already has an `ACTIVE` Device is rejected —
+"already been bootstrapped; use enrollment". It commits a Device certificate protocol object and
 creates the Device as `ACTIVE` without a dual-control enrollment record. A
 session-bootstrapped Device is a fully active Device (ADR 0010): it satisfies the same
 `ACTIVE` lifecycle gate as an enrolled Device and may act on the User's behalf, including
-approving an enrollment that a different Device initiated.
+approving an enrollment that a different Device initiated. A byte-identical retry of a
+committed bootstrap returns idempotently instead of being rejected. A Device whose only Device
+was revoked may bootstrap again, since revoked Devices are not counted.
 
-Dual-control enrollment remains the CLI handoff for adding a Device whose keys are generated on
-an already enrolled installation; it is not a gate a bootstrap Device must pass.
+Dual-control enrollment is the only path for additional Devices — for example the browser
+joining after the CLI is already active — and remains the CLI handoff for a Device whose keys
+are generated on an already enrolled installation. It is not a gate a bootstrap Device must
+pass.
 
 ## Dual-control enrollment
 

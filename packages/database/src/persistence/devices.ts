@@ -233,6 +233,19 @@ export class DeviceRepository {
         kind: "DEVICE_ENROLLMENT",
       });
       if (operation.idempotent) return operation;
+      // Bootstrap is first-Device-only: once the User has an ACTIVE Device,
+      // additional Devices join through dual-control enrollment (whose
+      // beginEnrollment gate requires at least one ACTIVE Device). The count
+      // runs under the User row lock above, after the idempotent-replay
+      // early return, so a retry of a committed bootstrap still returns
+      // idempotent instead of being rejected.
+      const activeDeviceCount = await transaction.device.count({
+        where: { userId: input.operation.actorUserId, lifecycle: "ACTIVE" },
+      });
+      if (activeDeviceCount > 0)
+        throw new Error(
+          "a device has already been bootstrapped; use enrollment to add another device",
+        );
       const user = await transaction.user.findUnique({
         where: { id: input.operation.actorUserId },
         select: { identityGeneration: true },

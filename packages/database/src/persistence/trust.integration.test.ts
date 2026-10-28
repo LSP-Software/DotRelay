@@ -312,31 +312,73 @@ integrationDescribe("trust workflow integration", () => {
     expect(await database.device.count({ where: { userId: user.id } })).toBe(1);
   });
 
-  test("bootstraps an additional Device when one is already active", async () => {
+  // Bootstrap is first-Device-only (ADR 0010): a User with an ACTIVE Device
+  // cannot bootstrap a second one, but a byte-identical retry of the
+  // committed first bootstrap still returns idempotent.
+  test("rejects a second bootstrap but replays the first idempotently", async () => {
     const user = await createUserFixture();
-    await createActiveDevice(user.id);
     const devices = new DeviceRepository();
-    const deviceId = crypto.randomUUID();
-    const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
-    const result = await devices.completeBootstrap(database, {
-      operation: await createOperationInput(
-        user.id,
-        "additional-bootstrap",
-        "DEVICE_ENROLLMENT",
-      ),
-      device: {
-        id: deviceId,
-        identityGeneration: 1n,
-        keyId: new Uint8Array(await sha384Digest(x25519PublicKey)),
-        x25519PublicKey,
-        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
-      },
+    const firstKey = crypto.getRandomValues(new Uint8Array(32));
+    const firstDevice = {
+      id: crypto.randomUUID(),
+      identityGeneration: 1n,
+      keyId: new Uint8Array(await sha384Digest(firstKey)),
+      x25519PublicKey: firstKey,
+      ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+    };
+    const firstOperation = await createOperationInput(
+      user.id,
+      "bootstrap-first-device",
+      "DEVICE_ENROLLMENT",
+    );
+    const first = await devices.completeBootstrap(database, {
+      operation: firstOperation,
+      device: firstDevice,
       certificateObject: await createProtocolObjectInput(2),
     });
-    if (!("device" in result))
+    if (!("device" in first))
       throw new Error("bootstrap did not return a device");
-    expect(result.device.lifecycle).toBe("ACTIVE");
-    expect(await database.device.count({ where: { userId: user.id } })).toBe(2);
+    expect(first.device.lifecycle).toBe("ACTIVE");
+    expect(
+      await database.device.count({
+        where: { userId: user.id, lifecycle: "ACTIVE" },
+      }),
+    ).toBe(1);
+
+    const secondKey = crypto.getRandomValues(new Uint8Array(32));
+    await expect(
+      devices.completeBootstrap(database, {
+        operation: await createOperationInput(
+          user.id,
+          "bootstrap-second-device",
+          "DEVICE_ENROLLMENT",
+        ),
+        device: {
+          id: crypto.randomUUID(),
+          identityGeneration: 1n,
+          keyId: new Uint8Array(await sha384Digest(secondKey)),
+          x25519PublicKey: secondKey,
+          ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+        },
+        certificateObject: await createProtocolObjectInput(2),
+      }),
+    ).rejects.toThrow(
+      "a device has already been bootstrapped; use enrollment to add another device",
+    );
+    expect(
+      await database.device.count({
+        where: { userId: user.id, lifecycle: "ACTIVE" },
+      }),
+    ).toBe(1);
+
+    const replay = await devices.completeBootstrap(database, {
+      operation: firstOperation,
+      device: firstDevice,
+      certificateObject: await createProtocolObjectInput(2),
+    });
+    if (!("idempotent" in replay) || !replay.idempotent)
+      throw new Error("committed bootstrap replay was not idempotent");
+    expect(await database.device.count({ where: { userId: user.id } })).toBe(1);
   });
 
   test("completes dual-control enrollment with approval", async () => {
