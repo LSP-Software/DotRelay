@@ -36,8 +36,7 @@ export const requireProtocolActor = async (
   auth: DotRelayAuth,
 ): Promise<ProtocolActor | Response> => {
   const cached = context.get("protocolActor" as never) as
-    | ProtocolActor
-    | undefined;
+    ProtocolActor | undefined;
   if (cached) return cached;
   try {
     const session = await auth.api.getSession({
