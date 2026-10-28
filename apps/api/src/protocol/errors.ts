@@ -1,15 +1,21 @@
 import { type ProblemCode, sha384 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
+  AccountKeyWrapperNotActiveError,
+  DeviceNotActiveError,
+  EnvironmentNotActiveError,
   GenesisExistsError,
+  MembershipNotActiveError,
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
+  ProjectNotActiveError,
   StagedObjectConflictError,
   StagingQuotaExceededError,
   StaleEpochError,
   StaleHeadError,
   SyncIntegrityError,
+  TeamNotActiveError,
 } from "@dotrelay/database";
 
 export const mapPersistenceError = (
@@ -40,6 +46,18 @@ export const mapPersistenceError = (
   if (error instanceof OperationNotFoundError)
     return { code: "resource_not_found" };
   if (error instanceof OperationNotCancellableError)
+    return { code: "state_conflict" };
+  if (error instanceof DeviceNotActiveError)
+    return { code: "device_not_active" };
+  if (error instanceof MembershipNotActiveError)
+    return { code: "membership_not_active" };
+  if (
+    error instanceof ProjectNotActiveError ||
+    error instanceof EnvironmentNotActiveError ||
+    error instanceof TeamNotActiveError
+  )
+    return { code: "archived_resource" };
+  if (error instanceof AccountKeyWrapperNotActiveError)
     return { code: "state_conflict" };
   if (!(error instanceof Error)) return null;
   const message = error.message;

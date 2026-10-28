@@ -8,9 +8,12 @@ import {
 } from "./objects";
 import {
   databaseBytes,
+  DeviceNotActiveError,
   GenesisExistsError,
+  MembershipNotActiveError,
   normalizeEnvironmentLabel,
   OperationConflictError,
+  ProjectNotActiveError,
   type PersistenceClient,
   requireTeamAction,
   StaleEpochError,
@@ -198,7 +201,7 @@ export class PublicationRepository {
         lifecycle: "ACTIVE",
       },
     });
-    if (!device) throw new Error("Device is not active");
+    if (!device) throw new DeviceNotActiveError();
     const membership = await transaction.membership.findFirst({
       where: {
         teamId: environment.project.teamId,
@@ -206,7 +209,7 @@ export class PublicationRepository {
         lifecycle: "ACTIVE",
       },
     });
-    if (!membership) throw new Error("Membership is not active");
+    if (!membership) throw new MembershipNotActiveError();
 
     await validateSha384Digest(
       input.operation.commandBytes,
@@ -505,8 +508,7 @@ export class EnvironmentRepository {
         where: { id: input.projectId },
         select: { lifecycle: true, teamId: true },
       });
-      if (project?.lifecycle !== "ACTIVE")
-        throw new Error("Project is not active");
+      if (project?.lifecycle !== "ACTIVE") throw new ProjectNotActiveError();
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -586,8 +588,7 @@ export class EnvironmentRepository {
         where: { id: input.projectId },
         select: { lifecycle: true, teamId: true },
       });
-      if (project?.lifecycle !== "ACTIVE")
-        throw new Error("Project is not active");
+      if (project?.lifecycle !== "ACTIVE") throw new ProjectNotActiveError();
       await requireTeamAction(
         transaction,
         input.publication.operation.actorUserId,

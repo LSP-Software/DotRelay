@@ -6,7 +6,11 @@ import {
   ProtocolObjectRepository,
   StagedObjectRepository,
 } from "./objects";
-import { databaseBytes, requireActiveDevice } from "./repository-core";
+import {
+  databaseBytes,
+  DeviceNotActiveError,
+  requireActiveDevice,
+} from "./repository-core";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import {
   validateDigest,
@@ -436,8 +440,7 @@ export class DeviceRepository {
       // A retry under a new Idempotency-Key must not sign the User out again
       // for a Device that is already gone; replaying the original operation
       // id above still returns the recorded outcome.
-      if (device.lifecycle === "REVOKED")
-        throw new Error("Device is not active");
+      if (device.lifecycle === "REVOKED") throw new DeviceNotActiveError();
       const now = input.now ?? new Date();
       const revoked = await transaction.device.update({
         where: { id: device.id },

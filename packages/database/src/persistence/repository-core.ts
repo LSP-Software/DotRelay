@@ -51,7 +51,7 @@ export const requireActiveDevice = async (
   const device = await database.device.findFirst({
     where: { id: actorDeviceId, userId: actorUserId, lifecycle: "ACTIVE" },
   });
-  if (!device) throw new Error("actor device is not active");
+  if (!device) throw new DeviceNotActiveError("actor device is not active");
   return device;
 };
 
@@ -96,6 +96,48 @@ export class StagingQuotaExceededError extends Error {
   constructor() {
     super("staging quota exceeded");
     this.name = "StagingQuotaExceededError";
+  }
+}
+
+export class DeviceNotActiveError extends Error {
+  constructor(message = "Device is not active") {
+    super(message);
+    this.name = "DeviceNotActiveError";
+  }
+}
+
+export class MembershipNotActiveError extends Error {
+  constructor() {
+    super("Membership is not active");
+    this.name = "MembershipNotActiveError";
+  }
+}
+
+export class ProjectNotActiveError extends Error {
+  constructor() {
+    super("Project is not active");
+    this.name = "ProjectNotActiveError";
+  }
+}
+
+export class EnvironmentNotActiveError extends Error {
+  constructor() {
+    super("Environment is not active");
+    this.name = "EnvironmentNotActiveError";
+  }
+}
+
+export class TeamNotActiveError extends Error {
+  constructor() {
+    super("Team is not active");
+    this.name = "TeamNotActiveError";
+  }
+}
+
+export class AccountKeyWrapperNotActiveError extends Error {
+  constructor() {
+    super("account key wrapper is not active for this user");
+    this.name = "AccountKeyWrapperNotActiveError";
   }
 }
 

@@ -5,9 +5,12 @@ import {
 } from "./objects";
 import {
   DEFAULT_ENVIRONMENT_LABEL,
+  EnvironmentNotActiveError,
   managedRoleAction,
+  ProjectNotActiveError,
   requireActiveDevice,
   requireTeamAction,
+  TeamNotActiveError,
 } from "./repository-core";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 export type TeamCreationInput = Readonly<{
@@ -117,7 +120,7 @@ export class AdministrationRepository {
       });
       if (!lockedProject) throw new Error("Project not found");
       if (lockedProject.lifecycle !== "ACTIVE")
-        throw new Error("Project is not active");
+        throw new ProjectNotActiveError();
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -224,7 +227,7 @@ export class AdministrationRepository {
       });
       if (!lockedEnvironment) throw new Error("Environment not found");
       if (lockedEnvironment.lifecycle !== "ACTIVE")
-        throw new Error("Environment is not active");
+        throw new EnvironmentNotActiveError();
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -354,7 +357,7 @@ export class MembershipAdministrationRepository {
         where: { id: input.teamId },
         select: { lifecycle: true },
       });
-      if (team?.lifecycle !== "ACTIVE") throw new Error("Team is not active");
+      if (team?.lifecycle !== "ACTIVE") throw new TeamNotActiveError();
       if (input.providerSubject.length === 0)
         throw new Error("GitHub provider subject is required");
       const now = input.now ?? new Date();
