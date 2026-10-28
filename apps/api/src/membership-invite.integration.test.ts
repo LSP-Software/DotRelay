@@ -268,6 +268,17 @@ integrationDescribe(
         ),
       );
       expect(digestOne).toBe(Buffer.from(expectedOne).toString("base64"));
+
+      // Now that B exists, each key's replay still reports the invitation its
+      // own operation created, not the newest invitation the subject holds.
+      const replayOne = await inviteRequest(keyOne, providerSubject);
+      expect(replayOne.status).toBe(200);
+      const replayOneBody = (await replayOne.json()) as Record<string, unknown>;
+      expect(replayOneBody.invitationId).toBe(firstBody.invitationId);
+      const replayTwo = await inviteRequest(keyTwo, providerSubject);
+      expect(replayTwo.status).toBe(200);
+      const replayTwoBody = (await replayTwo.json()) as Record<string, unknown>;
+      expect(replayTwoBody.invitationId).toBe(secondBody.invitationId);
     }, 30_000);
   },
 );
