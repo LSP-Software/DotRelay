@@ -177,22 +177,25 @@ export const registerProtocolRoutes = (
   app.use("/api/v1/operations/*", rateLimit);
   app.use("/api/v1/environments/*", rateLimit);
   app.use("/api/v1/projects/*", rateLimit);
-  app.use(
-    "/api/v1/operations/*",
-    bodyLimit({
-      maxSize: Math.min(
-        profile.limits.protocolObjectBytes,
-        profile.limits.stagingBytes,
-      ),
-      onError: (context) => {
-        const body = createProblem("payload_too_large");
-        return context.json(body, 413, {
-          "Content-Type": "application/problem+json",
-          "Cache-Control": "no-store",
-        });
-      },
-    }),
-  );
+
+  // The staging byte ceiling applies only to the CBOR upload routes. The
+  // administrative routes under the same prefix (/finalize, /epoch-transitions)
+  // keep adminJsonLimit as their effective ceiling, so an operator can
+  // configure STAGING_BYTES below ADMIN_BODY_BYTES without 413-ing valid
+  // administrative bodies.
+  const protocolBodyLimit = bodyLimit({
+    maxSize: Math.min(
+      profile.limits.protocolObjectBytes,
+      profile.limits.stagingBytes,
+    ),
+    onError: (context) => {
+      const body = createProblem("payload_too_large");
+      return context.json(body, 413, {
+        "Content-Type": "application/problem+json",
+        "Cache-Control": "no-store",
+      });
+    },
+  });
 
   const adminJsonLimit = bodyLimit({
     maxSize: profile.limits.adminBodyBytes,
@@ -207,111 +210,121 @@ export const registerProtocolRoutes = (
 
   void DEVICE_ID_HEADER;
 
-  app.post("/api/v1/operations/:operationId/begin", async (context) => {
-    const actor = await requireProtocolActor(context, database, profile, auth);
-    if (actor instanceof Response) return actor;
-    let operationId: string;
-    try {
-      operationId = readPathUuid(context, "operationId");
-    } catch (error) {
-      const problem = respondContractError(error);
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const idempotencyKey = context.req.header("Idempotency-Key");
-    if (!idempotencyKey || idempotencyKey !== operationId) {
-      const problem = respondProblem("invalid_request");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    parseIdempotencyKey(operationId);
-    let kind: ReturnType<typeof parseOperationKind>;
-    try {
-      kind = parseOperationKind(
-        context.req.header("X-DotRelay-Operation-Kind") ?? undefined,
+  app.post(
+    "/api/v1/operations/:operationId/begin",
+    protocolBodyLimit,
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
       );
-    } catch (error) {
-      if (error instanceof ContractError) {
-        const problem = respondProblem(error.code);
+      if (actor instanceof Response) return actor;
+      let operationId: string;
+      try {
+        operationId = readPathUuid(context, "operationId");
+      } catch (error) {
+        const problem = respondContractError(error);
         return context.json(problem.body, problem.status, {
           "Cache-Control": "no-store",
           "Content-Type": "application/problem+json",
         });
       }
-      const problem = respondProblem("invalid_request");
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const commandBody = await readProtocolBody(
-      context.req.raw,
-      profile.limits.protocolObjectBytes,
-    );
-    if (commandBody instanceof Response) return commandBody;
-    try {
-      validateProtocolObject(parseProtocolObject(commandBody));
-    } catch (error) {
-      const code =
-        error instanceof ContractError ? error.code : "invalid_crypto_object";
-      const problem = respondProblem(code);
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-    const commandDigest = await digestRequestBody(commandBody);
-    const expiresAt = clampStagingExpiry(
-      context.req.header("X-DotRelay-Expires-At") ?? undefined,
-      profile.limits.stagingTtlSeconds,
-    );
-    const createdAt = new Date();
-    try {
-      const result = await operations.begin(database, {
-        id: operationId,
-        actorUserId: actor.userId,
-        actorDeviceId: actor.deviceId,
-        kind,
-        commandBytes: commandBody,
-        commandDigest,
-        expiresAt,
-      });
-      await staging.put(database, {
-        operationId,
-        objectId: COMMAND_STAGE_OBJECT_ID,
-        actorDeviceId: actor.deviceId,
-        canonicalBytes: commandBody,
-        digest: commandDigest,
-        createdAt,
-        expiresAt,
-        limits: profile.limits,
-      });
-      return context.json(
-        {
-          operationId,
-          status: result.operation.status,
-          idempotent: result.idempotent,
-          expiresAt: expiresAt.toISOString(),
-        },
-        200,
-        { "Cache-Control": "no-store" },
+      const idempotencyKey = context.req.header("Idempotency-Key");
+      if (!idempotencyKey || idempotencyKey !== operationId) {
+        const problem = respondProblem("invalid_request");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      parseIdempotencyKey(operationId);
+      let kind: ReturnType<typeof parseOperationKind>;
+      try {
+        kind = parseOperationKind(
+          context.req.header("X-DotRelay-Operation-Kind") ?? undefined,
+        );
+      } catch (error) {
+        if (error instanceof ContractError) {
+          const problem = respondProblem(error.code);
+          return context.json(problem.body, problem.status, {
+            "Cache-Control": "no-store",
+            "Content-Type": "application/problem+json",
+          });
+        }
+        const problem = respondProblem("invalid_request");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const commandBody = await readProtocolBody(
+        context.req.raw,
+        profile.limits.protocolObjectBytes,
       );
-    } catch (error) {
-      const mapped = await handlePersistenceFailure(database, error);
-      const problem = respondProblem(mapped.code, mapped);
-      return context.json(problem.body, problem.status, {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/problem+json",
-      });
-    }
-  });
+      if (commandBody instanceof Response) return commandBody;
+      try {
+        validateProtocolObject(parseProtocolObject(commandBody));
+      } catch (error) {
+        const code =
+          error instanceof ContractError ? error.code : "invalid_crypto_object";
+        const problem = respondProblem(code);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      const commandDigest = await digestRequestBody(commandBody);
+      const expiresAt = clampStagingExpiry(
+        context.req.header("X-DotRelay-Expires-At") ?? undefined,
+        profile.limits.stagingTtlSeconds,
+      );
+      const createdAt = new Date();
+      try {
+        const result = await operations.begin(database, {
+          id: operationId,
+          actorUserId: actor.userId,
+          actorDeviceId: actor.deviceId,
+          kind,
+          commandBytes: commandBody,
+          commandDigest,
+          expiresAt,
+        });
+        await staging.put(database, {
+          operationId,
+          objectId: COMMAND_STAGE_OBJECT_ID,
+          actorDeviceId: actor.deviceId,
+          canonicalBytes: commandBody,
+          digest: commandDigest,
+          createdAt,
+          expiresAt,
+          limits: profile.limits,
+        });
+        return context.json(
+          {
+            operationId,
+            status: result.operation.status,
+            idempotent: result.idempotent,
+            expiresAt: expiresAt.toISOString(),
+          },
+          200,
+          { "Cache-Control": "no-store" },
+        );
+      } catch (error) {
+        const mapped = await handlePersistenceFailure(database, error);
+        const problem = respondProblem(mapped.code, mapped);
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+    },
+  );
 
   app.put(
     "/api/v1/operations/:operationId/staging/:objectId",
+    protocolBodyLimit,
     async (context) => {
       const actor = await requireProtocolActor(
         context,

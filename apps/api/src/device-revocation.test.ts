@@ -2,15 +2,49 @@ import { expect, test } from "bun:test";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
-const fixture = () => {
+const toBase64 = (bytes: Uint8Array) => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const signCommand = async (
+  key: CryptoKey,
+  targetId: string,
+  operationId: string,
+): Promise<string> =>
+  toBase64(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        "Ed25519",
+        key,
+        new TextEncoder().encode(
+          JSON.stringify({
+            action: "device.revoke",
+            deviceId: targetId,
+            operationId,
+          }),
+        ),
+      ),
+    ),
+  );
+
+const fixture = async () => {
   const profile = loadServerProfileConfig({});
   const actor = crypto.randomUUID();
   const actorDevice = crypto.randomUUID();
   const target = {
     id: crypto.randomUUID(),
     userId: actor,
-    lifecycle: "ACTIVE",
+    lifecycle: "ACTIVE" as "ACTIVE" | "REVOKED",
   };
+  const keyPair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+    "sign",
+    "verify",
+  ])) as unknown as CryptoKeyPair;
+  const actorDeviceKey = new Uint8Array(
+    await crypto.subtle.exportKey("raw", keyPair.publicKey),
+  );
   const sessions = new Set(["current-token", "copied-token"]);
   const operations = new Map<string, Record<string, unknown>>();
   const deletedUsers: string[] = [];
@@ -39,6 +73,7 @@ const fixture = () => {
         id: actorDevice,
         userId: actor,
         lifecycle: "ACTIVE",
+        ed25519PublicKey: actorDeviceKey,
       }),
       findUnique: async () => ({ ...target }),
       update: async () => {
@@ -48,8 +83,11 @@ const fixture = () => {
     },
     operation: {
       createMany: async ({ data }: { data: Record<string, unknown>[] }) => {
+        // Mirrors skipDuplicates: replayed operation ids keep their
+        // committed outcome.
         for (const entry of data)
-          operations.set(String(entry.id), { ...entry, status: "STAGED" });
+          if (!operations.has(String(entry.id)))
+            operations.set(String(entry.id), { ...entry, status: "STAGED" });
       },
       findUnique: async ({ where }: { where: { id: string } }) =>
         operations.get(where.id) ?? null,
@@ -83,20 +121,37 @@ const fixture = () => {
       },
     } as never,
   });
-  const revoke = () =>
-    app.request(`${profile.origin}/api/v1/devices/${target.id}/revoke`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer current-token",
-        "X-DotRelay-Device-Id": actorDevice,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
-    });
-  return { profile, app, target, sessions, operations, deletedUsers, revoke };
+  const revoke = (
+    operationId = crypto.randomUUID(),
+    signingKey: CryptoKey = keyPair.privateKey,
+    token = "current-token",
+  ) =>
+    signCommand(signingKey, target.id, operationId).then((signature) =>
+      app.request(`${profile.origin}/api/v1/devices/${target.id}/revoke`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-DotRelay-Device-Id": actorDevice,
+          "Idempotency-Key": operationId,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ signature }),
+      }),
+    );
+  return {
+    profile,
+    app,
+    target,
+    sessions,
+    operations,
+    deletedUsers,
+    keyPair,
+    revoke,
+  };
 };
 
 test("revocation invalidates copied sessions before they can bootstrap replacements", async () => {
-  const setup = fixture();
+  const setup = await fixture();
   expect((await setup.revoke()).status).toBe(200);
   expect(setup.target.lifecycle).toBe("REVOKED");
   expect(setup.deletedUsers).toEqual(["auth-user"]);
@@ -112,11 +167,52 @@ test("revocation invalidates copied sessions before they can bootstrap replaceme
 });
 
 test("a User cannot revoke another User's Device or sessions", async () => {
-  const setup = fixture();
+  const setup = await fixture();
   setup.target.userId = crypto.randomUUID();
   expect((await setup.revoke()).status).toBe(404);
   expect(setup.target.lifecycle).toBe("ACTIVE");
   expect(setup.sessions.size).toBe(2);
   expect(setup.deletedUsers).toHaveLength(0);
   expect(setup.operations.size).toBe(0);
+});
+
+test("a copied session cannot revoke without the actor Device's signing key", async () => {
+  const setup = await fixture();
+  const impostor = (await crypto.subtle.generateKey(
+    { name: "Ed25519" },
+    false,
+    ["sign"],
+  )) as unknown as CryptoKeyPair;
+  expect(
+    (await setup.revoke(crypto.randomUUID(), impostor.privateKey)).status,
+  ).toBe(400);
+  expect(setup.target.lifecycle).toBe("ACTIVE");
+  expect(setup.sessions.size).toBe(2);
+  expect(setup.deletedUsers).toHaveLength(0);
+  expect(setup.operations.size).toBe(0);
+});
+
+test("replaying the original operation id does not sign the User out again", async () => {
+  const setup = await fixture();
+  const operationId = crypto.randomUUID();
+  expect((await setup.revoke(operationId)).status).toBe(200);
+  // The User signs back in on a trusted Device.
+  setup.sessions.add("trusted-token");
+  expect(
+    (await setup.revoke(operationId, undefined, "trusted-token")).status,
+  ).toBe(200);
+  expect(setup.target.lifecycle).toBe("REVOKED");
+  expect(setup.sessions.size).toBe(1);
+  expect(setup.deletedUsers).toEqual(["auth-user"]);
+});
+
+test("a retry under a new operation id is refused once the Device is revoked", async () => {
+  const setup = await fixture();
+  expect((await setup.revoke()).status).toBe(200);
+  setup.sessions.add("trusted-token");
+  expect(
+    (await setup.revoke(undefined, undefined, "trusted-token")).status,
+  ).toBe(403);
+  expect(setup.target.lifecycle).toBe("REVOKED");
+  expect(setup.sessions.size).toBe(1);
 });

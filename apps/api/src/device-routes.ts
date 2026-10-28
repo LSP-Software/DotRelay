@@ -371,9 +371,36 @@ export const registerDeviceRoutes = (
       const operationId = parseIdempotencyKey(
         context.req.header("Idempotency-Key"),
       );
+      // Proof of possession: the actor Device signs the exact command this
+      // operation records. A copied session alone cannot claim a Device whose
+      // signing key it does not hold, so it cannot revoke Devices and sign
+      // the User out of every session.
+      const body = await readBody(context);
+      const signature = new Uint8Array(decodeBase64(body.signature));
+      if (signature.length !== 64) throw new ContractError("invalid_request");
       const bytes = new TextEncoder().encode(
-        JSON.stringify({ action: "device.revoke", deviceId }),
+        JSON.stringify({ action: "device.revoke", deviceId, operationId }),
       );
+      const actorDevice = await database.device.findFirst({
+        where: {
+          id: actor.deviceId,
+          userId: actor.userId,
+          lifecycle: "ACTIVE",
+        },
+        select: { ed25519PublicKey: true },
+      });
+      if (!actorDevice) return problem(context, "device_not_active");
+      const verifyingKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(actorDevice.ed25519PublicKey).buffer,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      if (
+        !(await crypto.subtle.verify("Ed25519", verifyingKey, signature, bytes))
+      )
+        return problem(context, "invalid_crypto_object");
       await devices.revoke(database, {
         deviceId,
         operation: {

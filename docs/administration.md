@@ -44,6 +44,26 @@ preserving the initial activation record. User-defined Value keys are never shar
 See [alpha release operations](alpha-release.md) for admission, bounded request sizes, and Device
 revocation procedures.
 
+### Provisioning key trust
+
+A new Device is enrolled only through trusted Devices: one trusted Device signs the enrollment
+transcript, a second, different trusted Device approves it, and the Server Profile verifies both
+signatures against its stored trusted-Device keys before it persists the new Device's self-signed
+certificate and X25519/Ed25519 keys. Revocation, re-approval, and every later protocol boundary
+reuse those persisted keys.
+
+**Share project keys** relies on that server-verified binding. The provisioning plan reports each
+recipient Device's X25519 public key as persisted for that Device, and the owner's browser seals
+each Project key to the reported key. The browser therefore trusts the Server Profile as the
+authority for Device key binding — the same trust it places in the persisted Device keys the
+service discloses elsewhere (Device lists, peer Devices, the workspace signing trust set). At
+commit time the service re-derives the plan from persisted state inside the same transaction and
+rejects the activation unless every sealed grant names one of the recipient Device's persisted
+X25519 keys, so a plan and its grants cannot be mixed across Devices or Profiles. A Server Profile
+that lies about a Device's key could steer a sealed Project key to another key it controls;
+enrollment and every subsequent Device-bound operation are the trust anchors that prevent that,
+and provisioning adds no new trust subject.
+
 ## Project and GitHub Repository identity
 
 A Project belongs permanently to one Team and identifies one GitHub Repository by GitHub's stable

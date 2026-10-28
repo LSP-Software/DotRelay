@@ -433,6 +433,11 @@ export class DeviceRepository {
         input.operation,
       );
       if (operation.idempotent) return operation;
+      // A retry under a new Idempotency-Key must not sign the User out again
+      // for a Device that is already gone; replaying the original operation
+      // id above still returns the recorded outcome.
+      if (device.lifecycle === "REVOKED")
+        throw new Error("Device is not active");
       const now = input.now ?? new Date();
       const revoked = await transaction.device.update({
         where: { id: device.id },

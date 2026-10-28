@@ -6,7 +6,15 @@ export const publicationTag = (version: string): string => {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
     throw new Error("The CLI package version is invalid");
   const prerelease = version.split("-")[1];
-  return prerelease ? (prerelease.split(".")[0] ?? "next") : "latest";
+  const tag = prerelease ? (prerelease.split(".")[0] ?? "next") : "latest";
+  // A prerelease must never replace the stable npm selector, whether its
+  // first identifier is literally "latest" (v1.2.3-latest.1) or the version
+  // is an empty-prerelease edge case (1.2.3--x).
+  if (version.includes("-") && tag === "latest")
+    throw new Error(
+      "Prerelease versions cannot publish to the latest npm tag; use an identifier such as alpha, beta, rc, or dev",
+    );
+  return tag;
 };
 
 const publish = async () => {

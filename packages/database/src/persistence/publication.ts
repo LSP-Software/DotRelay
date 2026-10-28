@@ -576,6 +576,12 @@ export class EnvironmentRepository {
     )
       throw new Error("Environment genesis context does not match its actor");
     return inShortTransaction(database, async (transaction) => {
+      // Lock the Project row before the Environment insert: the foreign key
+      // on environments.projectId would otherwise take a key-share lock on
+      // the Project row that deadlocks against the FOR UPDATE taken later
+      // inside publishRevisionInTransaction when two genesis creations run
+      // concurrently in the same Project.
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
       const project = await transaction.project.findUnique({
         where: { id: input.projectId },
         select: { lifecycle: true, teamId: true },

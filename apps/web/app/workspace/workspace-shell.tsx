@@ -1283,6 +1283,20 @@ export const WorkspaceShell = ({
     setRevokingDevice(deviceId);
     setRevokeDeviceError(null);
     try {
+      const operationId = crypto.randomUUID();
+      // The actor Device signs the exact command the service records, so a
+      // copied session alone cannot claim a Device whose key it does not
+      // hold.
+      const command = new TextEncoder().encode(
+        JSON.stringify({ action: "device.revoke", deviceId, operationId }),
+      );
+      const signingKey = await loadDeviceSigningKey(displayBoundary);
+      if (!signingKey) throw new Error("device signing key unavailable");
+      const signature = new Uint8Array(
+        await crypto.subtle.sign("Ed25519", signingKey, command),
+      );
+      let binary = "";
+      for (const byte of signature) binary += String.fromCharCode(byte);
       const response = await fetch(
         `${apiOrigin}/api/v1/devices/${deviceId}/revoke`,
         {
@@ -1290,8 +1304,10 @@ export const WorkspaceShell = ({
           credentials: "include",
           headers: {
             "X-DotRelay-Device-Id": browserDeviceId,
-            "Idempotency-Key": crypto.randomUUID(),
+            "Idempotency-Key": operationId,
+            "Content-Type": "application/json",
           },
+          body: JSON.stringify({ signature: btoa(binary) }),
         },
       );
       if (!response.ok) throw new Error();
@@ -3300,17 +3316,13 @@ export const WorkspaceShell = ({
                                               )
                                             }
                                           >
-                                            {memberMutation?.membershipId ===
-                                            member.membershipId
+                                            {memberMutation?.kind ===
+                                              "provision" &&
+                                            memberMutation.membershipId ===
+                                              member.membershipId
                                               ? "Sharing keys…"
                                               : "Share project keys"}
                                           </Button>
-                                          {memberMutationError?.membershipId ===
-                                          member.membershipId ? (
-                                            <p className="text-xs text-destructive">
-                                              {memberMutationError.message}
-                                            </p>
-                                          ) : null}
                                         </div>
                                       ) : null}
                                       {member.lifecycle === "ACTIVE" &&
@@ -3363,13 +3375,13 @@ export const WorkspaceShell = ({
                                               Remove member
                                             </Button>
                                           </div>
-                                          {memberMutationError?.membershipId ===
-                                          member.membershipId ? (
-                                            <p className="text-xs text-destructive">
-                                              {memberMutationError.message}
-                                            </p>
-                                          ) : null}
                                         </div>
+                                      ) : null}
+                                      {memberMutationError?.membershipId ===
+                                      member.membershipId ? (
+                                        <p className="text-xs text-destructive">
+                                          {memberMutationError.message}
+                                        </p>
                                       ) : null}
                                     </TableCell>
                                   ) : null}

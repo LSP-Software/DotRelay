@@ -40,10 +40,16 @@ Sign in again on trusted Devices and unlock with the existing recovery method. A
 recovery-code reset is not required on trusted installations. Previously downloaded secrets cannot
 be erased remotely; replace affected external credentials after a compromise.
 
-The equivalent API is `POST /api/v1/devices/:deviceId/revoke` with an active actor Device and a UUID
-`Idempotency-Key`. The actor can revoke only its own User's Devices. CLI `logout` still removes the
-local session; use Device revocation to invalidate copied sessions. A revoked Device's key material
-and signed history are retained for verification, while subsequent protected API access is refused.
+The equivalent API is `POST /api/v1/devices/:deviceId/revoke` with an active actor Device, a UUID
+`Idempotency-Key`, and a JSON body carrying the actor Device's Ed25519 signature over
+`{"action":"device.revoke","deviceId":<target>,"operationId":<key>}`. The signature proves the
+caller holds the actor Device's key, not only a copied session, so a stolen session cannot revoke
+Devices and sign the User out of every other session. The actor can revoke only its own User's
+Devices. CLI `logout` still removes the local session; use Device revocation to invalidate copied
+sessions. A revoked Device's key material and signed history are retained for verification, while
+subsequent protected API access is refused. Replaying the original `Idempotency-Key` returns the
+recorded result without signing the User out again; a new key against an already revoked Device is
+refused.
 
 ## Upload limits
 
@@ -62,7 +68,8 @@ settings; source changes cannot grant npm permissions. Never put the token in th
 Both workflows run `scripts/publish-cli.ts`, which validates the token with npm before publishing
 and removes its temporary npm configuration afterward. Stable versions use `latest`; prereleases
 use their first prerelease identifier (`alpha`, `beta`, `rc`, or `dev`). An alpha therefore does not
-replace the stable channel. Before announcing, verify the GitHub publish job succeeds and test
+replace the stable channel. The `latest` identifier is reserved for stable releases: a tag such as
+`v1.2.3-latest.1` is rejected at publication time instead of moving the stable npm selector. Before announcing, verify the GitHub publish job succeeds and test
 `npx dotrelay@alpha --version` in a clean environment. This change does not publish a package or
 create a production release tag.
 
