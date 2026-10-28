@@ -709,6 +709,139 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     expect(adminMembership.role).toBe("ADMIN");
   });
 
+  test("revives a removed membership on re-acceptance and rejects an existing member", async () => {
+    const {
+      device,
+      serverProfile,
+      user: owner,
+    } = await createAuthorizedDeviceFixture();
+    const teamId = crypto.randomUUID();
+    const administration = new AdministrationRepository();
+    const memberships = new MembershipAdministrationRepository();
+    await administration.createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: owner.id,
+      name: "rejoin-policy",
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const invitee = await createUserAndDevice(serverProfile.id);
+    const invitedAt = new Date("2026-08-28T12:00:00.000Z");
+    const invitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in invitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const accepted = await memberships.accept(database, {
+      invitationId: invitation.invitation.id,
+      userId: invitee.user.id,
+      operation: {
+        ...(await createOperationInput(
+          invitee.user.id,
+          "rejoin-acceptance",
+          "INVITATION",
+        )),
+        actorDeviceId: invitee.device.id,
+      },
+      now: invitedAt,
+    });
+    if (!("membership" in accepted))
+      throw new Error("invitation acceptance was unexpectedly idempotent");
+    expect(accepted.membership).toMatchObject({
+      lifecycle: "PENDING_KEY_GRANT",
+      role: "MEMBER",
+    });
+    await database.membership.update({
+      where: { id: accepted.membership.id },
+      data: { lifecycle: "ACTIVE", activatedAt: invitedAt },
+    });
+    const activeInvitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-active-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in activeInvitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    await expect(
+      memberships.accept(database, {
+        invitationId: activeInvitation.invitation.id,
+        userId: invitee.user.id,
+        operation: await createOperationInput(
+          invitee.user.id,
+          "rejoin-active-acceptance",
+          "INVITATION",
+        ),
+        now: invitedAt,
+      }),
+    ).rejects.toThrow("already a member");
+
+    const removed = await memberships.remove(database, {
+      teamId,
+      membershipId: accepted.membership.id,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-removal")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("membership" in removed))
+      throw new Error("membership removal was unexpectedly idempotent");
+    const rejoinedAt = new Date("2026-09-01T12:00:00.000Z");
+    const reinvitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: rejoinedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-second-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in reinvitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const rejoined = await memberships.accept(database, {
+      invitationId: reinvitation.invitation.id,
+      userId: invitee.user.id,
+      operation: {
+        ...(await createOperationInput(
+          invitee.user.id,
+          "rejoin-second-acceptance",
+          "INVITATION",
+        )),
+        actorDeviceId: invitee.device.id,
+      },
+      now: rejoinedAt,
+    });
+    if (!("membership" in rejoined))
+      throw new Error("rejoined acceptance was unexpectedly idempotent");
+    expect(rejoined.membership).toMatchObject({
+      id: accepted.membership.id,
+      teamId,
+      userId: invitee.user.id,
+      lifecycle: "PENDING_KEY_GRANT",
+      role: "MEMBER",
+      invitationId: reinvitation.invitation.id,
+      activatedAt: null,
+      removedAt: null,
+    });
+    expect(
+      await database.membership.count({
+        where: { teamId, userId: invitee.user.id },
+      }),
+    ).toBe(1);
+  });
+
   test("preserves Project identity and safely discloses Environment metadata and lanes", async () => {
     const {
       device,

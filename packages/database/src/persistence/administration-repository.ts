@@ -426,15 +426,33 @@ export class MembershipAdministrationRepository {
           "Membership invitation belongs to another Server Profile",
         );
       const now = input.now ?? new Date();
-      const membership = await transaction.membership.create({
-        data: {
-          id: crypto.randomUUID(),
-          teamId: invitation.teamId,
-          userId: user.id,
-          invitationId: invitation.id,
-          createdAt: now,
+      const priorMembership = await transaction.membership.findUnique({
+        where: {
+          teamId_userId: { teamId: invitation.teamId, userId: user.id },
         },
       });
+      if (priorMembership && priorMembership.lifecycle !== "REMOVED")
+        throw new Error("User is already a member of the Team");
+      const membership = priorMembership
+        ? await transaction.membership.update({
+            where: { id: priorMembership.id },
+            data: {
+              lifecycle: "PENDING_KEY_GRANT",
+              role: "MEMBER",
+              invitationId: invitation.id,
+              activatedAt: null,
+              removedAt: null,
+            },
+          })
+        : await transaction.membership.create({
+            data: {
+              id: crypto.randomUUID(),
+              teamId: invitation.teamId,
+              userId: user.id,
+              invitationId: invitation.id,
+              createdAt: now,
+            },
+          });
       await transaction.membershipInvitation.update({
         where: { id: invitation.id },
         data: { acceptedByUserId: user.id, acceptedAt: now },
@@ -452,6 +470,9 @@ export class MembershipAdministrationRepository {
           : {}),
         entityKind: "MEMBERSHIP",
         entityId: membership.id,
+        ...(priorMembership
+          ? { priorLifecycle: priorMembership.lifecycle }
+          : {}),
         newLifecycle: "PENDING_KEY_GRANT",
       });
       return { operation: operation.operation, membership };
