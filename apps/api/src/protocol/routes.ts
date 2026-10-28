@@ -18,6 +18,7 @@ import {
 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
+  beginOperationWithCommand,
   mutationToWire,
   OperationRepository,
   ProjectEpochRepository,
@@ -282,25 +283,34 @@ export const registerProtocolRoutes = (
       );
       const createdAt = new Date();
       try {
-        const result = await operations.begin(database, {
-          id: operationId,
-          actorUserId: actor.userId,
-          actorDeviceId: actor.deviceId,
-          kind,
-          commandBytes: commandBody,
-          commandDigest,
-          expiresAt,
-        });
-        await staging.put(database, {
-          operationId,
-          objectId: COMMAND_STAGE_OBJECT_ID,
-          actorDeviceId: actor.deviceId,
-          canonicalBytes: commandBody,
-          digest: commandDigest,
-          createdAt,
-          expiresAt,
-          limits: profile.limits,
-        });
+        // One transaction for the operation row and its staged command
+        // object: a request that fails after the operation exists (such as a
+        // full staging quota) must not leave an operation that consumed its
+        // id and command digest.
+        const result = await beginOperationWithCommand(
+          database,
+          operations,
+          staging,
+          {
+            id: operationId,
+            actorUserId: actor.userId,
+            actorDeviceId: actor.deviceId,
+            kind,
+            commandBytes: commandBody,
+            commandDigest,
+            expiresAt,
+          },
+          {
+            operationId,
+            objectId: COMMAND_STAGE_OBJECT_ID,
+            actorDeviceId: actor.deviceId,
+            canonicalBytes: commandBody,
+            digest: commandDigest,
+            createdAt,
+            expiresAt,
+            limits: profile.limits,
+          },
+        );
         return context.json(
           {
             operationId,

@@ -40,16 +40,24 @@ Sign in again on trusted Devices and unlock with the existing recovery method. A
 recovery-code reset is not required on trusted installations. Previously downloaded secrets cannot
 be erased remotely; replace affected external credentials after a compromise.
 
-The equivalent API is `POST /api/v1/devices/:deviceId/revoke` with an active actor Device, a UUID
-`Idempotency-Key`, and a JSON body carrying the actor Device's Ed25519 signature over
-`{"action":"device.revoke","deviceId":<target>,"operationId":<key>}`. The signature proves the
-caller holds the actor Device's key, not only a copied session, so a stolen session cannot revoke
-Devices and sign the User out of every other session. The actor can revoke only its own User's
-Devices. CLI `logout` still removes the local session; use Device revocation to invalidate copied
-sessions. A revoked Device's key material and signed history are retained for verification, while
-subsequent protected API access is refused. Replaying the original `Idempotency-Key` returns the
-recorded result without signing the User out again; a new key against an already revoked Device is
-refused.
+The equivalent API is `POST /api/v1/devices/:deviceId/revoke` with an active actor Device and a
+UUID `Idempotency-Key`, plus a JSON body `{"signature": "<base64>"}`. The value is the base64
+encoding of the actor Device's 64-byte Ed25519 signature over the UTF-8 bytes of the compact JSON
+`{"action":"device.revoke","deviceId":<target>,"operationId":<key>}` — exactly those three
+properties, in that order, with no whitespace; the `deviceId` is the target's id and
+`operationId` is the `Idempotency-Key` of the same request. A different byte sequence or encoding
+fails verification. The signature proves the caller holds the actor Device's key, not only a
+copied session, so a stolen session cannot revoke Devices and sign the User out of every other
+session. The actor can revoke only its own User's Devices. CLI `logout` still removes the local
+session; use Device revocation to invalidate copied sessions. A revoked Device's key material and
+signed history are retained for verification, while subsequent protected API access is refused.
+
+Replaying the original `Idempotency-Key` returns the recorded result without signing the User out
+again. Because revocation deletes the User's sessions, a replay needs a new session and the
+original actor Device: the recorded actor Device must still be `ACTIVE`, and a different Device
+cannot replay the operation — including after the actor revoked itself, so check the actor's
+status in the Devices list after a self-revocation before relying on a replay. A new key against
+an already revoked Device is refused.
 
 ## Upload limits
 

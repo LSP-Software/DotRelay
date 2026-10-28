@@ -46,23 +46,29 @@ revocation procedures.
 
 ### Provisioning key trust
 
-A new Device is enrolled only through trusted Devices: one trusted Device signs the enrollment
-transcript, a second, different trusted Device approves it, and the Server Profile verifies both
-signatures against its stored trusted-Device keys before it persists the new Device's self-signed
-certificate and X25519/Ed25519 keys. Revocation, re-approval, and every later protocol boundary
-reuse those persisted keys.
+A Device that is not created by initial trust bootstrap joins through dual-control enrollment:
+one trusted Device signs the enrollment transcript, a second, different trusted Device approves
+it, and the Server Profile verifies both signatures against its stored trusted-Device keys before
+it persists the new Device's self-signed certificate and X25519/Ed25519 keys. Initial trust
+bootstrap is a separate, documented path: it requires only an authenticated session and creates
+the Device as `ACTIVE` without a dual-control record, because a User's first Device has no trusted
+Device that could sign its enrollment (see
+[initial trust bootstrap](wiki/trust.md#initial-trust-bootstrap) and
+[ADR 0010](adr/0010-session-bootstrapped-devices-are-fully-active.md)). Revocation, re-approval,
+and every later protocol boundary reuse those persisted keys.
 
-**Share project keys** relies on that server-verified binding. The provisioning plan reports each
-recipient Device's X25519 public key as persisted for that Device, and the owner's browser seals
-each Project key to the reported key. The browser therefore trusts the Server Profile as the
-authority for Device key binding — the same trust it places in the persisted Device keys the
-service discloses elsewhere (Device lists, peer Devices, the workspace signing trust set). At
-commit time the service re-derives the plan from persisted state inside the same transaction and
-rejects the activation unless every sealed grant names one of the recipient Device's persisted
-X25519 keys, so a plan and its grants cannot be mixed across Devices or Profiles. A Server Profile
-that lies about a Device's key could steer a sealed Project key to another key it controls;
-enrollment and every subsequent Device-bound operation are the trust anchors that prevent that,
-and provisioning adds no new trust subject.
+**Share project keys** relies on the key binding the Server Profile has established for each
+Device. The provisioning plan reports each recipient Device's X25519 public key as persisted for
+that Device, and the owner's browser seals each Project key to the reported key. The browser
+therefore trusts the Server Profile as the authority for Device key binding — the same trust it
+places in the persisted Device keys the service discloses elsewhere (Device lists, peer Devices,
+the workspace signing trust set). At commit time the service re-derives the plan from persisted
+state inside the same transaction and rejects the activation unless every sealed grant names one
+of the recipient Device's persisted X25519 keys, so a plan and its grants cannot be mixed across
+Devices or Profiles. That re-derivation checks consistency within the service's own state: a
+dishonest Server Profile that controls the stored keys could still steer a sealed Project key to
+a key it controls. Enrollment or initial trust bootstrap is the trust anchor that makes a stored
+key meaningful, and provisioning adds no trust subject beyond the Server Profile itself.
 
 ## Project and GitHub Repository identity
 

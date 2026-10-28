@@ -118,6 +118,9 @@ jobs:
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
       - name: stamp CLI version from the release tag
+        # bash so the Windows matrix job expands $RELEASE_TAG like the
+        # POSIX runners (PowerShell would read it as an unset variable).
+        shell: bash
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun run package:cli:version -- "$RELEASE_TAG"
@@ -149,6 +152,9 @@ jobs:
           path: release-binaries
           merge-multiple: false
       - name: stamp CLI version from the release tag
+        # bash so the Windows matrix job expands $RELEASE_TAG like the
+        # POSIX runners (PowerShell would read it as an unset variable).
+        shell: bash
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun run package:cli:version -- "$RELEASE_TAG"

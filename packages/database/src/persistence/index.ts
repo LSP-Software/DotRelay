@@ -36,6 +36,7 @@ export type {
 } from "./objects";
 export {
   AuditFactRepository,
+  beginOperationWithCommand,
   OperationRepository,
   ProtocolObjectRepository,
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,

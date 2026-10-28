@@ -82,94 +82,108 @@ export class StagedObjectRepository {
       canonicalBytes,
       input.digest,
     );
-    return inPersistenceTransaction(database, async (transaction) => {
-      const operation = await transaction.operation.findUnique({
-        where: { id: input.operationId },
-      });
-      if (!operation || operation.actorDeviceId !== input.actorDeviceId)
-        throw new OperationNotFoundError();
-      // Serialize quotas across all Devices and pending operations of one User.
-      await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${operation.actorUserId} FOR UPDATE`;
-      await transaction.$executeRaw`SELECT "id" FROM "operations" WHERE "id" = ${input.operationId} FOR UPDATE`;
-      const currentOperation = await transaction.operation.findUnique({
-        where: { id: input.operationId },
-      });
-      if (!currentOperation) throw new OperationNotFoundError();
-      const existing = await transaction.stagedObject.findUnique({
-        where: {
-          operationId_objectId: {
-            operationId: input.operationId,
-            objectId: input.objectId,
-          },
+    return inPersistenceTransaction(database, (transaction) =>
+      this.putInTransaction(
+        transaction,
+        input,
+        canonicalBytes,
+        requestedDigest,
+      ),
+    );
+  }
+
+  async putInTransaction(
+    transaction: PersistenceClient,
+    input: StageObjectInput,
+    canonicalBytes: Uint8Array,
+    requestedDigest: Uint8Array,
+  ) {
+    const operation = await transaction.operation.findUnique({
+      where: { id: input.operationId },
+    });
+    if (!operation || operation.actorDeviceId !== input.actorDeviceId)
+      throw new OperationNotFoundError();
+    // Serialize quotas across all Devices and pending operations of one User.
+    await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${operation.actorUserId} FOR UPDATE`;
+    await transaction.$executeRaw`SELECT "id" FROM "operations" WHERE "id" = ${input.operationId} FOR UPDATE`;
+    const currentOperation = await transaction.operation.findUnique({
+      where: { id: input.operationId },
+    });
+    if (!currentOperation) throw new OperationNotFoundError();
+    const existing = await transaction.stagedObject.findUnique({
+      where: {
+        operationId_objectId: {
+          operationId: input.operationId,
+          objectId: input.objectId,
         },
-      });
-      if (existing) {
-        if (
-          existing.actorDeviceId !== input.actorDeviceId ||
-          !sameBytes(existing.digest, requestedDigest) ||
-          !sameBytes(existing.canonicalBytes, canonicalBytes)
-        )
-          throw new StagedObjectConflictError();
-        return existing;
-      }
+      },
+    });
+    if (existing) {
       if (
-        currentOperation.status !== "STAGED" ||
-        (currentOperation.expiresAt &&
-          currentOperation.expiresAt <= input.createdAt)
+        existing.actorDeviceId !== input.actorDeviceId ||
+        !sameBytes(existing.digest, requestedDigest) ||
+        !sameBytes(existing.canonicalBytes, canonicalBytes)
       )
-        throw new OperationNotCancellableError();
-      const [usage] = await transaction.$queryRaw<
-        Array<{ count: bigint; bytes: bigint }>
-      >`
+        throw new StagedObjectConflictError();
+      return existing;
+    }
+    if (
+      currentOperation.status !== "STAGED" ||
+      (currentOperation.expiresAt &&
+        currentOperation.expiresAt <= input.createdAt)
+    )
+      throw new OperationNotCancellableError();
+    const [usage] = await transaction.$queryRaw<
+      Array<{ count: bigint; bytes: bigint }>
+    >`
         SELECT COUNT(*) AS "count", COALESCE(SUM(octet_length(s."canonicalBytes")), 0) AS "bytes"
         FROM "staged_objects" s JOIN "devices" d ON d."id" = s."actorDeviceId"
         WHERE d."userId" = ${operation.actorUserId}
           AND s."committedAt" IS NULL AND s."expiresAt" > ${input.createdAt}`;
-      const maxObjects = Math.min(
-        input.limits?.stagingObjects ?? PERSISTENCE_LIMITS.maxStagingObjects,
-        PERSISTENCE_LIMITS.maxStagingObjects,
-      );
-      const maxBytes = Math.min(
-        input.limits?.stagingBytes ?? PERSISTENCE_LIMITS.maxStagingBytes,
-        PERSISTENCE_LIMITS.maxStagingBytes,
-      );
-      if (
-        !usage ||
-        usage.count >= BigInt(maxObjects) ||
-        usage.bytes + BigInt(canonicalBytes.length) > BigInt(maxBytes)
-      )
-        throw new StagingQuotaExceededError();
-      await transaction.stagedObject.createMany({
-        data: [
-          {
-            operationId: input.operationId,
-            objectId: input.objectId,
-            actorDeviceId: input.actorDeviceId,
-            canonicalBytes: databaseBytes(canonicalBytes),
-            digest: databaseBytes(requestedDigest),
-            createdAt: input.createdAt,
-            expiresAt: input.expiresAt,
-          },
-        ],
-        skipDuplicates: true,
-      });
-      const staged = await transaction.stagedObject.findUnique({
-        where: {
-          operationId_objectId: {
-            operationId: input.operationId,
-            objectId: input.objectId,
-          },
+    const maxObjects = Math.min(
+      input.limits?.stagingObjects ?? PERSISTENCE_LIMITS.maxStagingObjects,
+      PERSISTENCE_LIMITS.maxStagingObjects,
+    );
+    const maxBytes = Math.min(
+      input.limits?.stagingBytes ?? PERSISTENCE_LIMITS.maxStagingBytes,
+      PERSISTENCE_LIMITS.maxStagingBytes,
+    );
+    if (
+      !usage ||
+      usage.count >= BigInt(maxObjects) ||
+      usage.bytes + BigInt(canonicalBytes.length) > BigInt(maxBytes)
+    )
+      throw new StagingQuotaExceededError();
+    await transaction.stagedObject.createMany({
+      data: [
+        {
+          operationId: input.operationId,
+          objectId: input.objectId,
+          actorDeviceId: input.actorDeviceId,
+          canonicalBytes: databaseBytes(canonicalBytes),
+          digest: databaseBytes(requestedDigest),
+          createdAt: input.createdAt,
+          expiresAt: input.expiresAt,
         },
-      });
-      if (
-        !staged ||
-        staged.actorDeviceId !== input.actorDeviceId ||
-        !sameBytes(staged.digest, requestedDigest) ||
-        !sameBytes(staged.canonicalBytes, canonicalBytes)
-      )
-        throw new StagedObjectConflictError();
-      return staged;
+      ],
+      skipDuplicates: true,
     });
+    const staged = await transaction.stagedObject.findUnique({
+      where: {
+        operationId_objectId: {
+          operationId: input.operationId,
+          objectId: input.objectId,
+        },
+      },
+    });
+    if (
+      !staged ||
+      staged.actorDeviceId !== input.actorDeviceId ||
+      !sameBytes(staged.digest, requestedDigest) ||
+      !sameBytes(staged.canonicalBytes, canonicalBytes)
+    )
+      throw new StagedObjectConflictError();
+    return staged;
   }
 
   async expire(database: PersistenceClient, now: Date) {
@@ -251,40 +265,48 @@ export class OperationRepository {
         "operation digest",
       ),
     );
-    return inPersistenceTransaction(database, async (transaction) => {
-      await transaction.operation.createMany({
-        data: [
-          {
-            id: input.id,
-            actorUserId: input.actorUserId,
-            ...(input.actorDeviceId
-              ? { actorDeviceId: input.actorDeviceId }
-              : {}),
-            kind: input.kind,
-            commandDigest: digest,
-            ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
-          },
-        ],
-        skipDuplicates: true,
-      });
-      const operation = await transaction.operation.findUnique({
-        where: { id: input.id },
-      });
-      if (
-        !operation ||
-        operation.actorUserId !== input.actorUserId ||
-        operation.actorDeviceId !== (input.actorDeviceId ?? null) ||
-        operation.kind !== input.kind ||
-        !sameBytes(operation.commandDigest, digest) ||
-        operation.status === "CANCELLED" ||
-        operation.status === "EXPIRED"
-      )
-        throw new OperationConflictError();
-      return {
-        operation,
-        idempotent: operation.status === "COMMITTED",
-      };
+    return inPersistenceTransaction(database, (transaction) =>
+      this.beginInTransaction(transaction, input, digest),
+    );
+  }
+
+  async beginInTransaction(
+    transaction: PersistenceClient,
+    input: OperationInput,
+    digest: Uint8Array,
+  ) {
+    await transaction.operation.createMany({
+      data: [
+        {
+          id: input.id,
+          actorUserId: input.actorUserId,
+          ...(input.actorDeviceId
+            ? { actorDeviceId: input.actorDeviceId }
+            : {}),
+          kind: input.kind,
+          commandDigest: databaseBytes(digest),
+          ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+        },
+      ],
+      skipDuplicates: true,
     });
+    const operation = await transaction.operation.findUnique({
+      where: { id: input.id },
+    });
+    if (
+      !operation ||
+      operation.actorUserId !== input.actorUserId ||
+      operation.actorDeviceId !== (input.actorDeviceId ?? null) ||
+      operation.kind !== input.kind ||
+      !sameBytes(operation.commandDigest, digest) ||
+      operation.status === "CANCELLED" ||
+      operation.status === "EXPIRED"
+    )
+      throw new OperationConflictError();
+    return {
+      operation,
+      idempotent: operation.status === "COMMITTED",
+    };
   }
 
   async expireStaging(database: TransactionDatabase, now: Date) {
@@ -435,6 +457,52 @@ export type AuditFactInput = Readonly<{
   readonly outcomeObjectId?: string;
   readonly outcomeRevisionId?: string;
 }>;
+
+// Creates an operation and stages its command object in one transaction, so a
+// request that fails after the operation row exists (for example a full
+// staging quota) rolls back both writes instead of leaving an operation that
+// consumes its id and command digest. The actor User row is locked first, in
+// the same order as StagedObjectRepository.putInTransaction, before the
+// operation insert takes its foreign-key key-share on the User row.
+export const beginOperationWithCommand = async (
+  database: PersistenceClient,
+  operations: OperationRepository,
+  staging: StagedObjectRepository,
+  input: OperationInput,
+  stageInput: StageObjectInput,
+) => {
+  validateStagedObject(stageInput);
+  const stagedBytes = copyBytes(
+    stageInput.canonicalBytes,
+    "staged canonical bytes",
+  );
+  const stagedDigest = await validateSha384Digest(
+    stagedBytes,
+    stageInput.digest,
+  );
+  const commandDigest = databaseBytes(
+    await validateSha384Digest(
+      input.commandBytes,
+      input.commandDigest,
+      "operation digest",
+    ),
+  );
+  return inPersistenceTransaction(database, async (transaction) => {
+    await transaction.$executeRaw`SELECT "id" FROM "users" WHERE "id" = ${input.actorUserId} FOR UPDATE`;
+    const result = await operations.beginInTransaction(
+      transaction,
+      input,
+      commandDigest,
+    );
+    await staging.putInTransaction(
+      transaction,
+      stageInput,
+      stagedBytes,
+      stagedDigest,
+    );
+    return result;
+  });
+};
 
 export class AuditFactRepository {
   async append(database: PersistenceClient, input: AuditFactInput) {

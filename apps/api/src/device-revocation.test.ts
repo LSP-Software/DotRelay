@@ -48,6 +48,9 @@ const fixture = async () => {
   const sessions = new Set(["current-token", "copied-token"]);
   const operations = new Map<string, Record<string, unknown>>();
   const deletedUsers: string[] = [];
+  const actorState: { lifecycle: "ACTIVE" | "REVOKED" } = {
+    lifecycle: "ACTIVE",
+  };
   const transaction = {
     $executeRaw: async () => 0,
     user: {
@@ -69,12 +72,32 @@ const fixture = async () => {
       },
     },
     device: {
-      findFirst: async () => ({
-        id: actorDevice,
-        userId: actor,
-        lifecycle: "ACTIVE",
-        ed25519PublicKey: actorDeviceKey,
-      }),
+      // Honor the where clause so the lifecycle filter (and actor id/user)
+      // actually decide which row — and thus which public key — verifies the
+      // signature.
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          id?: string;
+          userId?: string;
+          lifecycle?: "ACTIVE" | "REVOKED";
+        };
+      }) => {
+        if (
+          where.id !== actorDevice ||
+          where.userId !== actor ||
+          (where.lifecycle !== undefined &&
+            where.lifecycle !== actorState.lifecycle)
+        )
+          return null;
+        return {
+          id: actorDevice,
+          userId: actor,
+          lifecycle: actorState.lifecycle,
+          ed25519PublicKey: actorDeviceKey,
+        };
+      },
       findUnique: async () => ({ ...target }),
       update: async () => {
         target.lifecycle = "REVOKED";
@@ -146,6 +169,7 @@ const fixture = async () => {
     operations,
     deletedUsers,
     keyPair,
+    actorState,
     revoke,
   };
 };
@@ -215,4 +239,17 @@ test("a retry under a new operation id is refused once the Device is revoked", a
   ).toBe(403);
   expect(setup.target.lifecycle).toBe("REVOKED");
   expect(setup.sessions.size).toBe(1);
+});
+
+test("a revoked actor Device cannot revoke even with a valid signature", async () => {
+  const setup = await fixture();
+  // The actor Device the session claims is no longer active, so the
+  // lifecycle filter in the actor lookup must refuse it even though the
+  // signature is valid for that Device's stored key.
+  setup.actorState.lifecycle = "REVOKED";
+  expect((await setup.revoke()).status).toBe(403);
+  expect(setup.target.lifecycle).toBe("ACTIVE");
+  expect(setup.sessions.size).toBe(2);
+  expect(setup.deletedUsers).toHaveLength(0);
+  expect(setup.operations.size).toBe(0);
 });
