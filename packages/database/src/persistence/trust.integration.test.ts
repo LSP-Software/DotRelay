@@ -1484,4 +1484,205 @@ integrationDescribe("trust workflow integration", () => {
       }),
     ).toBe(0);
   });
+
+  test("a committed publication operation cannot publish a second revision", async () => {
+    const user = await createUserFixture();
+    const device = await createActiveDevice(user.id);
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: user.id } } },
+    });
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: user.id,
+      name: "publication-idempotency-team",
+      operation: {
+        ...(await createOperationInput(
+          user.id,
+          "publication-idempotency-team",
+        )),
+        actorDeviceId: device.id,
+      },
+    });
+    const createdProject = await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now() + 200),
+      operation: {
+        ...(await createOperationInput(
+          user.id,
+          "publication-idempotency-project",
+        )),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("environment" in createdProject))
+      throw new Error("project creation did not provision an environment");
+    const environmentId = createdProject.environment.id;
+    const genesis = await prepareGenesisPublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      label: "publication-idempotency-genesis",
+    });
+
+    const publications = new PublicationRepository();
+    const operations = new OperationRepository();
+    const publicationOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "committed-publication",
+        "REVISION_PUBLICATION",
+      )),
+      actorDeviceId: device.id,
+    };
+    await operations.begin(database, publicationOperation);
+
+    // Stage the objects of two consecutive manifest updates on the one
+    // operation while it is still STAGED, before either is published.
+    const stageUpdateObjects = async () => {
+      const revisionObject = await createBoundProtocolObject(
+        16,
+        projectId,
+        environmentId,
+      );
+      const descriptorObject = await createBoundProtocolObject(
+        15,
+        projectId,
+        environmentId,
+      );
+      for (const protocolObject of [revisionObject, descriptorObject]) {
+        await stageObject({
+          operation: publicationOperation,
+          objectId: protocolObject.id,
+          canonicalBytes: protocolObject.canonicalBytes,
+          digest: protocolObject.digest,
+        });
+      }
+      return { revisionObject, descriptorObject };
+    };
+    const buildPublication = (input: {
+      readonly revisionId: string;
+      readonly staged: {
+        readonly revisionObject: ProtocolObjectInput;
+        readonly descriptorObject: ProtocolObjectInput;
+      };
+      readonly expectedHeadId: string;
+      readonly parentHash: Uint8Array;
+    }) => ({
+      operation: {
+        id: publicationOperation.id,
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        kind: "REVISION_PUBLICATION" as const,
+        commandBytes: publicationOperation.commandBytes,
+        commandDigest: publicationOperation.commandDigest,
+      },
+      environmentId,
+      expectedHeadId: input.expectedHeadId,
+      revision: {
+        id: input.revisionId,
+        protocolObjectId: input.staged.revisionObject.id,
+        parentHash: input.parentHash,
+        projectEpoch: 1n,
+        mutation: "MANIFEST_UPDATE" as const,
+        authoredAtMs: BigInt(Date.now()),
+      },
+      revisionObject: input.staged.revisionObject,
+      descriptor: {
+        protocolObject: input.staged.descriptorObject,
+        schemaVersion: 1,
+        descriptorHash: input.staged.descriptorObject.digest,
+        laneCount: 0,
+      },
+      lanes: [],
+      commitments: [],
+      audit: {
+        kind: "REVISION_PUBLISHED" as const,
+        entityKind: "ENVIRONMENT" as const,
+        entityId: environmentId,
+      },
+    });
+    const firstStaged = await stageUpdateObjects();
+    const secondStaged = await stageUpdateObjects();
+
+    const firstRevisionId = crypto.randomUUID();
+    const published = await publications.publishRevision(
+      database,
+      buildPublication({
+        revisionId: firstRevisionId,
+        staged: firstStaged,
+        expectedHeadId: genesis.revisionId,
+        parentHash: genesis.revisionDigest,
+      }),
+    );
+    if (published.idempotent)
+      throw new Error("first publication was unexpectedly idempotent");
+    expect(
+      (
+        await database.environment.findUniqueOrThrow({
+          where: { id: environmentId },
+        })
+      ).currentHeadId,
+    ).toBe(firstRevisionId);
+    expect(
+      await database.operation.findUniqueOrThrow({
+        where: { id: publicationOperation.id },
+      }),
+    ).toMatchObject({ status: "COMMITTED" });
+
+    // Re-publishing the committed update is an idempotent replay.
+    const replay = await publications.publishRevision(
+      database,
+      buildPublication({
+        revisionId: firstRevisionId,
+        staged: firstStaged,
+        expectedHeadId: genesis.revisionId,
+        parentHash: genesis.revisionDigest,
+      }),
+    );
+    if (!replay.idempotent)
+      throw new Error("replay of the committed publication was not idempotent");
+    expect(replay.revision.id).toBe(firstRevisionId);
+    expect(
+      await database.revision.count({
+        where: { operationId: publicationOperation.id },
+      }),
+    ).toBe(1);
+
+    // A different second update under the same, already-committed operation
+    // must be rejected instead of becoming a second committed outcome.
+    const secondRevisionId = crypto.randomUUID();
+    await expect(
+      publications.publishRevision(
+        database,
+        buildPublication({
+          revisionId: secondRevisionId,
+          staged: secondStaged,
+          expectedHeadId: firstRevisionId,
+          parentHash: firstStaged.revisionObject.digest,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(OperationConflictError);
+    expect(
+      (
+        await database.environment.findUniqueOrThrow({
+          where: { id: environmentId },
+        })
+      ).currentHeadId,
+    ).toBe(firstRevisionId);
+    expect(
+      await database.revision.findUnique({
+        where: { id: secondRevisionId },
+      }),
+    ).toBeNull();
+    expect(
+      await database.revision.count({
+        where: { operationId: publicationOperation.id },
+      }),
+    ).toBe(1);
+  });
 });

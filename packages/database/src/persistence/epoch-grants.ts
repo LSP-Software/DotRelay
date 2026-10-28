@@ -113,10 +113,13 @@ export class ProjectEpochRepository {
             },
           ],
         });
-        await this.publication.publishRevisionInTransaction(
-          transaction,
-          transition.publication,
-        );
+        // The shared operation stays STAGED across the whole loop; the
+        // COMMITTED update below (after every transition) is the only place
+        // it is committed.
+        await this.publication.publishRevisionInTransaction(transaction, {
+          ...transition.publication,
+          rotationInner: true,
+        });
         const protocolObject = await this.protocolObjects.create(
           transaction,
           transition.protocolObject,
