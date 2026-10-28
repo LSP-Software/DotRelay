@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalEncode,
+  type CborValue,
+  encodeProtocolObject,
+  protocolObjectFromFields,
+  uuidToBytes,
+} from "@dotrelay/contracts";
 import { Client } from "pg";
 import type { DatabaseClient, OperationInput, ProtocolObjectInput } from "..";
 import {
@@ -182,6 +189,37 @@ const stageObject = async (input: {
   });
 };
 
+// Encodes a registry-valid signed protocol object: field 3 carries the
+// canonical unsigned body and field 4 a 64-byte signature placeholder, the
+// same envelope shape the client signs (the server never re-verifies the
+// Ed25519 signature on the write path).
+const signedProtocolBytes = (
+  kind: number,
+  fields: ReadonlyMap<number, CborValue>,
+): Uint8Array => {
+  const body = protocolObjectFromFields(kind, fields);
+  const signed = new Map<number, CborValue>(fields);
+  signed.set(3, canonicalEncode(body));
+  signed.set(4, new Uint8Array(64));
+  return encodeProtocolObject(protocolObjectFromFields(kind, signed));
+};
+
+const boundProtocolInput = async (
+  kind: number,
+  canonicalBytes: Uint8Array,
+  projectId: string,
+  environmentId: string,
+): Promise<ProtocolObjectInput> => ({
+  id: crypto.randomUUID(),
+  suite: "dotrelay-e2ee-v3-classical-webcrypto",
+  formatVersion: 3,
+  kind,
+  canonicalBytes,
+  digest: await sha384Digest(canonicalBytes),
+  projectId,
+  environmentId,
+});
+
 // Publishes a GENESIS revision onto an existing headless Environment (such
 // as the default one that ProjectRepository.create provisions).
 const prepareGenesisPublication = async (input: {
@@ -202,17 +240,58 @@ const prepareGenesisPublication = async (input: {
     )),
     actorDeviceId: input.actorDeviceId,
   };
-  const revisionObject = await createBoundProtocolObject(
-    16,
-    input.projectId,
-    input.environmentId,
-  );
-  const descriptorObject = await createBoundProtocolObject(
-    15,
-    input.projectId,
-    input.environmentId,
-  );
   const revisionId = crypto.randomUUID();
+  const profileId = crypto.randomUUID();
+  const teamId = crypto.randomUUID();
+  const authoredAtMs = Date.now();
+  const descriptorBytes = signedProtocolBytes(
+    15,
+    new Map<number, CborValue>([
+      [8, uuidToBytes(profileId)],
+      [11, uuidToBytes(teamId)],
+      [13, uuidToBytes(input.projectId)],
+      [14, uuidToBytes(input.environmentId)],
+      [16, uuidToBytes(revisionId)],
+      [30, 1],
+      [50, 1],
+      [53, []],
+    ]),
+  );
+  const revisionBytes = signedProtocolBytes(
+    16,
+    new Map<number, CborValue>([
+      [8, uuidToBytes(profileId)],
+      [11, uuidToBytes(teamId)],
+      [13, uuidToBytes(input.projectId)],
+      [14, uuidToBytes(input.environmentId)],
+      [16, uuidToBytes(revisionId)],
+      [17, uuidToBytes(crypto.randomUUID())],
+      [19, uuidToBytes(input.environmentId)],
+      [20, new Uint8Array(48)],
+      [22, uuidToBytes(input.actorUserId)],
+      [23, uuidToBytes(input.actorDeviceId)],
+      [30, 1],
+      [34, authoredAtMs],
+      [35, 1],
+      [50, 1],
+      [51, descriptorBytes],
+      [52, await sha384Digest(descriptorBytes)],
+      [53, []],
+      [54, []],
+    ]),
+  );
+  const revisionObject = await boundProtocolInput(
+    16,
+    revisionBytes,
+    input.projectId,
+    input.environmentId,
+  );
+  const descriptorObject = await boundProtocolInput(
+    15,
+    descriptorBytes,
+    input.projectId,
+    input.environmentId,
+  );
   await stageObject({
     operation,
     objectId: revisionObject.id,
@@ -234,7 +313,7 @@ const prepareGenesisPublication = async (input: {
       protocolObjectId: revisionObject.id,
       projectEpoch: 1n,
       mutation: "GENESIS" as const,
-      authoredAtMs: BigInt(Date.now()),
+      authoredAtMs: BigInt(authoredAtMs),
     },
     revisionObject,
     descriptor: {
@@ -909,13 +988,56 @@ integrationDescribe("trust workflow integration", () => {
     await operations.begin(database, rotationOperation);
     const transitionRevisionId = crypto.randomUUID();
     const transitionObject = await createProtocolObjectInput(12);
-    const transitionRevisionObject = await createBoundProtocolObject(
+    const transitionProfileId = crypto.randomUUID();
+    const transitionTeamId = crypto.randomUUID();
+    const transitionAuthoredAtMs = Date.now();
+    const transitionDescriptorBytes = signedProtocolBytes(
+      15,
+      new Map<number, CborValue>([
+        [8, uuidToBytes(transitionProfileId)],
+        [11, uuidToBytes(transitionTeamId)],
+        [13, uuidToBytes(projectId)],
+        [14, uuidToBytes(environmentId)],
+        [16, uuidToBytes(transitionRevisionId)],
+        [30, 2],
+        [50, 1],
+        [53, []],
+      ]),
+    );
+    const transitionDescriptorDigest = await sha384Digest(
+      transitionDescriptorBytes,
+    );
+    const transitionRevisionObject = await boundProtocolInput(
       16,
+      signedProtocolBytes(
+        16,
+        new Map<number, CborValue>([
+          [8, uuidToBytes(transitionProfileId)],
+          [11, uuidToBytes(transitionTeamId)],
+          [13, uuidToBytes(projectId)],
+          [14, uuidToBytes(environmentId)],
+          [16, uuidToBytes(transitionRevisionId)],
+          [17, uuidToBytes(crypto.randomUUID())],
+          [19, uuidToBytes(genesisHead)],
+          [20, genesis.revisionDigest],
+          [22, uuidToBytes(user.id)],
+          [23, uuidToBytes(device.id)],
+          [30, 2],
+          [34, transitionAuthoredAtMs],
+          [35, 4],
+          [50, 1],
+          [51, transitionDescriptorBytes],
+          [52, transitionDescriptorDigest],
+          [53, []],
+          [54, []],
+        ]),
+      ),
       projectId,
       environmentId,
     );
-    const transitionDescriptorObject = await createBoundProtocolObject(
+    const transitionDescriptorObject = await boundProtocolInput(
       15,
+      transitionDescriptorBytes,
       projectId,
       environmentId,
     );
@@ -948,7 +1070,7 @@ integrationDescribe("trust workflow integration", () => {
         parentHash: genesis.revisionDigest,
         projectEpoch: 2n,
         mutation: "EPOCH_TRANSITION" as const,
-        authoredAtMs: BigInt(Date.now()),
+        authoredAtMs: BigInt(transitionAuthoredAtMs),
       },
       revisionObject: transitionRevisionObject,
       descriptor: {
