@@ -1,12 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
-import type { DatabaseClient, OperationInput, ProtocolObjectInput } from "..";
+import type {
+  DatabaseClient,
+  OperationInput,
+  ProtocolObjectInput,
+  RevisionPublicationInput,
+} from "..";
 import {
   AccountKeyRepository,
   AdministrationRepository,
   createDatabaseClient,
   DeviceRepository,
+  EnvironmentRepository,
   GrantRepository,
   MembershipAdministrationRepository,
   MembershipRepository,
@@ -182,18 +188,16 @@ const stageObject = async (input: {
   });
 };
 
-// Publishes a GENESIS revision onto an existing headless Environment (such
-// as the default one that ProjectRepository.create provisions).
-const prepareGenesisPublication = async (input: {
+// Builds a GENESIS revision publication for an existing headless Environment
+// (such as the default one that ProjectRepository.create provisions) without
+// publishing it, so callers can also hand it to createWithGenesis.
+const buildGenesisPublication = async (input: {
   readonly actorUserId: string;
   readonly actorDeviceId: string;
   readonly projectId: string;
   readonly environmentId: string;
   readonly label: string;
-}): Promise<{
-  readonly revisionId: string;
-  readonly revisionDigest: Uint8Array;
-}> => {
+}): Promise<RevisionPublicationInput> => {
   const operation = {
     ...(await createOperationInput(
       input.actorUserId,
@@ -225,7 +229,7 @@ const prepareGenesisPublication = async (input: {
     canonicalBytes: descriptorObject.canonicalBytes,
     digest: descriptorObject.digest,
   });
-  const publication = {
+  return {
     operation,
     environmentId: input.environmentId,
     expectedHeadId: null,
@@ -251,8 +255,25 @@ const prepareGenesisPublication = async (input: {
       entityId: input.environmentId,
     },
   };
+};
+
+// Publishes a GENESIS revision onto an existing headless Environment.
+const prepareGenesisPublication = async (input: {
+  readonly actorUserId: string;
+  readonly actorDeviceId: string;
+  readonly projectId: string;
+  readonly environmentId: string;
+  readonly label: string;
+}): Promise<{
+  readonly revisionId: string;
+  readonly revisionDigest: Uint8Array;
+}> => {
+  const publication = await buildGenesisPublication(input);
   await new PublicationRepository().publishRevision(database, publication);
-  return { revisionId, revisionDigest: revisionObject.digest };
+  return {
+    revisionId: publication.revision.id,
+    revisionDigest: publication.revisionObject.digest,
+  };
 };
 
 integrationDescribe("trust workflow integration", () => {
@@ -1121,5 +1142,547 @@ integrationDescribe("trust workflow integration", () => {
         ],
       }),
     ).rejects.toBeInstanceOf(StaleHeadError);
+  });
+
+  test("rotates the Project epoch across multiple Environments under one shared operation", async () => {
+    const user = await createUserFixture();
+    const device = await createActiveDevice(user.id);
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: user.id } } },
+    });
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: user.id,
+      name: "multi-environment-team",
+      operation: {
+        ...(await createOperationInput(user.id, "multi-environment-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const createdProject = await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now() + 100),
+      operation: {
+        ...(await createOperationInput(user.id, "multi-environment-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("environment" in createdProject))
+      throw new Error("project creation did not provision an environment");
+    const defaultEnvironmentId = createdProject.environment.id;
+    const defaultGenesis = await prepareGenesisPublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId: defaultEnvironmentId,
+      label: "multi-environment-genesis",
+    });
+    const environmentsRepository = new EnvironmentRepository();
+    const environmentIds = [defaultEnvironmentId];
+    const currentHeads: Record<
+      string,
+      { revisionId: string; revisionDigest: Uint8Array }
+    > = {
+      [defaultEnvironmentId]: {
+        revisionId: defaultGenesis.revisionId,
+        revisionDigest: defaultGenesis.revisionDigest,
+      },
+    };
+    for (const label of ["staging", "production"]) {
+      const environmentId = crypto.randomUUID();
+      const publication = await buildGenesisPublication({
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        projectId,
+        environmentId,
+        label: `${label}-genesis`,
+      });
+      const created = await environmentsRepository.createWithGenesis(database, {
+        environmentId,
+        projectId,
+        createdByUserId: user.id,
+        label,
+        publication,
+      });
+      if (created.idempotent)
+        throw new Error("genesis publication was unexpectedly idempotent");
+      environmentIds.push(environmentId);
+      currentHeads[environmentId] = {
+        revisionId: created.revision.id,
+        revisionDigest: publication.revisionObject.digest,
+      };
+    }
+
+    const epochRotation = new ProjectEpochRepository();
+    const operations = new OperationRepository();
+    const buildTransition = async (input: {
+      readonly operation: OperationInput & { readonly actorDeviceId: string };
+      readonly environmentId: string;
+      readonly parentHash: Uint8Array;
+      readonly projectEpoch: bigint;
+    }) => {
+      // createBoundProtocolObject encodes the sequence with full CBOR length
+      // prefixes, which createProtocolObjectInput only does below 24.
+      const transitionObject = await createBoundProtocolObject(
+        12,
+        projectId,
+        input.environmentId,
+      );
+      const revisionObject = await createBoundProtocolObject(
+        16,
+        projectId,
+        input.environmentId,
+      );
+      const descriptorObject = await createBoundProtocolObject(
+        15,
+        projectId,
+        input.environmentId,
+      );
+      for (const protocolObject of [
+        transitionObject,
+        revisionObject,
+        descriptorObject,
+      ]) {
+        await stageObject({
+          operation: input.operation,
+          objectId: protocolObject.id,
+          canonicalBytes: protocolObject.canonicalBytes,
+          digest: protocolObject.digest,
+        });
+      }
+      const revisionId = crypto.randomUUID();
+      const publication = {
+        operation: {
+          id: input.operation.id,
+          actorUserId: user.id,
+          actorDeviceId: device.id,
+          kind: "REVISION_PUBLICATION" as const,
+          commandBytes: input.operation.commandBytes,
+          commandDigest: input.operation.commandDigest,
+        },
+        environmentId: input.environmentId,
+        expectedHeadId: currentHeads[input.environmentId]!.revisionId,
+        revision: {
+          id: revisionId,
+          protocolObjectId: revisionObject.id,
+          parentHash: input.parentHash,
+          projectEpoch: input.projectEpoch,
+          mutation: "EPOCH_TRANSITION" as const,
+          authoredAtMs: BigInt(Date.now()),
+        },
+        revisionObject,
+        descriptor: {
+          protocolObject: descriptorObject,
+          schemaVersion: 1,
+          descriptorHash: descriptorObject.digest,
+          laneCount: 0,
+        },
+        lanes: [],
+        commitments: [],
+        audit: {
+          kind: "REVISION_PUBLISHED" as const,
+          entityKind: "ENVIRONMENT" as const,
+          entityId: input.environmentId,
+        },
+      };
+      return { transitionObject, revisionId, publication };
+    };
+
+    // One shared EPOCH_ROTATION operation drives a publication into every
+    // Environment; the first publication alone used to commit it and make
+    // the remaining Environments short-circuit as idempotent replays.
+    const rotationOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "rotate-multi-epoch-1-to-2",
+        "EPOCH_ROTATION",
+      )),
+      actorDeviceId: device.id,
+    };
+    await operations.begin(database, rotationOperation);
+    type RotationTransition = Readonly<{
+      environmentId: string;
+      expectedHeadId: string;
+      newHeadId: string;
+      protocolObject: ProtocolObjectInput;
+      publication: RevisionPublicationInput;
+    }>;
+    const rotatedHeadIds: Record<string, string> = {};
+    const epoch2HeadDigests: Record<string, Uint8Array> = {};
+    const rotateTransitions: RotationTransition[] = [];
+    for (const environmentId of environmentIds) {
+      const head = currentHeads[environmentId]!;
+      const transition = await buildTransition({
+        operation: rotationOperation,
+        environmentId,
+        parentHash: head.revisionDigest,
+        projectEpoch: 2n,
+      });
+      rotateTransitions.push({
+        environmentId,
+        expectedHeadId: head.revisionId,
+        newHeadId: transition.revisionId,
+        protocolObject: transition.transitionObject,
+        publication: transition.publication,
+      });
+      rotatedHeadIds[environmentId] = transition.revisionId;
+      epoch2HeadDigests[environmentId] =
+        transition.publication.revisionObject.digest;
+    }
+    const rotateInput = {
+      operation: rotationOperation,
+      projectId,
+      expectedEpoch: 1n,
+      newEpoch: 2n,
+      transitions: rotateTransitions,
+    };
+
+    const result = await epochRotation.rotate(database, rotateInput);
+    if (!("projectEpoch" in result))
+      throw new Error("rotation reported an idempotent replay");
+    expect(result.projectEpoch).toBe(2n);
+    expect(
+      (await database.project.findUniqueOrThrow({ where: { id: projectId } }))
+        .currentEpoch,
+    ).toBe(2n);
+    const rotatedOperation = await database.operation.findUniqueOrThrow({
+      where: { id: rotationOperation.id },
+      include: { revisions: true },
+    });
+    expect(rotatedOperation.status).toBe("COMMITTED");
+    // The one shared operation owns exactly one revision per Environment.
+    expect(rotatedOperation.revisions).toHaveLength(environmentIds.length);
+    expect(
+      rotatedOperation.revisions
+        .map(({ environmentId }) => environmentId)
+        .sort(),
+    ).toEqual([...environmentIds].sort());
+    for (const environmentId of environmentIds) {
+      const environment = await database.environment.findUniqueOrThrow({
+        where: { id: environmentId },
+      });
+      expect(environment.currentHeadId).toBe(rotatedHeadIds[environmentId]!);
+      const revision = await database.revision.findUniqueOrThrow({
+        where: { id: rotatedHeadIds[environmentId]! },
+      });
+      expect(revision.parentId).toBe(currentHeads[environmentId]!.revisionId);
+      expect(revision.projectEpoch).toBe(2n);
+      expect(revision.mutation).toBe("EPOCH_TRANSITION");
+      expect(revision.operationId).toBe(rotationOperation.id);
+    }
+    expect(
+      await database.epochTransitionObject.count({
+        where: { projectId, newEpoch: 2n },
+      }),
+    ).toBe(environmentIds.length);
+    expect(
+      await database.auditEvent.count({
+        where: {
+          operationId: rotationOperation.id,
+          kind: "EPOCH_ROTATED",
+        },
+      }),
+    ).toBe(1);
+
+    // A replay of the committed multi-Environment rotation is a no-op.
+    const replay = await epochRotation.rotate(database, rotateInput);
+    if (!("idempotent" in replay) || !replay.idempotent)
+      throw new Error("committed rotation replay was not idempotent");
+    expect(
+      (await database.project.findUniqueOrThrow({ where: { id: projectId } }))
+        .currentEpoch,
+    ).toBe(2n);
+    expect(
+      await database.revision.count({
+        where: { operationId: rotationOperation.id },
+      }),
+    ).toBe(environmentIds.length);
+    for (const environmentId of environmentIds) {
+      const environment = await database.environment.findUniqueOrThrow({
+        where: { id: environmentId },
+      });
+      expect(environment.currentHeadId).toBe(rotatedHeadIds[environmentId]!);
+    }
+
+    // A later Environment's transition failing (wrong parent hash) rolls the
+    // whole rotation back: earlier Environments already published inside the
+    // same transaction, so the rollback must undo them too.
+    const failureOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "rotate-multi-epoch-2-to-3",
+        "EPOCH_ROTATION",
+      )),
+      actorDeviceId: device.id,
+    };
+    await operations.begin(database, failureOperation);
+    const sortedEnvironmentIds = [...environmentIds].sort();
+    const failingEnvironmentId = sortedEnvironmentIds.at(-1)!;
+    for (const environmentId of environmentIds)
+      currentHeads[environmentId] = {
+        revisionId: rotatedHeadIds[environmentId]!,
+        revisionDigest: epoch2HeadDigests[environmentId]!,
+      };
+    const failureInput = {
+      operation: failureOperation,
+      projectId,
+      expectedEpoch: 2n,
+      newEpoch: 3n,
+      transitions: [] as typeof rotateInput.transitions,
+    };
+    for (const environmentId of environmentIds) {
+      const isFailingEnvironment = environmentId === failingEnvironmentId;
+      const transition = await buildTransition({
+        operation: failureOperation,
+        environmentId,
+        // defaultGenesis.revisionDigest belongs to another Environment, so
+        // the parent-hash check fails after the earlier Environments
+        // published successfully.
+        parentHash: isFailingEnvironment
+          ? defaultGenesis.revisionDigest
+          : epoch2HeadDigests[environmentId]!,
+        projectEpoch: 3n,
+      });
+      failureInput.transitions.push({
+        environmentId,
+        expectedHeadId: currentHeads[environmentId]!.revisionId,
+        newHeadId: transition.revisionId,
+        protocolObject: transition.transitionObject,
+        publication: transition.publication,
+      });
+    }
+    await expect(
+      epochRotation.rotate(database, failureInput),
+    ).rejects.toBeInstanceOf(StaleHeadError);
+    expect(
+      (await database.project.findUniqueOrThrow({ where: { id: projectId } }))
+        .currentEpoch,
+    ).toBe(2n);
+    expect(
+      await database.operation.findUniqueOrThrow({
+        where: { id: failureOperation.id },
+      }),
+    ).toMatchObject({ status: "STAGED", committedAt: null });
+    expect(
+      await database.revision.count({
+        where: { operationId: failureOperation.id },
+      }),
+    ).toBe(0);
+    for (const environmentId of environmentIds) {
+      const environment = await database.environment.findUniqueOrThrow({
+        where: { id: environmentId },
+      });
+      expect(environment.currentHeadId).toBe(rotatedHeadIds[environmentId]!);
+    }
+    expect(
+      await database.epochTransitionObject.count({
+        where: { projectId, newEpoch: 3n },
+      }),
+    ).toBe(0);
+  });
+
+  test("a committed publication operation cannot publish a second revision", async () => {
+    const user = await createUserFixture();
+    const device = await createActiveDevice(user.id);
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: user.id } } },
+    });
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: user.id,
+      name: "publication-idempotency-team",
+      operation: {
+        ...(await createOperationInput(
+          user.id,
+          "publication-idempotency-team",
+        )),
+        actorDeviceId: device.id,
+      },
+    });
+    const createdProject = await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now() + 200),
+      operation: {
+        ...(await createOperationInput(
+          user.id,
+          "publication-idempotency-project",
+        )),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("environment" in createdProject))
+      throw new Error("project creation did not provision an environment");
+    const environmentId = createdProject.environment.id;
+    const genesis = await prepareGenesisPublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      label: "publication-idempotency-genesis",
+    });
+
+    const publications = new PublicationRepository();
+    const operations = new OperationRepository();
+    const publicationOperation = {
+      ...(await createOperationInput(
+        user.id,
+        "committed-publication",
+        "REVISION_PUBLICATION",
+      )),
+      actorDeviceId: device.id,
+    };
+    await operations.begin(database, publicationOperation);
+
+    // Stage the objects of two consecutive manifest updates on the one
+    // operation while it is still STAGED, before either is published.
+    const stageUpdateObjects = async () => {
+      const revisionObject = await createBoundProtocolObject(
+        16,
+        projectId,
+        environmentId,
+      );
+      const descriptorObject = await createBoundProtocolObject(
+        15,
+        projectId,
+        environmentId,
+      );
+      for (const protocolObject of [revisionObject, descriptorObject]) {
+        await stageObject({
+          operation: publicationOperation,
+          objectId: protocolObject.id,
+          canonicalBytes: protocolObject.canonicalBytes,
+          digest: protocolObject.digest,
+        });
+      }
+      return { revisionObject, descriptorObject };
+    };
+    const buildPublication = (input: {
+      readonly revisionId: string;
+      readonly staged: {
+        readonly revisionObject: ProtocolObjectInput;
+        readonly descriptorObject: ProtocolObjectInput;
+      };
+      readonly expectedHeadId: string;
+      readonly parentHash: Uint8Array;
+    }) => ({
+      operation: {
+        id: publicationOperation.id,
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        kind: "REVISION_PUBLICATION" as const,
+        commandBytes: publicationOperation.commandBytes,
+        commandDigest: publicationOperation.commandDigest,
+      },
+      environmentId,
+      expectedHeadId: input.expectedHeadId,
+      revision: {
+        id: input.revisionId,
+        protocolObjectId: input.staged.revisionObject.id,
+        parentHash: input.parentHash,
+        projectEpoch: 1n,
+        mutation: "MANIFEST_UPDATE" as const,
+        authoredAtMs: BigInt(Date.now()),
+      },
+      revisionObject: input.staged.revisionObject,
+      descriptor: {
+        protocolObject: input.staged.descriptorObject,
+        schemaVersion: 1,
+        descriptorHash: input.staged.descriptorObject.digest,
+        laneCount: 0,
+      },
+      lanes: [],
+      commitments: [],
+      audit: {
+        kind: "REVISION_PUBLISHED" as const,
+        entityKind: "ENVIRONMENT" as const,
+        entityId: environmentId,
+      },
+    });
+    const firstStaged = await stageUpdateObjects();
+    const secondStaged = await stageUpdateObjects();
+
+    const firstRevisionId = crypto.randomUUID();
+    const published = await publications.publishRevision(
+      database,
+      buildPublication({
+        revisionId: firstRevisionId,
+        staged: firstStaged,
+        expectedHeadId: genesis.revisionId,
+        parentHash: genesis.revisionDigest,
+      }),
+    );
+    if (published.idempotent)
+      throw new Error("first publication was unexpectedly idempotent");
+    expect(
+      (
+        await database.environment.findUniqueOrThrow({
+          where: { id: environmentId },
+        })
+      ).currentHeadId,
+    ).toBe(firstRevisionId);
+    expect(
+      await database.operation.findUniqueOrThrow({
+        where: { id: publicationOperation.id },
+      }),
+    ).toMatchObject({ status: "COMMITTED" });
+
+    // Re-publishing the committed update is an idempotent replay.
+    const replay = await publications.publishRevision(
+      database,
+      buildPublication({
+        revisionId: firstRevisionId,
+        staged: firstStaged,
+        expectedHeadId: genesis.revisionId,
+        parentHash: genesis.revisionDigest,
+      }),
+    );
+    if (!replay.idempotent)
+      throw new Error("replay of the committed publication was not idempotent");
+    expect(replay.revision.id).toBe(firstRevisionId);
+    expect(
+      await database.revision.count({
+        where: { operationId: publicationOperation.id },
+      }),
+    ).toBe(1);
+
+    // A different second update under the same, already-committed operation
+    // must be rejected instead of becoming a second committed outcome.
+    const secondRevisionId = crypto.randomUUID();
+    await expect(
+      publications.publishRevision(
+        database,
+        buildPublication({
+          revisionId: secondRevisionId,
+          staged: secondStaged,
+          expectedHeadId: firstRevisionId,
+          parentHash: firstStaged.revisionObject.digest,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(OperationConflictError);
+    expect(
+      (
+        await database.environment.findUniqueOrThrow({
+          where: { id: environmentId },
+        })
+      ).currentHeadId,
+    ).toBe(firstRevisionId);
+    expect(
+      await database.revision.findUnique({
+        where: { id: secondRevisionId },
+      }),
+    ).toBeNull();
+    expect(
+      await database.revision.count({
+        where: { operationId: publicationOperation.id },
+      }),
+    ).toBe(1);
   });
 });

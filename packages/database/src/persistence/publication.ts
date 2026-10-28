@@ -57,6 +57,12 @@ export type RevisionPublicationInput = Readonly<{
     readonly commandDigest: Uint8Array;
     readonly expiresAt?: Date;
   }>;
+  // Set by ProjectEpochRepository.rotate: this publication is one transition
+  // of a Project epoch rotation, sharing one operation across Environments.
+  // The shared operation stays STAGED until rotate() commits it exactly once
+  // after every transition published, so an inner publication must not
+  // commit it or let a COMMITTED status block the remaining Environments.
+  readonly rotationInner?: boolean;
   readonly environmentId: string;
   readonly expectedHeadId: string | null;
   readonly revision: Readonly<{
@@ -132,7 +138,7 @@ export class PublicationRepository {
     await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
     const existingOperation = await transaction.operation.findUnique({
       where: { id: input.operation.id },
-      include: { revision: true },
+      include: { revisions: true },
     });
     if (existingOperation) {
       if (
@@ -144,11 +150,20 @@ export class PublicationRepository {
         )
       )
         throw new OperationConflictError();
-      if (
-        existingOperation.status === "COMMITTED" &&
-        existingOperation.revision
-      )
-        return { revision: existingOperation.revision, idempotent: true };
+      // A committed operation's outcome is final. A replay of the revision
+      // it already published is idempotent; a different revision is a
+      // conflict. Rotation inner publications are the one exception: their
+      // shared operation is committed only after every Environment of the
+      // rotation has published, so a committed operation can still owe this
+      // Environment its revision.
+      const existingRevision = existingOperation.revisions.find(
+        (revision) => revision.id === input.revision.id,
+      );
+      if (existingOperation.status === "COMMITTED") {
+        if (existingRevision)
+          return { revision: existingRevision, idempotent: true };
+        if (!input.rotationInner) throw new OperationConflictError();
+      }
     }
 
     const environment = await transaction.environment.findUnique({
@@ -457,10 +472,13 @@ export class PublicationRepository {
       where: { id: input.environmentId },
       data: { currentHeadId: revision.id },
     });
-    await transaction.operation.update({
-      where: { id: operation.id },
-      data: { status: "COMMITTED", committedAt: new Date() },
-    });
+    // A rotation inner publication leaves the shared operation STAGED;
+    // ProjectEpochRepository.rotate commits it once after all transitions.
+    if (!input.rotationInner)
+      await transaction.operation.update({
+        where: { id: operation.id },
+        data: { status: "COMMITTED", committedAt: new Date() },
+      });
     await transaction.auditEvent.create({
       data: {
         operationId: operation.id,
