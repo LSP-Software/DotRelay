@@ -1,6 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import {
+  type CborValue,
+  canonicalEncode,
+  protocolObjectFromFields,
+  uuidToBytes,
+} from "@dotrelay/contracts";
 import type {
   DatabaseClient,
   OperationInput,
@@ -113,6 +119,119 @@ const createProtocolObjectInput = async (
   };
 };
 
+const PUBLICATION_PROFILE_ID = "00000000-0000-4000-8000-000000000001";
+const PUBLICATION_TEAM_ID = "00000000-0000-4000-8000-000000000002";
+
+// Structurally complete signed object: fields 3 and 4 form the signed
+// envelope (zero-byte Ed25519 signature; persistence validates structure,
+// the API verifies the signature).
+const signedCanonicalBytes = (
+  kind: number,
+  fields: ReadonlyMap<number, CborValue>,
+): Uint8Array => {
+  const envelope = new Map<number, CborValue>(fields);
+  envelope.set(4, new Uint8Array(64));
+  const candidate = protocolObjectFromFields(kind, envelope);
+  const unsignedBytes = canonicalEncode(
+    new Map(
+      [...candidate.entries()].filter(([field]) => field !== 3 && field !== 4),
+    ),
+  );
+  envelope.set(3, unsignedBytes);
+  return canonicalEncode(protocolObjectFromFields(kind, envelope));
+};
+
+const publicationObjectInput = (
+  kind: number,
+  canonicalBytes: Uint8Array,
+  projectId: string,
+  environmentId: string,
+): Promise<ProtocolObjectInput> =>
+  (async () => ({
+    id: crypto.randomUUID(),
+    suite: "dotrelay-e2ee-v3-classical-webcrypto",
+    formatVersion: 3,
+    kind,
+    canonicalBytes,
+    digest: await sha384Digest(canonicalBytes),
+    projectId,
+    environmentId,
+  }))();
+
+type PublicationObjectContext = Readonly<{
+  readonly projectId: string;
+  readonly environmentId: string;
+  readonly revisionId: string;
+  readonly projectEpoch: bigint;
+}>;
+
+const createDescriptorObjectInput = (
+  context: PublicationObjectContext,
+): Promise<ProtocolObjectInput> =>
+  publicationObjectInput(
+    15,
+    signedCanonicalBytes(
+      15,
+      new Map<number, CborValue>([
+        [8, uuidToBytes(PUBLICATION_PROFILE_ID)],
+        [11, uuidToBytes(PUBLICATION_TEAM_ID)],
+        [13, uuidToBytes(context.projectId)],
+        [14, uuidToBytes(context.environmentId)],
+        [16, uuidToBytes(context.revisionId)],
+        [30, context.projectEpoch],
+        [50, 1],
+        [53, []],
+      ]),
+    ),
+    context.projectId,
+    context.environmentId,
+  );
+
+const createRevisionObjectInput = (
+  input: PublicationObjectContext &
+    Readonly<{
+      readonly actorUserId: string;
+      readonly actorDeviceId: string;
+      readonly mutationKind: number;
+      readonly expectedHeadId?: string | null;
+      readonly parentHash?: Uint8Array;
+      readonly rollbackTargetId?: string;
+      readonly descriptorBytes: Uint8Array;
+      readonly descriptorDigest: Uint8Array;
+    }>,
+): Promise<ProtocolObjectInput> => {
+  const fields = new Map<number, CborValue>([
+    [8, uuidToBytes(PUBLICATION_PROFILE_ID)],
+    [11, uuidToBytes(PUBLICATION_TEAM_ID)],
+    [13, uuidToBytes(input.projectId)],
+    [14, uuidToBytes(input.environmentId)],
+    [16, uuidToBytes(input.revisionId)],
+    [17, uuidToBytes(crypto.randomUUID())],
+    [19, uuidToBytes(input.expectedHeadId ?? input.environmentId)],
+    [20, input.parentHash ?? new Uint8Array(48)],
+    [22, uuidToBytes(input.actorUserId)],
+    [23, uuidToBytes(input.actorDeviceId)],
+    [30, input.projectEpoch],
+    [34, Date.now()],
+    [35, input.mutationKind],
+    [50, 1],
+    [51, input.descriptorBytes],
+    [52, input.descriptorDigest],
+    [53, []],
+    [54, []],
+  ]);
+  if (input.mutationKind === 3) {
+    fields.set(21, uuidToBytes(input.rollbackTargetId ?? input.environmentId));
+    fields.set(68, []);
+  }
+  return publicationObjectInput(
+    16,
+    signedCanonicalBytes(16, fields),
+    input.projectId,
+    input.environmentId,
+  );
+};
+
 const preparePublication = async (input: {
   readonly actorUserId: string;
   readonly actorDeviceId: string;
@@ -134,17 +253,35 @@ const preparePublication = async (input: {
     )),
     actorDeviceId: input.actorDeviceId,
   };
-  const revisionObject = await createProtocolObjectInput(
-    16,
-    input.projectId,
-    input.environmentId,
-  );
-  const descriptorObject = await createProtocolObjectInput(
-    15,
-    input.projectId,
-    input.environmentId,
-  );
   const revisionId = crypto.randomUUID();
+  const mutationKind =
+    input.mutation === "GENESIS"
+      ? 1
+      : input.mutation === "MANIFEST_UPDATE"
+        ? 2
+        : 3;
+  const descriptorObject = await createDescriptorObjectInput({
+    projectId: input.projectId,
+    environmentId: input.environmentId,
+    revisionId,
+    projectEpoch: 1n,
+  });
+  const revisionObject = await createRevisionObjectInput({
+    projectId: input.projectId,
+    environmentId: input.environmentId,
+    revisionId,
+    projectEpoch: 1n,
+    actorUserId: input.actorUserId,
+    actorDeviceId: input.actorDeviceId,
+    mutationKind,
+    expectedHeadId: input.expectedHeadId,
+    ...(input.parentHash ? { parentHash: input.parentHash } : {}),
+    ...(input.rollbackTargetId
+      ? { rollbackTargetId: input.rollbackTargetId }
+      : {}),
+    descriptorBytes: descriptorObject.canonicalBytes,
+    descriptorDigest: descriptorObject.digest,
+  });
   const operations = new OperationRepository();
   const staging = new StagedObjectRepository();
   await operations.begin(database, operation);
