@@ -37,6 +37,8 @@ const scriptForRepo =
   (_directory, args) => {
     if (args[0] === "rev-parse" && args[1] === "--git-dir")
       return { stdout: join(root, ".git"), exitCode: 0 };
+    if (args[0] === "rev-parse" && args[1] === "--git-path")
+      return { stdout: join(root, ".git", "info", "exclude"), exitCode: 0 };
     if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
       return { stdout: root, exitCode: 0 };
     if (args[0] === "ls-files") {
@@ -71,6 +73,7 @@ describe("Git tracking probe", () => {
     expect(info).toEqual({
       state: "tracked",
       gitDirectory: join(root, ".git"),
+      excludePath: join(root, ".git", "info", "exclude"),
       topLevel: root,
       relativePath: "service.env",
     });
@@ -87,6 +90,7 @@ describe("Git tracking probe", () => {
     expect(info).toEqual({
       state: "untracked",
       gitDirectory: join(root, ".git"),
+      excludePath: join(root, ".git", "info", "exclude"),
       topLevel: root,
       relativePath: "local.env",
     });
@@ -166,6 +170,7 @@ describe("Git tracking probe", () => {
     expect(info).toEqual({
       state: "untracked",
       gitDirectory: join(root, ".git"),
+      excludePath: join(root, ".git", "info", "exclude"),
       topLevel: root,
       relativePath: "nested/service.env",
     });
@@ -177,6 +182,7 @@ describe("repository-local Git exclusion", () => {
     Object.freeze({
       state: "untracked",
       gitDirectory: join(root, ".git"),
+      excludePath: join(root, ".git", "info", "exclude"),
       topLevel: root,
       relativePath,
     });
@@ -302,17 +308,9 @@ realRepositoryDescribe("Git tracking probe against a real repository", () => {
     expect(inWorktree.gitDirectory).toContain("worktrees");
     expect(inWorktree.topLevel).toBe(worktree);
     expect(await ensureLocalGitExclusion(inWorktree)).toBe("established");
-    expect(
-      await readFile(
-        join(inWorktree.gitDirectory ?? "", "info", "exclude"),
-        "utf8",
-      ),
-    ).toContain("/worktree.env");
-    const mainExclude = join(root, ".git", "info", "exclude");
-    const mainExcludeExists = await readFile(mainExclude, "utf8")
-      .then((content) => content)
-      .catch(() => "");
-    expect(mainExcludeExists).not.toContain("worktree.env");
+    expect((await probe(join(worktree, "worktree.env"))).state).toBe("ignored");
+    await runGit(worktree, ["add", "."]);
+    expect(await runGit(worktree, ["ls-files", "worktree.env"])).toBe("");
     await runGit(root, ["worktree", "remove", "--force", worktree]);
   });
 });

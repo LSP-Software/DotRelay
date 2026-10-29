@@ -8,6 +8,7 @@ export type GitTrackingInfo = Readonly<{
   readonly state: GitTrackingState;
   /** Absolute repository git directory, when the path is inside a repository. */
   readonly gitDirectory?: string;
+  readonly excludePath?: string;
   /** Absolute repository top-level directory, when the path is inside a repository. */
   readonly topLevel?: string;
   /** Repository-relative path, when the path is inside a repository. */
@@ -110,11 +111,19 @@ export const createGitTrackingProbe = (
     const outside: GitTrackingInfo = Object.freeze({ state: "outside" });
     let gitDirectory: string;
     let topLevel: string;
+    let excludePath: string;
     try {
       const gitDirectoryProbe = await run(["rev-parse", "--git-dir"]);
       if (gitDirectoryProbe.exitCode !== 0) return outside;
       const topLevelProbe = await run(["rev-parse", "--show-toplevel"]);
       if (topLevelProbe.exitCode !== 0) return outside;
+      const excludeProbe = await run([
+        "rev-parse",
+        "--git-path",
+        "info/exclude",
+      ]);
+      if (excludeProbe.exitCode !== 0) throw trackingUnavailable(realTarget);
+      excludePath = resolve(realProbeDirectory, excludeProbe.stdout);
       gitDirectory = resolve(realProbeDirectory, gitDirectoryProbe.stdout);
       topLevel = resolve(realProbeDirectory, topLevelProbe.stdout);
     } catch (error) {
@@ -128,7 +137,7 @@ export const createGitTrackingProbe = (
       isAbsolute(relativeToTop)
     )
       return outside;
-    const inRepository = Object.freeze({ gitDirectory, topLevel });
+    const inRepository = Object.freeze({ gitDirectory, topLevel, excludePath });
     const inRepo = (state: GitTrackingState): GitTrackingInfo =>
       Object.freeze({
         state,
@@ -157,8 +166,10 @@ export const ensureLocalGitExclusion = async (
       {},
       "git_exclusion_failed",
     );
-  const pattern = `/${info.relativePath}`;
-  const excludePath = join(info.gitDirectory, "info", "exclude");
+  // Gitignore metacharacters must describe a literal filename.
+  const pattern = `/${info.relativePath.replace(/[\\*?\[\] ]/g, "\\$&")}`;
+  const excludePath =
+    info.excludePath ?? join(info.gitDirectory, "info", "exclude");
   let current = "";
   try {
     current = await readFile(excludePath, "utf8");

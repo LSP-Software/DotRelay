@@ -233,6 +233,8 @@ const validateConditionalValues = (
     if (plaintextLength !== undefined && plaintextLength !== 32n)
       contractError("invalid_crypto_object");
     const fields = new Set(object.keys());
+    if (fields.has(97) && wrapperType !== 3)
+      contractError("invalid_crypto_object");
     if (wrapperType === 1) {
       if (!fields.has(93) || !fields.has(94))
         contractError("invalid_crypto_object");

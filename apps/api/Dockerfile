@@ -47,6 +47,9 @@ RUN printf '%s\n' \
       'exec bun run apps/api/dist/index.js' \
     > /entrypoint.sh && chmod 755 /entrypoint.sh
 
+# Alpha images fail closed if the operator forgets the admission list.
+# Public/self-hosted operators may explicitly opt out with false.
+ENV ALPHA_ADMISSION_REQUIRED=true ALPHA_GITHUB_IDS=""
 EXPOSE 3001
 USER dotrelay
 ENTRYPOINT ["/entrypoint.sh"]

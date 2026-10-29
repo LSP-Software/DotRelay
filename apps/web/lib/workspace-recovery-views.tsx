@@ -215,6 +215,29 @@ export const RecoveryArea = ({
               This browser needs its own keys to open your workspace.
             </CardDescription>
           </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Lost your other devices? Recover this browser with your saved
+              Recovery Code.
+            </p>
+            <Label htmlFor="lost-device-recovery-code">Recovery Code</Label>
+            <Input
+              id="lost-device-recovery-code"
+              type="password"
+              autoComplete="off"
+              value={unlockInput}
+              onChange={(event) => onUnlockInput(event.target.value)}
+              disabled={recoveryBusy}
+            />
+            <Button
+              disabled={
+                recoveryBusy || connection !== "online" || !unlockInput.trim()
+              }
+              onClick={() => onUnlock("recovery-code", unlockInput)}
+            >
+              Recover browser
+            </Button>
+          </CardContent>
           {deviceSetupInProgress ? (
             <CardContent
               role="status"

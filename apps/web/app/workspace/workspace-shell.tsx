@@ -151,6 +151,7 @@ import {
   type WorkspaceProfileId,
   type WorkspaceProject,
   workspaceProfileCatalog,
+  fetchWorkspaceBoundary,
 } from "@/lib/workspace-boundary";
 import {
   parseWorkspaceLocation,
@@ -951,7 +952,9 @@ export const WorkspaceShell = ({
     apiOrigin && boundary.device.active && boundary.device.id
       ? { origin: apiOrigin, deviceId: boundary.device.id }
       : null;
-  const recoveryActorKey = recoveryActor?.deviceId ?? null;
+  const recoveryActorKey =
+    recoveryActor?.deviceId ??
+    (boundary.session.active ? "session-recovery" : null);
 
   // The shared inputs for every recovery mutation: the acting account, the
   // current boundary and listed wrappers, and the in-memory key vault. The
@@ -960,6 +963,14 @@ export const WorkspaceShell = ({
   // recovery generation.
   const recoveryInputs = {
     actor: recoveryActor,
+    onRecoveredDevice: async (deviceId: string, key: Uint8Array) => {
+      const next = await fetchWorkspaceBoundary(profileId, { deviceId });
+      if (!next.device.active || next.device.id !== deviceId)
+        throw new Error("Recovered Device is not active");
+      accountMasterKeyRef.current = key;
+      unlockedScopeRef.current = `${next.profile.serverProfileId}:${next.session.userId}:${deviceId}`;
+      commitBoundary(next);
+    },
     boundary,
     wrappers: recoveryWrappers,
     accountMasterKey: {
@@ -1014,7 +1025,10 @@ export const WorkspaceShell = ({
       setRecoveryLoaded(false);
       return;
     }
-    const actor = recoveryActor as AccountKeyActor;
+    const actor = recoveryActor ?? {
+      origin: apiOrigin ?? boundary.profile.origin,
+      deviceId: "",
+    };
     let cancelled = false;
     void (async () => {
       try {

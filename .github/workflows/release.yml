@@ -5,7 +5,7 @@ on:
     tags: ["v*.*.*"]
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-production
   cancel-in-progress: false
 
 permissions:
@@ -90,7 +90,7 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ github.ref_name }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:latest-stable
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
       - name: build and push web image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
@@ -99,7 +99,7 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ github.ref_name }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:latest-stable
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
           build-args: |
             NEXT_PUBLIC_WEB_ORIGIN=https://dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://api.dotrelay.dev
@@ -179,9 +179,11 @@ jobs:
             release-binaries/**/*.exe
             release-binaries/**/dotrelay
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   deploy-prod:
     name: deploy prod (Coolify)
+    if: ${{ !contains(github.ref_name, '-') }}
     needs: [build-cli, build-images, publish]
     environment: security-review
     runs-on: ubuntu-latest

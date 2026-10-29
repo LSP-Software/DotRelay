@@ -1,4 +1,5 @@
 import {
+  bytesToUuid,
   ARGON2ID_POLICY,
   accountKeyTransferAcknowledgementMessage,
   ContractError,
@@ -30,7 +31,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DotRelayAuth } from "./auth";
 import type { ServerProfileConfig } from "./profile";
-import { requireProtocolActor } from "./protocol/context";
+import { requireProtocolActor, requireWebActor } from "./protocol/context";
 import { mapPersistenceError } from "./protocol/errors";
 
 type Dependencies = Readonly<{
@@ -1001,7 +1002,9 @@ export const registerDeviceRoutes = (
   });
 
   app.get("/api/v1/account-keys/wrappers", async (context) => {
-    const actor = await requireProtocolActor(context, database, profile, auth);
+    // Wrappers are ciphertext. Session-only reads enable disaster recovery;
+    // mutations and content access retain the active-Device gate.
+    const actor = await requireWebActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
     try {
       const wrappers = await database.accountKeyWrapperObject.findMany({
@@ -1033,7 +1036,7 @@ export const registerDeviceRoutes = (
           if (deviceId instanceof Uint8Array && deviceId.length === 16) {
             deviceIdHex = toHex(deviceId);
             const device = await database.device.findFirst({
-              where: { id: deviceIdHex, userId: actor.userId },
+              where: { id: bytesToUuid(deviceId), userId: actor.userId },
               select: { ed25519PublicKey: true },
             });
             if (device)

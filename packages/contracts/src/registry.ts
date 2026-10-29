@@ -116,6 +116,9 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     94: field("passkey PRF input", "bytes", { exactLength: 32 }),
     95: field("Account Key Transfer id", "bytes", { exactLength: 16 }),
     96: field("key envelope type", "uint"),
+    97: field("Recovery Code authorization public key", "bytes", {
+      exactLength: 32,
+    }),
   });
 
 export const ENUM_REGISTRIES = Object.freeze({
@@ -296,7 +299,7 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
     [0, 1, 2, 8, 9, 10, 17, 28, 32, 44, 46, 47, 48, 71, 72, 86, 87, 88],
     signed([
       0, 1, 2, 8, 9, 10, 17, 28, 32, 44, 46, 47, 48, 71, 72, 86, 87, 88, 89, 90,
-      91, 92, 93, 94,
+      91, 92, 93, 94, 97,
     ]),
   ),
   21: objectDefinition(

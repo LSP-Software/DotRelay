@@ -2477,13 +2477,23 @@ describe("protected CLI workflows", () => {
       );
       const gitDirectory = `${gitRoot}/.git`;
       const output = `${gitRoot}/.env`;
-      const probe: GitTrackingProbe = async () =>
-        Object.freeze({
-          state: "untracked",
+      const probe: GitTrackingProbe = async (path) => {
+        const relativePath = path.endsWith(".previous")
+          ? ".env.previous"
+          : ".env";
+        const exclusions = await readFile(
+          `${gitDirectory}/info/exclude`,
+          "utf8",
+        ).catch(() => "");
+        return Object.freeze({
+          state: exclusions.includes(`/${relativePath}\n`)
+            ? "ignored"
+            : "untracked",
           gitDirectory,
           topLevel: gitRoot,
-          relativePath: ".env",
+          relativePath,
         });
+      };
       const result = await run(
         [
           "pull",
@@ -2508,7 +2518,7 @@ describe("protected CLI workflows", () => {
       expect(String(body.message)).toContain(".git/info/exclude");
       expect(String(body.message)).toContain("excluded from Git");
       expect(await Bun.file(`${gitDirectory}/info/exclude`).text()).toBe(
-        "/.env\n",
+        "/.env\n/.env.previous\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2522,19 +2532,17 @@ describe("protected CLI workflows", () => {
     const gitRoot = `${import.meta.dir}/.tmp-workflow-git-${crypto.randomUUID()}`;
     try {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
-      await Bun.write(`${gitRoot}/.git/info/exclude`, "/.env\n");
+      await Bun.write(
+        `${gitRoot}/.git/info/exclude`,
+        "/.env\n/.env.previous\n",
+      );
       await seededEnvironment(
         runtime,
         `${import.meta.dir}/.tmp-workflow-input`,
       );
       const output = `${gitRoot}/.env`;
       const probe: GitTrackingProbe = async () =>
-        Object.freeze({
-          state: "untracked",
-          gitDirectory: `${gitRoot}/.git`,
-          topLevel: gitRoot,
-          relativePath: ".env",
-        });
+        Object.freeze({ state: "ignored" });
       const result = await run(
         [
           "pull",
@@ -2554,7 +2562,7 @@ describe("protected CLI workflows", () => {
       expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
       expect(String(body.message)).not.toContain(".git/info/exclude");
       expect(await Bun.file(`${gitRoot}/.git/info/exclude`).text()).toBe(
-        "/.env\n",
+        "/.env\n/.env.previous\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(

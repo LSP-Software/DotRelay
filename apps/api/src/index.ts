@@ -417,6 +417,27 @@ const parseBootstrapRequest = async (
   if (!(await verifyProtocolObject(certificate, signature, publicKey)))
     throw new Error("Device certificate signature is invalid");
   return {
+    ...(body.recovery === undefined
+      ? {}
+      : {
+          recovery: (() => {
+            const recovery = parseJsonObject<{
+              wrapperId: unknown;
+              signature: unknown;
+            }>(body.recovery, ["wrapperId", "signature"]);
+            const signature = decodeBase64(
+              recovery.signature,
+              "recovery signature",
+            );
+            if (signature.length !== 64)
+              throw new Error("invalid recovery signature");
+            return {
+              wrapperId: decodeHex(recovery.wrapperId, 16, "wrapper id"),
+              signature,
+              profileId: serverProfileId,
+            };
+          })(),
+        }),
     operationId,
     deviceId,
     certificateId,
@@ -763,6 +784,7 @@ const createApi = ({
               commandBytes: request.certificateBytes,
               commandDigest: await sha384Digest(request.certificateBytes),
             },
+            ...(request.recovery ? { recovery: request.recovery } : {}),
             device: {
               id: request.deviceId,
               identityGeneration: BigInt(request.identityGeneration),

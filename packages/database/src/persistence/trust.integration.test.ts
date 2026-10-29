@@ -1,3 +1,10 @@
+import {
+  createDeviceBootstrap,
+  createAccountKeyWrapper,
+  generateAccountMasterKey,
+  generateRecoveryCode,
+  prepareDeviceRecovery,
+} from "@dotrelay/client";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -475,6 +482,122 @@ integrationDescribe("trust workflow integration", () => {
       throw new Error("bootstrap did not return a device");
     expect(result.device.lifecycle).toBe("ACTIVE");
     expect(await database.device.count({ where: { userId: user.id } })).toBe(1);
+  });
+
+  test("Recovery Code authorizes a replacement while the lost Device remains active, with replay and retirement checks", async () => {
+    const user = await createUserFixture();
+    const serverProfile = await database.serverProfile.findUniqueOrThrow({
+      where: { id: user.serverProfileId },
+    });
+    const pin = {
+      serverProfileId: serverProfile.id,
+      origin: serverProfile.origin,
+    };
+    const devices = new DeviceRepository();
+    const lost = await createDeviceBootstrap({ pin, userId: user.id });
+    const deviceInput = (bootstrap: typeof lost) => ({
+      id: bootstrap.deviceId,
+      identityGeneration: 1n,
+      keyId: bootstrap.keyId,
+      x25519PublicKey: bootstrap.x25519PublicKey,
+      ed25519PublicKey: bootstrap.ed25519PublicKey,
+    });
+    await devices.completeBootstrap(database, {
+      operation: {
+        ...(await createOperationInput(
+          user.id,
+          "initial recovery device",
+          "DEVICE_ENROLLMENT",
+        )),
+      },
+      device: deviceInput(lost),
+      certificateObject: lost.certificate,
+    });
+    const code = generateRecoveryCode();
+    const wrapper = await createAccountKeyWrapper({
+      serverProfileId: pin.serverProfileId,
+      userId: lost.bundle.userId,
+      deviceId: lost.bundle.deviceId,
+      userIdentityGeneration: 1,
+      createdAtMs: Date.now(),
+      accountMasterKey: generateAccountMasterKey(),
+      signingPrivateKey: lost.keyMaterial.signingPrivateKey,
+      kind: { type: "recoveryCode", recoveryCode: code },
+    });
+    const canonicalBytes = encodeProtocolObject(wrapper.object);
+    const object = await database.protocolObject.create({
+      data: {
+        id: crypto.randomUUID(),
+        suite: lost.certificate.suite,
+        formatVersion: 3,
+        kind: 20,
+        canonicalBytes: new Uint8Array(canonicalBytes),
+        digest: new Uint8Array(await sha384Digest(canonicalBytes)),
+      },
+    });
+    await database.accountKeyWrapperObject.create({
+      data: {
+        protocolObjectId: object.id,
+        userId: user.id,
+        identityGeneration: 1n,
+        wrapperType: "RECOVERY_CODE",
+        wrapperId: new Uint8Array(wrapper.wrapperId),
+        ciphertextHash: new Uint8Array(await sha384Digest(wrapper.ciphertext)),
+        ciphertextLength: wrapper.ciphertext.length,
+      },
+    });
+    const prepare = () =>
+      prepareDeviceRecovery({
+        pin,
+        userId: user.id,
+        recoveryCode: code,
+        wrapperBytes: canonicalBytes,
+        creatorPublicKey: lost.ed25519PublicKey,
+      });
+    const inputFor = (prepared: Awaited<ReturnType<typeof prepare>>) => ({
+      operation: {
+        id: prepared.request.operationId,
+        actorUserId: user.id,
+        kind: "DEVICE_ENROLLMENT" as const,
+        commandBytes: prepared.bootstrap.certificate.canonicalBytes,
+        commandDigest: prepared.bootstrap.certificate.digest,
+      },
+      device: deviceInput(prepared.bootstrap),
+      certificateObject: prepared.bootstrap.certificate,
+      recovery: {
+        profileId: pin.serverProfileId,
+        wrapperId: wrapper.wrapperId,
+        signature: new Uint8Array(
+          Buffer.from(prepared.request.recovery.signature, "base64"),
+        ),
+      },
+    });
+    const prepared = await prepare();
+    const input = inputFor(prepared);
+    const tampered = {
+      ...input,
+      operation: { ...input.operation, id: crypto.randomUUID() },
+    };
+    await expect(devices.completeBootstrap(database, tampered)).rejects.toThrow(
+      "recovery authorization",
+    );
+    expect(await database.device.count({ where: { userId: user.id } })).toBe(1);
+    await devices.completeBootstrap(database, input);
+    expect(
+      await database.device.count({
+        where: { userId: user.id, lifecycle: "ACTIVE" },
+      }),
+    ).toBe(2);
+    const replay = await devices.completeBootstrap(database, input);
+    expect("idempotent" in replay && replay.idempotent).toBe(true);
+    await database.accountKeyWrapperObject.update({
+      where: { protocolObjectId: object.id },
+      data: { retiredAt: new Date() },
+    });
+    await expect(
+      devices.completeBootstrap(database, inputFor(await prepare())),
+    ).rejects.toThrow("recovery authorization");
+    expect(await database.device.count({ where: { userId: user.id } })).toBe(2);
   });
 
   // Bootstrap is first-Device-only (ADR 0010): a User with an ACTIVE Device

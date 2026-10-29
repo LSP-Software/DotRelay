@@ -89,3 +89,8 @@ The integration tests cover the exact GitHub callback, OAuth state rejection, se
 attributes, cross-subdomain cookie scoping, exact-origin CORS and CSRF failures, mixed credentials,
 device polling and expiry, endpoint limiting, logout, remote revocation, session expiry,
 capabilities ETags, profile rebinding, and suite or runtime refusal before credential access.
+
+Signed-in Users may fetch their own encrypted Account Key Wrappers without an active Device to
+start disaster recovery. A replacement Device requires the Recovery Code proof described in
+[ADR 0013](../adr/0013-recovery-code-device-authorization.md); this does not relax active-Device
+checks on account-key mutations or protected content.

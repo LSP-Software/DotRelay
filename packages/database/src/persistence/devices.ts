@@ -1,4 +1,8 @@
 import {
+  deviceRecoveryMessage,
+  parseProtocolObject,
+} from "@dotrelay/contracts";
+import {
   AuditFactRepository,
   type OperationInput,
   OperationRepository,
@@ -46,6 +50,11 @@ export type DeviceEnrollmentApprovalInput = Readonly<{
 }>;
 
 export type DeviceBootstrapInput = Readonly<{
+  readonly recovery?: Readonly<{
+    wrapperId: Uint8Array;
+    signature: Uint8Array;
+    profileId: string;
+  }>;
   readonly operation: OperationInput;
   readonly device: Readonly<{
     readonly id: string;
@@ -361,7 +370,46 @@ export class DeviceRepository {
       const activeDeviceCount = await transaction.device.count({
         where: { userId: input.operation.actorUserId, lifecycle: "ACTIVE" },
       });
-      if (activeDeviceCount > 0)
+      if (input.recovery) {
+        const wrapper = await transaction.accountKeyWrapperObject.findFirst({
+          where: {
+            userId: input.operation.actorUserId,
+            wrapperId: databaseBytes(input.recovery.wrapperId),
+            wrapperType: "RECOVERY_CODE",
+            retiredAt: null,
+          },
+          include: { protocolObject: true },
+        });
+        const publicKey = wrapper
+          ? parseProtocolObject(
+              new Uint8Array(wrapper.protocolObject.canonicalBytes),
+            ).get(97)
+          : undefined;
+        if (!(publicKey instanceof Uint8Array) || publicKey.length !== 32)
+          throw new Error("recovery authorization is invalid");
+        const key = await crypto.subtle.importKey(
+          "raw",
+          new Uint8Array(publicKey),
+          "Ed25519",
+          false,
+          ["verify"],
+        );
+        const message = deviceRecoveryMessage(
+          input.recovery.profileId,
+          input.operation.actorUserId,
+          input.operation.id,
+          input.certificateObject.digest,
+        );
+        if (
+          !(await crypto.subtle.verify(
+            "Ed25519",
+            key,
+            new Uint8Array(input.recovery.signature),
+            message,
+          ))
+        )
+          throw new Error("recovery authorization is invalid");
+      } else if (activeDeviceCount > 0)
         throw new Error(
           "a device has already been bootstrapped; use enrollment to add another device",
         );

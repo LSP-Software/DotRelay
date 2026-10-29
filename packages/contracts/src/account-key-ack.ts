@@ -15,3 +15,23 @@ export const accountKeyTransferAcknowledgementMessage = (
   message.set(transferId, prefix.length);
   return message;
 };
+
+// Binds a recovery authorization to this exact Device certificate, User,
+// profile and idempotency key. No Recovery Code or AMK crosses the API.
+export const deviceRecoveryMessage = (
+  profileId: string,
+  userId: string,
+  operationId: string,
+  certificateDigest: Uint8Array,
+): Uint8Array<ArrayBuffer> =>
+  new TextEncoder().encode(
+    JSON.stringify({
+      purpose: "dotrelay-device-recovery-v1",
+      profileId,
+      userId,
+      operationId,
+      certificateDigest: Array.from(certificateDigest, (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join(""),
+    }),
+  );

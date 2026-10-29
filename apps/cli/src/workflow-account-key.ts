@@ -8,6 +8,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
+  prepareDeviceRecovery,
   authenticatedCreatorKeys,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
@@ -29,7 +30,8 @@ import {
   sha384ToHex,
   uuidToBytes,
 } from "@dotrelay/contracts";
-import type { StrictJsonClient } from "./admin";
+import { createStrictJsonClient, type StrictJsonClient } from "./admin";
+import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
 import { readTerminalSecret, selectOption } from "./ui";
 import {
@@ -395,7 +397,81 @@ export const recoverAccountKey = async (
     throw new CliInvocationError(
       "device recover accepts either --recovery-code-file <path> or --transfer <transfer-id>, not both",
     );
-  await enrollFirstDevice(options);
+  try {
+    await enrollFirstDevice(options);
+  } catch (error) {
+    if (
+      hasTransfer ||
+      !(error instanceof CliError) ||
+      ![
+        "state_conflict",
+        "device_bundle_missing",
+        "device_bundle_invalid",
+        "device_not_active",
+      ].includes(error.code)
+    )
+      throw error;
+    // The old Device may be lost while still ACTIVE on the service. Prove
+    // possession of the recovery secret instead of requiring its approval.
+    const admin =
+      options.admin ??
+      createStrictJsonClient(options.profile.pin, options.credentials, {
+        ...(options.fetch ? { fetch: options.fetch } : {}),
+        ...(options.networkPolicy
+          ? { networkPolicy: options.networkPolicy }
+          : {}),
+      });
+    const session = await admin.get("/api/v1/session", [
+      "authenticated",
+      "user",
+    ]);
+    if (!isRecord(session.user) || typeof session.user.id !== "string")
+      throw error;
+    const wrappers = await fetchActiveWrappers(admin);
+    const entry = wrappers.find(
+      (candidate) => candidate.type === "recovery-code",
+    );
+    if (!entry?.creatorPublicKey)
+      throw new CliError(
+        "authentication",
+        "Recovery Code authorization is unavailable; use an existing Device",
+        {},
+        "account_key_unlock_failed",
+      );
+    const code = decodeRecoveryCode(
+      await readRecoveryCode(options, input.recoveryCodeFile),
+    );
+    const prepared = await prepareDeviceRecovery({
+      pin: options.profile.pin,
+      userId: session.user.id,
+      recoveryCode: code,
+      wrapperBytes: fromBase64(entry.object, "recovery wrapper"),
+      creatorPublicKey: hexToBytes(entry.creatorPublicKey),
+    });
+    code.fill(0);
+    const storage = resolveDeviceStorage(options);
+    await storage.save(prepared.bootstrap.bundle);
+    await storage.saveAccountKey(
+      accountKeyScope(options, prepared.bootstrap.deviceId),
+      prepared.accountMasterKey,
+    );
+    await writeDeviceId(
+      deviceMetadataPath(options.stateDirectory, options.profile.pin),
+      options.profile.pin,
+      prepared.bootstrap.deviceId,
+    );
+    await admin.post("/api/v1/devices/bootstrap", prepared.request, [
+      "deviceId",
+      "identityGeneration",
+      "active",
+    ]);
+    return {
+      deviceId: prepared.bootstrap.deviceId,
+      via: "recovery-code",
+      message:
+        "Recovered this Device with the Recovery Code; the existing account key is unlocked",
+    };
+  }
   const authorized = await loadAuthorizedDevice(options);
   const storage = resolveDeviceStorage(options);
   let accountMasterKey: Uint8Array;

@@ -25,3 +25,7 @@ publish job must be configured with the security owner as a required reviewer; i
 approval is the release evidence. The environment must also define the protected variable
 `SECURITY_REVIEW_APPROVAL=approved`; the publish job checks this value after the environment gate
 and refuses to publish without it.
+
+Prereleases publish versioned images and `latest-alpha`, never `latest-stable`; automatic production
+deployment runs only for stable tags. Alpha installation deployment is an explicit operation using
+the versioned alpha images. Release workflows serialize across all release tags.

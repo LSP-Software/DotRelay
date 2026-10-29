@@ -98,3 +98,19 @@ test("unauthenticated callers cannot choose a limiter bucket with arbitrary head
     await actorRateLimitKey("user-b"),
   );
 });
+
+test("required alpha admission fails closed on missing configuration", () => {
+  expect(() =>
+    loadServerProfileConfig({ ALPHA_ADMISSION_REQUIRED: "true" }),
+  ).toThrow("ALPHA_GITHUB_IDS");
+  expect(
+    loadServerProfileConfig({
+      ALPHA_ADMISSION_REQUIRED: "true",
+      ALPHA_GITHUB_IDS: "",
+    }).allowedGitHubIds,
+  ).toEqual([]);
+  expect(
+    loadServerProfileConfig({ ALPHA_ADMISSION_REQUIRED: "false" })
+      .allowedGitHubIds,
+  ).toBeUndefined();
+});

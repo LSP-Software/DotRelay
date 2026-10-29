@@ -837,6 +837,16 @@ export const guardPullOutputAgainstGit = async (
   for (const info of tracking) {
     if (info.state === "untracked") {
       const exclusion = await ensureLocalGitExclusion(info);
+      const verified = await probe(
+        resolve(paths[tracking.indexOf(info)] ?? outputPath),
+      );
+      if (verified.state !== "ignored")
+        throw new CliError(
+          "local-io",
+          "Git did not honor the plaintext output exclusion",
+          {},
+          "git_exclusion_failed",
+        );
       if (result !== "established") result = exclusion;
     } else if (info.state === "ignored" && result === undefined) {
       result = "present";

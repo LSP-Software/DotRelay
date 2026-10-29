@@ -507,7 +507,7 @@ export type DeviceRepairContext = Readonly<{
 export const repairStaleEpoch = async (
   ctx: DeviceRepairContext,
 ): Promise<void> => {
-  const { apiOrigin, profileId, boundary } = ctx;
+  const { profileId, boundary } = ctx;
   const { onMessage, onInProgress, onCommit, onOffline } = ctx;
   const profile = boundary.profile;
   const device = boundary.device;
@@ -547,119 +547,11 @@ export const repairStaleEpoch = async (
       // The unblocked editor is the result report: nothing needs saying.
       return;
     }
-    // The stored Device keys sign the fresh grant; a mismatch between the
-    // stored public key and the service's record means these keys belong
-    // to a different Device and cannot be used.
-    let keyMaterial: DeviceKeyMaterial | null = null;
-    let x25519PublicKey: Uint8Array | null = null;
-    if (storedId === device.id && device.encryptionPublicKey) {
-      try {
-        const storage = createBrowserDeviceStorage(pin);
-        const bundle = await storage.load({
-          pin,
-          deviceId: uuidToBytes(device.id),
-        });
-        const material = await loadDeviceKeyMaterial(bundle);
-        if (material.encryptionPublicKey) {
-          const exported = new Uint8Array(
-            await globalThis.crypto.subtle.exportKey(
-              "raw",
-              material.encryptionPublicKey,
-            ),
-          );
-          if (bytesToHex(exported) === device.encryptionPublicKey) {
-            keyMaterial = material;
-            x25519PublicKey = exported;
-          }
-        }
-      } catch {
-        keyMaterial = null;
-      }
-    }
-    const teamId = nextBoundary.environment.teamId ?? null;
-    const projectId = nextBoundary.environment.projectId ?? null;
-    const projectEpoch = Number(nextBoundary.environment.projectEpoch);
-    if (
-      keyMaterial?.encryptionPublicKey &&
-      x25519PublicKey &&
-      teamId &&
-      projectId &&
-      Number.isSafeInteger(projectEpoch) &&
-      projectEpoch >= 1
-    ) {
-      const grant = await createProjectEpochGrantBootstrap({
-        serverProfileId: profile.serverProfileId,
-        teamId,
-        projectId,
-        projectEpoch,
-        senderDeviceId: device.id,
-        recipientDeviceId: device.id,
-        recipientX25519PublicKey: x25519PublicKey,
-        recipientEncryptionPublicKey: keyMaterial.encryptionPublicKey,
-        signingPrivateKey: keyMaterial.signingPrivateKey,
-      });
-      const response = await fetch(`${apiOrigin}/api/v1/grants/bootstrap`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-DotRelay-Device-Id": device.id,
-        },
-        body: JSON.stringify({
-          operationId: globalThis.crypto.randomUUID(),
-          objectId: grant.objectId,
-          projectId,
-          teamId,
-          digest: toBase64(grant.digest),
-          grant: toBase64(grant.canonicalBytes),
-        }),
-      });
-      if (response.ok) {
-        const refreshed = await fetchWorkspaceBoundary(profileId, {
-          deviceId: device.id,
-          ...(ctx.selectedEnvironmentId
-            ? { environmentId: ctx.selectedEnvironmentId }
-            : ctx.environmentId
-              ? { environmentId: ctx.environmentId }
-              : {}),
-        });
-        if (refreshed.connection === "online") onCommit(refreshed);
-        else onOffline();
-        onMessage(
-          recoveredProjectAccess(refreshed)
-            ? null
-            : "The server accepted the new keys, but project access is still pending. Try again.",
-        );
-        return;
-      }
-      const body = (await response.json().catch(() => null)) as {
-        readonly code?: unknown;
-      } | null;
-      const code = typeof body?.code === "string" ? body.code : null;
-      if (code === "device_not_active") {
-        // The service deactivated the Device, so its keys can no longer
-        // sign; only a replacement Device recovers this browser.
-        ctx.onReplacementNeeded();
-        return;
-      }
-      if (code === "stale_epoch") {
-        onMessage(
-          "Key rotation is still in progress on this project. Wait for it to finish, then try again.",
-        );
-        return;
-      }
-      const teamName =
-        nextBoundary.catalog.teams.find((team) => team.id === teamId)?.name ??
-        ctx.selectedTeamName ??
-        "your team";
-      onMessage(
-        `This browser can't recover the project's current keys on its own. Recover the account's key from the Recovery area, or have another of your devices run \`dotrelay device transfer\` to hand this browser the key. An Owner or Admin${teamName !== "your team" ? ` of ${teamName}` : ""} can rotate the project keys with \`dotrelay project rotate\`.`,
-      );
-      return;
-    }
-    // No usable local keys for this Device: the only repair is a
-    // replacement Device, which discards the browser's stored keys.
-    ctx.onReplacementNeeded();
+    // Missing current keys must be recovered, never replaced by a random key
+    // under the existing epoch. A grant count proves presence, not correctness.
+    onMessage(
+      "Recover the existing project key from the Recovery area, or ask an owner or admin to share project keys. Repair cannot create a replacement key for an existing project epoch.",
+    );
   } catch {
     onMessage("Couldn't restore the project's keys. Try again.");
   } finally {
