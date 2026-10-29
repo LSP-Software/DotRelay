@@ -128,12 +128,15 @@ test("a conflicting bootstrap starts an enrollment awaiting approval", async ({
       "This browser is ready to join this account. Approve its enrollment on one of your other devices, then reload this page.",
     ),
   ).toBeVisible({ timeout: 15_000 });
+  // The browser saved its keys when it started the enrollment, so the setup
+  // card reports it as set up and keeps the pending-approval guidance instead
+  // of offering the first-Device bootstrap action again.
   await expect(
     page.locator("#devices").getByText("Set up this browser", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     page.locator("#devices").getByText("This browser is set up", {
       exact: true,
     }),
-  ).toHaveCount(0);
+  ).toBeVisible();
 });
