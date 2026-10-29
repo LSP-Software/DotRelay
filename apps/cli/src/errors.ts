@@ -113,6 +113,7 @@ const safeDiagnosticCodes = new Set([
   "invitation_expired",
   "invocation",
   "local-io",
+  "membership_not_active",
   "membership_not_key_provisioned",
   "missing_values",
   "operation_conflict",
@@ -194,6 +195,7 @@ export const categoryForProblem = (
     return "authentication";
   if (
     [
+      "membership_not_active",
       "membership_not_key_provisioned",
       "operation_conflict",
       "stale_head",
@@ -234,6 +236,8 @@ export const detailForProblem = (code: string): string => {
     return "login is required for this Server Profile; run dotrelay login";
   if (code === "device_not_active")
     return "this Device is not active; run dotrelay device enroll to re-authorize it";
+  if (code === "membership_not_active")
+    return "your Membership in this Team is not active; ask a Team owner to re-add you, then run dotrelay pull to refresh it";
   if (code === "forbidden") return "the Server Profile denied the request";
   if (code === "resource_not_found")
     return "the requested resource was not found";
@@ -276,6 +280,7 @@ export type ErrorPresentation = Readonly<{
 const errorTitles: Record<string, string> = {
   authentication_required: "Login required",
   device_not_active: "Device not active",
+  membership_not_active: "Membership not active",
   device_bundle_missing: "No Device enrolled",
   device_enrollment_failed: "Device enrollment failed",
   device_enrollment_unavailable: "Device enrollment unavailable",

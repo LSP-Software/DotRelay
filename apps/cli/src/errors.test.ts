@@ -175,6 +175,7 @@ describe("CLI diagnostics", () => {
       ["unsupported_crypto_runtime", "crypto", EXIT_CODES.crypto],
       ["stale_head", "conflict", EXIT_CODES.conflict],
       ["device_not_active", "authentication", EXIT_CODES.authentication],
+      ["membership_not_active", "conflict", EXIT_CODES.conflict],
       ["service_unavailable", "transient", EXIT_CODES.transient],
     ];
     for (const [code, category, exitCode] of cases) {
@@ -206,6 +207,10 @@ describe("CLI diagnostics", () => {
     const unavailable = diagnosticForError(transport("service_unavailable"));
     expect(unavailable.category).toBe("transient");
     expect(unavailable.exitCode).toBe(EXIT_CODES.transient);
+    const inactive = diagnosticForError(transport("membership_not_active"));
+    expect(inactive.category).toBe("conflict");
+    expect(inactive.code).toBe("membership_not_active");
+    expect(inactive.exitCode).toBe(EXIT_CODES.conflict);
     const cryptoRejection = diagnosticForError(
       transport("invalid_crypto_object"),
     );
