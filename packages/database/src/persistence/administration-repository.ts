@@ -220,6 +220,15 @@ export class AdministrationRepository {
     }>,
   ) {
     return inShortTransaction(database, async (transaction) => {
+      // Lock the owning project before the environment, matching rotation and
+      // publication, so a concurrent epoch rotation's active-environment read
+      // cannot interleave with this lifecycle change on the same project.
+      const projectRef = await transaction.environment.findUnique({
+        where: { id: input.environmentId },
+        select: { projectId: true },
+      });
+      if (!projectRef) throw new Error("Environment not found");
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${projectRef.projectId} FOR UPDATE`;
       await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
       const lockedEnvironment = await transaction.environment.findUnique({
         where: { id: input.environmentId },
@@ -277,6 +286,17 @@ export class AdministrationRepository {
     }>,
   ) {
     return inShortTransaction(database, async (transaction) => {
+      // Lock the owning project before the environment so a concurrent epoch
+      // rotation's active-environment read cannot interleave with this restore
+      // (an archived environment restored mid-rotation would escape the
+      // rotation's transition set); the re-read below sees the lifecycle
+      // under both locks.
+      const projectRef = await transaction.environment.findUnique({
+        where: { id: input.environmentId },
+        select: { projectId: true },
+      });
+      if (!projectRef) throw new Error("Environment not found");
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${projectRef.projectId} FOR UPDATE`;
       await transaction.$executeRaw`SELECT "id" FROM "environments" WHERE "id" = ${input.environmentId} FOR UPDATE`;
       const lockedEnvironment = await transaction.environment.findUnique({
         where: { id: input.environmentId },

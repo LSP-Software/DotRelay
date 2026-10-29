@@ -1760,6 +1760,101 @@ integrationDescribe("trust workflow integration", () => {
     ).rejects.toBeInstanceOf(StaleHeadError);
   });
 
+  test("blocks a concurrent environment restore behind a rotation's project lock", async () => {
+    const user = await createUserFixture();
+    const device = await createActiveDevice(user.id);
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: user.id } } },
+    });
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    const administration = new AdministrationRepository();
+    await administration.createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: user.id,
+      name: "rotation-lock-team",
+      operation: {
+        ...(await createOperationInput(user.id, "rotation-lock-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const createdProject = await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now() + 50),
+      operation: {
+        ...(await createOperationInput(user.id, "rotation-lock-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("environment" in createdProject))
+      throw new Error("project creation did not provision an environment");
+    const environmentId = createdProject.environment.id;
+
+    // Archive the environment so a rotation's active-environment read omits it
+    // from the transition set.
+    await administration.archiveEnvironment(database, {
+      environmentId,
+      operation: {
+        ...(await createOperationInput(user.id, "archive-rotation-lock-env")),
+        actorDeviceId: device.id,
+      },
+    });
+    const archived = await database.environment.findUniqueOrThrow({
+      where: { id: environmentId },
+    });
+    expect(archived.lifecycle).toBe("ARCHIVED");
+
+    // A separate transaction models an epoch rotation's critical section: it
+    // locks the project row and holds it while working, as ProjectEpochRepository
+    // .rotate does before it commits.
+    let releaseRotation: () => void = () => undefined;
+    const rotationHoldsProjectLock = new Promise<void>((resolve) => {
+      releaseRotation = resolve;
+    });
+    const rotation = database.$transaction(async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${projectId} FOR UPDATE`;
+      await rotationHoldsProjectLock;
+    });
+
+    // The restore takes the owning project lock before the environment lock, so
+    // while the rotation holds the project lock it cannot commit and the
+    // environment stays ARCHIVED rather than escaping the rotation's set.
+    const restoreEnvironment = administration.restoreEnvironment(database, {
+      environmentId,
+      operation: {
+        ...(await createOperationInput(user.id, "restore-rotation-lock-env")),
+        actorDeviceId: device.id,
+      },
+    });
+    const settledBeforeRelease = await Promise.race([
+      restoreEnvironment.then(
+        () => true,
+        () => true,
+      ),
+      new Promise((resolve) => setTimeout(() => resolve(false), 150)),
+    ]);
+    expect(settledBeforeRelease).toBe(false);
+    const whileRotationHoldsLock = await database.environment.findUniqueOrThrow(
+      {
+        where: { id: environmentId },
+      },
+    );
+    expect(whileRotationHoldsLock.lifecycle).toBe("ARCHIVED");
+
+    releaseRotation();
+    await rotation;
+    const restored = await restoreEnvironment;
+    if (!("environment" in restored))
+      throw new Error("restore did not return the updated environment");
+    expect(restored.environment.lifecycle).toBe("ACTIVE");
+    const finalEnvironment = await database.environment.findUniqueOrThrow({
+      where: { id: environmentId },
+    });
+    expect(finalEnvironment.lifecycle).toBe("ACTIVE");
+  });
+
   test("rotates the Project epoch across multiple Environments under one shared operation", async () => {
     const user = await createUserFixture();
     const device = await createActiveDevice(user.id);

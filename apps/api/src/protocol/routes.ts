@@ -771,12 +771,16 @@ export const registerProtocolRoutes = (
           ),
         ]),
       ]);
+      // Resolve staged objects whether or not they were already promoted. A
+      // replay of a rotation that committed in an earlier request must still
+      // resolve its (now committed) staging so the operation's own idempotency
+      // can return the recorded outcome, instead of failing on staging that
+      // only matched while it was uncommitted.
       const stagedRows = await database.stagedObject.findMany({
         where: {
           operationId,
           objectId: { in: [...stagedIds] },
           actorDeviceId: actor.deviceId,
-          committedAt: null,
         },
       });
       if (!hasAllStagedObjects(stagedIds, stagedRows)) {

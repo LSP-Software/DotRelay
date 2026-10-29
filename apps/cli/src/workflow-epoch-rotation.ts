@@ -12,7 +12,12 @@ import {
 } from "@dotrelay/contracts";
 import { listEnvironments, type EnvironmentSummary } from "./admin";
 import type { ParsedArguments } from "./args";
-import { CliError, CliInvocationError } from "./errors";
+import {
+  CliError,
+  CliInvocationError,
+  categoryForProblem,
+  detailForProblem,
+} from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
 import {
   base64,
@@ -69,6 +74,24 @@ export const planEpochRotation = (
     expectedHeadId: environment.currentHeadId as string,
     expectedHeadHash: hexToBytes(environment.currentHeadHash as string),
   }));
+};
+
+// A rotation's transport calls can fail with any protocol problem code. Classify
+// it through the central mapping so the category and guidance, and therefore the
+// exit code, match every other command instead of collapsing to transient here.
+export const rotationTransportFailure = (error: unknown): CliError => {
+  const code =
+    error instanceof ProtocolTransportError
+      ? error.problem.code
+      : "service_unavailable";
+  return new CliError(
+    categoryForProblem(code),
+    code === "stale_epoch"
+      ? "the project epoch changed before this rotation landed. Run dotrelay pull, then try again"
+      : detailForProblem(code),
+    {},
+    code,
+  );
 };
 
 export const rotateProjectEpoch = async (
@@ -139,24 +162,7 @@ export const rotateProjectEpoch = async (
       .catch(() => undefined);
     if (error instanceof CliError || error instanceof CliInvocationError)
       throw error;
-    const code =
-      error instanceof ProtocolTransportError
-        ? error.problem.code
-        : "service_unavailable";
-    throw new CliError(
-      code === "stale_epoch" ||
-        code === "stale_head" ||
-        code === "state_conflict"
-        ? "conflict"
-        : code === "invalid_crypto_object"
-          ? "crypto"
-          : "transient",
-      code === "stale_epoch"
-        ? "the project epoch changed before this rotation landed. Run dotrelay pull, then try again"
-        : "the Server Profile did not rotate the project keys",
-      {},
-      code,
-    );
+    throw rotationTransportFailure(error);
   }
   await storeRotatedEpochKey(options, synced.workflow, previousEpoch + 1);
   const environmentIds = rotationEnvironments.map(

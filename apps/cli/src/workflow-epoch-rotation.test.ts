@@ -2,14 +2,24 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMemoryCredentialStore } from "@dotrelay/client";
+import {
+  createMemoryCredentialStore,
+  ProtocolTransportError,
+} from "@dotrelay/client";
+import { createProblem } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { parseArguments } from "./args";
-import { CliError, CliInvocationError } from "./errors";
+import {
+  CliError,
+  CliInvocationError,
+  diagnosticForError,
+  EXIT_CODES,
+} from "./errors";
 import type { WorkflowOptions } from "./workflow-core";
 import {
   planEpochRotation,
   rotateProjectEpoch,
+  rotationTransportFailure,
 } from "./workflow-epoch-rotation";
 
 const options = {
@@ -201,5 +211,41 @@ describe("planEpochRotation", () => {
         ),
       ),
     ).toBe("environment_empty");
+  });
+});
+
+describe("rotationTransportFailure", () => {
+  test("maps membership_not_active to a conflict (exit 4) with membership guidance", () => {
+    const error = rotationTransportFailure(
+      new ProtocolTransportError(createProblem("membership_not_active")),
+    );
+    expect(error).toBeInstanceOf(CliError);
+    expect(error.category).toBe("conflict");
+    expect(error.code).toBe("membership_not_active");
+    const diagnostic = diagnosticForError(error);
+    expect(diagnostic.code).toBe("membership_not_active");
+    expect(diagnostic.exitCode).toBe(EXIT_CODES.conflict);
+    expect(diagnostic.detail).toContain(
+      "Membership in this Team is not active",
+    );
+  });
+
+  test("keeps the stale_epoch guidance and conflict category", () => {
+    const error = rotationTransportFailure(
+      new ProtocolTransportError(createProblem("stale_epoch")),
+    );
+    expect(error.category).toBe("conflict");
+    expect(error.code).toBe("stale_epoch");
+    expect(error.message).toContain(
+      "the project epoch changed before this rotation landed",
+    );
+    expect(diagnosticForError(error).exitCode).toBe(EXIT_CODES.conflict);
+  });
+
+  test("classifies an unstructured transport failure as a transient service error", () => {
+    const error = rotationTransportFailure(new Error("socket closed"));
+    expect(error.category).toBe("transient");
+    expect(error.code).toBe("service_unavailable");
+    expect(diagnosticForError(error).exitCode).toBe(EXIT_CODES.transient);
   });
 });
