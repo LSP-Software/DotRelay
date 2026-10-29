@@ -10,7 +10,7 @@ import {
   sha384ToHex,
   uuidToBytes,
 } from "@dotrelay/contracts";
-import { listEnvironments } from "./admin";
+import { listEnvironments, type EnvironmentSummary } from "./admin";
 import type { ParsedArguments } from "./args";
 import { CliError, CliInvocationError } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
@@ -27,6 +27,50 @@ import { syncWorkflow } from "./workflow-session";
 
 const ROTATE_QUESTION = "Rotate this project's keys?";
 
+export type RotationTarget = Readonly<{
+  readonly environmentId: string;
+  readonly expectedHeadId: string;
+  readonly expectedHeadHash: Uint8Array;
+}>;
+
+// A project epoch bump is project-wide, so a rotation advances every active
+// Environment in one shared operation. The operator must act from one of the
+// active Environments, and every active Environment needs a head to chain the
+// transition from.
+export const planEpochRotation = (
+  environments: readonly EnvironmentSummary[],
+  currentEnvironmentId: string,
+): RotationTarget[] => {
+  const active = environments.filter(
+    (environment) => environment.lifecycle === "active",
+  );
+  if (
+    active.length < 1 ||
+    !active.some((environment) => environment.id === currentEnvironmentId)
+  )
+    throw new CliError(
+      "conflict",
+      "this project has no active environment to rotate from. Activate an environment, or switch to one, before rotating the project's keys",
+      { activeEnvironments: active.length },
+      "epoch_rotation_unsupported",
+    );
+  const empty = active.find(
+    (environment) => environment.currentHeadId === null,
+  );
+  if (empty)
+    throw new CliError(
+      "conflict",
+      `the active environment ${empty.label} has no revision yet. Run dotrelay init in it before rotating the project's keys`,
+      { environmentId: empty.id },
+      "environment_empty",
+    );
+  return active.map((environment) => ({
+    environmentId: environment.id,
+    expectedHeadId: environment.currentHeadId as string,
+    expectedHeadHash: hexToBytes(environment.currentHeadHash as string),
+  }));
+};
+
 export const rotateProjectEpoch = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -35,6 +79,7 @@ export const rotateProjectEpoch = async (
     readonly projectEpoch: string;
     readonly previousEpoch: number;
     readonly environmentId: string;
+    readonly environmentIds: readonly string[];
     readonly message: string;
   }>
 > => {
@@ -49,38 +94,21 @@ export const rotateProjectEpoch = async (
   if (!options.noInput && !(await confirmSilent(options, ROTATE_QUESTION)))
     throw new CliInvocationError("project key rotation was declined");
   const context = synced.workflow.publicationContext;
-  const headId = synced.page.currentHeadId;
-  const headHash = synced.page.currentHeadHash;
-  if (!headId || !headHash)
-    throw new CliError(
-      "conflict",
-      "this environment has no revision yet. Run dotrelay init before rotating its keys",
-      {},
-      "environment_empty",
-    );
   const admin = createDeviceAdmin(options, synced.workflow.deviceId);
   const environments = await listEnvironments(admin, context.projectId);
-  const active = environments.filter(
-    (environment) => environment.lifecycle === "active",
+  const rotationEnvironments = planEpochRotation(
+    environments,
+    context.environmentId,
   );
-  if (active.length !== 1 || active[0]?.id !== context.environmentId)
-    throw new CliError(
-      "conflict",
-      "project rotate currently supports a project with one active environment, because one rotation operation can record only one environment revision",
-      { activeEnvironments: active.length },
-      "epoch_rotation_unsupported",
-    );
   const previousEpoch = safeProjectEpoch(synced.page.projectEpoch);
   const artifacts = await createEpochRotationArtifacts({
     serverProfileId: context.serverProfileId,
     teamId: context.teamId,
     projectId: context.projectId,
-    environmentId: context.environmentId,
     actorUserId: context.actorUserId,
     actorDeviceId: context.actorDeviceId,
     expectedEpoch: previousEpoch,
-    expectedHeadId: headId,
-    expectedHeadHash: headHash,
+    environments: rotationEnvironments,
     signingPrivateKey: context.signingPrivateKey,
   });
   const operationId = crypto.randomUUID();
@@ -131,11 +159,18 @@ export const rotateProjectEpoch = async (
     );
   }
   await storeRotatedEpochKey(options, synced.workflow, previousEpoch + 1);
+  const environmentIds = rotationEnvironments.map(
+    (target) => target.environmentId,
+  );
   return {
     projectEpoch: rotated.projectEpoch,
     previousEpoch,
     environmentId: context.environmentId,
-    message: `Rotated the project to epoch ${rotated.projectEpoch}. Devices that still hold only the previous epoch key can read later shared values after the next dotrelay pull.`,
+    environmentIds,
+    message:
+      environmentIds.length > 1
+        ? `Rotated the project to epoch ${rotated.projectEpoch} across all ${environmentIds.length} of its active environments. Devices that still hold only the previous epoch key can read later shared values after the next dotrelay pull.`
+        : `Rotated the project to epoch ${rotated.projectEpoch}. Devices that still hold only the previous epoch key can read later shared values after the next dotrelay pull.`,
   };
 };
 

@@ -940,7 +940,18 @@ describe("API foundation", () => {
             projectId: "00000000-0000-4000-8000-000000000002",
             label: "default",
             lifecycle: "ACTIVE",
+            currentHeadId: "00000000-0000-4000-8000-0000000000aa",
+            currentHead: {
+              protocolObject: { digest: new Uint8Array(48).fill(0xab) },
+            },
+          },
+          {
+            id: "00000000-0000-4000-8000-000000000004",
+            projectId: "00000000-0000-4000-8000-000000000002",
+            label: "empty",
+            lifecycle: "ACTIVE",
             currentHeadId: null,
+            currentHead: null,
           },
         ],
       },
@@ -965,7 +976,16 @@ describe("API foundation", () => {
           projectId: "00000000-0000-4000-8000-000000000002",
           label: "default",
           lifecycle: "active",
+          currentHeadId: "00000000-0000-4000-8000-0000000000aa",
+          currentHeadHash: "ab".repeat(48),
+        },
+        {
+          id: "00000000-0000-4000-8000-000000000004",
+          projectId: "00000000-0000-4000-8000-000000000002",
+          label: "empty",
+          lifecycle: "active",
           currentHeadId: null,
+          currentHeadHash: null,
         },
       ],
     });
@@ -1221,6 +1241,7 @@ describe("Project and Environment lifecycle administration", () => {
       label: "default",
       lifecycle: "archived",
       currentHeadId: HEAD,
+      currentHeadHash: null,
     });
 
     const restored = await call("restore", idempotency(2));
@@ -1231,6 +1252,7 @@ describe("Project and Environment lifecycle administration", () => {
       label: "default",
       lifecycle: "active",
       currentHeadId: HEAD,
+      currentHeadHash: null,
     });
 
     expect(operations.size).toBe(2);

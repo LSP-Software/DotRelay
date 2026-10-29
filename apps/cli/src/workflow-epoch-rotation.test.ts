@@ -7,7 +7,10 @@ import type { StrictJsonClient } from "./admin";
 import { parseArguments } from "./args";
 import { CliError, CliInvocationError } from "./errors";
 import type { WorkflowOptions } from "./workflow-core";
-import { rotateProjectEpoch } from "./workflow-epoch-rotation";
+import {
+  planEpochRotation,
+  rotateProjectEpoch,
+} from "./workflow-epoch-rotation";
 
 const options = {
   noInput: true,
@@ -72,5 +75,131 @@ describe("project rotate confirmation", () => {
     } finally {
       await rm(stateDirectory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("planEpochRotation", () => {
+  const environment = (
+    id: string,
+    lifecycle: "active" | "archived",
+    currentHeadId: string | null,
+    currentHeadHash: string | null,
+  ) =>
+    Object.freeze({
+      id,
+      projectId: "33333333-3333-4333-8333-333333333333",
+      label: id,
+      lifecycle,
+      currentHeadId,
+      currentHeadHash,
+    });
+
+  const codeOf = (plan: () => unknown): string | undefined => {
+    try {
+      plan();
+    } catch (error) {
+      return error instanceof CliError ? error.code : undefined;
+    }
+    return undefined;
+  };
+
+  test("plans one shared operation across every active environment", () => {
+    const targets = planEpochRotation(
+      [
+        environment(
+          "11111111-1111-4111-8111-111111111111",
+          "active",
+          "10000000-0000-4000-8000-000000000001",
+          "11".repeat(48),
+        ),
+        environment(
+          "22222222-2222-4222-8222-222222222222",
+          "active",
+          "20000000-0000-4000-8000-000000000002",
+          "22".repeat(48),
+        ),
+        environment(
+          "33333333-3333-4333-8333-333333333333",
+          "archived",
+          "30000000-0000-4000-8000-000000000003",
+          "33".repeat(48),
+        ),
+      ],
+      "11111111-1111-4111-8111-111111111111",
+    );
+    // The archived environment is excluded; the two active ones are planned as
+    // separate transitions of the single shared operation.
+    expect(targets).toEqual([
+      {
+        environmentId: "11111111-1111-4111-8111-111111111111",
+        expectedHeadId: "10000000-0000-4000-8000-000000000001",
+        expectedHeadHash: new Uint8Array(48).fill(0x11),
+      },
+      {
+        environmentId: "22222222-2222-4222-8222-222222222222",
+        expectedHeadId: "20000000-0000-4000-8000-000000000002",
+        expectedHeadHash: new Uint8Array(48).fill(0x22),
+      },
+    ]);
+  });
+
+  test("rejects a rotation that does not start from an active environment", () => {
+    expect(
+      codeOf(() =>
+        planEpochRotation(
+          [
+            environment(
+              "11111111-1111-4111-8111-111111111111",
+              "active",
+              "10000000-0000-4000-8000-000000000001",
+              "11".repeat(48),
+            ),
+          ],
+          "99999999-9999-4999-8999-999999999999",
+        ),
+      ),
+    ).toBe("epoch_rotation_unsupported");
+  });
+
+  test("rejects a project with no active environment", () => {
+    expect(
+      codeOf(() =>
+        planEpochRotation(
+          [
+            environment(
+              "11111111-1111-4111-8111-111111111111",
+              "archived",
+              "10000000-0000-4000-8000-000000000001",
+              "11".repeat(48),
+            ),
+          ],
+          "11111111-1111-4111-8111-111111111111",
+        ),
+      ),
+    ).toBe("epoch_rotation_unsupported");
+  });
+
+  test("rejects a rotation while an active environment has no revision", () => {
+    expect(
+      codeOf(() =>
+        planEpochRotation(
+          [
+            environment(
+              "11111111-1111-4111-8111-111111111111",
+              "active",
+              "10000000-0000-4000-8000-000000000001",
+              "11".repeat(48),
+            ),
+            environment(
+              "22222222-2222-4222-8222-222222222222",
+              "active",
+              null,
+              null,
+            ),
+          ],
+          "11111111-1111-4111-8111-111111111111",
+        ),
+      ),
+    ).toBe("environment_empty");
   });
 });

@@ -121,6 +121,7 @@ export type EnvironmentSummary = Readonly<{
   readonly label: string;
   readonly lifecycle: "active" | "archived";
   readonly currentHeadId: string | null;
+  readonly currentHeadHash: string | null;
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
@@ -162,6 +163,17 @@ const requireLifecycle = (
   return value;
 };
 
+const requireEnvironmentHeadHash = (value: unknown): string => {
+  if (typeof value !== "string" || value.length < 2)
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Environment head hash",
+      {},
+      "response_invalid",
+    );
+  return value;
+};
+
 const parseEnvironment = (value: unknown): EnvironmentSummary => {
   if (!isRecord(value))
     throw new CliError(
@@ -182,6 +194,10 @@ const parseEnvironment = (value: unknown): EnvironmentSummary => {
       value.currentHeadId === null
         ? null
         : requireOpaqueId(value.currentHeadId, "Environment head id"),
+    currentHeadHash:
+      value.currentHeadHash == null
+        ? null
+        : requireEnvironmentHeadHash(value.currentHeadHash),
   });
 };
 

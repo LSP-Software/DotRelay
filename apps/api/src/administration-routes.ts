@@ -116,18 +116,27 @@ const projectResponse = (project: {
   lifecycle: project.lifecycle.toLowerCase(),
 });
 
+const bytesToHex = (value: Uint8Array): string =>
+  [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
 const environmentResponse = (environment: {
   readonly id: string;
   readonly projectId: string;
   readonly label: string;
   readonly lifecycle: "ACTIVE" | "ARCHIVED";
   readonly currentHeadId: string | null;
+  readonly currentHead?: {
+    readonly protocolObject?: { readonly digest: Uint8Array } | null;
+  } | null;
 }) => ({
   id: environment.id,
   projectId: environment.projectId,
   label: environment.label,
   lifecycle: environment.lifecycle.toLowerCase(),
   currentHeadId: environment.currentHeadId,
+  currentHeadHash: environment.currentHead?.protocolObject
+    ? bytesToHex(new Uint8Array(environment.currentHead.protocolObject.digest))
+    : null,
 });
 
 const projectWithEnvironmentResponse = (
@@ -451,6 +460,9 @@ export const registerAdministrationRoutes = (
           label: true,
           lifecycle: true,
           currentHeadId: true,
+          currentHead: {
+            select: { protocolObject: { select: { digest: true } } },
+          },
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
@@ -616,6 +628,9 @@ export const registerAdministrationRoutes = (
                 label: true,
                 lifecycle: true,
                 currentHeadId: true,
+                currentHead: {
+                  select: { protocolObject: { select: { digest: true } } },
+                },
               },
             });
       if (!environment) return responseProblem(context, "resource_not_found");

@@ -172,6 +172,7 @@ describe("strict administration client", () => {
             label: "development",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
           {
             id: "00000000-0000-4000-8000-000000000004",
@@ -179,6 +180,7 @@ describe("strict administration client", () => {
             label: "production",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
         ],
       }),
@@ -193,6 +195,7 @@ describe("strict administration client", () => {
       label: "development",
       lifecycle: "active",
       currentHeadId: null,
+      currentHeadHash: null,
     });
   });
 
@@ -206,6 +209,7 @@ describe("strict administration client", () => {
             label: "staging",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
           {
             id: "00000000-0000-4000-8000-000000000004",
@@ -213,6 +217,7 @@ describe("strict administration client", () => {
             label: "staging",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
         ],
       }),
@@ -240,6 +245,7 @@ describe("strict administration client", () => {
             label: "development",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
         ],
       }),
@@ -264,6 +270,7 @@ describe("strict administration client", () => {
             label: "staging",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
           {
             id: "00000000-0000-4000-8000-000000000004",
@@ -271,6 +278,7 @@ describe("strict administration client", () => {
             label: "staging",
             lifecycle: "archived",
             currentHeadId: null,
+            currentHeadHash: null,
           },
         ],
       }),
@@ -309,6 +317,7 @@ describe("strict administration client", () => {
             label: "staging",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
           {
             id: "00000000-0000-4000-8000-000000000004",
@@ -316,6 +325,7 @@ describe("strict administration client", () => {
             label: "staging",
             lifecycle: "active",
             currentHeadId: null,
+            currentHeadHash: null,
           },
         ],
       }),
