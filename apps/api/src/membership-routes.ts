@@ -379,7 +379,12 @@ export const registerMembershipRoutes = (
         context.req.header("Idempotency-Key"),
       );
       const commandBytes = new TextEncoder().encode(
-        JSON.stringify({ action: "team.invite", teamId, providerSubject }),
+        JSON.stringify({
+          action: "team.invite",
+          teamId,
+          providerSubject,
+          operationId,
+        }),
       );
       const result = await memberships.invite(database, {
         teamId,
@@ -408,18 +413,25 @@ export const registerMembershipRoutes = (
         );
       }
       if (result.idempotent) {
-        // A replay names the same Team and subject: report the invitation
-        // the original command created instead of a second one.
-        const existing = await database.membershipInvitation.findFirst({
-          where: { teamId, providerSubject },
-          select: {
-            id: true,
-            providerSubject: true,
-            createdAt: true,
-            expiresAt: true,
-          },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        // A replay re-runs the same committed command: report the invitation
+        // that command created. The operation's MEMBERSHIP_INVITED audit fact
+        // binds it to that invitation, so re-inviting the same subject under a
+        // different key can never make this replay report a different one.
+        const fact = await database.auditEvent.findFirst({
+          where: { operationId, kind: "MEMBERSHIP_INVITED" },
+          select: { entityId: true },
         });
+        const existing = fact
+          ? await database.membershipInvitation.findUnique({
+              where: { id: fact.entityId },
+              select: {
+                id: true,
+                providerSubject: true,
+                createdAt: true,
+                expiresAt: true,
+              },
+            })
+          : null;
         if (!existing) return responseProblem(context, "state_conflict");
         return context.json(
           {

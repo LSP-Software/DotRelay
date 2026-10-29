@@ -678,6 +678,18 @@ const createDatabaseStub = () => {
         auditEvents.push(data);
         return data;
       },
+      findFirst: async ({
+        where,
+      }: {
+        where: { operationId: string; kind?: string };
+      }) => {
+        const event = auditEvents.find(
+          (entry) =>
+            entry.operationId === where.operationId &&
+            (where.kind === undefined || entry.kind === where.kind),
+        );
+        return event ? { entityId: event.entityId } : null;
+      },
     },
   };
   return {
