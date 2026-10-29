@@ -57,3 +57,19 @@ test("a tracked backup blocks replacement before either plaintext file changes",
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("literal Git metacharacters in plaintext output filenames remain excluded", async () => {
+  const { directory, git } = await fixture();
+  try {
+    const output = join(directory, ".env[local]");
+    await guardPullOutputAgainstGit({} as WorkflowOptions, output);
+    await atomicWriteProtectedFile(output, "SECRET=old\n");
+    await atomicWriteProtectedFile(output, "SECRET=new\n", {
+      retainPrevious: true,
+    });
+    await git("add", ".");
+    expect(await git("ls-files")).toBe("");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

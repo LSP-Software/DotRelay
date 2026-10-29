@@ -170,8 +170,16 @@ export const loadServerProfileConfig = (
     );
   }
   const allowRebind = environment.SERVER_PROFILE_REBIND === "true";
+  if (
+    environment.ALPHA_ADMISSION_REQUIRED === "true" &&
+    environment.ALPHA_GITHUB_IDS === undefined
+  )
+    throw new Error(
+      "ALPHA_GITHUB_IDS must be explicitly configured when alpha admission is required (empty denies everyone)",
+    );
   // Unset disables the alpha gate; explicitly empty denies everyone.
   const allowedGitHubIds =
+    environment.ALPHA_ADMISSION_REQUIRED === "false" ||
     environment.ALPHA_GITHUB_IDS === undefined
       ? undefined
       : environment.ALPHA_GITHUB_IDS.split(",")

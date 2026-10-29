@@ -20,6 +20,13 @@ prospective Device self-started. `PENDING` exists only for a
 Device whose enrollment is still in flight; there is no separate
 "limited" or "bootstrap-only" lifecycle state.
 
+## Recovery exception
+
+ADR 0013 adds a separate Recovery Code proof to bootstrap. A valid signature bound to the new
+Device certificate and operation, verified against the current signed recovery wrapper, permits
+a replacement when an old Device remains active but is lost. A session alone still cannot add a
+second active Device. The following first-Device restriction describes ordinary bootstrap.
+
 ## Bootstrap is first-Device-only
 
 `completeBootstrap` creates at most one `ACTIVE` Device per User at a time.

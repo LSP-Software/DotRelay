@@ -275,3 +275,9 @@ export {
   presentUserDefinedValue,
   type UserDefinedValueState,
 } from "./values/state";
+
+export {
+  recoveryAuthorizationKey,
+  recoveryAuthorizationPublicKey,
+} from "./account/recovery-authorization";
+export { prepareDeviceRecovery } from "./device/recovery";

@@ -1,4 +1,8 @@
 import {
+  recoveryAuthorizationKey,
+  recoveryAuthorizationPublicKey,
+} from "./recovery-authorization";
+import {
   ACCOUNT_KEY_ENVELOPE_KDF_INFO,
   ACCOUNT_KEY_WRAPPER_KDF_INFO,
   ARGON2ID_POLICY,
@@ -437,6 +441,13 @@ export const createAccountKeyWrapper = async (
     [87, wrapperId],
     [88, ACCOUNT_KEY_WRAPPER_FORMAT_VERSION],
   ]);
+  if (kind.type === "recoveryCode")
+    fields.set(
+      97,
+      await recoveryAuthorizationPublicKey(
+        await recoveryAuthorizationKey(kind.recoveryCode, salt),
+      ),
+    );
   if (credentialId) fields.set(93, credentialId);
   if (prfInput) fields.set(94, prfInput);
   if (kdf) {

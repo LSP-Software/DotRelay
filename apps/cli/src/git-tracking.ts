@@ -1,5 +1,13 @@
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  unlink,
+} from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CliError } from "./errors";
 
 export type GitTrackingState = "tracked" | "untracked" | "ignored" | "outside";
@@ -8,6 +16,7 @@ export type GitTrackingInfo = Readonly<{
   readonly state: GitTrackingState;
   /** Absolute repository git directory, when the path is inside a repository. */
   readonly gitDirectory?: string;
+  readonly excludePath?: string;
   /** Absolute repository top-level directory, when the path is inside a repository. */
   readonly topLevel?: string;
   /** Repository-relative path, when the path is inside a repository. */
@@ -110,11 +119,19 @@ export const createGitTrackingProbe = (
     const outside: GitTrackingInfo = Object.freeze({ state: "outside" });
     let gitDirectory: string;
     let topLevel: string;
+    let excludePath: string;
     try {
       const gitDirectoryProbe = await run(["rev-parse", "--git-dir"]);
       if (gitDirectoryProbe.exitCode !== 0) return outside;
       const topLevelProbe = await run(["rev-parse", "--show-toplevel"]);
       if (topLevelProbe.exitCode !== 0) return outside;
+      const excludeProbe = await run([
+        "rev-parse",
+        "--git-path",
+        "info/exclude",
+      ]);
+      if (excludeProbe.exitCode !== 0) throw trackingUnavailable(realTarget);
+      excludePath = resolve(realProbeDirectory, excludeProbe.stdout);
       gitDirectory = resolve(realProbeDirectory, gitDirectoryProbe.stdout);
       topLevel = resolve(realProbeDirectory, topLevelProbe.stdout);
     } catch (error) {
@@ -124,21 +141,33 @@ export const createGitTrackingProbe = (
     const relativeToTop = relative(topLevel, realTarget);
     if (
       relativeToTop === "" ||
-      relativeToTop.startsWith("..") ||
+      relativeToTop === ".." ||
+      relativeToTop.startsWith(`..${sep}`) ||
       isAbsolute(relativeToTop)
     )
       return outside;
-    const inRepository = Object.freeze({ gitDirectory, topLevel });
+    const inRepository = Object.freeze({ gitDirectory, topLevel, excludePath });
     const inRepo = (state: GitTrackingState): GitTrackingInfo =>
       Object.freeze({
         state,
         ...inRepository,
         relativePath: relativeToTop,
       });
-    const inIndex = await run(["ls-files", "--error-unmatch", "--", pathspec]);
+    const inIndex = await run([
+      "ls-files",
+      "--error-unmatch",
+      "--",
+      `:(literal)${pathspec}`,
+    ]);
     if (inIndex.exitCode === 0) return inRepo("tracked");
     if (inIndex.exitCode !== 1) throw trackingUnavailable(realTarget);
-    const ignored = await run(["check-ignore", "--quiet", "--", pathspec]);
+    const ignored = await run([
+      "check-ignore",
+      "--no-index",
+      "--quiet",
+      "--",
+      pathspec,
+    ]);
     if (ignored.exitCode === 0) return inRepo("ignored");
     if (ignored.exitCode !== 1) throw trackingUnavailable(realTarget);
     return inRepo("untracked");
@@ -157,27 +186,59 @@ export const ensureLocalGitExclusion = async (
       {},
       "git_exclusion_failed",
     );
-  const pattern = `/${info.relativePath}`;
-  const excludePath = join(info.gitDirectory, "info", "exclude");
-  let current = "";
-  try {
-    current = await readFile(excludePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-      throw exclusionFailed(info.relativePath);
-  }
-  const existing = current
-    .split("\n")
-    .some((line) => line === pattern || line === info.relativePath);
-  if (existing) return "present";
-  const next =
-    (current.length > 0 && !current.endsWith("\n") ? `${current}\n` : current) +
-    `${pattern}\n`;
+  // Validate before touching the shared exclusion file: a newline could
+  // inject an unignore rule for an unrelated plaintext file.
+  const literalPath = info.relativePath.split(sep).join("/");
+  if (/[\r\n]/.test(literalPath)) throw exclusionFailed(info.relativePath);
+  const pattern = `/${literalPath.replace(/[\\*?[\] ]/g, "\\$&")}`;
+  const excludePath =
+    info.excludePath ?? join(info.gitDirectory, "info", "exclude");
+  const lockPath = `${excludePath}.lock`;
+  // Git-style lock-and-rename serializes writers across linked worktrees
+  // and processes, and publishes a complete file in one atomic operation.
+  let lock: Awaited<ReturnType<typeof open>> | undefined;
+  let ownsLock = false;
   try {
     await mkdir(dirname(excludePath), { recursive: true, mode: 0o755 });
-    await writeFile(excludePath, next, { mode: 0o644 });
+    const deadline = Date.now() + 5_000;
+    while (!lock) {
+      try {
+        lock = await open(lockPath, "wx", 0o644);
+        ownsLock = true;
+      } catch (error) {
+        if (
+          (error as NodeJS.ErrnoException).code !== "EEXIST" ||
+          Date.now() >= deadline
+        )
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    let current = "";
+    try {
+      current = await readFile(excludePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const existing = current
+      .split("\n")
+      .some((line) => line === pattern || line === pattern.slice(1));
+    if (existing) return "present";
+    const next =
+      (current.length > 0 && !current.endsWith("\n")
+        ? `${current}\n`
+        : current) + `${pattern}\n`;
+    await lock.writeFile(next, "utf8");
+    await lock.sync();
+    await lock.close();
+    await rename(lockPath, excludePath);
+    ownsLock = false;
+    return "established";
   } catch {
     throw exclusionFailed(info.relativePath);
+  } finally {
+    await lock?.close().catch(() => undefined);
+    // After rename a different writer may own lockPath; never unlink it.
+    if (ownsLock) await unlink(lockPath);
   }
-  return "established";
 };

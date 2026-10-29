@@ -3278,6 +3278,32 @@ describe("CLI sign-in display", () => {
     }
   });
 
+  test("a saved GitHub session offers recovery when another Device blocks bootstrap", async () => {
+    const fixture = await createLoginFixture();
+    const originalFetch = fixture.runtime.fetch;
+    try {
+      const result = await run(
+        ["login", "--profile", "relay", "--no-open", "--no-input", "--json"],
+        {
+          ...fixture.runtime,
+          fetch: async (input, init) => {
+            if (String(input).endsWith("/api/v1/devices/bootstrap"))
+              return Response.json(createProblem("state_conflict"), {
+                status: 409,
+              });
+            return originalFetch(input, init);
+          },
+        },
+      );
+      expect(result.exitCode).toBe(6);
+      expect(result.stderr).toContain("account_key_not_unlocked");
+      expect(result.stderr).toContain("dotrelay device recover");
+      expect(fixture.enrolledDeviceId()).toBe(null);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   test("a repeat login verifies the saved Device without re-enrolling", async () => {
     const fixture = await createLoginFixture({
       remoteDeviceId: loginDeviceId,

@@ -2477,13 +2477,23 @@ describe("protected CLI workflows", () => {
       );
       const gitDirectory = `${gitRoot}/.git`;
       const output = `${gitRoot}/.env`;
-      const probe: GitTrackingProbe = async () =>
-        Object.freeze({
-          state: "untracked",
+      const probe: GitTrackingProbe = async (path) => {
+        const relativePath = path.endsWith(".previous")
+          ? ".env.previous"
+          : ".env";
+        const exclusions = await readFile(
+          `${gitDirectory}/info/exclude`,
+          "utf8",
+        ).catch(() => "");
+        return Object.freeze({
+          state: exclusions.includes(`/${relativePath}\n`)
+            ? "ignored"
+            : "untracked",
           gitDirectory,
           topLevel: gitRoot,
-          relativePath: ".env",
+          relativePath,
         });
+      };
       const result = await run(
         [
           "pull",
@@ -2508,7 +2518,7 @@ describe("protected CLI workflows", () => {
       expect(String(body.message)).toContain(".git/info/exclude");
       expect(String(body.message)).toContain("excluded from Git");
       expect(await Bun.file(`${gitDirectory}/info/exclude`).text()).toBe(
-        "/.env\n",
+        "/.env\n/.env.previous\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2522,19 +2532,17 @@ describe("protected CLI workflows", () => {
     const gitRoot = `${import.meta.dir}/.tmp-workflow-git-${crypto.randomUUID()}`;
     try {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
-      await Bun.write(`${gitRoot}/.git/info/exclude`, "/.env\n");
+      await Bun.write(
+        `${gitRoot}/.git/info/exclude`,
+        "/.env\n/.env.previous\n",
+      );
       await seededEnvironment(
         runtime,
         `${import.meta.dir}/.tmp-workflow-input`,
       );
       const output = `${gitRoot}/.env`;
       const probe: GitTrackingProbe = async () =>
-        Object.freeze({
-          state: "untracked",
-          gitDirectory: `${gitRoot}/.git`,
-          topLevel: gitRoot,
-          relativePath: ".env",
-        });
+        Object.freeze({ state: "ignored" });
       const result = await run(
         [
           "pull",
@@ -2554,7 +2562,7 @@ describe("protected CLI workflows", () => {
       expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
       expect(String(body.message)).not.toContain(".git/info/exclude");
       expect(await Bun.file(`${gitRoot}/.git/info/exclude`).text()).toBe(
-        "/.env\n",
+        "/.env\n/.env.previous\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -3918,6 +3926,75 @@ describe("protected CLI workflows", () => {
       code: "account_key_unlock_failed",
       exitCode: 6,
     });
+  });
+
+  test("clean-install recovery maps malformed and wrong codes to stable CLI errors", async () => {
+    for (const scenario of ["malformed", "wrong"] as const) {
+      const runtime = await setup();
+      const fixture = await accountKeyFixture(runtime.bootstrap, {
+        recoveryCode: generateRecoveryCode(),
+      });
+      const service = accountKeyService(runtime.admin, {
+        recoveryWrapper: {
+          wrapperId: fixture.recoveryWrapperId as string,
+          object: fixture.recoveryWrapperObject as string,
+          creatorPublicKey: bytesToHex(
+            await exportSigningPublicKey(
+              runtime.bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+            ),
+          ),
+        },
+      });
+      const admin: StrictJsonClient = {
+        ...service.admin,
+        get: async (path, fields) =>
+          path === "/api/v1/workspace/boundary"
+            ? { ...boundary, device: { active: false } }
+            : service.admin.get(path, fields),
+      };
+      let recoveryWrites = 0;
+      const originalSave = runtime.deviceStorage.save;
+      const result = await run(
+        [
+          "device",
+          "recover",
+          "--profile",
+          "relay",
+          "--recovery-code-file",
+          await writeCodeFile(
+            scenario === "malformed"
+              ? "bad-code"
+              : encodeRecoveryCode(generateRecoveryCode()),
+            `clean-${scenario}`,
+          ),
+          "--no-input",
+          "--json",
+        ],
+        {
+          ...runtime,
+          admin,
+          fetch: async () =>
+            Response.json(createProblem("state_conflict"), { status: 409 }),
+          deviceStorage: {
+            ...runtime.deviceStorage,
+            save: async (bundle) => {
+              recoveryWrites++;
+              await originalSave(bundle);
+            },
+          },
+        },
+      );
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        ok: false,
+        code:
+          scenario === "malformed"
+            ? "recovery_code_malformed"
+            : "account_key_unlock_failed",
+        category: scenario === "malformed" ? "invocation" : "authentication",
+        exitCode: scenario === "malformed" ? 2 : 6,
+      });
+      expect(recoveryWrites).toBe(0);
+    }
   });
 
   test("device recover reports when the account has no active Recovery Code wrapper", async () => {

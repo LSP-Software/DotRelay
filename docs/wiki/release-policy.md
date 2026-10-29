@@ -25,3 +25,11 @@ publish job must be configured with the security owner as a required reviewer; i
 approval is the release evidence. The environment must also define the protected variable
 `SECURITY_REVIEW_APPROVAL=approved`; the publish job checks this value after the environment gate
 and refuses to publish without it.
+
+Prereleases publish versioned images and `latest-alpha`, never `latest-stable`; automatic production
+deployment runs only for stable tags. Alpha installation deployment is an explicit operation using
+the versioned alpha images. Release workflows serialize across all release tags.
+
+Prerelease web builds require `ALPHA_WEB_ORIGIN` and `ALPHA_API_ORIGIN` in the release environment
+or repository variables. They are exact HTTPS origins baked into the client bundle. The release
+concurrency group uses `queue: max` so pending releases are retained rather than replaced.

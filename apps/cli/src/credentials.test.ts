@@ -195,3 +195,23 @@ describe("file credential store", () => {
     }
   });
 });
+
+test("concurrent first writers share one wrapping key", async () => {
+  directory = await mkdtemp(join(tmpdir(), "dotrelay-credentials-race-"));
+  const entries = Array.from({ length: 16 }, (_, i) => ({
+    account: `writer-${i}`,
+    secret: encoder.encode(`value-${i}`),
+  }));
+  await Promise.all(
+    entries.map(({ account, secret }) =>
+      createFileCredentialStore(directory).set("test", account, secret),
+    ),
+  );
+  for (const { account, secret } of entries)
+    expect(
+      await createFileCredentialStore(directory).get("test", account),
+    ).toEqual(secret);
+  expect(
+    (await readdir(directory)).filter((file) => file.endsWith(".tmp")),
+  ).toEqual([]);
+});

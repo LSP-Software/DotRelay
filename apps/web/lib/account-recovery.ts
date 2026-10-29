@@ -1,4 +1,7 @@
 import {
+  prepareDeviceRecovery,
+  decodeRecoveryCode,
+  probeBrowserDeviceStorage,
   authenticatedCreatorKeys,
   createBrowserDeviceStorage,
   createPasskeyWithPrf,
@@ -42,6 +45,10 @@ import {
   unlockWithPassword,
   unlockWithRecoveryCode,
 } from "@/lib/account-keys";
+import {
+  probeBrowserLocalStorage,
+  writeStoredBrowserDeviceId,
+} from "./browser-storage";
 import type { WorkspaceBoundary } from "@/lib/workspace-boundary";
 
 // In-browser Account Key recovery: the orchestration behind unlocking the
@@ -74,6 +81,10 @@ export type AccountKeyVault = Readonly<{
 
 export type AccountRecoveryInputs = Readonly<{
   readonly actor: AccountKeyActor | null;
+  readonly onRecoveredDevice?: (
+    deviceId: string,
+    key: Uint8Array,
+  ) => Promise<void>;
   readonly boundary: WorkspaceBoundary;
   readonly wrappers: readonly AccountKeyWrapperEntry[];
   readonly accountMasterKey: AccountKeyVault;
@@ -214,6 +225,77 @@ export const unlockAccount = async (
 ): Promise<void> => {
   const { actor, boundary, wrappers, accountMasterKey, passkeyAvailable } =
     inputs;
+  if (
+    (!actor ||
+      !boundary.device.active ||
+      (await loadDeviceSigningKey(boundary)) === null) &&
+    method === "recovery-code" &&
+    inputs.onRecoveredDevice
+  ) {
+    feedback.setBusy(true);
+    feedback.setError(null);
+    try {
+      if (
+        !(await probeBrowserDeviceStorage()).durable ||
+        !probeBrowserLocalStorage()
+      )
+        throw new Error("Persistent browser storage is required for recovery");
+      if (!boundary.session.userId || !boundary.profile.serverProfileId)
+        throw new Error("Sign in before recovery");
+      const pin = {
+        origin: boundary.profile.origin,
+        serverProfileId: boundary.profile.serverProfileId,
+      };
+      const entries = await fetchAccountKeyWrappers({
+        origin: pin.origin,
+        deviceId: "",
+      });
+      const entry = entries.find(
+        (candidate) => candidate.type === "recovery-code",
+      );
+      if (!entry?.creatorPublicKey)
+        throw new Error("Recovery authorization unavailable");
+      const code = decodeRecoveryCode(secret);
+      const prepared = await prepareDeviceRecovery({
+        pin,
+        userId: boundary.session.userId,
+        recoveryCode: code,
+        wrapperBytes: akFromBase64(entry.object),
+        creatorPublicKey: hexToBytes(entry.creatorPublicKey),
+      });
+      code.fill(0);
+      await createBrowserDeviceStorage(pin).save(prepared.bootstrap.bundle);
+      writeStoredBrowserDeviceId(
+        pin.origin,
+        pin.serverProfileId,
+        prepared.bootstrap.deviceId,
+      );
+      const response = await fetch(`${pin.origin}/api/v1/devices/bootstrap`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(prepared.request),
+      });
+      if (!response.ok) throw new Error("Recovery authorization rejected");
+      await inputs.onRecoveredDevice(
+        prepared.bootstrap.deviceId,
+        prepared.accountMasterKey,
+      );
+      feedback.clearInputs();
+      feedback.setAccountUnlocked(true);
+      feedback.setMessage(
+        "This browser was recovered with your existing account key.",
+      );
+      onMutated();
+    } catch {
+      feedback.setError(
+        "Could not recover this browser. Check the Recovery Code and connection. Older codes must first be rotated from an existing Device.",
+      );
+    } finally {
+      feedback.setBusy(false);
+    }
+    return;
+  }
   const verification = accountKeyVerification(boundary, wrappers);
   if (!actor || !verification) {
     feedback.setError(

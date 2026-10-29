@@ -1,4 +1,4 @@
-import { readFile, unlink } from "node:fs/promises";
+import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CliError } from "./errors";
 import { atomicWriteProtectedFile } from "./output";
@@ -125,16 +125,29 @@ const ensureWrappingKey = async (directory: string): Promise<CryptoKey> => {
   const existing = await readWrappingKey(directory);
   if (existing) return existing;
   const material = crypto.getRandomValues(new Uint8Array(KEY_LENGTH));
-  const key = await wrappingKey(material);
+  // Publish a complete key with an atomic no-replace link. Both in-process
+  // writers and separate CLI processes must use the winner's key.
+  const candidate = join(directory, `.key.${crypto.randomUUID()}.tmp`);
   try {
-    await atomicWriteProtectedFile(
-      join(directory, "key"),
-      `${Buffer.from(material).toString("hex")}\n`,
-    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(candidate, `${Buffer.from(material).toString("hex")}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    try {
+      await link(candidate, join(directory, "key"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const winner = await readWrappingKey(directory);
+    if (!winner) throw storeWriteFailed();
+    return winner;
   } catch {
     throw storeWriteFailed();
+  } finally {
+    material.fill(0);
+    await unlink(candidate).catch(() => undefined);
   }
-  return key;
 };
 
 export const createFileCredentialStore = (directory: string): CredentialStore =>

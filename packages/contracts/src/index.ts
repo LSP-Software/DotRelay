@@ -122,3 +122,5 @@ export {
   ServerProfileTrustError,
   type ServerProfileTrustErrorCode,
 } from "./server-profile";
+
+export { deviceRecoveryMessage } from "./account-key-ack";

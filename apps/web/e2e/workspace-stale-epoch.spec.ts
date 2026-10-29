@@ -3,7 +3,6 @@ import {
   type PublicationVariable,
 } from "@dotrelay/client";
 import {
-  bytesToUuid,
   encodeSyncPage,
   importSigningPrivateKey,
   parseProtocolObject,
@@ -134,6 +133,7 @@ const buildVerifiedFixturePage = async (
 type StaleEpochState = {
   deviceId: string | null;
   devicePublicKey: Uint8Array | null;
+  deviceActive?: boolean;
   epochCurrent: boolean;
   projectEpoch: string;
   grantResponse: { readonly status: number; readonly body: unknown };
@@ -173,7 +173,8 @@ const installStaleEpochService = async (page: Page, state: StaleEpochState) => {
     return route.fulfill({
       json: {
         ...boundary,
-        device,
+        device:
+          state.deviceActive === false ? { ...device, active: false } : device,
         epochCurrent: state.epochCurrent,
         profile: { ...boundary.profile, origin },
         environment: {
@@ -191,6 +192,7 @@ const installStaleEpochService = async (page: Page, state: StaleEpochState) => {
       };
       if (body.deviceId) {
         state.deviceId = body.deviceId;
+        state.deviceActive = true;
         state.devicePublicKey = body.x25519PublicKey
           ? hexToBytes(body.x25519PublicKey)
           : null;
@@ -297,47 +299,26 @@ const rotateProjectKeys = async (
   ).toBeVisible();
 };
 
-test("stale project keys are recovered in place with the stored Device keys", async ({
+test("stale project keys require the existing key without minting a random replacement", async ({
   page,
 }) => {
   test.setTimeout(90_000);
   const { state, grantCalls, editor } = await enrollAndReadVariables(page);
   await rotateProjectKeys(state, editor);
   const grantPostsBefore = grantCalls.length;
-  const devicePostsBefore = state.deviceId;
-
+  const deviceBefore = state.deviceId;
   await editor.getByRole("button", { name: RECOVER_KEYS }).click();
-
-  // The repair reuses the stored keys: the Device signs a fresh grant for the
-  // current epoch addressed to itself, and no replacement Device is created.
-  await expect
-    .poll(() => grantCalls.length, { timeout: 15_000 })
-    .toBe(grantPostsBefore + 1);
-  const repairCall = grantCalls.at(-1);
-  expect(repairCall?.deviceId).toBe(devicePostsBefore);
-  const grant = parseProtocolObject(
-    Buffer.from(String(repairCall?.body.grant), "base64"),
-  );
-  expect(bytesToUuid(new Uint8Array(grant.get(24) as Uint8Array))).toBe(
-    devicePostsBefore,
-  );
-  expect(bytesToUuid(new Uint8Array(grant.get(25) as Uint8Array))).toBe(
-    devicePostsBefore,
-  );
-  expect(Number(grant.get(30))).toBe(2);
-  expect(state.deviceId).toBe(devicePostsBefore);
-
-  // The unblocked editor is the result report, and the verified read works
-  // again with the same session keys.
+  await expect(
+    page.getByText("Recover the existing project key from the Recovery area", {
+      exact: false,
+    }),
+  ).toBeVisible({ timeout: 15_000 });
+  expect(grantCalls.length).toBe(grantPostsBefore);
+  expect(state.deviceId).toBe(deviceBefore);
   await expect(
     editor.getByRole("heading", { name: STALE_CARD_HEADING }),
-  ).toHaveCount(0, { timeout: 15_000 });
-  await expect(editor.getByRole("heading", { name: "Variables" })).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(
-    editor.getByTestId("environment-variable-FEATURE_GATE"),
   ).toBeVisible();
+  expect(await page.getByTestId("replace-device-dialog").count()).toBe(0);
 });
 
 test("a current grant provisioned elsewhere is reused without bootstrapping", async ({
@@ -366,37 +347,21 @@ test("a current grant provisioned elsewhere is reused without bootstrapping", as
   expect(await page.getByTestId("replace-device-dialog").count()).toBe(0);
 });
 
-test("a rejected in-place repair reports the owner or admin actions that unblock it", async ({
+test("missing project keys report recovery and owner/admin sharing without attempting a grant", async ({
   page,
 }) => {
   test.setTimeout(90_000);
-  const { state, editor } = await enrollAndReadVariables(page);
+  const { state, grantCalls, editor } = await enrollAndReadVariables(page);
   await rotateProjectKeys(state, editor);
+  const grantPostsBefore = grantCalls.length;
   state.grantResponse = { status: 403, body: { code: "forbidden" } };
-
   await editor.getByRole("button", { name: RECOVER_KEYS }).click();
   await expect(
-    page.getByText("can't recover the project's current keys on its own"),
+    page.getByText("ask an owner or admin to share project keys", {
+      exact: false,
+    }),
   ).toBeVisible({ timeout: 15_000 });
-  await expect(
-    page.getByText(
-      "An Owner or Admin of LSP Software can rotate the project keys with",
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Copy dotrelay project rotate" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Recover the account's key from the Recovery area"),
-  ).toBeVisible();
-  expect(await page.getByTestId("replace-device-dialog").count()).toBe(0);
-
-  // A rotation still in progress is reported as its own retryable state.
-  state.grantResponse = { status: 409, body: { code: "stale_epoch" } };
-  await editor.getByRole("button", { name: RECOVER_KEYS }).click();
-  await expect(
-    page.getByText("Key rotation is still in progress on this project."),
-  ).toBeVisible({ timeout: 15_000 });
+  expect(grantCalls.length).toBe(grantPostsBefore);
   expect(await page.getByTestId("replace-device-dialog").count()).toBe(0);
 });
 
@@ -406,11 +371,11 @@ test("a deactivated Device asks for approval before a replacement is enrolled", 
   test.setTimeout(120_000);
   const { state, editor } = await enrollAndReadVariables(page);
   await rotateProjectKeys(state, editor);
-  state.grantResponse = { status: 403, body: { code: "device_not_active" } };
+  state.deviceActive = false;
 
   await editor.getByRole("button", { name: RECOVER_KEYS }).click();
 
-  // The in-place repair cannot sign, so the replacement is proposed and held
+  // The refreshed boundary reports revocation, so replacement is held
   // for explicit approval: nothing is enrolled before the user confirms.
   await expect(
     page.getByTestId("replace-device-dialog").getByRole("heading", {
