@@ -409,7 +409,7 @@ model Membership {
   user             User                        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   invitation       MembershipInvitation?       @relation(fields: [invitationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   grants           GrantObject[]
-  activationObject MembershipActivationObject?
+  activationObjects MembershipActivationObject[]
 
   @@unique([teamId, userId])
   @@index([teamId, lifecycle, role])
@@ -564,13 +564,14 @@ model EnrollmentApprovalObject {
 
 model MembershipActivationObject {
   protocolObjectId String @id @db.Uuid
-  membershipId     String @unique @db.Uuid
+  membershipId     String @db.Uuid
   teamId           String @db.Uuid
 
   protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   membership     Membership     @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   team           Team           @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  @@index([membershipId])
   @@map("membership_activation_objects")
 }
 

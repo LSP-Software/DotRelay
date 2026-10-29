@@ -399,6 +399,16 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "membership_invitations" WHERE "id" = ${input.invitationId} FOR UPDATE`;
+      const invitation = await transaction.membershipInvitation.findUnique({
+        where: { id: input.invitationId },
+      });
+      // Lock the Team row before the operation insert below can take a key
+      // share on the accepting User row via its foreign key, so this path
+      // takes Team locks before User locks, the same order as membership
+      // activation, and a concurrent accept and activation can never
+      // deadlock.
+      if (invitation)
+        await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${invitation.teamId} FOR UPDATE`;
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -406,9 +416,6 @@ export class MembershipAdministrationRepository {
       if (operation.idempotent) return operation;
       if (input.operation.actorUserId !== input.userId)
         throw new Error("Membership invitation must be accepted by its User");
-      const invitation = await transaction.membershipInvitation.findUnique({
-        where: { id: input.invitationId },
-      });
       const user = await transaction.user.findUnique({
         where: { id: input.userId },
       });
@@ -420,26 +427,43 @@ export class MembershipAdministrationRepository {
         throw new Error("Membership invitation is expired or already used");
       if (user.githubSubject !== invitation.providerSubject)
         throw new Error("Membership invitation is addressed to another User");
-      await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${invitation.teamId} FOR UPDATE`;
       const team = await transaction.team.findUnique({
         where: { id: invitation.teamId },
         select: { serverProfileId: true, lifecycle: true },
       });
-      if (team?.lifecycle !== "ACTIVE") throw new Error("Team is not active");
+      if (team?.lifecycle !== "ACTIVE") throw new TeamNotActiveError();
       if (!team || team.serverProfileId !== user.serverProfileId)
         throw new Error(
           "Membership invitation belongs to another Server Profile",
         );
       const now = input.now ?? new Date();
-      const membership = await transaction.membership.create({
-        data: {
-          id: crypto.randomUUID(),
-          teamId: invitation.teamId,
-          userId: user.id,
-          invitationId: invitation.id,
-          createdAt: now,
+      const priorMembership = await transaction.membership.findUnique({
+        where: {
+          teamId_userId: { teamId: invitation.teamId, userId: user.id },
         },
       });
+      if (priorMembership && priorMembership.lifecycle !== "REMOVED")
+        throw new Error("User is already a member of the Team");
+      const membership = priorMembership
+        ? await transaction.membership.update({
+            where: { id: priorMembership.id },
+            data: {
+              lifecycle: "PENDING_KEY_GRANT",
+              role: "MEMBER",
+              invitationId: invitation.id,
+              activatedAt: null,
+              removedAt: null,
+            },
+          })
+        : await transaction.membership.create({
+            data: {
+              id: crypto.randomUUID(),
+              teamId: invitation.teamId,
+              userId: user.id,
+              invitationId: invitation.id,
+              createdAt: now,
+            },
+          });
       await transaction.membershipInvitation.update({
         where: { id: invitation.id },
         data: { acceptedByUserId: user.id, acceptedAt: now },
@@ -457,6 +481,9 @@ export class MembershipAdministrationRepository {
           : {}),
         entityKind: "MEMBERSHIP",
         entityId: membership.id,
+        ...(priorMembership
+          ? { priorLifecycle: priorMembership.lifecycle }
+          : {}),
         newLifecycle: "PENDING_KEY_GRANT",
       });
       return { operation: operation.operation, membership };

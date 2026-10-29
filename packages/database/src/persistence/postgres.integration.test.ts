@@ -1015,6 +1015,667 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     expect(adminMembership.role).toBe("ADMIN");
   });
 
+  test("revives a removed membership via re-acceptance, re-activates it, and rejects an existing member", async () => {
+    const {
+      device,
+      projectId,
+      teamId,
+      user: owner,
+    } = await createProjectFixture("rejoin-activation");
+    const team = await database.team.findUniqueOrThrow({
+      where: { id: teamId },
+    });
+    const environment = await database.environment.findFirstOrThrow({
+      where: { projectId, lifecycle: "ACTIVE" },
+    });
+    const memberships = new MembershipAdministrationRepository();
+    const grants = new GrantRepository();
+    const activations = new MembershipRepository();
+    const staging = new StagedObjectRepository();
+    const invitee = await createUserAndDevice(team.serverProfileId);
+    const invitedAt = new Date("2026-08-28T12:00:00.000Z");
+    const invitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in invitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const accepted = await memberships.accept(database, {
+      invitationId: invitation.invitation.id,
+      userId: invitee.user.id,
+      operation: {
+        ...(await createOperationInput(
+          invitee.user.id,
+          "rejoin-acceptance",
+          "INVITATION",
+        )),
+        actorDeviceId: invitee.device.id,
+      },
+      now: invitedAt,
+    });
+    if (!("membership" in accepted))
+      throw new Error("invitation acceptance was unexpectedly idempotent");
+    expect(accepted.membership).toMatchObject({
+      lifecycle: "PENDING_KEY_GRANT",
+      role: "MEMBER",
+    });
+    const provisionGrant = async (label: string, membershipId: string) => {
+      const grantObject = await createProtocolObjectInput(
+        7,
+        projectId,
+        environment.id,
+      );
+      const grantOperation = {
+        ...(await createOperationInput(owner.id, label)),
+        actorDeviceId: device.id,
+      };
+      await new OperationRepository().begin(database, grantOperation);
+      const stagedAt = new Date();
+      await staging.put(database, {
+        operationId: grantOperation.id,
+        objectId: grantObject.id,
+        actorDeviceId: device.id,
+        canonicalBytes: grantObject.canonicalBytes,
+        digest: grantObject.digest,
+        createdAt: stagedAt,
+        expiresAt: new Date(stagedAt.getTime() + 60_000),
+      });
+      await grants.create(database, {
+        operation: grantOperation,
+        grant: {
+          protocolObject: grantObject,
+          projectId,
+          teamId,
+          membershipId,
+          senderDeviceId: device.id,
+          recipientDeviceId: invitee.device.id,
+          ownerUserId: invitee.user.id,
+          keyKind: "PROJECT_EPOCH",
+          grantKind: "CURRENT_PROJECT_EPOCH",
+          projectEpoch: 1n,
+          plaintextLength: 32,
+          ciphertextLength: 48,
+          ciphertextHash: new Uint8Array(48),
+          recipientDeviceIds: [invitee.device.id],
+        },
+      });
+    };
+    const activateMembership = async (
+      label: string,
+      requiredGrantCount: number,
+    ) => {
+      const activationObject = await createProtocolObjectInput(
+        6,
+        projectId,
+        environment.id,
+      );
+      const activateOperation = {
+        ...(await createOperationInput(owner.id, label)),
+        actorDeviceId: device.id,
+      };
+      await new OperationRepository().begin(database, activateOperation);
+      const stagedAt = new Date();
+      await staging.put(database, {
+        operationId: activateOperation.id,
+        objectId: activationObject.id,
+        actorDeviceId: device.id,
+        canonicalBytes: activationObject.canonicalBytes,
+        digest: activationObject.digest,
+        createdAt: stagedAt,
+        expiresAt: new Date(stagedAt.getTime() + 60_000),
+      });
+      const result = await activations.activate(database, {
+        operation: activateOperation,
+        teamId,
+        membershipId: accepted.membership.id,
+        requiredGrantCount,
+        activationObject,
+      });
+      if (!("membership" in result))
+        throw new Error("activation was unexpectedly idempotent");
+      return { result, activationObject };
+    };
+
+    await provisionGrant("rejoin-grant", accepted.membership.id);
+    const { result: activated, activationObject: firstActivationObject } =
+      await activateMembership("rejoin-activation", 1);
+    expect(activated.membership.lifecycle).toBe("ACTIVE");
+    expect(
+      await database.membershipActivationObject.findMany({
+        where: { membershipId: accepted.membership.id },
+      }),
+    ).toHaveLength(1);
+    expect(
+      await database.membershipActivationObject.findFirst({
+        where: { membershipId: accepted.membership.id },
+      }),
+    ).toMatchObject({ protocolObjectId: firstActivationObject.id });
+
+    const activeInvitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-active-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in activeInvitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    await expect(
+      memberships.accept(database, {
+        invitationId: activeInvitation.invitation.id,
+        userId: invitee.user.id,
+        operation: await createOperationInput(
+          invitee.user.id,
+          "rejoin-active-acceptance",
+          "INVITATION",
+        ),
+        now: invitedAt,
+      }),
+    ).rejects.toThrow("already a member");
+
+    const removed = await memberships.remove(database, {
+      teamId,
+      membershipId: accepted.membership.id,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-removal")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("membership" in removed))
+      throw new Error("membership removal was unexpectedly idempotent");
+    const rejoinedAt = new Date("2026-09-01T12:00:00.000Z");
+    const reinvitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: rejoinedAt,
+      operation: {
+        ...(await createOperationInput(owner.id, "rejoin-second-invitation")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in reinvitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const rejoined = await memberships.accept(database, {
+      invitationId: reinvitation.invitation.id,
+      userId: invitee.user.id,
+      operation: {
+        ...(await createOperationInput(
+          invitee.user.id,
+          "rejoin-second-acceptance",
+          "INVITATION",
+        )),
+        actorDeviceId: invitee.device.id,
+      },
+      now: rejoinedAt,
+    });
+    if (!("membership" in rejoined))
+      throw new Error("rejoined acceptance was unexpectedly idempotent");
+    expect(rejoined.membership).toMatchObject({
+      id: accepted.membership.id,
+      teamId,
+      userId: invitee.user.id,
+      lifecycle: "PENDING_KEY_GRANT",
+      role: "MEMBER",
+      invitationId: reinvitation.invitation.id,
+      activatedAt: null,
+      removedAt: null,
+    });
+
+    await provisionGrant("rejoin-second-grant", rejoined.membership.id);
+    const { result: reactivated, activationObject: secondActivationObject } =
+      await activateMembership("rejoin-second-activation", 2);
+    expect(reactivated.membership).toMatchObject({
+      id: rejoined.membership.id,
+      lifecycle: "ACTIVE",
+    });
+    const activationHistory =
+      await database.membershipActivationObject.findMany({
+        where: { membershipId: rejoined.membership.id },
+      });
+    expect(activationHistory).toHaveLength(2);
+    expect(activationHistory.map((row) => row.protocolObjectId)).toEqual(
+      expect.arrayContaining([
+        firstActivationObject.id,
+        secondActivationObject.id,
+      ]),
+    );
+    expect(
+      await database.membership.count({
+        where: { teamId, userId: invitee.user.id },
+      }),
+    ).toBe(1);
+  });
+
+  test("serializes concurrent revivals of one removed membership on the Team row", async () => {
+    const {
+      device,
+      serverProfile,
+      user: owner,
+    } = await createAuthorizedDeviceFixture();
+    const teamId = crypto.randomUUID();
+    const administration = new AdministrationRepository();
+    const memberships = new MembershipAdministrationRepository();
+    await administration.createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: owner.id,
+      name: "concurrent-revival",
+      operation: {
+        ...(await createOperationInput(owner.id, "concurrent-revival-team")),
+        actorDeviceId: device.id,
+      },
+    });
+    const invitee = await createUserAndDevice(serverProfile.id);
+    const invitedAt = new Date("2026-08-28T12:00:00.000Z");
+    const seedInvitation = await memberships.invite(database, {
+      teamId,
+      providerSubject: invitee.user.githubSubject,
+      now: invitedAt,
+      operation: {
+        ...(await createOperationInput(
+          owner.id,
+          "concurrent-revival-invitation",
+        )),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("invitation" in seedInvitation))
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const seeded = await memberships.accept(database, {
+      invitationId: seedInvitation.invitation.id,
+      userId: invitee.user.id,
+      operation: {
+        ...(await createOperationInput(
+          invitee.user.id,
+          "concurrent-revival-acceptance",
+          "INVITATION",
+        )),
+        actorDeviceId: invitee.device.id,
+      },
+      now: invitedAt,
+    });
+    if (!("membership" in seeded))
+      throw new Error("invitation acceptance was unexpectedly idempotent");
+    await database.membership.update({
+      where: { id: seeded.membership.id },
+      data: { lifecycle: "ACTIVE", activatedAt: invitedAt },
+    });
+    const removed = await memberships.remove(database, {
+      teamId,
+      membershipId: seeded.membership.id,
+      operation: {
+        ...(await createOperationInput(owner.id, "concurrent-revival-removal")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("membership" in removed))
+      throw new Error("membership removal was unexpectedly idempotent");
+    const concurrentInvitations = await Promise.all(
+      [1, 2].map(async (index) =>
+        memberships.invite(database, {
+          teamId,
+          providerSubject: invitee.user.githubSubject,
+          now: invitedAt,
+          operation: {
+            ...(await createOperationInput(
+              owner.id,
+              `concurrent-revival-invitation-${index}`,
+            )),
+            actorDeviceId: device.id,
+          },
+        }),
+      ),
+    );
+    const [firstConcurrent, secondConcurrent] = concurrentInvitations;
+    if (!firstConcurrent || !secondConcurrent)
+      throw new Error("expected two concurrent invitations");
+    if (
+      !("invitation" in firstConcurrent) ||
+      !("invitation" in secondConcurrent)
+    )
+      throw new Error("invitation creation was unexpectedly idempotent");
+    const race = async (invitationId: string, label: string) => {
+      try {
+        const result = await memberships.accept(database, {
+          invitationId,
+          userId: invitee.user.id,
+          operation: {
+            ...(await createOperationInput(
+              invitee.user.id,
+              label,
+              "INVITATION",
+            )),
+            actorDeviceId: invitee.device.id,
+          },
+          now: invitedAt,
+        });
+        return "membership" in result
+          ? {
+              outcome: "revived" as const,
+              membershipId: result.membership.id,
+              invitationId: result.membership.invitationId,
+            }
+          : ({ outcome: "idempotent" } as const);
+      } catch (error) {
+        return {
+          outcome: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+    const results = await Promise.all([
+      race(
+        firstConcurrent.invitation.id,
+        "concurrent-revival-first-acceptance",
+      ),
+      race(
+        secondConcurrent.invitation.id,
+        "concurrent-revival-second-acceptance",
+      ),
+    ]);
+    expect(
+      results.filter((result) => result.outcome === "revived"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.outcome === "rejected"),
+    ).toHaveLength(1);
+    expect(
+      (
+        results.find((result) => result.outcome === "rejected") as {
+          message: string;
+        }
+      ).message,
+    ).toBe("User is already a member of the Team");
+    const revived = await database.membership.findUniqueOrThrow({
+      where: { teamId_userId: { teamId, userId: invitee.user.id } },
+    });
+    const winner = results.find((result) => result.outcome === "revived") as {
+      membershipId: string;
+      invitationId: string;
+    };
+    expect(revived.id).toBe(winner.membershipId);
+    expect(revived.invitationId).toBe(winner.invitationId);
+    expect(revived.lifecycle).toBe("PENDING_KEY_GRANT");
+    expect(
+      await database.membershipInvitation.count({
+        where: {
+          id: {
+            in: [firstConcurrent.invitation.id, secondConcurrent.invitation.id],
+          },
+          acceptedAt: { not: null },
+        },
+      }),
+    ).toBe(1);
+  });
+
+  test("preserves Project identity and safely discloses Environment metadata and lanes", async () => {
+    const {
+      device,
+      projectId,
+      teamId,
+      user: owner,
+    } = await createProjectFixture("administration-disclosure");
+    const team = await database.team.findUniqueOrThrow({
+      where: { id: teamId },
+    });
+    const admin = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: admin.user.id,
+        role: "ADMIN",
+        lifecycle: "ACTIVE",
+        activatedAt: new Date(),
+      },
+    });
+    const member = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: member.user.id,
+        role: "MEMBER",
+        lifecycle: "ACTIVE",
+        activatedAt: new Date(),
+      },
+    });
+    const project = await database.project.findUniqueOrThrow({
+      where: { id: projectId },
+    });
+    const projects = new ProjectRepository();
+    const administration = new AdministrationRepository();
+    await expect(
+      projects.create(database, {
+        teamId,
+        githubRepositoryId: 0n,
+        operation: {
+          ...(await createOperationInput(owner.id, "invalid-project-id")),
+          actorDeviceId: device.id,
+        },
+      }),
+    ).rejects.toThrow("must be positive");
+    const duplicate = await projects.create(database, {
+      teamId,
+      githubRepositoryId: project.githubRepositoryId,
+      operation: {
+        ...(await createOperationInput(owner.id, "duplicate-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("existing" in duplicate) || !duplicate.existing)
+      throw new Error(
+        "duplicate Project create should return the existing Project",
+      );
+    expect(duplicate.project.id).toBe(project.id);
+    await administration.archiveProject(database, {
+      projectId,
+      operation: {
+        ...(await createOperationInput(owner.id, "archive-original-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    const replacement = await projects.create(database, {
+      teamId,
+      githubRepositoryId: project.githubRepositoryId,
+      operation: {
+        ...(await createOperationInput(owner.id, "replacement-project")),
+        actorDeviceId: device.id,
+      },
+    });
+    if (!("project" in replacement))
+      throw new Error("Project creation was unexpectedly idempotent");
+    await expect(
+      administration.restoreProject(database, {
+        projectId,
+        operation: {
+          ...(await createOperationInput(owner.id, "conflicting-restore")),
+          actorDeviceId: device.id,
+        },
+      }),
+    ).rejects.toThrow();
+    await administration.archiveProject(database, {
+      projectId: replacement.project.id,
+      operation: {
+        ...(await createOperationInput(owner.id, "archive-replacement")),
+        actorDeviceId: device.id,
+      },
+    });
+    await administration.restoreProject(database, {
+      projectId,
+      operation: {
+        ...(await createOperationInput(owner.id, "restore-original")),
+        actorDeviceId: device.id,
+      },
+    });
+    await expect(
+      Promise.resolve(
+        database.project.update({
+          where: { id: projectId },
+          data: { githubRepositoryId: project.githubRepositoryId + 1n },
+        }),
+      ),
+    ).rejects.toThrow("identities are immutable");
+    await expect(
+      Promise.resolve(
+        database.project.update({
+          where: { id: projectId },
+          data: { teamId: crypto.randomUUID() },
+        }),
+      ),
+    ).rejects.toThrow("identities are immutable");
+
+    const environmentId = crypto.randomUUID();
+    const memberEnvironmentId = crypto.randomUUID();
+    const memberGenesis = await preparePublication({
+      actorUserId: member.user.id,
+      actorDeviceId: member.device.id,
+      projectId,
+      environmentId: memberEnvironmentId,
+      expectedHeadId: null,
+      mutation: "GENESIS",
+      label: "member-environment-genesis",
+    });
+    await expect(
+      new EnvironmentRepository().createWithGenesis(database, {
+        environmentId: memberEnvironmentId,
+        projectId,
+        createdByUserId: member.user.id,
+        publication: memberGenesis,
+      }),
+    ).rejects.toThrow("insufficient_role");
+    expect(
+      await database.environment.findUnique({
+        where: { id: memberEnvironmentId },
+      }),
+    ).toBeNull();
+    await database.environment.create({
+      data: {
+        id: environmentId,
+        projectId,
+        createdByUserId: owner.id,
+        label: "disclosure",
+      },
+    });
+    const createLane = async (
+      scope: "SHARED_VALUE" | "USER_DEFINED_VALUE",
+      ownerUserId?: string,
+    ) => {
+      if (scope === "USER_DEFINED_VALUE" && !ownerUserId)
+        throw new Error("User-defined Value test lane needs an owner");
+      const protocolObject = await new ProtocolObjectRepository().create(
+        database,
+        await createProtocolObjectInput(11, projectId, environmentId),
+      );
+      return database.laneObject.create({
+        data: {
+          id: crypto.randomUUID(),
+          protocolObjectId: protocolObject.id,
+          projectId,
+          environmentId,
+          scope,
+          ...(scope === "USER_DEFINED_VALUE"
+            ? { ownerUserId: ownerUserId as string, valueGeneration: 1n }
+            : { originalProviderUserId: owner.id }),
+          projectEpoch: 1n,
+          plaintextLength: 1,
+          ciphertextLength: 17,
+          ciphertextHash: crypto.getRandomValues(new Uint8Array(48)),
+        },
+      });
+    };
+    const shared = await createLane("SHARED_VALUE");
+    const ownersValue = await createLane("USER_DEFINED_VALUE", owner.id);
+    const adminsValue = await createLane("USER_DEFINED_VALUE", admin.user.id);
+    const disclosure = new AdministrationDisclosureRepository();
+    const visible = await disclosure.listEnvironmentLanes(database, {
+      actorUserId: admin.user.id,
+      actorDeviceId: admin.device.id,
+      environmentId,
+    });
+    expect(visible.map(({ id }) => id).sort()).toEqual(
+      [shared.id, adminsValue.id].sort(),
+    );
+    expect(visible.some(({ id }) => id === ownersValue.id)).toBe(false);
+    const metadata = await disclosure.getEnvironmentMetadata(database, {
+      actorUserId: admin.user.id,
+      actorDeviceId: admin.device.id,
+      environmentId,
+    });
+    expect(metadata).toEqual({
+      id: environmentId,
+      projectId,
+      label: "disclosure",
+      lifecycle: "ACTIVE",
+      currentHeadId: null,
+    });
+    expect(Object.hasOwn(metadata, "name")).toBe(false);
+    const admittedButPending = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: admittedButPending.user.id,
+        lifecycle: "PENDING_KEY_GRANT",
+      },
+    });
+    await expect(
+      disclosure.getEnvironmentMetadata(database, {
+        actorUserId: admittedButPending.user.id,
+        actorDeviceId: admittedButPending.device.id,
+        environmentId,
+      }),
+    ).rejects.toThrow("Environment not found");
+    const removed = await createUserAndDevice(team.serverProfileId);
+    await database.membership.create({
+      data: {
+        teamId,
+        userId: removed.user.id,
+        lifecycle: "REMOVED",
+        removedAt: new Date(),
+      },
+    });
+    await expect(
+      disclosure.getEnvironmentMetadata(database, {
+        actorUserId: removed.user.id,
+        actorDeviceId: removed.device.id,
+        environmentId,
+      }),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      disclosure.getEnvironmentMetadata(database, {
+        actorUserId: admittedButPending.user.id,
+        actorDeviceId: admittedButPending.device.id,
+        environmentId: crypto.randomUUID(),
+      }),
+    ).rejects.toThrow("Environment not found");
+    await administration.archiveEnvironment(database, {
+      environmentId,
+      operation: {
+        ...(await createOperationInput(admin.user.id, "archive-environment")),
+        actorDeviceId: admin.device.id,
+      },
+    });
+    await expect(
+      disclosure.listEnvironmentLanes(database, {
+        actorUserId: admin.user.id,
+        actorDeviceId: admin.device.id,
+        environmentId,
+      }),
+    ).rejects.toThrow("resource_not_active");
+    await administration.restoreEnvironment(database, {
+      environmentId,
+      operation: {
+        ...(await createOperationInput(admin.user.id, "restore-environment")),
+        actorDeviceId: admin.device.id,
+      },
+    });
+  });
+
   test("rejects accepting an invitation after its team is archived", async () => {
     const {
       device,

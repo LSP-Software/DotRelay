@@ -90,6 +90,8 @@ export class MembershipRepository {
               where: { id: input.membershipId },
               data: { lifecycle: "ACTIVE", activatedAt: now },
             });
+      // Activation rows are append-only history: re-activating a revived
+      // Membership appends a new row instead of reusing the first one.
       if (membership.lifecycle === "PENDING_KEY_GRANT")
         await transaction.membershipActivationObject.create({
           data: {
