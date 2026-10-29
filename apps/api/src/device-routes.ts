@@ -22,6 +22,7 @@ import {
   DeviceRepository,
   OperationRepository,
   StagedObjectRepository,
+  resolveDotRelayUser,
   sha384Digest,
 } from "@dotrelay/database";
 import type { Context, Hono } from "hono";
@@ -63,7 +64,17 @@ const mapError = (error: unknown) => {
   if (error.message.includes("generation")) return "stale_generation" as const;
   if (error.message.includes("not pending")) return "state_conflict" as const;
   if (error.message.includes("must differ")) return "forbidden" as const;
+  if (error.message.includes("must come from the initiator"))
+    return "forbidden" as const;
   if (error.message.includes("requires no active"))
+    return "state_conflict" as const;
+  if (error.message.includes("belongs to another user"))
+    return "forbidden" as const;
+  if (
+    error.message.includes("already active") ||
+    error.message.includes("conflicts with the stored device") ||
+    error.message.includes("no active device")
+  )
     return "state_conflict" as const;
   if (error.message.includes("expired")) return "state_conflict" as const;
   if (error.message.includes("already established"))
@@ -110,18 +121,6 @@ const toHex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const toBase64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
-
-const commandBytes = (...parts: readonly Uint8Array[]) => {
-  const output = new Uint8Array(
-    parts.reduce((length, part) => length + part.length, 0),
-  );
-  let offset = 0;
-  for (const part of parts) {
-    output.set(part, offset);
-    offset += part.length;
-  }
-  return output;
-};
 
 const requireIdempotencyKey = (context: Context, operationId: unknown) => {
   if (
@@ -421,14 +420,33 @@ export const registerDeviceRoutes = (
   });
 
   app.post("/api/v1/devices/enrollments", async (context) => {
-    const actor = await requireProtocolActor(context, database, profile, auth);
-    if (actor instanceof Response) return actor;
+    // The enrollment initiator is the prospective (not yet active) Device, so
+    // it authenticates with the User's session like bootstrap does; an active
+    // Device is only required of the approver.
+    const session = await auth.api.getSession({
+      headers: context.req.raw.headers,
+    });
+    if (!session) return problem(context, "authentication_required");
     try {
+      const user = await resolveDotRelayUser(database, {
+        serverProfileId: profile.id,
+        authSubject: session.user.id,
+        serverProfileOrigin: profile.origin,
+        allowRebind: profile.allowRebind,
+      });
+      if (!user) return problem(context, "service_unavailable");
       const body = await readBody(context);
       requireIdempotencyKey(context, body.operationId);
       const userId = parseUuid(body.userId, "userId");
-      if (userId !== actor.userId) return problem(context, "forbidden");
+      if (userId !== user.id) return problem(context, "forbidden");
       const enrollmentId = parseUuid(body.enrollmentId, "enrollmentId");
+      const deviceId = parseUuid(body.deviceId, "deviceId");
+      const identityGeneration = body.identityGeneration;
+      if (
+        typeof identityGeneration !== "string" ||
+        !/^[1-9][0-9]*$/.test(identityGeneration)
+      )
+        throw new ContractError("invalid_request");
       const expiresAt = new Date(String(body.expiresAt));
       const now = new Date();
       if (
@@ -443,6 +461,55 @@ export const registerDeviceRoutes = (
         "transcriptHash",
       );
       const challengeHash = parseSha384Hex(body.challengeHash, "challengeHash");
+      const x25519PublicKey = decodeBase64(body.x25519PublicKey);
+      const ed25519PublicKey = decodeBase64(body.ed25519PublicKey);
+      const keyId = decodeBase64(body.keyId);
+      if (
+        x25519PublicKey.length !== 32 ||
+        ed25519PublicKey.length !== 32 ||
+        keyId.length !== 48
+      )
+        throw new ContractError("invalid_request");
+      if (!equalBytes(keyId, await sha384Digest(x25519PublicKey)))
+        throw new ContractError("invalid_request");
+      const certificateObject = await parseProtocolPayload(
+        body,
+        "certificateObjectId",
+        "certificateObject",
+        2,
+      );
+      // The certificate is self-signed by the prospective Device and binds it
+      // to this profile and User.
+      validateActorBinding(certificateObject.object, profile.id, user.id);
+      if (
+        !equalBytes(
+          requiredBytes(certificateObject.object, 10, 16),
+          uuidToBytes(deviceId),
+        ) ||
+        requiredUint(certificateObject.object, 28) !==
+          BigInt(identityGeneration)
+      )
+        throw new ContractError("invalid_crypto_object");
+      const certificateSignature = requiredBytes(
+        certificateObject.object,
+        4,
+        64,
+      );
+      const certificatePublicKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(ed25519PublicKey).slice().buffer,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      if (
+        !(await verifyProtocolObject(
+          certificateObject.object,
+          certificateSignature,
+          certificatePublicKey,
+        ))
+      )
+        throw new ContractError("invalid_crypto_object");
       const commandBytes = new TextEncoder().encode(
         JSON.stringify({
           enrollmentId,
@@ -452,19 +519,42 @@ export const registerDeviceRoutes = (
           expiresAt: expiresAt.toISOString(),
         }),
       );
+      const client = parseDeviceClientInfo(body.client);
       const result = await devices.beginEnrollment(database, {
-        operation: await operation(
-          { operationId: body.operationId },
-          actor,
-          "DEVICE_ENROLLMENT",
+        operation: {
+          id: parseUuid(body.operationId, "operationId"),
+          actorUserId: user.id,
+          actorDeviceId: deviceId,
+          kind: "DEVICE_ENROLLMENT" as const,
           commandBytes,
-        ),
+          commandDigest: await sha384Digest(commandBytes),
+        },
         enrollmentId,
         userId,
-        initiatorDeviceId: actor.deviceId,
+        initiatorDeviceId: deviceId,
         transcriptHash,
         challengeHash,
         expiresAt,
+        device: {
+          id: deviceId,
+          identityGeneration: BigInt(identityGeneration),
+          keyId,
+          x25519PublicKey,
+          ed25519PublicKey,
+        },
+        ...(client
+          ? {
+              client: {
+                displayName: client.displayName,
+                clientKind:
+                  client.clientKind === "cli"
+                    ? ("CLI" as const)
+                    : ("BROWSER" as const),
+                osName: client.osName,
+                clientSummary: client.clientSummary,
+              },
+            }
+          : {}),
         now,
       });
       return enrollResponse(context, result);
@@ -498,6 +588,9 @@ export const registerDeviceRoutes = (
             initiatorDeviceId: true,
           },
         });
+        // The approver must be an existing ACTIVE Device of the User whose
+        // enrollment this is (requireProtocolActor above); the enrollment
+        // itself targets the prospective Device, which may still be PENDING.
         if (!enrollment || enrollment.userId !== actor.userId)
           return problem(context, "resource_not_found");
         const approval = await parseProtocolPayload(
@@ -545,14 +638,71 @@ export const registerDeviceRoutes = (
           ))
         )
           throw new ContractError("invalid_crypto_object");
+        // The prospective Device's self-signed certificate is recorded when
+        // the approval activates it; validate it here against the pending
+        // Device row created at begin.
+        const certificateObject = await parseProtocolPayload(
+          body,
+          "certificateObjectId",
+          "certificateObject",
+          2,
+        );
+        validateActorBinding(
+          certificateObject.object,
+          profile.id,
+          actor.userId,
+        );
+        if (
+          !equalBytes(
+            requiredBytes(certificateObject.object, 10, 16),
+            uuidToBytes(enrolledDeviceId),
+          )
+        )
+          throw new ContractError("invalid_crypto_object");
+        const prospective = await database.device.findUnique({
+          where: { id: enrolledDeviceId },
+        });
+        if (
+          !prospective ||
+          prospective.userId !== actor.userId ||
+          requiredUint(certificateObject.object, 28) !==
+            BigInt(prospective.identityGeneration)
+        )
+          throw new ContractError("invalid_crypto_object");
+        const certificateSignature = requiredBytes(
+          certificateObject.object,
+          4,
+          64,
+        );
+        const certificatePublicKey = await crypto.subtle.importKey(
+          "raw",
+          new Uint8Array(prospective.ed25519PublicKey).buffer,
+          { name: "Ed25519" },
+          false,
+          ["verify"],
+        );
+        if (
+          !(await verifyProtocolObject(
+            certificateObject.object,
+            certificateSignature,
+            certificatePublicKey,
+          ))
+        )
+          throw new ContractError("invalid_crypto_object");
         const command = approval.canonicalBytes;
         const op = await operation(body, actor, "DEVICE_ENROLLMENT", command);
         await operations.begin(database, op);
-        await stage(database, op, [approval], profile.limits.stagingTtlSeconds);
+        await stage(
+          database,
+          op,
+          [approval, certificateObject],
+          profile.limits.stagingTtlSeconds,
+        );
         const result = await devices.approveEnrollment(database, {
           operation: op,
           enrollmentId,
           approvalObject: approval,
+          certificateObject,
         });
         return context.json(
           {
@@ -585,6 +735,9 @@ export const registerDeviceRoutes = (
           context.req.param("enrollmentId"),
           "enrollmentId",
         );
+        // Completion comes from the prospective Device itself, which an
+        // approval has already activated; the actor gate above therefore
+        // also proves the enrollment was approved.
         const enrollment = await database.deviceEnrollment.findFirst({
           where: { id: enrollmentId, userId: actor.userId },
           select: {
@@ -602,12 +755,6 @@ export const registerDeviceRoutes = (
           "enrollmentObjectId",
           "enrollmentObject",
           4,
-        );
-        const certificateObject = await parseProtocolPayload(
-          body,
-          "certificateObjectId",
-          "certificateObject",
-          2,
         );
         if (
           !equalBytes(
@@ -668,108 +815,28 @@ export const registerDeviceRoutes = (
           )
         )
           throw new ContractError("invalid_crypto_object");
-        const deviceId = parseUuid(body.deviceId, "deviceId");
-        const identityGeneration = body.identityGeneration;
-        if (
-          typeof identityGeneration !== "string" ||
-          !/^[1-9][0-9]*$/.test(identityGeneration)
-        )
-          throw new ContractError("invalid_request");
-        const x25519PublicKey = decodeBase64(body.x25519PublicKey);
-        const ed25519PublicKey = decodeBase64(body.ed25519PublicKey);
-        const keyId = decodeBase64(body.keyId);
-        if (
-          x25519PublicKey.length !== 32 ||
-          ed25519PublicKey.length !== 32 ||
-          keyId.length !== 48
-        )
-          throw new ContractError("invalid_request");
         validateActorBinding(enrollmentObject.object, profile.id, actor.userId);
-        validateActorBinding(
-          certificateObject.object,
-          profile.id,
-          actor.userId,
-        );
-        if (
-          !equalBytes(
-            requiredBytes(enrollmentObject.object, 10, 16),
-            uuidToBytes(deviceId),
-          ) ||
-          !equalBytes(
-            requiredBytes(certificateObject.object, 10, 16),
-            uuidToBytes(deviceId),
-          )
-        )
-          throw new ContractError("invalid_crypto_object");
-        const certificateSignature = requiredBytes(
-          certificateObject.object,
-          4,
-          64,
-        );
-        const certificatePublicKey = await crypto.subtle.importKey(
-          "raw",
-          new Uint8Array(ed25519PublicKey).slice().buffer,
-          { name: "Ed25519" },
-          false,
-          ["verify"],
-        );
-        if (
-          !(await verifyProtocolObject(
-            certificateObject.object,
-            certificateSignature,
-            certificatePublicKey,
-          ))
-        )
-          throw new ContractError("invalid_crypto_object");
-        if (
-          requiredUint(certificateObject.object, 28) !==
-          BigInt(identityGeneration)
-        )
-          throw new ContractError("stale_generation");
         const op = await operation(
           body,
           actor,
           "DEVICE_ENROLLMENT",
-          commandBytes(
-            enrollmentObject.canonicalBytes,
-            certificateObject.canonicalBytes,
-          ),
+          enrollmentObject.canonicalBytes,
         );
         await operations.begin(database, op);
         await stage(
           database,
           op,
-          [enrollmentObject, certificateObject],
+          [enrollmentObject],
           profile.limits.stagingTtlSeconds,
         );
-        const client = parseDeviceClientInfo(body.client);
         const result = await devices.completeEnrollment(database, {
           operation: op,
           enrollmentId,
-          device: {
-            id: deviceId,
-            identityGeneration: BigInt(identityGeneration),
-            keyId,
-            x25519PublicKey,
-            ed25519PublicKey,
-          },
           enrollmentObject,
-          certificateObject,
-          ...(client
-            ? {
-                client: {
-                  displayName: client.displayName,
-                  clientKind:
-                    client.clientKind === "cli" ? "CLI" : ("BROWSER" as const),
-                  osName: client.osName,
-                  clientSummary: client.clientSummary,
-                },
-              }
-            : {}),
         });
         return context.json(
           {
-            deviceId: "device" in result ? result.device.id : deviceId,
+            deviceId: enrollment.initiatorDeviceId,
             active: true,
             idempotent: "idempotent" in result && result.idempotent,
           },

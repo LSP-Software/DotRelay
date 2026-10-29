@@ -47,12 +47,14 @@ revocation procedures.
 ### Provisioning key trust
 
 A Device that is not created by initial trust bootstrap joins through dual-control enrollment:
-one trusted Device signs the enrollment transcript, a second, different trusted Device approves
-it, and the Server Profile verifies both signatures against its stored trusted-Device keys before
-it persists the new Device's self-signed certificate and X25519/Ed25519 keys. Initial trust
-bootstrap is a separate, documented path: it requires only an authenticated session and creates
-the Device as `ACTIVE` without a dual-control record, because a User's first Device has no trusted
-Device that could sign its enrollment (see
+the prospective Device self-signs its enrollment request, one of the User's existing trusted
+Devices (which may be the only one) approves it, and the Server Profile verifies the approval
+against its stored trusted-Device keys before it persists the new Device's self-signed
+certificate and X25519/Ed25519 keys. Initial trust
+bootstrap is a separate, documented path: it requires only an authenticated session, is available
+only for a User's first Device (a second bootstrap is rejected once an `ACTIVE` Device exists),
+and creates the Device as `ACTIVE` without an enrollment record, because a User's first Device
+has no trusted Device that could approve its enrollment (see
 [initial trust bootstrap](wiki/trust.md#initial-trust-bootstrap) and
 [ADR 0010](adr/0010-session-bootstrapped-devices-are-fully-active.md)). Revocation, re-approval,
 and every later protocol boundary reuse those persisted keys.

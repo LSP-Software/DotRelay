@@ -58,6 +58,8 @@ type FixtureState = {
   signingPublicKey?: string;
   enrollmentId?: string;
   pendingDeviceId?: string;
+  pendingEncryptionPublicKey?: string;
+  pendingSigningPublicKey?: string;
   enrollmentApproved: boolean;
   recoveryWrapper?: {
     readonly wrapperId: string;
@@ -543,15 +545,27 @@ const handle = async (request: Request): Promise<Response> => {
     request.method === "POST"
   ) {
     const body = await readJson(request);
+    const x25519PublicKey = registeredKey(body.x25519PublicKey);
+    const ed25519PublicKey = registeredKey(body.ed25519PublicKey);
     if (
-      request.headers.get("X-DotRelay-Device-Id") !== state.deviceId ||
+      !uuid(body.deviceId) ||
       !uuid(body.enrollmentId) ||
+      !uuid(body.userId) ||
+      typeof body.identityGeneration !== "string" ||
       typeof body.transcriptHash !== "string" ||
       typeof body.challengeHash !== "string" ||
-      typeof body.expiresAt !== "string"
+      typeof body.expiresAt !== "string" ||
+      typeof body.certificateObject !== "string" ||
+      x25519PublicKey === null ||
+      ed25519PublicKey === null
     )
       return problemResponse("invalid_request");
-    state.enrollmentId = body.enrollmentId;
+    // The prospective Device self-starts with a session (no Device header);
+    // its enrollment registers the keys its approval will activate it with.
+    state.pendingDeviceId = body.deviceId as string;
+    state.pendingEncryptionPublicKey = x25519PublicKey;
+    state.pendingSigningPublicKey = ed25519PublicKey;
+    state.enrollmentId = body.enrollmentId as string;
     state.enrollmentCount += 1;
     return jsonResponse({
       enrollmentId: body.enrollmentId,
@@ -571,11 +585,20 @@ const handle = async (request: Request): Promise<Response> => {
     if (
       request.headers.get("X-DotRelay-Device-Id") !== state.deviceId ||
       typeof body.object !== "string" ||
+      typeof body.certificateObject !== "string" ||
       !uuid(body.enrolledDeviceId) ||
+      body.enrolledDeviceId !== state.pendingDeviceId ||
       enrollmentMatch[1] !== state.enrollmentId
     )
       return problemResponse("invalid_request");
-    state.pendingDeviceId = body.enrolledDeviceId;
+    // The approval activates the prospective Device with the exact keys its
+    // enrollment registered when it began.
+    resolveDevice(
+      state.pendingDeviceId!,
+      state.pendingEncryptionPublicKey!,
+      state.pendingSigningPublicKey!,
+    );
+    state.active = true;
     state.enrollmentApproved = true;
     return jsonResponse({ approved: true, idempotent: false });
   }
@@ -585,29 +608,21 @@ const handle = async (request: Request): Promise<Response> => {
     request.method === "POST"
   ) {
     const body = await readJson(request);
-    const x25519PublicKey = registeredKey(body.x25519PublicKey);
-    const ed25519PublicKey = registeredKey(body.ed25519PublicKey);
     if (
       request.headers.get("X-DotRelay-Device-Id") !== state.deviceId ||
       !state.enrollmentApproved ||
-      body.deviceId !== state.pendingDeviceId ||
-      typeof body.certificateObject !== "string" ||
       typeof body.enrollmentObject !== "string" ||
-      enrollmentMatch[1] !== state.enrollmentId ||
-      x25519PublicKey === null ||
-      ed25519PublicKey === null
+      enrollmentMatch[1] !== state.enrollmentId
     )
       return problemResponse("invalid_request");
-    // Completing an enrollment registers the new Device's public keys on the
-    // Server Profile, so its boundary must report them from now on.
-    state.active = true;
-    resolveDevice(body.deviceId as string, x25519PublicKey, ed25519PublicKey);
+    // Completion is the prospective Device confirming an enrollment an
+    // existing Device already approved; the Device and its keys were
+    // registered by the begin/approval, so the boundary already reports them.
     delete state.enrollmentId;
-    delete state.pendingDeviceId;
     state.enrollmentApproved = false;
     return jsonResponse(
       {
-        deviceId: body.deviceId,
+        deviceId: state.deviceId,
         active: true,
         idempotent: false,
       },
@@ -1111,10 +1126,13 @@ try {
     ],
     environment,
   );
+  const prospectiveDeviceId = state.pendingDeviceId;
   if (
     requireString(begun.request, "enrollment handoff path") !==
       enrollmentPath ||
-    state.enrollmentCount !== 1
+    state.enrollmentCount !== 1 ||
+    prospectiveDeviceId === undefined ||
+    prospectiveDeviceId === initialDeviceId
   )
     throw new Error("packaged CLI enrollment begin contract failed");
   // The approver's installation is the one approving: the Server Profile
@@ -1144,17 +1162,13 @@ try {
   );
   if (approved.approved !== true || !state.enrollmentApproved)
     throw new Error("packaged CLI enrollment approval contract failed");
-  // The initiator's installation completes the handoff: the Server Profile
-  // resolves the initial Device again, with the keys it registered for it.
-  resolveDevice(
-    initialDeviceId,
-    initialEncryptionPublicKey,
-    initialSigningPublicKey,
-  );
+  // The prospective Device's installation completes the handoff: `begin`
+  // recorded it as this installation's Device and the approval activated it,
+  // so the Server Profile now resolves the prospective Device.
   await writeDeviceId(
     deviceMetadataPath(isolatedDirectory, pin),
     pin,
-    initialDeviceId,
+    prospectiveDeviceId,
   );
   const completed = await runJson(
     [

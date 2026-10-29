@@ -37,5 +37,5 @@ do not force people to compare bare ids.
   the `DeviceClientKind` enum.
 - Boundary responses include optional `name` / `clientKind` / `osName` /
   `clientSummary` on `device` and each `peerDevices` entry.
-- Bootstrap and dual-control complete accept a `client` object parsed by
-  `parseDeviceClientInfo` (shared in `@dotrelay/contracts`).
+- Bootstrap and dual-control enrollment begin accept a `client` object
+  parsed by `parseDeviceClientInfo` (shared in `@dotrelay/contracts`).

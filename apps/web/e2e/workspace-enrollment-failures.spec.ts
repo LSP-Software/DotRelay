@@ -108,8 +108,35 @@ test("an unexpected problem code falls back to a neutral retry without dumping t
   await expect(page.getByText("some_future_code")).toHaveCount(0);
 });
 
-test("a conflicting bootstrap keeps the plain retry line", async ({ page }) => {
+test("a conflicting bootstrap starts an enrollment awaiting approval", async ({
+  page,
+}) => {
+  // Bootstrap is first-Device-only, so a conflict means the account already
+  // has a Device; the browser then starts a Device enrollment that one of
+  // the User's existing Devices approves.
   await interceptBootstrapFailure(page, 409, "state_conflict");
+  await page.route("**/api/v1/devices/enrollments**", (route) =>
+    route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ idempotent: false }),
+    }),
+  );
   await startSetup(page);
-  await expectSetupBlocked(page, "We couldn't set up this browser. Try again.");
+  await expect(
+    page.getByText(
+      "This browser is ready to join this account. Approve its enrollment on one of your other devices, then reload this page.",
+    ),
+  ).toBeVisible({ timeout: 15_000 });
+  // The browser saved its keys when it started the enrollment, so the setup
+  // card reports it as set up and keeps the pending-approval guidance instead
+  // of offering the first-Device bootstrap action again.
+  await expect(
+    page.locator("#devices").getByText("Set up this browser", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator("#devices").getByText("This browser is set up", {
+      exact: true,
+    }),
+  ).toBeVisible();
 });

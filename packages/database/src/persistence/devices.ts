@@ -10,6 +10,7 @@ import {
   databaseBytes,
   DeviceNotActiveError,
   requireActiveDevice,
+  sameBytes,
 } from "./repository-core";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import {
@@ -25,6 +26,14 @@ export type DeviceEnrollmentBeginInput = Readonly<{
   readonly transcriptHash: Uint8Array;
   readonly challengeHash: Uint8Array;
   readonly expiresAt: Date;
+  readonly device: Readonly<{
+    readonly id: string;
+    readonly identityGeneration: bigint;
+    readonly keyId: Uint8Array;
+    readonly x25519PublicKey: Uint8Array;
+    readonly ed25519PublicKey: Uint8Array;
+  }>;
+  readonly client?: DeviceClientMetadata | null;
   readonly now?: Date;
 }>;
 
@@ -32,6 +41,7 @@ export type DeviceEnrollmentApprovalInput = Readonly<{
   readonly operation: OperationInput & { readonly actorDeviceId: string };
   readonly enrollmentId: string;
   readonly approvalObject: ProtocolObjectInput;
+  readonly certificateObject: ProtocolObjectInput;
   readonly now?: Date;
 }>;
 
@@ -52,16 +62,7 @@ export type DeviceBootstrapInput = Readonly<{
 export type DeviceEnrollmentCompletionInput = Readonly<{
   readonly operation: OperationInput & { readonly actorDeviceId: string };
   readonly enrollmentId: string;
-  readonly device: Readonly<{
-    readonly id: string;
-    readonly identityGeneration: bigint;
-    readonly keyId: Uint8Array;
-    readonly x25519PublicKey: Uint8Array;
-    readonly ed25519PublicKey: Uint8Array;
-  }>;
   readonly enrollmentObject: ProtocolObjectInput;
-  readonly certificateObject: ProtocolObjectInput;
-  readonly client?: DeviceClientMetadata | null;
   readonly now?: Date;
 }>;
 
@@ -98,32 +99,96 @@ export class DeviceRepository {
   private readonly audit = new AuditFactRepository();
   private readonly stagedObjects = new StagedObjectRepository();
 
+  // The initiator is the prospective Device: not yet ACTIVE, and possibly not
+  // yet a row at all. Its row is created here as PENDING so the enrollment
+  // can reference it; an approval is what promotes it to ACTIVE.
   async beginEnrollment(
     database: TransactionDatabase,
     input: DeviceEnrollmentBeginInput,
   ) {
     return inShortTransaction(database, async (transaction) => {
-      await requireActiveDevice(
-        transaction,
-        input.operation.actorUserId,
-        input.operation.actorDeviceId,
-      );
-      if (input.initiatorDeviceId !== input.operation.actorDeviceId)
-        throw new Error("enrollment initiator must match the actor device");
+      const existing = await transaction.device.findUnique({
+        where: { id: input.device.id },
+      });
+      if (existing && existing.userId !== input.userId)
+        throw new Error(
+          "a device with this id already belongs to another user",
+        );
+      if (existing) {
+        const keyId = databaseBytes(
+          validateDigest(input.device.keyId, "Device key id"),
+        );
+        if (!sameBytes(existing.keyId, keyId))
+          throw new Error("device key id conflicts with the stored device");
+        if (existing.lifecycle === "REVOKED")
+          await transaction.device.update({
+            where: { id: input.device.id },
+            data: {
+              lifecycle: "PENDING",
+              activatedAt: null,
+              revokedAt: null,
+            },
+          });
+      } else {
+        const now = input.now ?? new Date();
+        await transaction.device.create({
+          data: {
+            id: input.device.id,
+            userId: input.userId,
+            lifecycle: "PENDING",
+            identityGeneration: input.device.identityGeneration,
+            keyId: databaseBytes(
+              validateDigest(input.device.keyId, "Device key id"),
+            ),
+            x25519PublicKey: databaseBytes(input.device.x25519PublicKey),
+            ed25519PublicKey: databaseBytes(input.device.ed25519PublicKey),
+            createdAt: now,
+            ...clientCreateData(input.client),
+          },
+        });
+      }
       const operation = await this.operations.begin(transaction, {
         ...input.operation,
         kind: "DEVICE_ENROLLMENT",
       });
       if (operation.idempotent) return operation;
+      if (input.userId !== input.operation.actorUserId)
+        throw new Error("enrollment user must match the actor user");
+      if (input.initiatorDeviceId !== input.operation.actorDeviceId)
+        throw new Error("enrollment initiator must match the actor device");
+      if (input.device.id !== input.initiatorDeviceId)
+        throw new Error("enrollment device must match the initiator");
+      const existingAfterOperation = await transaction.device.findUnique({
+        where: { id: input.device.id },
+      });
+      if (existingAfterOperation?.lifecycle === "ACTIVE")
+        throw new Error("device is already active");
+      const user = await transaction.user.findUnique({
+        where: { id: input.userId },
+        select: { identityGeneration: true },
+      });
+      if (!user || user.identityGeneration !== input.device.identityGeneration)
+        throw new Error("device identity generation is stale");
+      validatePublicKeys(input.device);
+      await validateSha384Digest(
+        input.device.x25519PublicKey,
+        input.device.keyId,
+        "Device key id",
+      );
+      // Enrollment needs an existing ACTIVE Device to approve the request;
+      // a User with none must use initial trust bootstrap instead.
       const activeDeviceCount = await transaction.device.count({
         where: { userId: input.userId, lifecycle: "ACTIVE" },
       });
       if (activeDeviceCount === 0)
         throw new Error(
-          "initial trust bootstrap must use the bootstrap enrollment path",
+          "the user has no active device to approve an enrollment; use initial trust bootstrap for the first device",
         );
       const now = input.now ?? new Date();
       if (input.expiresAt <= now) throw new Error("Device enrollment expired");
+      // The Device's certificate (and its protocol object) are recorded when
+      // an approval activates the Device: device_certificate_objects is
+      // append-only, so a PENDING row could never be promoted to ACTIVE.
       const enrollment = await transaction.deviceEnrollment.create({
         data: {
           id: input.enrollmentId,
@@ -156,6 +221,10 @@ export class DeviceRepository {
     });
   }
 
+  // The approver is an existing ACTIVE Device of the User. Approval is what
+  // activates the prospective Device: one existing Device approving the
+  // prospective Device's self-signed request is enough, which is how a User
+  // with a single Device adds a second one.
   async approveEnrollment(
     database: TransactionDatabase,
     input: DeviceEnrollmentApprovalInput,
@@ -176,6 +245,17 @@ export class DeviceRepository {
         throw new Error("Device enrollment expired");
       if (enrollment.initiatorDeviceId === input.operation.actorDeviceId)
         throw new Error("enrollment approver must differ from the initiator");
+      const prospective = await transaction.device.findUnique({
+        where: { id: enrollment.initiatorDeviceId },
+      });
+      // Once an approval activated the prospective Device, further approvals
+      // of the same enrollment are stale.
+      if (
+        !prospective ||
+        prospective.userId !== enrollment.userId ||
+        prospective.lifecycle !== "PENDING"
+      )
+        throw new Error("Device enrollment is not pending");
       const operation = await this.operations.begin(transaction, {
         ...input.operation,
         kind: "DEVICE_ENROLLMENT",
@@ -192,11 +272,20 @@ export class DeviceRepository {
             canonicalBytes: input.approvalObject.canonicalBytes,
             digest: input.approvalObject.digest,
           },
+          {
+            objectId: input.certificateObject.id,
+            canonicalBytes: input.certificateObject.canonicalBytes,
+            digest: input.certificateObject.digest,
+          },
         ],
       });
       const approvalObject = await this.protocolObjects.create(
         transaction,
         input.approvalObject,
+      );
+      const certificateObject = await this.protocolObjects.create(
+        transaction,
+        input.certificateObject,
       );
       await transaction.enrollmentApprovalObject.create({
         data: {
@@ -208,6 +297,22 @@ export class DeviceRepository {
       await transaction.deviceEnrollment.update({
         where: { id: enrollment.id },
         data: { approverDeviceId: input.operation.actorDeviceId },
+      });
+      await transaction.device.update({
+        where: { id: prospective.id },
+        data: { lifecycle: "ACTIVE", activatedAt: now },
+      });
+      // device_certificate_objects is append-only, so the prospective
+      // Device's certificate is recorded here, when the Device activates,
+      // rather than at begin.
+      await transaction.deviceCertificateObject.create({
+        data: {
+          protocolObjectId: certificateObject.id,
+          deviceId: prospective.id,
+          userId: prospective.userId,
+          identityGeneration: prospective.identityGeneration,
+          lifecycle: "ACTIVE",
+        },
       });
       await transaction.operation.update({
         where: { id: operation.operation.id },
@@ -221,6 +326,16 @@ export class DeviceRepository {
         entityKind: "OPERATION",
         entityId: operation.operation.id,
         outcomeObjectId: approvalObject.id,
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "DEVICE_ENROLLED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "DEVICE",
+        entityId: prospective.id,
+        newLifecycle: "ACTIVE",
+        outcomeObjectId: certificateObject.id,
       });
       return { operation: operation.operation, enrollment };
     });
@@ -237,6 +352,19 @@ export class DeviceRepository {
         kind: "DEVICE_ENROLLMENT",
       });
       if (operation.idempotent) return operation;
+      // Bootstrap is first-Device-only: once the User has an ACTIVE Device,
+      // additional Devices join through dual-control enrollment (whose
+      // beginEnrollment gate requires at least one ACTIVE Device). The count
+      // runs under the User row lock above, after the idempotent-replay
+      // early return, so a retry of a committed bootstrap still returns
+      // idempotent instead of being rejected.
+      const activeDeviceCount = await transaction.device.count({
+        where: { userId: input.operation.actorUserId, lifecycle: "ACTIVE" },
+      });
+      if (activeDeviceCount > 0)
+        throw new Error(
+          "a device has already been bootstrapped; use enrollment to add another device",
+        );
       const user = await transaction.user.findUnique({
         where: { id: input.operation.actorUserId },
         select: { identityGeneration: true },
@@ -295,6 +423,10 @@ export class DeviceRepository {
     });
   }
 
+  // Completion is the prospective Device's own confirmation, made after an
+  // approval already activated it. The Device row (and its certificate) was
+  // recorded at begin/approval time; this records the self-signed request
+  // object and closes the enrollment.
   async completeEnrollment(
     database: TransactionDatabase,
     input: DeviceEnrollmentCompletionInput,
@@ -320,18 +452,10 @@ export class DeviceRepository {
         throw new Error("Device enrollment expired");
       if (!enrollment.approverDeviceId)
         throw new Error("Device enrollment is not approved");
-      const user = await transaction.user.findUnique({
-        where: { id: enrollment.userId },
-        select: { identityGeneration: true },
-      });
-      if (!user || user.identityGeneration !== input.device.identityGeneration)
-        throw new Error("device identity generation is stale");
-      validatePublicKeys(input.device);
-      await validateSha384Digest(
-        input.device.x25519PublicKey,
-        input.device.keyId,
-        "Device key id",
-      );
+      if (enrollment.initiatorDeviceId !== input.operation.actorDeviceId)
+        throw new Error(
+          "enrollment completion must come from the initiator device",
+        );
       const now = input.now ?? new Date();
       await this.stagedObjects.promote(transaction, {
         operationId: operation.operation.id,
@@ -343,49 +467,16 @@ export class DeviceRepository {
             canonicalBytes: input.enrollmentObject.canonicalBytes,
             digest: input.enrollmentObject.digest,
           },
-          {
-            objectId: input.certificateObject.id,
-            canonicalBytes: input.certificateObject.canonicalBytes,
-            digest: input.certificateObject.digest,
-          },
         ],
       });
       const enrollmentObject = await this.protocolObjects.create(
         transaction,
         input.enrollmentObject,
       );
-      const certificateObject = await this.protocolObjects.create(
-        transaction,
-        input.certificateObject,
-      );
-      const device = await transaction.device.create({
-        data: {
-          id: input.device.id,
-          userId: enrollment.userId,
-          identityGeneration: input.device.identityGeneration,
-          keyId: databaseBytes(
-            validateDigest(input.device.keyId, "Device key id"),
-          ),
-          x25519PublicKey: databaseBytes(input.device.x25519PublicKey),
-          ed25519PublicKey: databaseBytes(input.device.ed25519PublicKey),
-          lifecycle: "ACTIVE",
-          activatedAt: now,
-          ...clientCreateData(input.client),
-        },
-      });
       await transaction.enrollmentObject.create({
         data: {
           protocolObjectId: enrollmentObject.id,
           enrollmentId: enrollment.id,
-        },
-      });
-      await transaction.deviceCertificateObject.create({
-        data: {
-          protocolObjectId: certificateObject.id,
-          deviceId: device.id,
-          userId: enrollment.userId,
-          identityGeneration: input.device.identityGeneration,
-          lifecycle: "ACTIVE",
         },
       });
       await transaction.deviceEnrollment.update({
@@ -396,19 +487,7 @@ export class DeviceRepository {
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
       });
-      await this.audit.append(transaction, {
-        operationId: operation.operation.id,
-        kind: "DEVICE_ENROLLED",
-        actorUserId: input.operation.actorUserId,
-        ...(input.operation.actorDeviceId
-          ? { actorDeviceId: input.operation.actorDeviceId }
-          : {}),
-        entityKind: "DEVICE",
-        entityId: device.id,
-        newLifecycle: "ACTIVE",
-        outcomeObjectId: certificateObject.id,
-      });
-      return { operation: operation.operation, device };
+      return { operation: operation.operation, enrollment };
     });
   }
 

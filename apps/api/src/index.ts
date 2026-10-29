@@ -706,6 +706,8 @@ const createApi = ({
   });
 
   app.use("/api/v1/devices/bootstrap", protocolCors(profile));
+  app.use("/api/v1/devices/enrollments", protocolCors(profile));
+  app.use("/api/v1/devices/enrollments/*", protocolCors(profile));
   app.use("/api/v1/devices/self", protocolCors(profile));
   app.use("/api/v1/devices/*/revoke", protocolCors(profile));
   app.use("/api/v1/account-keys", protocolCors(profile));

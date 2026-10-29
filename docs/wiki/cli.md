@@ -48,10 +48,12 @@ trust decision.
 Interactive setup and `profile add` confirm trust with Enter. `--no-input` never guesses and still
 requires `--accept-profile <server-profile-id>`.
 
-`dotrelay login` reuses an existing profile: it waits on the user code, then enrolls the first
-Device if this machine does not already have one. It does not start dual-control enrollment and
-does not receive a GitHub token. Before it starts waiting it shows the copyable verification URL,
-the user code, and the code expiry. The shown URL is validated against the pinned Server Profile
+`dotrelay login` reuses an existing profile: it waits on the user code, then bootstraps the
+first Device if this machine does not already have one. Bootstrap is first-Device-only, so a
+machine joining an account that already has a Device gets a conflict from the bootstrap and
+should run `dotrelay device enroll` instead. Login does not receive a GitHub token.
+Before it starts waiting it shows the copyable verification URL, the user code, and the
+code expiry. The shown URL is validated against the pinned Server Profile
 and is the one to open: when the service supplies a complete URL it already includes the user
 code. `--no-open` suppresses opening the browser, and `--no-input` never attempts to open one (for
 example over SSH); in both cases the same URL, code, and expiry are shown so the User can open the
@@ -269,11 +271,15 @@ line or the next command to run. It never dumps key:value local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle
 in the local credential store, with a protected local record for its profile and Device id.
-The browser is a separate Device. Session bootstrap may enroll it after the CLI is already active.
-`device enroll` still begins the dual-control flow when adding a Device whose keys are generated on
-an already enrolled installation. The explicit form is `device begin --output <request>`. Move that
-signed request artifact to a second authorized installation and run `device approve --from
-<request>`. Return the request artifact to the initiator and run `device complete --from <request>`.
+The browser is a separate Device. Bootstrap is first-Device-only, so once the User already has
+an active Device, a new installation or browser joins through enrollment instead: it generates
+its keys and self-starts the enrollment, and one of the User's existing Devices (which may be
+the only one) approves it.
+`device enroll` bootstraps the first Device, or self-starts that enrollment when the User
+already has one; the explicit form is `device begin --output <request>`. Move the signed
+request artifact to an existing authorized installation and run `device approve --from
+<request>`, which activates the new Device. Return the request artifact to the new
+installation and run `device complete --from <request>`.
 The request contains public protocol objects only; the pending private bundle stays in encrypted
 local Device storage.
 

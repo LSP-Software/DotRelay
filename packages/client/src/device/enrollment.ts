@@ -193,14 +193,35 @@ export const createDeviceEnrollmentRequest = async (
     readonly initiatorSigningPublicKey: Uint8Array;
     readonly expiresAtMs: number;
     readonly deviceId?: string;
+    /**
+     * Pre-generated Device keys, used when the caller (a prospective Device)
+     * already holds the keypair the request signs with. When omitted the
+     * keys are generated here.
+     */
+    readonly keyMaterial?: Readonly<{
+      readonly encryptionPrivateKey: CryptoKey;
+      readonly signingPrivateKey: CryptoKey;
+      readonly encryptionPublicKey: CryptoKey;
+      readonly signingPublicKey: CryptoKey;
+    }>;
   }>,
 ): Promise<DeviceEnrollmentRequest> => {
   validateExpiry(input.expiresAtMs);
   if (input.initiatorSigningPublicKey.length === 0)
     throw new TypeError("initiator signing public key is required");
   const deviceId = input.deviceId ?? crypto.randomUUID();
-  const encryption = await generateEncryptionKeyPair();
-  const signing = await generateSigningKeyPair();
+  const encryption = input.keyMaterial
+    ? {
+        privateKey: input.keyMaterial.encryptionPrivateKey,
+        publicKey: input.keyMaterial.encryptionPublicKey,
+      }
+    : await generateEncryptionKeyPair();
+  const signing = input.keyMaterial
+    ? {
+        privateKey: input.keyMaterial.signingPrivateKey,
+        publicKey: input.keyMaterial.signingPublicKey,
+      }
+    : await generateSigningKeyPair();
   const keyMaterial: DeviceKeyMaterial = Object.freeze({
     encryptionPrivateKey: encryption.privateKey,
     signingPrivateKey: signing.privateKey,
