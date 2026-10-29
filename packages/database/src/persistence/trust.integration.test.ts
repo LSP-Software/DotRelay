@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { Client } from "pg";
 import {
-  type CborValue,
   canonicalEncode,
+  type CborValue,
   encodeProtocolObject,
   protocolObjectFromFields,
   uuidToBytes,
 } from "@dotrelay/contracts";
+import { Client } from "pg";
 import type {
   DatabaseClient,
   OperationInput,

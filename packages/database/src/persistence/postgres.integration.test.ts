@@ -1,12 +1,20 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { Client } from "pg";
 import {
-  type CborValue,
   canonicalEncode,
+  type CborValue,
+  encodeProtocolObject,
+  generateEncryptionKeyPair,
+  generateSigningKeyPair,
+  parseProtocolObject,
   protocolObjectFromFields,
   uuidToBytes,
 } from "@dotrelay/contracts";
+import {
+  createPublicationArtifacts,
+  type PublicationVariable,
+} from "@dotrelay/client";
+import { Client } from "pg";
 import type {
   DatabaseClient,
   OperationInput,
@@ -119,117 +127,233 @@ const createProtocolObjectInput = async (
   };
 };
 
-const PUBLICATION_PROFILE_ID = "00000000-0000-4000-8000-000000000001";
-const PUBLICATION_TEAM_ID = "00000000-0000-4000-8000-000000000002";
-
-// Structurally complete signed object: fields 3 and 4 form the signed
-// envelope (zero-byte Ed25519 signature; persistence validates structure,
-// the API verifies the signature).
-const signedCanonicalBytes = (
+// Encodes a registry-valid signed protocol object: field 3 carries the
+// canonical unsigned body and field 4 a 64-byte signature placeholder, the
+// same envelope shape the client signs (the server never re-verifies the
+// Ed25519 signature on the write path).
+const signedProtocolBytes = (
   kind: number,
   fields: ReadonlyMap<number, CborValue>,
 ): Uint8Array => {
-  const envelope = new Map<number, CborValue>(fields);
-  envelope.set(4, new Uint8Array(64));
-  const candidate = protocolObjectFromFields(kind, envelope);
-  const unsignedBytes = canonicalEncode(
-    new Map(
-      [...candidate.entries()].filter(([field]) => field !== 3 && field !== 4),
-    ),
-  );
-  envelope.set(3, unsignedBytes);
-  return canonicalEncode(protocolObjectFromFields(kind, envelope));
+  const body = protocolObjectFromFields(kind, fields);
+  const signed = new Map<number, CborValue>(fields);
+  signed.set(3, canonicalEncode(body));
+  signed.set(4, new Uint8Array(64));
+  return encodeProtocolObject(protocolObjectFromFields(kind, signed));
 };
 
-const publicationObjectInput = (
-  kind: number,
-  canonicalBytes: Uint8Array,
-  projectId: string,
-  environmentId: string,
-): Promise<ProtocolObjectInput> =>
-  (async () => ({
+// Re-encodes a signed revision with a few fields replaced (keeping the
+// registry-valid envelope), so tests can publish a revision that commits to
+// a manifest different from the one the client paired with it.
+const rebuiltRevisionBytes = (
+  baseBytes: Uint8Array,
+  overrides: ReadonlyMap<number, CborValue>,
+): Uint8Array => {
+  const fields = new Map<number, CborValue>();
+  for (const [field, value] of parseProtocolObject(baseBytes)) {
+    if (field === 0 || field === 1 || field === 2 || field === 3 || field === 4)
+      continue;
+    fields.set(field, value);
+  }
+  for (const [field, value] of overrides) fields.set(field, value);
+  return signedProtocolBytes(16, fields);
+};
+
+const manifestBindingVariable = (name: string): PublicationVariable =>
+  Object.freeze({
     id: crypto.randomUUID(),
+    name,
+    description: "manifest binding fixture variable",
+    ownership: "SHARED_VALUE",
+    value: `value-for-${name}`,
+    required: true,
+    hasDraftChange: true,
+  });
+
+// Maps real client publication artifact sets onto a persistence input, the
+// same way the API maps staged objects for the finalize route. The revision
+// comes from baseArtifacts; the descriptor and lanes/commitments may be
+// sourced from different artifact sets, which is exactly the mismatch the
+// write path must now reject. Every input begins its own operation and
+// stages exactly the objects the publication will promote.
+const publicationFromArtifacts = async (
+  baseArtifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
+  input: {
+    readonly actorUserId: string;
+    readonly actorDeviceId: string;
+    readonly projectId: string;
+    readonly environmentId: string;
+    readonly revisionBytes?: Uint8Array;
+    readonly descriptorSource?: Awaited<
+      ReturnType<typeof createPublicationArtifacts>
+    >;
+    readonly lanesSource?: Awaited<
+      ReturnType<typeof createPublicationArtifacts>
+    >;
+  },
+): Promise<RevisionPublicationInput> => {
+  const request = baseArtifacts.request;
+  const descriptorArtifacts = input.descriptorSource ?? baseArtifacts;
+  const lanesArtifacts = input.lanesSource ?? baseArtifacts;
+  const revisionBytes = input.revisionBytes ?? baseArtifacts.commandBytes;
+  const descriptorStaged = descriptorArtifacts.stagedObjects.find(
+    (object) =>
+      object.objectId ===
+      descriptorArtifacts.request.descriptor.protocolObjectId,
+  );
+  if (!descriptorStaged) throw new Error("descriptor object is not staged");
+  const laneBytesById = new Map<string, Uint8Array>();
+  for (const object of lanesArtifacts.stagedObjects)
+    laneBytesById.set(object.objectId, object.bytes);
+  const buildObject = async (
+    objectId: string,
+    kind: number,
+    bytes: Uint8Array,
+  ): Promise<ProtocolObjectInput> => ({
+    id: objectId,
     suite: "dotrelay-e2ee-v3-classical-webcrypto",
     formatVersion: 3,
     kind,
-    canonicalBytes,
-    digest: await sha384Digest(canonicalBytes),
-    projectId,
-    environmentId,
-  }))();
-
-type PublicationObjectContext = Readonly<{
-  readonly projectId: string;
-  readonly environmentId: string;
-  readonly revisionId: string;
-  readonly projectEpoch: bigint;
-}>;
-
-const createDescriptorObjectInput = (
-  context: PublicationObjectContext,
-): Promise<ProtocolObjectInput> =>
-  publicationObjectInput(
-    15,
-    signedCanonicalBytes(
-      15,
-      new Map<number, CborValue>([
-        [8, uuidToBytes(PUBLICATION_PROFILE_ID)],
-        [11, uuidToBytes(PUBLICATION_TEAM_ID)],
-        [13, uuidToBytes(context.projectId)],
-        [14, uuidToBytes(context.environmentId)],
-        [16, uuidToBytes(context.revisionId)],
-        [30, context.projectEpoch],
-        [50, 1],
-        [53, []],
-      ]),
-    ),
-    context.projectId,
-    context.environmentId,
-  );
-
-const createRevisionObjectInput = (
-  input: PublicationObjectContext &
-    Readonly<{
-      readonly actorUserId: string;
-      readonly actorDeviceId: string;
-      readonly mutationKind: number;
-      readonly expectedHeadId?: string | null;
-      readonly parentHash?: Uint8Array;
-      readonly rollbackTargetId?: string;
-      readonly descriptorBytes: Uint8Array;
-      readonly descriptorDigest: Uint8Array;
-    }>,
-): Promise<ProtocolObjectInput> => {
-  const fields = new Map<number, CborValue>([
-    [8, uuidToBytes(PUBLICATION_PROFILE_ID)],
-    [11, uuidToBytes(PUBLICATION_TEAM_ID)],
-    [13, uuidToBytes(input.projectId)],
-    [14, uuidToBytes(input.environmentId)],
-    [16, uuidToBytes(input.revisionId)],
-    [17, uuidToBytes(crypto.randomUUID())],
-    [19, uuidToBytes(input.expectedHeadId ?? input.environmentId)],
-    [20, input.parentHash ?? new Uint8Array(48)],
-    [22, uuidToBytes(input.actorUserId)],
-    [23, uuidToBytes(input.actorDeviceId)],
-    [30, input.projectEpoch],
-    [34, Date.now()],
-    [35, input.mutationKind],
-    [50, 1],
-    [51, input.descriptorBytes],
-    [52, input.descriptorDigest],
-    [53, []],
-    [54, []],
-  ]);
-  if (input.mutationKind === 3) {
-    fields.set(21, uuidToBytes(input.rollbackTargetId ?? input.environmentId));
-    fields.set(68, []);
-  }
-  return publicationObjectInput(
+    canonicalBytes: bytes,
+    digest: await sha384Digest(bytes),
+    projectId: input.projectId,
+    environmentId: input.environmentId,
+  });
+  const laneRequests = lanesArtifacts.request.lanes;
+  const revisionObject = await buildObject(
+    request.revision.protocolObjectId,
     16,
-    signedCanonicalBytes(16, fields),
-    input.projectId,
-    input.environmentId,
+    revisionBytes,
   );
+  const descriptorObject = await buildObject(
+    descriptorArtifacts.request.descriptor.protocolObjectId,
+    15,
+    descriptorStaged.bytes,
+  );
+  const lanes = await Promise.all(
+    laneRequests.map(async (lane) => {
+      const bytes = laneBytesById.get(lane.protocolObjectId);
+      if (!bytes)
+        throw new Error(`staged lane object ${lane.protocolObjectId} missing`);
+      return {
+        lane: {
+          id: lane.id,
+          protocolObjectId: lane.protocolObjectId,
+          projectId: input.projectId,
+          environmentId: input.environmentId,
+          scope: lane.scope,
+          ...(lane.ownerUserId ? { ownerUserId: lane.ownerUserId } : {}),
+          ...(lane.originalProviderUserId
+            ? { originalProviderUserId: lane.originalProviderUserId }
+            : {}),
+          projectEpoch: BigInt(lane.projectEpoch),
+          ...(lane.valueGeneration !== undefined
+            ? { valueGeneration: BigInt(lane.valueGeneration) }
+            : {}),
+          plaintextLength: lane.plaintextLength,
+          ciphertextLength: lane.ciphertextLength,
+          ciphertextHash: lane.ciphertextHash,
+        },
+        protocolObject: await buildObject(lane.protocolObjectId, 13, bytes),
+      };
+    }),
+  );
+  const operationKind =
+    request.revision.mutation === "ROLLBACK"
+      ? ("ROLLBACK" as const)
+      : ("REVISION_PUBLICATION" as const);
+  // Operations are unique per (actor, command digest), so each scenario
+  // carries a distinct nonce-prefixed command around the same revision
+  // bytes, the way separate client operations would.
+  const commandNonce = uuidToBytes(crypto.randomUUID());
+  const commandBytes = new Uint8Array(
+    commandNonce.length + revisionBytes.length,
+  );
+  commandBytes.set(commandNonce);
+  commandBytes.set(revisionBytes, commandNonce.length);
+  const operation = {
+    id: crypto.randomUUID(),
+    actorUserId: input.actorUserId,
+    actorDeviceId: input.actorDeviceId,
+    kind: operationKind,
+    commandBytes,
+    commandDigest: await sha384Digest(commandBytes),
+  };
+  await new OperationRepository().begin(database, operation);
+  const staging = new StagedObjectRepository();
+  for (const object of [
+    { objectId: revisionObject.id, bytes: revisionObject.canonicalBytes },
+    {
+      objectId: descriptorObject.id,
+      bytes: descriptorObject.canonicalBytes,
+    },
+    ...lanes.map(({ protocolObject }) => ({
+      objectId: protocolObject.id,
+      bytes: protocolObject.canonicalBytes,
+    })),
+  ]) {
+    const createdAt = new Date();
+    await staging.put(database, {
+      operationId: operation.id,
+      objectId: object.objectId,
+      actorDeviceId: input.actorDeviceId,
+      canonicalBytes: object.bytes,
+      digest: await sha384Digest(object.bytes),
+      createdAt,
+      expiresAt: new Date(createdAt.getTime() + 60_000),
+    });
+  }
+  return {
+    operation,
+    environmentId: input.environmentId,
+    expectedHeadId: request.expectedHeadId,
+    revision: {
+      id: request.revision.id,
+      protocolObjectId: request.revision.protocolObjectId,
+      ...(request.revision.parentHash
+        ? { parentHash: request.revision.parentHash }
+        : {}),
+      projectEpoch: BigInt(request.revision.projectEpoch),
+      mutation: request.revision.mutation,
+      authoredAtMs: BigInt(request.revision.authoredAtMs),
+      ...(request.revision.rollbackTargetId
+        ? { rollbackTargetId: request.revision.rollbackTargetId }
+        : {}),
+    },
+    revisionObject,
+    descriptor: {
+      protocolObject: descriptorObject,
+      schemaVersion: descriptorArtifacts.request.descriptor.schemaVersion,
+      descriptorHash: descriptorArtifacts.request.descriptor.descriptorHash,
+      laneCount: descriptorArtifacts.request.descriptor.laneCount,
+    },
+    lanes,
+    commitments: lanesArtifacts.request.commitments.map((commitment) => ({
+      ordinal: commitment.ordinal,
+      laneObjectId: commitment.laneObjectId,
+      objectHash: commitment.objectHash,
+      projectEpoch: BigInt(commitment.projectEpoch),
+      scope: commitment.scope,
+      ...(commitment.valueGeneration !== undefined
+        ? { valueGeneration: BigInt(commitment.valueGeneration) }
+        : {}),
+      ...(commitment.ownerUserId
+        ? { ownerUserId: commitment.ownerUserId }
+        : {}),
+      ...(commitment.originalProviderUserId
+        ? { originalProviderUserId: commitment.originalProviderUserId }
+        : {}),
+      ciphertextLength: commitment.ciphertextLength,
+    })),
+    audit: {
+      kind:
+        request.revision.mutation === "ROLLBACK"
+          ? ("ROLLBACK_PUBLISHED" as const)
+          : ("REVISION_PUBLISHED" as const),
+      entityKind: "ENVIRONMENT",
+      entityId: input.environmentId,
+    },
+  };
 };
 
 const preparePublication = async (input: {
@@ -254,34 +378,79 @@ const preparePublication = async (input: {
     actorDeviceId: input.actorDeviceId,
   };
   const revisionId = crypto.randomUUID();
-  const mutationKind =
-    input.mutation === "GENESIS"
-      ? 1
-      : input.mutation === "MANIFEST_UPDATE"
-        ? 2
-        : 3;
-  const descriptorObject = await createDescriptorObjectInput({
+  const profileId = crypto.randomUUID();
+  const teamId = crypto.randomUUID();
+  const authoredAtMs = Date.now();
+  const descriptorBytes = signedProtocolBytes(
+    15,
+    new Map<number, CborValue>([
+      [8, uuidToBytes(profileId)],
+      [11, uuidToBytes(teamId)],
+      [13, uuidToBytes(input.projectId)],
+      [14, uuidToBytes(input.environmentId)],
+      [16, uuidToBytes(revisionId)],
+      [30, 1],
+      [50, 1],
+      [53, []],
+    ]),
+  );
+  const descriptorDigest = await sha384Digest(descriptorBytes);
+  const revisionFields = new Map<number, CborValue>([
+    [8, uuidToBytes(profileId)],
+    [11, uuidToBytes(teamId)],
+    [13, uuidToBytes(input.projectId)],
+    [14, uuidToBytes(input.environmentId)],
+    [16, uuidToBytes(revisionId)],
+    [17, uuidToBytes(crypto.randomUUID())],
+    [
+      19,
+      input.expectedHeadId
+        ? uuidToBytes(input.expectedHeadId)
+        : uuidToBytes(input.environmentId),
+    ],
+    [20, input.parentHash ?? new Uint8Array(48)],
+    [22, uuidToBytes(input.actorUserId)],
+    [23, uuidToBytes(input.actorDeviceId)],
+    [30, 1],
+    [34, authoredAtMs],
+    [
+      35,
+      input.mutation === "GENESIS" ? 1 : input.mutation === "ROLLBACK" ? 3 : 2,
+    ],
+    [50, 1],
+    [51, descriptorBytes],
+    [52, descriptorDigest],
+    [53, []],
+    [54, []],
+  ]);
+  if (input.mutation === "ROLLBACK") {
+    revisionFields.set(
+      21,
+      uuidToBytes(input.rollbackTargetId ?? input.environmentId),
+    );
+    revisionFields.set(68, [uuidToBytes(crypto.randomUUID())]);
+  }
+  const revisionBytes = signedProtocolBytes(16, revisionFields);
+  const revisionObject: ProtocolObjectInput = {
+    id: crypto.randomUUID(),
+    suite: "dotrelay-e2ee-v3-classical-webcrypto",
+    formatVersion: 3,
+    kind: 16,
+    canonicalBytes: revisionBytes,
+    digest: await sha384Digest(revisionBytes),
     projectId: input.projectId,
     environmentId: input.environmentId,
-    revisionId,
-    projectEpoch: 1n,
-  });
-  const revisionObject = await createRevisionObjectInput({
+  };
+  const descriptorObject: ProtocolObjectInput = {
+    id: crypto.randomUUID(),
+    suite: "dotrelay-e2ee-v3-classical-webcrypto",
+    formatVersion: 3,
+    kind: 15,
+    canonicalBytes: descriptorBytes,
+    digest: descriptorDigest,
     projectId: input.projectId,
     environmentId: input.environmentId,
-    revisionId,
-    projectEpoch: 1n,
-    actorUserId: input.actorUserId,
-    actorDeviceId: input.actorDeviceId,
-    mutationKind,
-    expectedHeadId: input.expectedHeadId,
-    ...(input.parentHash ? { parentHash: input.parentHash } : {}),
-    ...(input.rollbackTargetId
-      ? { rollbackTargetId: input.rollbackTargetId }
-      : {}),
-    descriptorBytes: descriptorObject.canonicalBytes,
-    descriptorDigest: descriptorObject.digest,
-  });
+  };
   const operations = new OperationRepository();
   const staging = new StagedObjectRepository();
   await operations.begin(database, operation);
@@ -307,7 +476,7 @@ const preparePublication = async (input: {
       ...(input.parentHash ? { parentHash: input.parentHash } : {}),
       projectEpoch: 1n,
       mutation: input.mutation,
-      authoredAtMs: BigInt(Date.now()),
+      authoredAtMs: BigInt(authoredAtMs),
       ...(input.rollbackTargetId
         ? { rollbackTargetId: input.rollbackTargetId }
         : {}),
@@ -1391,6 +1560,141 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     expect(
       await database.environment.findUnique({ where: { id: environmentId } }),
     ).toMatchObject({ currentHeadId: genesis.revision.id });
+  });
+
+  test("binds the published descriptor and lanes to the signed revision", async () => {
+    const { device, projectId, teamId, user } =
+      await createProjectFixture("manifest-binding");
+    const environments = new EnvironmentRepository();
+    const publications = new PublicationRepository();
+    const environmentId = crypto.randomUUID();
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: user.id } } },
+    });
+    const encryption = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
+    const context = {
+      serverProfileId: serverProfile.id,
+      teamId,
+      projectId,
+      environmentId,
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: signing.privateKey,
+    };
+    const fixtureContext = {
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+    };
+    const genesisArtifacts = await createPublicationArtifacts(
+      [manifestBindingVariable("MANIFEST_BINDING_GENESIS")],
+      { ...context, mutation: "GENESIS" },
+    );
+    const genesis = await publicationFromArtifacts(
+      genesisArtifacts,
+      fixtureContext,
+    );
+    await environments.createWithGenesis(database, {
+      environmentId,
+      projectId,
+      createdByUserId: user.id,
+      publication: genesis,
+    });
+    const headId = genesis.revision.id;
+    const updateContext = {
+      ...context,
+      expectedHeadId: headId,
+      expectedHeadHash: genesis.revisionObject.digest,
+      mutation: "MANIFEST_UPDATE" as const,
+    };
+    // Two valid artifact sets against the same genesis head: A's signed
+    // revision commits to descriptor A (hash M1), B's to descriptor B (M2).
+    const artifactsA = await createPublicationArtifacts(
+      [manifestBindingVariable("MANIFEST_BINDING_A")],
+      updateContext,
+    );
+    const artifactsB = await createPublicationArtifacts(
+      [manifestBindingVariable("MANIFEST_BINDING_B")],
+      updateContext,
+    );
+    // A's signed revision (field 52 = M1) paired with B's descriptor (M2)
+    // and B's lanes/commitments: the pairing is internally consistent, so
+    // only the revision's own manifest binding rejects it.
+    const mismatchedDescriptor = await publicationFromArtifacts(artifactsA, {
+      ...fixtureContext,
+      descriptorSource: artifactsB,
+      lanesSource: artifactsB,
+    });
+    await expect(
+      publications.publishRevision(database, mismatchedDescriptor),
+    ).rejects.toThrow(
+      "submitted descriptor hash differs from the signed revision's manifest",
+    );
+    expect(
+      await database.environment.findUnique({ where: { id: environmentId } }),
+    ).toMatchObject({ currentHeadId: headId });
+
+    // A revision that commits (field 53) to B's lane commitments while A's
+    // descriptor still commits to A's lanes.
+    const committedLanesB = parseProtocolObject(artifactsB.commandBytes).get(
+      53,
+    );
+    if (!Array.isArray(committedLanesB))
+      throw new Error("fixture B has no committed lanes");
+    const mismatchedCommitments = await publicationFromArtifacts(artifactsA, {
+      ...fixtureContext,
+      revisionBytes: rebuiltRevisionBytes(
+        artifactsA.commandBytes,
+        new Map<number, CborValue>([[53, committedLanesB]]),
+      ),
+      lanesSource: artifactsB,
+    });
+    await expect(
+      publications.publishRevision(database, mismatchedCommitments),
+    ).rejects.toThrow(
+      "signed revision lane commitments differ from its descriptor",
+    );
+    expect(
+      await database.environment.findUnique({ where: { id: environmentId } }),
+    ).toMatchObject({ currentHeadId: headId });
+
+    // A revision that commits to A's lanes, paired with A's descriptor but
+    // B's lane projections: the request no longer represents the committed
+    // list.
+    const mismatchedProjection = await publicationFromArtifacts(artifactsA, {
+      ...fixtureContext,
+      lanesSource: artifactsB,
+    });
+    await expect(
+      publications.publishRevision(database, mismatchedProjection),
+    ).rejects.toThrow(
+      "request commitment projection differs from the signed revision's committed lanes",
+    );
+    expect(
+      await database.environment.findUnique({ where: { id: environmentId } }),
+    ).toMatchObject({ currentHeadId: headId });
+
+    // The correctly paired publication still succeeds and advances the head.
+    const paired = await publicationFromArtifacts(artifactsA, fixtureContext);
+    const published = await publications.publishRevision(database, paired);
+    expect(published.revision.id).toBe(artifactsA.request.revision.id);
+    expect(published.idempotent).toBe(false);
+    expect(
+      await database.environment.findUnique({ where: { id: environmentId } }),
+    ).toMatchObject({ currentHeadId: artifactsA.request.revision.id });
+    expect(await database.revision.count({ where: { environmentId } })).toBe(2);
+    expect(
+      await database.manifestDescriptor.count({ where: { environmentId } }),
+    ).toBe(2);
+    expect(await database.laneObject.count({ where: { environmentId } })).toBe(
+      4,
+    );
   });
 
   test("returns authorization-scoped synchronization pages after a trusted revision", async () => {

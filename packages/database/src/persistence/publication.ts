@@ -1,4 +1,10 @@
-import { bytesToUuid, parseProtocolObject } from "@dotrelay/contracts";
+import {
+  bytesToUuid,
+  canonicalEncode,
+  type CborValue,
+  parseProtocolObject,
+  sha384,
+} from "@dotrelay/contracts";
 import {
   AuditFactRepository,
   type OperationInput,
@@ -150,6 +156,26 @@ export type RevisionPublicationInput = Readonly<{
     readonly entityId: string;
   }>;
 }>;
+
+const commitmentScopeFromField = (
+  scope: number,
+): LaneProjectionInput["scope"] | null =>
+  scope === 1
+    ? "ENVIRONMENT_DEFINITION"
+    : scope === 2
+      ? "VARIABLE_DEFINITION"
+      : scope === 3
+        ? "SHARED_VALUE"
+        : scope === 4
+          ? "USER_DEFINED_VALUE"
+          : null;
+
+const commitmentUserId = (value: CborValue | undefined): string | undefined => {
+  if (value === undefined) return undefined;
+  if (!(value instanceof Uint8Array) || value.length !== 16)
+    throw new Error("signed revision lane commitment is malformed");
+  return bytesToUuid(value);
+};
 
 export class PublicationRepository {
   private readonly protocolObjects = new ProtocolObjectRepository();
@@ -365,6 +391,94 @@ export class PublicationRepository {
     }
     if ([...ordinals].some((ordinal, index) => ordinal !== index))
       throw new Error("Manifest commitment ordinals must be contiguous");
+    // Bind the submitted descriptor and lanes to the signed revision: the
+    // revision commits to the manifest (field 51 = descriptor bytes, field 52
+    // = its hash) and to the lane commitments (field 53), and the descriptor
+    // repeats those commitments. The client re-verifies all of this on read,
+    // so the write path must reject any pairing the client would reject.
+    const revisionFields = parseProtocolObject(
+      input.revisionObject.canonicalBytes,
+    );
+    const manifestDescriptorBytes = revisionFields.get(51);
+    const manifestHash = revisionFields.get(52);
+    const manifestCommitments = revisionFields.get(53);
+    if (
+      !(manifestDescriptorBytes instanceof Uint8Array) ||
+      !(manifestHash instanceof Uint8Array) ||
+      !Array.isArray(manifestCommitments)
+    )
+      throw new Error("signed revision does not commit to its manifest");
+    if (!sameBytes(input.descriptor.descriptorHash, manifestHash))
+      throw new Error(
+        "submitted descriptor hash differs from the signed revision's manifest",
+      );
+    if (!sameBytes(await sha384(manifestDescriptorBytes), manifestHash))
+      throw new Error(
+        "signed revision manifest hash does not match its descriptor bytes",
+      );
+    if (
+      !sameBytes(
+        manifestDescriptorBytes,
+        input.descriptor.protocolObject.canonicalBytes,
+      )
+    )
+      throw new Error(
+        "submitted descriptor differs from the signed revision's manifest",
+      );
+    if (input.descriptor.laneCount !== manifestCommitments.length)
+      throw new Error(
+        "signed revision lane commitment count differs from its manifest",
+      );
+    const descriptorFields = parseProtocolObject(
+      input.descriptor.protocolObject.canonicalBytes,
+    );
+    const descriptorCommitments = descriptorFields.get(53);
+    if (!Array.isArray(descriptorCommitments))
+      throw new Error("manifest descriptor does not commit to its lanes");
+    if (
+      !sameBytes(
+        canonicalEncode(manifestCommitments),
+        canonicalEncode(descriptorCommitments),
+      )
+    )
+      throw new Error(
+        "signed revision lane commitments differ from its descriptor",
+      );
+    for (let index = 0; index < manifestCommitments.length; index += 1) {
+      const embedded = manifestCommitments[index];
+      if (!(embedded instanceof Map))
+        throw new Error("signed revision lane commitment is malformed");
+      const laneId = embedded.get(18);
+      const scope = embedded.get(36);
+      const objectHash = embedded.get(48);
+      const ciphertextLength = embedded.get(72);
+      if (
+        !(laneId instanceof Uint8Array) ||
+        laneId.length !== 16 ||
+        typeof scope !== "number" ||
+        !(objectHash instanceof Uint8Array) ||
+        typeof ciphertextLength !== "number"
+      )
+        throw new Error("signed revision lane commitment is malformed");
+      const commitmentScope = commitmentScopeFromField(scope);
+      if (commitmentScope === null)
+        throw new Error("signed revision lane commitment has an unknown scope");
+      const ownerUserId = commitmentUserId(embedded.get(26));
+      const originalProviderUserId = commitmentUserId(embedded.get(27));
+      const commitment = input.commitments[index];
+      if (
+        !commitment ||
+        commitment.laneObjectId !== bytesToUuid(laneId) ||
+        commitment.scope !== commitmentScope ||
+        commitment.ownerUserId !== ownerUserId ||
+        commitment.originalProviderUserId !== originalProviderUserId ||
+        commitment.ciphertextLength !== ciphertextLength ||
+        !sameBytes(commitment.objectHash, objectHash)
+      )
+        throw new Error(
+          "request commitment projection differs from the signed revision's committed lanes",
+        );
+    }
     if (input.revision.mutation === "ROLLBACK") {
       if (!input.revision.rollbackTargetId)
         throw new Error("rollback must identify its target revision");
