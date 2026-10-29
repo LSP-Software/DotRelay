@@ -1,3 +1,4 @@
+import { bytesToUuid, parseProtocolObject } from "@dotrelay/contracts";
 import {
   AuditFactRepository,
   type OperationInput,
@@ -27,6 +28,44 @@ import {
   validateProtocolProjection,
   validateSha384Digest,
 } from "./validation";
+type PublicationScope = Readonly<{
+  readonly projectId: string;
+  readonly environmentId: string;
+}>;
+
+// The projections stamp Project and Environment from the route arguments, so
+// they cannot prove a blob belongs to the target. The signed canonical bytes
+// can: Revisions (kind 16) and Manifest descriptors (kind 15) always carry
+// Project (field 13) and Environment (field 14) inside the signature, and
+// Ciphertext lane objects (kind 13) carry them when present. Bind those signed
+// ids to the Environment the operation actually targets.
+const assertSignedPublicationScope = (
+  canonicalBytes: Uint8Array,
+  scope: PublicationScope,
+  required: boolean,
+  label: string,
+): void => {
+  const object = parseProtocolObject(canonicalBytes);
+  const fields = [
+    [13, scope.projectId, "Project"],
+    [14, scope.environmentId, "Environment"],
+  ] as const;
+  for (const [field, expectedId, name] of fields) {
+    const value = object.get(field);
+    if (value === undefined) {
+      if (required)
+        throw new Error(`${label} is missing its signed ${name} id`);
+      continue;
+    }
+    if (!(value instanceof Uint8Array) || value.length !== 16)
+      throw new Error(`${label} signed ${name} id is not a UUID`);
+    if (bytesToUuid(value) !== expectedId)
+      throw new Error(
+        `${label} names a different ${name} than its publication target`,
+      );
+  }
+};
+
 export type LaneProjectionInput = Readonly<{
   readonly id: string;
   readonly protocolObjectId: string;
@@ -245,6 +284,22 @@ export class PublicationRepository {
       throw new Error(
         "publication protocol objects are outside the Environment",
       );
+    const publicationScope = {
+      projectId: environment.projectId,
+      environmentId: input.environmentId,
+    };
+    assertSignedPublicationScope(
+      input.revisionObject.canonicalBytes,
+      publicationScope,
+      true,
+      "revision object",
+    );
+    assertSignedPublicationScope(
+      input.descriptor.protocolObject.canonicalBytes,
+      publicationScope,
+      true,
+      "manifest descriptor object",
+    );
     validateProtocolProjection(input.descriptor.protocolObject);
     if (
       !sameBytes(
@@ -270,6 +325,12 @@ export class PublicationRepository {
         lane.protocolObject.environmentId !== input.environmentId
       )
         throw new Error("lane projection is outside the publication context");
+      assertSignedPublicationScope(
+        lane.protocolObject.canonicalBytes,
+        publicationScope,
+        false,
+        "lane object",
+      );
       if (lane.protocolObject.id !== lane.lane.protocolObjectId)
         throw new Error(
           "lane protocol object id does not match its projection",

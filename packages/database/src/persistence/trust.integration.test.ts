@@ -1,6 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import {
+  type CborValue,
+  canonicalEncode,
+  encodeProtocolObject,
+  protocolObjectFromFields,
+  uuidToBytes,
+} from "@dotrelay/contracts";
 import type {
   DatabaseClient,
   OperationInput,
@@ -98,34 +105,112 @@ const createProtocolObjectInput = async (
   };
 };
 
-// Like createProtocolObjectInput, but binds the object to a Project and
-// Environment (required when the object is published in a revision) and
-// encodes the sequence with full CBOR length prefixes.
-const createBoundProtocolObject = async (
+const PUBLICATION_PROFILE_ID = "00000000-0000-4000-8000-000000000001";
+const PUBLICATION_TEAM_ID = "00000000-0000-4000-8000-000000000002";
+
+// Encodes a registry-valid signed protocol object: field 3 carries the
+// canonical unsigned body and field 4 a 64-byte signature placeholder, the
+// same envelope shape the client signs (the server never re-verifies the
+// Ed25519 signature on the write path).
+const signedProtocolBytes = (
   kind: number,
+  fields: ReadonlyMap<number, CborValue>,
+): Uint8Array => {
+  const body = protocolObjectFromFields(kind, fields);
+  const signed = new Map<number, CborValue>(fields);
+  signed.set(3, canonicalEncode(body));
+  signed.set(4, new Uint8Array(64));
+  return encodeProtocolObject(protocolObjectFromFields(kind, signed));
+};
+
+const boundProtocolInput = async (
+  kind: number,
+  canonicalBytes: Uint8Array,
   projectId: string,
   environmentId: string,
+): Promise<ProtocolObjectInput> => ({
+  id: crypto.randomUUID(),
+  suite: "dotrelay-e2ee-v3-classical-webcrypto",
+  formatVersion: 3,
+  kind,
+  canonicalBytes,
+  digest: await sha384Digest(canonicalBytes),
+  projectId,
+  environmentId,
+});
+
+type PublicationObjectContext = Readonly<{
+  readonly projectId: string;
+  readonly environmentId: string;
+  readonly revisionId: string;
+  readonly projectEpoch: bigint;
+}>;
+
+const createDescriptorObjectInput = (
+  context: PublicationObjectContext,
+): Promise<ProtocolObjectInput> =>
+  boundProtocolInput(
+    15,
+    signedProtocolBytes(
+      15,
+      new Map<number, CborValue>([
+        [8, uuidToBytes(PUBLICATION_PROFILE_ID)],
+        [11, uuidToBytes(PUBLICATION_TEAM_ID)],
+        [13, uuidToBytes(context.projectId)],
+        [14, uuidToBytes(context.environmentId)],
+        [16, uuidToBytes(context.revisionId)],
+        [30, context.projectEpoch],
+        [50, 1],
+        [53, []],
+      ]),
+    ),
+    context.projectId,
+    context.environmentId,
+  );
+
+const createRevisionObjectInput = (
+  input: PublicationObjectContext &
+    Readonly<{
+      readonly actorUserId: string;
+      readonly actorDeviceId: string;
+      readonly mutationKind: number;
+      readonly expectedHeadId?: string | null;
+      readonly parentHash?: Uint8Array;
+      readonly rollbackTargetId?: string;
+      readonly descriptorBytes: Uint8Array;
+      readonly descriptorDigest: Uint8Array;
+    }>,
 ): Promise<ProtocolObjectInput> => {
-  const sequence = protocolSequence++;
-  const canonicalBytes = new Uint8Array([
-    0xa1,
-    0x00,
-    ...(sequence < 24
-      ? [sequence]
-      : sequence < 256
-        ? [0x18, sequence]
-        : [0x19, sequence >> 8, sequence & 0xff]),
+  const fields = new Map<number, CborValue>([
+    [8, uuidToBytes(PUBLICATION_PROFILE_ID)],
+    [11, uuidToBytes(PUBLICATION_TEAM_ID)],
+    [13, uuidToBytes(input.projectId)],
+    [14, uuidToBytes(input.environmentId)],
+    [16, uuidToBytes(input.revisionId)],
+    [17, uuidToBytes(crypto.randomUUID())],
+    [19, uuidToBytes(input.expectedHeadId ?? input.environmentId)],
+    [20, input.parentHash ?? new Uint8Array(48)],
+    [22, uuidToBytes(input.actorUserId)],
+    [23, uuidToBytes(input.actorDeviceId)],
+    [30, input.projectEpoch],
+    [34, Date.now()],
+    [35, input.mutationKind],
+    [50, 1],
+    [51, input.descriptorBytes],
+    [52, input.descriptorDigest],
+    [53, []],
+    [54, []],
   ]);
-  return {
-    id: crypto.randomUUID(),
-    suite: "dotrelay-e2ee-v3-classical-webcrypto",
-    formatVersion: 3,
-    kind,
-    canonicalBytes,
-    digest: await sha384Digest(canonicalBytes),
-    projectId,
-    environmentId,
-  };
+  if (input.mutationKind === 3) {
+    fields.set(21, uuidToBytes(input.rollbackTargetId ?? input.environmentId));
+    fields.set(68, []);
+  }
+  return boundProtocolInput(
+    16,
+    signedProtocolBytes(16, fields),
+    input.projectId,
+    input.environmentId,
+  );
 };
 
 const createUserFixture = async (serverProfileId?: string) => {
@@ -206,17 +291,25 @@ const buildGenesisPublication = async (input: {
     )),
     actorDeviceId: input.actorDeviceId,
   };
-  const revisionObject = await createBoundProtocolObject(
-    16,
-    input.projectId,
-    input.environmentId,
-  );
-  const descriptorObject = await createBoundProtocolObject(
-    15,
-    input.projectId,
-    input.environmentId,
-  );
   const revisionId = crypto.randomUUID();
+  const descriptorObject = await createDescriptorObjectInput({
+    projectId: input.projectId,
+    environmentId: input.environmentId,
+    revisionId,
+    projectEpoch: 1n,
+  });
+  const revisionObject = await createRevisionObjectInput({
+    projectId: input.projectId,
+    environmentId: input.environmentId,
+    revisionId,
+    projectEpoch: 1n,
+    actorUserId: input.actorUserId,
+    actorDeviceId: input.actorDeviceId,
+    mutationKind: 1,
+    expectedHeadId: null,
+    descriptorBytes: descriptorObject.canonicalBytes,
+    descriptorDigest: descriptorObject.digest,
+  });
   await stageObject({
     operation,
     objectId: revisionObject.id,
@@ -930,16 +1023,25 @@ integrationDescribe("trust workflow integration", () => {
     await operations.begin(database, rotationOperation);
     const transitionRevisionId = crypto.randomUUID();
     const transitionObject = await createProtocolObjectInput(12);
-    const transitionRevisionObject = await createBoundProtocolObject(
-      16,
+    const transitionDescriptorObject = await createDescriptorObjectInput({
       projectId,
       environmentId,
-    );
-    const transitionDescriptorObject = await createBoundProtocolObject(
-      15,
+      revisionId: transitionRevisionId,
+      projectEpoch: 2n,
+    });
+    const transitionRevisionObject = await createRevisionObjectInput({
       projectId,
       environmentId,
-    );
+      revisionId: transitionRevisionId,
+      projectEpoch: 2n,
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      mutationKind: 4,
+      expectedHeadId: genesisHead,
+      parentHash: genesis.revisionDigest,
+      descriptorBytes: transitionDescriptorObject.canonicalBytes,
+      descriptorDigest: transitionDescriptorObject.digest,
+    });
     for (const protocolObject of [
       transitionObject,
       transitionRevisionObject,
@@ -1082,16 +1184,26 @@ integrationDescribe("trust workflow integration", () => {
     };
     await operations.begin(database, staleHeadRotation);
     const staleHeadObject = await createProtocolObjectInput(12);
-    const staleHeadRevisionObject = await createBoundProtocolObject(
-      16,
+    const staleHeadRevisionId = crypto.randomUUID();
+    const staleHeadDescriptorObject = await createDescriptorObjectInput({
       projectId,
       environmentId,
-    );
-    const staleHeadDescriptorObject = await createBoundProtocolObject(
-      15,
+      revisionId: staleHeadRevisionId,
+      projectEpoch: 3n,
+    });
+    const staleHeadRevisionObject = await createRevisionObjectInput({
       projectId,
       environmentId,
-    );
+      revisionId: staleHeadRevisionId,
+      projectEpoch: 3n,
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      mutationKind: 4,
+      expectedHeadId: genesisHead,
+      parentHash: genesis.revisionDigest,
+      descriptorBytes: staleHeadDescriptorObject.canonicalBytes,
+      descriptorDigest: staleHeadDescriptorObject.digest,
+    });
     await expect(
       epochRotation.rotate(database, {
         operation: staleHeadRotation,
@@ -1116,7 +1228,7 @@ integrationDescribe("trust workflow integration", () => {
               environmentId,
               expectedHeadId: genesisHead,
               revision: {
-                id: crypto.randomUUID(),
+                id: staleHeadRevisionId,
                 protocolObjectId: staleHeadRevisionObject.id,
                 parentHash: genesis.revisionDigest,
                 projectEpoch: 3n,
@@ -1222,26 +1334,34 @@ integrationDescribe("trust workflow integration", () => {
     const buildTransition = async (input: {
       readonly operation: OperationInput & { readonly actorDeviceId: string };
       readonly environmentId: string;
+      readonly expectedHeadId: string;
       readonly parentHash: Uint8Array;
       readonly projectEpoch: bigint;
     }) => {
-      // createBoundProtocolObject encodes the sequence with full CBOR length
-      // prefixes, which createProtocolObjectInput only does below 24.
-      const transitionObject = await createBoundProtocolObject(
-        12,
+      // The EPOCH_TRANSITION metadata object is staged but never parsed by
+      // the publication checks, which only inspect the signed revision and
+      // descriptor bytes, so it can stay minimal.
+      const transitionObject = await createProtocolObjectInput(12);
+      const revisionId = crypto.randomUUID();
+      const descriptorObject = await createDescriptorObjectInput({
         projectId,
-        input.environmentId,
-      );
-      const revisionObject = await createBoundProtocolObject(
-        16,
+        environmentId: input.environmentId,
+        revisionId,
+        projectEpoch: input.projectEpoch,
+      });
+      const revisionObject = await createRevisionObjectInput({
         projectId,
-        input.environmentId,
-      );
-      const descriptorObject = await createBoundProtocolObject(
-        15,
-        projectId,
-        input.environmentId,
-      );
+        environmentId: input.environmentId,
+        revisionId,
+        projectEpoch: input.projectEpoch,
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        mutationKind: 4,
+        expectedHeadId: input.expectedHeadId,
+        parentHash: input.parentHash,
+        descriptorBytes: descriptorObject.canonicalBytes,
+        descriptorDigest: descriptorObject.digest,
+      });
       for (const protocolObject of [
         transitionObject,
         revisionObject,
@@ -1254,7 +1374,6 @@ integrationDescribe("trust workflow integration", () => {
           digest: protocolObject.digest,
         });
       }
-      const revisionId = crypto.randomUUID();
       const publication = {
         operation: {
           id: input.operation.id,
@@ -1265,7 +1384,7 @@ integrationDescribe("trust workflow integration", () => {
           commandDigest: input.operation.commandDigest,
         },
         environmentId: input.environmentId,
-        expectedHeadId: currentHeads[input.environmentId]!.revisionId,
+        expectedHeadId: input.expectedHeadId,
         revision: {
           id: revisionId,
           protocolObjectId: revisionObject.id,
@@ -1319,6 +1438,7 @@ integrationDescribe("trust workflow integration", () => {
       const transition = await buildTransition({
         operation: rotationOperation,
         environmentId,
+        expectedHeadId: head.revisionId,
         parentHash: head.revisionDigest,
         projectEpoch: 2n,
       });
@@ -1439,6 +1559,7 @@ integrationDescribe("trust workflow integration", () => {
       const transition = await buildTransition({
         operation: failureOperation,
         environmentId,
+        expectedHeadId: currentHeads[environmentId]!.revisionId,
         // defaultGenesis.revisionDigest belongs to another Environment, so
         // the parent-hash check fails after the earlier Environments
         // published successfully.
@@ -1542,18 +1663,34 @@ integrationDescribe("trust workflow integration", () => {
     await operations.begin(database, publicationOperation);
 
     // Stage the objects of two consecutive manifest updates on the one
-    // operation while it is still STAGED, before either is published.
-    const stageUpdateObjects = async () => {
-      const revisionObject = await createBoundProtocolObject(
-        16,
+    // operation while it is still STAGED, before either is published. The
+    // signed revision names its own id, its expected head, and the parent
+    // it will chain onto, so all of that is fixed when the objects are
+    // staged.
+    const stageUpdateObjects = async (input: {
+      readonly expectedHeadId: string;
+      readonly parentHash: Uint8Array;
+    }) => {
+      const revisionId = crypto.randomUUID();
+      const descriptorObject = await createDescriptorObjectInput({
         projectId,
         environmentId,
-      );
-      const descriptorObject = await createBoundProtocolObject(
-        15,
+        revisionId,
+        projectEpoch: 1n,
+      });
+      const revisionObject = await createRevisionObjectInput({
         projectId,
         environmentId,
-      );
+        revisionId,
+        projectEpoch: 1n,
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        mutationKind: 2,
+        expectedHeadId: input.expectedHeadId,
+        parentHash: input.parentHash,
+        descriptorBytes: descriptorObject.canonicalBytes,
+        descriptorDigest: descriptorObject.digest,
+      });
       for (const protocolObject of [revisionObject, descriptorObject]) {
         await stageObject({
           operation: publicationOperation,
@@ -1562,17 +1699,19 @@ integrationDescribe("trust workflow integration", () => {
           digest: protocolObject.digest,
         });
       }
-      return { revisionObject, descriptorObject };
+      return { revisionId, revisionObject, descriptorObject };
     };
-    const buildPublication = (input: {
-      readonly revisionId: string;
-      readonly staged: {
+    const buildPublication = (
+      staged: {
+        readonly revisionId: string;
         readonly revisionObject: ProtocolObjectInput;
         readonly descriptorObject: ProtocolObjectInput;
-      };
-      readonly expectedHeadId: string;
-      readonly parentHash: Uint8Array;
-    }) => ({
+      },
+      input: {
+        readonly expectedHeadId: string;
+        readonly parentHash: Uint8Array;
+      },
+    ) => ({
       operation: {
         id: publicationOperation.id,
         actorUserId: user.id,
@@ -1584,18 +1723,18 @@ integrationDescribe("trust workflow integration", () => {
       environmentId,
       expectedHeadId: input.expectedHeadId,
       revision: {
-        id: input.revisionId,
-        protocolObjectId: input.staged.revisionObject.id,
+        id: staged.revisionId,
+        protocolObjectId: staged.revisionObject.id,
         parentHash: input.parentHash,
         projectEpoch: 1n,
         mutation: "MANIFEST_UPDATE" as const,
         authoredAtMs: BigInt(Date.now()),
       },
-      revisionObject: input.staged.revisionObject,
+      revisionObject: staged.revisionObject,
       descriptor: {
-        protocolObject: input.staged.descriptorObject,
+        protocolObject: staged.descriptorObject,
         schemaVersion: 1,
-        descriptorHash: input.staged.descriptorObject.digest,
+        descriptorHash: staged.descriptorObject.digest,
         laneCount: 0,
       },
       lanes: [],
@@ -1606,15 +1745,18 @@ integrationDescribe("trust workflow integration", () => {
         entityId: environmentId,
       },
     });
-    const firstStaged = await stageUpdateObjects();
-    const secondStaged = await stageUpdateObjects();
+    const firstStaged = await stageUpdateObjects({
+      expectedHeadId: genesis.revisionId,
+      parentHash: genesis.revisionDigest,
+    });
+    const secondStaged = await stageUpdateObjects({
+      expectedHeadId: firstStaged.revisionId,
+      parentHash: firstStaged.revisionObject.digest,
+    });
 
-    const firstRevisionId = crypto.randomUUID();
     const published = await publications.publishRevision(
       database,
-      buildPublication({
-        revisionId: firstRevisionId,
-        staged: firstStaged,
+      buildPublication(firstStaged, {
         expectedHeadId: genesis.revisionId,
         parentHash: genesis.revisionDigest,
       }),
@@ -1627,7 +1769,7 @@ integrationDescribe("trust workflow integration", () => {
           where: { id: environmentId },
         })
       ).currentHeadId,
-    ).toBe(firstRevisionId);
+    ).toBe(firstStaged.revisionId);
     expect(
       await database.operation.findUniqueOrThrow({
         where: { id: publicationOperation.id },
@@ -1637,16 +1779,14 @@ integrationDescribe("trust workflow integration", () => {
     // Re-publishing the committed update is an idempotent replay.
     const replay = await publications.publishRevision(
       database,
-      buildPublication({
-        revisionId: firstRevisionId,
-        staged: firstStaged,
+      buildPublication(firstStaged, {
         expectedHeadId: genesis.revisionId,
         parentHash: genesis.revisionDigest,
       }),
     );
     if (!replay.idempotent)
       throw new Error("replay of the committed publication was not idempotent");
-    expect(replay.revision.id).toBe(firstRevisionId);
+    expect(replay.revision.id).toBe(firstStaged.revisionId);
     expect(
       await database.revision.count({
         where: { operationId: publicationOperation.id },
@@ -1655,14 +1795,11 @@ integrationDescribe("trust workflow integration", () => {
 
     // A different second update under the same, already-committed operation
     // must be rejected instead of becoming a second committed outcome.
-    const secondRevisionId = crypto.randomUUID();
     await expect(
       publications.publishRevision(
         database,
-        buildPublication({
-          revisionId: secondRevisionId,
-          staged: secondStaged,
-          expectedHeadId: firstRevisionId,
+        buildPublication(secondStaged, {
+          expectedHeadId: firstStaged.revisionId,
           parentHash: firstStaged.revisionObject.digest,
         }),
       ),
@@ -1673,10 +1810,10 @@ integrationDescribe("trust workflow integration", () => {
           where: { id: environmentId },
         })
       ).currentHeadId,
-    ).toBe(firstRevisionId);
+    ).toBe(firstStaged.revisionId);
     expect(
       await database.revision.findUnique({
-        where: { id: secondRevisionId },
+        where: { id: secondStaged.revisionId },
       }),
     ).toBeNull();
     expect(
