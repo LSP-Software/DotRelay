@@ -135,3 +135,42 @@ test("repair of an initialized project never publishes a fresh random epoch key"
     await storage.remove({ pin, deviceId: uuidToBytes(bootstrap.deviceId) });
   }
 });
+
+test("repair proposes replacement when a refreshed boundary revokes the Device", async () => {
+  const { e2eWorkspaceBoundary } = await import("./workspace-boundary");
+  const { repairStaleEpoch } = await import("./device-provisioning");
+  const boundary = e2eWorkspaceBoundary("hosted", {
+    deviceId: crypto.randomUUID(),
+  });
+  const originalFetch = globalThis.fetch;
+  let replacements = 0;
+  let mutations = 0;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") mutations++;
+    return Response.json({
+      ...boundary,
+      device: { ...boundary.device, active: false },
+    });
+  }) as typeof fetch;
+  try {
+    await repairStaleEpoch({
+      apiOrigin: boundary.profile.origin,
+      profileId: "hosted",
+      boundary,
+      selectedEnvironmentId: null,
+      environmentId: null,
+      selectedTeamName: null,
+      onMessage: () => {},
+      onInProgress: () => {},
+      onCommit: () => {},
+      onOffline: () => {},
+      onReplacementNeeded: () => {
+        replacements++;
+      },
+    });
+    expect(replacements).toBe(1);
+    expect(mutations).toBe(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

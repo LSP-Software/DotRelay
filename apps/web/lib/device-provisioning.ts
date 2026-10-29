@@ -543,6 +543,10 @@ export const repairStaleEpoch = async (
       return;
     }
     onCommit(nextBoundary);
+    if (!nextBoundary.device.active || nextBoundary.device.id !== device.id) {
+      ctx.onReplacementNeeded();
+      return;
+    }
     if (recoveredProjectAccess(nextBoundary)) {
       // The unblocked editor is the result report: nothing needs saying.
       return;
