@@ -255,6 +255,43 @@ const prepareGenesisPublication = async (input: {
   return { revisionId, revisionDigest: revisionObject.digest };
 };
 
+const pollUntilTrue = async (
+  probe: () => Promise<boolean>,
+  timeoutMs: number,
+  label: string,
+) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const check = probe();
+    check.catch(() => undefined);
+    if (await check) return;
+    if (Date.now() > deadline)
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
+
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 integrationDescribe("trust workflow integration", () => {
   beforeAll(async () => {
     if (!adminDatabaseUrl || !testDatabaseUrl)
@@ -697,6 +734,183 @@ integrationDescribe("trust workflow integration", () => {
       throw new Error("activation did not return a membership");
     expect(activated.membership.lifecycle).toBe("ACTIVE");
   });
+
+  // Acceptance and membership activation must take row locks in the same
+  // Team-then-User order. This test pins the previously deadlocking
+  // interleaving: the acceptance transaction has performed its operation
+  // insert (holding a key share on the accepting User row) and is paused by
+  // a trigger barrier, while a second transaction runs the activation
+  // path's lock sequence (Team row FOR UPDATE, then target User row
+  // FOR UPDATE). With matching lock order neither can deadlock; with the
+  // old order Postgres aborts one side with 40P01.
+  test("concurrent acceptance and activation lock orders cannot deadlock", async () => {
+    const owner = await createUserFixture();
+    const ownerDevice = await createActiveDevice(owner.id);
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: owner.id } } },
+    });
+    const teamId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: owner.id,
+      name: "deadlock-team",
+      operation: {
+        ...(await createOperationInput(owner.id, "deadlock-team")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    const invitee = await createUserFixture(serverProfile.id);
+    const invitationId = crypto.randomUUID();
+    await new MembershipAdministrationRepository().invite(database, {
+      teamId,
+      invitationId,
+      providerSubject: invitee.githubSubject,
+      operation: {
+        ...(await createOperationInput(owner.id, "deadlock-invite")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    const signalLock = 8842;
+    const acceptOperation = await createOperationInput(
+      invitee.id,
+      "deadlock-accept",
+    );
+    await database.$executeRawUnsafe(`
+      CREATE TABLE dotrelay_barrier_flags (key text primary key);
+      CREATE OR REPLACE FUNCTION dotrelay_accept_barrier()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW."id" = '${acceptOperation.id}'::uuid THEN
+          PERFORM pg_advisory_lock(${signalLock}::bigint);
+          FOR barrier_pass IN 1..160 LOOP
+            EXIT WHEN EXISTS (
+              SELECT 1 FROM dotrelay_barrier_flags WHERE key = 'release'
+            );
+            PERFORM pg_sleep(0.05);
+          END LOOP;
+          IF NOT EXISTS (
+            SELECT 1 FROM dotrelay_barrier_flags WHERE key = 'release'
+          ) THEN
+            RAISE EXCEPTION 'accept barrier timed out';
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      DROP TRIGGER IF EXISTS dotrelay_accept_barrier_trigger ON "operations";
+      CREATE TRIGGER dotrelay_accept_barrier_trigger
+      AFTER INSERT ON "operations"
+      FOR EACH ROW EXECUTE FUNCTION dotrelay_accept_barrier();
+    `);
+    const connectionString = testDatabaseUrl?.toString();
+    if (!connectionString) throw new Error("DATABASE_URL is required");
+    const release = new Client({ connectionString });
+    await release.connect();
+    const probe = new Client({ connectionString });
+    await probe.connect();
+    const acceptPromise = new MembershipAdministrationRepository().accept(
+      database,
+      {
+        invitationId,
+        userId: invitee.id,
+        operation: acceptOperation,
+      },
+    );
+    let activationDone: Promise<void> | undefined;
+    try {
+      await pollUntilTrue(
+        async () => {
+          const { rows } = await probe.query(
+            `SELECT EXISTS(
+               SELECT 1 FROM pg_locks
+               WHERE classid = 0
+                 AND objid = ${signalLock} AND objsubid = 1
+                 AND mode = 'ExclusiveLock'
+             ) AS "signaled"`,
+          );
+          return rows[0].signaled === true;
+        },
+        10_000,
+        "the acceptance transaction to reach the operation insert",
+      );
+      // Runs the activation path's lock sequence: Team row FOR UPDATE,
+      // then target User row FOR UPDATE.
+      const activation = new Client({ connectionString });
+      await activation.connect();
+      const { rows: pidRows } = await activation.query(
+        "SELECT pg_backend_pid() AS pid",
+      );
+      const activationPid = Number(pidRows[0].pid);
+      activationDone = (async () => {
+        try {
+          await activation.query(`BEGIN`);
+          await activation.query(
+            `SELECT "id" FROM "teams" WHERE "id" = $1 FOR UPDATE`,
+            [teamId],
+          );
+          await activation.query(
+            `SELECT "id" FROM "users" WHERE "id" = $1 FOR UPDATE`,
+            [invitee.id],
+          );
+          await activation.query(`COMMIT`);
+        } catch (error) {
+          await activation.query(`ROLLBACK`).catch(() => undefined);
+          throw error;
+        } finally {
+          await activation.end().catch(() => undefined);
+        }
+      })();
+      // A FOR UPDATE blocked on a row locked by an open transaction is
+      // recorded in pg_locks as an ungranted wait on that transaction's id
+      // (wait_event "transactionid"), not as a row lock, so any ungranted
+      // lock held by the activation backend means it is parked on a lock
+      // the acceptance transaction holds.
+      await pollUntilTrue(
+        async () => {
+          const { rows } = await probe.query(
+            `SELECT EXISTS(
+               SELECT 1 FROM pg_locks
+               WHERE pid = $1 AND granted = false
+             ) AS "waiting"`,
+            [activationPid],
+          );
+          return rows[0].waiting === true;
+        },
+        10_000,
+        "the activation transaction to block on an acceptance-held lock",
+      );
+      await release.query(
+        `INSERT INTO dotrelay_barrier_flags (key) VALUES ('release')`,
+      );
+      const accepted = await withTimeout(
+        acceptPromise,
+        15_000,
+        "invitation acceptance",
+      );
+      await withTimeout(activationDone, 15_000, "the activation lock sequence");
+      if (!("membership" in accepted))
+        throw new Error("acceptance did not return a membership");
+      const membership = await database.membership.findUniqueOrThrow({
+        where: { id: accepted.membership.id },
+      });
+      expect(membership.lifecycle).toBe("PENDING_KEY_GRANT");
+      expect(membership.invitationId).toBe(invitationId);
+      const invitation = await database.membershipInvitation.findUniqueOrThrow({
+        where: { id: invitationId },
+      });
+      expect(invitation.acceptedByUserId).toBe(invitee.id);
+      expect(invitation.acceptedAt).not.toBeNull();
+    } finally {
+      acceptPromise.catch(() => undefined);
+      activationDone?.catch(() => undefined);
+      await database.$executeRawUnsafe(
+        'DROP TRIGGER IF EXISTS dotrelay_accept_barrier_trigger ON "operations"; DROP FUNCTION IF EXISTS dotrelay_accept_barrier(); DROP TABLE IF EXISTS dotrelay_barrier_flags;',
+      );
+      await probe.end().catch(() => undefined);
+      await release.end().catch(() => undefined);
+    }
+  }, 30_000);
 
   test("revokes a Device and manages Account Key wrappers", async () => {
     const user = await createUserFixture();

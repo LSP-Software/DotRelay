@@ -396,6 +396,16 @@ export class MembershipAdministrationRepository {
   ) {
     return inShortTransaction(database, async (transaction) => {
       await transaction.$executeRaw`SELECT "id" FROM "membership_invitations" WHERE "id" = ${input.invitationId} FOR UPDATE`;
+      const invitation = await transaction.membershipInvitation.findUnique({
+        where: { id: input.invitationId },
+      });
+      // Lock the Team row before the operation insert below can take a key
+      // share on the accepting User row via its foreign key, so this path
+      // takes Team locks before User locks, the same order as membership
+      // activation, and a concurrent accept and activation can never
+      // deadlock.
+      if (invitation)
+        await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${invitation.teamId} FOR UPDATE`;
       const operation = await this.operations.begin(
         transaction,
         input.operation,
@@ -403,9 +413,6 @@ export class MembershipAdministrationRepository {
       if (operation.idempotent) return operation;
       if (input.operation.actorUserId !== input.userId)
         throw new Error("Membership invitation must be accepted by its User");
-      const invitation = await transaction.membershipInvitation.findUnique({
-        where: { id: input.invitationId },
-      });
       const user = await transaction.user.findUnique({
         where: { id: input.userId },
       });
@@ -425,7 +432,6 @@ export class MembershipAdministrationRepository {
         throw new Error(
           "Membership invitation belongs to another Server Profile",
         );
-      await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${invitation.teamId} FOR UPDATE`;
       const now = input.now ?? new Date();
       const priorMembership = await transaction.membership.findUnique({
         where: {
