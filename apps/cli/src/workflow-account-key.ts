@@ -438,17 +438,37 @@ export const recoverAccountKey = async (
         {},
         "account_key_unlock_failed",
       );
-    const code = decodeRecoveryCode(
-      await readRecoveryCode(options, input.recoveryCodeFile),
-    );
-    const prepared = await prepareDeviceRecovery({
-      pin: options.profile.pin,
-      userId: session.user.id,
-      recoveryCode: code,
-      wrapperBytes: fromBase64(entry.object, "recovery wrapper"),
-      creatorPublicKey: hexToBytes(entry.creatorPublicKey),
-    });
-    code.fill(0);
+    const codeText = await readRecoveryCode(options, input.recoveryCodeFile);
+    let code: Uint8Array;
+    try {
+      code = decodeRecoveryCode(codeText);
+    } catch {
+      throw new CliError(
+        "invocation",
+        "the recovery code is malformed; it is 13 groups of 4 Crockford characters",
+        {},
+        "recovery_code_malformed",
+      );
+    }
+    let prepared: Awaited<ReturnType<typeof prepareDeviceRecovery>>;
+    try {
+      prepared = await prepareDeviceRecovery({
+        pin: options.profile.pin,
+        userId: session.user.id,
+        recoveryCode: code,
+        wrapperBytes: fromBase64(entry.object, "recovery wrapper"),
+        creatorPublicKey: hexToBytes(entry.creatorPublicKey),
+      });
+    } catch {
+      throw new CliError(
+        "authentication",
+        "could not unlock the account with the recovery code; re-check the code and retry (older codes must first be rotated from an existing Device)",
+        {},
+        "account_key_unlock_failed",
+      );
+    } finally {
+      code.fill(0);
+    }
     const storage = resolveDeviceStorage(options);
     await storage.save(prepared.bootstrap.bundle);
     await storage.saveAccountKey(

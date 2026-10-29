@@ -6,6 +6,7 @@ on:
 
 concurrency:
   group: release-production
+  queue: max
   cancel-in-progress: false
 
 permissions:
@@ -78,6 +79,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
+      - name: resolve release origins
+        id: origins
+        env:
+          PRERELEASE: ${{ contains(github.ref_name, '-') }}
+          ALPHA_WEB_ORIGIN: ${{ vars.ALPHA_WEB_ORIGIN }}
+          ALPHA_API_ORIGIN: ${{ vars.ALPHA_API_ORIGIN }}
+        run: |
+          node <<'JS'
+          const { appendFileSync } = require('node:fs');
+          const alpha = process.env.PRERELEASE === 'true';
+          const origins = {
+            'web-origin': alpha ? process.env.ALPHA_WEB_ORIGIN : 'https://dotrelay.dev',
+            'api-origin': alpha ? process.env.ALPHA_API_ORIGIN : 'https://api.dotrelay.dev',
+          };
+          for (const [name, value] of Object.entries(origins)) {
+            if (!value) throw new Error(`Configure ALPHA_WEB_ORIGIN and ALPHA_API_ORIGIN before publishing a prerelease (${name} is missing)`);
+            const url = new URL(value);
+            if (url.protocol !== 'https:' || url.origin !== value) {
+              throw new Error(`${name} must be an exact HTTPS origin; configure ALPHA_WEB_ORIGIN and ALPHA_API_ORIGIN for prereleases`);
+            }
+            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
+          JS
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -101,8 +125,8 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
           build-args: |
-            NEXT_PUBLIC_WEB_ORIGIN=https://dotrelay.dev
-            NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://api.dotrelay.dev
+            NEXT_PUBLIC_WEB_ORIGIN=${{ steps.origins.outputs.web-origin }}
+            NEXT_PUBLIC_DOTRELAY_API_ORIGIN=${{ steps.origins.outputs.api-origin }}
             NEXT_PUBLIC_DOTRELAY_WEB_PROFILE=hosted
 
   build-cli:

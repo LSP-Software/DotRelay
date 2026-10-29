@@ -90,7 +90,9 @@ attributes, cross-subdomain cookie scoping, exact-origin CORS and CSRF failures,
 device polling and expiry, endpoint limiting, logout, remote revocation, session expiry,
 capabilities ETags, profile rebinding, and suite or runtime refusal before credential access.
 
-Signed-in Users may fetch their own encrypted Account Key Wrappers without an active Device to
+Signed-in Users may fetch their own encrypted Recovery Code wrapper without an active Device to
 start disaster recovery. A replacement Device requires the Recovery Code proof described in
 [ADR 0013](../adr/0013-recovery-code-device-authorization.md); this does not relax active-Device
 checks on account-key mutations or protected content.
+
+Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.

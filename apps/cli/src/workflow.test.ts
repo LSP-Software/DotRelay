@@ -3928,6 +3928,75 @@ describe("protected CLI workflows", () => {
     });
   });
 
+  test("clean-install recovery maps malformed and wrong codes to stable CLI errors", async () => {
+    for (const scenario of ["malformed", "wrong"] as const) {
+      const runtime = await setup();
+      const fixture = await accountKeyFixture(runtime.bootstrap, {
+        recoveryCode: generateRecoveryCode(),
+      });
+      const service = accountKeyService(runtime.admin, {
+        recoveryWrapper: {
+          wrapperId: fixture.recoveryWrapperId as string,
+          object: fixture.recoveryWrapperObject as string,
+          creatorPublicKey: bytesToHex(
+            await exportSigningPublicKey(
+              runtime.bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+            ),
+          ),
+        },
+      });
+      const admin: StrictJsonClient = {
+        ...service.admin,
+        get: async (path, fields) =>
+          path === "/api/v1/workspace/boundary"
+            ? { ...boundary, device: { active: false } }
+            : service.admin.get(path, fields),
+      };
+      let recoveryWrites = 0;
+      const originalSave = runtime.deviceStorage.save;
+      const result = await run(
+        [
+          "device",
+          "recover",
+          "--profile",
+          "relay",
+          "--recovery-code-file",
+          await writeCodeFile(
+            scenario === "malformed"
+              ? "bad-code"
+              : encodeRecoveryCode(generateRecoveryCode()),
+            `clean-${scenario}`,
+          ),
+          "--no-input",
+          "--json",
+        ],
+        {
+          ...runtime,
+          admin,
+          fetch: async () =>
+            Response.json(createProblem("state_conflict"), { status: 409 }),
+          deviceStorage: {
+            ...runtime.deviceStorage,
+            save: async (bundle) => {
+              recoveryWrites++;
+              await originalSave(bundle);
+            },
+          },
+        },
+      );
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        ok: false,
+        code:
+          scenario === "malformed"
+            ? "recovery_code_malformed"
+            : "account_key_unlock_failed",
+        category: scenario === "malformed" ? "invocation" : "authentication",
+        exitCode: scenario === "malformed" ? 2 : 6,
+      });
+      expect(recoveryWrites).toBe(0);
+    }
+  });
+
   test("device recover reports when the account has no active Recovery Code wrapper", async () => {
     const code = generateRecoveryCode();
     const runtime = await setup();

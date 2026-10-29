@@ -42,7 +42,10 @@ const scriptForRepo =
     if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
       return { stdout: root, exitCode: 0 };
     if (args[0] === "ls-files") {
-      const pathspec = args[args.length - 1] ?? "";
+      const pathspec = (args[args.length - 1] ?? "").replace(
+        /^:\(literal\)/,
+        "",
+      );
       if (states.tracked.includes(pathspec)) return { stdout: "", exitCode: 0 };
       return { stdout: "", exitCode: 1 };
     }
@@ -229,6 +232,57 @@ describe("repository-local Git exclusion", () => {
     expect(await readFile(excludePath, "utf8")).toBe(".env\n");
   });
 
+  test("rejects rule injection before changing the exclusion file", async () => {
+    const root = await makeRepo();
+    const excludePath = join(root, ".git", "info", "exclude");
+    await mkdir(join(root, ".git", "info"), { recursive: true });
+    const original = "/.env\n";
+    await Bun.write(excludePath, original);
+    for (const name of ["x\n!.env\nsuffix", "x\r!.env", "x\r\n!.env"]) {
+      await expect(
+        ensureLocalGitExclusion(repoInfo(root, name)),
+      ).rejects.toMatchObject({ code: "git_exclusion_failed" });
+      expect(await readFile(excludePath, "utf8")).toBe(original);
+      expect(await Bun.file(`${excludePath}.lock`).exists()).toBe(false);
+    }
+  });
+
+  test("independent processes retain every update to the shared exclusion file", async () => {
+    const root = await makeRepo();
+    const excludePath = join(root, ".git", "info", "exclude");
+    await mkdir(join(root, ".git", "info"), { recursive: true });
+    await Bun.write(excludePath, "/existing.env\n");
+    const modulePath = join(import.meta.dir, "git-tracking.ts");
+    const children = Array.from({ length: 12 }, (_, index) => {
+      const info = {
+        state: "untracked",
+        gitDirectory: join(root, ".git"),
+        excludePath,
+        topLevel: root,
+        relativePath: `secret-${index}.env`,
+      };
+      const source = `import { ensureLocalGitExclusion } from ${JSON.stringify(modulePath)};
+        await ensureLocalGitExclusion(${JSON.stringify(info)});`;
+      return Bun.spawn([process.execPath, "-e", source], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    });
+    for (const child of children) {
+      const stderr = await new Response(child.stderr).text();
+      expect({ code: await child.exited, stderr }).toEqual({
+        code: 0,
+        stderr: "",
+      });
+    }
+    const lines = (await readFile(excludePath, "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(13);
+    expect(lines).toContain("/existing.env");
+    for (let index = 0; index < children.length; index++)
+      expect(lines).toContain(`/secret-${index}.env`);
+    expect(await Bun.file(`${excludePath}.lock`).exists()).toBe(false);
+  });
+
   test("rejects tracking info without repository context", async () => {
     await expect(
       ensureLocalGitExclusion(Object.freeze({ state: "outside" })),
@@ -295,6 +349,23 @@ realRepositoryDescribe("Git tracking probe against a real repository", () => {
     expect(
       await readFile(join(root, ".git", "info", "exclude"), "utf8"),
     ).toContain("/nested/service.env");
+  });
+
+  test("bracketed filenames use literal index checks and escaped exclusions", async () => {
+    const { root } = await createRepository();
+    await Bun.write(join(root, ".envl"), "TRACKED=1\n");
+    await runGit(root, ["add", ".envl"]);
+    const probe = createGitTrackingProbe();
+    const output = join(root, ".env[local]");
+    await Bun.write(output, "SECRET=placeholder\n");
+    const info = await probe(output);
+    expect(info.state).toBe("untracked");
+    const exclude = info.excludePath as string;
+    await Bun.write(exclude, ".env[local]\n");
+    expect(await ensureLocalGitExclusion(info)).toBe("established");
+    expect((await probe(output)).state).toBe("ignored");
+    await runGit(root, ["add", "--force", "--", ":(literal).env[local]"]);
+    expect((await probe(output)).state).toBe("tracked");
   });
 
   test("honors a linked worktree's own index and exclusion list", async () => {

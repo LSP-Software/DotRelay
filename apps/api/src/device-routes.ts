@@ -1002,13 +1002,21 @@ export const registerDeviceRoutes = (
   });
 
   app.get("/api/v1/account-keys/wrappers", async (context) => {
-    // Wrappers are ciphertext. Session-only reads enable disaster recovery;
-    // mutations and content access retain the active-Device gate.
+    // Only the high-entropy Recovery Code wrapper is disclosed to a session
+    // alone. Password/passkey wrappers retain the active-Device gate.
     const actor = await requireWebActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
+    const deviceActor = context.req.header(DEVICE_ID_HEADER)
+      ? await requireProtocolActor(context, database, profile, auth)
+      : null;
+    if (deviceActor instanceof Response) return deviceActor;
     try {
       const wrappers = await database.accountKeyWrapperObject.findMany({
-        where: { userId: actor.userId, retiredAt: null },
+        where: {
+          userId: actor.userId,
+          retiredAt: null,
+          ...(deviceActor ? {} : { wrapperType: "RECOVERY_CODE" }),
+        },
         orderBy: { createdAt: "asc" },
         select: {
           wrapperId: true,

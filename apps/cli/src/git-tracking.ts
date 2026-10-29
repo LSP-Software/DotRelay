@@ -1,4 +1,12 @@
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  unlink,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CliError } from "./errors";
 
@@ -145,10 +153,21 @@ export const createGitTrackingProbe = (
         ...inRepository,
         relativePath: relativeToTop,
       });
-    const inIndex = await run(["ls-files", "--error-unmatch", "--", pathspec]);
+    const inIndex = await run([
+      "ls-files",
+      "--error-unmatch",
+      "--",
+      `:(literal)${pathspec}`,
+    ]);
     if (inIndex.exitCode === 0) return inRepo("tracked");
     if (inIndex.exitCode !== 1) throw trackingUnavailable(realTarget);
-    const ignored = await run(["check-ignore", "--quiet", "--", pathspec]);
+    const ignored = await run([
+      "check-ignore",
+      "--no-index",
+      "--quiet",
+      "--",
+      pathspec,
+    ]);
     if (ignored.exitCode === 0) return inRepo("ignored");
     if (ignored.exitCode !== 1) throw trackingUnavailable(realTarget);
     return inRepo("untracked");
@@ -167,30 +186,59 @@ export const ensureLocalGitExclusion = async (
       {},
       "git_exclusion_failed",
     );
-  // Gitignore metacharacters must describe a literal filename.
+  // Validate before touching the shared exclusion file: a newline could
+  // inject an unignore rule for an unrelated plaintext file.
   const literalPath = info.relativePath.split(sep).join("/");
-  const pattern = `/${literalPath.replace(/[\\*?\[\] ]/g, "\\$&")}`;
+  if (/[\r\n]/.test(literalPath)) throw exclusionFailed(info.relativePath);
+  const pattern = `/${literalPath.replace(/[\\*?[\] ]/g, "\\$&")}`;
   const excludePath =
     info.excludePath ?? join(info.gitDirectory, "info", "exclude");
-  let current = "";
-  try {
-    current = await readFile(excludePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-      throw exclusionFailed(info.relativePath);
-  }
-  const existing = current
-    .split("\n")
-    .some((line) => line === pattern || line === info.relativePath);
-  if (existing) return "present";
-  const next =
-    (current.length > 0 && !current.endsWith("\n") ? `${current}\n` : current) +
-    `${pattern}\n`;
+  const lockPath = `${excludePath}.lock`;
+  // Git-style lock-and-rename serializes writers across linked worktrees
+  // and processes, and publishes a complete file in one atomic operation.
+  let lock: Awaited<ReturnType<typeof open>> | undefined;
+  let ownsLock = false;
   try {
     await mkdir(dirname(excludePath), { recursive: true, mode: 0o755 });
-    await writeFile(excludePath, next, { mode: 0o644 });
+    const deadline = Date.now() + 5_000;
+    while (!lock) {
+      try {
+        lock = await open(lockPath, "wx", 0o644);
+        ownsLock = true;
+      } catch (error) {
+        if (
+          (error as NodeJS.ErrnoException).code !== "EEXIST" ||
+          Date.now() >= deadline
+        )
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    let current = "";
+    try {
+      current = await readFile(excludePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const existing = current
+      .split("\n")
+      .some((line) => line === pattern || line === pattern.slice(1));
+    if (existing) return "present";
+    const next =
+      (current.length > 0 && !current.endsWith("\n")
+        ? `${current}\n`
+        : current) + `${pattern}\n`;
+    await lock.writeFile(next, "utf8");
+    await lock.sync();
+    await lock.close();
+    await rename(lockPath, excludePath);
+    ownsLock = false;
+    return "established";
   } catch {
     throw exclusionFailed(info.relativePath);
+  } finally {
+    await lock?.close().catch(() => undefined);
+    // After rename a different writer may own lockPath; never unlink it.
+    if (ownsLock) await unlink(lockPath);
   }
-  return "established";
 };

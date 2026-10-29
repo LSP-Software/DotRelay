@@ -186,3 +186,95 @@ describe("Account Key Wrapper ingest wire gates", () => {
     ).rejects.toMatchObject({ code: "invalid_crypto_object" });
   });
 });
+
+describe("Account Key Wrapper disclosure", () => {
+  test("only an active Device can download password and passkey wrappers", async () => {
+    for (const deviceState of [
+      "absent",
+      "active",
+      "revoked",
+      "other-user",
+    ] as const) {
+      const profile = loadServerProfileConfig({});
+      const userId = crypto.randomUUID();
+      const deviceId = crypto.randomUUID();
+      let reads = 0;
+      const rows = ["RECOVERY_CODE", "PASSWORD", "PASSKEY_PRF"].map(
+        (wrapperType) => ({
+          wrapperType,
+          wrapperId: new Uint8Array(16),
+          kdfName: null,
+          kdfMemoryKib: null,
+          kdfIterations: null,
+          kdfParallelism: null,
+          createdAt: new Date(),
+          protocolObject: { canonicalBytes: buildWrapperBytes() },
+        }),
+      );
+      const api = createApi({
+        profile,
+        database: {
+          authAccount: { findFirst: async () => ({ accountId: "1001" }) },
+          user: { upsert: async () => ({ id: userId }) },
+          device: {
+            findFirst: async ({
+              where,
+            }: {
+              where: Record<string, unknown>;
+            }) => {
+              if (where.lifecycle === "ACTIVE")
+                return deviceState === "active" &&
+                  where.userId === userId &&
+                  where.id === deviceId
+                  ? { id: deviceId }
+                  : null;
+              return null;
+            },
+          },
+          accountKeyWrapperObject: {
+            findMany: async ({ where }: { where: Record<string, unknown> }) => {
+              reads++;
+              expect(where.userId).toBe(userId);
+              expect(where.retiredAt).toBe(null);
+              expect(where.wrapperType).toBe(
+                deviceState === "active" ? undefined : "RECOVERY_CODE",
+              );
+              return rows.filter(
+                (row) =>
+                  !where.wrapperType || row.wrapperType === where.wrapperType,
+              );
+            },
+          },
+        } as never,
+        auth: {
+          api: { getSession: async () => ({ user: { id: "auth-subject" } }) },
+        } as never,
+      });
+      const response = await api.request(
+        `${profile.origin}/api/v1/account-keys/wrappers`,
+        {
+          headers: {
+            Authorization: "Bearer session",
+            ...(deviceState === "absent"
+              ? {}
+              : { "X-DotRelay-Device-Id": deviceId }),
+          },
+        },
+      );
+      if (deviceState === "revoked" || deviceState === "other-user") {
+        expect(response.status).toBe(403);
+        expect(reads).toBe(0);
+      } else {
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          wrappers: { type: string }[];
+        };
+        expect(body.wrappers.map((wrapper) => wrapper.type)).toEqual(
+          deviceState === "active"
+            ? ["recovery-code", "password", "passkey-prf"]
+            : ["recovery-code"],
+        );
+      }
+    }
+  });
+});

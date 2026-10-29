@@ -67,7 +67,7 @@ an already revoked Device is refused.
 New Recovery Code wrappers carry a Device-signed Ed25519 authorization public key in optional
 field 97. Its private seed is derived from the high-entropy Recovery Code and wrapper salt with
 a separate HKDF-SHA-384 purpose, independent of wrapper encryption. No code or AMK is sent to the
-service. A signed-in User can fetch their ciphertext wrappers without an active Device, unwrap
+service. A signed-in User can fetch only their high-entropy Recovery Code wrapper without an active Device, unwrap
 locally, and sign a replacement Device certificate's digest, profile, User and operation id.
 The service checks the currently active recovery wrapper under the User row lock before allowing
 the otherwise first-Device-only bootstrap. Ordinary enrollment is unchanged; losing a Device does
@@ -122,3 +122,10 @@ Deploy the selected versioned alpha image deliberately to the alpha installation
 retain the production deployment path. Release runs serialize across tags so mutable image aliases
 cannot be advanced by overlapping workflows. Configure the admission list on the target service
 before deploying; source changes do not modify hosting configuration.
+
+Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
+
+Before cutting a prerelease, configure the `security-review` environment/repository variables
+`ALPHA_WEB_ORIGIN` and `ALPHA_API_ORIGIN` to the exact HTTPS origins of the alpha installation.
+The web image is built for those origins and refuses missing/invalid values; stable builds keep
+the production origins. The release concurrency queue retains up to 100 pending tags.

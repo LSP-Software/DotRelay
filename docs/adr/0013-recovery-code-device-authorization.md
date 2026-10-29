@@ -12,7 +12,7 @@ Recovery Code wrappers may carry field 97, a 32-byte Ed25519 public key. Its see
 cover this field. Password and passkey wrappers cannot carry it. No additional database secret
 or private key is stored.
 
-The session may read only its own encrypted wrappers and their authenticated creator Device keys
+The session may read only its own encrypted Recovery Code wrapper and its authenticated creator Device key
 without an active Device. Clients verify and unwrap the wrapper before authorizing a replacement.
 The proof signs the `dotrelay-device-recovery-v1` message binding the profile UUID, User UUID,
 operation UUID and SHA-384 digest of the self-signed replacement certificate. Bootstrap checks
@@ -28,3 +28,5 @@ lifecycle unchanged; the User can revoke it after regaining access.
 Wrappers without field 97 remain readable but cannot authorize replacement Devices. Existing
 Users must rotate their Recovery Code with this release before relying on disaster recovery.
 The optional field extends the pre-alpha v3 registry, so ship the API, web and CLI together.
+
+Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
