@@ -1,5 +1,5 @@
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CliError } from "./errors";
 
 export type GitTrackingState = "tracked" | "untracked" | "ignored" | "outside";
@@ -133,7 +133,8 @@ export const createGitTrackingProbe = (
     const relativeToTop = relative(topLevel, realTarget);
     if (
       relativeToTop === "" ||
-      relativeToTop.startsWith("..") ||
+      relativeToTop === ".." ||
+      relativeToTop.startsWith(`..${sep}`) ||
       isAbsolute(relativeToTop)
     )
       return outside;
@@ -167,7 +168,8 @@ export const ensureLocalGitExclusion = async (
       "git_exclusion_failed",
     );
   // Gitignore metacharacters must describe a literal filename.
-  const pattern = `/${info.relativePath.replace(/[\\*?\[\] ]/g, "\\$&")}`;
+  const literalPath = info.relativePath.split(sep).join("/");
+  const pattern = `/${literalPath.replace(/[\\*?\[\] ]/g, "\\$&")}`;
   const excludePath =
     info.excludePath ?? join(info.gitDirectory, "info", "exclude");
   let current = "";

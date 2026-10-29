@@ -127,9 +127,9 @@ const ensureWrappingKey = async (directory: string): Promise<CryptoKey> => {
   const material = crypto.getRandomValues(new Uint8Array(KEY_LENGTH));
   // Publish a complete key with an atomic no-replace link. Both in-process
   // writers and separate CLI processes must use the winner's key.
-  await mkdir(directory, { recursive: true, mode: 0o700 });
   const candidate = join(directory, `.key.${crypto.randomUUID()}.tmp`);
   try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
     await writeFile(candidate, `${Buffer.from(material).toString("hex")}\n`, {
       mode: 0o600,
       flag: "wx",
