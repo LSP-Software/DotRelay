@@ -175,6 +175,10 @@ export const raceBrowserAndCliEstablishment = async (
         origin: deps.profileOrigin,
         serverProfileId: deps.serverProfileId,
         userId,
+        recoveryCode: deps.requireString(
+          enrolledResult.recoveryCode,
+          "CLI recovery code",
+        ),
       }),
     );
     const browserDevice = await deps.database.device.findFirst({
@@ -217,6 +221,56 @@ export const raceBrowserAndCliEstablishment = async (
       throw new Error(
         "the browser did not open a 32-byte Account Master Key from the CLI recovery code",
       );
+    // A second clean CLI installation recovers without any existing Device
+    // approval. The original Device remains ACTIVE, as it would after loss.
+    const recoveryHome = join(deps.isolatedDirectory, "lost-device-cli");
+    const recoveryEnvironment = {
+      ...process.env,
+      HOME: recoveryHome,
+      DOTRELAY_CONFIG_DIR: join(recoveryHome, "cli"),
+    };
+    await mkdir(recoveryHome, { recursive: true });
+    const login = await deps.runWithDeviceApproval(
+      ["setup", deps.profileOrigin, "--no-input", "--json"],
+      recoveryEnvironment,
+      cliRepo,
+      session.header,
+    );
+    if (
+      login.exitCode !== 6 ||
+      deps.parseJsonLines(login.stderr).at(-1)?.code !==
+        "account_key_not_unlocked"
+    )
+      throw new Error("a clean CLI did not require recovery");
+    const recovered = await deps.runBinary(
+      [
+        "device",
+        "recover",
+        "--profile",
+        deps.requireString(enrolledResult.profile, "CLI profile"),
+        "--recovery-code-file",
+        await deps.writeRecoveryCodeFile(
+          deps.isolatedDirectory,
+          recoveryCode,
+          "lost-device",
+        ),
+        "--no-input",
+        "--json",
+      ],
+      recoveryEnvironment,
+      cliRepo,
+    );
+    if (
+      recovered.exitCode !== 0 ||
+      deps.parseJsonLines(recovered.stdout).at(-1)?.via !== "recovery-code"
+    )
+      throw new Error(`clean CLI recovery failed: ${recovered.stderr}`);
+    if (
+      (await deps.database.accountKeyWrapperObject.count({
+        where: { userId, wrapperType: "RECOVERY_CODE", retiredAt: null },
+      })) !== 1
+    )
+      throw new Error("recovery replaced the established account key");
     console.log(
       "→ CLI setup created the first key; the browser refused a second and opened the CLI key",
     );

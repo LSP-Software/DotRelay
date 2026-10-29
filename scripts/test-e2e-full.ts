@@ -802,6 +802,54 @@ try {
       throw new Error(
         `device${index} setup performed ${enrolled.approvals} authorizations`,
       );
+    // Session authorization does not approve a second Device. Exercise the
+    // supported handoff from the original installation before key recovery.
+    const requestPath = join(baseDirectory, `device${index}-enrollment.json`);
+    for (const [args, commandEnvironment, commandRepo] of [
+      [
+        [
+          "device",
+          "begin",
+          ...profileFlag,
+          "--output",
+          requestPath,
+          "--no-input",
+          "--json",
+        ],
+        env,
+        repo,
+      ],
+      [
+        [
+          "device",
+          "approve",
+          ...profileFlag,
+          "--from",
+          requestPath,
+          "--no-input",
+          "--json",
+        ],
+        cliEnvironment,
+        repositoryDirectory,
+      ],
+      [
+        [
+          "device",
+          "complete",
+          ...profileFlag,
+          "--from",
+          requestPath,
+          "--no-input",
+          "--json",
+        ],
+        env,
+        repo,
+      ],
+    ] as const) {
+      const result = await runBinary(args, commandEnvironment, commandRepo);
+      if (result.exitCode !== 0)
+        throw new Error(`Device handoff failed: ${result.stderr.trim()}`);
+    }
     const newDevices = await database.device.findMany({
       where: { userId: demoUserId, id: { notIn: [...enrolledBefore] } },
     });

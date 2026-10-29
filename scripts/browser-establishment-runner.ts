@@ -1,4 +1,5 @@
 import {
+  prepareDeviceRecovery,
   authenticatedCreatorKeys,
   createAccountKeyWrapper,
   createDeviceBootstrap,
@@ -29,6 +30,7 @@ type EstablishConfig = Readonly<{
   readonly origin: string;
   readonly serverProfileId: string;
   readonly userId: string;
+  readonly recoveryCode?: string;
 }>;
 
 type PreparedDevice = Readonly<{
@@ -99,30 +101,65 @@ const deviceHeaders = (
 const prepareBrowserDevice = async (
   config: EstablishConfig,
 ): Promise<{ readonly deviceId: string }> => {
-  const bootstrap = await createDeviceBootstrap({
-    pin: { serverProfileId: config.serverProfileId, origin: config.origin },
-    userId: config.userId,
-  });
+  const pin = {
+    serverProfileId: config.serverProfileId,
+    origin: config.origin,
+  };
+  let recoveryRequest: Record<string, unknown> | undefined;
+  let bootstrap: DeviceBootstrap;
+  if (config.recoveryCode) {
+    const response = await fetch(
+      `${config.origin}/api/v1/account-keys/wrappers`,
+      { credentials: "include" },
+    );
+    if (!response.ok) throw new Error("browser recovery wrapper fetch failed");
+    const entry = firstWrapper(await response.json());
+    if (!entry?.creatorPublicKey)
+      throw new Error("browser recovery has no authenticated creator key");
+    const code = decodeRecoveryCode(config.recoveryCode);
+    const recovery = await prepareDeviceRecovery({
+      pin,
+      userId: config.userId,
+      recoveryCode: code,
+      wrapperBytes: fromBase64(entry.object),
+      creatorPublicKey: fromHex(entry.creatorPublicKey),
+    });
+    code.fill(0);
+    recovery.accountMasterKey.fill(0);
+    bootstrap = recovery.bootstrap;
+    recoveryRequest = recovery.request;
+  } else {
+    bootstrap = await createDeviceBootstrap({ pin, userId: config.userId });
+  }
   const response = await fetch(`${config.origin}/api/v1/devices/bootstrap`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      operationId: crypto.randomUUID(),
-      deviceId: bootstrap.deviceId,
-      identityGeneration: bootstrap.identityGeneration,
-      keyId: toHex(bootstrap.keyId),
-      x25519PublicKey: toHex(bootstrap.x25519PublicKey),
-      ed25519PublicKey: toHex(bootstrap.ed25519PublicKey),
-      certificateId: bootstrap.certificate.id,
-      certificate: toBase64(bootstrap.certificate.canonicalBytes),
-    }),
+    body: JSON.stringify(
+      recoveryRequest ?? {
+        operationId: crypto.randomUUID(),
+        deviceId: bootstrap.deviceId,
+        identityGeneration: bootstrap.identityGeneration,
+        keyId: toHex(bootstrap.keyId),
+        x25519PublicKey: toHex(bootstrap.x25519PublicKey),
+        ed25519PublicKey: toHex(bootstrap.ed25519PublicKey),
+        certificateId: bootstrap.certificate.id,
+        certificate: toBase64(bootstrap.certificate.canonicalBytes),
+      },
+    ),
   });
   if (!response.ok)
     throw new Error(
       `browser device bootstrap failed: ${await problemCode(response)}`,
     );
-  prepared = { config, bootstrap };
+  prepared = {
+    config: {
+      origin: config.origin,
+      serverProfileId: config.serverProfileId,
+      userId: config.userId,
+    },
+    bootstrap,
+  };
   return { deviceId: bootstrap.deviceId };
 };
 

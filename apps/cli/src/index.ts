@@ -909,6 +909,25 @@ const loginAndEnroll = async (
   if (!parsed.json) stepDone(`GitHub verified for ${profile.name}`);
   const enrollment = await enrollFirstDevice(
     deviceWorkflowOptions(parsed, runtime, profile, credentials),
+  ).catch(
+    async (
+      error: unknown,
+    ): Promise<Awaited<ReturnType<typeof enrollFirstDevice>>> => {
+      if (!(error instanceof CliError) || error.code !== "state_conflict")
+        throw error;
+      if (parsed.noInput)
+        throw new CliError(
+          "authentication",
+          "GitHub sign-in was saved. Authorize this installation with dotrelay device enroll from an existing Device, or run dotrelay device recover --recovery-code-file <path> if your Devices are lost.",
+          {},
+          "account_key_not_unlocked",
+        );
+      const recovered = await recoverAccountKey(
+        deviceWorkflowOptions(parsed, runtime, profile, credentials),
+        {},
+      );
+      return { deviceId: recovered.deviceId, active: true, existing: false };
+    },
   );
   if (!parsed.json)
     stepDone(
