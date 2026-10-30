@@ -26,11 +26,11 @@ export const assertSafeStdout = (
     );
 };
 
+export const protectedTemporaryPath = (path: string): string =>
+  join(dirname(path), `.${basename(path)}.${crypto.randomUUID()}.tmp`);
+
 const writeProtected = async (path: string, data: string | Uint8Array) => {
-  const temporary = join(
-    dirname(path),
-    `.${basename(path)}.${crypto.randomUUID()}.tmp`,
-  );
+  const temporary = protectedTemporaryPath(path);
   try {
     await writeFile(
       temporary,
@@ -55,10 +55,7 @@ const writeProtected = async (path: string, data: string | Uint8Array) => {
 
 const retainPreviousFile = async (path: string): Promise<void> => {
   const previousPath = `${path}.previous`;
-  const temporary = join(
-    dirname(path),
-    `.${basename(path)}.previous.${crypto.randomUUID()}.tmp`,
-  );
+  const temporary = protectedTemporaryPath(previousPath);
   try {
     const prior = await readFile(path);
     try {

@@ -2518,7 +2518,7 @@ describe("protected CLI workflows", () => {
       expect(String(body.message)).toContain(".git/info/exclude");
       expect(String(body.message)).toContain("excluded from Git");
       expect(await Bun.file(`${gitDirectory}/info/exclude`).text()).toBe(
-        "/.env\n/.env.previous\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2534,15 +2534,25 @@ describe("protected CLI workflows", () => {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
       await Bun.write(
         `${gitRoot}/.git/info/exclude`,
-        "/.env\n/.env.previous\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
       );
       await seededEnvironment(
         runtime,
         `${import.meta.dir}/.tmp-workflow-input`,
       );
       const output = `${gitRoot}/.env`;
-      const probe: GitTrackingProbe = async () =>
-        Object.freeze({ state: "ignored" });
+      await mkdir(`${gitRoot}/.git/info`, { recursive: true });
+      await Bun.write(
+        `${gitRoot}/.git/info/exclude`,
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+      );
+      const probe: GitTrackingProbe = async (path) =>
+        Object.freeze({
+          state: "ignored",
+          gitDirectory: `${gitRoot}/.git`,
+          topLevel: gitRoot,
+          relativePath: path.slice(gitRoot.length + 1),
+        });
       const result = await run(
         [
           "pull",
@@ -2562,7 +2572,7 @@ describe("protected CLI workflows", () => {
       expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
       expect(String(body.message)).not.toContain(".git/info/exclude");
       expect(await Bun.file(`${gitRoot}/.git/info/exclude`).text()).toBe(
-        "/.env\n/.env.previous\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2699,8 +2709,18 @@ describe("protected CLI workflows", () => {
         `${import.meta.dir}/.tmp-workflow-input`,
       );
       const output = `${gitRoot}/.env`;
-      const probe: GitTrackingProbe = async () =>
-        Object.freeze({ state: "ignored" });
+      await mkdir(`${gitRoot}/.git/info`, { recursive: true });
+      await Bun.write(
+        `${gitRoot}/.git/info/exclude`,
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+      );
+      const probe: GitTrackingProbe = async (path) =>
+        Object.freeze({
+          state: "ignored",
+          gitDirectory: `${gitRoot}/.git`,
+          topLevel: gitRoot,
+          relativePath: path.slice(gitRoot.length + 1),
+        });
       const result = await run(
         [
           "pull",

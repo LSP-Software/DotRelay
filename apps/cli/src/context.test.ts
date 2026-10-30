@@ -43,7 +43,7 @@ describe("repository and worktree context", () => {
     const context = {
       repositoryRemote: "origin",
       repositoryOwner: "LSP-Software",
-      repositoryName: "DotRelay",
+      repositoryName: ".github",
       repositoryIdentity: "1311418611",
     } as const;
     try {

@@ -158,11 +158,12 @@ const projectWithEnvironmentResponse = (
   environment: environmentResponse(environment),
 });
 
-// GitHub limits owner and repository names to 1 to 39 characters of letters,
-// digits, hyphens, and periods; the pattern keeps the descriptive parts the
-// Client sends from ever encoding a path or a credential.
-const repositoryNamePattern =
-  /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,37}[A-Za-z0-9])?$/;
+// Owners and repositories have different GitHub naming rules. Restrict both
+// to literal path components; repository names additionally allow underscores
+// and up to 100 characters.
+const repositoryOwnerPattern =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const repositoryNamePattern = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 
 export const registerAdministrationRoutes = (
   app: Hono,
@@ -276,7 +277,7 @@ export const registerAdministrationRoutes = (
     if (
       host !== "github.com" ||
       typeof owner !== "string" ||
-      !repositoryNamePattern.test(owner) ||
+      !repositoryOwnerPattern.test(owner) ||
       typeof name !== "string" ||
       !repositoryNamePattern.test(name)
     )

@@ -1400,6 +1400,41 @@ describe("Resolving a GitHub Repository's identity", () => {
       },
     );
 
+  test("accepts underscores, leading dots, and 100-character repository names", async () => {
+    const profile = loadServerProfileConfig({});
+    const { auth, database } = actorDependencies([
+      { providerId: "github", accessToken: "ghu_delegated-token" },
+    ]);
+    for (const name of ["my_app", ".github", "a".repeat(100)]) {
+      const testApp = createApi({
+        database,
+        profile,
+        auth,
+        githubFetch: (async () =>
+          Response.json({
+            id: 1311418611,
+            full_name: `LSP-Software/${name}`,
+          })) as unknown as typeof fetch,
+      });
+      const response = await resolveRequest(
+        testApp,
+        profile,
+        `?owner=LSP-Software&name=${name}`,
+      );
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { name: string }).name).toBe(name);
+    }
+    const testApp = createApi({ database, profile, auth });
+    for (const name of ["a".repeat(101), ".", "..", "a/b"]) {
+      const response = await resolveRequest(
+        testApp,
+        profile,
+        `?owner=LSP-Software&name=${encodeURIComponent(name)}`,
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
   test("resolves the Repository on the acting User's behalf with their delegated access", async () => {
     const profile = loadServerProfileConfig({});
     const { auth, database } = actorDependencies([

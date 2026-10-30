@@ -53,7 +53,7 @@ export type EnvironmentSelection = Readonly<{
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
 // Remote names and GitHub owner/name parts are stored as identifiers; they
 // are short, never carry credentials, and cannot encode a URL.
-const repositoryIdentifier = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const repositoryIdentifier = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 const contextKeys = new Set([
   "environmentId",
   "projectId",

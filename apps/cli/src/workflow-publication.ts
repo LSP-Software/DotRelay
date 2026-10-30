@@ -34,6 +34,7 @@ import {
   diffDotenvEntries,
   parseDotenv,
 } from "./dotenv";
+import { protectedTemporaryPath } from "./output";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import {
   createGitTrackingProbe,
@@ -885,10 +886,15 @@ export const guardPullOutputAgainstGit = async (
   }
   let result: "established" | "present" | undefined;
   for (const [index, info] of tracking.entries()) {
-    if (info.state === "untracked") {
-      const exclusion = await ensureLocalGitExclusion(info);
+    if (info.state === "untracked" || info.state === "ignored") {
+      const exclusion = await ensureLocalGitExclusion(info, {
+        includeTemporaryFiles: true,
+      });
       const verified = await probe(resolve(paths[index] ?? outputPath));
-      if (verified.state !== "ignored")
+      const temporary = await probe(
+        protectedTemporaryPath(resolve(paths[index] ?? outputPath)),
+      );
+      if (verified.state !== "ignored" || temporary.state !== "ignored")
         throw new CliError(
           "local-io",
           "Git did not honor the plaintext output exclusion",
@@ -896,8 +902,6 @@ export const guardPullOutputAgainstGit = async (
           "git_exclusion_failed",
         );
       if (result !== "established") result = exclusion;
-    } else if (info.state === "ignored" && result === undefined) {
-      result = "present";
     }
   }
   return result;
