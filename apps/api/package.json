@@ -16,7 +16,7 @@
     "@dotrelay/database": "workspace:*",
     "better-auth": "1.7.7",
     "hono": "4.13.11",
-    "ioredis": "5.11.1"
+    "ioredis": "6.0.0"
   },
   "devDependencies": {
     "@dotrelay/client": "workspace:*",
