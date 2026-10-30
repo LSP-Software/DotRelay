@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@dotrelay/client": "workspace:*",
-    "@electric-sql/pglite": "0.5.5",
+    "@electric-sql/pglite": "0.5.13",
     "@types/pg": "8.23.1",
     "pg": "8.23.1",
     "prisma": "7.9.1"
