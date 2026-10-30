@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PGlite } from "@electric-sql/pglite";
 import { SyncRepository } from "./sync";
 
 const environmentId = "00000000-0000-4000-8000-000000000001";
@@ -35,7 +36,19 @@ const fixture = () => {
     project: { currentEpoch: 1n, lifecycle: "ACTIVE", teamId: "team" },
   };
   let beforePage: (() => void) | undefined;
+  const calls = { chain: 0, revision: 0 };
   const database = {
+    $queryRaw: async (
+      _strings: TemplateStringsArray,
+      ..._values: unknown[]
+    ) => {
+      calls.chain += 1;
+      return rows.map(({ id, parentId, environmentId }) => ({
+        id,
+        parentId,
+        environmentId,
+      }));
+    },
     device: { findFirst: async () => ({ id: "device" }) },
     membership: {
       findFirst: async () => ({ lifecycle: "ACTIVE", role: "OWNER" }),
@@ -46,8 +59,10 @@ const fixture = () => {
       findUnique: async () => ({ ...environment }),
     },
     revision: {
-      findUnique: async ({ where }: { where: { id: string } }) =>
-        rows.find((row) => row.id === where.id) ?? null,
+      findUnique: async ({ where }: { where: { id: string } }) => {
+        calls.revision += 1;
+        return rows.find((row) => row.id === where.id) ?? null;
+      },
       findMany: async ({ where }: { where: { id?: { in: string[] } } }) => {
         beforePage?.();
         // Deliberately return rows in UUID order, never parent order.
@@ -67,6 +82,7 @@ const fixture = () => {
   };
   return {
     rows,
+    calls,
     environment,
     database,
     input,
@@ -128,5 +144,64 @@ describe("sync parent-chain pagination", () => {
     await expect(
       new SyncRepository().synchronize(database as never, input),
     ).rejects.toThrow("history is incomplete");
+  });
+  test("fetches a long chain in one cycle-safe recursive PostgreSQL query per page", async () => {
+    const { database, input, rows, environment, calls } = fixture();
+    for (let index = 0; index < 2048; index += 1) {
+      rows.push(revision(crypto.randomUUID(), rows.at(-1)!.id, 3));
+    }
+    environment.currentHeadId = rows.at(-1)!.id;
+    environment.currentHead = { protocolObject: rows.at(-1)!.protocolObject };
+    const sql = new PGlite();
+    try {
+      await sql.exec(
+        'CREATE TABLE revisions (id uuid PRIMARY KEY, "parentId" uuid, "environmentId" uuid)',
+      );
+      await sql.query(
+        `INSERT INTO revisions SELECT * FROM json_to_recordset($1::json) AS links(id uuid, "parentId" uuid, "environmentId" uuid)`,
+        [
+          JSON.stringify(
+            rows.map(({ id, parentId, environmentId }) => ({
+              id,
+              parentId,
+              environmentId,
+            })),
+          ),
+        ],
+      );
+      database.$queryRaw = async (strings, ...values) => {
+        calls.chain += 1;
+        const query = strings.reduce(
+          (text, part, index) => text + (index ? `$${index}` : "") + part,
+          "",
+        );
+        const result = await sql.query<{
+          id: string;
+          parentId: string | null;
+          environmentId: string;
+        }>(query, values);
+        return result.rows;
+      };
+      const repository = new SyncRepository();
+      const first = await repository.synchronize(database as never, input);
+      expect(first.revisions.map((row) => row.id)).toEqual([parentId]);
+      const second = await repository.synchronize(database as never, {
+        ...input,
+        cursorRevisionId: parentId,
+        cursorRevisionHash: rows[0]!.protocolObject.digest,
+      });
+      expect(second.revisions.map((row) => row.id)).toEqual([childId]);
+      expect(calls).toEqual({ chain: 2, revision: 1 });
+      // A corrupt cycle must terminate in SQL and be refused by validation.
+      await sql.query('UPDATE revisions SET "parentId" = $1 WHERE id = $2', [
+        childId,
+        parentId,
+      ]);
+      await expect(
+        repository.synchronize(database as never, input),
+      ).rejects.toThrow("history contains a cycle");
+    } finally {
+      await sql.close();
+    }
   });
 });

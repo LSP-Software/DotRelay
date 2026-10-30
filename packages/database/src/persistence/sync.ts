@@ -132,6 +132,27 @@ export class SyncRepository {
     // Revisions are immutable. Walk only the chain ending at the head captured
     // above, so concurrent publications cannot leak beyond the advertised head.
     // Wall-clock timestamps (and random UUIDs) do not define ancestry.
+    // UNION deduplicates complete links, so even a corrupt cycle terminates
+    // in SQL. Validate the returned links below without per-ancestor queries.
+    const links = await database.$queryRaw<
+      Array<{
+        id: string;
+        parentId: string | null;
+        environmentId: string;
+      }>
+    >`
+      WITH RECURSIVE chain AS (
+        SELECT "id", "parentId", "environmentId"
+        FROM "revisions" WHERE "id" = ${environment.currentHeadId}::uuid
+        UNION
+        SELECT revision."id", revision."parentId", revision."environmentId"
+        FROM "revisions" revision JOIN chain ON revision."id" = chain."parentId"
+        WHERE chain."id" IS DISTINCT FROM ${trusted?.id ?? null}::uuid
+          AND chain."environmentId" = ${input.environmentId}::uuid
+      )
+      SELECT "id", "parentId", "environmentId" FROM chain
+    `;
+    const linksById = new Map(links.map((link) => [link.id, link]));
     const reverseChain: string[] = [];
     const visited = new Set<string>();
     let currentId = environment.currentHeadId;
@@ -139,10 +160,7 @@ export class SyncRepository {
       if (visited.has(currentId))
         throw new SyncIntegrityError("revision history contains a cycle");
       visited.add(currentId);
-      const link = await database.revision.findUnique({
-        where: { id: currentId },
-        select: { id: true, parentId: true, environmentId: true },
-      });
+      const link = linksById.get(currentId);
       if (!link || link.environmentId !== input.environmentId)
         throw new SyncIntegrityError(
           "revision history is incomplete or incompatible",
