@@ -114,3 +114,52 @@ test("hosted Project archive/restore has credentialed JSON/idempotency CORS", as
   );
   expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
 });
+
+test("concurrent readiness probes share one underlying database query", async () => {
+  let calls = 0;
+  let finish: ((value: ReturnType<typeof rows>) => void) | undefined;
+  const pending = new Promise<ReturnType<typeof rows>>((resolve) => {
+    finish = resolve;
+  });
+  const database = {
+    $queryRaw: async () => {
+      calls++;
+      return pending;
+    },
+  } as never;
+  const first = databaseReady(database);
+  const second = databaseReady(database);
+  expect(calls).toBe(1);
+  finish?.(rows());
+  expect(await first).toBe(true);
+  expect(await second).toBe(true);
+});
+
+test("browser and CLI sessions cannot request delegated OAuth credentials", async () => {
+  let called = false;
+  const app = createApi({
+    profile,
+    database: {} as never,
+    auth: {
+      handler: async () => {
+        called = true;
+        return Response.json({ accessToken: "must-not-leave-service" });
+      },
+    } as never,
+  });
+  for (const path of [
+    "get-access-token",
+    "refresh-token",
+    "get-access-token/",
+    "%67et-access-token",
+  ]) {
+    const response = await app.request(`/api/auth/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: profile.origin },
+      body: JSON.stringify({ accountId: "github-account" }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("must-not-leave-service");
+  }
+  expect(called).toBe(false);
+});

@@ -17,11 +17,13 @@ const sql = postgres(url, {
   idle_timeout: 0,
   onnotice: () => undefined,
 });
-const connection = await sql.reserve();
-const run = async (command: string[]) => {
+let connection: Awaited<ReturnType<typeof sql.reserve>> | undefined;
+let step = "maintenance connection";
+const run = async (label: string, command: string[], showOutput = false) => {
+  step = label;
   const child = Bun.spawn(command, {
-    stdout: "ignore",
-    stderr: "ignore",
+    stdout: showOutput ? "inherit" : "ignore",
+    stderr: showOutput ? "inherit" : "ignore",
     env: process.env,
   });
   if ((await child.exited) !== 0)
@@ -30,20 +32,26 @@ const run = async (command: string[]) => {
     );
 };
 try {
+  connection = await sql.reserve();
+  step = "maintenance lock";
   const [lock] =
     await connection`SELECT pg_try_advisory_lock(107733261, 1) AS locked`;
   if (!lock?.locked)
     throw new Error("Another maintenance process holds the deployment lock");
   // Back up even the legacy state before inspecting its destructive cutover.
-  await run([
+  await run("encrypted backup and verification", [
     "python3",
     "ops/postgres.py",
     "backup",
     process.env.BACKUP_ARCHIVE,
   ]);
-  await run([process.execPath, "scripts/guard-legacy-recovery-cutover.ts"]);
+  await run(
+    "legacy-recovery guard",
+    [process.execPath, "scripts/guard-legacy-recovery-cutover.ts"],
+    true,
+  );
   // Use the installed locked CLI; never let bunx download a replacement.
-  await run([
+  await run("Prisma migrations", [
     process.execPath,
     "node_modules/prisma/build/index.js",
     "migrate",
@@ -53,11 +61,12 @@ try {
   ]);
   console.log("Migrations completed; verify readiness before enabling traffic");
 } catch {
+  console.error(`Maintenance step failed: ${step}`);
   console.error(
     "Deployment migration failed; keep all writers stopped. Preserve the backup and failed database for investigation.",
   );
   process.exitCode = 1;
 } finally {
-  connection.release();
+  connection?.release();
   await sql.end({ timeout: 5 });
 }

@@ -38,11 +38,15 @@ try:
     # An incompatible migration history must stop readiness while liveness
     # keeps working. Restore the disposable CI fixture in finally.
     subprocess.run(["docker", "exec", container, "bun", "-e", 'const {createDatabaseClient}=await import("./packages/database/src/persistence/client.ts"); const db=createDatabaseClient(); await db.$executeRawUnsafe("UPDATE _prisma_migrations SET checksum = \'mismatch\'"); await db.$disconnect();'], check=True, stdout=subprocess.DEVNULL)
-    try:
-        urllib.request.urlopen("http://127.0.0.1:3001/ready", timeout=4)
+    for attempt in range(5):
+        try:
+            urllib.request.urlopen("http://127.0.0.1:3001/ready", timeout=4)
+        except urllib.error.HTTPError as error:
+            assert error.code == 503
+            break
+        time.sleep(1)
+    else:
         raise AssertionError("Changed schema remained ready")
-    except urllib.error.HTTPError as error:
-        assert error.code == 503
     with urllib.request.urlopen("http://127.0.0.1:3001/health", timeout=4) as response:
         assert json.load(response) == {"status": "ok"}
 finally:

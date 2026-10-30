@@ -697,6 +697,18 @@ const createApi = ({
   });
 
   app.all("/api/auth/*", async (context) => {
+    // Delegated GitHub credentials are service-only. Keep Better Auth's
+    // server-side refresh API usable without exposing token-returning HTTP
+    // endpoints to browser or CLI sessions.
+    const authPath = decodeURIComponent(context.req.path)
+      .replace(/\/+$/, "")
+      .toLowerCase();
+    if (
+      ["/api/auth/get-access-token", "/api/auth/refresh-token"].includes(
+        authPath,
+      )
+    )
+      return jsonProblem(context, "forbidden");
     try {
       const response = await auth.handler(context.req.raw);
       response.headers.set("Cache-Control", "no-store");

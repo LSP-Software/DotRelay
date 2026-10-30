@@ -114,3 +114,121 @@ test("an unpersisted publication is never sent", async () => {
   await expect(transport.finalize(input)).rejects.toThrow("disk full");
   expect(calls).toBe(0);
 });
+
+test("a later authorization error cannot erase an earlier uncertain commit", async () => {
+  let saved: string | null = null;
+  let calls = 0;
+  const transport = createProtocolTransport({
+    origin: "https://relay.example",
+    pendingPublication: {
+      read: async () => saved,
+      write: async (value) => {
+        saved = value;
+      },
+    },
+    fetch: async (url) => {
+      if (url.endsWith("/finalize") && calls++ === 0)
+        throw new Error("lost response");
+      return Response.json(
+        {
+          type: "https://dotrelay.dev/problems/v1",
+          title: "Forbidden",
+          status: 403,
+          code: "forbidden",
+          detail: "Forbidden",
+        },
+        { status: 403 },
+      );
+    },
+  });
+  await expect(transport.finalize(input)).rejects.toBeInstanceOf(
+    PublicationUncertainError,
+  );
+  expect(saved).not.toBeNull();
+  await expect(transport.recoverPublication?.()).rejects.toBeInstanceOf(
+    PublicationUncertainError,
+  );
+  expect(saved).not.toBeNull();
+});
+
+test("only an authoritative terminal receipt clears an unresolved publication", async () => {
+  const { PublicationTerminalError } = await import("./publication-recovery");
+  let saved: string | null = null;
+  let terminal = false;
+  const transport = createProtocolTransport({
+    origin: "https://relay.example",
+    pendingPublication: {
+      read: async () => saved,
+      write: async (value) => {
+        saved = value;
+      },
+    },
+    fetch: async (url) => {
+      if (url.endsWith("/finalize") || !terminal) throw new Error("offline");
+      return Response.json({ status: "EXPIRED", revisionIds: [] });
+    },
+  });
+  await expect(transport.finalize(input)).rejects.toBeInstanceOf(
+    PublicationUncertainError,
+  );
+  terminal = true;
+  await expect(transport.recoverPublication?.()).rejects.toBeInstanceOf(
+    PublicationTerminalError,
+  );
+  expect(saved).toBeNull();
+});
+
+test("concurrent publications settle only their own journal entries", async () => {
+  const entries = new Map<string, string>();
+  const second = {
+    ...input,
+    operationId: "77777777-7777-4777-8777-777777777777",
+  };
+  const transport = createProtocolTransport({
+    origin: "https://relay.example",
+    pendingPublication: {
+      read: async () => entries.values().next().value ?? null,
+      write: async (value, id) => {
+        if (value === null) entries.delete(id);
+        else entries.set(id, value);
+      },
+    },
+    fetch: async (url) => {
+      if (url.includes(input.operationId)) throw new Error("lost response");
+      return Response.json({ revisionId: second.request.revision.id });
+    },
+  });
+  const outcomes = await Promise.allSettled([
+    transport.finalize(input),
+    transport.finalize(second),
+  ]);
+  expect(outcomes.map((result) => result.status)).toEqual([
+    "rejected",
+    "fulfilled",
+  ]);
+  expect([...entries.keys()]).toEqual([input.operationId]);
+});
+
+test("corrupt recovery data fails as local IO and never starts a new operation", async () => {
+  const { PublicationJournalError } = await import("./publication-recovery");
+  let saved: string | null = "corrupt journal";
+  let requests = 0;
+  const transport = createProtocolTransport({
+    origin: "https://relay.example",
+    pendingPublication: {
+      read: async () => saved,
+      write: async (value) => {
+        saved = value;
+      },
+    },
+    fetch: async () => {
+      requests++;
+      return Response.json({});
+    },
+  });
+  await expect(transport.recoverPublication?.()).rejects.toBeInstanceOf(
+    PublicationJournalError,
+  );
+  expect(saved).toBe("corrupt journal");
+  expect(requests).toBe(0);
+});

@@ -93,6 +93,7 @@ export type LaneProjectionInput = Readonly<{
 }>;
 
 export type RevisionPublicationInput = Readonly<{
+  readonly finalizationDigest?: Uint8Array;
   readonly operation: Readonly<{
     readonly id: string;
     readonly actorUserId: string;
@@ -225,6 +226,15 @@ export class PublicationRepository {
         (revision) => revision.id === input.revision.id,
       );
       if (existingOperation.status === "COMMITTED") {
+        if (
+          input.finalizationDigest &&
+          (!existingOperation.finalizationDigest ||
+            !sameBytes(
+              existingOperation.finalizationDigest,
+              input.finalizationDigest,
+            ))
+        )
+          throw new OperationConflictError();
         if (existingRevision)
           return { revision: existingRevision, idempotent: true };
         if (!input.rotationInner) throw new OperationConflictError();
@@ -652,7 +662,13 @@ export class PublicationRepository {
     if (!input.rotationInner)
       await transaction.operation.update({
         where: { id: operation.id },
-        data: { status: "COMMITTED", committedAt: new Date() },
+        data: {
+          status: "COMMITTED",
+          committedAt: new Date(),
+          ...(input.finalizationDigest
+            ? { finalizationDigest: databaseBytes(input.finalizationDigest) }
+            : {}),
+        },
       });
     await transaction.auditEvent.create({
       data: {

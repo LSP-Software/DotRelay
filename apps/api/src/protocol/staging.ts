@@ -80,6 +80,7 @@ export const verifyRevisionSignature = async (
 
 export const buildPublicationInput = (input: {
   readonly operationId: string;
+  readonly finalizationDigest?: Uint8Array;
   readonly actorUserId: string;
   readonly actorDeviceId: string;
   readonly commandStaged: StagedRow;
@@ -138,6 +139,9 @@ export const buildPublicationInput = (input: {
         ? { expiresAt: input.operationExpiresAt }
         : {}),
     },
+    ...(input.finalizationDigest
+      ? { finalizationDigest: input.finalizationDigest }
+      : {}),
     environmentId: input.environmentId,
     expectedHeadId: input.finalizeRequest.expectedHeadId,
     revision: {
@@ -287,4 +291,28 @@ const validateLaneOwnership = (
     (originalProviderUserId !== actorUserId || ownerUserId !== undefined)
   )
     throw new ContractError("invalid_crypto_object");
+};
+
+// This receipt fingerprint covers only opaque protocol metadata. It neither
+// changes signed v3 bytes nor introduces a new cryptographic suite.
+export const digestFinalizationRequest = async (
+  request: FinalizePublicationRequest,
+): Promise<Uint8Array> => {
+  const normalize = (value: unknown): unknown => {
+    if (value instanceof Uint8Array) return Array.from(value);
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, item]) => [key, normalize(item)]),
+      );
+    return value;
+  };
+  return new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-384",
+      new TextEncoder().encode(JSON.stringify(normalize(request))),
+    ),
+  );
 };

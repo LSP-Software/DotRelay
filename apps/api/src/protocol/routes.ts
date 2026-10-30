@@ -42,6 +42,7 @@ import { createProtocolRateLimit } from "./rate-limit";
 import {
   buildProtocolObjectFromStage,
   buildPublicationInput,
+  digestFinalizationRequest,
   collectStagedObjectIds,
   hasAllStagedObjects,
   uniqueStagedObjectIds,
@@ -536,7 +537,21 @@ export const registerProtocolRoutes = (
           "Cache-Control": "no-store",
         });
       }
+      const finalizationDigest =
+        await digestFinalizationRequest(finalizeRequest);
       if (operation.status === "COMMITTED") {
+        if (
+          !operation.finalizationDigest ||
+          operation.finalizationDigest.length !== finalizationDigest.length ||
+          !finalizationDigest.every(
+            (byte, index) => operation.finalizationDigest?.[index] === byte,
+          )
+        ) {
+          const problem = respondProblem("operation_conflict");
+          return context.json(problem.body, problem.status, {
+            "Cache-Control": "no-store",
+          });
+        }
         const revision = await database.revision.findFirst({
           where: {
             id: finalizeRequest.revision.id,
@@ -641,6 +656,7 @@ export const registerProtocolRoutes = (
             actorDeviceId: actor.deviceId,
             commandStaged,
             operationExpiresAt: operation.expiresAt,
+            finalizationDigest,
             finalizeRequest,
             projectId: environment.projectId,
             environmentId: environment.id,

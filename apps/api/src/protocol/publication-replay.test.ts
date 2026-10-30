@@ -1,3 +1,5 @@
+import { digestFinalizationRequest } from "./staging";
+import { parseFinalizePublicationRequest } from "@dotrelay/contracts";
 import { expect, test } from "bun:test";
 import { createApi, loadServerProfileConfig } from "../index";
 
@@ -43,12 +45,23 @@ const create = (kind = "REVISION_PUBLICATION", owner = userId) => {
           actorDeviceId: deviceId,
           kind,
           status: "COMMITTED",
+          finalizationDigest: await digestFinalizationRequest(
+            parseFinalizePublicationRequest(body),
+          ),
           revisions: [{ id: revisionId }],
         }),
       },
       revision: {
-        findFirst: async ({ where }: { where: { id: string } }) =>
-          where.id === revisionId ? { id: revisionId } : null,
+        findFirst: async ({
+          where,
+        }: {
+          where: { id: string; operationId: string; environmentId: string };
+        }) =>
+          where.id === revisionId &&
+          where.operationId === operationId &&
+          where.environmentId === environmentId
+            ? { id: revisionId }
+            : null,
       },
       stagedObject: {
         findMany: async () => {
@@ -76,6 +89,9 @@ test("finalize refuses another operation kind and a different Revision on replay
   for (const [app, request] of [
     [create("EPOCH_ROTATION"), body],
     [create(), { ...body, revision: { ...body.revision, id: operationId } }],
+    [create(), { ...body, environmentId: operationId }],
+    [create(), { ...body, expectedHeadId: operationId }],
+    [create(), { ...body, descriptor: { ...body.descriptor, laneCount: 1 } }],
   ] as const) {
     expect(
       (

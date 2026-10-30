@@ -1,5 +1,15 @@
+import { createProblem } from "@dotrelay/contracts";
 import type { FinalizeInput, ProtocolTransport } from "./transport";
-import { ProtocolTransportError } from "./transport";
+import { ProtocolTransportError } from "./transport-error";
+
+export class PublicationJournalError extends Error {
+  constructor() {
+    super(
+      "Publication recovery data could not be read. Publishing is blocked; restore the recovery record before retrying.",
+    );
+    this.name = "PublicationJournalError";
+  }
+}
 
 export class PublicationUncertainError extends Error {
   constructor(readonly operationId: string) {
@@ -10,8 +20,15 @@ export class PublicationUncertainError extends Error {
   }
 }
 
-// Retrying the same operation and exact revision is safe. Never cancel a
-// finalize whose commit outcome is unknown and never invent a new operation.
+export class PublicationTerminalError extends ProtocolTransportError {
+  constructor() {
+    super(createProblem("staging_expired"));
+    this.name = "PublicationTerminalError";
+  }
+}
+
+// Retry only the same operation and exact Revision. A 4xx cannot settle an
+// earlier uncertain attempt: authorization may have changed after its commit.
 export const finalizePublication = async (
   transport: ProtocolTransport,
   input: FinalizeInput,
@@ -21,27 +38,31 @@ export const finalizePublication = async (
     try {
       return await transport.finalize(input);
     } catch (error) {
-      if (
+      const definitive =
         error instanceof ProtocolTransportError &&
         error.problem.status < 500 &&
-        ![408, 429].includes(error.problem.status)
-      ) {
+        ![408, 429].includes(error.problem.status);
+      if (!definitive) uncertain = true;
+      if (uncertain && transport.operation) {
+        let receipt:
+          | Awaited<ReturnType<NonNullable<ProtocolTransport["operation"]>>>
+          | undefined;
+        try {
+          receipt = await transport.operation(input);
+        } catch {
+          /* Keep the journal when the receipt is inaccessible. */
+        }
+        if (
+          receipt?.status === "COMMITTED" &&
+          receipt.revisionIds.includes(input.request.revision.id)
+        )
+          return { revisionId: input.request.revision.id, idempotent: true };
+        if (receipt && ["CANCELLED", "EXPIRED"].includes(receipt.status))
+          throw new PublicationTerminalError();
+      }
+      if (definitive) {
         if (uncertain) throw new PublicationUncertainError(input.operationId);
         throw error;
-      }
-      uncertain = true;
-      if (transport.operation) {
-        try {
-          const receipt = await transport.operation(input);
-          if (receipt.status === "COMMITTED") {
-            if (!receipt.revisionIds.includes(input.request.revision.id))
-              throw new Error("Operation receipt mismatch");
-            return { revisionId: input.request.revision.id, idempotent: true };
-          }
-          if (["CANCELLED", "EXPIRED"].includes(receipt.status)) throw error;
-        } catch {
-          /* Offline or uncertain: retain the exact input for retry. */
-        }
       }
     }
   }

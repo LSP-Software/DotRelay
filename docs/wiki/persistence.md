@@ -78,9 +78,9 @@ generations it found, and refuses (exit 1) until the operator either exports the
 `--acknowledge-legacy-recovery-data` to record that the data is disposable:
 
 ```sh
-bun run db:cutover-guard
-bun run db:cutover-guard --database <DATABASE_URL>
-bun run db:cutover-guard --acknowledge-legacy-recovery-data
+bun run db:cutover-guard # requires DATABASE_URL to be set
+bun run db:cutover-guard # requires DATABASE_URL to be set --database <DATABASE_URL>
+bun run db:cutover-guard # requires DATABASE_URL to be set --acknowledge-legacy-recovery-data
 ```
 
 A database that has already cut over, or that never held legacy recovery data, passes silently.

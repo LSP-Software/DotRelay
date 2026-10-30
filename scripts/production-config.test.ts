@@ -36,11 +36,14 @@ test("production requires every essential setting, explicit mode, secure origins
   ]) {
     expect(() => loadProductionEnvironment({ ...valid, ...change })).toThrow();
   }
+  let message = "";
   try {
     loadProductionEnvironment({ ...valid, DATABASE_URL: "secret-invalid-url" });
   } catch (error) {
-    expect(String(error)).not.toContain("secret-invalid-url");
+    message = String(error);
   }
+  expect(message).toContain("DATABASE_URL must identify a PostgreSQL database");
+  expect(message).not.toContain("secret-invalid-url");
 });
 
 test("private secret files work; conflicting, public, symlink and directory inputs fail closed", async () => {

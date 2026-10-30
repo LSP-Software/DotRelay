@@ -9,6 +9,8 @@ import {
   type DecodedVariable,
   decodeSyncVariables,
   PublicationUncertainError,
+  PublicationTerminalError,
+  PublicationJournalError,
   type PublicationContext,
   reconcilePublicationBaseline,
   reviewPublication,
@@ -509,7 +511,22 @@ export const publish = async (
         revision: recovered.revisionId,
         message: "Original publication confirmed; no new Revision was created",
       };
-  } catch {
+  } catch (error) {
+    if (error instanceof PublicationJournalError)
+      throw new CliError(
+        "local-io",
+        error.message,
+        {},
+        "publication_journal_invalid",
+      );
+    if (error instanceof PublicationTerminalError)
+      throw new CliError(
+        "conflict",
+        "The original publication expired or was cancelled without committing. Review and retry the command to create a new publication.",
+        {},
+        "staging_expired",
+      );
+    if (!(error instanceof PublicationUncertainError)) throw error;
     throw new CliError(
       "transient",
       "The previous publication outcome is still unknown. Retry this command to reconcile the original operation before publishing again.",

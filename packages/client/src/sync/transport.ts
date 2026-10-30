@@ -1,28 +1,22 @@
+import { ProtocolTransportError } from "./transport-error";
 import {
   finalizePublication,
   PublicationUncertainError,
+  PublicationTerminalError,
+  PublicationJournalError,
 } from "./publication-recovery";
 import {
   DEVICE_ID_HEADER,
   decodeSyncPage,
   type FinalizePublicationRequest,
   PROTOCOL_MEDIA_TYPE,
-  type Problem,
   parseProblem,
   type SyncPageWire,
   type SyncRequest,
   sha384ToHex,
 } from "@dotrelay/contracts";
 
-export class ProtocolTransportError extends Error {
-  readonly problem: Problem;
-
-  constructor(problem: Problem) {
-    super(problem.detail);
-    this.name = "ProtocolTransportError";
-    this.problem = problem;
-  }
-}
+export { ProtocolTransportError } from "./transport-error";
 
 export type EpochRotationTransportRequest = Readonly<{
   readonly projectId: string;
@@ -437,9 +431,9 @@ export const createProtocolTransport = (
       return result;
     } catch (error) {
       if (
-        !recovering &&
-        !(error instanceof PublicationUncertainError) &&
-        pending
+        pending &&
+        (error instanceof PublicationTerminalError ||
+          (!recovering && !(error instanceof PublicationUncertainError)))
       )
         await pending.write(null, request.operationId);
       throw error;
@@ -449,9 +443,27 @@ export const createProtocolTransport = (
     ...transport,
     finalize,
     recoverPublication: async () => {
-      const saved = await pending?.read();
-      if (!saved) return null;
-      return finalize(decode(saved), true);
+      let saved: string | null | undefined;
+      let request: FinalizeInput;
+      try {
+        saved = await pending?.read();
+        if (!saved) return null;
+        request = decode(saved);
+        if (
+          !request.operationId ||
+          !request.deviceId ||
+          !request.request?.revision?.id
+        )
+          throw new Error();
+      } catch {
+        throw new PublicationJournalError();
+      }
+      try {
+        return await finalize(request, true);
+      } catch (error) {
+        if (error instanceof PublicationTerminalError) throw error;
+        throw new PublicationUncertainError(request.operationId);
+      }
     },
     begin: async (request: BeginInput) => {
       // Callers must reconcile before constructing a fresh publication.

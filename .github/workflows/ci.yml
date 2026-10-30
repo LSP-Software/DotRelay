@@ -26,8 +26,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
@@ -41,8 +39,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run build
@@ -57,8 +53,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
@@ -92,8 +86,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run test:integration
@@ -106,8 +98,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
@@ -127,8 +117,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run test:cli
@@ -165,8 +153,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
@@ -196,8 +182,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun scripts/create-shadow-database.ts
@@ -230,8 +214,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun node_modules/prisma/build/index.js migrate deploy --config packages/database/prisma.config.ts
@@ -245,8 +227,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run docs:validate
@@ -259,8 +239,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       # braces (GHSA-vfj7-8cjw-p6xm) has no patched release. The script ignores
@@ -354,8 +332,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       # The dev build is cut from this main commit: it is stamped with the
@@ -384,8 +360,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -431,8 +405,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run tracked-tree:clean

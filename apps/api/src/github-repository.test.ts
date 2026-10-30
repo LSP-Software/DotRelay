@@ -274,7 +274,7 @@ test("classic OAuth and personal tokens cannot supply delegated repository acces
     let called = false;
     const result = await resolveGitHubRepositoryIdentity(
       delegatedAuth([{ providerId: "github", accessToken: token }]),
-      "user",
+      "auth-user",
       { owner: "LSP-Software", name: "DotRelay" },
       {
         fetch: (async () => {

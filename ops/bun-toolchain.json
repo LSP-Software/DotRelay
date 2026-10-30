@@ -3,24 +3,28 @@
   "commit": "da867c60bf0bcbf9d6d36994f8ca0efa42075115",
   "assets": [
     {
-      "name": "bun-darwin-aarch64.zip",
-      "id": 687869686,
-      "sha256": "67ede5394a7da4a8b1a1eb0788b72325f480bc956cb1155b6be962919c9aa581"
+      "name": "@oven/bun-linux-x64",
+      "version": "1.4.4-canary.20261030.1",
+      "url": "https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4-canary.20261030.1.tgz",
+      "integrity": "sha512-vSnhkW4Ay9KaEnkGqjvwqsLp7aW3Dr+7TLvlFzN08oL9ZLu1Fxy8aSH1uAwlF6cJiSUPK99EIIpBQ4BQ68XZGA=="
     },
     {
-      "name": "bun-darwin-x64.zip",
-      "id": 687869655,
-      "sha256": "31e8e67eb5b742f7114002047d91c9455e253ad3f3a9d7a8e27d3dd73465b6a4"
+      "name": "@oven/bun-darwin-aarch64",
+      "version": "1.4.4-canary.20261030.1",
+      "url": "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.4.4-canary.20261030.1.tgz",
+      "integrity": "sha512-8FD31h0pV9p94i1wsc4t7+jUxn2WLmkezM8fZgKqvcnutGkaDUW8a5v4RySiByVhUR+62wNXVqCnhBLeOLCv5w=="
     },
     {
-      "name": "bun-linux-x64.zip",
-      "id": 687869747,
-      "sha256": "e8f27b24f74186e87fc0f0f603bdb6b79264dc86a1680da41e2025a3cb3efee0"
+      "name": "@oven/bun-darwin-x64",
+      "version": "1.4.4-canary.20261030.1",
+      "url": "https://registry.npmjs.org/@oven/bun-darwin-x64/-/bun-darwin-x64-1.4.4-canary.20261030.1.tgz",
+      "integrity": "sha512-I52Wa4xtj5T05BfEw+/LmGMmM31oaKtQ3xzs07MSRmp9IeJKKmhOWCZK7iieENEiW0zDpQZAdSDcQBJ4ipWlqw=="
     },
     {
-      "name": "bun-windows-x64.zip",
-      "id": 687870574,
-      "sha256": "053e8d9776759e33d372bef6a1bad38aa45be9f4533b64a98668d04328f776ce"
+      "name": "@oven/bun-windows-x64",
+      "version": "1.4.4-canary.20261030.1",
+      "url": "https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-1.4.4-canary.20261030.1.tgz",
+      "integrity": "sha512-dbr4ZhCK6CweBCep+0CIoNeXZAi/qohF2Cpb82FJYdjgtrmvhTZ3K3S0BWRezFbtGcMZ/wJerBJoRaoHmoT33Q=="
     }
   ]
 }

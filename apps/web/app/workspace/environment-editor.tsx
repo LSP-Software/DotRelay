@@ -6,6 +6,8 @@ import {
   type ProtocolTransport,
   ProtocolTransportError,
   PublicationUncertainError,
+  PublicationTerminalError,
+  PublicationJournalError,
   type PublicationContext,
   type RevisionSigningTrust,
   type SyncPageWire,
@@ -791,6 +793,16 @@ export const EnvironmentEditor = ({
         `Local preview saved as rev_${String(nextRevision).padStart(4, "0")}.`,
       );
     } catch (error) {
+      if (error instanceof PublicationJournalError) {
+        setPublishMessage(error.message);
+        return;
+      }
+      if (error instanceof PublicationTerminalError) {
+        setPublishMessage(
+          "The original publication expired or was cancelled without committing. Review your draft before publishing again.",
+        );
+        return;
+      }
       if (error instanceof PublicationUncertainError) {
         setPublishMessage(
           "Publication outcome is unknown. Retry to reconcile the original operation; no new Revision will be created until it is resolved.",

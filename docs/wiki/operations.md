@@ -62,7 +62,12 @@ on private monitoring paths where possible. Production startup never migrates.
    `age` 1.x through your reviewed package source. Check `pg_dump --version`,
    `pg_restore --version` and `age --version`. Never dump with an older major client.
 3. Supply `DATABASE_URL`, `BACKUP_AGE_RECIPIENT`, `BACKUP_IDENTITY_FILE` and a unique
-   `BACKUP_ARCHIVE` in a private 0700 backup directory. The identity is a private
+   `BACKUP_ARCHIVE` in a private 0700 backup directory.
+   The backup URL accepts only `sslmode`, `sslrootcert`, `sslcert` and `sslkey`
+   query options. Remove Prisma-only options such as `schema` and
+   `connection_limit` from this maintenance connection; configure supported TLS
+   options or libpq environment variables explicitly. Unsupported options fail
+   before migration. The identity is a private
    age key file; protect it independently and retain an offline recovery copy.
    Run `DOTRELAY_WRITERS_STOPPED=true bun scripts/deploy-migrate.ts`.
 4. This process holds a PostgreSQL advisory lock, takes an encrypted `pg_dump`
@@ -138,7 +143,10 @@ The Docker bases and PostgreSQL/Valkey service images are digest-pinned. CI Bun 
 pinned to revision `da867c60bf0bcbf9d6d36994f8ca0efa42075115`; Docker verifies its
 reported revision. The matching Linux x64 Bun archive SHA-256 is
 `e8f27b24f74186e87fc0f0f603bdb6b79264dc86a1680da41e2025a3cb3efee0`.
-Direct package versions and transitive resolutions are locked; installs must use
+CI installs the official, immutable dated npm packages
+`@oven/bun-*@1.4.4-canary.20261030.1`, verifies their SHA-512 integrity from
+`ops/bun-toolchain.json` and checks the executable revision before use. It does
+not depend on GitHub's replaceable canary asset IDs. Direct package versions and transitive resolutions are locked; installs must use
 `--frozen-lockfile`. Pin changes require the full runtime/crypto matrix again.
 This is repeatable dependency resolution, not a claim of bit-for-bit reproducible
 Next.js/native binaries across different hosts.
@@ -157,3 +165,9 @@ the old reusable `approved` flag is insufficient. Record reviewer, report hash,
 artifact identities and finding disposition separately. No independent approval
 is supplied by this change. Critical/high findings and unresolved crypto-boundary
 medium findings block real-secret releases.
+
+The receipt-digest migration `20261030000000_publication_receipt_digest` is additive.
+It binds new publication receipts to their normalized finalize requests without
+changing signed v3 objects. Older committed operations have no fingerprint and
+fail closed on `/finalize` replay; current clients use the authenticated operation
+receipt to confirm those outcomes. Do not edit earlier migration checksums.

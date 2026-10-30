@@ -29,11 +29,11 @@ const databaseUrl: string =
     ? (args[databaseFlagIndex + 1] ?? "")
     : (process.env.DATABASE_URL ?? "");
 if (!databaseUrl) {
-  console.error("--database requires a connection string");
+  console.error(
+    "Pass --database <DATABASE_URL> or set DATABASE_URL to a connection string",
+  );
   process.exit(2);
 }
-
-const url = new URL(databaseUrl);
 
 // The tables the cutover drops, and the legacy enum values it removes. These
 // are a fixed, trusted list — never user input — so the identifiers below are
@@ -89,6 +89,7 @@ const countWhere = async (
 };
 
 const main = async () => {
+  const url = new URL(databaseUrl);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
     // The maintenance database cannot hold DotRelay tables; nothing to guard.

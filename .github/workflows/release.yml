@@ -46,8 +46,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { fetch-depth: 0, persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: git fetch origin main --depth=1
       - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
@@ -88,8 +86,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { fetch-depth: 0, persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run --cwd apps/cli build
@@ -177,8 +173,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - name: stamp CLI version from the release tag
@@ -209,8 +203,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
