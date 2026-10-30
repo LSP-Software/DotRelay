@@ -51,6 +51,9 @@ applied migration names/checksums, including failed migrations and unexpected
 newer migrations; it returns only a generic 200 or 503. It has a three-second
 response budget. `MAINTENANCE_MODE=true` makes readiness fail. Keep health endpoints
 on private monitoring paths where possible. Production startup never migrates.
+If the orchestrator overrides Docker's built-in healthcheck, configure
+`bun /app/scripts/probe-ready.ts` instead of an inherited curl/wget command;
+the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 
 ## Upgrade and migrations
 
@@ -155,13 +158,23 @@ Release images attach SBOM/provenance. Record and promote exact image digests,
 not mutable tags, and retain the CLI artifact hashes. Hosted deployment requires
 an operator migration receipt for the exact source SHA (`DEV_MIGRATED_COMMIT_SHA`
 or `PRODUCTION_MIGRATED_COMMIT_SHA`). Configure Coolify to consume the reviewed
-image digests before acknowledging that receipt. A full signed compatibility
-manifest, offline artifact verification and build-once promotion remain #32/#36
-gates. Do not treat a mutable channel alias as evidence of a verified deployment.
+image digests before acknowledging that receipt. Releases package each CLI platform
+into a unique timestamp-normalized archive, attach `SHA256SUMS` and a
+`release-manifest.json` binding source SHA, toolchain/integrity pins, dependency
+lock hash, exact image digests, CLI bytes and the independent-review report hash.
+GitHub OIDC signs provenance for those exact release files; the already-built
+binaries are packaged and promoted without recompilation. Download the provenance
+bundle and verify each archive and the manifest with
+`gh attestation verify FILE --repo LSP-Software/DotRelay`, then run
+`sha256sum --check SHA256SUMS` from the directory containing all release files.
+Keep an offline copy of the verified manifest, attestations and artifacts.
+Do not treat a mutable channel alias as evidence of a verified deployment.
 
 The `security-review` environment must have required independent reviewers.
 `SECURITY_REVIEW_APPROVED_SHA` must identify the exact reviewed source commit;
-the old reusable `approved` flag is insufficient. Record reviewer, report hash,
+the old reusable `approved` flag is insufficient. Set
+`SECURITY_REVIEW_REPORT_SHA256` to the actual independent report's SHA-256;
+publication refuses missing or malformed report metadata. Record reviewer, report hash,
 artifact identities and finding disposition separately. No independent approval
 is supplied by this change. Critical/high findings and unresolved crypto-boundary
 medium findings block real-secret releases.

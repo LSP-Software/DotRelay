@@ -100,13 +100,19 @@ jobs:
     # the tag that production pulls.
     environment: security-review
     runs-on: ubuntu-latest
+    outputs:
+      api-digest: ${{ steps.api.outputs.digest }}
+      web-digest: ${{ steps.web.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Require independent approval of this exact commit
         env:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
-        run: test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+        run: |
+          test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - name: resolve release origins
         id: origins
         env:
@@ -135,6 +141,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: build and push API image
+        id: api
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
@@ -146,6 +153,7 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
       - name: build and push web image
+        id: web
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
@@ -195,11 +203,18 @@ jobs:
     needs: [build-cli, build-images]
     environment: security-review
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Verify recorded privacy-boundary approval
         env:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
-        run: test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+        run: |
+          test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
@@ -225,6 +240,23 @@ jobs:
           find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
       - run: bun scripts/test-cli-package.ts
       - run: npm pack --dry-run ./packages/dotrelay
+      - name: Package unique platform release archives
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/package-release.py
+      - name: Bind exact release artifacts and review evidence
+        env:
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          API_IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api@${{ needs.build-images.outputs.api-digest }}
+          WEB_IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web@${{ needs.build-images.outputs.web-digest }}
+        run: bun scripts/release-evidence.ts
+      - name: Sign exact release artifact provenance
+        id: provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-path: release-binaries/**/*
       - name: publish npm selector
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -232,8 +264,11 @@ jobs:
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           files: |
-            release-binaries/**/*.exe
-            release-binaries/**/dotrelay
+            release-binaries/*.tar.gz
+            release-binaries/*.zip
+            release-binaries/release-manifest.json
+            release-binaries/SHA256SUMS
+            ${{ steps.provenance.outputs.bundle-path }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
 
@@ -247,7 +282,10 @@ jobs:
       - name: Verify recorded privacy-boundary approval
         env:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
-        run: test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+        run: |
+          test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Require operator migration receipt for this commit
