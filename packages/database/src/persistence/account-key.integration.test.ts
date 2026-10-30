@@ -611,7 +611,11 @@ integrationDescribe("account key persistence invariants", () => {
       new Uint8Array(passkeyRow.wrapperId),
     );
     const replay = await new AccountKeyRepository().revokeWrapper(database, {
-      operation: { ...revoked.operation, actorDeviceId: device.id },
+      operation: {
+        ...(await createOperationInput(user.id, "revoke-passkey")),
+        id: revoked.operation.id,
+        actorDeviceId: device.id,
+      },
       wrapperId: new Uint8Array(passkeyRow.wrapperId),
     });
     expect("idempotent" in replay && replay.idempotent).toBe(true);

@@ -37,7 +37,7 @@ try:
     assert user == "10001"
     # An incompatible migration history must stop readiness while liveness
     # keeps working. Restore the disposable CI fixture in finally.
-    subprocess.run(["docker", "exec", container, "bun", "-e", 'const {createDatabaseClient}=await import("@dotrelay/database"); const db=createDatabaseClient(); await db.$executeRawUnsafe("UPDATE _prisma_migrations SET checksum = \'mismatch\'"); await db.$disconnect();'], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "exec", container, "bun", "-e", 'const {createDatabaseClient}=await import("./packages/database/src/persistence/client.ts"); const db=createDatabaseClient(); await db.$executeRawUnsafe("UPDATE _prisma_migrations SET checksum = \'mismatch\'"); await db.$disconnect();'], check=True, stdout=subprocess.DEVNULL)
     try:
         urllib.request.urlopen("http://127.0.0.1:3001/ready", timeout=4)
         raise AssertionError("Changed schema remained ready")
