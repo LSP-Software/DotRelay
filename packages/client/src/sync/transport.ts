@@ -227,7 +227,7 @@ export const createProtocolTransport = (
     readonly authorization?: string;
     readonly pendingPublication?: Readonly<{
       read(): Promise<string | null>;
-      write(value: string | null): Promise<void>;
+      write(value: string | null, operationId: string): Promise<void>;
     }>;
   }>,
 ): ProtocolTransport => {
@@ -424,10 +424,16 @@ export const createProtocolTransport = (
         : item,
     );
   const finalize = async (request: FinalizeInput, recovering = false) => {
-    if (pending) await pending.write(encode(request));
+    if (pending) await pending.write(encode(request), request.operationId);
     try {
       const result = await finalizePublication(transport, request, recovering);
-      if (pending) await pending.write(null);
+      if (pending) {
+        try {
+          await pending.write(null, request.operationId);
+        } catch {
+          throw new PublicationUncertainError(request.operationId);
+        }
+      }
       return result;
     } catch (error) {
       if (
@@ -435,7 +441,7 @@ export const createProtocolTransport = (
         !(error instanceof PublicationUncertainError) &&
         pending
       )
-        await pending.write(null);
+        await pending.write(null, request.operationId);
       throw error;
     }
   };

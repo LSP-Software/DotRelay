@@ -463,12 +463,15 @@ export const loadWorkspaceSession = (
       const transport = createProtocolTransport({
         origin: profile.origin,
         pendingPublication: {
-          read: async () =>
-            localStorage.getItem(
-              `dotrelay-publication:${profile.id}:${device.id}`,
-            ),
-          write: async (value) => {
-            const key = `dotrelay-publication:${profile.id}:${device.id}`;
+          read: async () => {
+            const prefix = `dotrelay-publication:${profile.id}:${device.id}:`;
+            const key = Object.keys(localStorage)
+              .filter((key) => key.startsWith(prefix))
+              .sort()[0];
+            return key ? localStorage.getItem(key) : null;
+          },
+          write: async (value, operationId) => {
+            const key = `dotrelay-publication:${profile.id}:${device.id}:${operationId}`;
             if (value === null) localStorage.removeItem(key);
             else localStorage.setItem(key, value);
           },

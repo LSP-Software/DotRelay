@@ -729,6 +729,9 @@ export const publish = async (
 export const shareEnvironmentWithPeerDevices = async (
   synced: Awaited<ReturnType<typeof syncWorkflow>>,
 ): Promise<void> => {
+  // A pull can trigger peer sharing too; settle an older uncertain
+  // publication before attempting that new operation.
+  if (await synced.workflow.transport.recoverPublication?.()) return;
   const epochKey = synced.workflow.publicationContext.sharedValueSecret;
   if (
     !epochKey ||

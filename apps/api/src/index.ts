@@ -1458,6 +1458,7 @@ const createApi = ({
 const profile = loadServerProfileConfig();
 const database = createDatabaseClient();
 type RequestIpServer = {
+  stop(closeActiveConnections?: boolean): Promise<void>;
   readonly requestIP: (request: Request) => { readonly address: string } | null;
 };
 let server: RequestIpServer | undefined;
@@ -1501,4 +1502,24 @@ if (import.meta.main) {
     60 * 60 * 1000,
   );
   cleanupTimer.unref?.();
+  let stopping = false;
+  for (const signal of ["SIGTERM", "SIGINT"] as const)
+    process.on(signal, () => {
+      if (stopping) return;
+      stopping = true;
+      process.env.MAINTENANCE_MODE = "true";
+      clearInterval(cleanupTimer);
+      const deadline = setTimeout(() => process.exit(1), 20_000);
+      deadline.unref();
+      void (async () => {
+        try {
+          await server?.stop(false);
+          await database.$disconnect();
+          clearTimeout(deadline);
+          process.exit(0);
+        } catch {
+          process.exit(1);
+        }
+      })();
+    });
 }

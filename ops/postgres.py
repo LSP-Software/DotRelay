@@ -33,8 +33,9 @@ def pg_environment(url):
     return env
 
 
-def run(command, env=None, data=None):
-    result = subprocess.run(command, env=env, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def run(command, env=None, data=None, output=None):
+    streams = {"stdin": data} if hasattr(data, "read") else {"input": data}
+    result = subprocess.run(command, env=env, stdout=output if output is not None else subprocess.PIPE, stderr=subprocess.PIPE, **streams)
     if result.returncode:
         raise RuntimeError(f"{Path(command[0]).name} failed; target remains offline")
     return result.stdout
@@ -47,16 +48,31 @@ def private_file(path):
     return path
 
 
+def checksum(path):
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def verify(archive, identity):
     archive = Path(archive)
     manifest = json.loads(Path(str(archive) + ".json").read_text())
-    if manifest.get("version") != 1 or manifest.get("sha256") != hashlib.sha256(archive.read_bytes()).hexdigest():
+    if manifest.get("version") != 1 or manifest.get("sha256") != checksum(archive):
         raise RuntimeError("Backup checksum mismatch")
     private_file(identity)
     # age authenticates the full encrypted stream before pg_restore sees it.
-    plaintext = run(["age", "--decrypt", "--identity", str(identity), str(archive)])
-    run(["pg_restore", "--list"], data=plaintext)
-    return plaintext
+    # Unlinked private temporary file bounds memory while ensuring the whole
+    # age stream authenticates before the first database write. The host's
+    # temp storage must be private/encrypted; do not use a shared mount.
+    plaintext = tempfile.TemporaryFile()
+    try:
+        run(["age", "--decrypt", "--identity", str(identity), str(archive)], output=plaintext)
+        plaintext.seek(0)
+        run(["pg_restore", "--list"], data=plaintext)
+        plaintext.seek(0)
+        return plaintext
+    except BaseException:
+        plaintext.close()
+        raise
 
 
 def backup(archive, env, recipient, identity):
@@ -79,21 +95,25 @@ def backup(archive, env, recipient, identity):
             if dump.poll() is None:
                 dump.kill()
                 dump.wait()
-    manifest = {"version": 1, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+    manifest = {"version": 1, "sha256": checksum(archive)}
     with Path(str(archive) + ".json").open("x") as output:
         json.dump(manifest, output)
-    verify(archive, identity)
+    verify(archive, identity).close()
 
 
 def restore(archive, env, identity):
     plaintext = verify(archive, identity)
-    # Never --clean, DROP DATABASE, or overwrite an existing schema. The
-    # operator supplies a newly created isolated target and switches only
-    # after validation; the original database and backup stay intact.
-    count = run(["psql", "-XAt", "--set=ON_ERROR_STOP=1", "-c", "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','v','m','S','f')"], env).strip()
-    if count != b"0":
-        raise RuntimeError("Restore requires an empty isolated database")
-    run(["pg_restore", "--exit-on-error", "--single-transaction", "--no-owner", "--no-privileges", "--dbname", env["PGDATABASE"]], env, plaintext)
+    try:
+        # Never --clean, DROP DATABASE, or overwrite an existing schema. The
+        # operator supplies a newly created isolated target and switches only
+        # after validation; the original database and backup stay intact.
+        count = run(["psql", "-XAt", "--set=ON_ERROR_STOP=1", "-c", "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','v','m','S','f')"], env).strip()
+        if count != b"0":
+            raise RuntimeError("Restore requires an empty isolated database")
+        run(["pg_restore", "--exit-on-error", "--single-transaction", "--no-owner", "--no-privileges", "--dbname", env["PGDATABASE"]], env, plaintext)
+    finally:
+        if hasattr(plaintext, "close"):
+            plaintext.close()
 
 
 def main():
@@ -103,7 +123,7 @@ def main():
     args = parser.parse_args()
     identity = os.environ["BACKUP_IDENTITY_FILE"]
     if args.action == "verify":
-        verify(args.archive, identity)
+        verify(args.archive, identity).close()
     else:
         env = pg_environment(os.environ["RESTORE_DATABASE_URL" if args.action == "restore" else "DATABASE_URL"])
         if args.action == "backup":

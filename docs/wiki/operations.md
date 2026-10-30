@@ -58,7 +58,7 @@ on private monitoring paths where possible. Production startup never migrates.
    Stop traffic and **all** writers (API replicas, jobs and maintenance commands).
    `DOTRELAY_WRITERS_STOPPED=true` is an operator assertion, not an automatic fence.
 2. Use that revision's checkout, pinned Bun and `bun install --frozen-lockfile`.
-   On the maintenance host provision PostgreSQL **17** clients, Python 3 and
+   On the maintenance host provision PostgreSQL **17** clients, Python 3.11+ and
    `age` 1.x through your reviewed package source. Check `pg_dump --version`,
    `pg_restore --version` and `age --version`. Never dump with an older major client.
 3. Supply `DATABASE_URL`, `BACKUP_AGE_RECIPIENT`, `BACKUP_IDENTITY_FILE` and a unique
@@ -116,7 +116,9 @@ Restore first authenticates the complete encrypted archive and refuses checksum
 mismatch or a nonempty target. It uses `pg_restore --single-transaction` and
 `--exit-on-error`, without `--clean`, without dropping or overwriting the original
 DB. Preserve ownership/privileges by provisioning the dedicated role separately;
-archives intentionally omit role/ACL recreation. Keep all target traffic and writers
+archives intentionally omit role/ACL recreation. Verification uses an unlinked private
+temporary file to bound memory; the maintenance host needs sufficient private,
+encrypted temporary storage. Keep all target traffic and writers
 stopped during verification; a restore failure must leave the target offline.
 
 Verify migration history, Server Profile UUID/origin, ciphertext bytes, counts,

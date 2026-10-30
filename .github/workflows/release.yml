@@ -26,6 +26,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { fetch-depth: 0, persist-credentials: false }
       - name: Install verified pinned Bun toolchain
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: git fetch origin main --depth=1
       - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
@@ -62,6 +64,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { fetch-depth: 0, persist-credentials: false }
       - name: Install verified pinned Bun toolchain
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run --cwd apps/cli build
@@ -149,6 +153,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - name: stamp CLI version from the release tag
@@ -179,6 +185,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - name: Install verified pinned Bun toolchain
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/setup-bun.py
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -235,17 +243,9 @@ jobs:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         run: python3 scripts/coolify-deploy.py --environment production
-      - name: smoke prod origins
-        run: |
-          set -euo pipefail
-          # /health is exempt from the API's secure-request gate, so probing
-          # it alone cannot catch a TRUST_PROXY / X-Forwarded-Proto
-          # misconfiguration that would 403 every real request. Probe
-          # /api/v1/capabilities (public GET, still gated) instead.
-          for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 https://api.dotrelay.dev/ready -o /dev/null && curl -fsS --max-time 10 https://api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dotrelay.dev -o /dev/null; then
-              echo "prod origins healthy"; exit 0
-            fi
-            echo "waiting for prod origins to come up (${i}/12)..."; sleep 15
-          done
-          echo "prod origins did not become healthy" >&2; exit 1
+      - name: smoke deployment readiness and trust boundary
+        env:
+          SMOKE_API_ORIGIN: https://api.dotrelay.dev
+          SMOKE_WEB_ORIGIN: https://dotrelay.dev
+          SMOKE_SERVER_PROFILE_ID: ${{ vars.PRODUCTION_SERVER_PROFILE_ID }}
+        run: python3 scripts/smoke-deployment.py

@@ -67,7 +67,7 @@ const DEMO_GITHUB = {
   owner: "demo-org",
   name: "demo-service",
   id: 99001122,
-  token: "demo-github-token",
+  token: "ghu_demo-github-token",
   accountId: "demo-github-account",
   subject: "demo-github-100001",
 } as const;

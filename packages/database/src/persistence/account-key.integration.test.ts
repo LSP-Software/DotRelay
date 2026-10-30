@@ -604,18 +604,16 @@ integrationDescribe("account key persistence invariants", () => {
     const active = await activeWrapperRows(user.id);
     const passkeyRow = active.find((row) => row.wrapperType === "PASSKEY_PRF");
     if (!passkeyRow) throw new Error("passkey wrapper not found");
-    await revokeWrapperById(
+    const revoked = await revokeWrapperById(
       user.id,
       device.id,
       "revoke-passkey",
       new Uint8Array(passkeyRow.wrapperId),
     );
-    const replay = await revokeWrapperById(
-      user.id,
-      device.id,
-      "revoke-passkey",
-      new Uint8Array(passkeyRow.wrapperId),
-    );
+    const replay = await new AccountKeyRepository().revokeWrapper(database, {
+      operation: { ...revoked.operation, actorDeviceId: device.id },
+      wrapperId: new Uint8Array(passkeyRow.wrapperId),
+    });
     expect("idempotent" in replay && replay.idempotent).toBe(true);
     const survivors = await activeWrapperRows(user.id);
     expect(survivors.map((row) => row.wrapperType)).toEqual(["RECOVERY_CODE"]);

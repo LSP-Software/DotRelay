@@ -11,7 +11,13 @@ if (
   throw new Error(
     "DATABASE_URL, BACKUP_ARCHIVE and DOTRELAY_WRITERS_STOPPED=true are required",
   );
-const sql = postgres(url, { max: 1, onnotice: () => undefined });
+const sql = postgres(url, {
+  max: 1,
+  max_lifetime: null,
+  idle_timeout: 0,
+  onnotice: () => undefined,
+});
+const connection = await sql.reserve();
 const run = async (command: string[]) => {
   const child = Bun.spawn(command, {
     stdout: "ignore",
@@ -24,7 +30,8 @@ const run = async (command: string[]) => {
     );
 };
 try {
-  const [lock] = await sql`SELECT pg_try_advisory_lock(107733261, 1) AS locked`;
+  const [lock] =
+    await connection`SELECT pg_try_advisory_lock(107733261, 1) AS locked`;
   if (!lock?.locked)
     throw new Error("Another maintenance process holds the deployment lock");
   // Back up even the legacy state before inspecting its destructive cutover.
@@ -51,5 +58,6 @@ try {
   );
   process.exitCode = 1;
 } finally {
+  connection.release();
   await sql.end({ timeout: 5 });
 }

@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+import urllib.error
+from urllib.parse import urlsplit
 import zipfile
 
 lock = json.loads((Path(__file__).parent.parent / "ops/bun-toolchain.json").read_text())
@@ -22,9 +24,26 @@ arch = "aarch64" if platform.machine().lower() in ("aarch64", "arm64") else "x64
 asset = next(a for a in lock["assets"] if a["name"] == f"bun-{system}-{arch}.zip")
 directory = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / ("dotrelay-bun-" + lock["commit"])
 directory.mkdir(parents=True, exist_ok=True)
-request = urllib.request.Request(f'https://api.github.com/repos/oven-sh/bun/releases/assets/{asset["id"]}', headers={"Accept": "application/octet-stream", "User-Agent": "DotRelay-toolchain"})
-with urllib.request.urlopen(request, timeout=90) as response:
-    data = response.read()
+headers = {"Accept": "application/octet-stream", "User-Agent": "DotRelay-toolchain"}
+if os.environ.get("GITHUB_TOKEN"):
+    headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
+request = urllib.request.Request(f'https://api.github.com/repos/oven-sh/bun/releases/assets/{asset["id"]}', headers=headers)
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+        return None
+try:
+    with urllib.request.build_opener(NoRedirect).open(request, timeout=90) as response:
+        data = response.read()
+except urllib.error.HTTPError as error:
+    if error.code != 302:
+        raise RuntimeError("Pinned Bun asset could not be downloaded") from None
+    location = error.headers.get("Location", "")
+    parsed = urlsplit(location)
+    if parsed.scheme != "https" or parsed.hostname not in ("release-assets.githubusercontent.com", "objects.githubusercontent.com"):
+        raise RuntimeError("Unexpected Bun asset redirect")
+    # Never forward the GitHub credential across origins.
+    with urllib.request.urlopen(location, timeout=90) as response:
+        data = response.read()
 if hashlib.sha256(data).hexdigest() != asset["sha256"]:
     raise RuntimeError("Bun archive checksum mismatch; refusing to execute")
 name = "bun.exe" if system == "windows" else "bun"
