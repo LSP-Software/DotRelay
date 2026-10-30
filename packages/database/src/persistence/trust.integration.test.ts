@@ -1066,6 +1066,16 @@ integrationDescribe("trust workflow integration", () => {
       approvalObject,
       certificateObject: prospectiveCertificateObject,
     });
+    // The response may have been lost; activation and expiry must not turn
+    // a retry of this exact approval into a state conflict.
+    const replay = await devices.approveEnrollment(database, {
+      operation: approveOperation,
+      enrollmentId,
+      approvalObject,
+      certificateObject: prospectiveCertificateObject,
+      now: new Date(Date.now() + 120_000),
+    });
+    expect("idempotent" in replay && replay.idempotent).toBe(true);
     expect(
       await database.auditEvent.count({
         where: {

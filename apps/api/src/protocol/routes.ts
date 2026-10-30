@@ -523,6 +523,19 @@ export const registerProtocolRoutes = (
           "Content-Type": "application/problem+json",
         });
       }
+      const expectedKind =
+        finalizeRequest.revision.mutation === "ROLLBACK"
+          ? "ROLLBACK"
+          : "REVISION_PUBLICATION";
+      if (
+        operation.kind !== expectedKind ||
+        finalizeRequest.revision.mutation === "EPOCH_TRANSITION"
+      ) {
+        const problem = respondProblem("operation_conflict");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+        });
+      }
       if (operation.status === "COMMITTED") {
         const revision = await database.revision.findFirst({
           where: {

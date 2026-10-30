@@ -245,6 +245,13 @@ export class DeviceRepository {
         input.operation.actorUserId,
         input.operation.actorDeviceId,
       );
+      // Authentication and the enrollment lock remain first; a committed
+      // command is final even after activation, completion or expiry.
+      const operation = await this.operations.begin(transaction, {
+        ...input.operation,
+        kind: "DEVICE_ENROLLMENT",
+      });
+      if (operation.idempotent) return operation;
       const enrollment = await transaction.deviceEnrollment.findUnique({
         where: { id: input.enrollmentId },
       });
@@ -265,11 +272,6 @@ export class DeviceRepository {
         prospective.lifecycle !== "PENDING"
       )
         throw new Error("Device enrollment is not pending");
-      const operation = await this.operations.begin(transaction, {
-        ...input.operation,
-        kind: "DEVICE_ENROLLMENT",
-      });
-      if (operation.idempotent) return operation;
       const now = input.now ?? new Date();
       await this.stagedObjects.promote(transaction, {
         operationId: operation.operation.id,

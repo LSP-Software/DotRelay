@@ -25,8 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run check
@@ -38,8 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run tracked-tree:clean
@@ -52,8 +52,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run test:unit
@@ -85,8 +85,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run test:integration
       - run: bun run tracked-tree:clean
@@ -97,8 +97,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run test:e2e
@@ -116,8 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run test:cli
       - run: bun run test:cli:live
@@ -152,8 +152,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       # The harness drives the packaged native binary, so build it first.
@@ -181,8 +181,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun scripts/create-shadow-database.ts
       - run: bun run db:validate
@@ -200,8 +200,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run docs:validate
       - run: bun run tracked-tree:clean
@@ -212,8 +212,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       # braces (GHSA-vfj7-8cjw-p6xm) has no patched release. The script ignores
       # that one advisory; it is only reached through shadcn's glob matcher.
@@ -310,8 +310,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       # The dev build is cut from this main commit: it is stamped with the
       # dev API origin and a dev version recording the commit sha.
@@ -338,8 +338,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: cli-dev-*
@@ -382,7 +382,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run tracked-tree:clean

@@ -497,6 +497,7 @@ integrationDescribe("account key persistence invariants", () => {
       actorUserId: user.id,
       actorDeviceId: device.id,
       label: "recovery-code-replay",
+      intent: "establish",
       wrapperType: "RECOVERY_CODE",
       wrapperId: codeId,
     });
@@ -519,6 +520,7 @@ integrationDescribe("account key persistence invariants", () => {
     });
     const replayed = await accountKeys.addWrapper(database, {
       operation: replayOperation,
+      intent: "establish",
       wrapper: {
         protocolObject: replayObject,
         identityGeneration: 1n,
@@ -608,6 +610,13 @@ integrationDescribe("account key persistence invariants", () => {
       "revoke-passkey",
       new Uint8Array(passkeyRow.wrapperId),
     );
+    const replay = await revokeWrapperById(
+      user.id,
+      device.id,
+      "revoke-passkey",
+      new Uint8Array(passkeyRow.wrapperId),
+    );
+    expect("idempotent" in replay && replay.idempotent).toBe(true);
     const survivors = await activeWrapperRows(user.id);
     expect(survivors.map((row) => row.wrapperType)).toEqual(["RECOVERY_CODE"]);
   });

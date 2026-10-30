@@ -71,3 +71,46 @@ test("readiness is private-detail-free, database-aware and distinct from livenes
   expect(ready.headers.get("cache-control")).toBe("no-store");
   expect(await ready.text()).toBe('{"status":"unavailable"}');
 });
+
+test("hosted Project archive/restore has credentialed JSON/idempotency CORS", async () => {
+  const config = loadServerProfileConfig({
+    WEB_ORIGIN: "https://app.example",
+    SERVER_PROFILE_ORIGIN: "https://api.example",
+  });
+  const app = createApi({
+    profile: config,
+    database: {} as never,
+    auth: createInMemoryAuth(config),
+  });
+  const response = await app.request(
+    `${config.origin}/api/v1/projects/11111111-1111-4111-8111-111111111111/lifecycle`,
+    {
+      method: "OPTIONS",
+      headers: {
+        Origin: config.webOrigin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers":
+          "content-type,idempotency-key,x-dotrelay-device-id",
+      },
+    },
+  );
+  expect(response.status).toBe(204);
+  expect(response.headers.get("access-control-allow-origin")).toBe(
+    config.webOrigin,
+  );
+  expect(response.headers.get("access-control-allow-credentials")).toBe("true");
+  expect(
+    response.headers.get("access-control-allow-headers")?.toLowerCase(),
+  ).toContain("idempotency-key");
+  const rejected = await app.request(
+    `${config.origin}/api/v1/projects/11111111-1111-4111-8111-111111111111/lifecycle`,
+    {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://untrusted.example",
+        "Access-Control-Request-Method": "POST",
+      },
+    },
+  );
+  expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
+});
