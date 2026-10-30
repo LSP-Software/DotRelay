@@ -109,7 +109,7 @@ const delegatedGitHubAccessToken = async (
   const stored = account?.accessToken;
   if (typeof stored !== "string" || stored.length === 0) return null;
   const token = await decryptOAuthToken(stored, context as never);
-  if (typeof token !== "string" || token.trim().length === 0) return null;
+  if (typeof token !== "string" || !token.startsWith("ghu_")) return null;
   return token;
 };
 

@@ -1,3 +1,5 @@
+import { readFile, rm } from "node:fs/promises";
+import { atomicWriteProtectedFile } from "./output";
 import {
   authenticatedCreatorKeys,
   createAccountKeyEnvelope,
@@ -449,6 +451,24 @@ export const loadWorkflowSession = async (
       output.write(`${note(action, "warn")}\n`);
   }
   const transport = createProtocolTransport({
+    pendingPublication: {
+      read: async () => {
+        try {
+          return await readFile(
+            `${options.stateDirectory}/publication-${deviceId}.json`,
+            "utf8",
+          );
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
+        }
+      },
+      write: async (value) => {
+        const path = `${options.stateDirectory}/publication-${deviceId}.json`;
+        if (value === null) await rm(path, { force: true });
+        else await atomicWriteProtectedFile(path, value);
+      },
+    },
     origin: options.profile.origin,
     authorization: `Bearer ${token}`,
     ...(options.fetch ? { fetch: options.fetch as never } : {}),

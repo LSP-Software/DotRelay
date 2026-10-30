@@ -1,3 +1,4 @@
+import { databaseReady } from "./readiness";
 import {
   bytesToUuid,
   ContractError,
@@ -586,7 +587,7 @@ const createApi = ({
     // origin, and credential gates so the in-container health check (plain
     // HTTP, no proxy, no x-forwarded-proto) always gets a deterministic 200
     // instead of the production secure-request 403.
-    if (context.req.path === "/health") {
+    if (["/health", "/ready"].includes(context.req.path)) {
       await next();
       return;
     }
@@ -632,7 +633,7 @@ const createApi = ({
     if (
       allowed === undefined ||
       context.req.method === "OPTIONS" ||
-      context.req.path === "/health" ||
+      ["/health", "/ready"].includes(context.req.path) ||
       context.req.path === "/api/v1/capabilities" ||
       context.req.path === "/api/auth/sign-out"
     ) {
@@ -659,6 +660,16 @@ const createApi = ({
   });
 
   app.get("/health", (context) => context.json({ status: "ok" }));
+  app.get("/ready", async (context) => {
+    context.header("Cache-Control", "no-store");
+    const ready =
+      process.env.MAINTENANCE_MODE !== "true" &&
+      (await databaseReady(database));
+    return context.json(
+      { status: ready ? "ready" : "unavailable" },
+      ready ? 200 : 503,
+    );
+  });
   app.get("/api/v1/capabilities", async (context) => {
     const etag = await getCapabilitiesEtag();
     if (context.req.header("If-None-Match") === etag) {
@@ -1466,6 +1477,10 @@ export const app = createApi({
 export { createApi, loadServerProfileConfig };
 
 if (import.meta.main) {
+  if (!(await databaseReady(database)))
+    throw new Error(
+      "Database schema is not ready; run the deployment migration process",
+    );
   await ensureServerProfile(database, {
     id: profile.id,
     origin: profile.origin,

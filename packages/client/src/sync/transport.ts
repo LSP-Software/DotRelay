@@ -1,4 +1,8 @@
 import {
+  finalizePublication,
+  PublicationUncertainError,
+} from "./publication-recovery";
+import {
   DEVICE_ID_HEADER,
   decodeSyncPage,
   type FinalizePublicationRequest,
@@ -47,6 +51,10 @@ export type EpochRotateResult = Readonly<{
 }>;
 
 export type ProtocolTransport = Readonly<{
+  recoverPublication?(): Promise<FinalizeResult | null>;
+  operation?(
+    input: CancelInput,
+  ): Promise<Readonly<{ status: string; revisionIds: readonly string[] }>>;
   begin(input: BeginInput): Promise<BeginResult>;
   stage(input: StageInput): Promise<void>;
   finalize(input: FinalizeInput): Promise<FinalizeResult>;
@@ -217,6 +225,10 @@ export const createProtocolTransport = (
     readonly origin: string;
     readonly fetch?: FetchLike;
     readonly authorization?: string;
+    readonly pendingPublication?: Readonly<{
+      read(): Promise<string | null>;
+      write(value: string | null): Promise<void>;
+    }>;
   }>,
 ): ProtocolTransport => {
   const baseFetcher =
@@ -234,7 +246,29 @@ export const createProtocolTransport = (
   const endpoint = (path: string): string =>
     `${input.origin.replace(/\/$/, "")}${path}`;
 
-  return Object.freeze({
+  const transport: ProtocolTransport = Object.freeze({
+    operation: async (request: CancelInput) => {
+      const response = await fetcher(
+        endpoint(`/api/v1/operations/${request.operationId}`),
+        {
+          method: "GET",
+          headers: jsonHeaders(request.deviceId),
+          credentials: "include",
+        },
+      );
+      await requireOk(response);
+      const body = (await response.json()) as {
+        status: string;
+        revisionIds: string[];
+      };
+      if (
+        typeof body.status !== "string" ||
+        !Array.isArray(body.revisionIds) ||
+        body.revisionIds.some((id) => typeof id !== "string")
+      )
+        throw new Error("Invalid operation receipt");
+      return body;
+    },
     begin: async (request) => {
       const response = await fetcher(
         endpoint(`/api/v1/operations/${request.operationId}/begin`),
@@ -376,6 +410,48 @@ export const createProtocolTransport = (
         revisions: Object.freeze(revisions),
         nextCursor: null,
       });
+    },
+  });
+  const pending = input.pendingPublication;
+  const encode = (value: FinalizeInput) =>
+    JSON.stringify(value, (_key, item) =>
+      item instanceof Uint8Array ? { $bytes: Array.from(item) } : item,
+    );
+  const decode = (value: string): FinalizeInput =>
+    JSON.parse(value, (_key, item) =>
+      item && typeof item === "object" && Array.isArray(item.$bytes)
+        ? new Uint8Array(item.$bytes)
+        : item,
+    );
+  const finalize = async (request: FinalizeInput, recovering = false) => {
+    if (pending) await pending.write(encode(request));
+    try {
+      const result = await finalizePublication(transport, request, recovering);
+      if (pending) await pending.write(null);
+      return result;
+    } catch (error) {
+      if (
+        !recovering &&
+        !(error instanceof PublicationUncertainError) &&
+        pending
+      )
+        await pending.write(null);
+      throw error;
+    }
+  };
+  return Object.freeze({
+    ...transport,
+    finalize,
+    recoverPublication: async () => {
+      const saved = await pending?.read();
+      if (!saved) return null;
+      return finalize(decode(saved), true);
+    },
+    begin: async (request: BeginInput) => {
+      // Callers must reconcile before constructing a fresh publication.
+      if (await pending?.read())
+        throw new PublicationUncertainError(request.operationId);
+      return transport.begin(request);
     },
   });
 };

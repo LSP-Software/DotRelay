@@ -16,7 +16,7 @@ env:
   # Canary channel: the built-in `bun lint` linter is not enabled in stable
   # releases yet (it is gated behind the canary build flavor). `bun check`
   # and `bun fmt` work on both; the canary pin keeps all three built-ins.
-  BUN_VERSION: canary
+  BUN_VERSION: da867c60bf0bcbf9d6d36994f8ca0efa42075115
 
 jobs:
   check:
@@ -187,6 +187,10 @@ jobs:
       - run: bun scripts/create-shadow-database.ts
       - run: bun run db:validate
       - run: bun run tracked-tree:clean
+      - name: Install PostgreSQL backup tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-17 age
+      - run: python3 -m unittest discover -s ops -p 'test_postgres.py'
+      - run: python3 ops/test_roundtrip.py
       - run: bun run db:migrate-check
       - run: bun run tracked-tree:clean
 
@@ -257,6 +261,10 @@ jobs:
             NEXT_PUBLIC_WEB_ORIGIN=https://dev.dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://dev-api.dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_WEB_PROFILE=hosted
+      - name: Require operator migration receipt for this commit
+        env:
+          MIGRATED_COMMIT_SHA: ${{ vars.DEV_MIGRATED_COMMIT_SHA }}
+        run: test "$MIGRATED_COMMIT_SHA" = "$GITHUB_SHA"
       - name: deploy dev apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
@@ -270,7 +278,7 @@ jobs:
           # misconfiguration that would 403 every real request. Probe
           # /api/v1/capabilities (public GET, still gated) instead.
           for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 https://dev-api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dev.dotrelay.dev -o /dev/null; then
+            if curl -fsS --max-time 10 https://dev-api.dotrelay.dev/ready -o /dev/null && curl -fsS --max-time 10 https://dev-api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dev.dotrelay.dev -o /dev/null; then
               echo "dev origins healthy"; exit 0
             fi
             echo "waiting for dev origins to come up (${i}/12)..."; sleep 15

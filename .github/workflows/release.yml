@@ -15,7 +15,7 @@ permissions:
 env:
   # Canary channel: the built-in `bun lint` linter is not enabled in stable
   # releases yet (it is gated behind the canary build flavor).
-  BUN_VERSION: canary
+  BUN_VERSION: da867c60bf0bcbf9d6d36994f8ca0efa42075115
 
 jobs:
   verify:
@@ -79,6 +79,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
+      - name: Require independent approval of this exact commit
+        env:
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+        run: test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
       - name: resolve release origins
         id: origins
         env:
@@ -112,6 +116,8 @@ jobs:
           context: .
           file: apps/api/Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
@@ -121,6 +127,8 @@ jobs:
           context: .
           file: apps/web/Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
@@ -160,14 +168,14 @@ jobs:
 
   publish:
     name: publish CLI binaries and npm selector
-    needs: build-cli
+    needs: [build-cli, build-images]
     environment: security-review
     runs-on: ubuntu-latest
     steps:
       - name: Verify recorded privacy-boundary approval
         env:
-          SECURITY_REVIEW_APPROVAL: ${{ vars.SECURITY_REVIEW_APPROVAL }}
-        run: test "$SECURITY_REVIEW_APPROVAL" = approved
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+        run: test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -214,10 +222,14 @@ jobs:
     steps:
       - name: Verify recorded privacy-boundary approval
         env:
-          SECURITY_REVIEW_APPROVAL: ${{ vars.SECURITY_REVIEW_APPROVAL }}
-        run: test "$SECURITY_REVIEW_APPROVAL" = approved
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+        run: test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
+      - name: Require operator migration receipt for this commit
+        env:
+          MIGRATED_COMMIT_SHA: ${{ vars.PRODUCTION_MIGRATED_COMMIT_SHA }}
+        run: test "$MIGRATED_COMMIT_SHA" = "$GITHUB_SHA"
       - name: deploy prod apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
@@ -231,7 +243,7 @@ jobs:
           # misconfiguration that would 403 every real request. Probe
           # /api/v1/capabilities (public GET, still gated) instead.
           for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 https://api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dotrelay.dev -o /dev/null; then
+            if curl -fsS --max-time 10 https://api.dotrelay.dev/ready -o /dev/null && curl -fsS --max-time 10 https://api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dotrelay.dev -o /dev/null; then
               echo "prod origins healthy"; exit 0
             fi
             echo "waiting for prod origins to come up (${i}/12)..."; sleep 15

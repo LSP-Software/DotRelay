@@ -48,7 +48,9 @@ test("resolves a familiar login to its stable GitHub user id", async () => {
   }) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "delegated-token" }]),
+    delegatedAuth([
+      { providerId: "github", accessToken: "ghu_delegated-token" },
+    ]),
     "auth-user",
     "octocat",
     { fetch: fetchImpl, sleep: async () => undefined },
@@ -62,7 +64,7 @@ test("resolves a familiar login to its stable GitHub user id", async () => {
   expect(calls).toEqual([
     {
       url: "https://api.github.com/users/octocat",
-      authorization: "Bearer delegated-token",
+      authorization: "Bearer ghu_delegated-token",
     },
   ]);
 });
@@ -107,7 +109,7 @@ test("GitHub denial and absence answer identically and never retry", async () =>
       return new Response("nope", { status });
     }) as typeof fetch;
     const outcome = await resolveGitHubUserIdentity(
-      delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+      delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
       "auth-user",
       "octocat",
       { fetch: fetchImpl, sleep: async () => undefined },
@@ -129,7 +131,7 @@ test("a secondary rate limit 403 is rate-limited, not a missing login", async ()
   }) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     "octocat",
     {
@@ -160,7 +162,7 @@ test("a 403 with an exhausted rate budget is treated as a rate limit", async () 
   }) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     "octocat",
     { fetch: fetchImpl, sleep: async () => undefined, now: () => 40_000 },
@@ -178,7 +180,7 @@ test("an invalid login is never sent to GitHub", async () => {
   }) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     "not a login",
     { fetch: fetchImpl, sleep: async () => undefined },
@@ -202,7 +204,7 @@ test("a rate limit is retried within budget and then resolved", async () => {
   }) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     "octocat",
     {
@@ -231,7 +233,7 @@ test("a rejected credential is a definitive denial, not an outage", async () => 
   }) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "expired" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_expired" }]),
     "auth-user",
     "octocat",
     { fetch: fetchImpl, sleep: async () => undefined },
@@ -250,7 +252,7 @@ test("an exhausted rate limit reports the reset window from GitHub's headers", a
     })) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     "octocat",
     { fetch: fetchImpl, sleep: async () => undefined, now },
@@ -273,7 +275,7 @@ test("an unreachable GitHub is retried within budget, then reported as an outage
   }) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     "octocat",
     {
@@ -295,7 +297,7 @@ test("a 200 without a usable user payload is an outage, not a denial", async () 
     Response.json({ message: "Not Found" })) as typeof fetch;
 
   const outcome = await resolveGitHubUserIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     "octocat",
     { fetch: fetchImpl, sleep: async () => undefined },

@@ -11,3 +11,5 @@ Read the [development commands](development.md), [quality gates](quality-gates.m
 [synchronization, staging, and publication](synchronization.md), [standalone CLI](cli.md), [web application and trust states](web-application.md), [the v3 WebCrypto core](crypto.md),
 [privacy-preserving observability](observability.md), and
 [release policy](release-policy.md) before changing the repository foundation.
+
+- [Deployment, backup and recovery](operations.md)

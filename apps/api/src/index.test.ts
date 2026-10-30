@@ -1403,7 +1403,7 @@ describe("Resolving a GitHub Repository's identity", () => {
   test("resolves the Repository on the acting User's behalf with their delegated access", async () => {
     const profile = loadServerProfileConfig({});
     const { auth, database } = actorDependencies([
-      { providerId: "github", accessToken: "delegated-token" },
+      { providerId: "github", accessToken: "ghu_delegated-token" },
     ]);
     const calls: Array<
       Readonly<{ url: string; authorization: string | null }>
@@ -1443,7 +1443,7 @@ describe("Resolving a GitHub Repository's identity", () => {
     expect(calls).toEqual([
       {
         url: "https://api.github.com/repos/LSP-Software/DotRelay",
-        authorization: "Bearer delegated-token",
+        authorization: "Bearer ghu_delegated-token",
       },
     ]);
   });
@@ -1468,7 +1468,7 @@ describe("Resolving a GitHub Repository's identity", () => {
   test("reports GitHub's rate limit with its retry window", async () => {
     const profile = loadServerProfileConfig({});
     const { auth, database } = actorDependencies([
-      { providerId: "github", accessToken: "t" },
+      { providerId: "github", accessToken: "ghu_t" },
     ]);
     // A one-second window keeps the in-budget retries fast; after the
     // attempt budget the final answer carries the window as GitHub stated it.
@@ -1499,7 +1499,7 @@ describe("Resolving a GitHub Repository's identity", () => {
   test("reports an unreachable GitHub as a service outage", async () => {
     const profile = loadServerProfileConfig({});
     const { auth, database } = actorDependencies([
-      { providerId: "github", accessToken: "t" },
+      { providerId: "github", accessToken: "ghu_t" },
     ]);
     const testApp = createApi({
       database,
@@ -1527,7 +1527,7 @@ describe("Resolving a GitHub Repository's identity", () => {
   test("reports a rejected credential as a denial, not an outage", async () => {
     const profile = loadServerProfileConfig({});
     const { auth, database } = actorDependencies([
-      { providerId: "github", accessToken: "t" },
+      { providerId: "github", accessToken: "ghu_t" },
     ]);
     const testApp = createApi({
       database,
@@ -1552,7 +1552,7 @@ describe("Resolving a GitHub Repository's identity", () => {
   test("rejects a descriptive name the GitHub API cannot take", async () => {
     const profile = loadServerProfileConfig({});
     const { auth, database } = actorDependencies([
-      { providerId: "github", accessToken: "t" },
+      { providerId: "github", accessToken: "ghu_t" },
     ]);
     const testApp = createApi({ database, profile, auth });
 

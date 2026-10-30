@@ -8,6 +8,7 @@ import {
   createPublicationArtifacts,
   type DecodedVariable,
   decodeSyncVariables,
+  PublicationUncertainError,
   type PublicationContext,
   reconcilePublicationBaseline,
   reviewPublication,
@@ -501,6 +502,21 @@ export const publish = async (
   reconciliation?: PublicationReconciliation,
 ): Promise<Record<string, unknown>> => {
   const synced = await syncWorkflow(options, parsed);
+  try {
+    const recovered = await synced.workflow.transport.recoverPublication?.();
+    if (recovered)
+      return {
+        revision: recovered.revisionId,
+        message: "Original publication confirmed; no new Revision was created",
+      };
+  } catch {
+    throw new CliError(
+      "transient",
+      "The previous publication outcome is still unknown. Retry this command to reconcile the original operation before publishing again.",
+      {},
+      "publication_uncertain",
+    );
+  }
   let draftVariables: readonly PublicationDraft[];
   if (mutation === "ROLLBACK" && rollback)
     draftVariables = draftForRollback(synced.variables, variables, rollback);
@@ -654,6 +670,13 @@ export const publish = async (
       request: artifacts.request,
     });
   } catch (error) {
+    if (error instanceof PublicationUncertainError)
+      throw new CliError(
+        "transient",
+        error.message,
+        {},
+        "publication_uncertain",
+      );
     await synced.workflow.transport
       .cancel({ operationId, deviceId: synced.workflow.deviceId })
       .catch(() => undefined);
@@ -764,6 +787,13 @@ export const shareEnvironmentWithPeerDevices = async (
       request: artifacts.request,
     });
   } catch (error) {
+    if (error instanceof PublicationUncertainError)
+      throw new CliError(
+        "transient",
+        error.message,
+        {},
+        "publication_uncertain",
+      );
     await synced.workflow.transport
       .cancel({ operationId, deviceId })
       .catch(() => undefined);

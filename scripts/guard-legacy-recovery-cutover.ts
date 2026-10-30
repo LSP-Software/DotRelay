@@ -27,8 +27,7 @@ const databaseFlagIndex = args.indexOf("--database");
 const databaseUrl: string =
   databaseFlagIndex >= 0
     ? (args[databaseFlagIndex + 1] ?? "")
-    : (process.env.DATABASE_URL ??
-      "postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay");
+    : (process.env.DATABASE_URL ?? "");
 if (!databaseUrl) {
   console.error("--database requires a connection string");
   process.exit(2);
@@ -153,4 +152,7 @@ const main = async () => {
   }
 };
 
-void main();
+void main().catch(() => {
+  console.error("Legacy cutover guard failed; database details suppressed");
+  process.exitCode = 1;
+});

@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17
+    image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
     environment:
       POSTGRES_USER: dotrelay
       POSTGRES_PASSWORD: dotrelay
@@ -13,7 +13,7 @@ services:
       timeout: 5s
       retries: 5
   valkey:
-    image: valkey/valkey:8
+    image: valkey/valkey@sha256:495e4fecdc98ee48a20b207726caa5ab6451e0fac3642a9be10d9e70b3068df6
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:

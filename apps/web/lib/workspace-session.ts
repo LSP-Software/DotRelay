@@ -460,7 +460,20 @@ export const loadWorkspaceSession = (
         revisionSigningPublicKey: hexToBytes(device.signingPublicKey),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       };
-      const transport = createProtocolTransport({ origin: profile.origin });
+      const transport = createProtocolTransport({
+        origin: profile.origin,
+        pendingPublication: {
+          read: async () =>
+            localStorage.getItem(
+              `dotrelay-publication:${profile.id}:${device.id}`,
+            ),
+          write: async (value) => {
+            const key = `dotrelay-publication:${profile.id}:${device.id}`;
+            if (value === null) localStorage.removeItem(key);
+            else localStorage.setItem(key, value);
+          },
+        },
+      });
       const signingTrustKeys = (boundary.signingTrustKeys ?? [])
         .map((key) => {
           try {
