@@ -78,7 +78,7 @@ export const resolveRepositoryIdentity = async (
     owner.length > 39 ||
     typeof name !== "string" ||
     name.length === 0 ||
-    name.length > 39
+    name.length > 100
   )
     throw new CliError(
       "transient",

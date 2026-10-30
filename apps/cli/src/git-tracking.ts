@@ -178,6 +178,7 @@ export const createGitTrackingProbe = (
 // changes tracked content, so it is safe for the CLI to maintain on its own.
 export const ensureLocalGitExclusion = async (
   info: GitTrackingInfo,
+  options: Readonly<{ includeTemporaryFiles?: boolean }> = {},
 ): Promise<"established" | "present"> => {
   if (!info.gitDirectory || !info.topLevel || !info.relativePath)
     throw new CliError(
@@ -191,6 +192,13 @@ export const ensureLocalGitExclusion = async (
   const literalPath = info.relativePath.split(sep).join("/");
   if (/[\r\n]/.test(literalPath)) throw exclusionFailed(info.relativePath);
   const pattern = `/${literalPath.replace(/[\\*?[\] ]/g, "\\$&")}`;
+  const slash = pattern.lastIndexOf("/");
+  const patterns = options.includeTemporaryFiles
+    ? [
+        pattern,
+        `${pattern.slice(0, slash + 1)}.${pattern.slice(slash + 1)}.*.tmp`,
+      ]
+    : [pattern];
   const excludePath =
     info.excludePath ?? join(info.gitDirectory, "info", "exclude");
   const lockPath = `${excludePath}.lock`;
@@ -220,14 +228,15 @@ export const ensureLocalGitExclusion = async (
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    const existing = current
-      .split("\n")
-      .some((line) => line === pattern || line === pattern.slice(1));
-    if (existing) return "present";
+    const lines = new Set(current.split("\n"));
+    const missing = patterns.filter(
+      (entry) => !lines.has(entry) && !lines.has(entry.slice(1)),
+    );
+    if (missing.length === 0) return "present";
     const next =
       (current.length > 0 && !current.endsWith("\n")
         ? `${current}\n`
-        : current) + `${pattern}\n`;
+        : current) + `${missing.join("\n")}\n`;
     await lock.writeFile(next, "utf8");
     await lock.sync();
     await lock.close();

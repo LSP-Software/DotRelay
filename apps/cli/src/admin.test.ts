@@ -8,6 +8,7 @@ import {
   listTeams,
   type ProjectSummary,
   resolveEnvironmentReference,
+  resolveRepositoryIdentity,
   resolveTeamForProject,
 } from "./admin";
 import type { NetworkPolicy } from "./network";
@@ -18,6 +19,23 @@ const profile: ServerProfilePin = {
 };
 
 describe("strict administration client", () => {
+  test("accepts GitHub's full repository name length after identity resolution", async () => {
+    for (const name of ["my_app", ".github", "a".repeat(100)]) {
+      const result = await resolveRepositoryIdentity(
+        {
+          get: async () => ({
+            host: "github.com",
+            owner: "LSP-Software",
+            name,
+            githubRepositoryId: "1311418611",
+          }),
+        },
+        { host: "github.com", owner: "LSP-Software", name },
+      );
+      expect(result.name).toBe(name);
+    }
+  });
+
   test("finds an accessible Project by GitHub Repository id", async () => {
     await expect(
       findProjectByRepository(

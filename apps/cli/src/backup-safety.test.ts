@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { atomicWriteProtectedFile } from "./output";
+import { atomicWriteProtectedFile, protectedTemporaryPath } from "./output";
 import type { WorkflowOptions } from "./workflow-core";
 import { guardPullOutputAgainstGit } from "./workflow-publication";
 
@@ -67,6 +67,29 @@ test("literal Git metacharacters in plaintext output filenames remain excluded",
     await atomicWriteProtectedFile(output, "SECRET=new\n", {
       retainPrevious: true,
     });
+    await git("add", ".");
+    expect(await git("ls-files")).toBe("");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("orphaned plaintext temporary files stay excluded before any write", async () => {
+  const { directory, git } = await fixture();
+  try {
+    for (const name of [
+      ".env",
+      "nested/.env[local]",
+      "nested/name with spaces.env",
+    ]) {
+      const output = join(directory, name);
+      await guardPullOutputAgainstGit({} as WorkflowOptions, output);
+      for (const target of [output, `${output}.previous`]) {
+        const temporary = protectedTemporaryPath(target);
+        await atomicWriteProtectedFile(temporary, "SECRET=interrupted-write\n");
+        expect(await git("check-ignore", temporary)).toBe(temporary);
+      }
+    }
     await git("add", ".");
     expect(await git("ls-files")).toBe("");
   } finally {

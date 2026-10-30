@@ -129,14 +129,51 @@ export class SyncRepository {
       throw new SyncIntegrityError(
         "trusted revision is unknown or incompatible",
       );
-    if (
-      trusted &&
-      !(await this.isAncestor(database, trusted.id, environment.currentHeadId))
-    )
+    // Revisions are immutable. Walk only the chain ending at the head captured
+    // above, so concurrent publications cannot leak beyond the advertised head.
+    // Wall-clock timestamps (and random UUIDs) do not define ancestry.
+    // UNION deduplicates complete links, so even a corrupt cycle terminates
+    // in SQL. Validate the returned links below without per-ancestor queries.
+    const links = await database.$queryRaw<
+      Array<{
+        id: string;
+        parentId: string | null;
+        environmentId: string;
+      }>
+    >`
+      WITH RECURSIVE chain AS (
+        SELECT "id", "parentId", "environmentId"
+        FROM "revisions" WHERE "id" = ${environment.currentHeadId}::uuid
+        UNION
+        SELECT revision."id", revision."parentId", revision."environmentId"
+        FROM "revisions" revision JOIN chain ON revision."id" = chain."parentId"
+        WHERE chain."id" IS DISTINCT FROM ${trusted?.id ?? null}::uuid
+          AND chain."environmentId" = ${input.environmentId}::uuid
+      )
+      SELECT "id", "parentId", "environmentId" FROM chain
+    `;
+    const linksById = new Map(links.map((link) => [link.id, link]));
+    const reverseChain: string[] = [];
+    const visited = new Set<string>();
+    let currentId = environment.currentHeadId;
+    while (currentId !== null && currentId !== trusted?.id) {
+      if (visited.has(currentId))
+        throw new SyncIntegrityError("revision history contains a cycle");
+      visited.add(currentId);
+      const link = linksById.get(currentId);
+      if (!link || link.environmentId !== input.environmentId)
+        throw new SyncIntegrityError(
+          "revision history is incomplete or incompatible",
+        );
+      reverseChain.push(link.id);
+      currentId = link.parentId;
+    }
+    if (trusted && currentId !== trusted.id)
       throw new SyncIntegrityError(
         "trusted revision is not an ancestor of the head",
       );
-    let afterRevision = trusted;
+    const chain = reverseChain.reverse();
+    let afterIndex = -1;
     if (input.cursorRevisionId !== undefined) {
       if (input.cursorRevisionHash === undefined)
         throw new SyncIntegrityError("cursor revision hash is required");
@@ -152,27 +189,16 @@ export class SyncRepository {
         throw new SyncIntegrityError(
           "cursor revision is unknown or incompatible",
         );
-      if (trusted && !(await this.isAncestor(database, trusted.id, cursor.id)))
+      afterIndex = chain.indexOf(cursor.id);
+      if (cursor.id !== trusted?.id && afterIndex === -1)
         throw new SyncIntegrityError(
-          "cursor revision is not after the trusted revision",
+          "cursor revision is not on the advertised head's chain",
         );
-      afterRevision = cursor;
     }
+    const remaining = chain.slice(afterIndex + 1);
+    const pageIds = remaining.slice(0, input.limit);
     const revisions = await database.revision.findMany({
-      where: {
-        environmentId: input.environmentId,
-        ...(afterRevision
-          ? {
-              OR: [
-                { acceptedAt: { gt: afterRevision.acceptedAt } },
-                {
-                  acceptedAt: afterRevision.acceptedAt,
-                  id: { gt: afterRevision.id },
-                },
-              ],
-            }
-          : {}),
-      },
+      where: { environmentId: input.environmentId, id: { in: pageIds } },
       include: {
         protocolObject: true,
         manifestDescriptor: {
@@ -187,10 +213,14 @@ export class SyncRepository {
           orderBy: { ordinal: "asc" },
         },
       },
-      orderBy: [{ acceptedAt: "asc" }, { id: "asc" }],
-      take: input.limit + 1,
     });
-    const pageRevisions = revisions.slice(0, input.limit);
+    const byId = new Map(revisions.map((revision) => [revision.id, revision]));
+    const pageRevisions = pageIds.map((id) => {
+      const revision = byId.get(id);
+      if (!revision)
+        throw new SyncIntegrityError("revision history is incomplete");
+      return revision;
+    });
     const resourceLifecycle =
       environment.lifecycle === "ACTIVE" &&
       environment.project.lifecycle === "ACTIVE"
@@ -264,7 +294,7 @@ export class SyncRepository {
     );
     const lastRevision = pageRevisions.at(-1);
     const nextCursor =
-      revisions.length > input.limit && lastRevision !== undefined
+      remaining.length > input.limit && lastRevision !== undefined
         ? Object.freeze({
             revisionId: lastRevision.id,
             revisionHash: copyBytes(
@@ -291,25 +321,6 @@ export class SyncRepository {
       revisions: Object.freeze(mapped),
       nextCursor,
     });
-  }
-
-  private async isAncestor(
-    database: PersistenceClient,
-    ancestorId: string,
-    descendantId: string | null,
-  ): Promise<boolean> {
-    if (descendantId === null) return false;
-    let currentId: string | null = descendantId;
-    while (currentId !== null) {
-      if (currentId === ancestorId) return true;
-      const link: { parentId: string | null } | null =
-        await database.revision.findUnique({
-          where: { id: currentId },
-          select: { parentId: true },
-        });
-      currentId = link?.parentId ?? null;
-    }
-    return false;
   }
 }
 
