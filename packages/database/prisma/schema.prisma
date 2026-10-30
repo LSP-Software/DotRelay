@@ -812,6 +812,7 @@ model Operation {
   kind          OperationKind
   status        OperationStatus @default(STAGED)
   commandDigest Bytes           @db.ByteA
+  finalizationDigest Bytes?     @db.ByteA
   createdAt     DateTime        @default(now()) @db.Timestamptz(3)
   committedAt   DateTime?       @db.Timestamptz(3)
   expiresAt     DateTime?       @db.Timestamptz(3)

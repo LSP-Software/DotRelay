@@ -67,7 +67,7 @@ const DEMO_GITHUB = {
   owner: "demo-org",
   name: "demo-service",
   id: 99001122,
-  token: "demo-github-token",
+  token: "ghu_demo-github-token",
   accountId: "demo-github-account",
   subject: "demo-github-100001",
 } as const;
@@ -408,6 +408,8 @@ const runWithDeviceApproval = async (
 // is a few microseconds wide, but if the port is still taken the bind is
 // retried on a freshly reserved port: the profile id is stable across
 // origins, so only the origin is rebound and the seeded demo rows stay valid.
+let dropFinalizeResponse = false;
+
 const bindRealServer = async (
   api: typeof import("../apps/api/src/index"),
   initial: { port: number; release: () => void },
@@ -425,7 +427,22 @@ const bindRealServer = async (
     });
     held.release();
     try {
-      return Bun.serve({ port: held.port, fetch: app.fetch });
+      return Bun.serve({
+        port: held.port,
+        fetch: async (request) => {
+          const response = await app.fetch(request);
+          if (
+            dropFinalizeResponse &&
+            new URL(request.url).pathname.endsWith("/finalize") &&
+            response.ok
+          ) {
+            dropFinalizeResponse = false;
+            // Commit on the real server, then lose its successful receipt.
+            return new Response(null, { status: 503 });
+          }
+          return response;
+        },
+      });
     } catch (error) {
       if (attempt > 2 || !isPortInUse(error)) throw error;
       console.error(
@@ -1045,6 +1062,7 @@ try {
 
   console.log("→ CLI: push (change published through the real API)");
   await writeFile(sourcePath, "SHARED_VALUE=two\nUSER_VALUE=secret\nEMPTY=\n");
+  dropFinalizeResponse = true;
   const pushResult = await runBinary(
     [
       "push",
@@ -1067,6 +1085,10 @@ try {
     parseJsonLines(pushResult.stdout).at(-1)?.revision,
     "published Revision id",
   );
+  if (dropFinalizeResponse)
+    throw new Error(
+      "Lost-finalize regression did not exercise the committed response",
+    );
   const publishedCount = await database.revision.count({
     where: { environmentId: productionEnvironment.id },
   });

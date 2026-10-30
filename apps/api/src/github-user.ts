@@ -1,4 +1,4 @@
-import { decryptOAuthToken } from "better-auth/oauth2";
+import { delegatedGitHubAccessToken } from "./github-access";
 import type { DotRelayAuth } from "./auth";
 
 // Companion seam to the repository-resolution seam in github-repository.ts.
@@ -95,22 +95,6 @@ const parseGitHubUserIdentity = (
     return null;
   if (typeof record.login !== "string") return null;
   return { githubUserId: String(record.id), login: record.login };
-};
-
-const delegatedGitHubAccessToken = async (
-  auth: DotRelayAuth,
-  userId: string,
-): Promise<string | null> => {
-  const context = await auth.$context;
-  const accounts = await context.internalAdapter.findAccounts(userId);
-  const account = accounts.find(
-    (candidate) => candidate.providerId === "github",
-  );
-  const stored = account?.accessToken;
-  if (typeof stored !== "string" || stored.length === 0) return null;
-  const token = await decryptOAuthToken(stored, context as never);
-  if (typeof token !== "string" || token.trim().length === 0) return null;
-  return token;
 };
 
 const timedFetch = async (

@@ -281,3 +281,10 @@ export {
   recoveryAuthorizationPublicKey,
 } from "./account/recovery-authorization";
 export { prepareDeviceRecovery } from "./device/recovery";
+
+export {
+  finalizePublication,
+  PublicationUncertainError,
+  PublicationTerminalError,
+  PublicationJournalError,
+} from "./sync/publication-recovery";

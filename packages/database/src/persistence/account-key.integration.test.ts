@@ -497,6 +497,7 @@ integrationDescribe("account key persistence invariants", () => {
       actorUserId: user.id,
       actorDeviceId: device.id,
       label: "recovery-code-replay",
+      intent: "establish",
       wrapperType: "RECOVERY_CODE",
       wrapperId: codeId,
     });
@@ -519,6 +520,7 @@ integrationDescribe("account key persistence invariants", () => {
     });
     const replayed = await accountKeys.addWrapper(database, {
       operation: replayOperation,
+      intent: "establish",
       wrapper: {
         protocolObject: replayObject,
         identityGeneration: 1n,
@@ -602,12 +604,21 @@ integrationDescribe("account key persistence invariants", () => {
     const active = await activeWrapperRows(user.id);
     const passkeyRow = active.find((row) => row.wrapperType === "PASSKEY_PRF");
     if (!passkeyRow) throw new Error("passkey wrapper not found");
-    await revokeWrapperById(
+    const revoked = await revokeWrapperById(
       user.id,
       device.id,
       "revoke-passkey",
       new Uint8Array(passkeyRow.wrapperId),
     );
+    const replay = await new AccountKeyRepository().revokeWrapper(database, {
+      operation: {
+        ...(await createOperationInput(user.id, "revoke-passkey")),
+        id: revoked.operation.id,
+        actorDeviceId: device.id,
+      },
+      wrapperId: new Uint8Array(passkeyRow.wrapperId),
+    });
+    expect("idempotent" in replay && replay.idempotent).toBe(true);
     const survivors = await activeWrapperRows(user.id);
     expect(survivors.map((row) => row.wrapperType)).toEqual(["RECOVERY_CODE"]);
   });

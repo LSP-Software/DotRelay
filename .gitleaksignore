@@ -1,0 +1,11 @@
+# Reviewed synthetic WebCrypto fixtures and public-key/field-name matches.
+# Exact history fingerprints only: no test-directory or generic token exemption.
+cf52de5f213d161f25aa9df12905d1665f45b7b0:apps/web/e2e/workspace-recovery.spec.ts:generic-api-key:35
+cf52de5f213d161f25aa9df12905d1665f45b7b0:apps/web/e2e/workspace-recovery.spec.ts:generic-api-key:40
+cf52de5f213d161f25aa9df12905d1665f45b7b0:apps/web/e2e/workspace-recovery.spec.ts:generic-api-key:360
+e782bafa3fadd67090120cb362643425456347d4:apps/web/e2e/workspace-stale-epoch.spec.ts:generic-api-key:21
+9eb9cbf7d59c1af1d1ee6d8743037d3093effc16:apps/web/e2e/workspace-role-permissions.spec.ts:generic-api-key:18
+5e3c8dd37d89fec6a124d04889b73429df25a95f:apps/web/lib/workspace-boundary.ts:generic-api-key:334
+2e70d315400b678d719b78754546b5c2ec5d6c9c:apps/web/e2e/workspace-enrollment-storage.spec.ts:generic-api-key:20
+5e3c8dd37d89fec6a124d04889b73429df25a95f:apps/web/e2e/workspace-protocol-reread.spec.ts:generic-api-key:18
+b6e1b0face05e5bfb8d2b8b67040e99a608c53af:apps/web/e2e/workspace-protocol-publish.spec.ts:generic-api-key:18

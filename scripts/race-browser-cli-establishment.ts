@@ -96,7 +96,7 @@ export const raceBrowserAndCliEstablishment = async (
       accountId: `browser-race-${userId}`,
       providerId: "github",
       userId: authUserId,
-      accessToken: "browser-race-token",
+      accessToken: "ghu_browser-race-token",
       scope: "user:email",
       issuer: "",
     },

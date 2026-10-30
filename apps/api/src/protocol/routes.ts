@@ -42,6 +42,7 @@ import { createProtocolRateLimit } from "./rate-limit";
 import {
   buildProtocolObjectFromStage,
   buildPublicationInput,
+  digestFinalizationRequest,
   collectStagedObjectIds,
   hasAllStagedObjects,
   uniqueStagedObjectIds,
@@ -408,6 +409,42 @@ export const registerProtocolRoutes = (
     },
   );
 
+  // An authenticated receipt lets clients resolve a lost finalize response.
+  app.get("/api/v1/operations/:operationId", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    let operationId: string;
+    try {
+      operationId = readPathUuid(context, "operationId");
+    } catch (error) {
+      const problem = respondContractError(error);
+      return context.json(problem.body, problem.status);
+    }
+    const operation = await database.operation.findUnique({
+      where: { id: operationId },
+      include: { revisions: { select: { id: true } } },
+    });
+    if (
+      !operation ||
+      operation.actorUserId !== actor.userId ||
+      operation.actorDeviceId !== actor.deviceId
+    ) {
+      const problem = respondProblem("resource_not_found");
+      return context.json(problem.body, problem.status, {
+        "Cache-Control": "no-store",
+      });
+    }
+    return context.json(
+      {
+        operationId,
+        status: operation.status,
+        revisionIds: operation.revisions.map((revision) => revision.id),
+      },
+      200,
+      { "Cache-Control": "no-store" },
+    );
+  });
+
   app.delete("/api/v1/operations/:operationId", async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
@@ -485,6 +522,53 @@ export const registerProtocolRoutes = (
         return context.json(problem.body, problem.status, {
           "Cache-Control": "no-store",
           "Content-Type": "application/problem+json",
+        });
+      }
+      const expectedKind =
+        finalizeRequest.revision.mutation === "ROLLBACK"
+          ? "ROLLBACK"
+          : "REVISION_PUBLICATION";
+      if (
+        operation.kind !== expectedKind ||
+        finalizeRequest.revision.mutation === "EPOCH_TRANSITION"
+      ) {
+        const problem = respondProblem("operation_conflict");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+        });
+      }
+      const finalizationDigest =
+        await digestFinalizationRequest(finalizeRequest);
+      if (operation.status === "COMMITTED") {
+        if (
+          !operation.finalizationDigest ||
+          operation.finalizationDigest.length !== finalizationDigest.length ||
+          !finalizationDigest.every(
+            (byte, index) => operation.finalizationDigest?.[index] === byte,
+          )
+        ) {
+          const problem = respondProblem("operation_conflict");
+          return context.json(problem.body, problem.status, {
+            "Cache-Control": "no-store",
+          });
+        }
+        const revision = await database.revision.findFirst({
+          where: {
+            id: finalizeRequest.revision.id,
+            operationId,
+            environmentId: finalizeRequest.environmentId,
+          },
+          select: { id: true },
+        });
+        if (revision)
+          return context.json(
+            { revisionId: revision.id, idempotent: true },
+            200,
+            { "Cache-Control": "no-store" },
+          );
+        const problem = respondProblem("operation_conflict");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
         });
       }
       const environment = await database.environment.findUnique({
@@ -572,6 +656,7 @@ export const registerProtocolRoutes = (
             actorDeviceId: actor.deviceId,
             commandStaged,
             operationExpiresAt: operation.expiresAt,
+            finalizationDigest,
             finalizeRequest,
             projectId: environment.projectId,
             environmentId: environment.id,

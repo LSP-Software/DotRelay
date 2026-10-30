@@ -167,6 +167,16 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
     ),
   }),
   "/api/v1/operations/{operationId}": Object.freeze({
+    get: authenticatedOperation(
+      Object.freeze({
+        operationId: "readOperationReceipt",
+        parameters: Object.freeze([
+          protocolParameters.OperationId,
+          protocolParameters.DeviceIdHeader,
+        ]),
+        responses: noStoreJsonResponse,
+      }),
+    ),
     delete: authenticatedOperation(
       Object.freeze({
         operationId: "cancelOperation",

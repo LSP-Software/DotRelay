@@ -15,22 +15,46 @@ permissions:
 env:
   # Canary channel: the built-in `bun lint` linter is not enabled in stable
   # releases yet (it is gated behind the canary build flavor).
-  BUN_VERSION: canary
+  BUN_VERSION: da867c60bf0bcbf9d6d36994f8ca0efa42075115
 
 jobs:
   verify:
     name: verify release source
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        env:
+          POSTGRES_USER: dotrelay
+          POSTGRES_PASSWORD: dotrelay
+          POSTGRES_DB: dotrelay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dotrelay -d dotrelay"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      valkey:
+        image: valkey/valkey@sha256:495e4fecdc98ee48a20b207726caa5ab6451e0fac3642a9be10d9e70b3068df6
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay
+      VALKEY_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { fetch-depth: 0, persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: git fetch origin main --depth=1
       - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
       - run: bun run verify
+      - run: bash scripts/setup-backup-tools.sh
+      - run: python3 -m unittest discover -s ops -p 'test_*.py'
+      - run: python3 ops/test_roundtrip.py
 
   e2e-full:
     name: full-stack e2e (packaged CLI against real API + Postgres + Valkey)
@@ -61,8 +85,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { fetch-depth: 0, persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run --cwd apps/cli build
       - run: bun run test:e2e:full
@@ -76,9 +100,19 @@ jobs:
     # the tag that production pulls.
     environment: security-review
     runs-on: ubuntu-latest
+    outputs:
+      api-digest: ${{ steps.api.outputs.digest }}
+      web-digest: ${{ steps.web.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
+      - name: Require independent approval of this exact commit
+        env:
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+        run: |
+          test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - name: resolve release origins
         id: origins
         env:
@@ -107,20 +141,26 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: build and push API image
+        id: api
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: apps/api/Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
       - name: build and push web image
+        id: web
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: apps/web/Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
@@ -140,8 +180,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - name: stamp CLI version from the release tag
         # bash so the Windows matrix job expands $RELEASE_TAG like the
@@ -160,18 +200,25 @@ jobs:
 
   publish:
     name: publish CLI binaries and npm selector
-    needs: build-cli
+    needs: [build-cli, build-images]
     environment: security-review
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Verify recorded privacy-boundary approval
         env:
-          SECURITY_REVIEW_APPROVAL: ${{ vars.SECURITY_REVIEW_APPROVAL }}
-        run: test "$SECURITY_REVIEW_APPROVAL" = approved
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+        run: |
+          test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: cli-*
@@ -193,6 +240,23 @@ jobs:
           find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
       - run: bun scripts/test-cli-package.ts
       - run: npm pack --dry-run ./packages/dotrelay
+      - name: Package unique platform release archives
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/package-release.py
+      - name: Bind exact release artifacts and review evidence
+        env:
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          API_IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api@${{ needs.build-images.outputs.api-digest }}
+          WEB_IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web@${{ needs.build-images.outputs.web-digest }}
+        run: bun scripts/release-evidence.ts
+      - name: Sign exact release artifact provenance
+        id: provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-path: release-binaries/**/*
       - name: publish npm selector
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -200,8 +264,11 @@ jobs:
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           files: |
-            release-binaries/**/*.exe
-            release-binaries/**/dotrelay
+            release-binaries/*.tar.gz
+            release-binaries/*.zip
+            release-binaries/release-manifest.json
+            release-binaries/SHA256SUMS
+            ${{ steps.provenance.outputs.bundle-path }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
 
@@ -214,26 +281,25 @@ jobs:
     steps:
       - name: Verify recorded privacy-boundary approval
         env:
-          SECURITY_REVIEW_APPROVAL: ${{ vars.SECURITY_REVIEW_APPROVAL }}
-        run: test "$SECURITY_REVIEW_APPROVAL" = approved
+          SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
+          SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
+        run: |
+          test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
+          [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
+      - name: Require operator migration receipt for this commit
+        env:
+          MIGRATED_COMMIT_SHA: ${{ vars.PRODUCTION_MIGRATED_COMMIT_SHA }}
+        run: test "$MIGRATED_COMMIT_SHA" = "$GITHUB_SHA"
       - name: deploy prod apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         run: python3 scripts/coolify-deploy.py --environment production
-      - name: smoke prod origins
-        run: |
-          set -euo pipefail
-          # /health is exempt from the API's secure-request gate, so probing
-          # it alone cannot catch a TRUST_PROXY / X-Forwarded-Proto
-          # misconfiguration that would 403 every real request. Probe
-          # /api/v1/capabilities (public GET, still gated) instead.
-          for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 https://api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dotrelay.dev -o /dev/null; then
-              echo "prod origins healthy"; exit 0
-            fi
-            echo "waiting for prod origins to come up (${i}/12)..."; sleep 15
-          done
-          echo "prod origins did not become healthy" >&2; exit 1
+      - name: smoke deployment readiness and trust boundary
+        env:
+          SMOKE_API_ORIGIN: https://api.dotrelay.dev
+          SMOKE_WEB_ORIGIN: https://dotrelay.dev
+          SMOKE_SERVER_PROFILE_ID: ${{ vars.PRODUCTION_SERVER_PROFILE_ID }}
+        run: python3 scripts/smoke-deployment.py

@@ -1,3 +1,5 @@
+import { readFile, readdir, rm } from "node:fs/promises";
+import { atomicWriteProtectedFile } from "./output";
 import {
   authenticatedCreatorKeys,
   createAccountKeyEnvelope,
@@ -449,6 +451,29 @@ export const loadWorkflowSession = async (
       output.write(`${note(action, "warn")}\n`);
   }
   const transport = createProtocolTransport({
+    pendingPublication: {
+      read: async () => {
+        try {
+          const directory = `${options.stateDirectory}/publications-${deviceId}`;
+          const names = (await readdir(directory))
+            .filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
+            .sort();
+          return names[0]
+            ? await readFile(`${directory}/${names[0]}`, "utf8")
+            : null;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
+        }
+      },
+      write: async (value, operationId) => {
+        if (!/^[0-9a-f-]{36}$/i.test(operationId))
+          throw new Error("Invalid publication operation id");
+        const path = `${options.stateDirectory}/publications-${deviceId}/${operationId}.json`;
+        if (value === null) await rm(path, { force: true });
+        else await atomicWriteProtectedFile(path, value);
+      },
+    },
     origin: options.profile.origin,
     authorization: `Bearer ${token}`,
     ...(options.fetch ? { fetch: options.fetch as never } : {}),

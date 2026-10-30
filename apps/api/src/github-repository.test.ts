@@ -68,7 +68,9 @@ test("resolves the Repository Identity with the User's delegated access", async 
   }) as typeof fetch;
 
   const outcome = await resolveGitHubRepositoryIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "delegated-token" }]),
+    delegatedAuth([
+      { providerId: "github", accessToken: "ghu_delegated-token" },
+    ]),
     "auth-user",
     { owner: "LSP-Software", name: "DotRelay" },
     { fetch: fetchImpl, sleep: async () => undefined },
@@ -83,7 +85,7 @@ test("resolves the Repository Identity with the User's delegated access", async 
   expect(calls).toEqual([
     {
       url: "https://api.github.com/repos/LSP-Software/DotRelay",
-      authorization: "Bearer delegated-token",
+      authorization: "Bearer ghu_delegated-token",
     },
   ]);
 });
@@ -128,7 +130,7 @@ test("GitHub denial and absence answer identically and never retry", async () =>
       return new Response("nope", { status });
     }) as typeof fetch;
     const outcome = await resolveGitHubRepositoryIdentity(
-      delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+      delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
       "auth-user",
       { owner: "LSP-Software", name: "DotRelay" },
       { fetch: fetchImpl, sleep: async () => undefined },
@@ -146,7 +148,7 @@ test("a rejected credential is a definitive denial, not an outage", async () => 
   }) as typeof fetch;
 
   const outcome = await resolveGitHubRepositoryIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "expired" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_expired" }]),
     "auth-user",
     { owner: "LSP-Software", name: "DotRelay" },
     { fetch: fetchImpl, sleep: async () => undefined },
@@ -173,7 +175,7 @@ test("a rate limit is retried within budget and then resolved", async () => {
   }) as typeof fetch;
 
   const outcome = await resolveGitHubRepositoryIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     { owner: "LSP-Software", name: "DotRelay" },
     {
@@ -209,7 +211,7 @@ test("an exhausted rate limit reports the reset window from GitHub's headers", a
     })) as typeof fetch;
 
   const outcome = await resolveGitHubRepositoryIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     { owner: "LSP-Software", name: "DotRelay" },
     { fetch: fetchImpl, sleep: async () => undefined, now },
@@ -232,7 +234,7 @@ test("an unreachable GitHub is retried within budget, then reported as an outage
   }) as typeof fetch;
 
   const outcome = await resolveGitHubRepositoryIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     { owner: "LSP-Software", name: "DotRelay" },
     {
@@ -254,11 +256,34 @@ test("a 200 without a usable repository payload is an outage, not a denial", asy
     Response.json({ message: "Not Found" })) as typeof fetch;
 
   const outcome = await resolveGitHubRepositoryIdentity(
-    delegatedAuth([{ providerId: "github", accessToken: "t" }]),
+    delegatedAuth([{ providerId: "github", accessToken: "ghu_t" }]),
     "auth-user",
     { owner: "LSP-Software", name: "DotRelay" },
     { fetch: fetchImpl, sleep: async () => undefined },
   );
 
   expect(outcome).toEqual({ code: "github_unavailable" });
+});
+
+test("classic OAuth and personal tokens cannot supply delegated repository access", async () => {
+  for (const token of [
+    "gho_classic",
+    "ghp_personal",
+    "github_pat_finegrained",
+  ]) {
+    let called = false;
+    const result = await resolveGitHubRepositoryIdentity(
+      delegatedAuth([{ providerId: "github", accessToken: token }]),
+      "auth-user",
+      { owner: "LSP-Software", name: "DotRelay" },
+      {
+        fetch: (async () => {
+          called = true;
+          return Response.json({});
+        }) as unknown as typeof fetch,
+      },
+    );
+    expect(result.code).toBe("repository_access_denied");
+    expect(called).toBe(false);
+  }
 });

@@ -27,14 +27,13 @@ const databaseFlagIndex = args.indexOf("--database");
 const databaseUrl: string =
   databaseFlagIndex >= 0
     ? (args[databaseFlagIndex + 1] ?? "")
-    : (process.env.DATABASE_URL ??
-      "postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay");
+    : (process.env.DATABASE_URL ?? "");
 if (!databaseUrl) {
-  console.error("--database requires a connection string");
+  console.error(
+    "Pass --database <DATABASE_URL> or set DATABASE_URL to a connection string",
+  );
   process.exit(2);
 }
-
-const url = new URL(databaseUrl);
 
 // The tables the cutover drops, and the legacy enum values it removes. These
 // are a fixed, trusted list — never user input — so the identifiers below are
@@ -90,6 +89,7 @@ const countWhere = async (
 };
 
 const main = async () => {
+  const url = new URL(databaseUrl);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
     // The maintenance database cannot hold DotRelay tables; nothing to guard.
@@ -153,4 +153,7 @@ const main = async () => {
   }
 };
 
-void main();
+void main().catch(() => {
+  console.error("Legacy cutover guard failed; database details suppressed");
+  process.exitCode = 1;
+});

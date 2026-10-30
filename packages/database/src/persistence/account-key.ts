@@ -94,6 +94,12 @@ export class AccountKeyRepository {
         input.operation.actorUserId,
         input.operation.actorDeviceId,
       );
+      // Replay the authenticated command before testing mutable wrapper state.
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       if (input.wrapper.identityGeneration !== user.identityGeneration)
         throw new Error("account key wrapper identity generation is stale");
       if (
@@ -136,11 +142,6 @@ export class AccountKeyRepository {
         if (activeRecoveryCount < 1)
           throw new Error("account key recovery code is missing");
       }
-      const operation = await this.operations.begin(
-        transaction,
-        input.operation,
-      );
-      if (operation.idempotent) return operation;
       const now = input.now ?? new Date();
       await this.stagedObjects.promote(transaction, {
         operationId: operation.operation.id,
@@ -240,6 +241,12 @@ export class AccountKeyRepository {
         input.operation.actorUserId,
         input.operation.actorDeviceId,
       );
+      // Replay the authenticated command before testing mutable wrapper state.
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
       const wrapper = await transaction.accountKeyWrapperObject.findFirst({
         where: {
           userId: input.operation.actorUserId,
@@ -269,11 +276,6 @@ export class AccountKeyRepository {
       }
       if (activeCount <= 1)
         throw new Error("the last account key wrapper cannot be revoked");
-      const operation = await this.operations.begin(
-        transaction,
-        input.operation,
-      );
-      if (operation.idempotent) return operation;
       const now = input.now ?? new Date();
       await transaction.accountKeyWrapperObject.update({
         where: { protocolObjectId: wrapper.protocolObjectId },

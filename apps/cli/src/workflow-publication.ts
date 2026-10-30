@@ -8,6 +8,9 @@ import {
   createPublicationArtifacts,
   type DecodedVariable,
   decodeSyncVariables,
+  PublicationUncertainError,
+  PublicationTerminalError,
+  PublicationJournalError,
   type PublicationContext,
   reconcilePublicationBaseline,
   reviewPublication,
@@ -501,6 +504,36 @@ export const publish = async (
   reconciliation?: PublicationReconciliation,
 ): Promise<Record<string, unknown>> => {
   const synced = await syncWorkflow(options, parsed);
+  try {
+    const recovered = await synced.workflow.transport.recoverPublication?.();
+    if (recovered)
+      return {
+        revision: recovered.revisionId,
+        message: "Original publication confirmed; no new Revision was created",
+      };
+  } catch (error) {
+    if (error instanceof PublicationJournalError)
+      throw new CliError(
+        "local-io",
+        error.message,
+        {},
+        "publication_journal_invalid",
+      );
+    if (error instanceof PublicationTerminalError)
+      throw new CliError(
+        "conflict",
+        "The original publication expired or was cancelled without committing. Review and retry the command to create a new publication.",
+        {},
+        "staging_expired",
+      );
+    if (!(error instanceof PublicationUncertainError)) throw error;
+    throw new CliError(
+      "transient",
+      "The previous publication outcome is still unknown. Retry this command to reconcile the original operation before publishing again.",
+      {},
+      "publication_uncertain",
+    );
+  }
   let draftVariables: readonly PublicationDraft[];
   if (mutation === "ROLLBACK" && rollback)
     draftVariables = draftForRollback(synced.variables, variables, rollback);
@@ -654,6 +687,13 @@ export const publish = async (
       request: artifacts.request,
     });
   } catch (error) {
+    if (error instanceof PublicationUncertainError)
+      throw new CliError(
+        "transient",
+        error.message,
+        {},
+        "publication_uncertain",
+      );
     await synced.workflow.transport
       .cancel({ operationId, deviceId: synced.workflow.deviceId })
       .catch(() => undefined);
@@ -706,6 +746,9 @@ export const publish = async (
 export const shareEnvironmentWithPeerDevices = async (
   synced: Awaited<ReturnType<typeof syncWorkflow>>,
 ): Promise<void> => {
+  // A pull can trigger peer sharing too; settle an older uncertain
+  // publication before attempting that new operation.
+  if (await synced.workflow.transport.recoverPublication?.()) return;
   const epochKey = synced.workflow.publicationContext.sharedValueSecret;
   if (
     !epochKey ||
@@ -764,6 +807,13 @@ export const shareEnvironmentWithPeerDevices = async (
       request: artifacts.request,
     });
   } catch (error) {
+    if (error instanceof PublicationUncertainError)
+      throw new CliError(
+        "transient",
+        error.message,
+        {},
+        "publication_uncertain",
+      );
     await synced.workflow.transport
       .cancel({ operationId, deviceId })
       .catch(() => undefined);

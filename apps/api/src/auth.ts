@@ -55,12 +55,10 @@ const createAuthWithAdapter = (
             github: {
               clientId: profile.githubClientId,
               clientSecret: profile.githubClientSecret,
-              // The provider already requests read:user and user:email; only
-              // the repository intent is added here. The fine-grained GitHub
-              // App's consent screen lets the User pick which repositories
-              // the Server Profile may see; "repo" names that repository-
-              // access intent on the grant.
-              scope: ["repo"],
+              // GitHub Apps use configured installation/user permissions, not
+              // classic OAuth scopes. Never request broad OAuth repository access.
+              disableDefaultScope: true,
+              scope: [],
             },
           }
         : {},

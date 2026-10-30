@@ -128,127 +128,162 @@ const openFirstProject = async (page: Page) => {
 const activeEditor = (page: Page): Locator =>
   page.getByTestId("editor-context-active");
 
-test("edits made while a publication is in flight stay unpublished after it succeeds", async ({
-  page,
-}) => {
-  test.setTimeout(90_000);
-  let devicePublicKey: Uint8Array | null = null;
-  let syncPage: Uint8Array | null = null;
-  const finalizeDelayMs = 4_000;
-
-  await page.route("**/api/v1/devices/bootstrap**", (route) => {
-    if (route.request().method() === "POST") {
-      const body = route.request().postData();
-      if (body) {
-        const { x25519PublicKey } = JSON.parse(body) as {
-          readonly x25519PublicKey?: string;
-        };
-        if (x25519PublicKey) devicePublicKey = hexToBytes(x25519PublicKey);
+for (const lostResponse of [false, true])
+  test(`edits made in flight stay unpublished (lost finalize response: ${lostResponse})`, async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    let devicePublicKey: Uint8Array | null = null;
+    let syncPage: Uint8Array | null = null;
+    const finalizeDelayMs = 4_000;
+    let finalizeCalls = 0;
+    let committedRevision: string | null = null;
+    let cancellations = 0;
+    await page.route(/\/api\/v1\/operations\/[^/]+$/, async (route) => {
+      if (route.request().method() === "DELETE") {
+        cancellations++;
+        await route.fulfill({ json: {} });
+        return;
       }
-    }
-    return route.fulfill({ json: {} });
+      await route.fulfill({
+        json: { status: "COMMITTED", revisionIds: [committedRevision] },
+      });
+    });
+
+    await page.route("**/api/v1/devices/bootstrap**", (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postData();
+        if (body) {
+          const { x25519PublicKey } = JSON.parse(body) as {
+            readonly x25519PublicKey?: string;
+          };
+          if (x25519PublicKey) devicePublicKey = hexToBytes(x25519PublicKey);
+        }
+      }
+      return route.fulfill({ json: {} });
+    });
+    await page.route(/\/api\/v1\/environments\/.*\/sync/, async (route) => {
+      if (!devicePublicKey) {
+        await route.abort();
+        return;
+      }
+      if (!syncPage) syncPage = await buildVerifiedFixturePage(devicePublicKey);
+      await route.fulfill({ body: Buffer.from(syncPage), status: 200 });
+    });
+    await page.route(/\/api\/v1\/operations\/.*\/begin/, (route) =>
+      route.fulfill({
+        json: {
+          operationId: "in-flight",
+          status: "ACCEPTED",
+          idempotent: false,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      }),
+    );
+    await page.route(/\/api\/v1\/operations\/.*\/staging\/.*/, (route) =>
+      route.fulfill({ status: 200 }),
+    );
+    await page.route(/\/api\/v1\/operations\/.*\/finalize/, async (route) => {
+      // Hold the finalize open long enough to edit again while the publication
+      // is still in flight.
+      await new Promise((resolve) => setTimeout(resolve, finalizeDelayMs));
+      finalizeCalls++;
+      committedRevision = (
+        route.request().postDataJSON() as { revision: { id: string } }
+      ).revision.id;
+      if (lostResponse) await route.abort("failed");
+      else await route.fulfill({ json: { revisionId: committedRevision } });
+    });
+
+    await page.goto("/workspace");
+    await trustWorkspaceServer(page);
+    await openFirstProject(page);
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: "Devices" })
+      .click();
+    await page.getByRole("button", { name: "Set up browser" }).click();
+    await page
+      .locator("aside")
+      .getByRole("button", { name: "LSP-Software / DotRelay" })
+      .click();
+
+    const editor = activeEditor(page);
+    await expect(
+      editor.getByRole("heading", { name: "Variables" }),
+    ).toBeVisible({
+      timeout: 10_000,
+    });
+    const optionalRow = () =>
+      editor.getByTestId("environment-variable-OPTIONAL_FLAG");
+    const featureRow = () =>
+      editor.getByTestId("environment-variable-FEATURE_GATE");
+    await expect(optionalRow()).toBeVisible({ timeout: 30_000 });
+    await expect(featureRow()).toBeVisible();
+    await expect(editor.getByLabel("OPTIONAL_FLAG Value")).toBeEnabled();
+
+    // The verified history identifies the synced Revision by its change kind
+    // and reports the author the wire record does not provide as unavailable.
+    await expect(
+      editor.getByText("Author unavailable", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      editor.getByText("First publish", { exact: true }),
+    ).toBeVisible();
+
+    await editor.getByLabel("OPTIONAL_FLAG Value").fill("submitted-value");
+    await expect(optionalRow()).toContainText("Draft change");
+
+    await editor.getByRole("button", { name: "Save changes" }).click();
+    const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
+    await expect(reviewDialog).toBeVisible();
+    await reviewDialog.getByRole("button", { name: "Publish" }).click();
+    await expect(
+      reviewDialog.getByRole("button", { name: "Publishing…" }),
+    ).toBeVisible();
+
+    // Close the review dialog while the publication is still in flight, then
+    // make a newer edit that the submitted snapshot does not contain.
+    await page.keyboard.press("Escape");
+    await expect(reviewDialog).toBeHidden();
+    await editor.getByLabel("FEATURE_GATE Value").fill("newer-value");
+    await expect(featureRow()).toContainText("Draft change");
+
+    await expect(page.getByText(/Published as /)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // The published Revision joins the history with its verified context and
+    // the acting User as its author.
+    const publishedMessage =
+      (await page
+        .getByText(/Published as /)
+        .first()
+        .textContent()) ?? "";
+    const publishedRevisionId = publishedMessage
+      .replace("Published as ", "")
+      .replace(".", "");
+    const publishedRow = editor.getByTestId(
+      `history-revision-${publishedRevisionId}`,
+    );
+    await expect(publishedRow).toBeVisible();
+    await expect(publishedRow.getByText("You", { exact: true })).toBeVisible();
+    await expect(
+      publishedRow.getByText("Update", { exact: true }),
+    ).toBeVisible();
+
+    // The submitted lane is published and no longer a draft; the newer edit made
+    // while the publication was in flight remains visibly unpublished.
+    await expect(optionalRow()).not.toContainText("Draft change");
+    await expect(featureRow()).toContainText("Draft change");
+    expect(finalizeCalls).toBe(1);
+    expect(cancellations).toBe(0);
+    expect(
+      await page.evaluate(() =>
+        Object.keys(localStorage).filter((key) =>
+          key.startsWith("dotrelay-publication:"),
+        ),
+      ),
+    ).toHaveLength(0);
   });
-  await page.route(/\/api\/v1\/environments\/.*\/sync/, async (route) => {
-    if (!devicePublicKey) {
-      await route.abort();
-      return;
-    }
-    if (!syncPage) syncPage = await buildVerifiedFixturePage(devicePublicKey);
-    await route.fulfill({ body: Buffer.from(syncPage), status: 200 });
-  });
-  await page.route(/\/api\/v1\/operations\/.*\/begin/, (route) =>
-    route.fulfill({
-      json: {
-        operationId: "in-flight",
-        status: "ACCEPTED",
-        idempotent: false,
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      },
-    }),
-  );
-  await page.route(/\/api\/v1\/operations\/.*\/staging\/.*/, (route) =>
-    route.fulfill({ status: 200 }),
-  );
-  await page.route(/\/api\/v1\/operations\/.*\/finalize/, async (route) => {
-    // Hold the finalize open long enough to edit again while the publication
-    // is still in flight.
-    await new Promise((resolve) => setTimeout(resolve, finalizeDelayMs));
-    await route.fulfill({ json: {} });
-  });
-
-  await page.goto("/workspace");
-  await trustWorkspaceServer(page);
-  await openFirstProject(page);
-
-  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
-  await page.getByRole("button", { name: "Set up browser" }).click();
-  await page
-    .locator("aside")
-    .getByRole("button", { name: "LSP-Software / DotRelay" })
-    .click();
-
-  const editor = activeEditor(page);
-  await expect(editor.getByRole("heading", { name: "Variables" })).toBeVisible({
-    timeout: 10_000,
-  });
-  const optionalRow = () =>
-    editor.getByTestId("environment-variable-OPTIONAL_FLAG");
-  const featureRow = () =>
-    editor.getByTestId("environment-variable-FEATURE_GATE");
-  await expect(optionalRow()).toBeVisible({ timeout: 30_000 });
-  await expect(featureRow()).toBeVisible();
-  await expect(editor.getByLabel("OPTIONAL_FLAG Value")).toBeEnabled();
-
-  // The verified history identifies the synced Revision by its change kind
-  // and reports the author the wire record does not provide as unavailable.
-  await expect(
-    editor.getByText("Author unavailable", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    editor.getByText("First publish", { exact: true }),
-  ).toBeVisible();
-
-  await editor.getByLabel("OPTIONAL_FLAG Value").fill("submitted-value");
-  await expect(optionalRow()).toContainText("Draft change");
-
-  await editor.getByRole("button", { name: "Save changes" }).click();
-  const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
-  await expect(reviewDialog).toBeVisible();
-  await reviewDialog.getByRole("button", { name: "Publish" }).click();
-  await expect(
-    reviewDialog.getByRole("button", { name: "Publishing…" }),
-  ).toBeVisible();
-
-  // Close the review dialog while the publication is still in flight, then
-  // make a newer edit that the submitted snapshot does not contain.
-  await page.keyboard.press("Escape");
-  await expect(reviewDialog).toBeHidden();
-  await editor.getByLabel("FEATURE_GATE Value").fill("newer-value");
-  await expect(featureRow()).toContainText("Draft change");
-
-  await expect(page.getByText(/Published as /)).toBeVisible({
-    timeout: 15_000,
-  });
-
-  // The published Revision joins the history with its verified context and
-  // the acting User as its author.
-  const publishedMessage =
-    (await page
-      .getByText(/Published as /)
-      .first()
-      .textContent()) ?? "";
-  const publishedRevisionId = publishedMessage
-    .replace("Published as ", "")
-    .replace(".", "");
-  const publishedRow = editor.getByTestId(
-    `history-revision-${publishedRevisionId}`,
-  );
-  await expect(publishedRow).toBeVisible();
-  await expect(publishedRow.getByText("You", { exact: true })).toBeVisible();
-  await expect(publishedRow.getByText("Update", { exact: true })).toBeVisible();
-
-  // The submitted lane is published and no longer a draft; the newer edit made
-  // while the publication was in flight remains visibly unpublished.
-  await expect(optionalRow()).not.toContainText("Draft change");
-  await expect(featureRow()).toContainText("Draft change");
-});

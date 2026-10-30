@@ -123,6 +123,11 @@ const bounded = (
 export const loadServerProfileConfig = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerProfileConfig => {
+  if (
+    environment.NODE_ENV &&
+    !["production", "development", "test"].includes(environment.NODE_ENV)
+  )
+    throw new Error("NODE_ENV must be production, development or test");
   const isProduction = environment.NODE_ENV === "production";
   if (isProduction && !environment.SERVER_PROFILE_ID) {
     throw new Error("SERVER_PROFILE_ID must be configured in production");

@@ -1,10 +1,9 @@
-# syntax=docker/dockerfile:1
 # DotRelay Web (Next.js, output: "standalone"). Build context = repository
 # root (bun workspaces resolve at the root). The NEXT_PUBLIC_* values are
 # baked in at build time; CI passes them per environment (dev vs prod
 # origins, and the profile DotRelay's own deployments declare), so the web
 # image is environment-specific.
-FROM oven/bun:canary AS builder
+FROM oven/bun@sha256:14e08ed749dcfb986e6c05b59ac45a991952e3ef846b9e86c4b09a3ac41cf979 AS builder
 
 ARG NEXT_PUBLIC_WEB_ORIGIN
 ARG NEXT_PUBLIC_DOTRELAY_API_ORIGIN
@@ -15,11 +14,11 @@ ENV NEXT_PUBLIC_WEB_ORIGIN=${NEXT_PUBLIC_WEB_ORIGIN} \
 
 WORKDIR /app
 COPY . .
-RUN bun install --frozen-lockfile
+RUN test "$(bun --revision)" = "1.4.4-canary.1+da867c60b" && bun install --frozen-lockfile
 RUN bun run --cwd apps/web build
 
 # Runtime: Next.js standalone output is a plain Node process.
-FROM node:22-alpine
+FROM node@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
 
 # The profile declaration travels with the image so the server-side boundary
 # route resolves the same Server Profile the client bundle was built with,

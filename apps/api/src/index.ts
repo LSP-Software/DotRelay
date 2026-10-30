@@ -1,3 +1,4 @@
+import { databaseReady } from "./readiness";
 import {
   bytesToUuid,
   ContractError,
@@ -586,7 +587,7 @@ const createApi = ({
     // origin, and credential gates so the in-container health check (plain
     // HTTP, no proxy, no x-forwarded-proto) always gets a deterministic 200
     // instead of the production secure-request 403.
-    if (context.req.path === "/health") {
+    if (["/health", "/ready"].includes(context.req.path)) {
       await next();
       return;
     }
@@ -632,7 +633,7 @@ const createApi = ({
     if (
       allowed === undefined ||
       context.req.method === "OPTIONS" ||
-      context.req.path === "/health" ||
+      ["/health", "/ready"].includes(context.req.path) ||
       context.req.path === "/api/v1/capabilities" ||
       context.req.path === "/api/auth/sign-out"
     ) {
@@ -659,6 +660,16 @@ const createApi = ({
   });
 
   app.get("/health", (context) => context.json({ status: "ok" }));
+  app.get("/ready", async (context) => {
+    context.header("Cache-Control", "no-store");
+    const ready =
+      process.env.MAINTENANCE_MODE !== "true" &&
+      (await databaseReady(database));
+    return context.json(
+      { status: ready ? "ready" : "unavailable" },
+      ready ? 200 : 503,
+    );
+  });
   app.get("/api/v1/capabilities", async (context) => {
     const etag = await getCapabilitiesEtag();
     if (context.req.header("If-None-Match") === etag) {
@@ -686,6 +697,18 @@ const createApi = ({
   });
 
   app.all("/api/auth/*", async (context) => {
+    // Delegated GitHub credentials are service-only. Keep Better Auth's
+    // server-side refresh API usable without exposing token-returning HTTP
+    // endpoints to browser or CLI sessions.
+    const authPath = decodeURIComponent(context.req.path)
+      .replace(/\/+$/, "")
+      .toLowerCase();
+    if (
+      ["/api/auth/get-access-token", "/api/auth/refresh-token"].includes(
+        authPath,
+      )
+    )
+      return jsonProblem(context, "forbidden");
     try {
       const response = await auth.handler(context.req.raw);
       response.headers.set("Cache-Control", "no-store");
@@ -736,6 +759,7 @@ const createApi = ({
   app.use("/api/v1/grants/bootstrap", protocolCors(profile));
   app.use("/api/v1/operations/*", protocolCors(profile));
   app.use("/api/v1/environments/*", protocolCors(profile));
+  app.use("/api/v1/projects/*", protocolCors(profile));
   // The Team membership and invitation surfaces are browser-reachable: the
   // workspace's Members table and invitation dialog call them cross-origin
   // with the session cookie and, for mutations, the browser Device id.
@@ -1446,6 +1470,7 @@ const createApi = ({
 const profile = loadServerProfileConfig();
 const database = createDatabaseClient();
 type RequestIpServer = {
+  stop(closeActiveConnections?: boolean): Promise<void>;
   readonly requestIP: (request: Request) => { readonly address: string } | null;
 };
 let server: RequestIpServer | undefined;
@@ -1466,6 +1491,10 @@ export const app = createApi({
 export { createApi, loadServerProfileConfig };
 
 if (import.meta.main) {
+  if (!(await databaseReady(database)))
+    throw new Error(
+      "Database schema is not ready; run the deployment migration process",
+    );
   await ensureServerProfile(database, {
     id: profile.id,
     origin: profile.origin,
@@ -1485,4 +1514,24 @@ if (import.meta.main) {
     60 * 60 * 1000,
   );
   cleanupTimer.unref?.();
+  let stopping = false;
+  for (const signal of ["SIGTERM", "SIGINT"] as const)
+    process.on(signal, () => {
+      if (stopping) return;
+      stopping = true;
+      process.env.MAINTENANCE_MODE = "true";
+      clearInterval(cleanupTimer);
+      const deadline = setTimeout(() => process.exit(1), 20_000);
+      deadline.unref();
+      void (async () => {
+        try {
+          await server?.stop(false);
+          await database.$disconnect();
+          clearTimeout(deadline);
+          process.exit(0);
+        } catch {
+          process.exit(1);
+        }
+      })();
+    });
 }

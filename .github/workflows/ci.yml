@@ -16,7 +16,7 @@ env:
   # Canary channel: the built-in `bun lint` linter is not enabled in stable
   # releases yet (it is gated behind the canary build flavor). `bun check`
   # and `bun fmt` work on both; the canary pin keeps all three built-ins.
-  BUN_VERSION: canary
+  BUN_VERSION: da867c60bf0bcbf9d6d36994f8ca0efa42075115
 
 jobs:
   check:
@@ -25,8 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run check
@@ -38,8 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run tracked-tree:clean
@@ -52,8 +52,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run test:unit
@@ -85,8 +85,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run test:integration
       - run: bun run tracked-tree:clean
@@ -97,8 +97,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run test:e2e
@@ -116,8 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run test:cli
       - run: bun run test:cli:live
@@ -152,8 +152,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       # The harness drives the packaged native binary, so build it first.
@@ -181,14 +181,44 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun scripts/create-shadow-database.ts
       - run: bun run db:validate
       - run: bun run tracked-tree:clean
+      - name: Install PostgreSQL backup tools
+        run: bash scripts/setup-backup-tools.sh
+      - run: python3 -m unittest discover -s ops -p 'test_*.py'
+      - run: python3 ops/test_roundtrip.py
       - run: bun run db:migrate-check
       - run: bun run tracked-tree:clean
+
+  container:
+    name: production API image and readiness
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        env:
+          POSTGRES_USER: dotrelay
+          POSTGRES_PASSWORD: dotrelay
+          POSTGRES_DB: dotrelay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dotrelay -d dotrelay"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
+      - run: bun install --frozen-lockfile
+      - run: bun node_modules/prisma/build/index.js migrate deploy --config packages/database/prisma.config.ts
+      - run: docker build -f apps/api/Dockerfile -t dotrelay-api-test .
+      - run: python3 scripts/test-api-container.py
 
   docs:
     name: documentation and links
@@ -196,8 +226,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run docs:validate
       - run: bun run tracked-tree:clean
@@ -208,8 +238,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       # braces (GHSA-vfj7-8cjw-p6xm) has no patched release. The script ignores
       # that one advisory; it is only reached through shadcn's glob matcher.
@@ -229,6 +259,7 @@ jobs:
         cli-round-trip,
         e2e-full,
         prisma,
+        container,
         docs,
         security,
       ]
@@ -257,25 +288,22 @@ jobs:
             NEXT_PUBLIC_WEB_ORIGIN=https://dev.dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://dev-api.dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_WEB_PROFILE=hosted
+      - name: Require operator migration receipt for this commit
+        env:
+          MIGRATED_COMMIT_SHA: ${{ vars.DEV_MIGRATED_COMMIT_SHA }}
+        run: test "$MIGRATED_COMMIT_SHA" = "$GITHUB_SHA"
       - name: deploy dev apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         run: python3 scripts/coolify-deploy.py --environment dev
-      - name: smoke dev origins
-        run: |
-          set -euo pipefail
-          # /health is exempt from the API's secure-request gate, so probing
-          # it alone cannot catch a TRUST_PROXY / X-Forwarded-Proto
-          # misconfiguration that would 403 every real request. Probe
-          # /api/v1/capabilities (public GET, still gated) instead.
-          for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 https://dev-api.dotrelay.dev/api/v1/capabilities -o /dev/null && curl -fsS --max-time 10 https://dev.dotrelay.dev -o /dev/null; then
-              echo "dev origins healthy"; exit 0
-            fi
-            echo "waiting for dev origins to come up (${i}/12)..."; sleep 15
-          done
-          echo "dev origins did not become healthy" >&2; exit 1
+      - name: smoke deployment readiness and trust boundary
+        env:
+          SMOKE_API_ORIGIN: https://dev-api.dotrelay.dev
+          SMOKE_WEB_ORIGIN: https://dev.dotrelay.dev
+          SMOKE_SERVER_PROFILE_ID: ${{ vars.DEV_SERVER_PROFILE_ID }}
+        run: python3 scripts/smoke-deployment.py
+
   build-cli-dev:
     name: build dev CLI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -290,6 +318,7 @@ jobs:
         cli-round-trip,
         e2e-full,
         prisma,
+        container,
         docs,
         security,
       ]
@@ -302,8 +331,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       # The dev build is cut from this main commit: it is stamped with the
       # dev API origin and a dev version recording the commit sha.
@@ -330,8 +359,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: cli-dev-*
@@ -365,6 +394,7 @@ jobs:
         cli-round-trip,
         e2e-full,
         prisma,
+        container,
         docs,
         security,
         deploy-dev,
@@ -374,7 +404,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
       - run: bun install --frozen-lockfile
       - run: bun run tracked-tree:clean

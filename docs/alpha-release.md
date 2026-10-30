@@ -129,3 +129,14 @@ Before cutting a prerelease, configure the `security-review` environment/reposit
 `ALPHA_WEB_ORIGIN` and `ALPHA_API_ORIGIN` to the exact HTTPS origins of the alpha installation.
 The web image is built for those origins and refuses missing/invalid values; stable builds keep
 the production origins. The release concurrency queue retains up to 100 pending tags.
+
+## Remaining deployment and security gates
+
+See [the versioned operations runbook](wiki/operations.md) for GitHub App permissions,
+production configuration, explicit backed-up migrations, encrypted PostgreSQL
+backup/restore, readiness, exact toolchain pins and failure handling. API startup
+no longer applies migrations. Configure the maintenance process before deploying.
+Issues #32 and #36 remain open: independent review, complete artifact-bound security
+evidence, signed release packaging, supported production self-host bundle and full
+operator restore/recovery workflows are not established merely by passing CI.
+Until those gates close, do not admit external alpha users with real secrets.

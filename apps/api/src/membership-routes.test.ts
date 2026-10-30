@@ -325,7 +325,7 @@ const createAuthStub = (): DotRelayAuth =>
             .filter((account) => account.userId === userId)
             .map((account) => ({
               providerId: account.providerId,
-              accessToken: "delegated-token",
+              accessToken: "ghu_delegated-token",
             })),
       },
     }),
