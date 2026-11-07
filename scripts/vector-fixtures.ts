@@ -34,6 +34,19 @@ const fixtureValue = (field: number): CborValue => {
   return zeros(0);
 };
 
+// One Account Device roster entry (ADR 0015); revoked when revokedAtMs is set.
+const rosterEntry = (fill: number, revokedAtMs?: number): CborValue =>
+  new Map<number, CborValue>([
+    [10, zeros(16, fill)],
+    [32, 1_700_000_000_000],
+    [39, zeros(32, fill)],
+    [41, zeros(32, fill + 1)],
+    [79, revokedAtMs === undefined ? 2 : 3],
+    ...(revokedAtMs === undefined
+      ? []
+      : ([[100, revokedAtMs]] as Array<[number, CborValue]>)),
+  ]);
+
 const copyObject = (object: ProtocolObject): ProtocolObject => {
   return new Map(object);
 };
@@ -106,6 +119,11 @@ const GENERATED_NEGATIVE_IDS = new Set([
   "epoch-key-link-from-epoch-zero",
   "epoch-key-link-wrong-key-length",
   "epoch-key-link-missing-to-epoch",
+  "roster-version-zero",
+  "roster-duplicate-device",
+  "roster-revoked-without-time",
+  "roster-active-with-revoked-time",
+  "roster-unknown-entry-field",
 ]);
 export const VECTOR_CASES = Object.freeze([
   ...Object.keys(OBJECT_REGISTRY)
@@ -186,6 +204,17 @@ export const VECTOR_CASES = Object.freeze([
     id: "wrapper-type-3",
     kind: 20,
     object: buildVectorObject(20, new Map<number, CborValue>([[86, 3]])),
+  },
+  {
+    id: "roster-active-and-revoked",
+    kind: 24,
+    object: buildVectorObject(
+      24,
+      new Map<number, CborValue>([
+        [98, 2],
+        [99, [rosterEntry(0x31), rosterEntry(0x32, 1_700_000_100_000)]],
+      ]),
+    ),
   },
   {
     id: "key-envelope-type-2",
@@ -423,6 +452,80 @@ const NEGATIVE_VECTOR_CASES_BASE = [
       );
       return canonicalEncode(object);
     })(),
+    error: "invalid_crypto_object",
+  },
+  {
+    // Roster versions start at 1.
+    id: "roster-version-zero",
+    bytes: buildVectorObjectBytes(24, new Map<number, CborValue>([[98, 0]])),
+    error: "invalid_crypto_object",
+  },
+  {
+    // A Device appears once per roster.
+    id: "roster-duplicate-device",
+    bytes: buildVectorObjectBytes(
+      24,
+      new Map<number, CborValue>([
+        [99, [rosterEntry(0x41), rosterEntry(0x41)]],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // A revoked entry must say when it was revoked.
+    id: "roster-revoked-without-time",
+    bytes: buildVectorObjectBytes(
+      24,
+      new Map<number, CborValue>([
+        [
+          99,
+          [
+            new Map<number, CborValue>([
+              ...(rosterEntry(0x42) as Map<number, CborValue>),
+              [79, 3],
+            ]),
+          ],
+        ],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // An active entry carries no revoked-at time.
+    id: "roster-active-with-revoked-time",
+    bytes: buildVectorObjectBytes(
+      24,
+      new Map<number, CborValue>([
+        [
+          99,
+          [
+            new Map<number, CborValue>([
+              ...(rosterEntry(0x43) as Map<number, CborValue>),
+              [100, 1],
+            ]),
+          ],
+        ],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // Entries are closed maps.
+    id: "roster-unknown-entry-field",
+    bytes: buildVectorObjectBytes(
+      24,
+      new Map<number, CborValue>([
+        [
+          99,
+          [
+            new Map<number, CborValue>([
+              ...(rosterEntry(0x44) as Map<number, CborValue>),
+              [13, zeros(16)],
+            ]),
+          ],
+        ],
+      ]),
+    ),
     error: "invalid_crypto_object",
   },
 ];

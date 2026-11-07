@@ -37,8 +37,13 @@ active Device and the signed protocol checks implemented in this package.
   fresh storage instance; interrupted enrollments keep their pending keys and operation identity so
   a retry replays the same Device instead of creating a duplicate.
 
+Account trust pins (ADR 0015) are wrapped by the same origin-bound key and stored in a record slot
+derived from the Device id.
+
 ### CLI
 
+- Account trust pins live in `account-trust-<server-profile-id>.json` in the CLI state directory,
+  written with the protected-file helper (0600, atomic).
 - The encrypted Device bundle record and the wrapping secret are stored separately.
 - Wrapping secrets belong in the **local credential store** through the
   `CredentialStore` adapter; the CLI implements that adapter as AES-256-GCM
@@ -61,9 +66,12 @@ Before trusting synchronized protocol bytes, clients should:
 1. Pin the Server Profile with `establishServerProfileTrust`.
 2. Verify the WebCrypto runtime with `assertCryptoRuntime`.
 3. Load and unwrap the local Device bundle.
-4. Verify signed protocol objects, parent Revision links, grant recipient bindings, Project epoch,
+4. Derive the account identity from the AMK, verify the Account Device rosters against it and
+   the pinned teammate identities, and narrow every service-reported Device key list to the
+   roster-verified keys (ADR 0015).
+5. Verify signed protocol objects, parent Revision links, grant recipient bindings, Project epoch,
    and Manifest descriptor ceilings.
-5. Advance or reconcile the trusted head; refuse implicit continuity loss.
+6. Advance or reconcile the trusted head; refuse implicit continuity loss.
 
 Malformed objects, signature failures, and parent-link breaks fail closed with generic client errors
 that do not reveal which cryptographic component failed.

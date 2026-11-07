@@ -18,8 +18,14 @@ import {
   createMemoryCredentialStore,
   createMemoryDeviceRecordStore,
   createProjectEpochGrantBootstrap,
+  createAccountDeviceRoster,
   createProjectEpochKeyLink,
   createPublicationArtifacts,
+  deriveAccountSigningKey,
+  emptyAccountTrustPins,
+  retrustTeammate,
+  serializeAccountTrustPins,
+  verifyAccountDeviceRoster,
   encodeRecoveryCode,
   generateAccountMasterKey,
   generateRecoveryCode,
@@ -5319,6 +5325,8 @@ describe("pull after Project epoch rotations", () => {
       throw new Error("Device signing private key is missing");
     const author = await generateSigningKeyPair();
     const authorDeviceId = "88888888-8888-4888-8888-888888888888";
+    // The author is a teammate, not another Device of the pulling User.
+    const authorUserId = "99999999-9999-4999-8999-999999999999";
     // The lanes are sealed to the epoch keys only, never to this Device.
     const elsewhere = await generateEncryptionKeyPair();
     const epochKeys = new Map<number, Uint8Array>([
@@ -5377,7 +5385,7 @@ describe("pull after Project epoch rotations", () => {
           teamId: ids.team,
           projectId: ids.project,
           environmentId: ids.environment,
-          actorUserId: ids.user,
+          actorUserId: authorUserId,
           actorDeviceId: authorDeviceId,
           projectEpoch,
           expectedHeadId: parent?.id ?? null,
@@ -5402,7 +5410,7 @@ describe("pull after Project epoch rotations", () => {
         serverProfileId: profile.pin.serverProfileId,
         teamId: ids.team,
         projectId: ids.project,
-        actorUserId: ids.user,
+        actorUserId: authorUserId,
         actorDeviceId: authorDeviceId,
         expectedEpoch,
         environments: [
@@ -5481,6 +5489,8 @@ describe("pull after Project epoch rotations", () => {
       links,
       epochEnvelope,
       epochKeys,
+      authorUserId,
+      authorDeviceId,
       authorKeyHex: bytesToHex(await rawSigningPublicKey(author.publicKey)),
     };
   };
@@ -5490,17 +5500,41 @@ describe("pull after Project epoch rotations", () => {
     options: Readonly<{
       readonly links: readonly string[];
       readonly listedEpochs: readonly number[];
-      readonly signingTrustKeys?: readonly string[];
+      readonly signingTrustDevices?: readonly TestSigningTrustDevice[];
+      /** Account Device rosters the service reports (ADR 0015). */
+      readonly accountRosters?: Readonly<Record<string, string | null>>;
+      /** Reuse an earlier run's state directory (pins persist there). */
+      readonly runtime?: Awaited<ReturnType<typeof setup>>;
+      readonly args?: readonly string[];
+      readonly peerDevices?: Parameters<typeof setup>[0] extends infer O
+        ? O extends { peerDevices?: infer P }
+          ? P
+          : never
+        : never;
+      readonly fetch?: FetchFunction;
     }>,
   ) => {
-    const runtime = await setup({
-      bootstrap: project.bootstrap,
-      grantsReady: true,
-      // A Member who joined after the rotations holds only the current key.
-      accountKeyEnvelope: await project.epochEnvelope(3),
-      signingTrustKeys: options.signingTrustKeys ?? [project.authorKeyHex],
-      revisions: project.revisions,
-    });
+    const runtime =
+      options.runtime ??
+      (await setup({
+        bootstrap: project.bootstrap,
+        grantsReady: true,
+        // A Member who joined after the rotations holds only the current key.
+        accountKeyEnvelope: await project.epochEnvelope(3),
+        signingTrustDevices: options.signingTrustDevices ?? [
+          {
+            deviceId: project.authorDeviceId,
+            userId: project.authorUserId,
+            signingPublicKey: project.authorKeyHex,
+            deviceActiveFromMs: 0,
+            deviceActiveUntilMs: null,
+            memberSinceMs: 0,
+            memberUntilMs: null,
+          },
+        ],
+        revisions: project.revisions,
+        ...(options.peerDevices ? { peerDevices: options.peerDevices } : {}),
+      }));
     await runtime.deviceStorage.saveAccountKey(
       { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
       project.amk,
@@ -5515,18 +5549,25 @@ describe("pull after Project epoch rotations", () => {
     );
     const service = accountKeyService(runtime.admin);
     const postedLinks: Record<string, unknown>[] = [];
+    const postedRosters: Record<string, unknown>[] = [];
+    const rosters: Record<string, string | null> = {
+      ...(options.accountRosters ?? {}),
+    };
     const result = await run(
-      [
-        "pull",
-        "--profile",
-        "relay",
-        "--environment",
-        ids.environment,
-        "--stdout",
-        "--no-input",
-      ],
+      options.args
+        ? [...options.args]
+        : [
+            "pull",
+            "--profile",
+            "relay",
+            "--environment",
+            ids.environment,
+            "--stdout",
+            "--no-input",
+          ],
       {
         ...runtime,
+        ...(options.fetch ? { fetch: options.fetch } : {}),
         admin: {
           ...service.admin,
           post: async (path, body, fields, requestOptions) => {
@@ -5534,11 +5575,28 @@ describe("pull after Project epoch rotations", () => {
               postedLinks.push(body);
               return { objectId: body.objectId, idempotent: false };
             }
+            if (path === "/api/v1/account-keys/rosters") {
+              postedRosters.push(body);
+              rosters[ids.user] = String(body.object);
+              return { objectId: body.objectId, idempotent: false };
+            }
             return service.admin.post(path, body, fields, requestOptions);
           },
           get: async (path, fields) => {
             if (path === "/api/v1/account-keys/envelopes")
               return { envelopes: listed };
+            if (path === `/api/v1/teams/${ids.team}/memberships`)
+              return {
+                memberships: [ids.user, project.authorUserId].map((userId) => ({
+                  membershipId: crypto.randomUUID(),
+                  userId,
+                  name: userId === ids.user ? "Me" : "Author",
+                  image: null,
+                  githubSubject: "1",
+                  lifecycle: "ACTIVE",
+                  accountRoster: rosters[userId] ?? null,
+                })),
+              };
             const body = await service.admin.get(path, fields);
             if (
               body === null ||
@@ -5550,13 +5608,14 @@ describe("pull after Project epoch rotations", () => {
             return {
               ...body,
               epochKeyLinks: options.links,
+              accountRosters: rosters,
               environment: { ...environment, projectEpoch: "3" },
             };
           },
         },
       },
     );
-    return { result, postedLinks };
+    return { result, postedLinks, postedRosters, runtime };
   };
 
   test("a Member who joins after two rotations reads every Value through the key chain", async () => {
@@ -5635,6 +5694,284 @@ describe("pull after Project epoch rotations", () => {
       [1, 2],
       [2, 3],
     ]);
+  });
+  describe("account Device roster trust (ADR 0015)", () => {
+    // Reuses the rotated Project: the author is a teammate whose Device signs
+    // every Revision, and this installation holds the AMK.
+    const signedRoster = async (
+      amk: Uint8Array,
+      userId: string,
+      version: number,
+      devices: Parameters<typeof createAccountDeviceRoster>[0]["devices"],
+    ) =>
+      Buffer.from(
+        (
+          await createAccountDeviceRoster({
+            serverProfileId: profile.pin.serverProfileId,
+            userId,
+            version,
+            devices,
+            signingKey: await deriveAccountSigningKey(amk, {
+              serverProfileId: profile.pin.serverProfileId,
+              userId,
+            }),
+          })
+        ).canonicalBytes,
+      ).toString("base64");
+
+    const ownDevice = async (
+      bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
+    ) => ({
+      deviceId: ids.device,
+      encryptionPublicKey: new Uint8Array(
+        await crypto.subtle.exportKey(
+          "raw",
+          bootstrap.keyMaterial.encryptionPublicKey!,
+        ),
+      ),
+      signingPublicKey: new Uint8Array(
+        await crypto.subtle.exportKey(
+          "raw",
+          bootstrap.keyMaterial.signingPublicKey!,
+        ),
+      ),
+      addedAtMs: 1,
+    });
+
+    const authorDevice = (
+      project: Awaited<ReturnType<typeof rotatedProject>>,
+    ) => ({
+      deviceId: project.authorDeviceId,
+      encryptionPublicKey: new Uint8Array(32).fill(9),
+      signingPublicKey: Buffer.from(project.authorKeyHex, "hex"),
+      addedAtMs: 0,
+    });
+
+    test("publishes the account's first roster, signed by the AMK-derived key", async () => {
+      const project = await rotatedProject();
+      const { result, postedRosters } = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(postedRosters).toHaveLength(1);
+      const { identity } = await deriveAccountSigningKey(project.amk, {
+        serverProfileId: profile.pin.serverProfileId,
+        userId: ids.user,
+      });
+      const roster = await verifyAccountDeviceRoster(
+        Buffer.from(String(postedRosters[0]?.object), "base64"),
+        {
+          serverProfileId: profile.pin.serverProfileId,
+          userId: ids.user,
+          identity,
+        },
+      );
+      expect(roster.version).toBe(1);
+      expect(roster.devices.map((device) => device.deviceId)).toContain(
+        ids.device,
+      );
+    });
+
+    test("refuses to share the Project key with a Device the service injected into the account", async () => {
+      const project = await rotatedProject();
+      const injected = await generateEncryptionKeyPair();
+      const injectedSigning = await generateSigningKeyPair();
+      const grantCalls: unknown[] = [];
+      const runtime = await setup({
+        bootstrap: project.bootstrap,
+        grantsReady: true,
+        accountKeyEnvelope: await project.epochEnvelope(3),
+        signingTrustDevices: [
+          {
+            deviceId: project.authorDeviceId,
+            userId: project.authorUserId,
+            signingPublicKey: project.authorKeyHex,
+            deviceActiveFromMs: 0,
+            deviceActiveUntilMs: null,
+            memberSinceMs: 0,
+            memberUntilMs: null,
+          },
+        ],
+        revisions: project.revisions,
+        peerDevices: [
+          {
+            id: "abababab-abab-4bab-8bab-abababababab",
+            encryptionPublicKey: bytesToHex(
+              new Uint8Array(
+                await crypto.subtle.exportKey("raw", injected.publicKey),
+              ),
+            ),
+            signingPublicKey: bytesToHex(
+              await rawSigningPublicKey(injectedSigning.publicKey),
+            ),
+            hasEpochGrant: false,
+          } as never,
+        ],
+      });
+      const { result, postedRosters } = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        runtime,
+        // This account already has a roster that does not list the newcomer.
+        accountRosters: {
+          [ids.user]: await signedRoster(project.amk, ids.user, 1, [
+            await ownDevice(project.bootstrap),
+          ]),
+        },
+        fetch: async (input, init) => {
+          const request = new Request(input as never, init);
+          if (new URL(request.url).pathname.endsWith("/grants/bootstrap")) {
+            grantCalls.push(request.url);
+            return Response.json(
+              { grantObjectId: crypto.randomUUID() },
+              { status: 201 },
+            );
+          }
+          return runtime.fetch(input, init);
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      // No grant was sealed to the injected Device, and the roster was not
+      // extended to include it.
+      expect(grantCalls).toHaveLength(0);
+      expect(postedRosters).toHaveLength(0);
+    });
+
+    test("refuses a teammate whose account key the service swapped, until it is re-trusted", async () => {
+      const project = await rotatedProject();
+      const teammateAmk = generateAccountMasterKey();
+      const pinned = await signedRoster(teammateAmk, project.authorUserId, 1, [
+        authorDevice(project),
+      ]);
+      const swapped = await signedRoster(
+        generateAccountMasterKey(),
+        project.authorUserId,
+        2,
+        [authorDevice(project)],
+      );
+      // First sight pins the genuine teammate identity.
+      const first = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        accountRosters: { [project.authorUserId]: pinned },
+      });
+      expect(first.result.exitCode).toBe(0);
+      const ownRoster = String(first.postedRosters[0]?.object);
+      const rosters = {
+        [ids.user]: ownRoster,
+        [project.authorUserId]: swapped,
+      };
+      const refused = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        runtime: first.runtime,
+        accountRosters: rosters,
+      });
+      expect(refused.result.exitCode).not.toBe(0);
+      expect(refused.result.stdout).not.toContain("postgres://epoch-one");
+      const members = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        runtime: first.runtime,
+        accountRosters: rosters,
+        args: [
+          "team",
+          "members",
+          "--fingerprints",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--json",
+        ],
+      });
+      expect(members.result.exitCode).toBe(0);
+      const listed = JSON.parse(members.result.stdout) as {
+        members: Array<{
+          userId: string;
+          status: string;
+          fingerprint?: string;
+        }>;
+      };
+      const author = listed.members.find(
+        (member) => member.userId === project.authorUserId,
+      );
+      expect(author?.status).toBe("identity-changed");
+      expect(author?.fingerprint).toMatch(/^([0-9a-f]{8} ){4}[0-9a-f]{8}$/);
+      const trusted = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        runtime: first.runtime,
+        accountRosters: rosters,
+        args: [
+          "team",
+          "trust",
+          project.authorUserId,
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+      });
+      expect(trusted.result.exitCode).toBe(0);
+      const accepted = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        runtime: first.runtime,
+        accountRosters: rosters,
+      });
+      expect(accepted.result.exitCode).toBe(0);
+      expect(accepted.result.stdout).toContain(
+        "DATABASE_URL='postgres://epoch-one'",
+      );
+    });
+
+    test("a teammate's injected Device cannot sign Revisions the client accepts", async () => {
+      const project = await rotatedProject();
+      // The teammate's roster lists a different Device; the service claims
+      // the author Device belongs to them.
+      const { result } = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        accountRosters: {
+          [project.authorUserId]: await signedRoster(
+            generateAccountMasterKey(),
+            project.authorUserId,
+            1,
+            [
+              {
+                ...authorDevice(project),
+                deviceId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+              },
+            ],
+          ),
+        },
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).not.toContain("postgres://epoch-one");
+    });
+
+    test("with wiped local state, trust comes back only through the AMK", async () => {
+      const project = await rotatedProject();
+      // A roster for this User that the service signed with another key: a
+      // client that lost its pins still derives the real identity from the
+      // AMK and refuses it.
+      const { result } = await pullWith(project, {
+        links: project.links,
+        listedEpochs: [],
+        accountRosters: {
+          [ids.user]: await signedRoster(
+            generateAccountMasterKey(),
+            ids.user,
+            7,
+            [await ownDevice(project.bootstrap)],
+          ),
+        },
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("roster");
+    });
   });
 });
 

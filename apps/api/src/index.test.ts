@@ -2036,6 +2036,9 @@ describe("workspace boundary Device binding", () => {
       projectEpochKeyLinkObject: {
         findMany: async () => keyLinks,
       },
+      accountDeviceRosterObject: {
+        findMany: async () => [],
+      },
     };
     const profile = loadServerProfileConfig({});
     const auth = {
@@ -2184,6 +2187,7 @@ describe("workspace boundary Device binding", () => {
     expect(body.signingTrustDevices).toEqual([
       {
         deviceId: olderDeviceId,
+        encryptionPublicKey: "55".repeat(32),
         userId,
         signingPublicKey: "22".repeat(32),
         deviceActiveFromMs: olderDeviceActivatedAt.getTime(),
@@ -2193,6 +2197,7 @@ describe("workspace boundary Device binding", () => {
       },
       {
         deviceId: newerDeviceId,
+        encryptionPublicKey: "66".repeat(32),
         userId,
         signingPublicKey: "77".repeat(32),
         deviceActiveFromMs: newerDeviceActivatedAt.getTime(),
@@ -2202,6 +2207,7 @@ describe("workspace boundary Device binding", () => {
       },
       {
         deviceId: peerDeviceId,
+        encryptionPublicKey: "88".repeat(32),
         userId: peerUserId,
         signingPublicKey: "33".repeat(32),
         deviceActiveFromMs: peerDeviceActivatedAt.getTime(),

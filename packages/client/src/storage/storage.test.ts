@@ -56,6 +56,18 @@ describe("device storage wrapping", () => {
 });
 
 describe("browser device storage", () => {
+  test("wraps account trust pins next to the Device bundle (ADR 0015)", async () => {
+    resetMemoryDeviceRecordStore();
+    const storage = createBrowserDeviceStorage(pin);
+    const deviceId = new Uint8Array(16).fill(7);
+    expect(await storage.loadAccountTrustPins(deviceId)).toBeNull();
+    await storage.saveAccountTrustPins(deviceId, '{"version":1}');
+    expect(await storage.loadAccountTrustPins(deviceId)).toBe('{"version":1}');
+    expect(
+      await storage.loadAccountTrustPins(new Uint8Array(16).fill(8)),
+    ).toBeNull();
+  });
+
   test("persists and reloads an encrypted bundle for one origin/profile", async () => {
     resetMemoryDeviceRecordStore();
     const storage = createBrowserDeviceStorage(pin);

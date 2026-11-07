@@ -18,6 +18,8 @@ export type TeamMember = Readonly<{
   readonly image: string | null;
   readonly githubSubject: string;
   readonly lifecycle: MembershipLifecycle;
+  /** Latest Account Device roster, base64; null before the Member has one. */
+  readonly accountRoster?: string | null;
   // Present only for Owners and Admins: the service withholds roles and the
   // removed history from plain Members.
   readonly role?: MembershipRole;
@@ -182,6 +184,10 @@ export const parseTeamMembershipState = (
         image: asString(entry.image) ?? null,
         githubSubject,
         lifecycle,
+        ...(typeof entry.accountRoster === "string" ||
+        entry.accountRoster === null
+          ? { accountRoster: entry.accountRoster }
+          : {}),
       };
       const role = entry.role;
       if (role === "OWNER" || role === "ADMIN" || role === "MEMBER") {

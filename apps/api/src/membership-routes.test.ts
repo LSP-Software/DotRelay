@@ -530,6 +530,9 @@ const createDatabaseStub = () => {
         return membership;
       },
     },
+    accountDeviceRosterObject: {
+      findMany: async () => [],
+    },
     membershipInvitation: {
       findFirst: async ({
         where,
@@ -772,6 +775,7 @@ describe("Team membership and invitation routes", () => {
     expect(body.memberships).toEqual([
       {
         membershipId: MEMBER_M1,
+        accountRoster: null,
         userId: USER_OWNER,
         name: "Owner Person",
         image: null,
@@ -784,6 +788,7 @@ describe("Team membership and invitation routes", () => {
       },
       {
         membershipId: MEMBER_M2,
+        accountRoster: null,
         userId: USER_MEMBER,
         name: "Member Person",
         image: "https://a/1.png",
@@ -796,6 +801,7 @@ describe("Team membership and invitation routes", () => {
       },
       {
         membershipId: MEMBER_M7,
+        accountRoster: null,
         userId: USER_ADMIN,
         name: "Admin Person",
         image: null,
@@ -808,6 +814,7 @@ describe("Team membership and invitation routes", () => {
       },
       {
         membershipId: MEMBER_M8,
+        accountRoster: null,
         userId: USER_OWNER_TWO,
         name: "Second Owner",
         image: null,
@@ -820,6 +827,7 @@ describe("Team membership and invitation routes", () => {
       },
       {
         membershipId: MEMBER_M3,
+        accountRoster: null,
         userId: USER_PENDING,
         name: null,
         image: null,
@@ -832,6 +840,7 @@ describe("Team membership and invitation routes", () => {
       },
       {
         membershipId: MEMBER_M4,
+        accountRoster: null,
         userId: USER_OLD,
         name: null,
         image: null,
@@ -867,6 +876,7 @@ describe("Team membership and invitation routes", () => {
       memberships: [
         {
           membershipId: MEMBER_M1,
+          accountRoster: null,
           userId: USER_OWNER,
           name: "Owner Person",
           image: null,
@@ -875,6 +885,7 @@ describe("Team membership and invitation routes", () => {
         },
         {
           membershipId: MEMBER_M2,
+          accountRoster: null,
           userId: USER_MEMBER,
           name: "Member Person",
           image: "https://a/1.png",
@@ -883,6 +894,7 @@ describe("Team membership and invitation routes", () => {
         },
         {
           membershipId: MEMBER_M7,
+          accountRoster: null,
           userId: USER_ADMIN,
           name: "Admin Person",
           image: null,
@@ -891,6 +903,7 @@ describe("Team membership and invitation routes", () => {
         },
         {
           membershipId: MEMBER_M8,
+          accountRoster: null,
           userId: USER_OWNER_TWO,
           name: "Second Owner",
           image: null,

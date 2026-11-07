@@ -14,6 +14,10 @@ import {
 } from "./account-keys";
 import { accountKeyVerification } from "./account-recovery";
 import {
+  assertProvisioningRecipients,
+  resolveProvisioningTrust,
+} from "./account-trust";
+import {
   BROWSER_DEVICE_ID_HEADER,
   fetchWorkspaceBoundary,
   type WorkspaceBoundary,
@@ -51,7 +55,9 @@ export const provisionTeamMember = async (
         : "We couldn't prepare this member's access. Refresh and try again.",
     );
   }
-  const plan = (await response.json()) as MembershipProvisioningPlan;
+  const plan = (await response.json()) as MembershipProvisioningPlan & {
+    readonly accountRoster?: string | null;
+  };
   if (
     plan.teamId !== input.teamId ||
     plan.membershipId !== input.membershipId ||
@@ -61,6 +67,22 @@ export const provisionTeamMember = async (
   )
     throw new Error("The server returned an invalid provisioning plan.");
   const pin = { origin: boundary.profile.origin, serverProfileId };
+  // ADR 0015: keys go only to Devices in the member's signed roster.
+  if (!boundary.session.userId)
+    throw new Error("Unlock this browser before sharing project keys.");
+  assertProvisioningRecipients(
+    await resolveProvisioningTrust({
+      pin,
+      deviceId,
+      ownUserId: boundary.session.userId,
+      accountMasterKey: input.accountMasterKey,
+      memberUserId: plan.userId,
+      accountRoster:
+        typeof plan.accountRoster === "string" ? plan.accountRoster : null,
+    }),
+    plan.userId,
+    plan.devices,
+  );
   const bundle = await createBrowserDeviceStorage(pin).load({
     pin,
     deviceId: uuidToBytes(deviceId),

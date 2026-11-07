@@ -200,9 +200,9 @@ describe("immutable dotrelay-e2ee-v3 classical vectors", () => {
       suiteValue: 3,
       immutable: true,
     });
-    expect(positive.objects).toHaveLength(19);
-    expect(objects.vectors).toHaveLength(19);
-    expect(conditional.vectors).toHaveLength(29);
+    expect(positive.objects).toHaveLength(20);
+    expect(objects.vectors).toHaveLength(20);
+    expect(conditional.vectors).toHaveLength(30);
     expect(objects.vectors.map((vector: { id: string }) => vector.id)).toEqual(
       positive.objects.map((vector: { id: string }) => vector.id),
     );

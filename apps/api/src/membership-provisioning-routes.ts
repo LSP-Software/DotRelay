@@ -13,6 +13,7 @@ import {
   verifyProtocolObject,
 } from "@dotrelay/contracts";
 import {
+  AccountRosterRepository,
   type DatabaseClient,
   GrantRepository,
   MembershipRepository,
@@ -154,7 +155,19 @@ export const registerMembershipProvisioningRoutes = (
         parseUuid(context.req.param("teamId"), "teamId"),
         parseUuid(context.req.param("membershipId"), "membershipId"),
       );
-      return context.json(plan, 200, { "Cache-Control": "no-store" });
+      // The member's latest Account Device roster (ADR 0015): the
+      // provisioning client accepts only Devices it lists.
+      const roster = (
+        await new AccountRosterRepository().latestFor(database, [plan.userId])
+      ).get(plan.userId);
+      return context.json(
+        {
+          ...plan,
+          accountRoster: roster ? Buffer.from(roster).toString("base64") : null,
+        },
+        200,
+        { "Cache-Control": "no-store" },
+      );
     } catch (error) {
       return problem(context, error);
     }

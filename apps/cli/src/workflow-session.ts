@@ -34,6 +34,7 @@ import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
+import { establishAccountTrust } from "./workflow-account-trust";
 import {
   clearPendingRotation,
   grantRecoveredKeyToSelf,
@@ -53,6 +54,7 @@ import {
   opaqueEnvironmentId,
   parseBoundary,
   projectGrantVerification,
+  rawPublicKey,
   readTrustedHead,
   resolveRequestedEnvironmentReference,
   safeProjectEpoch,
@@ -149,7 +151,7 @@ export const loadWorkflowSession = async (
         ["name", "clientKind", "osName", "clientSummary", "nameOverridden"],
       )
       .catch(() => undefined);
-  const boundary = parseBoundary(
+  let boundary = parseBoundary(
     await admin.get(
       `/api/v1/workspace/boundary${requestedEnvironment ? `?environment=${encodeURIComponent(requestedEnvironment)}` : ""}`,
       workspaceBoundaryFields,
@@ -272,6 +274,34 @@ export const loadWorkflowSession = async (
   } catch {
     accountMasterKey = null;
   }
+  // From here on every key list comes from a verified Account Device roster
+  // (ADR 0015): the boundary is narrowed before any key is used.
+  const accountTrust = await establishAccountTrust({
+    options,
+    boundary,
+    userId: boundary.session.userId,
+    deviceId,
+    accountMasterKey,
+    encryptionPublicKey: await rawPublicKey(deviceEncryptionPublicKey),
+    signingPublicKey: new Uint8Array(
+      await crypto.subtle.exportKey("raw", deviceSigningPublicKey),
+    ),
+  });
+  boundary = accountTrust.boundary;
+  pendingActions.push(...accountTrust.notices);
+  // The narrowed boundary keeps the identity fields checked above.
+  if (
+    !boundary.session.userId ||
+    !boundary.environment.projectId ||
+    !boundary.environment.teamId ||
+    !boundary.environment.projectEpoch
+  )
+    throw new CliError(
+      "conflict",
+      "the selected Environment has no active Project context",
+      {},
+      "environment_context_missing",
+    );
   let epochKey: Uint8Array | undefined;
   let epochEnvelopePublished = false;
   // A rotation from this Device whose commit was uncertain left its new key

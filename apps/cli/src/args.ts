@@ -17,6 +17,7 @@ export const COMMANDS = [
   "context",
   "project",
   "env",
+  "team",
   "history",
   "rollback",
 ] as const;
@@ -49,6 +50,7 @@ export type ParsedArguments = Readonly<{
   readonly debug: boolean;
   readonly stdout: boolean;
   readonly reveal: boolean;
+  readonly fingerprints: boolean;
 }>;
 
 type MutableArguments = {
@@ -76,6 +78,7 @@ type MutableArguments = {
   debug: boolean;
   stdout: boolean;
   reveal: boolean;
+  fingerprints: boolean;
 };
 
 const valueFlags = new Set([
@@ -171,6 +174,7 @@ export const FLAG_KEYS = [
   "json",
   "reveal",
   "stdout",
+  "fingerprints",
 ] as const;
 
 export type FlagKey = (typeof FLAG_KEYS)[number];
@@ -196,6 +200,7 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
   json: "--json",
   reveal: "--reveal",
   stdout: "--stdout",
+  fingerprints: "--fingerprints",
 };
 
 export const USAGE: Record<string, string> = {
@@ -229,6 +234,8 @@ export const USAGE: Record<string, string> = {
   "device revoke-wrapper": "dotrelay device revoke-wrapper | --wrapper-id <id>",
   "project link": "dotrelay project link --team <team-id>",
   "project rotate": "dotrelay project rotate",
+  "team members": "dotrelay team members | --fingerprints",
+  "team trust": "dotrelay team trust <user-id>",
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
 };
@@ -342,6 +349,8 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "device revoke-wrapper": ["profile", "noInput", "json", "wrapperId"],
   "project link": ["profile", "team", "remote", "noInput", "json"],
   "project rotate": ["profile", "noInput", "force", "json"],
+  "team members": ["profile", "team", "fingerprints", "noInput", "json"],
+  "team trust": ["profile", "team", "noInput", "force", "json"],
   "env use": ["profile", "environment", "json"],
 };
 
@@ -364,6 +373,7 @@ export const SUBCOMMANDS: Readonly<
     "revoke-wrapper",
   ],
   project: ["link", "rotate"],
+  team: ["members", "trust"],
   env: ["use"],
 };
 
@@ -494,6 +504,7 @@ const validateCommand = (parsed: MutableArguments) => {
           : 0,
     device: 0,
     project: 0,
+    team: parsed.subcommand === "trust" ? 1 : 0,
     env: parsed.subcommand === "use" && parsed.environment ? 0 : 1,
     init: [0, 1],
     setup: 1,
@@ -590,6 +601,7 @@ export const parseArguments = (
     debug: false,
     stdout: false,
     reveal: false,
+    fingerprints: false,
     classifications: {},
     variableReferences: [],
   };
@@ -630,6 +642,7 @@ export const parseArguments = (
       else if (flag === "--debug") parsed.debug = true;
       else if (flag === "--stdout") parsed.stdout = true;
       else if (flag === "--reveal") parsed.reveal = true;
+      else if (flag === "--fingerprints") parsed.fingerprints = true;
       else {
         const usage = usageFor(parsed.command, parsed.subcommand);
         throw new CliInvocationError(
@@ -644,6 +657,7 @@ export const parseArguments = (
       (parsed.command === "profile" ||
         parsed.command === "device" ||
         parsed.command === "project" ||
+        parsed.command === "team" ||
         parsed.command === "env" ||
         parsed.command === "context") &&
       !parsed.subcommand

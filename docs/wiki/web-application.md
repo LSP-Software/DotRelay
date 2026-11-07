@@ -55,6 +55,14 @@ this Team's Projects.
 Membership Invitations target a stable GitHub subject and expire after seven days. An accepted
 invitation stays **Pending key grant** until all required grants activate the Membership.
 
+The Members view shows each Member's account state and fingerprint (ADR 0015): **Verified
+account**, **Unverified account** (no signed Device roster yet), or **Account key changed**. This
+browser pins each Member's account identity the first time it sees it. **Share project keys**
+sends keys only to Devices in the Member's signed roster, and refuses a Member whose account key
+changed. **Trust new key** re-trusts a changed key after confirmation; compare the fingerprint with
+the Member first. A workspace session also verifies this account's own roster when it loads, and
+publishes a new version when this browser holds the Account Master Key and is not listed yet.
+
 Archive and restore operations require confirmation. Archiving an Environment keeps immutable
 Revision history but hides Variables until restore. Restoring a Project fails closed if another
 active Project holds the same stable GitHub Repository linkage.

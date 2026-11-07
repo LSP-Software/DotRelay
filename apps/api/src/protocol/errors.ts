@@ -2,6 +2,7 @@ import { type ProblemCode, sha384 } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
   AccountKeyWrapperNotActiveError,
+  AccountRosterConflictError,
   DeviceNotActiveError,
   EnvironmentNotActiveError,
   GenesisExistsError,
@@ -42,6 +43,8 @@ export const mapPersistenceError = (
   if (error instanceof StagedObjectConflictError)
     return { code: "state_conflict" };
   if (error instanceof ProjectEpochKeyLinkConflictError)
+    return { code: "state_conflict" };
+  if (error instanceof AccountRosterConflictError)
     return { code: "state_conflict" };
   if (error instanceof StagingQuotaExceededError)
     return { code: "payload_too_large" };

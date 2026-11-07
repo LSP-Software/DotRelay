@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import {
+  createAccountDeviceRoster,
   createEpochRotationArtifacts,
+  deriveAccountSigningKey,
   createProjectEpochKeyLink,
   createProtocolTransport,
   createPublicationArtifacts,
@@ -524,6 +526,72 @@ integrationDescribe(
         );
         expect(refused.status).toBe(400);
         expect(await database.projectEpochKeyLinkObject.count()).toBe(2);
+      },
+      TEST_TIMEOUT_MS,
+    );
+    test(
+      "the roster route accepts the account's next version and serves it on the boundary",
+      async () => {
+        const amk = crypto.getRandomValues(new Uint8Array(32));
+        const signingKey = await deriveAccountSigningKey(amk, {
+          serverProfileId: profile.id,
+          userId,
+        });
+        const devices = [
+          {
+            deviceId,
+            encryptionPublicKey: crypto.getRandomValues(new Uint8Array(32)),
+            signingPublicKey: new Uint8Array(
+              await crypto.subtle.exportKey("raw", signing.publicKey),
+            ),
+            addedAtMs: 1,
+          },
+        ];
+        const post = async (version: number, key = signingKey) => {
+          const roster = await createAccountDeviceRoster({
+            serverProfileId: profile.id,
+            userId,
+            version,
+            devices,
+            signingKey: key,
+          });
+          const operationId = crypto.randomUUID();
+          return {
+            roster,
+            response: await app.request(
+              `${profile.origin}/api/v1/account-keys/rosters`,
+              {
+                method: "POST",
+                headers: {
+                  Origin: profile.origin,
+                  Authorization: `Bearer ${TOKEN}`,
+                  "X-DotRelay-Device-Id": deviceId,
+                  "Idempotency-Key": operationId,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  operationId,
+                  objectId: roster.objectId,
+                  object: Buffer.from(roster.canonicalBytes).toString("base64"),
+                }),
+              },
+            ),
+          };
+        };
+        const first = await post(1);
+        expect(first.response.status).toBe(201);
+        const served = await boundary();
+        expect(
+          (served.accountRosters as Record<string, string | null>)[userId],
+        ).toBe(Buffer.from(first.roster.canonicalBytes).toString("base64"));
+        // Skipping a version, or switching identity, is refused.
+        expect((await post(3)).response.status).toBe(409);
+        const otherKey = await deriveAccountSigningKey(
+          crypto.getRandomValues(new Uint8Array(32)),
+          { serverProfileId: profile.id, userId },
+        );
+        expect((await post(2, otherKey)).response.status).toBe(409);
+        expect((await post(2)).response.status).toBe(201);
       },
       TEST_TIMEOUT_MS,
     );

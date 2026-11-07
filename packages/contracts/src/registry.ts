@@ -119,6 +119,9 @@ export const FIELD_REGISTRY: Readonly<Record<number, FieldDefinition>> =
     97: field("Recovery Code authorization public key", "bytes", {
       exactLength: 32,
     }),
+    98: field("account Device roster version", "uint"),
+    99: field("account Device roster entries", "array"),
+    100: field("revoked-at Unix milliseconds", "uint"),
   });
 
 export const ENUM_REGISTRIES = Object.freeze({
@@ -321,6 +324,12 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
     "Project Epoch Key Link",
     [0, 1, 2, 8, 11, 13, 17, 23, 32, 44, 46, 47, 48, 62, 63, 71, 72],
     signed([0, 1, 2, 8, 11, 13, 17, 23, 32, 44, 46, 47, 48, 62, 63, 71, 72]),
+  ),
+  // The User's Devices, signed by the account signing key (ADR 0015).
+  24: objectDefinition(
+    "Account Device roster",
+    [0, 1, 2, 8, 9, 32, 41, 98, 99],
+    signed([0, 1, 2, 8, 9, 32, 41, 98, 99]),
   ),
 };
 

@@ -124,14 +124,59 @@ link it holds both keys for, and publishes it through
 `POST /api/v1/projects/:projectId/epoch-key-links`. Any active Member's active Device may
 backfill. The first link for a to-epoch wins; a different link for it is a `state_conflict`.
 
-The service cannot forge a link that opens, because it never holds an epoch key. Until the
-account Device roster lands, the signing keys used to check a link come from the service's Team
-trust set.
+The service cannot forge a link that opens, because it never holds an epoch key. The signing keys
+used to check a link are the roster-verified keys described below.
 
 **What rotation does and does not do.** Rotation stops a removed Member from reading Values
 published after it. It never revokes Values they already saw, and every current Member can still
 read every older Value through the chain. To cut a removed Member off from a secret, rotate the
 secret itself and publish the new Value.
+
+## Account identity and Device rosters
+
+The service is untrusted for integrity as well as confidentiality, so clients no longer take Device
+keys from its JSON (ADR 0015).
+
+- **Account signing key.** Every client that holds a User's Account Master Key derives the same
+  Ed25519 key from it (HKDF-SHA-384, info `dotrelay-account-signing-ed25519-v1`, salt = Server
+  Profile id and User id). Its public key is the User's account identity.
+- **Account Device roster.** Protocol object kind 24, signed by the account signing key, lists the
+  User's Devices with their X25519 and Ed25519 keys, active or revoked with a revocation time.
+  `POST /api/v1/account-keys/rosters` stores version 1, then only `latest + 1` under the same
+  identity. The workspace boundary serves `accountRosters` for the User and every User in the
+  Team's signing trust set; Membership listings and provisioning plans carry each Member's roster.
+- **Publishing.** A client that holds the AMK publishes a new version when its own Device is
+  missing or its keys changed, and records Devices the service reports revoked. It never adds
+  another Device. A revoked entry stays revoked.
+- **Own pins.** The client pins its own identity and roster version: the CLI in a protected file
+  in its state directory, the browser in the wrapped IndexedDB Device record store. It rejects a
+  roster that its AMK-derived key did not sign and any lower version. A client that lost its pins
+  trusts nothing for its own account until it restores the AMK.
+- **Teammates.** A teammate's identity is pinned on first sight. Their Devices count only when a
+  roster signed by the pinned identity lists them. A changed identity, a lower version, or a
+  vanished roster blocks that teammate: no grants or provisioning go to them and their Revisions
+  do not verify, until the user compares fingerprints and re-trusts them
+  (`dotrelay team trust <user-id>` or **Trust new key** in Members).
+
+Roster-verified keys replace the service's lists for Revision signing trust (a revoked roster
+entry also ends the Device's window), grant and Account Key signature trust, the own peers that
+receive the Project Epoch Key, Membership provisioning recipients, and Project Epoch Key Link
+signatures.
+
+### Upgrade window
+
+The first client with a User's AMK after the upgrade publishes that User's version-1 roster from
+the Devices the service reports, active and revoked. Until then the User is **unverified**:
+clients keep the old behaviour for their Devices and show them as unverified in
+`dotrelay team members` and the Members view. The window closes per User as soon as any of their
+clients with the AMK runs.
+
+### What the roster does not cover
+
+Adding a new Device is still a user decision on what the service shows: the AMK handoff during
+enrollment approval, Account Key Transfer, or Recovery Code restore happens before the new Device
+can be listed. Once it lists itself, no other Device can join without an AMK holder. Membership
+windows still come from the service.
 
 ## Security boundaries
 

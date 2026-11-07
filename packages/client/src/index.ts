@@ -182,6 +182,39 @@ export {
   withResolvedConflicts,
 } from "./sync/baseline";
 export {
+  ACCOUNT_SIGNING_KEY_INFO,
+  type AccountSigningKey,
+  accountFingerprint,
+  deriveAccountSigningKey,
+} from "./account/account-identity";
+export {
+  ACCOUNT_DEVICE_ROSTER_KIND,
+  type AccountDeviceRoster,
+  AccountRosterError,
+  createAccountDeviceRoster,
+  readAccountDeviceRoster,
+  type RosterDevice,
+  verifyAccountDeviceRoster,
+} from "./account/roster";
+export {
+  type AccountTrustPin,
+  type AccountTrustPins,
+  type AccountTrustResolution,
+  type AccountTrustStatus,
+  type DeviceKeyClaim,
+  type DeviceTrustDecision,
+  decideDeviceTrust,
+  emptyAccountTrustPins,
+  isBlockingStatus,
+  type OwnDeviceReport,
+  parseAccountTrustPins,
+  planOwnRoster,
+  resolveAccountTrust,
+  retrustTeammate,
+  serializeAccountTrustPins,
+  type UserAccountTrust,
+} from "./trust/account-trust";
+export {
   createProjectEpochKeyLink,
   createProjectEpochKeyLinkBackfill,
   missingProjectEpochKeyLinks,

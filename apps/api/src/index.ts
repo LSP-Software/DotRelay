@@ -16,6 +16,7 @@ import {
   verifyProtocolObject,
 } from "@dotrelay/contracts";
 import {
+  AccountRosterRepository,
   createBetterAuthDatabaseAdapter,
   createDatabaseClient,
   type DatabaseClient,
@@ -330,6 +331,7 @@ const loadTeamSigningTrustDevices = async (
       id: true,
       userId: true,
       ed25519PublicKey: true,
+      x25519PublicKey: true,
       activatedAt: true,
       revokedAt: true,
     },
@@ -343,6 +345,7 @@ const loadTeamSigningTrustDevices = async (
       deviceId: device.id,
       userId: device.userId,
       signingPublicKey: bytesToHex(new Uint8Array(device.ed25519PublicKey)),
+      encryptionPublicKey: bytesToHex(new Uint8Array(device.x25519PublicKey)),
       deviceActiveFromMs: toMillis(device.activatedAt),
       deviceActiveUntilMs: toMillis(device.revokedAt),
       memberSinceMs: toMillis(membership?.activatedAt ?? null),
@@ -1274,6 +1277,13 @@ const createApi = ({
     const signingTrustDevices = project
       ? await loadTeamSigningTrustDevices(database, project.teamId)
       : [];
+    // The latest Account Device roster (ADR 0015) of this User and of every
+    // User whose Devices are in the trust set; null where none exists yet.
+    // Clients verify each against the identity they derived or pinned.
+    const accountRosters = await new AccountRosterRepository().latestFor(
+      database,
+      [user.id, ...signingTrustDevices.map((entry) => entry.userId)],
+    );
     return context.json(
       {
         session: {
@@ -1341,6 +1351,12 @@ const createApi = ({
               ),
             }
           : {}),
+        accountRosters: Object.fromEntries(
+          [...accountRosters].map(([userId, roster]) => [
+            userId,
+            roster ? bytesToBase64(roster) : null,
+          ]),
+        ),
         epochKeyLinks: epochKeyLinks.map((link) =>
           bytesToBase64(new Uint8Array(link.protocolObject.canonicalBytes)),
         ),

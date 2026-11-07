@@ -39,6 +39,7 @@ export type WorkspaceSigningTrustDevice = Readonly<{
   readonly deviceId?: string;
   readonly userId?: string;
   readonly signingPublicKey: string;
+  readonly encryptionPublicKey?: string;
   readonly deviceActiveFromMs: number | null;
   readonly deviceActiveUntilMs: number | null;
   readonly memberSinceMs: number | null;
@@ -91,6 +92,11 @@ export type WorkspaceBoundary = Readonly<{
   readonly userValueKeyEnvelope?: string;
   /** The Project's key chain links (ADR 0014), base64 canonical bytes. */
   readonly epochKeyLinks?: readonly string[];
+  /**
+   * Latest Account Device roster per User (ADR 0015), base64 canonical
+   * bytes, or null for a User who has none yet.
+   */
+  readonly accountRosters?: Readonly<Record<string, string | null>>;
   readonly peerDevices?: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
@@ -266,11 +272,13 @@ export const parseSigningTrustDevices = (
       return [];
     const deviceId = asString(entry.deviceId);
     const userId = asString(entry.userId);
+    const encryptionPublicKey = asString(entry.encryptionPublicKey);
     return [
       {
         ...(deviceId ? { deviceId } : {}),
         ...(userId ? { userId } : {}),
         signingPublicKey,
+        ...(encryptionPublicKey ? { encryptionPublicKey } : {}),
         deviceActiveFromMs: entry.deviceActiveFromMs,
         deviceActiveUntilMs: entry.deviceActiveUntilMs,
         memberSinceMs: entry.memberSinceMs,

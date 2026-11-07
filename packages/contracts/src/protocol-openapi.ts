@@ -273,6 +273,30 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
       }),
     ),
   }),
+  "/api/v1/account-keys/rosters": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "publishAccountDeviceRoster",
+        description:
+          "Publishes the next Account Device roster version (ADR 0015), signed by the account signing key.",
+        parameters: Object.freeze([
+          protocolParameters.DeviceIdHeader,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        requestBody: Object.freeze({
+          required: true,
+          content: Object.freeze({
+            "application/json": Object.freeze({
+              schema: Object.freeze({
+                $ref: "#/components/schemas/StrictJsonObject",
+              }),
+            }),
+          }),
+        }),
+        responses: noStoreJsonResponse,
+      }),
+    ),
+  }),
   "/api/v1/environments/{environmentId}/sync": Object.freeze({
     post: authenticatedOperation(
       Object.freeze({
