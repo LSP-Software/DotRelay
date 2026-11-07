@@ -337,8 +337,10 @@ type WorkspaceSessionContext = Readonly<{
 
 export const loadWorkspaceSession = (
   ctx: WorkspaceSessionContext,
-  cancelled: boolean,
-): void => {
+  // A ref, not a boolean: the caller's effect cleanup flips it after this
+  // loader has started, and every await below must observe that.
+  cancellation: { readonly current: boolean },
+): Promise<void> => {
   const {
     boundary,
     profileId,
@@ -367,12 +369,13 @@ export const loadWorkspaceSession = (
     (boundary.environment.id === environmentId &&
       boundary.environment.projectId === projectId &&
       boundary.environment.teamId === teamId);
+  const cancelled = () => cancellation.current;
   const clearSelectedSession = () => {
-    if (cancelled) return;
+    if (cancelled()) return;
     removeSessionByKey(targetKey);
   };
   const settleContext = () => {
-    if (!cancelled) setContextStale(false);
+    if (!cancelled()) setContextStale(false);
   };
   const loadSession = async () => {
     const environment = boundary.environment;
@@ -404,7 +407,9 @@ export const loadWorkspaceSession = (
         pin,
         deviceId: uuidToBytes(device.id),
       });
+      if (cancelled()) return;
       const keyMaterial = await loadDeviceKeyMaterial(bundle);
+      if (cancelled()) return;
       if (!keyMaterial.encryptionPublicKey)
         throw new Error("stored Device public key is missing");
       let userDefinedValueSecret: Uint8Array | undefined;
@@ -436,6 +441,7 @@ export const loadWorkspaceSession = (
           if (opened) userDefinedValueSecret = opened;
         }
       }
+      if (cancelled()) return;
       const expectedHeadId =
         boundary.environment.headRevision === "empty-environment"
           ? null
@@ -519,6 +525,7 @@ export const loadWorkspaceSession = (
           sharedValueSecret = undefined;
         }
       }
+      if (cancelled()) return;
       // A direct grant can predate recovery setup. Once the account key is
       // unlocked, seal that exact Project key for future devices; never mint
       // a replacement for an existing encrypted environment.
@@ -560,6 +567,7 @@ export const loadWorkspaceSession = (
           // opens this environment; a refresh will show the winning envelope.
         }
       }
+      if (cancelled()) return;
       // A session that unlocked the Account Master Key in this browser
       // (setup or unlock in the Recovery area) reads the project's
       // current epoch key from the boundary's Account Key Envelope, so a
@@ -590,6 +598,7 @@ export const loadWorkspaceSession = (
           if (envelopeKey) sharedValueSecret = envelopeKey;
         }
       }
+      if (cancelled()) return;
       // The last-resort self-mint, mirroring the CLI: only when the
       // account key is unlocked, no Device holds this epoch's key, and
       // no peer holds one — otherwise a fresh random key could never
@@ -645,6 +654,7 @@ export const loadWorkspaceSession = (
           sharedValueSecret = epochKey;
         }
       }
+      if (cancelled()) return;
       const session = createEnvironmentProtocolSession({
         context: sharedValueSecret
           ? { ...context, sharedValueSecret }
@@ -661,7 +671,7 @@ export const loadWorkspaceSession = (
         ...(sharedValueSecret ? { sharedValueSecret } : {}),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       });
-      if (cancelled) return;
+      if (cancelled()) return;
       if (
         environment.id !== environmentId ||
         environment.projectId !== projectId ||
@@ -679,5 +689,5 @@ export const loadWorkspaceSession = (
       if (boundaryMatchesSelection) settleContext();
     }
   };
-  void loadSession();
+  return loadSession();
 };

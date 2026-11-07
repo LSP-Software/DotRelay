@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { emptyWorkspaceBoundary } from "./workspace-boundary";
 import {
   createWorkspaceRefreshLoop,
+  loadWorkspaceSession,
   workspaceBoundaryRefreshMs,
 } from "./workspace-session";
 
@@ -161,4 +162,77 @@ test("the refresh loop repeats on the short setup interval", async () => {
   } finally {
     run.dispose();
   }
+});
+
+// A boundary complete enough to reach the Device storage read, which fails
+// in this runtime because no Device was ever enrolled, so the loader settles
+// through its error path after at least one await.
+const enrolledBoundary = () => {
+  const base = onlineBoundary();
+  return {
+    ...base,
+    profile: {
+      ...base.profile,
+      serverProfileId: "00000000-0000-4000-8000-000000000062",
+    },
+    device: {
+      ...base.device,
+      active: true,
+      id: "00000000-0000-4000-8000-0000000000d1",
+      encryptionPublicKey: "00",
+      signingPublicKey: "00",
+    },
+    environment: {
+      headRevision: "empty-environment",
+      id: "env-1",
+      projectId: "project-1",
+      teamId: "team-1",
+    },
+  };
+};
+
+const sessionLoaderHarness = (cancellation: { current: boolean }) => {
+  const removed: string[] = [];
+  const staleWrites: boolean[] = [];
+  let sessionWrites = 0;
+  const done = loadWorkspaceSession(
+    {
+      boundary: enrolledBoundary(),
+      profileId: "hosted",
+      teamId: "team-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      recoveryWrappers: [],
+      recoveryActor: null,
+      accountMasterKey: { get: () => null },
+      durableBrowserDevice: { add: () => {} },
+      removeSessionByKey: (key) => removed.push(key),
+      setSessionsByKey: (update) => {
+        sessionWrites += 1;
+        update(new Map());
+      },
+      setContextStale: (stale) => staleWrites.push(stale),
+    },
+    cancellation,
+  );
+  return { done, removed, staleWrites, sessionWrites: () => sessionWrites };
+};
+
+test("a session load that is still current settles its selection", async () => {
+  const run = sessionLoaderHarness({ current: false });
+  await run.done;
+  expect(run.removed).toHaveLength(1);
+  expect(run.staleWrites).toEqual([false]);
+});
+
+test("a session load cancelled after it started writes no state", async () => {
+  const cancellation = { current: false };
+  const run = sessionLoaderHarness(cancellation);
+  // The effect cleanup runs after the loader began awaiting; the flag must
+  // reach the loader by reference, not as the value captured at the call.
+  cancellation.current = true;
+  await run.done;
+  expect(run.removed).toEqual([]);
+  expect(run.staleWrites).toEqual([]);
+  expect(run.sessionWrites()).toBe(0);
 });
