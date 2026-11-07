@@ -29,6 +29,7 @@ import {
   type WorkflowOptions,
 } from "./workflow-core";
 import {
+  assertNoPendingRotation,
   clearPendingRotation,
   RotationOutcomeUnknownError,
   submitRotation,
@@ -120,6 +121,12 @@ export const rotateProjectEpoch = async (
   // destructive confirmation, so a missing login or enrollment is reported
   // instead of prompting first (publication confirms after syncing too).
   const synced = await syncWorkflow(options, parsed);
+  // The sync above settles an earlier uncertain rotation when it can; one
+  // that is still open blocks this rotation (ADR 0014).
+  await assertNoPendingRotation(
+    options,
+    synced.workflow.publicationContext.projectId,
+  );
   if (!options.noInput && !(await confirmSilent(options, ROTATE_QUESTION)))
     throw new CliInvocationError("project key rotation was declined");
   const context = synced.workflow.publicationContext;

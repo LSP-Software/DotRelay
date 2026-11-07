@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@dotrelay/contracts";
 import { type Boundary, parseBoundary } from "./workflow-core";
 import {
+  assertNoPendingRotation,
   pendingRotationPath,
   RotationOutcomeUnknownError,
   resolvePendingRotation,
@@ -143,6 +144,14 @@ describe("an uncertain Project epoch rotation", () => {
     expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
       true,
     );
+    // While the outcome is open, another rotation is refused and the
+    // record stays byte-for-byte intact.
+    const path = pendingRotationPath(run.options, ids.project);
+    const before = await readFile(path, "utf8");
+    await expect(
+      assertNoPendingRotation(run.options, ids.project),
+    ).rejects.toMatchObject({ code: "epoch_rotation_uncertain" });
+    expect(await readFile(path, "utf8")).toBe(before);
     // Once it commits, the next session recovers the key.
     expect(
       await resolvePendingRotation({
@@ -153,6 +162,12 @@ describe("an uncertain Project epoch rotation", () => {
         cancel: async () => false,
       }),
     ).toEqual(run.newKey);
+  });
+
+  test("a rotation may start once no earlier outcome is open", async () => {
+    const run = await scenario();
+    await rm(pendingRotationPath(run.options, ids.project));
+    await assertNoPendingRotation(run.options, ids.project);
   });
 
   test("discards the key when the Project never reached the new epoch", async () => {

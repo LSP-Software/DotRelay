@@ -37,6 +37,8 @@ import { loadAccountMasterKey } from "./workflow-account-key";
 import {
   clearPendingRotation,
   grantRecoveredKeyToSelf,
+  hasPendingRotation,
+  PENDING_ROTATION_NOTICE,
   resolvePendingRotation,
 } from "./workflow-pending-rotation";
 import {
@@ -296,6 +298,11 @@ export const loadWorkflowSession = async (
         ),
   });
   if (recoveredRotationKey) epochKey = recoveredRotationKey;
+  else if (
+    boundary.environment.projectId &&
+    (await hasPendingRotation(options, boundary.environment.projectId))
+  )
+    pendingActions.push(PENDING_ROTATION_NOTICE);
   if (
     epochKey === undefined &&
     accountMasterKey !== null &&

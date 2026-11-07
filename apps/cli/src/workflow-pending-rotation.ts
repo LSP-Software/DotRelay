@@ -5,6 +5,7 @@ import {
   readProjectEpochKeyLinkEpochs,
 } from "@dotrelay/client";
 import { open, seal, sha384 } from "@dotrelay/contracts";
+import { CliError } from "./errors";
 import { atomicWriteProtectedFile } from "./output";
 import {
   base64,
@@ -94,6 +95,29 @@ const readPendingRotation = async (
     return null;
   }
 };
+
+export const PENDING_ROTATION_NOTICE =
+  "An earlier project rotation's outcome is still unknown; its new key is kept sealed to this device. Run dotrelay pull again once the Server Profile can confirm it, before rotating again";
+
+// A new rotation must not start while an earlier one may still commit: it
+// would overwrite or delete the only copy of that rotation's new key.
+export const assertNoPendingRotation = async (
+  options: WorkflowOptions,
+  projectId: string,
+): Promise<void> => {
+  if (await readPendingRotation(options, projectId))
+    throw new CliError(
+      "conflict",
+      "an earlier rotation of this project has an unknown outcome and its new key is kept on this device. Run dotrelay pull once the Server Profile is reachable, then rotate again if you still need to",
+      {},
+      "epoch_rotation_uncertain",
+    );
+};
+
+export const hasPendingRotation = async (
+  options: WorkflowOptions,
+  projectId: string,
+): Promise<boolean> => (await readPendingRotation(options, projectId)) !== null;
 
 // Cancels the rotation's operation. A cancelled operation can never be begun
 // again, so true means the rotation is confirmed unable to commit; false
