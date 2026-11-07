@@ -30,18 +30,13 @@ import {
 } from "./workflow-core";
 import {
   clearPendingRotation,
+  RotationOutcomeUnknownError,
+  submitRotation,
   writePendingRotation,
 } from "./workflow-pending-rotation";
 import { syncWorkflow } from "./workflow-session";
 
 const ROTATE_QUESTION = "Rotate this project's keys?";
-
-// A problem response in the 4xx range is the service refusing the rotation;
-// anything else (no answer, a 5xx) leaves its outcome unknown.
-const isDefinitiveRejection = (error: unknown): boolean =>
-  error instanceof ProtocolTransportError &&
-  error.problem.status >= 400 &&
-  error.problem.status < 500;
 
 export type RotationTarget = Readonly<{
   readonly environmentId: string;
@@ -206,30 +201,35 @@ export const rotateProjectEpoch = async (
     newEpochKey: artifacts.newEpochKey,
     encryptionPublicKey,
   });
-  const attempt = () =>
-    workflow.transport.epochRotate({
-      operationId,
-      deviceId: workflow.deviceId,
-      request: artifacts.request,
-    });
   try {
-    rotated = await attempt();
+    rotated = await submitRotation({
+      attempt: () =>
+        workflow.transport.epochRotate({
+          operationId,
+          deviceId: workflow.deviceId,
+          request: artifacts.request,
+        }),
+      cancel: () =>
+        workflow.transport
+          .cancel({ operationId, deviceId: workflow.deviceId })
+          .then(
+            () => true,
+            () => false,
+          ),
+      discardPending: () => clearPendingRotation(options, context.projectId),
+    });
   } catch (error) {
-    if (isDefinitiveRejection(error)) return settleFailure(error);
-    // No answer, or a server error: replaying the same operation returns the
-    // committed outcome idempotently, or a definitive rejection.
-    try {
-      rotated = await attempt();
-    } catch (retryError) {
-      if (isDefinitiveRejection(retryError)) return settleFailure(retryError);
-      artifacts.newEpochKey.fill(0);
+    artifacts.newEpochKey.fill(0);
+    if (error instanceof RotationOutcomeUnknownError)
       throw new CliError(
         "transient",
         "the rotation's outcome is unknown. Its new project key is kept sealed to this device: run dotrelay pull once the Server Profile is reachable to finish it. Do not run project rotate again before that",
         {},
         "epoch_rotation_uncertain",
       );
-    }
+    if (error instanceof CliError || error instanceof CliInvocationError)
+      throw error;
+    throw rotationTransportFailure(error);
   }
   await storeRotatedEpochKey(
     options,

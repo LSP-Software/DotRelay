@@ -95,16 +95,58 @@ const readPendingRotation = async (
   }
 };
 
+// Cancels the rotation's operation. A cancelled operation can never be begun
+// again, so true means the rotation is confirmed unable to commit; false
+// (already committed, or no answer) leaves the outcome open.
+export type CancelRotation = (operationId: string) => Promise<boolean>;
+
+export class RotationOutcomeUnknownError extends Error {
+  constructor() {
+    super("the rotation's outcome is unknown");
+    this.name = "RotationOutcomeUnknownError";
+  }
+}
+
+// Submits the epoch transition. Any failure is replayed once with the same
+// operation, which returns a committed outcome idempotently. The sealed key
+// is discarded only after a successful cancel proves the operation cannot
+// commit; otherwise it is kept and RotationOutcomeUnknownError is thrown.
+// A failure's status code is not trusted for this: a 429, for example, can
+// arrive before the service checks whether the first attempt committed.
+export const submitRotation = async <T>(
+  input: Readonly<{
+    attempt: () => Promise<T>;
+    cancel: () => Promise<boolean>;
+    discardPending: () => Promise<void>;
+  }>,
+): Promise<T> => {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await input.attempt();
+    } catch (error) {
+      failure = error;
+    }
+  }
+  if (await input.cancel()) {
+    await input.discardPending();
+    throw failure;
+  }
+  throw new RotationOutcomeUnknownError();
+};
+
 // Settles a pending rotation against the boundary. Returns the new epoch key
 // when the Project is at that epoch and its served link opens with the key,
-// which proves this Device's rotation committed. Otherwise the record is
-// discarded: the rotation never committed, or another one superseded it.
+// which proves this Device's rotation committed. The record is discarded only
+// when the rotation provably cannot commit: another rotation took the epoch,
+// or the Project is still behind it and cancelling the operation succeeded.
 export const resolvePendingRotation = async (
   input: Readonly<{
     options: WorkflowOptions;
     boundary: Boundary;
     encryptionPrivateKey: CryptoKey;
     trustedSigningKeys: readonly Uint8Array[];
+    cancel: CancelRotation;
   }>,
 ): Promise<Uint8Array | null> => {
   const { projectId, teamId } = input.boundary.environment;
@@ -114,7 +156,15 @@ export const resolvePendingRotation = async (
   const currentEpoch = safeProjectEpoch(
     input.boundary.environment.projectEpoch,
   );
-  if (currentEpoch !== pending.newEpoch) {
+  if (currentEpoch < pending.newEpoch) {
+    // The request may still be in flight; only a cancel settles it.
+    if (await input.cancel(pending.operationId))
+      await clearPendingRotation(input.options, projectId);
+    return null;
+  }
+  if (currentEpoch > pending.newEpoch) {
+    // Whichever rotation reached that epoch, its successor's link carries
+    // the key; a staged operation for an older epoch can no longer commit.
     await clearPendingRotation(input.options, projectId);
     return null;
   }

@@ -283,6 +283,17 @@ export const loadWorkflowSession = async (
       boundary,
       await exportSigningPublicKey(deviceSigningPublicKey),
     ).keys,
+    cancel: (operationId) =>
+      createProtocolTransport({
+        origin: options.profile.origin,
+        authorization: `Bearer ${token}`,
+        ...(options.fetch ? { fetch: options.fetch as never } : {}),
+      })
+        .cancel({ operationId, deviceId })
+        .then(
+          () => true,
+          () => false,
+        ),
   });
   if (recoveredRotationKey) epochKey = recoveredRotationKey;
   if (

@@ -14,7 +14,9 @@ import {
 import { type Boundary, parseBoundary } from "./workflow-core";
 import {
   pendingRotationPath,
+  RotationOutcomeUnknownError,
   resolvePendingRotation,
+  submitRotation,
   writePendingRotation,
 } from "./workflow-pending-rotation";
 
@@ -111,12 +113,46 @@ describe("an uncertain Project epoch rotation", () => {
       boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
       encryptionPrivateKey: run.encryption.privateKey,
       trustedSigningKeys: run.trustedSigningKeys,
+      cancel: async () => true,
     });
     expect(key).toEqual(run.newKey);
     // The caller clears the record after storing the key.
     expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
       true,
     );
+  });
+
+  test("keeps the key while the Project is behind and the operation cannot be cancelled", async () => {
+    // The original request may still be in flight: the boundary was read
+    // before it committed, so only a successful cancel may discard the key.
+    const run = await scenario();
+    const cancelled: string[] = [];
+    expect(
+      await resolvePendingRotation({
+        options: run.options,
+        boundary: run.boundaryAt("1", []),
+        encryptionPrivateKey: run.encryption.privateKey,
+        trustedSigningKeys: run.trustedSigningKeys,
+        cancel: async (operationId) => {
+          cancelled.push(operationId);
+          return false;
+        },
+      }),
+    ).toBeNull();
+    expect(cancelled).toHaveLength(1);
+    expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
+      true,
+    );
+    // Once it commits, the next session recovers the key.
+    expect(
+      await resolvePendingRotation({
+        options: run.options,
+        boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
+        encryptionPrivateKey: run.encryption.privateKey,
+        trustedSigningKeys: run.trustedSigningKeys,
+        cancel: async () => false,
+      }),
+    ).toEqual(run.newKey);
   });
 
   test("discards the key when the Project never reached the new epoch", async () => {
@@ -127,6 +163,7 @@ describe("an uncertain Project epoch rotation", () => {
         boundary: run.boundaryAt("1", []),
         encryptionPrivateKey: run.encryption.privateKey,
         trustedSigningKeys: run.trustedSigningKeys,
+        cancel: async () => true,
       }),
     ).toBeNull();
     expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
@@ -152,6 +189,7 @@ describe("an uncertain Project epoch rotation", () => {
         boundary: run.boundaryAt("2", [other.canonicalBytes]),
         encryptionPrivateKey: run.encryption.privateKey,
         trustedSigningKeys: run.trustedSigningKeys,
+        cancel: async () => true,
       }),
     ).toBeNull();
     expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
@@ -168,7 +206,72 @@ describe("an uncertain Project epoch rotation", () => {
         boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
         encryptionPrivateKey: stranger.privateKey,
         trustedSigningKeys: run.trustedSigningKeys,
+        cancel: async () => true,
       }),
     ).toBeNull();
+  });
+});
+
+describe("submitting an epoch rotation", () => {
+  const rateLimited = Object.assign(new Error("rate limited"), {
+    status: 429,
+  });
+
+  test("a lost commit followed by a 429 keeps the key when cancel fails", async () => {
+    let discarded = false;
+    let attempts = 0;
+    await expect(
+      submitRotation({
+        attempt: async () => {
+          attempts += 1;
+          // First: committed, but the answer was lost. Then: rate limited
+          // before the service's idempotency check.
+          throw attempts === 1 ? new TypeError("network") : rateLimited;
+        },
+        // The committed operation cannot be cancelled.
+        cancel: async () => false,
+        discardPending: async () => {
+          discarded = true;
+        },
+      }),
+    ).rejects.toBeInstanceOf(RotationOutcomeUnknownError);
+    expect(attempts).toBe(2);
+    expect(discarded).toBe(false);
+  });
+
+  test("discards the key only after a successful cancel", async () => {
+    let discarded = false;
+    const rejection = new Error("stale epoch");
+    await expect(
+      submitRotation({
+        attempt: async () => {
+          throw rejection;
+        },
+        cancel: async () => true,
+        discardPending: async () => {
+          discarded = true;
+        },
+      }),
+    ).rejects.toBe(rejection);
+    expect(discarded).toBe(true);
+  });
+
+  test("a replay that returns the committed outcome succeeds", async () => {
+    let attempts = 0;
+    expect(
+      await submitRotation({
+        attempt: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new TypeError("network");
+          return { projectEpoch: "2", idempotent: true };
+        },
+        cancel: async () => {
+          throw new Error("must not cancel");
+        },
+        discardPending: async () => {
+          throw new Error("must not discard");
+        },
+      }),
+    ).toEqual({ projectEpoch: "2", idempotent: true });
   });
 });
