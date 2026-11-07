@@ -88,6 +88,11 @@ export type Boundary = Readonly<{
   readonly userValueKeyEnvelope?: string;
   /** The Project's key chain links (ADR 0014), base64 canonical bytes. */
   readonly epochKeyLinks: readonly string[];
+  /**
+   * Latest Account Device roster per User (ADR 0015), base64 canonical
+   * bytes, or null for a User who has none yet.
+   */
+  readonly accountRosters: ReadonlyMap<string, string | null>;
   readonly signingTrustKeys: readonly string[];
   readonly signingTrustDevices: readonly SigningTrustDevice[];
   readonly peerDevices: readonly Readonly<{
@@ -106,6 +111,7 @@ export type SigningTrustDevice = Readonly<{
   readonly deviceId: string;
   readonly userId: string;
   readonly signingPublicKey: string;
+  readonly encryptionPublicKey?: string;
   readonly deviceActiveFromMs: number | null;
   readonly deviceActiveUntilMs: number | null;
   readonly memberSinceMs: number | null;
@@ -156,6 +162,7 @@ export const workspaceBoundaryFields = [
   "accountKeyEnvelope",
   "userValueKeyEnvelope",
   "epochKeyLinks",
+  "accountRosters",
   "peerDevices",
 ] as const;
 
@@ -227,6 +234,16 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
     ...(typeof value.userValueKeyEnvelope === "string"
       ? { userValueKeyEnvelope: value.userValueKeyEnvelope }
       : {}),
+    accountRosters: new Map(
+      isRecord(value.accountRosters)
+        ? Object.entries(value.accountRosters).flatMap(
+            ([userId, roster]): Array<[string, string | null]> =>
+              typeof roster === "string" || roster === null
+                ? [[userId, roster]]
+                : [],
+          )
+        : [],
+    ),
     epochKeyLinks: Array.isArray(value.epochKeyLinks)
       ? value.epochKeyLinks.filter(
           (link): link is string => typeof link === "string",
@@ -258,6 +275,9 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
               deviceId: entry.deviceId,
               userId: entry.userId,
               signingPublicKey: entry.signingPublicKey,
+              ...(typeof entry.encryptionPublicKey === "string"
+                ? { encryptionPublicKey: entry.encryptionPublicKey }
+                : {}),
               deviceActiveFromMs: entry.deviceActiveFromMs,
               deviceActiveUntilMs: entry.deviceActiveUntilMs,
               memberSinceMs: entry.memberSinceMs,

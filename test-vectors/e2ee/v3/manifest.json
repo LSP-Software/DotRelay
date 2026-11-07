@@ -10,19 +10,19 @@
     },
     {
       "path": "conditional.json",
-      "sha384": "4be3079e1656dbb0f9c810e398f83612cfaa32f5201a3ed0dd04e1023b3f382ab516aabbafd15f00327e6f35833849cc"
+      "sha384": "ac4a0ee2fc75bd22d832019973588c719c9683b59ce503f8a40831fefca16deb574470cee34782d70708113cc39bd0b6"
     },
     {
       "path": "negative.json",
-      "sha384": "9754ad4d90c5811012010214645f9c48c4420138e122a2d23384eb3aae3eb33671e88780d20f263d58e6b2aeb31550f6"
+      "sha384": "1cb373b0aa0f7cccd318d75ff2efd8265143ee2d5ebc68a27d7c71cf3184c7fc5398af79f0ad6e3017090cb47c2e604d"
     },
     {
       "path": "objects.json",
-      "sha384": "836f8d444d0cb6159515007359ff307b156119ce87ae328cbea8f376f3cbc299fa033eaeb0ba0de711e004cefe265a95"
+      "sha384": "0a97a312eb905924c994d82309fb0a175b30ed2e0391ade746a8360d75ed35550a3ea4987a5d80510f3619eb7e99c795"
     },
     {
       "path": "positive.json",
-      "sha384": "1507645861feb7a5f5124ceb7f2241afad03d4cefae2b9af6b82f4d0855a67018aa9e067caf5aada69b687d8f89bc5c9"
+      "sha384": "eb232be9725928e296d6bb806bfb295769b2cee3396abc7d00940b3188ca524c8cf03f6ff8c51b31bc8b3e58e5b38e76"
     },
     {
       "path": "primitives.json",

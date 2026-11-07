@@ -308,6 +308,22 @@ export const publishProjectEpochKeyLink = async (
   );
 };
 
+// Publishes the next Account Device roster (ADR 0015).
+export const publishAccountDeviceRoster = async (
+  actor: AccountKeyActor,
+  roster: Readonly<{
+    readonly objectId: string;
+    readonly canonicalBytes: Uint8Array;
+  }>,
+): Promise<void> => {
+  await jsonPost(
+    actor,
+    "/api/v1/account-keys/rosters",
+    globalThis.crypto.randomUUID(),
+    { objectId: roster.objectId, object: toBase64(roster.canonicalBytes) },
+  );
+};
+
 export const fetchAccountKeyEnvelopes = async (
   actor: AccountKeyActor,
 ): Promise<readonly AccountKeyEnvelopeEntry[]> => {

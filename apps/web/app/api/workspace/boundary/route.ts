@@ -114,6 +114,7 @@ const fetchLiveBoundary = async (
             accountKeyEnvelope?: unknown;
             userValueKeyEnvelope?: unknown;
             epochKeyLinks?: unknown;
+            accountRosters?: unknown;
             peerDevices?: unknown;
           }
         | undefined)
@@ -210,6 +211,18 @@ const fetchLiveBoundary = async (
       : {}),
     ...(typeof workspaceBody.userValueKeyEnvelope === "string"
       ? { userValueKeyEnvelope: workspaceBody.userValueKeyEnvelope }
+      : {}),
+    ...(workspaceBody.accountRosters !== null &&
+    typeof workspaceBody.accountRosters === "object" &&
+    !Array.isArray(workspaceBody.accountRosters)
+      ? {
+          accountRosters: Object.fromEntries(
+            Object.entries(workspaceBody.accountRosters).filter(
+              (entry): entry is [string, string | null] =>
+                typeof entry[1] === "string" || entry[1] === null,
+            ),
+          ),
+        }
       : {}),
     ...(Array.isArray(workspaceBody.epochKeyLinks)
       ? {

@@ -23,6 +23,17 @@ AMK can recover the content keys and decrypt the User's data. It is never stored
 the service and never differs by recovery method.
 _Avoid_: Master password, account password, encryption key
 
+**Account Identity**:
+The Ed25519 public key of a User's account signing key, which every client that holds the Account
+Master Key derives the same way. It never changes for a User on one Server Profile, so a changed
+identity for a known teammate is never routine.
+_Avoid_: User key, account fingerprint (the fingerprint is only its short display form)
+
+**Account Device Roster**:
+The versioned list of a User's Devices and their public keys, active or revoked, signed by the
+User's account signing key. Clients trust a Device only when the roster of its User lists it.
+_Avoid_: Device list, peer list
+
 **Account Key Wrapper**:
 A service-stored, Device-signed encryption of the Account Master Key under a key derived from one
 User-held secret. Wrappers protect exactly the same AMK regardless of type and may be added,

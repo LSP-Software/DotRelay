@@ -20,6 +20,7 @@ import {
 import type { DatabaseClient } from "@dotrelay/database";
 import {
   AccountKeyRepository,
+  AccountRosterRepository,
   DeviceRepository,
   OperationRepository,
   ProjectEpochKeyLinkRepository,
@@ -356,6 +357,7 @@ export const registerDeviceRoutes = (
   const operations = new OperationRepository();
   const accountKeys = new AccountKeyRepository();
   const keyLinks = new ProjectEpochKeyLinkRepository();
+  const rosters = new AccountRosterRepository();
   const jsonLimit = bodyLimit({
     maxSize: profile.limits.adminBodyBytes,
     onError: (context) => problem(context, "payload_too_large"),
@@ -365,6 +367,60 @@ export const registerDeviceRoutes = (
   app.use("/api/v1/devices/enrollments/*", jsonLimit);
   app.use("/api/v1/account-keys", jsonLimit);
   app.use("/api/v1/account-keys/*", jsonLimit);
+
+  // Publishes the next Account Device roster (ADR 0015). The service checks
+  // only that the roster binds this User and verifies under the identity it
+  // names; whether that identity is the User's is for clients to decide.
+  app.post("/api/v1/account-keys/rosters", async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const body = await readBody(context);
+      requireIdempotencyKey(context, body.operationId);
+      const object = await parseProtocolPayload(body, "objectId", "object", 24);
+      validateActorBinding(object.object, profile.id, actor.userId);
+      const accountIdentity = requiredBytes(object.object, 41, 32);
+      const publicKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(accountIdentity),
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      if (
+        !(await verifyProtocolObject(
+          object.object,
+          requiredBytes(object.object, 4, 64),
+          publicKey,
+        ))
+      )
+        throw new ContractError("invalid_crypto_object");
+      const op = await operation(
+        body,
+        actor,
+        "ACCOUNT_KEY",
+        object.canonicalBytes,
+      );
+      await operations.begin(database, op);
+      await stage(database, op, [object], profile.limits.stagingTtlSeconds);
+      const { object: parsed, ...protocolObject } = object;
+      const result = await rosters.publish(database, {
+        operation: op,
+        roster: {
+          protocolObject,
+          version: requiredUint(parsed, 98),
+          accountIdentity,
+        },
+      });
+      return context.json(
+        { objectId: object.id, idempotent: result.idempotent === true },
+        201,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      return problem(context, mapError(error));
+    }
+  });
 
   // Backfills a Project Epoch Key Link for an epoch rotated before links
   // existed (ADR 0014). The actor's own Device must have signed it.

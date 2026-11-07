@@ -390,6 +390,30 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "dotrelay project rotate --profile work --no-input --force",
     ],
   },
+  "team members": {
+    about:
+      "List the linked Team's Members with the trust state of their account identity: verified (Devices come from a roster signed by the pinned account key), unverified (no signed roster yet), or a blocking key change or rollback.",
+    options: {
+      team: "Team id (defaults to the linked Project's Team)",
+      fingerprints:
+        "show each Member's account fingerprint for out-of-band comparison",
+    },
+    notes: [
+      "An account fingerprint never changes for a Member. A changed one means the Server Profile presented a different account key; compare it with the Member before running dotrelay team trust.",
+    ],
+    examples: ["dotrelay team members", "dotrelay team members --fingerprints"],
+  },
+  "team trust": {
+    about:
+      "Re-trust a Member whose account identity changed, after you compared the new fingerprint with them out of band. Until then this installation sends them no keys and does not accept their Devices.",
+    positional: ["<user-id>  The Member's User id from dotrelay team members."],
+    options: {
+      team: "Team id (defaults to the linked Project's Team)",
+      noInput: "never prompt; requires --force",
+      force: "confirm the re-trust when --no-input is set",
+    },
+    examples: ["dotrelay team trust <user-id>"],
+  },
   "env use": {
     about:
       "Select the worktree Environment by id or operator-visible label, resolved within the worktree's Project. The selection is saved in the worktree context.",
@@ -640,6 +664,8 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["context reselect", "Clear a stale Project or Environment selection"],
   ["project link", "Link a Project explicitly"],
   ["project rotate", "Advance the Project epoch and seal a new key"],
+  ["team members", "List Members and their account fingerprints"],
+  ["team trust", "Re-trust a Member whose account key changed"],
   ["env use", "Select an Environment by id or label"],
   ["history", "List verified Revisions with readable context"],
   ["rollback", "Append a lane-scoped Rollback Revision"],

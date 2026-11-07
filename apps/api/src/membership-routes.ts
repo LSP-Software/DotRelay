@@ -7,6 +7,7 @@ import {
   parseUuid,
 } from "@dotrelay/contracts";
 import {
+  AccountRosterRepository,
   type DatabaseClient,
   MembershipAdministrationRepository,
   OperationConflictError,
@@ -159,6 +160,7 @@ type MembershipView =
       readonly name: string | null;
       readonly image: string | null;
       readonly githubSubject: string;
+      readonly accountRoster: string | null;
       readonly role: MembershipRow["role"];
       readonly lifecycle: MembershipRow["lifecycle"];
       readonly createdAt: string;
@@ -171,6 +173,7 @@ type MembershipView =
       readonly name: string | null;
       readonly image: string | null;
       readonly githubSubject: string;
+      readonly accountRoster: string | null;
       readonly lifecycle: "ACTIVE";
     }>;
 
@@ -261,12 +264,22 @@ const loadTeamMembershipState = async (
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       })
     : [];
+  // Each Member's latest Account Device roster (ADR 0015), for fingerprint
+  // display and pinning; clients verify it themselves.
+  const rosters = await new AccountRosterRepository().latestFor(
+    database,
+    rows.map((row) => row.userId),
+  );
   const decorated = rows.map((row) => ({
     membershipId: row.id,
     userId: row.userId,
     name: display.get(row.authSubject)?.name ?? null,
     image: display.get(row.authSubject)?.image ?? null,
     githubSubject: row.githubSubject,
+    accountRoster: (() => {
+      const roster = rosters.get(row.userId);
+      return roster ? Buffer.from(roster).toString("base64") : null;
+    })(),
     ...(privileged
       ? {
           role: row.role,

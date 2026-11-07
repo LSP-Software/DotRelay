@@ -95,6 +95,7 @@ import {
   unlockAccount,
   unlockMethods,
 } from "@/lib/account-recovery";
+import { resolveMemberTrust, retrustMember } from "@/lib/account-trust";
 import {
   restoreBrowserAccountKey,
   saveBrowserAccountKey,
@@ -236,6 +237,57 @@ const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
     "Admins can invite and remove members and manage projects and environments. They cannot change owners or other admins.",
   MEMBER:
     "Members can view this team's projects, read shared values, and manage their own values.",
+};
+
+// A Member's account identity state (ADR 0015) and fingerprint.
+const MemberAccountTrust = ({
+  trust,
+  onTrust,
+}: Readonly<{
+  trust: Readonly<{ status: string; fingerprint: string | null }> | undefined;
+  onTrust: () => void;
+}>) => {
+  if (!trust) return null;
+  const blocked =
+    trust.status === "identity-changed" ||
+    trust.status === "rollback" ||
+    trust.status === "invalid";
+  return (
+    <div
+      className="mt-1 flex flex-col gap-1"
+      data-testid="member-account-trust"
+    >
+      <div className="flex items-center gap-2">
+        {trust.status === "verified" ? (
+          <Badge variant="outline">Verified account</Badge>
+        ) : trust.status === "unverified" ? (
+          <Badge variant="secondary">Unverified account</Badge>
+        ) : (
+          <Badge variant="destructive">
+            {trust.status === "identity-changed"
+              ? "Account key changed"
+              : "Account list rolled back"}
+          </Badge>
+        )}
+        {trust.status === "identity-changed" ? (
+          <Button size="sm" variant="outline" onClick={onTrust}>
+            Trust new key
+          </Button>
+        ) : null}
+      </div>
+      {trust.fingerprint ? (
+        <code className="text-xs text-muted-foreground">
+          {trust.fingerprint}
+        </code>
+      ) : null}
+      {blocked ? (
+        <p className="text-xs text-destructive">
+          Keys aren't shared with this member until you compare the fingerprint
+          with them and trust it.
+        </p>
+      ) : null}
+    </div>
+  );
 };
 
 const roleLabel = (role: MembershipRole | undefined): string =>
@@ -922,6 +974,80 @@ export const WorkspaceShell = ({
     membershipTick,
     displayBoundary.connection,
   ]);
+
+  // ADR 0015: each Member's account identity, pinned on first sight in this
+  // browser, with a fingerprint for out-of-band comparison. A changed
+  // identity blocks sharing keys until it is explicitly re-trusted.
+  const [memberTrust, setMemberTrust] = useState<
+    ReadonlyMap<
+      string,
+      Readonly<{
+        status: string;
+        fingerprint: string | null;
+        presentedIdentity: Uint8Array | null;
+      }>
+    >
+  >(new Map());
+  const [memberTrustTick, setMemberTrustTick] = useState(0);
+  // accountUnlocked and memberTrustTick are refresh triggers: the AMK lives in a ref
+  useEffect(() => {
+    const serverProfileId = displayBoundary.profile.serverProfileId;
+    const ownUserId = displayBoundary.session.userId;
+    if (
+      !membershipState ||
+      !browserDeviceId ||
+      !serverProfileId ||
+      !ownUserId
+    ) {
+      setMemberTrust(new Map());
+      return;
+    }
+    let cancelled = false;
+    void resolveMemberTrust({
+      pin: { serverProfileId, origin: displayBoundary.profile.origin },
+      deviceId: browserDeviceId,
+      ownUserId,
+      accountMasterKey: accountMasterKeyRef.current,
+      members: membershipState.memberships,
+    })
+      .then((trust) => {
+        if (!cancelled) setMemberTrust(trust);
+      })
+      .catch(() => {
+        if (!cancelled) setMemberTrust(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    membershipState,
+    browserDeviceId,
+    displayBoundary.profile.serverProfileId,
+    displayBoundary.profile.origin,
+    displayBoundary.session.userId,
+    accountUnlocked,
+    memberTrustTick,
+  ]);
+
+  const trustMemberKey = async (userId: string) => {
+    const serverProfileId = displayBoundary.profile.serverProfileId;
+    const trust = memberTrust.get(userId);
+    if (!serverProfileId || !browserDeviceId || !trust?.presentedIdentity)
+      return;
+    if (
+      !window.confirm(
+        `Trust this member's new account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`,
+      )
+    )
+      return;
+    await retrustMember(
+      { serverProfileId, origin: displayBoundary.profile.origin },
+      browserDeviceId,
+      userId,
+      trust.presentedIdentity,
+    );
+    setMemberTrustTick((tick) => tick + 1);
+  };
 
   // Keep the invitations addressed to the signed-in User current, so an
   // invitee who has not yet joined a Team still sees the invitation they hold.
@@ -3289,6 +3415,12 @@ export const WorkspaceShell = ({
                                       {member.name ??
                                         `GitHub ${member.githubSubject}`}
                                     </div>
+                                    <MemberAccountTrust
+                                      trust={memberTrust.get(member.userId)}
+                                      onTrust={() =>
+                                        void trustMemberKey(member.userId)
+                                      }
+                                    />
                                   </TableCell>
                                   {canAdminister ? (
                                     <TableCell>

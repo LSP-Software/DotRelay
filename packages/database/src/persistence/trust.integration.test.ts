@@ -23,6 +23,8 @@ import type {
 } from "..";
 import {
   AccountKeyRepository,
+  AccountRosterConflictError,
+  AccountRosterRepository,
   AdministrationRepository,
   createDatabaseClient,
   DeviceRepository,
@@ -1634,6 +1636,105 @@ integrationDescribe("trust workflow integration", () => {
       }),
     ).rejects.toBeInstanceOf(OperationConflictError);
   });
+  test("stores Account Device rosters one version at a time under one identity", async () => {
+    const user = await createUserFixture();
+    const device = await createActiveDevice(user.id);
+    const other = await createUserFixture();
+    const otherDevice = await createActiveDevice(other.id);
+    const rosters = new AccountRosterRepository();
+    const identity = new Uint8Array(32).fill(0x31);
+    const publish = async (
+      version: bigint,
+      label: string,
+      options: {
+        readonly accountIdentity?: Uint8Array;
+        readonly protocolObject?: ProtocolObjectInput;
+        readonly actor?: { userId: string; deviceId: string };
+      } = {},
+    ) => {
+      const actor = options.actor ?? { userId: user.id, deviceId: device.id };
+      const operation = {
+        ...(await createOperationInput(actor.userId, label, "ACCOUNT_KEY")),
+        actorDeviceId: actor.deviceId,
+      };
+      const protocolObject =
+        options.protocolObject ?? (await createProtocolObjectInput(24));
+      await stageObject({
+        operation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+      return {
+        protocolObject,
+        result: () =>
+          rosters.publish(database, {
+            operation,
+            roster: {
+              protocolObject,
+              version,
+              accountIdentity: options.accountIdentity ?? identity,
+            },
+          }),
+      };
+    };
+
+    // Version 1 must come first.
+    await expect(
+      (await publish(2n, "roster-skip")).result(),
+    ).rejects.toBeInstanceOf(AccountRosterConflictError);
+    const first = await publish(1n, "roster-1");
+    expect((await first.result()).idempotent).toBe(false);
+    // A byte-identical retry under a fresh operation is idempotent.
+    expect(
+      (
+        await (
+          await publish(1n, "roster-1-again", {
+            protocolObject: first.protocolObject,
+          })
+        ).result()
+      ).idempotent,
+    ).toBe(true);
+    // A different roster for the same version conflicts.
+    await expect(
+      (await publish(1n, "roster-1-rival")).result(),
+    ).rejects.toBeInstanceOf(AccountRosterConflictError);
+    // A later version must name the identity of version 1.
+    await expect(
+      (
+        await publish(2n, "roster-2-other-key", {
+          accountIdentity: new Uint8Array(32).fill(0x32),
+        })
+      ).result(),
+    ).rejects.toBeInstanceOf(AccountRosterConflictError);
+    expect((await (await publish(2n, "roster-2")).result()).idempotent).toBe(
+      false,
+    );
+    // Rollback to an older version number is refused.
+    await expect(
+      (await publish(2n, "roster-2-rival")).result(),
+    ).rejects.toBeInstanceOf(AccountRosterConflictError);
+    const latest = await rosters.latestFor(database, [user.id, other.id]);
+    expect(latest.get(other.id)).toBeNull();
+    expect(latest.get(user.id)?.length).toBeGreaterThan(0);
+    // Another User's Device cannot publish this User's roster: the actor's
+    // own roster history is separate.
+    expect(
+      (
+        await (
+          await publish(1n, "other-roster-1", {
+            actor: { userId: other.id, deviceId: otherDevice.id },
+          })
+        ).result()
+      ).idempotent,
+    ).toBe(false);
+    expect(
+      await database.accountDeviceRosterObject.count({
+        where: { userId: user.id },
+      }),
+    ).toBe(2);
+  });
+
   test("backfills Project Epoch Key Links: first wins, retries are idempotent, other links conflict", async () => {
     const owner = await createUserFixture();
     const ownerDevice = await createActiveDevice(owner.id);

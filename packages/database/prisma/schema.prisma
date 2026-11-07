@@ -144,6 +144,7 @@ enum AuditEventKind {
   ROLLBACK_PUBLISHED
   EPOCH_ROTATED
   EPOCH_KEY_LINK_PUBLISHED
+  ACCOUNT_DEVICE_ROSTER_PUBLISHED
   GRANT_CREATED
   DEVICE_ENROLLMENT_STARTED
   DEVICE_ENROLLMENT_APPROVED
@@ -271,6 +272,7 @@ model User {
   auditEvents                 AuditEvent[]              @relation("AuditActor")
   accountKeyWrappers          AccountKeyWrapperObject[]
   accountKeyEnvelopes         AccountKeyEnvelopeObject[]
+  accountDeviceRosters        AccountDeviceRosterObject[]
   accountKeyEnvelopeOwned     AccountKeyEnvelopeObject[] @relation("EnvelopeOwnerUser")
   accountKeyTransfers         AccountKeyTransferObject[]
   identityRollovers           IdentityRolloverObject[]
@@ -486,6 +488,7 @@ model ProtocolObject {
   grantObject          GrantObject?
   epochTransition      EpochTransitionObject?
   epochKeyLink         ProjectEpochKeyLinkObject?
+  accountDeviceRoster  AccountDeviceRosterObject?
   laneObject           LaneObject?
   laneCommitment       LaneCommitmentObject?
   manifestDescriptor   ManifestDescriptor?
@@ -707,6 +710,23 @@ model ProjectEpochKeyLinkObject {
 
   @@unique([projectId, toEpoch])
   @@map("project_epoch_key_links")
+}
+
+// A User's Devices signed by their account signing key (ADR 0015). Versions
+// advance by one; every version names the identity of version 1.
+model AccountDeviceRosterObject {
+  protocolObjectId String   @id @db.Uuid
+  userId           String   @db.Uuid
+  version          BigInt   @db.BigInt
+  accountIdentity  Bytes    @db.ByteA
+  operationId      String   @db.Uuid
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  protocolObject ProtocolObject @relation(fields: [protocolObjectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, version])
+  @@map("account_device_rosters")
 }
 
 model LaneObject {

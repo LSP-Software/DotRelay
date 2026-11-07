@@ -31,6 +31,11 @@ export type {
   ProjectEpochKeyLinkInput,
 } from "./epoch-grants";
 export {
+  AccountRosterConflictError,
+  type AccountRosterInput,
+  AccountRosterRepository,
+} from "./account-roster";
+export {
   GrantRepository,
   ProjectEpochKeyLinkConflictError,
   ProjectEpochKeyLinkRepository,

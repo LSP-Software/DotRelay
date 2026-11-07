@@ -251,7 +251,7 @@ export const validateProtocolProjection = (input: {
     fail("protocol object suite is not supported");
   if (input.formatVersion !== DOTRELAY_PROTOCOL_FORMAT_VERSION)
     fail("protocol object format version is not supported");
-  if (!Number.isInteger(input.kind) || input.kind < 1 || input.kind > 23)
+  if (!Number.isInteger(input.kind) || input.kind < 1 || input.kind > 24)
     fail("protocol object kind is not supported");
   const bytes = validateProtocolBytes(
     input.canonicalBytes,

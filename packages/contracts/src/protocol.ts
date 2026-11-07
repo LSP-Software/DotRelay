@@ -155,6 +155,41 @@ const validateSignedEnvelope = (object: ProtocolObject, kind: number): void => {
     contractError("invalid_crypto_object");
 };
 
+export const MAX_ROSTER_DEVICES = 256;
+const ROSTER_ENTRY_FIELDS = new Set([10, 32, 39, 41, 79, 100]);
+
+// An Account Device roster (ADR 0015) lists each Device once, active or
+// revoked; only a revoked entry carries a revoked-at time.
+const validateRosterEntries = (object: ProtocolObject): void => {
+  const version = numberValue(mapValue(object, 98));
+  if (version === undefined || version < 1)
+    contractError("invalid_crypto_object");
+  const entries = mapValue(object, 99);
+  if (!Array.isArray(entries) || entries.length > MAX_ROSTER_DEVICES)
+    contractError("invalid_crypto_object");
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!(entry instanceof Map)) contractError("invalid_crypto_object");
+    for (const [field, value] of entry) {
+      if (!ROSTER_ENTRY_FIELDS.has(field))
+        contractError("invalid_crypto_object");
+      validateValueType(field, value);
+    }
+    const deviceId = requireBytes(entry, 10, 16);
+    requireBytes(entry, 39, 32);
+    requireBytes(entry, 41, 32);
+    if (numberValue(mapValue(entry, 32)) === undefined)
+      contractError("invalid_crypto_object");
+    const lifecycle = numberValue(mapValue(entry, 79));
+    validateEnumSet(lifecycle, [2, 3]);
+    if ((lifecycle === 3) !== entry.has(100))
+      contractError("invalid_crypto_object");
+    const id = [...deviceId].join(",");
+    if (seen.has(id)) contractError("invalid_crypto_object");
+    seen.add(id);
+  }
+};
+
 const validateConditionalValues = (
   object: ProtocolObject,
   kind: number,
@@ -314,6 +349,7 @@ const validateConditionalValues = (
     )
       contractError("invalid_crypto_object");
   }
+  if (kind === 24) validateRosterEntries(object);
   if (kind === 22) {
     if (numberValue(mapValue(object, 88)) !== 2)
       contractError("invalid_crypto_object");

@@ -75,6 +75,7 @@ export {
   ARGON2ID_POLICY,
   encodeProtocolObject,
   isSignedField,
+  MAX_ROSTER_DEVICES,
   parseProtocolObject,
   protocolObjectFromFields,
   signatureInput,

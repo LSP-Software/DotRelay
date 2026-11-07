@@ -26,6 +26,7 @@ import {
   loadDeviceSigningKey,
 } from "@/lib/account-recovery";
 import { readStoredBrowserDeviceId } from "@/lib/browser-storage";
+import { establishBrowserAccountTrust } from "@/lib/account-trust";
 import { describeThisBrowser } from "@/lib/device-describe";
 import {
   environmentContextIdentity,
@@ -485,7 +486,7 @@ export const loadWorkspaceSession = (
   cancellation: { readonly current: boolean },
 ): Promise<void> => {
   const {
-    boundary,
+    boundary: untrustedBoundary,
     profileId,
     teamId,
     projectId,
@@ -501,7 +502,7 @@ export const loadWorkspaceSession = (
   const targetKey = environmentContextKey(
     environmentContextIdentity({
       profileId,
-      serverProfileId: boundary.profile.serverProfileId,
+      serverProfileId: untrustedBoundary.profile.serverProfileId,
       teamId,
       projectId,
       environmentId,
@@ -509,9 +510,9 @@ export const loadWorkspaceSession = (
   );
   const boundaryMatchesSelection =
     environmentId === null ||
-    (boundary.environment.id === environmentId &&
-      boundary.environment.projectId === projectId &&
-      boundary.environment.teamId === teamId);
+    (untrustedBoundary.environment.id === environmentId &&
+      untrustedBoundary.environment.projectId === projectId &&
+      untrustedBoundary.environment.teamId === teamId);
   const cancelled = () => cancellation.current;
   const clearSelectedSession = () => {
     if (cancelled()) return;
@@ -521,11 +522,11 @@ export const loadWorkspaceSession = (
     if (!cancelled()) setContextStale(false);
   };
   const loadSession = async () => {
-    const environment = boundary.environment;
-    const device = boundary.device;
-    const profile = boundary.profile;
+    const environment = untrustedBoundary.environment;
+    const device = untrustedBoundary.device;
+    const profile = untrustedBoundary.profile;
     if (
-      !boundary.session.userId ||
+      !untrustedBoundary.session.userId ||
       !profile.serverProfileId ||
       !device.active ||
       !device.id ||
@@ -555,6 +556,24 @@ export const loadWorkspaceSession = (
       if (cancelled()) return;
       if (!keyMaterial.encryptionPublicKey)
         throw new Error("stored Device public key is missing");
+      // ADR 0015: from here on every key list comes from a verified Account
+      // Device roster. A roster this account's key did not sign closes the
+      // session instead of trusting the service's Device list.
+      const { boundary } = await establishBrowserAccountTrust({
+        boundary: untrustedBoundary,
+        accountMasterKey: accountMasterKey.get(),
+        actor: recoveryActor,
+        encryptionPublicKey: new Uint8Array(
+          await globalThis.crypto.subtle.exportKey(
+            "raw",
+            keyMaterial.encryptionPublicKey,
+          ),
+        ),
+        signingPublicKey: hexToBytes(device.signingPublicKey),
+      });
+      if (cancelled()) return;
+      if (!boundary.session.userId)
+        throw new Error("the narrowed boundary lost its session");
       let userDefinedValueSecret: Uint8Array | undefined;
       const userValueMaster = accountMasterKey.get();
       const ownerUserIdText = boundary.session.userId;

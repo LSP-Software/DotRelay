@@ -126,6 +126,7 @@ import {
 } from "./workflow";
 import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
 import { rotateProjectEpoch } from "./workflow-epoch-rotation";
+import { listTeamMembers, trustTeamMember } from "./workflow-team";
 
 export { renderHelp, renderPowerHelp } from "./help";
 
@@ -1630,6 +1631,48 @@ const execute = async (
         },
         parsed,
       ),
+    };
+  }
+  if (parsed.command === "team") {
+    if (parsed.noInput && !parsed.profile)
+      throw new CliInvocationError(
+        `--no-input requires explicit --profile for team ${parsed.subcommand}`,
+      );
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
+    const credentials = localCredentials(runtime);
+    const stateDirectory =
+      runtime.stateDirectory ??
+      dirname(runtime.profilePath ?? profileCatalogPath());
+    const options = {
+      profile,
+      credentials,
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.networkPolicy
+        ? { networkPolicy: runtime.networkPolicy }
+        : {}),
+      ...(runtime.deviceStorage
+        ? { deviceStorage: runtime.deviceStorage }
+        : {}),
+      ...(runtime.admin ? { admin: runtime.admin } : {}),
+      ...(runtime.deviceId ? { deviceId: runtime.deviceId } : {}),
+      stateDirectory,
+      contextPath: runtime.worktreeConfig ?? "",
+      ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+      ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+      ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+      noInput: parsed.noInput,
+      force: parsed.force,
+      stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
+    };
+    return {
+      value:
+        parsed.subcommand === "trust"
+          ? await trustTeamMember(options, parsed)
+          : await listTeamMembers(options, parsed),
     };
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {

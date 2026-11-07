@@ -193,6 +193,14 @@ it does not revoke Values they already saw, so rotate a leaked secret itself as 
 rebuilds earlier epoch keys from the Project's key chain, and publishes any link missing from a
 Project rotated before links existed when the Account Master Key holds both keys.
 
+`team members` lists the linked Team's Members with the state of their account identity:
+verified, unverified (no signed Device roster yet), or blocked because the account key changed or
+the roster rolled back. `--fingerprints` adds each Member's account fingerprint for comparison out
+of band. The first time this installation sees a Member, it pins their identity. `team trust
+<user-id>` re-trusts a Member whose identity changed, after confirmation. Until then the CLI does
+not accept that Member's Devices. Every protected command also verifies this account's own
+roster and publishes a new one when this Device holds the AMK and is not listed yet.
+
 `pull` writes decrypted Values to `.env` by default. Before any Value is decrypted or moved, `pull`
 checks the output path's Git tracking state in the repository it resolves against (including linked
 worktrees and custom `--output` paths). A Git-tracked output is refused with the two safe choices:

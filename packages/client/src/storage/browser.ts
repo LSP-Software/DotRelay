@@ -34,7 +34,29 @@ export type BrowserDeviceStorage = Readonly<{
   load(scope: DeviceStorageScope): Promise<DevicePrivateBundle>;
   remove(scope: DeviceStorageScope): Promise<void>;
   wipe(): Promise<void>;
+  /**
+   * Account trust pins (ADR 0015), wrapped by the same origin-bound key as
+   * the Device bundle and stored in a record derived from the Device id.
+   */
+  saveAccountTrustPins(deviceId: Uint8Array, text: string): Promise<void>;
+  loadAccountTrustPins(deviceId: Uint8Array): Promise<string | null>;
 }>;
+
+// The record slot for a Device's account trust pins: a 16-byte id derived
+// from the Device id, so it never collides with a Device bundle record.
+const accountTrustPinsSlot = async (
+  deviceId: Uint8Array,
+  runtime: Crypto,
+): Promise<Uint8Array> => {
+  const label = new TextEncoder().encode("dotrelay-account-trust-pins\0");
+  const input = new Uint8Array(label.length + deviceId.length);
+  input.set(label);
+  input.set(deviceId, label.length);
+  return new Uint8Array(await runtime.subtle.digest("SHA-384", input)).slice(
+    0,
+    16,
+  );
+};
 
 const records = new Map<string, EncryptedDeviceRecord>();
 const wrappingKeys = new Map<string, CryptoKey>();
@@ -362,6 +384,41 @@ export const createBrowserDeviceStorage = (
     },
     remove: async (scope) => {
       await recordStore.remove(scope);
+    },
+    saveAccountTrustPins: async (deviceId, text) => {
+      const slot = await accountTrustPinsSlot(deviceId, runtime);
+      const wrappingKey = await resolveWrappingKey();
+      const wrapped = await wrapBytes(
+        wrappingKey,
+        new TextEncoder().encode(text),
+        wrappingAssociatedData(pin, slot),
+        runtime,
+      );
+      await recordStore.write(
+        Object.freeze({
+          version: 1,
+          scope: Object.freeze({ pin, deviceId: slot }),
+          iv: wrapped.iv,
+          ciphertext: wrapped.ciphertext,
+          wrappingKey,
+        }),
+      );
+    },
+    loadAccountTrustPins: async (deviceId) => {
+      const slot = await accountTrustPinsSlot(deviceId, runtime);
+      const record = await recordStore.read({ pin, deviceId: slot });
+      if (!record) return null;
+      const wrappingKey = record.wrappingKey ?? (await resolveWrappingKey());
+      wrappingKeys.set(pinKey, wrappingKey);
+      return new TextDecoder().decode(
+        await unwrapBytes(
+          wrappingKey,
+          record.iv,
+          record.ciphertext,
+          wrappingAssociatedData(pin, slot),
+          runtime,
+        ),
+      );
     },
     wipe: async () => {
       wrappingKeys.delete(pinKey);
