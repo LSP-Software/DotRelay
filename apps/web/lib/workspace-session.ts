@@ -13,6 +13,7 @@ import {
   fromBase64,
   hexToBytes,
   openProjectEpochEnvelope,
+  projectGrantVerification,
   publishAccountKeyEnvelope,
 } from "@/lib/account-keys";
 import {
@@ -523,6 +524,7 @@ export const loadWorkspaceSession = (
           sharedValueSecret = await openProjectEpochGrant(
             fromBase64(boundary.epochGrant),
             keyMaterial.encryptionPrivateKey,
+            projectGrantVerification(boundary),
           );
         } catch {
           sharedValueSecret = undefined;

@@ -36,6 +36,7 @@ import {
   hexToBytes,
   openAccountKeyTransferForDevice,
   openProjectEpochEnvelope,
+  projectGrantVerification,
   publishAccountKeyEnvelope,
   publishAccountKeyWrapper,
   revokeAccountKeyWrapper,
@@ -519,6 +520,7 @@ const prepareRecoveryCeremony = async (
                 }),
               )
             ).encryptionPrivateKey,
+            projectGrantVerification(boundary),
           )
         : globalThis.crypto.getRandomValues(new Uint8Array(32));
       envelopeProjectEpoch = Number(environment.projectEpoch ?? 1);

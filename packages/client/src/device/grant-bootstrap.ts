@@ -11,6 +11,7 @@ import {
   signProtocolObject,
   uuidToBytes,
 } from "@dotrelay/contracts";
+import { isSignedByTrustedKey } from "../trust/verify";
 
 export type ProjectEpochGrantBootstrap = Readonly<{
   readonly objectId: string;
@@ -116,9 +117,49 @@ export const createProjectEpochGrantBootstrap = async (
   }
 };
 
+// The context a caller expects a Project grant to carry. Recipient, Project
+// and epoch are always known; the Server Profile and Team are checked when the
+// caller knows them.
+export type ProjectEpochGrantExpectation = Readonly<{
+  readonly recipientDeviceId: string;
+  readonly projectId: string;
+  readonly projectEpoch: number;
+  readonly serverProfileId?: string;
+  readonly teamId?: string;
+}>;
+
+export type ProjectEpochGrantVerification = Readonly<{
+  readonly expected: ProjectEpochGrantExpectation;
+  // Ed25519 signing public keys (raw 32 bytes or SPKI) of the Devices allowed
+  // to have issued the grant.
+  readonly trustedSigningKeys: readonly Uint8Array[];
+}>;
+
+export class ProjectEpochGrantVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectEpochGrantVerificationError";
+  }
+}
+
+const sameBytes = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1)
+    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  return difference === 0;
+};
+
+// Open a kind-7 Project grant. The server is untrusted, so the grant's
+// field-4 signature must verify against a key in the caller's trusted signing
+// set and its recipient, Project, epoch (and Server Profile and Team when
+// known) must match what the caller expects. Every check runs before the
+// envelope is decrypted; the envelope itself is unchanged so stored grants
+// keep opening.
 export const openProjectEpochGrant = async (
   canonicalBytes: Uint8Array,
   recipientPrivateKey: CryptoKey,
+  verification: ProjectEpochGrantVerification,
 ): Promise<Uint8Array> => {
   const object = parseProtocolObject(canonicalBytes);
   if (object.get(1) !== 7) throw new TypeError("expected a grant object");
@@ -128,6 +169,35 @@ export const openProjectEpochGrant = async (
       throw new TypeError(`grant object is missing field ${key}`);
     return value;
   };
+  if (!(await isSignedByTrustedKey(object, verification.trustedSigningKeys)))
+    throw new ProjectEpochGrantVerificationError(
+      "project grant signature is not authorized by any trusted key",
+    );
+  const { expected } = verification;
+  const checkId = (field: number, value: string | undefined): void => {
+    if (value === undefined) return;
+    const actual = object.get(field);
+    if (
+      !(actual instanceof Uint8Array) ||
+      !sameBytes(actual, uuidToBytes(value))
+    )
+      throw new ProjectEpochGrantVerificationError(
+        `project grant field ${field} binding mismatch`,
+      );
+  };
+  checkId(25, expected.recipientDeviceId);
+  checkId(13, expected.projectId);
+  checkId(8, expected.serverProfileId);
+  checkId(11, expected.teamId);
+  const epoch = object.get(30);
+  if (
+    (typeof epoch !== "number" && typeof epoch !== "bigint") ||
+    !Number.isSafeInteger(expected.projectEpoch) ||
+    BigInt(epoch) !== BigInt(expected.projectEpoch)
+  )
+    throw new ProjectEpochGrantVerificationError(
+      "project grant epoch binding mismatch",
+    );
   const envelope = canonicalEncode(
     new Map<number, CborValue>([
       [0, requiredField(0)],

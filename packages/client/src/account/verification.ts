@@ -2,8 +2,8 @@ import {
   type ProtocolObject,
   parseProtocolObject,
   sha384,
-  verifyProtocolObject,
 } from "@dotrelay/contracts";
+import { isSignedByTrustedKey } from "../trust/verify";
 
 import {
   ACCOUNT_KEY_ENVELOPE_KIND,
@@ -110,20 +110,7 @@ const verifySignature = async (
   const signature = object.get(4);
   if (!(signature instanceof Uint8Array) || signature.length !== 64)
     throw new AccountKeyVerificationError("signature field is missing");
-  for (const keyBytes of trustedKeys.keys) {
-    try {
-      const publicKey = await crypto.subtle.importKey(
-        keyBytes.length === 32 ? "raw" : "spki",
-        new Uint8Array(keyBytes).buffer,
-        { name: "Ed25519" },
-        false,
-        ["verify"],
-      );
-      if (await verifyProtocolObject(object, signature, publicKey)) return;
-    } catch {
-      // A malformed trusted key must not mask a valid one.
-    }
-  }
+  if (await isSignedByTrustedKey(object, trustedKeys.keys)) return;
   throw new AccountKeyVerificationError(
     "account key object signature is not authorized by any trusted key",
   );
