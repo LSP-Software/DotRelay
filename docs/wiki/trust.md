@@ -103,7 +103,10 @@ AES-256-GCM, with associated data that binds the Server Profile, Team, Project, 
 to-epoch, and signed by the rotating Device.
 
 - The rotating client generates the new key first and stages the link with the transitions. A
-  client that does not hold the current key cannot rotate.
+  client that does not hold the current key cannot rotate. Until the commit is confirmed, the CLI
+  keeps the new key sealed to its own Device in its state directory. If the answer is lost, the
+  next `dotrelay pull` adopts the key once the served link for the new epoch opens with it, and
+  discards it if the Project never reached that epoch.
 - The API rejects a rotation that does not carry exactly one valid link for `expectedEpoch ->
 newEpoch`, signed by the acting Device. The link is stored in `project_epoch_key_links` in the
   same transaction as the epoch advance. A byte-identical retry is idempotent.

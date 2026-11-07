@@ -28,9 +28,20 @@ import {
   safeProjectEpoch,
   type WorkflowOptions,
 } from "./workflow-core";
+import {
+  clearPendingRotation,
+  writePendingRotation,
+} from "./workflow-pending-rotation";
 import { syncWorkflow } from "./workflow-session";
 
 const ROTATE_QUESTION = "Rotate this project's keys?";
+
+// A problem response in the 4xx range is the service refusing the rotation;
+// anything else (no answer, a 5xx) leaves its outcome unknown.
+const isDefinitiveRejection = (error: unknown): boolean =>
+  error instanceof ProtocolTransportError &&
+  error.problem.status >= 400 &&
+  error.problem.status < 500;
 
 export type RotationTarget = Readonly<{
   readonly environmentId: string;
@@ -147,6 +158,25 @@ export const rotateProjectEpoch = async (
     previousEpochKey,
   });
   const operationId = crypto.randomUUID();
+  const workflow = synced.workflow;
+  const encryptionPublicKey = workflow.keys.encryptionPublicKey;
+  if (!encryptionPublicKey)
+    throw new CliError(
+      "crypto",
+      "this device has no encryption key to keep the new project key safe during the rotation",
+      {},
+      "epoch_key_unavailable",
+    );
+  const settleFailure = async (error: unknown): Promise<never> => {
+    await workflow.transport
+      .cancel({ operationId, deviceId: workflow.deviceId })
+      .catch(() => undefined);
+    await clearPendingRotation(options, context.projectId);
+    artifacts.newEpochKey.fill(0);
+    if (error instanceof CliError || error instanceof CliInvocationError)
+      throw error;
+    throw rotationTransportFailure(error);
+  };
   let rotated: { readonly projectEpoch: string };
   try {
     await synced.workflow.transport.begin({
@@ -163,19 +193,43 @@ export const rotateProjectEpoch = async (
         objectId: staged.objectId,
         bytes: staged.bytes,
       });
-    rotated = await synced.workflow.transport.epochRotate({
+  } catch (error) {
+    // Nothing was committed yet: begin and staging never advance the epoch.
+    return settleFailure(error);
+  }
+  // From here the rotation may commit even if no answer arrives, so the new
+  // key is kept sealed to this Device until the outcome is known.
+  await writePendingRotation(options, {
+    operationId,
+    projectId: context.projectId,
+    newEpoch: previousEpoch + 1,
+    newEpochKey: artifacts.newEpochKey,
+    encryptionPublicKey,
+  });
+  const attempt = () =>
+    workflow.transport.epochRotate({
       operationId,
-      deviceId: synced.workflow.deviceId,
+      deviceId: workflow.deviceId,
       request: artifacts.request,
     });
+  try {
+    rotated = await attempt();
   } catch (error) {
-    await synced.workflow.transport
-      .cancel({ operationId, deviceId: synced.workflow.deviceId })
-      .catch(() => undefined);
-    artifacts.newEpochKey.fill(0);
-    if (error instanceof CliError || error instanceof CliInvocationError)
-      throw error;
-    throw rotationTransportFailure(error);
+    if (isDefinitiveRejection(error)) return settleFailure(error);
+    // No answer, or a server error: replaying the same operation returns the
+    // committed outcome idempotently, or a definitive rejection.
+    try {
+      rotated = await attempt();
+    } catch (retryError) {
+      if (isDefinitiveRejection(retryError)) return settleFailure(retryError);
+      artifacts.newEpochKey.fill(0);
+      throw new CliError(
+        "transient",
+        "the rotation's outcome is unknown. Its new project key is kept sealed to this device: run dotrelay pull once the Server Profile is reachable to finish it. Do not run project rotate again before that",
+        {},
+        "epoch_rotation_uncertain",
+      );
+    }
   }
   await storeRotatedEpochKey(
     options,
@@ -183,6 +237,7 @@ export const rotateProjectEpoch = async (
     previousEpoch + 1,
     artifacts.newEpochKey,
   );
+  await clearPendingRotation(options, context.projectId);
   const environmentIds = rotationEnvironments.map(
     (target) => target.environmentId,
   );

@@ -35,6 +35,11 @@ import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
 import {
+  clearPendingRotation,
+  grantRecoveredKeyToSelf,
+  resolvePendingRotation,
+} from "./workflow-pending-rotation";
+import {
   accountKeyTrustedKeys,
   type Boundary,
   adminClient,
@@ -267,7 +272,21 @@ export const loadWorkflowSession = async (
   }
   let epochKey: Uint8Array | undefined;
   let epochEnvelopePublished = false;
+  // A rotation from this Device whose commit was uncertain left its new key
+  // sealed locally. When the served link proves it committed, that key is
+  // this epoch's key: adopt it before anything could mint another one.
+  const recoveredRotationKey = await resolvePendingRotation({
+    options,
+    boundary,
+    encryptionPrivateKey: keys.encryptionPrivateKey,
+    trustedSigningKeys: accountKeyTrustedKeys(
+      boundary,
+      await exportSigningPublicKey(deviceSigningPublicKey),
+    ).keys,
+  });
+  if (recoveredRotationKey) epochKey = recoveredRotationKey;
   if (
+    epochKey === undefined &&
     accountMasterKey !== null &&
     boundary.accountKeyEnvelope !== undefined &&
     boundary.environment.projectId !== null
@@ -440,6 +459,18 @@ export const loadWorkflowSession = async (
       ["objectId", "idempotent"],
       { idempotencyKey: operationId },
     );
+  }
+  if (recoveredRotationKey && boundary.environment.projectId) {
+    if (accountMasterKey === null)
+      await grantRecoveredKeyToSelf({
+        options,
+        boundary,
+        deviceId,
+        encryptionPublicKey: deviceEncryptionPublicKey,
+        signingPrivateKey: keys.signingPrivateKey,
+        epochKey: recoveredRotationKey,
+      });
+    await clearPendingRotation(options, boundary.environment.projectId);
   }
   // A locked Device's missing Account Master Key is surfaced by the device
   // backup/recover commands, not here: the missing-grant action above already
