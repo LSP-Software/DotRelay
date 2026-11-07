@@ -5,6 +5,7 @@ import {
   decodeRecoveryCode,
   openAccountKeyEnvelope,
   openAccountKeyTransfer,
+  type ProjectEpochGrantVerification,
   type ProtocolObject,
   parseAccountKeyEnvelope,
   parseAccountKeyTransfer,
@@ -444,6 +445,33 @@ export const accountKeyTrustedKeys = (
     if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
   for (const key of extraKeys) addHex(key);
   return Object.freeze({ keys });
+};
+
+// What a Project grant on this boundary must prove before it is opened: a
+// signature by a Device in this browser's signing trust history, addressed to
+// this Device, for the boundary's Project and epoch on this Server Profile and
+// Team. A grant the server forged or redirected fails before decryption.
+export const projectGrantVerification = (
+  boundary: WorkspaceBoundary,
+): ProjectEpochGrantVerification => {
+  const { device, environment, profile } = boundary;
+  if (!device.id || !device.signingPublicKey || !environment.projectId)
+    throw new Error("This browser can't verify the project's key grant.");
+  return Object.freeze({
+    expected: Object.freeze({
+      recipientDeviceId: device.id,
+      projectId: environment.projectId,
+      projectEpoch: Number(environment.projectEpoch ?? 1),
+      ...(profile.serverProfileId
+        ? { serverProfileId: profile.serverProfileId }
+        : {}),
+      ...(environment.teamId ? { teamId: environment.teamId } : {}),
+    }),
+    trustedSigningKeys: accountKeyTrustedKeys(
+      boundary,
+      hexToBytes(device.signingPublicKey),
+    ).keys,
+  });
 };
 
 // The identity fields every account-key object in this workspace is bound

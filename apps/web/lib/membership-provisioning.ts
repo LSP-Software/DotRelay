@@ -10,6 +10,7 @@ import {
   type AccountKeyWrapperEntry,
   fromBase64,
   openProjectEpochEnvelope,
+  projectGrantVerification,
 } from "./account-keys";
 import { accountKeyVerification } from "./account-recovery";
 import {
@@ -97,6 +98,7 @@ export const provisionTeamMember = async (
         key = await openProjectEpochGrant(
           fromBase64(scoped.epochGrant),
           keys.encryptionPrivateKey,
+          projectGrantVerification(scoped),
         );
       if (!key)
         throw new Error(

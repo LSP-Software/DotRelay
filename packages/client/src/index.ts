@@ -91,6 +91,9 @@ export {
   createProjectEpochGrantBootstrap,
   openProjectEpochGrant,
   type ProjectEpochGrantBootstrap,
+  type ProjectEpochGrantExpectation,
+  type ProjectEpochGrantVerification,
+  ProjectEpochGrantVerificationError,
 } from "./device/grant-bootstrap";
 export {
   createMembershipProvisioning,
@@ -216,13 +219,6 @@ export {
   verifySyncPage,
 } from "./sync/publication";
 export {
-  detectEquivocation,
-  type EquivocationReport,
-  type ReconciliationInput,
-  type ReconciliationOutcome,
-  reconcileHead,
-} from "./sync/reconcile";
-export {
   createVerifiedEnvironmentSession,
   type VerifiedEnvironmentSession,
 } from "./sync/session";
@@ -242,17 +238,6 @@ export {
   type SyncInput,
 } from "./sync/transport";
 export {
-  acknowledgeHistoryTrustReset,
-  createTrustedHeadStore,
-  HistoryTrustResetRequiredError,
-  hashRevisionBytes,
-  revisionParentLink,
-  type TrustedHead,
-  TrustedHeadContinuityError,
-  type TrustedHeadStore,
-  trustedHeadFromRevision,
-} from "./trust/head";
-export {
   type ClientCryptoState,
   type ClientTrustPhase,
   createClientCryptoState,
@@ -260,10 +245,8 @@ export {
   validateKeyGenerationTransition,
 } from "./trust/state";
 export {
+  isSignedByTrustedKey,
   ProtocolVerificationError,
-  verifyGrantDigest,
-  verifyRevisionChainLink,
-  verifyRevisionIntegrity,
   verifySignedProtocolObject,
 } from "./trust/verify";
 export { type InlineValueHunk, splitInlineValueDiff } from "./values/diff";

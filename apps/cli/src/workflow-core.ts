@@ -6,6 +6,7 @@ import {
   type createVerifiedEnvironmentSession,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
+  type ProjectEpochGrantVerification,
   loadDeviceKeyMaterial,
   type ProtocolTransport,
   type PublicationContext,
@@ -401,6 +402,39 @@ export const accountKeyTrustedKeys = (
     if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
   for (const key of extraKeys) addHex(key);
   return Object.freeze({ keys });
+};
+
+// What a Project grant on this boundary must prove before it is opened: a
+// signature by a Device in the signing trust history, addressed to this
+// Device, for the boundary's Project and epoch on this Server Profile and
+// Team. A grant the server forged or redirected fails before decryption.
+export const projectGrantVerification = (
+  boundary: Boundary,
+  deviceId: string,
+  serverProfileId: string,
+  localSigningPublicKey: Uint8Array,
+): ProjectEpochGrantVerification => {
+  const projectId = boundary.environment.projectId;
+  if (projectId === null)
+    throw new CliError(
+      "conflict",
+      "the selected Environment has no active Project context",
+      {},
+      "environment_context_missing",
+    );
+  return Object.freeze({
+    expected: Object.freeze({
+      recipientDeviceId: deviceId,
+      projectId,
+      projectEpoch: safeProjectEpoch(boundary.environment.projectEpoch),
+      serverProfileId,
+      ...(boundary.environment.teamId
+        ? { teamId: boundary.environment.teamId }
+        : {}),
+    }),
+    trustedSigningKeys: accountKeyTrustedKeys(boundary, localSigningPublicKey)
+      .keys,
+  });
 };
 
 export const statePath = (directory: string, environmentId: string): string =>

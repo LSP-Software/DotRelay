@@ -41,6 +41,7 @@ import {
   fromBase64,
   opaqueEnvironmentId,
   parseBoundary,
+  projectGrantVerification,
   readTrustedHead,
   resolveRequestedEnvironmentReference,
   safeProjectEpoch,
@@ -368,6 +369,12 @@ export const loadWorkflowSession = async (
     epochKey = await openProjectEpochGrant(
       fromBase64(boundary.epochGrant, "Project epoch grant"),
       keys.encryptionPrivateKey,
+      projectGrantVerification(
+        boundary,
+        deviceId,
+        options.profile.pin.serverProfileId,
+        await exportSigningPublicKey(deviceSigningPublicKey),
+      ),
     );
   } else if (
     epochKey === undefined &&
