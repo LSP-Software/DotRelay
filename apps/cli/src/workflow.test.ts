@@ -862,7 +862,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('DATABASE_URL="postgres://example"');
+    expect(result.stdout).toContain("DATABASE_URL='postgres://example'");
     expect(result.stderr).toBe("");
   });
 
@@ -959,7 +959,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('DATABASE_URL="postgres://example"');
+    expect(result.stdout).toContain("DATABASE_URL='postgres://example'");
     expect(result.stderr).toBe("");
   });
 
@@ -1409,7 +1409,7 @@ describe("protected CLI workflows", () => {
       { ...runtime, worktreeConfig: contextPath },
     );
     expect(reuse.exitCode).toBe(0);
-    expect(reuse.stdout).toContain('DATABASE_URL="postgres://secret"');
+    expect(reuse.stdout).toContain("DATABASE_URL='postgres://secret'");
     expect(runtime.createdEnvironments).toEqual([ids.environment]);
   });
 
@@ -2328,9 +2328,9 @@ describe("protected CLI workflows", () => {
       previous: `${input}.previous`,
     });
     expect(await Bun.file(input).text()).toContain(
-      'DATABASE_URL="postgres://secret"',
+      "DATABASE_URL='postgres://secret'",
     );
-    expect(await Bun.file(input).text()).toContain('API_KEY="tok"');
+    expect(await Bun.file(input).text()).toContain("API_KEY='tok'");
     expect(await Bun.file(`${input}.previous`).text()).toBe(
       "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n",
     );
@@ -2377,7 +2377,7 @@ describe("protected CLI workflows", () => {
     expect(fresh.exitCode).toBe(0);
     expect(JSON.parse(fresh.stdout)).toMatchObject({ ok: true, output });
     const written = await Bun.file(output).text();
-    expect(written).toContain('DATABASE_URL="postgres://secret"');
+    expect(written).toContain("DATABASE_URL='postgres://secret'");
     expect(await Bun.file(`${output}.previous`).exists()).toBe(false);
     const unchanged = await run(
       [
@@ -2436,7 +2436,7 @@ describe("protected CLI workflows", () => {
     );
     expect(pulled.exitCode).toBe(0);
     expect(await Bun.file(input).text()).toContain(
-      'DATABASE_URL="postgres://secret"',
+      "DATABASE_URL='postgres://secret'",
     );
     expect(await Bun.file(`${input}.previous`).text()).toBe(
       "DATABASE_URL=postgres://local\n",
@@ -2739,7 +2739,7 @@ describe("protected CLI workflows", () => {
       const body = JSON.parse(result.stdout) as Record<string, unknown>;
       expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
       expect(await Bun.file(output).text()).toContain(
-        'DATABASE_URL="postgres://secret"',
+        "DATABASE_URL='postgres://secret'",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2776,7 +2776,7 @@ describe("protected CLI workflows", () => {
       expect(body).toMatchObject({ ok: true, output });
       expect("gitExclusion" in body).toBe(false);
       expect(await Bun.file(output).text()).toContain(
-        'DATABASE_URL="postgres://secret"',
+        "DATABASE_URL='postgres://secret'",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -5568,7 +5568,7 @@ describe("pull against an unreadable Manifest", () => {
     );
     expect(ok.exitCode).toBe(0);
     expect(await Bun.file(output).text()).toContain(
-      'DATABASE_URL="postgres://old"',
+      "DATABASE_URL='postgres://old'",
     );
     const headAfterFirst = await Bun.file(
       `${runtime.stateDirectory}/head-${ids.environment}.json`,
@@ -5608,7 +5608,7 @@ describe("pull against an unreadable Manifest", () => {
     // The file keeps the verified older Value and the trusted head does not
     // advance past the last Revision this Device could verify.
     expect(await Bun.file(output).text()).toContain(
-      'DATABASE_URL="postgres://old"',
+      "DATABASE_URL='postgres://old'",
     );
     expect(await Bun.file(output).text()).not.toContain("postgres://new");
     expect(

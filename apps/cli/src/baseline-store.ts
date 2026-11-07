@@ -88,10 +88,13 @@ export const readPublicationBaseline = async (
   const stored = await readFileOrEmpty(publicationBaselinePath(stateDirectory));
   const key = publicationBaselineInputPath(inputPath);
   return (
-    stored.entries.find(
-      (entry) =>
-        entry.environmentId === environmentId && entry.inputPath === key,
-    ) ?? null
+    // Older versions could store duplicates; the last entry is the newest.
+    [...stored.entries]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.environmentId === environmentId && entry.inputPath === key,
+      ) ?? null
   );
 };
 
@@ -107,7 +110,7 @@ export const writePublicationBaseline = async (
       ...stored.entries.filter(
         (entry) =>
           entry.environmentId !== baseline.environmentId ||
-          entry.inputPath !== baseline.inputPath,
+          entry.inputPath !== publicationBaselineInputPath(baseline.inputPath),
       ),
       Object.freeze({
         ...baseline,

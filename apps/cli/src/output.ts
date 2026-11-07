@@ -1,6 +1,7 @@
 import {
   chmod,
   mkdir,
+  open,
   readFile,
   rename,
   unlink,
@@ -32,13 +33,13 @@ export const protectedTemporaryPath = (path: string): string =>
 const writeProtected = async (path: string, data: string | Uint8Array) => {
   const temporary = protectedTemporaryPath(path);
   try {
-    await writeFile(
-      temporary,
-      data,
-      typeof data === "string"
-        ? { encoding: "utf8", mode: 0o600 }
-        : { mode: 0o600 },
-    );
+    const handle = await open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(data);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await chmod(temporary, 0o600);
     await rename(temporary, path);
     if (process.platform !== "win32") await chmod(path, 0o600);
