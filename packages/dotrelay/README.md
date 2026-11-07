@@ -27,4 +27,7 @@ with code 1 and reports the release it is running, the `<platform>-<arch>` this 
 the platforms the package ships, and the supported repair: reinstall this release or the latest
 from npm (`npm install -g dotrelay@<version>`, `npm install -g dotrelay@latest`) or run the
 matching native binary from a DotRelay GitHub release. A `DOTRELAY_BINARY` override that points
-at a missing or unlaunchable binary is named in the same report.
+at a missing or unlaunchable binary is named in the same report. The selector only launches a
+binary from its own package or the absolute path in `DOTRELAY_BINARY`; it never falls back to a
+path outside the package. While the binary runs, the selector forwards `SIGINT`, `SIGTERM`, and
+`SIGHUP` to it and re-raises the signal that ended it.

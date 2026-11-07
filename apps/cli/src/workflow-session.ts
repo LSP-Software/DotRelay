@@ -713,6 +713,7 @@ export const syncWorkflow = async (
       statePath(options.stateDirectory, environmentId),
       page.currentHeadId,
       page.currentHeadHash,
+      options.profile.pin.serverProfileId,
     );
   const variables = synced.variables;
   return { workflow, page, variables };

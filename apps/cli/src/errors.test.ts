@@ -13,6 +13,7 @@ import {
   diagnosticForError,
   EXIT_CODES,
   humanDetailForError,
+  sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
 
@@ -293,5 +294,25 @@ describe("CLI diagnostics", () => {
     expect(humanDetailForError(runtimeError)).toBe(
       "The command could not complete.",
     );
+  });
+});
+
+describe("CLI text sanitizing", () => {
+  test("strips C0, C1, escape sequences and bidi/format characters", () => {
+    expect(sanitizeCliText("a\x1b]8;;https://x\x07b\x1b[31mc")).toBe(
+      "a]8;;https://xb[31mc",
+    );
+    expect(sanitizeCliText("a\u009b31mb\u0085c\u007f")).toBe("a31mbc");
+    expect(
+      sanitizeCliText("a\u200bb\u200fc\u202ad\u202ee\u2066f\u2069g\u200dh"),
+    ).toBe("abcdefgh");
+    expect(sanitizeCliText("line one\n\tline two\r")).toBe(
+      "line one\n\tline two\r",
+    );
+    expect(sanitizeCliText("café · ✓ 東京")).toBe("café · ✓ 東京");
+  });
+
+  test("folds line breaks for single-line values", () => {
+    expect(sanitizeCliLine("a\r\nb\tc\x1bd")).toBe("a b cd");
   });
 });

@@ -48,6 +48,11 @@ export type RepositoryIdentityResolution = Readonly<{
   readonly identity: string;
 }>;
 
+// GitHub's own alphabets for account and repository names. A resolved name
+// outside them is rejected rather than printed or stored.
+const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const GITHUB_REPOSITORY_NAME = /^[A-Za-z0-9._-]{1,100}$/;
+
 // Asks the Server Profile to resolve the descriptive owner/name the Client
 // read from its Git remote to the stable Repository Identity, using the
 // signed-in User's Delegated GitHub Access. The Client never calls the
@@ -74,11 +79,9 @@ export const resolveRepositoryIdentity = async (
   if (
     response.host !== "github.com" ||
     typeof owner !== "string" ||
-    owner.length === 0 ||
-    owner.length > 39 ||
+    !GITHUB_OWNER.test(owner) ||
     typeof name !== "string" ||
-    name.length === 0 ||
-    name.length > 100
+    !GITHUB_REPOSITORY_NAME.test(name)
   )
     throw new CliError(
       "transient",

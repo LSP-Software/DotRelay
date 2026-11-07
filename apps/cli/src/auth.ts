@@ -141,11 +141,29 @@ const numberField = (
   return value;
 };
 
+// Device authorization user codes are short codes a person reads off the
+// terminal and types into a browser: letters and digits, optionally grouped
+// with hyphens. Anything else (including terminal control sequences) is
+// rejected rather than printed.
+const USER_CODE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$/;
+
+const userCodeField = (object: Record<string, unknown>): string => {
+  const value = stringField(object, "user_code", "userCode");
+  if (!USER_CODE.test(value))
+    throw new CliError(
+      "authentication",
+      "the server returned an invalid device authorization response",
+      {},
+      "auth_response_invalid",
+    );
+  return value;
+};
+
 const parseAuthorization = (value: unknown): DeviceAuthorization => {
   const object = readObject(value);
   return Object.freeze({
     deviceCode: stringField(object, "device_code", "deviceCode"),
-    userCode: stringField(object, "user_code", "userCode"),
+    userCode: userCodeField(object),
     verificationUri: stringField(object, "verification_uri", "verificationUri"),
     ...(typeof object.verification_uri_complete === "string" ||
     typeof object.verificationUriComplete === "string"
