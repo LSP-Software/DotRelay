@@ -5508,7 +5508,7 @@ describe("pull after a Project epoch rotation", () => {
     const result = await pull(true);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(
-      'DATABASE_URL="postgres://before-rotation"',
+      "DATABASE_URL='postgres://before-rotation'",
     );
   });
 });
