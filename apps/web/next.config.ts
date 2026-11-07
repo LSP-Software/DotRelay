@@ -27,6 +27,19 @@ const loadRootEnv = () => {
 
 loadRootEnv();
 
+// The workspace fixture trusts a checked-in revision signing key, so a
+// production build or server must never enable it. An e2e harness that
+// deliberately runs a production build opts in with a dedicated variable.
+if (
+  process.env.DOTRELAY_WORKSPACE_FIXTURE === "1" &&
+  process.env.NODE_ENV === "production" &&
+  process.env.DOTRELAY_E2E_ALLOW_PRODUCTION_FIXTURE !== "1"
+) {
+  throw new Error(
+    "DOTRELAY_WORKSPACE_FIXTURE=1 is a development-only setting and cannot be used with NODE_ENV=production",
+  );
+}
+
 // The browser shell can only read NEXT_PUBLIC_* values, so mirror the
 // server-side fixture switch into a public twin for the client bundle.
 if (

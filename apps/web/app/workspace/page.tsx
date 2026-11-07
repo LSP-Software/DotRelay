@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { resolveLiveApiOrigin } from "@/lib/workspace-boundary";
+import {
+  isWorkspaceFixtureEnabled,
+  resolveLiveApiOrigin,
+} from "@/lib/workspace-boundary";
 import { WorkspaceShell } from "./workspace-shell";
 
 export const metadata: Metadata = {
@@ -13,10 +16,10 @@ export const metadata: Metadata = {
 // Only a 401 from the session relay is authoritative "not signed in"; an
 // unreachable or degraded API must not bounce signed-in users to sign-in.
 const requireSignIn = async () => {
-  if (process.env.DOTRELAY_WORKSPACE_FIXTURE === "1") return;
+  const cookie = (await headers()).get("cookie");
+  if (isWorkspaceFixtureEnabled()) return;
   const apiOrigin = resolveLiveApiOrigin();
   if (!apiOrigin) return;
-  const cookie = (await headers()).get("cookie");
   const sessionResponse = await fetch(`${apiOrigin}/api/v1/session`, {
     headers: cookie ? { cookie } : {},
     cache: "no-store",

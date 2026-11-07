@@ -32,12 +32,17 @@ WORKDIR /app
 # (minimal traced node_modules at the root, the app under apps/web).
 COPY --from=builder --chown=node:node /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
-# This repository has no apps/web/public directory, so there is no public
-# asset copy to make.
+# Standalone output does not include public/, which holds the Argon2 worker
+# bundle (argon2-worker.js) the browser fetches before unlocking keys.
+COPY --from=builder --chown=node:node /app/apps/web/public ./apps/web/public
 
 WORKDIR /app/apps/web
 # Run as the non-root node user shipped with the image; the standalone tree is
 # chown'd above so the server has read (and any runtime cache) access.
 USER node
 EXPOSE 3000
+# Bind on all interfaces so the in-container health probe can reach the server
+# on loopback (Docker sets HOSTNAME to the container id otherwise).
+ENV HOSTNAME=0.0.0.0
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 CMD ["node", "server.js"]
