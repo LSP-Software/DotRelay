@@ -4,6 +4,7 @@ import {
   emptyWorkspaceBoundary,
   enrolledDeviceRows,
   fetchWorkspaceBoundary,
+  isWorkspaceFixtureEnabled,
   parsePeerDevices,
   parseWorkspaceCatalog,
   projectDisplayName,
@@ -38,6 +39,55 @@ test("local workspace talks to the loopback API when no origin env is set", () =
       delete process.env.SERVER_PROFILE_ORIGIN;
     else process.env.SERVER_PROFILE_ORIGIN = previous.profile;
   }
+});
+
+test("a production server without an API origin fails with a configuration error", () => {
+  const keys = [
+    "NODE_ENV",
+    "DOTRELAY_WORKSPACE_FIXTURE",
+    "NEXT_PUBLIC_DOTRELAY_API_ORIGIN",
+    "DOTRELAY_API_ORIGIN",
+    "SERVER_PROFILE_ORIGIN",
+  ] as const;
+  const env = process.env as Record<string, string | undefined>;
+  const previous = keys.map((key) => [key, env[key]] as const);
+  for (const key of keys) delete env[key];
+  try {
+    env.NODE_ENV = "production";
+    expect(() => resolveLiveApiOrigin()).toThrow(
+      /API origin is not configured/,
+    );
+    env.DOTRELAY_API_ORIGIN = "https://api.example.test";
+    expect(resolveLiveApiOrigin()).toBe("https://api.example.test");
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete env[key];
+      else env[key] = value;
+    }
+  }
+});
+
+test("the workspace fixture is refused in production without the e2e opt-in", () => {
+  expect(isWorkspaceFixtureEnabled({})).toBe(false);
+  expect(
+    isWorkspaceFixtureEnabled({
+      DOTRELAY_WORKSPACE_FIXTURE: "1",
+      NODE_ENV: "development",
+    }),
+  ).toBe(true);
+  expect(() =>
+    isWorkspaceFixtureEnabled({
+      DOTRELAY_WORKSPACE_FIXTURE: "1",
+      NODE_ENV: "production",
+    }),
+  ).toThrow(/development-only/);
+  expect(
+    isWorkspaceFixtureEnabled({
+      DOTRELAY_WORKSPACE_FIXTURE: "1",
+      NODE_ENV: "production",
+      DOTRELAY_E2E_ALLOW_PRODUCTION_FIXTURE: "1",
+    }),
+  ).toBe(true);
 });
 
 test("the deployment profile is declared explicitly or fails closed", () => {

@@ -460,18 +460,21 @@ export const loadWorkspaceSession = (
         revisionSigningPublicKey: hexToBytes(device.signingPublicKey),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       };
+      // Scope the journal to the server, Environment and Device so a pending
+      // publication never replays against a different server or Environment.
+      const publicationKeyPrefix = `dotrelay-publication:${encodeURIComponent(profile.origin)}:${profile.serverProfileId ?? profile.id}:${environment.id}:${device.id}:`;
       const transport = createProtocolTransport({
         origin: profile.origin,
         pendingPublication: {
           read: async () => {
-            const prefix = `dotrelay-publication:${profile.id}:${device.id}:`;
+            const prefix = publicationKeyPrefix;
             const key = Object.keys(localStorage)
               .filter((key) => key.startsWith(prefix))
               .sort()[0];
             return key ? localStorage.getItem(key) : null;
           },
           write: async (value, operationId) => {
-            const key = `dotrelay-publication:${profile.id}:${device.id}:${operationId}`;
+            const key = `${publicationKeyPrefix}${operationId}`;
             if (value === null) localStorage.removeItem(key);
             else localStorage.setItem(key, value);
           },

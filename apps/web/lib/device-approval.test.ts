@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
 import {
   attemptDeviceApproval,
+  attemptDeviceDenial,
   checkDeviceStatus,
   checkServerProfileSession,
   type DeviceStatusCheck,
   deviceApprovalAttemptView,
   deviceApprovalView,
+  deviceDenialAttemptView,
   parseDeviceApprovalAttempt,
   parseDeviceStatusResponse,
   parseSessionResponse,
@@ -266,4 +268,32 @@ test("a signed-out approval lands on the sign-in view through a re-check", async
     checkServerProfileSession("http://localhost:3001", fetcher),
   ]);
   expect(deviceApprovalView(status, session)).toEqual({ kind: "sign-in" });
+});
+
+test("denial posts the user code to the deny endpoint and ends declined", async () => {
+  const { fetcher, calls } = routeFetch({
+    "POST http://localhost:3001/api/auth/device/deny": (init) => {
+      expect(init?.body).toBe(JSON.stringify({ userCode: "ABCDEFGH" }));
+      return jsonResponse(200, { success: true });
+    },
+  });
+  const attempt = await attemptDeviceDenial(
+    "http://localhost:3001",
+    "ABCDEFGH",
+    fetcher,
+  );
+  expect(calls).toEqual(["http://localhost:3001/api/auth/device/deny"]);
+  expect(deviceDenialAttemptView(attempt)).toEqual({ kind: "declined" });
+});
+
+test("denial failures map like approval failures", () => {
+  expect(deviceDenialAttemptView({ kind: "expired" })).toEqual({
+    kind: "expired",
+  });
+  expect(deviceDenialAttemptView({ kind: "unavailable" })).toEqual({
+    kind: "connection",
+  });
+  expect(deviceDenialAttemptView({ kind: "stale" })).toEqual({
+    kind: "recheck",
+  });
 });

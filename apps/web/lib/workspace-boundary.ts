@@ -624,9 +624,36 @@ export const resolveApiOrigin = (): string | undefined =>
   process.env.DOTRELAY_API_ORIGIN ??
   process.env.SERVER_PROFILE_ORIGIN;
 
+/**
+ * Whether the development workspace fixture (synthetic boundary plus the
+ * trusted e2e revision signing key) is on. A production server never serves
+ * it: the fixture fails closed under NODE_ENV=production unless an e2e
+ * harness that deliberately runs a production build also sets
+ * DOTRELAY_E2E_ALLOW_PRODUCTION_FIXTURE=1.
+ */
+export const isWorkspaceFixtureEnabled = (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean => {
+  if (env.DOTRELAY_WORKSPACE_FIXTURE !== "1") return false;
+  if (
+    env.NODE_ENV === "production" &&
+    env.DOTRELAY_E2E_ALLOW_PRODUCTION_FIXTURE !== "1"
+  )
+    throw new Error(
+      "DOTRELAY_WORKSPACE_FIXTURE=1 is a development-only setting and cannot be used with NODE_ENV=production",
+    );
+  return true;
+};
+
 export const resolveLiveApiOrigin = (): string | undefined => {
-  if (process.env.DOTRELAY_WORKSPACE_FIXTURE === "1") return resolveApiOrigin();
-  return resolveApiOrigin() ?? "http://localhost:3001";
+  if (isWorkspaceFixtureEnabled()) return resolveApiOrigin();
+  const origin = resolveApiOrigin();
+  if (origin) return origin;
+  if (process.env.NODE_ENV === "production")
+    throw new Error(
+      "DotRelay API origin is not configured: set NEXT_PUBLIC_DOTRELAY_API_ORIGIN, DOTRELAY_API_ORIGIN or SERVER_PROFILE_ORIGIN",
+    );
+  return "http://localhost:3001";
 };
 
 export const resolveOAuthCallbackUrl = (): string =>
