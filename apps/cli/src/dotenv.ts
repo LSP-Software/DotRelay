@@ -260,8 +260,11 @@ export const diffDotenvEntries = (
   return Object.freeze(changes);
 };
 
+// Single quotes are literal for sh and python-dotenv, but Bun's loader still
+// expands `$` inside them, so any value with `$` or a backtick takes the
+// escaped double-quoted form, which Bun, sh and dotenv-expand read literally.
 const serializeValue = (value: string): string => {
-  if (!/['\n\r]/.test(value)) return `'${value}'`;
+  if (!/['\n\r$`]/.test(value)) return `'${value}'`;
   const escaped = value
     .replaceAll("\\", "\\\\")
     .replaceAll("\n", "\\n")

@@ -223,8 +223,12 @@ describe("local dotenv parsing", () => {
 
 describe("serializeDotenv safety", () => {
   test("does not leave $ or backticks open to interpolation", () => {
+    // Bun's loader expands `$` even in single quotes, so `$` forces escaping.
     expect(serializeDotenv([{ name: "A", value: "pa$HOME$x`id`" }])).toBe(
-      "A='pa$HOME$x`id`'\n",
+      'A="pa\\$HOME\\$x\\`id\\`"\n',
+    );
+    expect(serializeDotenv([{ name: "A", value: "plain value" }])).toBe(
+      "A='plain value'\n",
     );
     expect(serializeDotenv([{ name: "A", value: "it's $HOME `id`\n" }])).toBe(
       'A="it\'s \\$HOME \\`id\\`\\n"\n',
