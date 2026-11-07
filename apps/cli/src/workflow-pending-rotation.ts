@@ -1,4 +1,10 @@
-import { mkdir, open as openFile, readFile, rm } from "node:fs/promises";
+import {
+  mkdir,
+  open as openFile,
+  readdir,
+  readFile,
+  rm,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   createProjectEpochGrantBootstrap,
@@ -37,12 +43,50 @@ const associatedData = (projectId: string, newEpoch: number) =>
     `dotrelay-pending-rotation-v1\0${projectId}\0${newEpoch}`,
   );
 
+// Each rotation keeps its own record, named by its operation id. Removing a
+// record therefore never needs a read-then-delete ownership check: a run can
+// only ever delete the file it created.
+const recordPrefix = (options: WorkflowOptions, projectId: string): string =>
+  `pending-rotation-${options.profile.pin.serverProfileId}-${projectId}.`;
+
 export const pendingRotationPath = (
   options: WorkflowOptions,
   projectId: string,
+  operationId: string,
 ): string =>
-  `${options.stateDirectory}/pending-rotation-${options.profile.pin.serverProfileId}-${projectId}.json`;
+  `${options.stateDirectory}/${recordPrefix(options, projectId)}${operationId}.json`;
 
+// Every pending record of the Project, oldest operation id first.
+export const listPendingRotationPaths = async (
+  options: WorkflowOptions,
+  projectId: string,
+): Promise<string[]> => {
+  const prefix = recordPrefix(options, projectId);
+  try {
+    return (await readdir(options.stateDirectory))
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+      .sort()
+      .map((name) => `${options.stateDirectory}/${name}`);
+  } catch {
+    return [];
+  }
+};
+
+export class PendingRotationExistsError extends CliError {
+  constructor() {
+    super(
+      "conflict",
+      "another rotation of this project is in progress or has an unknown outcome on this device. Run dotrelay pull, then rotate again if you still need to",
+      {},
+      "epoch_rotation_uncertain",
+    );
+  }
+}
+
+// Reserves the Project for this rotation: write this operation's own record
+// (exclusive create of a unique name), then abort if any other record of the
+// Project exists. Two concurrent runs can both abort, never both proceed, and
+// neither touches the other's record.
 export const writePendingRotation = async (
   options: WorkflowOptions,
   input: Readonly<{
@@ -65,59 +109,42 @@ export const writePendingRotation = async (
     newEpoch: input.newEpoch,
     sealedKey: base64(sealed),
   };
-  // An exclusive create is the reservation: of two concurrent rotations of
-  // one Project, only the first holds the record; the other must abort.
-  const path = pendingRotationPath(options, input.projectId);
+  const path = pendingRotationPath(options, input.projectId, input.operationId);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  let handle: Awaited<ReturnType<typeof openFile>>;
-  try {
-    handle = await openFile(path, "wx", 0o600);
-  } catch (error) {
-    if ((error as { code?: unknown }).code === "EEXIST")
-      throw new PendingRotationExistsError();
-    throw error;
-  }
+  const handle = await openFile(path, "wx", 0o600);
   try {
     await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
   }
+  const others = (
+    await listPendingRotationPaths(options, input.projectId)
+  ).filter((candidate) => candidate !== path);
+  if (others.length > 0) {
+    await rm(path, { force: true });
+    throw new PendingRotationExistsError();
+  }
 };
 
-export class PendingRotationExistsError extends CliError {
-  constructor() {
-    super(
-      "conflict",
-      "another rotation of this project is in progress or has an unknown outcome on this device. Run dotrelay pull, then rotate again if you still need to",
-      {},
-      "epoch_rotation_uncertain",
-    );
-  }
-}
-
-// Removes the record only when it belongs to this operation, so one
-// rotation can never discard the key another rotation reserved.
-export const clearPendingRotation = async (
+// Removes this operation's own record; it cannot reach another rotation's.
+export const clearPendingRotation = (
   options: WorkflowOptions,
   projectId: string,
   operationId: string,
-): Promise<void> => {
-  const pending = await readPendingRotation(options, projectId);
-  if (pending?.operationId === operationId)
-    await rm(pendingRotationPath(options, projectId), { force: true });
-};
+): Promise<void> =>
+  rm(pendingRotationPath(options, projectId, operationId), { force: true });
 
-const readPendingRotation = async (
-  options: WorkflowOptions,
+const readRecord = async (
+  path: string,
   projectId: string,
 ): Promise<PendingRotation | null> => {
   try {
-    const value = JSON.parse(
-      await readFile(pendingRotationPath(options, projectId), "utf8"),
-    ) as PendingRotation;
+    const value = JSON.parse(await readFile(path, "utf8")) as PendingRotation;
     return value.version === 1 &&
       value.projectId === projectId &&
+      typeof value.operationId === "string" &&
+      path.endsWith(`.${value.operationId}.json`) &&
       Number.isSafeInteger(value.newEpoch) &&
       typeof value.sealedKey === "string"
       ? value
@@ -125,6 +152,17 @@ const readPendingRotation = async (
   } catch {
     return null;
   }
+};
+
+const readPendingRotation = async (
+  options: WorkflowOptions,
+  projectId: string,
+): Promise<PendingRotation | null> => {
+  for (const path of await listPendingRotationPaths(options, projectId)) {
+    const record = await readRecord(path, projectId);
+    if (record) return record;
+  }
+  return null;
 };
 
 export const PENDING_ROTATION_NOTICE =

@@ -85,8 +85,9 @@ const scenario = async () => {
         Buffer.from(bytes).toString("base64"),
       ),
     });
+  const operationId = crypto.randomUUID();
   await writePendingRotation(options, {
-    operationId: crypto.randomUUID(),
+    operationId,
     projectId: ids.project,
     newEpoch: 2,
     newEpochKey: newKey,
@@ -94,6 +95,8 @@ const scenario = async () => {
   });
   return {
     options,
+    operationId,
+    path: pendingRotationPath(options, ids.project, operationId),
     encryption,
     trustedSigningKeys: [await exportSigningPublicKey(signing.publicKey)],
     newKey,
@@ -120,9 +123,7 @@ describe("an uncertain Project epoch rotation", () => {
     });
     expect(recovered?.key).toEqual(run.newKey);
     // The caller clears the record after storing the key.
-    expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
-      true,
-    );
+    expect(await exists(run.path)).toBe(true);
   });
 
   test("keeps the key while the Project is behind and the operation cannot be cancelled", async () => {
@@ -143,12 +144,10 @@ describe("an uncertain Project epoch rotation", () => {
       }),
     ).toBeNull();
     expect(cancelled).toHaveLength(1);
-    expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
-      true,
-    );
+    expect(await exists(run.path)).toBe(true);
     // While the outcome is open, another rotation is refused and the
     // record stays byte-for-byte intact.
-    const path = pendingRotationPath(run.options, ids.project);
+    const path = run.path;
     const before = await readFile(path, "utf8");
     await expect(
       assertNoPendingRotation(run.options, ids.project),
@@ -170,7 +169,7 @@ describe("an uncertain Project epoch rotation", () => {
 
   test("a rotation may start once no earlier outcome is open", async () => {
     const run = await scenario();
-    await rm(pendingRotationPath(run.options, ids.project));
+    await rm(run.path);
     await assertNoPendingRotation(run.options, ids.project);
   });
 
@@ -185,9 +184,7 @@ describe("an uncertain Project epoch rotation", () => {
         cancel: async () => true,
       }),
     ).toBeNull();
-    expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
-      false,
-    );
+    expect(await exists(run.path)).toBe(false);
   });
 
   test("discards the key when another rotation reached the epoch", async () => {
@@ -211,9 +208,7 @@ describe("an uncertain Project epoch rotation", () => {
         cancel: async () => true,
       }),
     ).toBeNull();
-    expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
-      false,
-    );
+    expect(await exists(run.path)).toBe(false);
   });
 
   test("only this Device can open the kept key", async () => {
@@ -235,7 +230,7 @@ describe("concurrent rotations of one Project", () => {
   test("the second rotation cannot reserve or discard the first one's key", async () => {
     // Both processes passed the guard; the first reserved the record.
     const run = await scenario();
-    const path = pendingRotationPath(run.options, ids.project);
+    const path = run.path;
     const reserved = await readFile(path, "utf8");
     const second = crypto.randomUUID();
     await expect(
@@ -262,6 +257,27 @@ describe("concurrent rotations of one Project", () => {
         })
       )?.key,
     ).toEqual(run.newKey);
+  });
+});
+
+describe("a delayed cleanup of a settled rotation", () => {
+  test("cannot delete a newer rotation's record", async () => {
+    const run = await scenario();
+    // Rotation A settles and is cleaned up; rotation B then reserves the
+    // Project; A's delayed second cleanup runs afterwards.
+    await clearPendingRotation(run.options, ids.project, run.operationId);
+    const second = crypto.randomUUID();
+    await writePendingRotation(run.options, {
+      operationId: second,
+      projectId: ids.project,
+      newEpoch: 2,
+      newEpochKey: crypto.getRandomValues(new Uint8Array(32)),
+      encryptionPublicKey: run.encryption.publicKey,
+    });
+    const reservedB = pendingRotationPath(run.options, ids.project, second);
+    const before = await readFile(reservedB, "utf8");
+    await clearPendingRotation(run.options, ids.project, run.operationId);
+    expect(await readFile(reservedB, "utf8")).toBe(before);
   });
 });
 
