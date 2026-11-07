@@ -22,9 +22,12 @@ Diagnostic Events, Audit Facts, Security Request Logs, hosted cleanup, self-host
 access controls still match the canonical Wiki policy. A missing approval or a hosted/self-hosted
 parity exception blocks the production release. The `security-review` GitHub Environment used by the
 publish job must be configured with the security owner as a required reviewer; its deployment
-approval is the release evidence. The environment must also define the protected variable
-`SECURITY_REVIEW_APPROVAL=approved`; the publish job checks this value after the environment gate
-and refuses to publish without it.
+approval is the release evidence. The environment must also define the protected variables
+`SECURITY_REVIEW_APPROVED_SHA`, set to the exact commit the review approved, and
+`SECURITY_REVIEW_REPORT_SHA256`, the 64-character lowercase hex SHA-256 of the review report. The
+image, publish and production deploy jobs check after the environment gate that the approved SHA
+equals the tagged commit and that the report hash is well formed, and refuse to continue otherwise.
+The publish job binds both values into the release evidence.
 
 Prereleases publish versioned images and `latest-alpha`, never `latest-stable`; automatic production
 deployment runs only for stable tags. Alpha installation deployment is an explicit operation using

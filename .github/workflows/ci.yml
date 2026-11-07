@@ -276,14 +276,18 @@ jobs:
           context: .
           file: apps/api/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:dev
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ github.sha }}
       - name: build and push dev web image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: apps/web/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:dev
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ github.sha }}
           build-args: |
             NEXT_PUBLIC_WEB_ORIGIN=https://dev.dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://dev-api.dotrelay.dev

@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { publicationTag } from "./publish-cli";
+import { publicationTag, publishCommand } from "./publish-cli";
+
+test("npm publication carries signed provenance", () => {
+  const command = publishCommand("/tmp/pkg", "alpha");
+  expect(command.slice(0, 3)).toEqual(["npm", "publish", "/tmp/pkg"]);
+  expect(command).toContain("--provenance");
+  expect(command[command.indexOf("--tag") + 1]).toBe("alpha");
+});
 
 test("prereleases never update the stable npm tag", () => {
   expect(publicationTag("0.1.0-alpha.1")).toBe("alpha");

@@ -18,8 +18,8 @@
     "format": "bun fmt",
     "format:check": "bun fmt --check",
     "format:fix": "bun fmt",
-    "lint": "bun lint",
-    "lint:fix": "bun lint --fix",
+    "lint": "bun scripts/lint.ts",
+    "lint:fix": "bun scripts/lint.ts --fix",
     "typecheck": "bun check --no-script && turbo run typecheck",
     "boundaries": "bun scripts/verify-boundaries.ts",
     "vectors:verify-sources": "bun scripts/verify-vector-sources.ts",
@@ -38,7 +38,7 @@
     "db:cutover-guard": "bun scripts/guard-legacy-recovery-cutover.ts",
     "docs:validate": "bun scripts/validate-docs.ts",
     "tracked-tree:clean": "bun scripts/check-tracked-tree.ts",
-    "security:audit": "bun audit --ignore GHSA-vfj7-8cjw-p6xm",
+    "security:audit": "bun audit --ignore GHSA-gcqx-w48m-w2h4",
     "postinstall": "bun run prisma:generate",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run boundaries && bun run openapi:check && bun run vectors:verify-sources && bun run test:unit",
     "verify": "bun run check && bun run build && bun run smoke && bun run test:integration && bun run test:e2e && bun run test:cli && bun run test:cli:live && bun run db:validate && bun run db:migrate-check && bun run docs:validate && bun run tracked-tree:clean"
@@ -58,12 +58,12 @@
     "typescript6": "npm:@typescript/typescript6@6.0.2"
   },
   "overrides": {
-    "deepmerge": "4.1.2",
     "deepmerge-ts": "8.0.2",
     "find-my-way": "9.7.0",
     "fast-uri": "3.1.9",
+    "minimatch": "11.0.5",
     "mysql2": "3.24.2",
-    "postcss": "8.5.23",
+    "postcss": "8.5.32",
     "sharp": "0.35.5",
     "valibot": "1.4.2"
   }

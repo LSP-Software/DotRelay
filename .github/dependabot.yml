@@ -20,3 +20,25 @@ updates:
           - minor
           - patch
     open-pull-requests-limit: 10
+  - package-ecosystem: docker
+    directories:
+      - "/apps/api"
+      - "/apps/web"
+    schedule:
+      interval: weekly
+    groups:
+      compatible-docker-updates:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      compatible-compose-updates:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10

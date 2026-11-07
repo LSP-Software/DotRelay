@@ -17,6 +17,22 @@ export const publicationTag = (version: string): string => {
   return tag;
 };
 
+// --provenance signs the tarball with the job's OIDC token (id-token: write).
+export const publishCommand = (
+  packageDirectory: string,
+  tag: string,
+): string[] => [
+  "npm",
+  "publish",
+  packageDirectory,
+  "--access",
+  "public",
+  "--tag",
+  tag,
+  "--provenance",
+  "--registry=https://registry.npmjs.org/",
+];
+
 const publish = async () => {
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: this release-only command runs directly, outside Turbo.
   const token = process.env.NODE_AUTH_TOKEN;
@@ -53,19 +69,11 @@ const publish = async () => {
       throw new Error(
         "NPM_TOKEN is missing, expired, or invalid. Replace the repository secret with a token authorized to publish dotrelay.",
       );
-    const child = Bun.spawn(
-      [
-        "npm",
-        "publish",
-        packageDirectory,
-        "--access",
-        "public",
-        "--tag",
-        tag,
-        "--registry=https://registry.npmjs.org/",
-      ],
-      { env, stdout: "inherit", stderr: "inherit" },
-    );
+    const child = Bun.spawn(publishCommand(packageDirectory, tag), {
+      env,
+      stdout: "inherit",
+      stderr: "inherit",
+    });
     if ((await child.exited) !== 0)
       throw new Error(
         "CLI publication failed. Check NPM_TOKEN has write access to dotrelay and allows CI publishing without an interactive OTP. The release has not been published successfully.",
