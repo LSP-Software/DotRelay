@@ -1123,7 +1123,7 @@ try {
   const output = await readFile(outputPath, "utf8");
   const outputMode = (await stat(outputPath)).mode & 0o777;
   if (
-    output !== 'SHARED_VALUE="two"\nUSER_VALUE="secret"\nEMPTY=""\n' ||
+    output !== "SHARED_VALUE='two'\nUSER_VALUE='secret'\nEMPTY=''\n" ||
     (process.platform !== "win32" && outputMode !== 0o600)
   )
     throw new Error(`pull wrote an unexpected file: ${JSON.stringify(output)}`);
@@ -1373,8 +1373,8 @@ try {
   );
   if (
     rolledBack.exitCode !== 0 ||
-    !rolledBack.stdout.includes('SHARED_VALUE="one"') ||
-    !rolledBack.stdout.includes('USER_VALUE="secret"') ||
+    !rolledBack.stdout.includes("SHARED_VALUE='one'") ||
+    !rolledBack.stdout.includes("USER_VALUE='secret'") ||
     rolledBack.stderr.includes("secret")
   )
     throw new Error(
@@ -1401,8 +1401,8 @@ try {
     if (
       terminal.exitCode !== 2 ||
       !terminalOutput.includes("Refusing to write Values to terminal stdout") ||
-      terminalOutput.includes('USER_VALUE="secret"') ||
-      terminalOutput.includes('SHARED_VALUE="one"')
+      terminalOutput.includes("USER_VALUE='secret'") ||
+      terminalOutput.includes("SHARED_VALUE='one'")
     )
       throw new Error(
         `TTY stdout safety failed: exit=${terminal.exitCode} ${terminalOutput.trim()}`,
@@ -1422,7 +1422,7 @@ try {
     );
     if (
       revealed.exitCode !== 0 ||
-      !revealed.stdout.includes('USER_VALUE="secret"') ||
+      !revealed.stdout.includes("USER_VALUE='secret'") ||
       revealed.stderr.includes("secret")
     )
       throw new Error("explicit reveal contract failed");
@@ -1575,8 +1575,8 @@ try {
     );
   const lifecycleText = device1LifecycleBytes.toString("utf8");
   if (
-    !lifecycleText.includes('SHARED_VALUE="alpha"') ||
-    !lifecycleText.includes('EMPTY=""')
+    !lifecycleText.includes("SHARED_VALUE='alpha'") ||
+    !lifecycleText.includes("EMPTY=''")
   )
     throw new Error(
       `lifecycle pull decoded unexpected Values: ${JSON.stringify(lifecycleText)}`,

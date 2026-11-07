@@ -198,18 +198,26 @@ jobs:
     name: production API image and readiness
     runs-on: ubuntu-latest
     services:
+      # Production refuses the development dotrelay:dotrelay credentials, so
+      # this job's disposable database uses a distinct password.
       postgres:
         image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
         env:
           POSTGRES_USER: dotrelay
-          POSTGRES_PASSWORD: dotrelay
+          POSTGRES_PASSWORD: container-ci-only
           POSTGRES_DB: dotrelay
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U dotrelay -d dotrelay"
           --health-interval 10s --health-timeout 5s --health-retries 5
+      valkey:
+        image: valkey/valkey@sha256:495e4fecdc98ee48a20b207726caa5ab6451e0fac3642a9be10d9e70b3068df6
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     env:
-      DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay
+      DATABASE_URL: postgresql://dotrelay:container-ci-only@127.0.0.1:5432/dotrelay
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
