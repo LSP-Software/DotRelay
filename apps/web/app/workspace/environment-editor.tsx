@@ -70,6 +70,7 @@ import {
   verifiedRevisionsFromPage,
 } from "@/lib/environment-editor-views";
 import {
+  advanceDraftBase,
   applyConflictResolution,
   applyRollbackToVariables,
   bareVerifiedRevision,
@@ -80,19 +81,21 @@ import {
   changedLaneCount,
   createEnvironmentVariable,
   createRollbackPlan,
+  type DraftBase,
   deleteEnvironmentVariable,
+  draftBaseFromRemote,
   draftValueDiffs,
   type EditorActor,
   type EnvironmentVariable,
   loadRollbackHistory,
   locallyPublishedRevision,
-  mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
   publicationMutationForHead,
   publishedBaseline,
   type RollbackHistoryResolution,
   readOnlyReason,
+  rebaseDraftOntoRemote,
   reconcileDraftWithPermissions,
   roleLabel,
   rollbackValueDiffs,
@@ -245,6 +248,12 @@ export const EnvironmentEditor = ({
   const [rollbackMutationTarget, setRollbackMutationTarget] = useState<
     string | null
   >(null);
+  // The remote version each drafted lane was edited from. It survives a
+  // session swap (a boundary refresh onto a new head), so a reload can tell a
+  // teammate's concurrent change apart from a lane only this draft touched.
+  const draftBaseRef = useRef<DraftBase | null>(null);
+  const variablesRef = useRef(variables);
+  variablesRef.current = variables;
   useEffect(() => {
     if (!session) return;
     setVariables((current) =>
@@ -300,12 +309,26 @@ export const EnvironmentEditor = ({
           setLoadPhase("failed");
           return;
         }
-        setRemoteVariables(decoded);
-        setVariables((current) =>
-          current.some((variable) => variable.hasDraftChange)
-            ? [...mergeDraftVariablesOverRemote(current, decoded)]
-            : [...decoded],
+        const rebased = rebaseDraftOntoRemote(
+          variablesRef.current,
+          draftBaseRef.current,
+          decoded,
         );
+        draftBaseRef.current = rebased.base;
+        setRemoteVariables(decoded);
+        setVariables([...rebased.variables]);
+        if (rebased.conflictVariableIds.length > 0) {
+          setConflictLaneIds(new Set(rebased.conflictVariableIds));
+          setConflictChoices(new Map());
+          setConflictValuesRevealed(false);
+          setStaleHeadRevision(
+            page.currentHeadId ?? context.expectedHeadId ?? "empty-environment",
+          );
+          setReviewOpen(false);
+          setPublishMessage(
+            "Someone else changed variables you are editing. Compare both versions, pick what to keep, then publish.",
+          );
+        }
         setVerifiedHistory((current) =>
           mergeVerifiedHistory(current, verifiedRevisionsFromPage(page)),
         );
@@ -773,6 +796,7 @@ export const EnvironmentEditor = ({
         );
         setDeletedVariableSnapshots(new Map());
         setRemoteVariables(publishedBaseline(publishVariables));
+        draftBaseRef.current = draftBaseFromRemote(publishVariables);
         setRollbackMutationTarget(null);
         clearConflictState();
         setReviewOpen(false);
@@ -787,6 +811,7 @@ export const EnvironmentEditor = ({
       );
       setDeletedVariableSnapshots(new Map());
       setRemoteVariables(publishedBaseline(publishVariables));
+      draftBaseRef.current = draftBaseFromRemote(publishVariables);
       clearConflictState();
       setReviewOpen(false);
       setPublishMessage(
@@ -861,6 +886,12 @@ export const EnvironmentEditor = ({
               : localChangedVariableIds.filter((id) =>
                   remoteChangedVariableIds.has(id),
                 );
+          if (decodedVariables)
+            draftBaseRef.current = advanceDraftBase(
+              draftBaseRef.current,
+              decodedVariables,
+              conflictingVariableIds,
+            );
           setProtocolHead({
             id: page.currentHeadId,
             hash: page.currentHeadHash,
@@ -928,6 +959,9 @@ export const EnvironmentEditor = ({
   const retryAgainstVerifiedHead = () => {
     if (!staleHeadRevision || publishing) return;
     const materialized = materializeConflicts();
+    // Every conflict was resolved against the current remote, which is now
+    // the base each lane was edited from.
+    draftBaseRef.current = draftBaseFromRemote(remoteVariables);
     if (changedLaneCount(materialized) === 0) {
       clearConflictState();
       setHeadRevision(staleHeadRevision);
