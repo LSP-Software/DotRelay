@@ -25,6 +25,8 @@ export type ServerProfileConfig = Readonly<{
   readonly isProduction: boolean;
   readonly trustProxy: boolean;
   readonly trustedProxies: readonly TrustedProxy[];
+  /** Explicit `COOKIE_DOMAIN`; see `sharedCookieDomain`. */
+  readonly cookieDomain?: string;
   readonly allowRebind: boolean;
   readonly allowedGitHubIds?: readonly string[];
 }>;
@@ -120,6 +122,38 @@ const bounded = (
   return result;
 };
 
+const hostLabel = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+
+const isDomainOrSubdomain = (host: string, domain: string) =>
+  host === domain || host.endsWith(`.${domain}`);
+
+const parseCookieDomain = (
+  value: string | undefined,
+  origin: string,
+  webOrigin: string,
+): string | undefined => {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const domain = trimmed.replace(/^\./, "").toLowerCase();
+  const labels = domain.split(".");
+  if (
+    isIP(domain) !== 0 ||
+    labels.length < 2 ||
+    !labels.every((label) => hostLabel.test(label))
+  )
+    throw new Error("COOKIE_DOMAIN must be a registrable domain name");
+  const apiHost = new URL(origin).hostname;
+  const webHost = new URL(webOrigin).hostname;
+  if (
+    !isDomainOrSubdomain(apiHost, domain) ||
+    !isDomainOrSubdomain(webHost, domain)
+  )
+    throw new Error(
+      "COOKIE_DOMAIN must be the API and web host or a parent domain of both",
+    );
+  return domain;
+};
+
 export const loadServerProfileConfig = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerProfileConfig => {
@@ -174,6 +208,11 @@ export const loadServerProfileConfig = (
       "SERVER_PROFILE_TRUSTED_PROXIES must list the trusted proxy addresses or CIDR ranges",
     );
   }
+  const cookieDomain = parseCookieDomain(
+    environment.COOKIE_DOMAIN,
+    origin,
+    webOrigin,
+  );
   const allowRebind = environment.SERVER_PROFILE_REBIND === "true";
   if (
     environment.ALPHA_ADMISSION_REQUIRED === "true" &&
@@ -268,6 +307,7 @@ export const loadServerProfileConfig = (
     isProduction,
     trustProxy,
     trustedProxies,
+    ...(cookieDomain ? { cookieDomain } : {}),
     allowRebind,
     ...(allowedGitHubIds === undefined
       ? {}
@@ -308,45 +348,29 @@ export const isAllowedOrigin = (
 ) =>
   origin === null || origin === profile.origin || origin === profile.webOrigin;
 
-// When the Server Profile and the web app are served from different hosts on
-// the same registered domain (e.g. dev-api.dotrelay.dev and dev.dotrelay.dev),
+// When the Server Profile and the web app are served from different hosts,
 // the browser only sends a session cookie to one origin unless the cookie is
-// scoped to the shared parent domain. The web app's server-side session relay
+// scoped to a domain covering both. The web app's server-side session relay
 // forwards the browser's Cookie header to the API, so the cookie must be
 // visible to both origins or the dashboard permanently reports signed-out.
+//
+// Without a public-suffix list a shared label suffix cannot be trusted (two
+// tenants of `*.example-platform.app` share one), so the domain is derived
+// only when one host is the parent of the other (web `example.com`, API
+// `api.example.com`). Sibling hosts such as `app.example.com` and
+// `api.example.com` must set `COOKIE_DOMAIN=example.com` explicitly;
+// otherwise cookies stay host-only.
 export const sharedCookieDomain = (
   profile: ServerProfileConfig,
 ): string | undefined => {
+  if (profile.cookieDomain) return profile.cookieDomain;
   const apiHost = new URL(profile.origin).hostname;
   const webHost = new URL(profile.webOrigin).hostname;
   if (apiHost === webHost) return undefined;
-  const apiLabels = apiHost.split(".");
-  const webLabels = webHost.split(".");
-  const suffix: string[] = [];
-  let apiIndex = apiLabels.length - 1;
-  let webIndex = webLabels.length - 1;
-  while (apiIndex >= 0 && webIndex >= 0) {
-    const apiLabel = apiLabels[apiIndex];
-    const webLabel = webLabels[webIndex];
-    if (
-      apiLabel === undefined ||
-      webLabel === undefined ||
-      apiLabel !== webLabel
-    )
-      break;
-    suffix.unshift(apiLabel);
-    apiIndex -= 1;
-    webIndex -= 1;
-  }
-  const domain = suffix.join(".");
-  if (
-    !domain ||
-    !apiHost.endsWith(`.${domain}`) ||
-    !webHost.endsWith(`.${domain}`)
-  ) {
-    return undefined;
-  }
-  return domain;
+  if (isIP(apiHost) !== 0 || isIP(webHost) !== 0) return undefined;
+  if (apiHost.endsWith(`.${webHost}`)) return webHost;
+  if (webHost.endsWith(`.${apiHost}`)) return apiHost;
+  return undefined;
 };
 
 export const isSecureRequest = (

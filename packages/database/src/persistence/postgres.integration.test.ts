@@ -2467,7 +2467,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       }),
     ).toMatchObject({ status: "EXPIRED" });
 
-    const endpointTemplate = "/health";
+    const endpointTemplate = "/api/v1/session";
     for (const expiresAt of [
       new Date(now.getTime() - 60_000),
       new Date(now.getTime() + 60_000),
@@ -2497,7 +2497,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     const requestedAt = new Date();
     await new SecurityRequestLogRepository().append(database, {
       ipAddress: "192.0.2.55",
-      endpointTemplate: "/health",
+      endpointTemplate: "/api/v1/session",
       httpStatus: 401,
       transferBytes: 0n,
       requestedAt,

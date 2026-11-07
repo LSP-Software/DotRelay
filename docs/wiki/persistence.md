@@ -53,7 +53,9 @@ current-head constraints, foreign keys, and append-only triggers that Prisma can
 Durable Users, Devices, Memberships, Projects, Environments, protocol objects, Revisions, grants,
 commitments, and Audit Facts are not physically deleted. Archival, Membership removal, and Device
 revocation are logical lifecycle changes. Cleanup is limited to expired sessions and device codes,
-uncommitted expired staging rows, and expired Security Request Logs. Security Request Logs contain
+uncommitted expired staging rows, and expired Security Request Logs. Every uncommitted staged row
+counts against the staging quota until cleanup deletes it, whatever its expiry, and a client's
+`X-DotRelay-Expires-At` is clamped to between five minutes and the staging TTL. Security Request Logs contain
 only the approved IP, endpoint template, status, transfer size, and retention timestamps; they do
 not contain request bodies, ciphertext, plaintext, credentials, User-Agent data, or free-form
 metadata.

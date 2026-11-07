@@ -10,7 +10,8 @@ security investigation. A record must never be used as a substitute for one of t
 The fixed schema is version `1`. Its Diagnostic Field Allowlist is:
 
 - `eventName`, one of the bounded operational tokens `api.request.completed`,
-  `api.security_request_log.write_failed`, or `api.security_request_log.expiry_failed`;
+  `api.security_request_log.write_failed`, `api.security_request_log.expiry_failed`, or
+  `api.staging.expiry_failed`;
 - `correlationId`, a fresh opaque UUID used only to link one request or bounded execution;
 - `durationMs`, a non-negative bounded integer;
 - `outcome`, a bounded operational token;
@@ -44,18 +45,23 @@ Security Request Logs are separate, allowlisted records containing only the serv
 (provided to the API observability adapter by the HTTP server or trusted proxy adapter),
 canonical endpoint template, HTTP status, transfer size, request time, and expiry. They do not
 contain User-Agent data, request bodies, query values, credentials, plaintext, ciphertext, or free-
-form metadata. Hosted deployments retain them for 30 days by default and operators must restrict
-access more tightly than ordinary diagnostics. Cleanup may remove expired Security Request Logs;
+form metadata. Anonymous liveness and discovery probes (`/health` and `/api/v1/capabilities`) are
+not recorded, so a flood of them never becomes database writes. Hosted deployments retain them for
+30 days by default and operators must restrict access more tightly than ordinary diagnostics. Cleanup may remove expired Security Request Logs;
 Audit Facts and accepted protocol history are not physically deleted.
 
 ## Operations and release gate
 
-The Bun adapter obtains the peer address from the server connection (`requestIP`). A deployment
-behind a proxy may provide an address only through an adapter that validates its trusted-proxy
-chain; the generic Hono request object never treats an arbitrary forwarded header as authoritative.
-The hosted cleanup job invokes the Security Request Log expiry operation at least hourly. A
-self-hosted operator must schedule the same operation and alert on failures; both deployment modes
-use the same 30-day maximum and allowlist.
+The Bun adapter obtains the peer address from the server connection (`requestIP`). With
+`SERVER_PROFILE_TRUST_PROXY=true` it resolves the client the same way Better Auth does: it walks
+`X-Forwarded-For` (ending in the socket peer) from the right, skips addresses in
+`SERVER_PROFILE_TRUSTED_PROXIES`, and records the first untrusted hop. A forwarded header from an
+untrusted peer is ignored, and the leftmost, client-supplied entry is never trusted on its own.
+The API process runs the retention cleanup every 10 minutes: it expires abandoned staging
+operations and staged rows, then expired Security Request Logs, each in bounded batches of short
+transactions with a per-run time budget. Failures emit `api.staging.expiry_failed` or
+`api.security_request_log.expiry_failed`; operators must alert on them. Both deployment modes use
+the same 30-day maximum and allowlist.
 
 Diagnostic access is limited to the operations role. Security Request Logs are limited to the
 security-response role and are not available to ordinary support users. Break-glass access requires

@@ -16,6 +16,29 @@ type StagedRow = Readonly<{
   readonly digest: Uint8Array | Buffer;
 }>;
 
+/** Shortest staging lifetime a client may request (five minutes). */
+export const MINIMUM_STAGING_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Resolves the expiry of a new staging operation from the optional
+ * `X-DotRelay-Expires-At` header. The result is clamped to
+ * `[now + min(5 minutes, TTL), now + TTL]`, so a client cannot pick a
+ * near-immediate expiry that would drop its rows out of the staging quota
+ * before they are deleted.
+ */
+export const clampStagingExpiry = (
+  expiresHeader: string | undefined,
+  stagingTtlSeconds: number,
+  now: number,
+): Date => {
+  const ceiling = now + stagingTtlSeconds * 1000;
+  const floor = Math.min(now + MINIMUM_STAGING_TTL_MS, ceiling);
+  const requested =
+    expiresHeader === undefined ? Number.NaN : Date.parse(expiresHeader);
+  if (Number.isNaN(requested)) return new Date(ceiling);
+  return new Date(Math.min(Math.max(requested, floor), ceiling));
+};
+
 export const collectStagedObjectIds = (
   request: FinalizePublicationRequest,
 ): readonly string[] => [

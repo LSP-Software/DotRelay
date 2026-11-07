@@ -1503,7 +1503,7 @@ describe("Team membership role and removal routes", () => {
     });
   });
 
-  test("replaying a removal reports the state conflict", async () => {
+  test("replaying a removal returns the recorded outcome", async () => {
     const { testApp } = createTestApp();
     const first = await request(
       testApp,
@@ -1527,12 +1527,38 @@ describe("Team membership role and removal routes", () => {
         body: {},
       },
     );
-    // The removal is the Team's record: the persistence layer checks the
-    // membership's lifecycle before its idempotency key, so the replay of a
-    // removal the membership already completed reports the conflict.
+    // A committed command with the same Idempotency-Key is final: the
+    // persistence layer answers the key before the lifecycle precondition,
+    // so the replay reports the removal it already recorded.
     expect(first.status).toBe(201);
-    expect(replay.status).toBe(409);
-    expect(await replay.json()).toMatchObject({ code: "state_conflict" });
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({
+      membershipId: MEMBER_M2,
+      teamId: TEAM_A,
+      lifecycle: "REMOVED",
+    });
+  });
+
+  test("removing an already removed Membership with a new key conflicts", async () => {
+    const { testApp } = createTestApp();
+    const remove = (idempotencyKey: string) =>
+      request(
+        testApp,
+        `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+        {
+          method: "POST",
+          token: "owner-token",
+          deviceId: DEVICE_OWNER,
+          idempotencyKey,
+          body: {},
+        },
+      );
+    expect((await remove("c0000000-0000-4000-8000-000000000005")).status).toBe(
+      201,
+    );
+    const second = await remove("c0000000-0000-4000-8000-000000000006");
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ code: "state_conflict" });
   });
 
   test("an admin removes a member but cannot change roles", async () => {
