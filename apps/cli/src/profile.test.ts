@@ -405,7 +405,10 @@ describe("CLI Server Profile catalog", () => {
     });
     const head = `${directory}/head-00000000-0000-4000-8000-000000000099.json`;
     const device = `${directory}/device-00000000-0000-4000-8000-000000000042.json`;
-    await writeFile(head, "{}\n");
+    await writeFile(
+      head,
+      `${JSON.stringify({ id: "x", hash: "00", serverProfileId: current.serverProfileId })}\n`,
+    );
     await writeFile(device, "{}\n");
     try {
       await addServerProfile(store, "work", current.origin, {
@@ -436,12 +439,70 @@ describe("CLI Server Profile catalog", () => {
         },
       });
       expect(rebound.identityChanged).toBe(true);
+      expect(rebound.previous?.serverProfileId).toBe(current.serverProfileId);
       expect((await store.read()).profiles[0]?.origin).toBe(moved.origin);
-      expect(await resetTrustedEnvironmentHistory(directory)).toBe(1);
+      expect(
+        await resetTrustedEnvironmentHistory(
+          directory,
+          rebound.previous?.serverProfileId ?? "",
+        ),
+      ).toBe(1);
       expect(await Bun.file(head).exists()).toBe(false);
       expect(await Bun.file(device).exists()).toBe(true);
     } finally {
       const { rm } = await import("node:fs/promises");
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("resets trusted history only for the rebound profile's Environments", async () => {
+    const { mkdir, writeFile, rm } = await import("node:fs/promises");
+    const directory = `${import.meta.dir}/.tmp-rebind-scope-${crypto.randomUUID()}`;
+    await mkdir(directory);
+    const rebound = "00000000-0000-4000-8000-000000000042";
+    const other = "00000000-0000-4000-8000-000000000043";
+    const environment = (n: number) =>
+      `00000000-0000-4000-8000-0000000001${String(n).padStart(2, "0")}`;
+    const head = (n: number) => `${directory}/head-${environment(n)}.json`;
+    const headRecord = (serverProfileId?: string) =>
+      `${JSON.stringify({
+        id: "00000000-0000-4000-8000-000000000999",
+        hash: "ab".repeat(48),
+        ...(serverProfileId === undefined ? {} : { serverProfileId }),
+      })}\n`;
+    const baseline = (n: number) => ({
+      environmentId: environment(n),
+      inputPath: `/work/${n}/.env`,
+      revisionId: "00000000-0000-4000-8000-000000000999",
+      headHash: "ab".repeat(48),
+    });
+    try {
+      await writeFile(head(1), headRecord(rebound.toUpperCase()));
+      await writeFile(head(2), headRecord(other));
+      await writeFile(head(3), headRecord());
+      await writeFile(head(4), "not json");
+      await writeFile(
+        `${directory}/baselines.json`,
+        `${JSON.stringify({
+          version: 1,
+          entries: [baseline(1), baseline(2), baseline(3)],
+        })}\n`,
+      );
+      expect(await resetTrustedEnvironmentHistory(directory, rebound)).toBe(1);
+      expect(await Bun.file(head(1)).exists()).toBe(false);
+      expect(await Bun.file(head(2)).exists()).toBe(true);
+      expect(await Bun.file(head(3)).exists()).toBe(true);
+      expect(await Bun.file(head(4)).exists()).toBe(true);
+      const baselines = (await Bun.file(
+        `${directory}/baselines.json`,
+      ).json()) as { version: number; entries: { environmentId: string }[] };
+      expect(baselines.version).toBe(1);
+      expect(baselines.entries.map((entry) => entry.environmentId)).toEqual([
+        environment(2),
+        environment(3),
+      ]);
+      expect(await resetTrustedEnvironmentHistory(directory, rebound)).toBe(0);
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });

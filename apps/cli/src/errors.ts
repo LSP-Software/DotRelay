@@ -170,18 +170,32 @@ const safeDiagnosticCodes = new Set([
   "variable_conflict",
 ]);
 
+// Unicode format characters that reorder or hide text on a terminal: zero
+// width and directional marks, bidi embeddings and overrides, and bidi
+// isolates. Server-supplied text could use them to disguise what it says.
+const isFormatCharacter = (codePoint: number): boolean =>
+  (codePoint >= 0x200b && codePoint <= 0x200f) ||
+  (codePoint >= 0x202a && codePoint <= 0x202e) ||
+  (codePoint >= 0x2066 && codePoint <= 0x2069);
+
+// Removes C0 controls (except tab, line feed and carriage return), DEL, C1
+// controls and bidi/format characters, so text received from a server or a
+// file cannot carry ANSI/OSC escape sequences or reorder what is printed.
 export const sanitizeCliText = (detail: string): string =>
   Array.from(detail)
     .filter((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
-      return (
-        codePoint === 9 ||
-        codePoint === 10 ||
-        codePoint === 13 ||
-        !(codePoint < 32 || (codePoint >= 127 && codePoint <= 159))
-      );
+      if (codePoint === 9 || codePoint === 10 || codePoint === 13) return true;
+      if (codePoint < 32 || (codePoint >= 127 && codePoint <= 159))
+        return false;
+      return !isFormatCharacter(codePoint);
     })
     .join("");
+
+// For a value printed inside a single line (a card row, a menu entry): the
+// sanitized text with tabs and line breaks folded to single spaces.
+export const sanitizeCliLine = (detail: string): string =>
+  sanitizeCliText(detail).replace(/[\t\r\n]+/g, " ");
 
 export const categoryForProblem = (
   code: string,

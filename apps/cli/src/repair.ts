@@ -22,8 +22,63 @@ export const backupMetadataContents = async (
   return path;
 };
 
+const HEAD_FILE = /^head-([0-9a-f-]{36})\.json$/i;
+
+// The Server Profile identity a trusted head record was verified against, or
+// null when the record does not name one (older records) or is unreadable.
+const headServerProfileId = async (path: string): Promise<string | null> => {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      return null;
+    const id = (value as Record<string, unknown>).serverProfileId;
+    return typeof id === "string" ? id.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+};
+
+// Drops the publication baselines of the reset Environments and keeps every
+// other entry. A baseline file that cannot be read is left as it is.
+const removeBaselines = async (
+  stateDirectory: string,
+  environmentIds: ReadonlySet<string>,
+): Promise<void> => {
+  const path = join(stateDirectory, "baselines.json");
+  let stored: unknown;
+  try {
+    stored = JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch {
+    return;
+  }
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored))
+    return;
+  const entries = (stored as Record<string, unknown>).entries;
+  if (!Array.isArray(entries)) return;
+  const kept = entries.filter((entry: unknown) => {
+    const environmentId =
+      entry !== null && typeof entry === "object"
+        ? (entry as Record<string, unknown>).environmentId
+        : undefined;
+    return (
+      typeof environmentId !== "string" ||
+      !environmentIds.has(environmentId.toLowerCase())
+    );
+  });
+  if (kept.length === entries.length) return;
+  await atomicWriteProtectedFile(
+    path,
+    `${JSON.stringify({ ...stored, entries: kept })}\n`,
+  );
+};
+
+// Resets trusted Revision continuity for the Environments verified against
+// one Server Profile identity: their trusted head records and publication
+// baselines. Records of other profiles, and records that do not name the
+// identity they were verified against, are kept.
 export const resetTrustedEnvironmentHistory = async (
   stateDirectory: string,
+  serverProfileId: string,
 ): Promise<number> => {
   let names: string[];
   try {
@@ -37,12 +92,18 @@ export const resetTrustedEnvironmentHistory = async (
       "trusted_head_read_failed",
     );
   }
-  const targets = names.filter(
-    (name) =>
-      name === "baselines.json" || /^head-[0-9a-f-]{36}\.json$/i.test(name),
-  );
-  for (const name of targets) await unlink(join(stateDirectory, name));
-  return targets.length;
+  const profileId = serverProfileId.toLowerCase();
+  const reset = new Set<string>();
+  for (const name of names) {
+    const environmentId = HEAD_FILE.exec(name)?.[1];
+    if (environmentId === undefined) continue;
+    const path = join(stateDirectory, name);
+    if ((await headServerProfileId(path)) !== profileId) continue;
+    await unlink(path);
+    reset.add(environmentId.toLowerCase());
+  }
+  if (reset.size > 0) await removeBaselines(stateDirectory, reset);
+  return reset.size;
 };
 
 const withoutNavigation = (context: WorktreeContext): WorktreeContext =>

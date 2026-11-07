@@ -8,6 +8,7 @@ import {
   truncate,
   visibleWidth,
 } from "./theme";
+import { sanitizeCliLine } from "./errors";
 
 export type { Tone };
 export { bold, dim, paint, terminalWidth, truncate, visibleWidth };
@@ -72,11 +73,16 @@ export type KvRow = Readonly<{
   readonly tone?: Tone | undefined;
 }>;
 
+// Row keys and values are plain text, often received from a server, so they
+// are sanitized here before the card applies its own styling.
 export const kv = (rows: readonly KvRow[], keyWidth = 16): string =>
   rows
     .map((row) => {
-      const key = pad(truncate(row.key, keyWidth), keyWidth);
-      const value = row.value ?? paint(GLYPHS.em, "ghost");
+      const key = pad(truncate(sanitizeCliLine(row.key), keyWidth), keyWidth);
+      const value =
+        row.value === undefined
+          ? paint(GLYPHS.em, "ghost")
+          : sanitizeCliLine(row.value);
       return `  ${paint(key, "faint")} ${paint(value, row.tone ?? "fg")}`;
     })
     .join("\n");
@@ -243,12 +249,15 @@ export type SelectionRow = Readonly<{
 
 export const selectionTitle = (title: string): string => `  ${bold(title)}`;
 
+// Selection labels and details are plain text, often server-supplied names
+// (Teams, Projects, Environments), so they are sanitized before styling.
 export const selectionRow = (row: SelectionRow, cursor: boolean): string => {
   const marker = cursor
     ? paint(GLYPHS.cursor, "brand")
     : paint(GLYPHS.item, "ghost");
-  const label = cursor ? bold(row.label) : paint(row.label, "muted");
-  const detail = row.detail ? paint(row.detail, "faint") : "";
+  const text = sanitizeCliLine(row.label);
+  const label = cursor ? bold(text) : paint(text, "muted");
+  const detail = row.detail ? paint(sanitizeCliLine(row.detail), "faint") : "";
   return `    ${marker}  ${label}${detail ? `  ${detail}` : ""}`;
 };
 
@@ -259,8 +268,8 @@ export const selectionHint = (interactive: boolean): string =>
   )}`;
 
 export const numberedRow = (index: number, row: SelectionRow): string =>
-  `    ${pad(`${index}.`, 3)}  ${paint(row.label, "muted")}${
-    row.detail ? `  ${paint(row.detail, "faint")}` : ""
+  `    ${pad(`${index}.`, 3)}  ${paint(sanitizeCliLine(row.label), "muted")}${
+    row.detail ? `  ${paint(sanitizeCliLine(row.detail), "faint")}` : ""
   }`;
 
 export const numberedHint = (allowsDefault: boolean): string =>

@@ -473,14 +473,21 @@ export const safeProjectEpoch = (value: unknown): number => {
   return Number(epoch);
 };
 
+// The record names the Server Profile identity it was verified against, so
+// a profile rebind can reset trust for that profile's Environments only.
 export const writeTrustedHead = async (
   path: string,
   id: string,
   hash: Uint8Array,
+  serverProfileId?: string,
 ): Promise<void> => {
   await atomicWriteProtectedFile(
     path,
-    `${JSON.stringify({ id, hash: sha384ToHex(hash) })}\n`,
+    `${JSON.stringify({
+      id,
+      hash: sha384ToHex(hash),
+      ...(serverProfileId === undefined ? {} : { serverProfileId }),
+    })}\n`,
   );
 };
 

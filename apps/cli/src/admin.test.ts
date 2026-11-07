@@ -36,6 +36,29 @@ describe("strict administration client", () => {
     }
   });
 
+  test("rejects a resolved repository name outside GitHub's alphabet", async () => {
+    for (const [owner, name] of [
+      ["LSP-Software", "app\x1b]0;pwned\x07"],
+      ["LSP\x1b[31m", "app"],
+      ["LSP-Software", "app\u202e"],
+      ["LSP Software", "app"],
+    ] as const) {
+      await expect(
+        resolveRepositoryIdentity(
+          {
+            get: async () => ({
+              host: "github.com",
+              owner,
+              name,
+              githubRepositoryId: "1311418611",
+            }),
+          },
+          { host: "github.com", owner: "LSP-Software", name: "app" },
+        ),
+      ).rejects.toThrow("invalid repository identity");
+    }
+  });
+
   test("finds an accessible Project by GitHub Repository id", async () => {
     await expect(
       findProjectByRepository(
