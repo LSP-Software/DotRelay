@@ -4,6 +4,8 @@ import {
   decodeSyncManifest,
   type PublicationContext,
   type RevisionSigningTrust,
+  type SharedValueKeyRing,
+  type SharedValueSecrets,
   verifySyncPage,
 } from "./publication";
 import type { ProtocolTransport, SyncInput } from "./transport";
@@ -50,12 +52,32 @@ export type VerifiedEnvironmentSession = Readonly<{
   >;
 }>;
 
+const sharedValueSecretsFor = (input: {
+  readonly context: PublicationContext;
+  readonly sharedValueSecret?: Uint8Array;
+  readonly sharedValueKeyRing?: SharedValueKeyRing;
+}): SharedValueSecrets | undefined => {
+  if (!input.sharedValueKeyRing) return input.sharedValueSecret;
+  const ring = new Map(input.sharedValueKeyRing);
+  if (input.sharedValueSecret)
+    ring.set(input.context.projectEpoch, input.sharedValueSecret);
+  return ring;
+};
+
 export const createVerifiedEnvironmentSession = (input: {
   readonly context: PublicationContext;
   readonly transport: ProtocolTransport;
   readonly sharedValuePrivateKey: CryptoKey;
   readonly userDefinedValuePrivateKey?: CryptoKey;
+  /** The current Project epoch key; it also seals new publications. */
   readonly sharedValueSecret?: Uint8Array;
+  /**
+   * Project epoch keys this Device holds for earlier epochs, keyed by epoch,
+   * so lanes sealed before a Project epoch rotation stay readable. When
+   * given, each lane opens only with the key of the epoch it names, and
+   * `sharedValueSecret` is the key of `context.projectEpoch`.
+   */
+  readonly sharedValueKeyRing?: SharedValueKeyRing;
   readonly userDefinedValueSecret?: Uint8Array;
   /**
    * The trust set Revision signatures are checked against. Plain keys carry
@@ -72,6 +94,7 @@ export const createVerifiedEnvironmentSession = (input: {
       : input.context.revisionSigningPublicKey;
   if (!signingTrust)
     throw new Error("revision signing trust key is required for live sync");
+  const sharedValueSecrets = sharedValueSecretsFor(input);
   const snapshots = new Map<string, readonly DecodedVariable[]>();
   let cachedVariables: readonly DecodedVariable[] = [];
   const resolvePrivateKey = (
@@ -95,7 +118,7 @@ export const createVerifiedEnvironmentSession = (input: {
       page,
       resolvePrivateKey,
       previousVariables,
-      input.sharedValueSecret,
+      sharedValueSecrets,
       input.context.actorUserId,
       input.userDefinedValueSecret,
     );
@@ -113,6 +136,8 @@ export const createVerifiedEnvironmentSession = (input: {
       const page = await input.transport.syncAll(request);
       await verifySyncPage(page, signingTrust, {
         actorUserId: input.context.actorUserId,
+        expectedTrustedRevisionId: request.request.trustedRevisionId,
+        expectedTrustedRevisionHash: request.request.trustedRevisionHash,
       });
       const variables = await decodeVariables(page);
       return Object.freeze({ page, variables });

@@ -295,6 +295,8 @@ export const EnvironmentEditor = ({
         stage = "verify";
         await verifySyncPage(page, sessionSigningTrust(session), {
           actorUserId: context.actorUserId,
+          expectedTrustedRevisionId: context.trustedRevisionId,
+          expectedTrustedRevisionHash: context.trustedRevisionHash,
         });
         if (cancelled) return;
         stage = "decrypt";
@@ -845,25 +847,29 @@ export const EnvironmentEditor = ({
         }
         try {
           const context = publishSession.context;
+          const trustedRevisionId =
+            protocolHead?.id ??
+            context.expectedHeadId ??
+            context.trustedRevisionId ??
+            context.environmentId;
+          const trustedRevisionHash =
+            protocolHead?.hash ??
+            context.expectedHeadHash ??
+            context.trustedRevisionHash ??
+            new Uint8Array(48);
           const page = await publishSession.transport.syncAll({
             environmentId: context.environmentId,
             deviceId: context.actorDeviceId,
             request: {
-              trustedRevisionId:
-                protocolHead?.id ??
-                context.expectedHeadId ??
-                context.trustedRevisionId ??
-                context.environmentId,
-              trustedRevisionHash:
-                protocolHead?.hash ??
-                context.expectedHeadHash ??
-                context.trustedRevisionHash ??
-                new Uint8Array(48),
+              trustedRevisionId,
+              trustedRevisionHash,
               pagination: {},
             },
           });
           await verifySyncPage(page, sessionSigningTrust(publishSession), {
             actorUserId: context.actorUserId,
+            expectedTrustedRevisionId: trustedRevisionId,
+            expectedTrustedRevisionHash: trustedRevisionHash,
           });
           setVerifiedHistory((current) =>
             mergeVerifiedHistory(current, verifiedRevisionsFromPage(page)),

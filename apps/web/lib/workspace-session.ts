@@ -10,6 +10,7 @@ import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
   createAccountKeyEnvelope,
+  fetchAccountKeyEnvelopes,
   fromBase64,
   hexToBytes,
   openProjectEpochEnvelope,
@@ -89,6 +90,57 @@ const WORKSPACE_REFRESH_MS = Math.max(
 const SETUP_BOUNDARY_REFRESH_MS = 2_000;
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
+
+// Opens this User's Account Key Envelopes for the Project's earlier epochs.
+// The service keeps them after a rotation, so content sealed before it stays
+// readable here; an envelope that fails verification contributes no key.
+const pastProjectEpochKeys = async (input: {
+  readonly actor: AccountKeyActor;
+  readonly boundary: WorkspaceBoundary;
+  readonly recoveryWrappers: readonly AccountKeyWrapperEntry[];
+  readonly accountMasterKey: Uint8Array;
+  readonly projectId: string;
+  readonly currentEpoch: number;
+}): Promise<Map<number, Uint8Array>> => {
+  const ring = new Map<number, Uint8Array>();
+  if (input.currentEpoch <= 1) return ring;
+  let envelopes: Awaited<ReturnType<typeof fetchAccountKeyEnvelopes>>;
+  try {
+    envelopes = await fetchAccountKeyEnvelopes(input.actor);
+  } catch {
+    return ring;
+  }
+  const verification = accountKeyVerification(input.boundary, [
+    ...input.recoveryWrappers,
+    ...envelopes,
+  ]);
+  if (!verification) return ring;
+  for (const entry of envelopes) {
+    const epoch = Number(entry.projectEpoch);
+    if (
+      entry.envelopeType !== "project-epoch-key" ||
+      entry.projectId !== input.projectId ||
+      !Number.isSafeInteger(epoch) ||
+      epoch < 1 ||
+      epoch >= input.currentEpoch ||
+      ring.has(epoch)
+    )
+      continue;
+    // The envelope's own signed Project and epoch must match the listing.
+    const key = await openProjectEpochEnvelope(
+      entry.object,
+      input.accountMasterKey,
+      {
+        trustedKeys: verification.trustedKeys,
+        context: verification.context,
+        projectId: input.projectId,
+        projectEpoch: epoch,
+      },
+    );
+    if (key) ring.set(epoch, key);
+  }
+  return ring;
+};
 
 export const workspaceBoundaryRefreshMs = (setupPending: boolean): number =>
   setupPending
@@ -660,6 +712,19 @@ export const loadWorkspaceSession = (
         }
       }
       if (cancelled()) return;
+      const pastEpochKeyMaster = accountMasterKey.get();
+      const sharedValueKeyRing =
+        pastEpochKeyMaster && recoveryActor && environment.projectId
+          ? await pastProjectEpochKeys({
+              actor: recoveryActor,
+              boundary,
+              recoveryWrappers,
+              accountMasterKey: pastEpochKeyMaster,
+              projectId: environment.projectId,
+              currentEpoch: Number(environment.projectEpoch ?? 1),
+            })
+          : undefined;
+      if (cancelled()) return;
       const session = createEnvironmentProtocolSession({
         context: sharedValueSecret
           ? { ...context, sharedValueSecret }
@@ -674,6 +739,9 @@ export const loadWorkspaceSession = (
               ? signingTrustKeys
               : [hexToBytes(device.signingPublicKey)],
         ...(sharedValueSecret ? { sharedValueSecret } : {}),
+        ...(sharedValueKeyRing && sharedValueKeyRing.size > 0
+          ? { sharedValueKeyRing }
+          : {}),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       });
       if (cancelled()) return;

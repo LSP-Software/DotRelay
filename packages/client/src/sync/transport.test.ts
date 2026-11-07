@@ -194,6 +194,51 @@ describe("protocol transport", () => {
     );
   });
 
+  test("rejects a later sync page that moves the requested starting point", async () => {
+    const firstPage = {
+      environmentId: uuid,
+      trustedRevisionId: uuid,
+      trustedRevisionHash: digest,
+      currentHeadId: uuid,
+      currentHeadHash: digest,
+      projectEpoch: 1n,
+      revisions: [],
+      nextCursor: "cursor-1",
+    };
+    const shiftedPage = {
+      ...firstPage,
+      trustedRevisionId: "33333333-3333-4333-8333-333333333333",
+      trustedRevisionHash: new Uint8Array(48).fill(8),
+      nextCursor: null,
+    };
+    let requestCount = 0;
+    const transport = createProtocolTransport({
+      origin: "https://relay.example",
+      fetch: async () => {
+        requestCount += 1;
+        return new Response(
+          encodeSyncPage(requestCount === 1 ? firstPage : shiftedPage),
+          {
+            headers: {
+              "Content-Type": "application/vnd.dotrelay.e2ee-v3+cbor",
+            },
+          },
+        );
+      },
+    });
+    await expect(
+      transport.syncAll({
+        environmentId: uuid,
+        deviceId,
+        request: {
+          trustedRevisionId: uuid,
+          trustedRevisionHash: digest,
+          pagination: {},
+        },
+      }),
+    ).rejects.toThrow("does not start from the requested trusted revision");
+  });
+
   test("stops pagination when the bounded sync budget is exhausted", async () => {
     let requestCount = 0;
     const transport = createProtocolTransport({

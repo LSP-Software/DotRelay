@@ -125,6 +125,41 @@ export type SyncDisclosureOptions = Readonly<{
   readonly actorUserId?: string;
 }>;
 
+/**
+ * How far past this Device's clock a Revision's signer-chosen authored-at
+ * instant may lie. Device and Membership windows are judged at that instant,
+ * so an unbounded future (or a past earlier than the parent) would let a
+ * signer move a Revision into whichever window authorizes it.
+ */
+export const MAX_REVISION_CLOCK_SKEW_MS = 10 * 60 * 1000;
+
+export type SyncPageVerificationOptions = SyncDisclosureOptions &
+  Readonly<{
+    /**
+     * The starting point this Device requested the sync from. The page must
+     * answer from exactly this point: a page that starts at a later Revision
+     * would hide every Variable defined before it.
+     */
+    readonly expectedTrustedRevisionId: string;
+    readonly expectedTrustedRevisionHash: Uint8Array;
+    /**
+     * The authored-at instant of the trusted starting Revision, when this
+     * Device knows it; the first Revision of the page must not predate it.
+     */
+    readonly trustedRevisionAuthoredAtMs?: bigint;
+    /** This Device's clock; defaults to Date.now(). */
+    readonly nowMs?: number;
+  }>;
+
+/**
+ * The Project epoch keys this Device holds, keyed by Project epoch. Each lane
+ * opens with the key of the epoch it names (lane field 30), so content sealed
+ * before a Project epoch rotation stays readable after it. A single key is
+ * accepted as a convenience and is tried for every lane.
+ */
+export type SharedValueKeyRing = ReadonlyMap<number, Uint8Array>;
+export type SharedValueSecrets = Uint8Array | SharedValueKeyRing;
+
 export type RevisionSigningTrustEntry = Readonly<{
   readonly publicKey: Uint8Array;
   readonly deviceId?: string;
@@ -718,6 +753,40 @@ export type SyncManifestDecode = Readonly<{
   readonly snapshots: ReadonlyMap<string, readonly DecodedVariable[]>;
 }>;
 
+// The Project epoch a lane was sealed under (field 30). A lane can never be
+// sealed under an epoch later than its Revision's: that key did not exist yet.
+const laneProjectEpoch = (
+  lane: ProtocolObject,
+  revisionEpoch: bigint,
+): bigint => {
+  const epoch = lane.get(30);
+  const value =
+    typeof epoch === "bigint"
+      ? epoch
+      : typeof epoch === "number" && Number.isSafeInteger(epoch)
+        ? BigInt(epoch)
+        : null;
+  if (value === null || value < 1n)
+    throw new ProtocolVerificationError("sync lane Project epoch is malformed");
+  if (value > revisionEpoch)
+    throw new ProtocolVerificationError(
+      "sync lane Project epoch is later than its Revision's",
+    );
+  return value;
+};
+
+const sharedSecretForLane = (
+  secrets: SharedValueSecrets | undefined,
+  lane: ProtocolObject,
+  revisionEpoch: bigint,
+): Uint8Array | undefined => {
+  const epoch = laneProjectEpoch(lane, revisionEpoch);
+  if (secrets === undefined || secrets instanceof Uint8Array) return secrets;
+  return epoch <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? secrets.get(Number(epoch))
+    : undefined;
+};
+
 const decodedVariables = (
   variables: ReadonlyMap<string, DecodedVariableState>,
 ): readonly DecodedVariable[] =>
@@ -750,7 +819,7 @@ export const decodeSyncManifest = async (
     scope: "SHARED_VALUE" | "USER_DEFINED_VALUE",
   ) => CryptoKey,
   existingVariables: readonly DecodedVariable[] = [],
-  sharedValueSecret?: Uint8Array,
+  sharedValueSecrets?: SharedValueSecrets,
   actorUserId?: string,
   userDefinedValueSecret?: Uint8Array,
 ): Promise<SyncManifestDecode> => {
@@ -772,6 +841,8 @@ export const decodeSyncManifest = async (
   const valueStates = new Map<string, ValueLaneState>();
   const snapshots = new Map<string, readonly DecodedVariable[]>();
   for (const revision of page.revisions) {
+    const sharedValueSecret = (lane: ProtocolObject): Uint8Array | undefined =>
+      sharedSecretForLane(sharedValueSecrets, lane, revision.projectEpoch);
     const laneObjects = revision.objects.filter((object) => {
       const lane = parseProtocolObject(object.canonicalBytes);
       return lane.get(1) === 13;
@@ -798,7 +869,7 @@ export const decodeSyncManifest = async (
         const plaintext = await openReadableLane(
           object.canonicalBytes,
           resolvePrivateKey("SHARED_VALUE"),
-          sharedValueSecret,
+          sharedValueSecret(lane),
         );
         if (!plaintext) {
           // The head definition of this Variable is unverified; whether that
@@ -838,7 +909,25 @@ export const decodeSyncManifest = async (
         });
       } else if (scope === 3 || scope === 4) {
         const existing = variables.get(id);
-        if (!existing) continue;
+        if (!existing) {
+          // A Value lane needs its Variable's definition from this page or
+          // from the Variables the caller already verified. When the
+          // definition lane itself was unreadable the Value is unknown and
+          // the unreadable definition fails the decode; otherwise the page
+          // (or the caller's prior state) is incomplete, and skipping the
+          // lane would silently drop the Variable.
+          if (definitionStates.get(id) === "REQUIRED_UNREADABLE") {
+            valueStates.set(id, {
+              state: "REQUIRED_UNREADABLE",
+              scope,
+              ownerUserId: scope === 4 ? laneUserId(lane, 26) : null,
+            });
+            continue;
+          }
+          throw new ProtocolVerificationError(
+            "sync Value lane has no known Variable definition",
+          );
+        }
         if (
           existing.tombstone ||
           (scope === 3 && existing.ownership !== "SHARED_VALUE") ||
@@ -860,7 +949,7 @@ export const decodeSyncManifest = async (
           resolvePrivateKey(
             scope === 3 ? "SHARED_VALUE" : "USER_DEFINED_VALUE",
           ),
-          scope === 3 ? sharedValueSecret : userDefinedValueSecret,
+          scope === 3 ? sharedValueSecret(lane) : userDefinedValueSecret,
         );
         if (!plaintext) {
           // Never carry an earlier Value across a lane this Device cannot
@@ -1008,7 +1097,7 @@ export const decodeSyncVariables = async (
     scope: "SHARED_VALUE" | "USER_DEFINED_VALUE",
   ) => CryptoKey,
   existingVariables: readonly DecodedVariable[] = [],
-  sharedValueSecret?: Uint8Array,
+  sharedValueSecret?: SharedValueSecrets,
   actorUserId?: string,
   userDefinedValueSecret?: Uint8Array,
 ): Promise<readonly DecodedVariable[]> =>
@@ -1225,8 +1314,22 @@ const authorizeRevisionSignature = async (
 export const verifySyncPage = async (
   page: SyncPageWire,
   signingTrust: RevisionSigningTrust,
-  options: SyncDisclosureOptions = {},
+  options: SyncPageVerificationOptions,
 ): Promise<void> => {
+  // The page's own copy of the starting point is service-supplied: a page
+  // that starts later than requested would chain-verify yet silently drop
+  // every Variable defined before its first Revision.
+  if (
+    page.trustedRevisionId !== options.expectedTrustedRevisionId ||
+    !bytesEqual(page.trustedRevisionHash, options.expectedTrustedRevisionHash)
+  )
+    throw new ProtocolVerificationError(
+      "sync page does not start from the requested trusted revision",
+    );
+  const latestAuthoredAtMs =
+    BigInt(Math.floor(options.nowMs ?? Date.now())) +
+    BigInt(MAX_REVISION_CLOCK_SKEW_MS);
+  let previousAuthoredAtMs = options.trustedRevisionAuthoredAtMs;
   const trustEntries = normalizeSigningTrust(signingTrust);
   const trustKeys = trustEntries.map((entry) => entry.publicKey);
   const scopedTrust = trustEntries.some((entry) => entry.constrained);
@@ -1280,6 +1383,18 @@ export const verifySyncPage = async (
     const actualRevisionDigest = await sha384(revisionObject.canonicalBytes);
     if (!bytesEqual(actualRevisionDigest, revision.digest))
       throw new ProtocolVerificationError("revision digest mismatch");
+    // Authorization windows are judged at the signer-chosen authored-at
+    // instant, so bound it: never before the parent, never in the future
+    // beyond clock skew.
+    if (
+      (previousAuthoredAtMs !== undefined &&
+        revision.authoredAtMs < previousAuthoredAtMs) ||
+      revision.authoredAtMs > latestAuthoredAtMs
+    )
+      throw new ProtocolVerificationError(
+        "sync revision authored-at instant is outside its allowed range",
+      );
+    previousAuthoredAtMs = revision.authoredAtMs;
     let revisionTrustKeys = trustKeys;
     if (scopedTrust) {
       revisionTrustKeys = await authorizeRevisionSignature(
@@ -1401,6 +1516,7 @@ export const verifySyncPage = async (
           "sync object environment identity mismatch",
         );
       if (parsed.get(1) === 13) {
+        laneProjectEpoch(parsed, revision.projectEpoch);
         const laneId = parsed.get(18);
         const laneScope = parsed.get(36);
         const laneCiphertextLength = parsed.get(72);
