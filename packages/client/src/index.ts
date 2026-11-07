@@ -182,6 +182,20 @@ export {
   withResolvedConflicts,
 } from "./sync/baseline";
 export {
+  createProjectEpochKeyLink,
+  createProjectEpochKeyLinkBackfill,
+  missingProjectEpochKeyLinks,
+  openProjectEpochKeyChain,
+  openProjectEpochKeyLink,
+  PROJECT_EPOCH_KEY_LINK_KIND,
+  type ProjectEpochKeyChain,
+  type ProjectEpochKeyChainBreak,
+  type ProjectEpochKeyLink,
+  type ProjectEpochKeyLinkContext,
+  ProjectEpochKeyLinkError,
+  readProjectEpochKeyLinkEpochs,
+} from "./sync/epoch-key-chain";
+export {
   createEpochRotationArtifacts,
   type EpochRotationArtifacts,
   type EpochRotationInput,

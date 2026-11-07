@@ -86,6 +86,8 @@ export type Boundary = Readonly<{
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;
   readonly userValueKeyEnvelope?: string;
+  /** The Project's key chain links (ADR 0014), base64 canonical bytes. */
+  readonly epochKeyLinks: readonly string[];
   readonly signingTrustKeys: readonly string[];
   readonly signingTrustDevices: readonly SigningTrustDevice[];
   readonly peerDevices: readonly Readonly<{
@@ -153,6 +155,7 @@ export const workspaceBoundaryFields = [
   "epochGrant",
   "accountKeyEnvelope",
   "userValueKeyEnvelope",
+  "epochKeyLinks",
   "peerDevices",
 ] as const;
 
@@ -224,6 +227,11 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
     ...(typeof value.userValueKeyEnvelope === "string"
       ? { userValueKeyEnvelope: value.userValueKeyEnvelope }
       : {}),
+    epochKeyLinks: Array.isArray(value.epochKeyLinks)
+      ? value.epochKeyLinks.filter(
+          (link): link is string => typeof link === "string",
+        )
+      : [],
     signingTrustKeys: Array.isArray(value.signingTrustKeys)
       ? value.signingTrustKeys.filter(
           (key): key is string => typeof key === "string",

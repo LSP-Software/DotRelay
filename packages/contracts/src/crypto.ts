@@ -27,6 +27,12 @@ export const ACCOUNT_KEY_ENVELOPE_KDF_INFO = new TextEncoder().encode(
   `DotRelay\0${SUITE_NAME}\0Account-key-envelope\0v1`,
 );
 
+// HKDF info for a Project Epoch Key Link (ADR 0014): the to-epoch key seals
+// the from-epoch key.
+export const PROJECT_EPOCH_KEY_LINK_KDF_INFO = new TextEncoder().encode(
+  `DotRelay\0${SUITE_NAME}\0Project-epoch-key-link\0v1`,
+);
+
 export const CRYPTO_SUITE = Object.freeze({
   name: SUITE_NAME,
   version: SUITE_VALUE,

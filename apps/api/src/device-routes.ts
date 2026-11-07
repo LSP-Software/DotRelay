@@ -22,6 +22,7 @@ import {
   AccountKeyRepository,
   DeviceRepository,
   OperationRepository,
+  ProjectEpochKeyLinkRepository,
   StagedObjectRepository,
   resolveDotRelayUser,
   sha384Digest,
@@ -33,6 +34,7 @@ import type { DotRelayAuth } from "./auth";
 import type { ServerProfileConfig } from "./profile";
 import { requireProtocolActor, requireWebActor } from "./protocol/context";
 import { mapPersistenceError } from "./protocol/errors";
+import { verifyProjectEpochKeyLink } from "./protocol/staging";
 
 type Dependencies = Readonly<{
   readonly database: DatabaseClient;
@@ -260,7 +262,7 @@ const validateActorBinding = (
 const operation = async (
   body: Record<string, unknown>,
   actor: { readonly userId: string; readonly deviceId: string },
-  kind: "DEVICE_ENROLLMENT" | "ACCOUNT_KEY",
+  kind: "DEVICE_ENROLLMENT" | "ACCOUNT_KEY" | "EPOCH_KEY_LINK",
   commandBytes: Uint8Array,
 ) => {
   const operationId = parseUuid(body.operationId, "operationId");
@@ -353,6 +355,7 @@ export const registerDeviceRoutes = (
   const devices = new DeviceRepository();
   const operations = new OperationRepository();
   const accountKeys = new AccountKeyRepository();
+  const keyLinks = new ProjectEpochKeyLinkRepository();
   const jsonLimit = bodyLimit({
     maxSize: profile.limits.adminBodyBytes,
     onError: (context) => problem(context, "payload_too_large"),
@@ -362,6 +365,80 @@ export const registerDeviceRoutes = (
   app.use("/api/v1/devices/enrollments/*", jsonLimit);
   app.use("/api/v1/account-keys", jsonLimit);
   app.use("/api/v1/account-keys/*", jsonLimit);
+
+  // Backfills a Project Epoch Key Link for an epoch rotated before links
+  // existed (ADR 0014). The actor's own Device must have signed it.
+  app.post(
+    "/api/v1/projects/:projectId/epoch-key-links",
+    jsonLimit,
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      try {
+        const projectId = parseUuid(
+          context.req.param("projectId"),
+          "projectId",
+        );
+        const body = await readBody(context);
+        requireIdempotencyKey(context, body.operationId);
+        const object = await parseProtocolPayload(
+          body,
+          "objectId",
+          "object",
+          23,
+        );
+        const [project, device] = await Promise.all([
+          database.project.findUnique({
+            where: { id: projectId },
+            select: { teamId: true },
+          }),
+          database.device.findFirst({
+            where: { id: actor.deviceId, userId: actor.userId },
+            select: { ed25519PublicKey: true },
+          }),
+        ]);
+        if (!project) return problem(context, "resource_not_found");
+        if (!device) return problem(context, "device_not_active");
+        const fields = await verifyProjectEpochKeyLink({
+          canonicalBytes: object.canonicalBytes,
+          serverProfileId: profile.id,
+          teamId: project.teamId,
+          projectId,
+          actorDeviceId: actor.deviceId,
+          actorSigningPublicKey: device.ed25519PublicKey,
+        });
+        const op = await operation(
+          body,
+          actor,
+          "EPOCH_KEY_LINK",
+          object.canonicalBytes,
+        );
+        await operations.begin(database, op);
+        await stage(database, op, [object], profile.limits.stagingTtlSeconds);
+        const { object: _parsed, ...protocolObject } = object;
+        const result = await keyLinks.publish(database, {
+          operation: op,
+          projectId,
+          keyLink: { protocolObject, ...fields },
+        });
+        return context.json(
+          {
+            objectId: result.protocolObjectId ?? object.id,
+            idempotent: "idempotent" in result && result.idempotent,
+          },
+          201,
+          { "Cache-Control": "no-store" },
+        );
+      } catch (error) {
+        return problem(context, mapError(error));
+      }
+    },
+  );
 
   app.post("/api/v1/devices/:deviceId/revoke", jsonLimit, async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);

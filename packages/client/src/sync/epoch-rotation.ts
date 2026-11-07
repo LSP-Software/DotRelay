@@ -8,6 +8,7 @@ import {
   signProtocolObject,
   uuidToBytes,
 } from "@dotrelay/contracts";
+import { createProjectEpochKeyLink } from "./epoch-key-chain";
 
 export type EpochRotationEnvironment = Readonly<{
   readonly environmentId: string;
@@ -24,10 +25,19 @@ export type EpochRotationInput = Readonly<{
   readonly expectedEpoch: number;
   readonly environments: readonly EpochRotationEnvironment[];
   readonly signingPrivateKey: CryptoKey;
+  /**
+   * The current epoch key. The rotation seals it under the new key in a
+   * Project Epoch Key Link (ADR 0014); without it the rotation cannot start.
+   */
+  readonly previousEpochKey: Uint8Array;
+  /** The new epoch key; generated when omitted. */
+  readonly newEpochKey?: Uint8Array;
   readonly authoredAtMs?: number;
 }>;
 
 export type EpochRotationArtifacts = Readonly<{
+  /** The new epoch key. The caller must store it and zero it afterwards. */
+  readonly newEpochKey: Uint8Array;
   readonly commandBytes: Uint8Array;
   readonly stagedObjects: ReadonlyArray<
     Readonly<{ readonly objectId: string; readonly bytes: Uint8Array }>
@@ -45,6 +55,7 @@ export type EpochRotationArtifacts = Readonly<{
         readonly publication: FinalizePublicationRequest;
       }>
     >;
+    readonly keyLink: Readonly<{ readonly protocolObjectId: string }>;
   }>;
 }>;
 
@@ -214,6 +225,14 @@ export const createEpochRotationArtifacts = async (
     )
   )
     throw new TypeError("project epoch rotation context is invalid");
+  if (
+    !(input.previousEpochKey instanceof Uint8Array) ||
+    input.previousEpochKey.length !== 32 ||
+    (input.newEpochKey !== undefined && input.newEpochKey.length !== 32)
+  )
+    throw new TypeError(
+      "project epoch rotation needs the current epoch key to link the new one",
+    );
   const newEpoch = input.expectedEpoch + 1;
   const authoredAtMs = input.authoredAtMs ?? Date.now();
   const shared: RotationSharedContext = Object.freeze({
@@ -238,11 +257,30 @@ export const createEpochRotationArtifacts = async (
       )
       .map((environment) => buildEnvironmentTransition(shared, environment)),
   );
-  const stagedObjects = transitions.flatMap((transition) => [
-    ...transition.stagedObjects,
-  ]);
+  const newEpochKey = input.newEpochKey
+    ? new Uint8Array(input.newEpochKey)
+    : crypto.getRandomValues(new Uint8Array(32));
+  const keyLink = await createProjectEpochKeyLink({
+    serverProfileId: input.serverProfileId,
+    teamId: input.teamId,
+    projectId: input.projectId,
+    fromEpoch: input.expectedEpoch,
+    fromKey: input.previousEpochKey,
+    toKey: newEpochKey,
+    signingDeviceId: input.actorDeviceId,
+    signingPrivateKey: input.signingPrivateKey,
+    createdAtMs: authoredAtMs,
+  });
+  const stagedObjects = [
+    ...transitions.flatMap((transition) => [...transition.stagedObjects]),
+    Object.freeze({
+      objectId: keyLink.objectId,
+      bytes: keyLink.canonicalBytes,
+    }),
+  ];
   const [firstTransition] = transitions;
   return Object.freeze({
+    newEpochKey,
     commandBytes: firstTransition!.commandBytes,
     stagedObjects: Object.freeze(stagedObjects),
     request: Object.freeze({
@@ -260,6 +298,7 @@ export const createEpochRotationArtifacts = async (
           }),
         ),
       ),
+      keyLink: Object.freeze({ protocolObjectId: keyLink.objectId }),
     }),
   });
 };

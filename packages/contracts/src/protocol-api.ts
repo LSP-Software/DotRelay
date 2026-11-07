@@ -759,6 +759,8 @@ export type EpochRotationRequest = Readonly<{
       readonly publication: FinalizePublicationRequest;
     }>
   >;
+  /** The staged Project Epoch Key Link sealing the previous epoch key. */
+  readonly keyLink: Readonly<{ readonly protocolObjectId: string }>;
 }>;
 
 export const parseEpochRotationRequest = (
@@ -769,7 +771,14 @@ export const parseEpochRotationRequest = (
     expectedEpoch?: unknown;
     newEpoch?: unknown;
     transitions?: unknown;
-  }>(value, ["projectId", "expectedEpoch", "newEpoch", "transitions"]);
+    keyLink?: unknown;
+  }>(value, [
+    "projectId",
+    "expectedEpoch",
+    "newEpoch",
+    "transitions",
+    "keyLink",
+  ]);
   if (
     typeof body.expectedEpoch !== "number" ||
     !Number.isSafeInteger(body.expectedEpoch) ||
@@ -781,9 +790,18 @@ export const parseEpochRotationRequest = (
   )
     contractError("invalid_request");
   if (body.newEpoch <= body.expectedEpoch) contractError("invalid_request");
+  const keyLink = parseJsonObject<{ protocolObjectId?: unknown }>(
+    body.keyLink,
+    ["protocolObjectId"],
+  );
+  const keyLinkObjectId = parseUuid(
+    keyLink.protocolObjectId,
+    "keyLink.protocolObjectId",
+  );
   const seenEnvironmentIds = new Set<string>();
   return Object.freeze({
     projectId: parseUuid(body.projectId, "projectId"),
+    keyLink: Object.freeze({ protocolObjectId: keyLinkObjectId }),
     expectedEpoch: body.expectedEpoch,
     newEpoch: body.newEpoch,
     transitions: Object.freeze(

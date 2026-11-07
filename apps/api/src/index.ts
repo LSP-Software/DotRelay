@@ -1227,6 +1227,18 @@ const createApi = ({
           select: { protocolObject: { select: { canonicalBytes: true } } },
         })
       : null;
+    // The Project's key chain (ADR 0014): each link seals an epoch key under
+    // the next. Clients verify and walk them from the current epoch down.
+    const epochKeyLinks = project
+      ? await database.projectEpochKeyLinkObject.findMany({
+          where: {
+            projectId: project.id,
+            toEpoch: { lte: project.currentEpoch },
+          },
+          orderBy: { toEpoch: "asc" },
+          select: { protocolObject: { select: { canonicalBytes: true } } },
+        })
+      : [];
     const userValueKeyEnvelope =
       await database.accountKeyEnvelopeObject.findFirst({
         where: {
@@ -1329,6 +1341,9 @@ const createApi = ({
               ),
             }
           : {}),
+        epochKeyLinks: epochKeyLinks.map((link) =>
+          bytesToBase64(new Uint8Array(link.protocolObject.canonicalBytes)),
+        ),
         peerDevices: devices
           .filter((candidate) => candidate.id !== device?.id)
           .map((candidate) => ({

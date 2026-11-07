@@ -158,12 +158,15 @@ test("a browser session reads Shared Values sealed before a Project epoch rotati
       },
     ],
     signingPrivateKey: signing.privateKey,
+    previousEpochKey: new Uint8Array(32).fill(7),
   });
   const transition = rotation.request.transitions[0];
   if (!transition) throw new Error("transition is missing");
   const rotated = await wire(
     rotation.stagedObjects.filter(
-      (object) => object.objectId !== transition.protocolObjectId,
+      (object) =>
+        object.objectId !== transition.protocolObjectId &&
+        object.objectId !== rotation.request.keyLink.protocolObjectId,
     ),
     transition.publication.revision.protocolObjectId,
     transition.newHeadId,

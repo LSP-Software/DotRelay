@@ -47,6 +47,7 @@ import {
   collectStagedObjectIds,
   hasAllStagedObjects,
   uniqueStagedObjectIds,
+  verifyProjectEpochKeyLink,
   verifyRevisionSignature,
 } from "./staging";
 
@@ -838,6 +839,7 @@ export const registerProtocolRoutes = (
       }
       const stagedIds = uniqueStagedObjectIds([
         COMMAND_STAGE_OBJECT_ID,
+        rotationRequest.keyLink.protocolObjectId,
         ...rotationRequest.transitions.flatMap((transition) => [
           transition.protocolObjectId,
           ...collectStagedObjectIds(transition.publication).filter(
@@ -884,7 +886,41 @@ export const registerProtocolRoutes = (
           "Content-Type": "application/problem+json",
         });
       }
+      const rotatedProject = await database.project.findUnique({
+        where: { id: rotationRequest.projectId },
+        select: { teamId: true },
+      });
+      if (!rotatedProject) {
+        const problem = respondProblem("resource_not_found");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
       try {
+        // Exactly one link, for expectedEpoch -> newEpoch, signed by the
+        // actor Device (ADR 0014); without it the rotation never commits.
+        const keyLinkObject = buildProtocolObjectFromStage(
+          stagedById,
+          rotationRequest.keyLink.protocolObjectId,
+          rotationRequest.projectId,
+          rotationRequest.transitions[0]?.environmentId ?? "",
+        );
+        const keyLinkFields = await verifyProjectEpochKeyLink({
+          canonicalBytes: keyLinkObject.canonicalBytes,
+          serverProfileId: profile.id,
+          teamId: rotatedProject.teamId,
+          projectId: rotationRequest.projectId,
+          actorDeviceId: actor.deviceId,
+          actorSigningPublicKey: signingDevice.ed25519PublicKey,
+        });
+        if (
+          keyLinkFields.fromEpoch !== BigInt(rotationRequest.expectedEpoch) ||
+          keyLinkFields.toEpoch !== BigInt(rotationRequest.newEpoch)
+        )
+          throw new ContractError("invalid_crypto_object");
+        const { environmentId: _linkEnvironment, ...keyLinkProtocolObject } =
+          keyLinkObject;
         const transitions = rotationRequest.transitions.map((transition) => ({
           environmentId: transition.environmentId,
           expectedHeadId: transition.expectedHeadId,
@@ -940,6 +976,10 @@ export const registerProtocolRoutes = (
           expectedEpoch: BigInt(rotationRequest.expectedEpoch),
           newEpoch: BigInt(rotationRequest.newEpoch),
           transitions,
+          keyLink: {
+            protocolObject: keyLinkProtocolObject,
+            ...keyLinkFields,
+          },
         });
         return context.json(
           {

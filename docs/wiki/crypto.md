@@ -14,6 +14,12 @@ data is supplied by the caller and is authenticated by AES-GCM; it is not treate
 metadata. Protocol objects and signatures continue to use `encodeProtocolObject` and
 `signatureInput` from `@dotrelay/contracts`.
 
+A Project Epoch Key Link (kind 23, ADR 0014) seals one Project Epoch Key under the next epoch's
+key. Its AES-256-GCM key is HKDF-SHA-384 over the newer key with a fresh 32-byte salt and the info
+string `DotRelay\0dotrelay-e2ee-v3-classical-webcrypto\0Project-epoch-key-link\0v1`; its associated
+data is the canonical CBOR of every link field except the signature envelope (3, 4), ciphertext,
+ciphertext hash and ciphertext length.
+
 Decryption returns only plaintext or one generic `InvalidCiphertextError`. Malformed envelopes,
 unsupported suites, wrong keys, wrong associated data, and authentication failures are
 indistinguishable to callers.

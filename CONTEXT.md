@@ -64,6 +64,12 @@ to a new Device's X25519 key, relayed by the service. It underpins CLI login and
 approval; the service relays ciphertext and never sees the AMK.
 _Avoid_: Session handoff, key sync
 
+**Project Epoch Key Link**:
+A service-stored, Device-signed encryption of one Project Epoch Key under the next epoch's key,
+published with each rotation. Walking the links back from the current key recovers every earlier
+epoch key without per-Member or per-Device grants.
+_Avoid_: Key history, historical grant
+
 **Team**:
 The collaboration and authorization boundary whose active Members share access to all of its
 Projects.

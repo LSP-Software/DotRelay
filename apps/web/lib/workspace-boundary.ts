@@ -89,6 +89,8 @@ export type WorkspaceBoundary = Readonly<{
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;
   readonly userValueKeyEnvelope?: string;
+  /** The Project's key chain links (ADR 0014), base64 canonical bytes. */
+  readonly epochKeyLinks?: readonly string[];
   readonly peerDevices?: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;

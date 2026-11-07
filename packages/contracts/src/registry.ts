@@ -316,6 +316,12 @@ const kindDefinitions: Record<number, ObjectDefinition> = {
       0, 1, 2, 8, 9, 10, 25, 17, 32, 33, 44, 45, 46, 47, 48, 71, 72, 88, 95,
     ]),
   ),
+  // The previous Project Epoch Key sealed under the next epoch's key (ADR 0014).
+  23: objectDefinition(
+    "Project Epoch Key Link",
+    [0, 1, 2, 8, 11, 13, 17, 23, 32, 44, 46, 47, 48, 62, 63, 71, 72],
+    signed([0, 1, 2, 8, 11, 13, 17, 23, 32, 44, 46, 47, 48, 62, 63, 71, 72]),
+  ),
 };
 
 // Keep the ranges explicit: these are the only conditional fields permitted by each closed body.

@@ -22,6 +22,7 @@ export {
   ACCOUNT_KEY_ENVELOPE_KDF_INFO,
   ACCOUNT_KEY_WRAPPER_KDF_INFO,
   assertCryptoRuntime,
+  PROJECT_EPOCH_KEY_LINK_KDF_INFO,
   type CiphertextEnvelope,
   type ClassicalEncryptionKeyPair,
   type ClassicalSigningKeyPair,

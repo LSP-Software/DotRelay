@@ -1891,6 +1891,14 @@ describe("workspace boundary Device binding", () => {
   };
 
   const createTestApp = () => {
+    // The Project's key chain (ADR 0014); the service relays it verbatim.
+    const keyLinks = [
+      {
+        protocolObject: {
+          canonicalBytes: new TextEncoder().encode("key-link-1-2"),
+        },
+      },
+    ];
     const olderGrantBytes = new TextEncoder().encode(
       "older-device-epoch-grant",
     );
@@ -2025,6 +2033,9 @@ describe("workspace boundary Device binding", () => {
       accountKeyEnvelopeObject: {
         findFirst: async () => null,
       },
+      projectEpochKeyLinkObject: {
+        findMany: async () => keyLinks,
+      },
     };
     const profile = loadServerProfileConfig({});
     const auth = {
@@ -2049,6 +2060,19 @@ describe("workspace boundary Device binding", () => {
       headers,
     });
   };
+
+  test("serves the Project's epoch key links in to-epoch order", async () => {
+    const response = await boundaryRequest(
+      createTestApp(),
+      loadServerProfileConfig({}),
+      olderDeviceId,
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(response.status).toBe(200);
+    expect(body.epochKeyLinks).toEqual([
+      Buffer.from("key-link-1-2").toString("base64"),
+    ]);
+  });
 
   test("resolves the presented Device's grants, not the first-created Device's", async () => {
     const profile = loadServerProfileConfig({});

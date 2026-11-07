@@ -28,6 +28,13 @@ import {
   safeProjectEpoch,
   type WorkflowOptions,
 } from "./workflow-core";
+import {
+  assertNoPendingRotation,
+  clearPendingRotation,
+  RotationOutcomeUnknownError,
+  submitRotation,
+  writePendingRotation,
+} from "./workflow-pending-rotation";
 import { syncWorkflow } from "./workflow-session";
 
 const ROTATE_QUESTION = "Rotate this project's keys?";
@@ -114,6 +121,12 @@ export const rotateProjectEpoch = async (
   // destructive confirmation, so a missing login or enrollment is reported
   // instead of prompting first (publication confirms after syncing too).
   const synced = await syncWorkflow(options, parsed);
+  // The sync above settles an earlier uncertain rotation when it can; one
+  // that is still open blocks this rotation (ADR 0014).
+  await assertNoPendingRotation(
+    options,
+    synced.workflow.publicationContext.projectId,
+  );
   if (!options.noInput && !(await confirmSilent(options, ROTATE_QUESTION)))
     throw new CliInvocationError("project key rotation was declined");
   const context = synced.workflow.publicationContext;
@@ -124,6 +137,17 @@ export const rotateProjectEpoch = async (
     context.environmentId,
   );
   const previousEpoch = safeProjectEpoch(synced.page.projectEpoch);
+  // The rotation links the current epoch key to the new one (ADR 0014), so a
+  // Device without the current key cannot rotate: fail before anything is
+  // sent.
+  const previousEpochKey = context.sharedValueSecret;
+  if (!previousEpochKey || context.projectEpoch !== previousEpoch)
+    throw new CliError(
+      "conflict",
+      "this device does not hold the project's current key, so it cannot link the new key to it. Run dotrelay pull, then try again",
+      {},
+      "epoch_key_unavailable",
+    );
   const artifacts = await createEpochRotationArtifacts({
     serverProfileId: context.serverProfileId,
     teamId: context.teamId,
@@ -133,8 +157,27 @@ export const rotateProjectEpoch = async (
     expectedEpoch: previousEpoch,
     environments: rotationEnvironments,
     signingPrivateKey: context.signingPrivateKey,
+    previousEpochKey,
   });
   const operationId = crypto.randomUUID();
+  const workflow = synced.workflow;
+  const encryptionPublicKey = workflow.keys.encryptionPublicKey;
+  if (!encryptionPublicKey)
+    throw new CliError(
+      "crypto",
+      "this device has no encryption key to keep the new project key safe during the rotation",
+      {},
+      "epoch_key_unavailable",
+    );
+  const settleFailure = async (error: unknown): Promise<never> => {
+    await workflow.transport
+      .cancel({ operationId, deviceId: workflow.deviceId })
+      .catch(() => undefined);
+    artifacts.newEpochKey.fill(0);
+    if (error instanceof CliError || error instanceof CliInvocationError)
+      throw error;
+    throw rotationTransportFailure(error);
+  };
   let rotated: { readonly projectEpoch: string };
   try {
     await synced.workflow.transport.begin({
@@ -151,20 +194,63 @@ export const rotateProjectEpoch = async (
         objectId: staged.objectId,
         bytes: staged.bytes,
       });
-    rotated = await synced.workflow.transport.epochRotate({
+  } catch (error) {
+    // Nothing was committed yet: begin and staging never advance the epoch.
+    return settleFailure(error);
+  }
+  // From here the rotation may commit even if no answer arrives, so the new
+  // key is kept sealed to this Device until the outcome is known.
+  // Losing the reservation to a concurrent rotation aborts this one before
+  // it can commit; the cancel cannot touch the other rotation's record.
+  try {
+    await writePendingRotation(options, {
       operationId,
-      deviceId: synced.workflow.deviceId,
-      request: artifacts.request,
+      projectId: context.projectId,
+      newEpoch: previousEpoch + 1,
+      newEpochKey: artifacts.newEpochKey,
+      encryptionPublicKey,
     });
   } catch (error) {
-    await synced.workflow.transport
-      .cancel({ operationId, deviceId: synced.workflow.deviceId })
-      .catch(() => undefined);
+    return settleFailure(error);
+  }
+  try {
+    rotated = await submitRotation({
+      attempt: () =>
+        workflow.transport.epochRotate({
+          operationId,
+          deviceId: workflow.deviceId,
+          request: artifacts.request,
+        }),
+      cancel: () =>
+        workflow.transport
+          .cancel({ operationId, deviceId: workflow.deviceId })
+          .then(
+            () => true,
+            () => false,
+          ),
+      discardPending: () =>
+        clearPendingRotation(options, context.projectId, operationId),
+    });
+  } catch (error) {
+    artifacts.newEpochKey.fill(0);
+    if (error instanceof RotationOutcomeUnknownError)
+      throw new CliError(
+        "transient",
+        "the rotation's outcome is unknown. Its new project key is kept sealed to this device: run dotrelay pull once the Server Profile is reachable to finish it. Do not run project rotate again before that",
+        {},
+        "epoch_rotation_uncertain",
+      );
     if (error instanceof CliError || error instanceof CliInvocationError)
       throw error;
     throw rotationTransportFailure(error);
   }
-  await storeRotatedEpochKey(options, synced.workflow, previousEpoch + 1);
+  await storeRotatedEpochKey(
+    options,
+    synced.workflow,
+    previousEpoch + 1,
+    artifacts.newEpochKey,
+  );
+  await clearPendingRotation(options, context.projectId, operationId);
   const environmentIds = rotationEnvironments.map(
     (target) => target.environmentId,
   );
@@ -184,8 +270,9 @@ const storeRotatedEpochKey = async (
   options: WorkflowOptions,
   workflow: Awaited<ReturnType<typeof syncWorkflow>>["workflow"],
   projectEpoch: number,
+  // The key the committed rotation's link was sealed under; zeroed here.
+  epochKey: Uint8Array,
 ): Promise<void> => {
-  const epochKey = crypto.getRandomValues(new Uint8Array(32));
   try {
     const accountMasterKey = await loadAccountMasterKey(
       options,

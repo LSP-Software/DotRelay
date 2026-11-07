@@ -83,6 +83,12 @@ const protocolParameters = Object.freeze({
     required: true,
     schema: Object.freeze({ type: "string", format: "uuid" }),
   }),
+  ProjectId: Object.freeze({
+    name: "projectId",
+    in: "path",
+    required: true,
+    schema: Object.freeze({ type: "string", format: "uuid" }),
+  }),
   DeviceIdHeader: Object.freeze({
     name: DEVICE_ID_HEADER,
     in: "header",
@@ -227,6 +233,31 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.OperationId,
           protocolParameters.DeviceIdHeader,
+        ]),
+        requestBody: Object.freeze({
+          required: true,
+          content: Object.freeze({
+            "application/json": Object.freeze({
+              schema: Object.freeze({
+                $ref: "#/components/schemas/StrictJsonObject",
+              }),
+            }),
+          }),
+        }),
+        responses: noStoreJsonResponse,
+      }),
+    ),
+  }),
+  "/api/v1/projects/{projectId}/epoch-key-links": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "publishProjectEpochKeyLink",
+        description:
+          "Backfills one Project Epoch Key Link (ADR 0014) for an epoch rotated before links existed.",
+        parameters: Object.freeze([
+          protocolParameters.ProjectId,
+          protocolParameters.DeviceIdHeader,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
         ]),
         requestBody: Object.freeze({
           required: true,

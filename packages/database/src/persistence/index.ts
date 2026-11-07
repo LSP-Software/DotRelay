@@ -24,8 +24,18 @@ export type {
 export { DeviceRepository } from "./devices";
 export type { EnvironmentMetadata } from "./disclosure";
 export { AdministrationDisclosureRepository } from "./disclosure";
-export type { EpochRotationInput, GrantCreationInput } from "./epoch-grants";
-export { GrantRepository, ProjectEpochRepository } from "./epoch-grants";
+export type {
+  EpochRotationInput,
+  GrantCreationInput,
+  ProjectEpochKeyLinkBackfillInput,
+  ProjectEpochKeyLinkInput,
+} from "./epoch-grants";
+export {
+  GrantRepository,
+  ProjectEpochKeyLinkConflictError,
+  ProjectEpochKeyLinkRepository,
+  ProjectEpochRepository,
+} from "./epoch-grants";
 export type { MembershipActivationInput } from "./membership";
 export { MembershipRepository } from "./membership";
 export type {

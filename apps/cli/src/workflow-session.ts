@@ -3,6 +3,7 @@ import { atomicWriteProtectedFile } from "./output";
 import {
   authenticatedCreatorKeys,
   createAccountKeyEnvelope,
+  createProjectEpochKeyLinkBackfill,
   createProtocolTransport,
   createVerifiedEnvironmentSession,
   type DecodedVariable,
@@ -11,6 +12,7 @@ import {
   openAccountKeyEnvelope,
   openOwnedUserValueKey,
   openProjectEpochGrant,
+  openProjectEpochKeyChain,
   type PublicationContext,
   parseAccountKeyEnvelope,
   type SharedValueKeyRing,
@@ -32,6 +34,13 @@ import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
+import {
+  clearPendingRotation,
+  grantRecoveredKeyToSelf,
+  hasPendingRotation,
+  PENDING_ROTATION_NOTICE,
+  resolvePendingRotation,
+} from "./workflow-pending-rotation";
 import {
   accountKeyTrustedKeys,
   type Boundary,
@@ -265,7 +274,38 @@ export const loadWorkflowSession = async (
   }
   let epochKey: Uint8Array | undefined;
   let epochEnvelopePublished = false;
+  // A rotation from this Device whose commit was uncertain left its new key
+  // sealed locally. When the served link proves it committed, that key is
+  // this epoch's key: adopt it before anything could mint another one.
+  const recoveredRotation = await resolvePendingRotation({
+    options,
+    boundary,
+    encryptionPrivateKey: keys.encryptionPrivateKey,
+    trustedSigningKeys: accountKeyTrustedKeys(
+      boundary,
+      await exportSigningPublicKey(deviceSigningPublicKey),
+    ).keys,
+    cancel: (operationId) =>
+      createProtocolTransport({
+        origin: options.profile.origin,
+        authorization: `Bearer ${token}`,
+        ...(options.fetch ? { fetch: options.fetch as never } : {}),
+      })
+        .cancel({ operationId, deviceId })
+        .then(
+          () => true,
+          () => false,
+        ),
+  });
+  const recoveredRotationKey = recoveredRotation?.key;
+  if (recoveredRotationKey) epochKey = recoveredRotationKey;
+  else if (
+    boundary.environment.projectId &&
+    (await hasPendingRotation(options, boundary.environment.projectId))
+  )
+    pendingActions.push(PENDING_ROTATION_NOTICE);
   if (
+    epochKey === undefined &&
     accountMasterKey !== null &&
     boundary.accountKeyEnvelope !== undefined &&
     boundary.environment.projectId !== null
@@ -439,6 +479,22 @@ export const loadWorkflowSession = async (
       { idempotencyKey: operationId },
     );
   }
+  if (recoveredRotationKey && boundary.environment.projectId) {
+    if (accountMasterKey === null)
+      await grantRecoveredKeyToSelf({
+        options,
+        boundary,
+        deviceId,
+        encryptionPublicKey: deviceEncryptionPublicKey,
+        signingPrivateKey: keys.signingPrivateKey,
+        epochKey: recoveredRotationKey,
+      });
+    await clearPendingRotation(
+      options,
+      boundary.environment.projectId,
+      recoveredRotation?.operationId ?? "",
+    );
+  }
   // A locked Device's missing Account Master Key is surfaced by the device
   // backup/recover commands, not here: the missing-grant action above already
   // names the actionable fix when the epoch key is unavailable, and an empty
@@ -603,16 +659,22 @@ export const loadWorkflowSession = async (
     }
   }
   // Lanes sealed before a Project epoch rotation keep the earlier epoch's
-  // key; the User's Account Key Envelopes for those epochs carry it.
+  // key; the Project's key chain (ADR 0014) recovers it from the current key.
   const sharedValueKeyRing =
-    accountMasterKey !== null && boundary.environment.projectId !== null
-      ? await pastProjectEpochKeys({
+    epochKey &&
+    boundary.environment.projectId !== null &&
+    boundary.environment.teamId !== null
+      ? await projectEpochKeyRing({
           options,
           deviceId,
           boundary,
+          projectId: boundary.environment.projectId,
+          teamId: boundary.environment.teamId,
+          currentKey: epochKey,
           accountMasterKey,
           userId: bundle.userId,
           localSigningKey: signingPublicKey,
+          signingPrivateKey: keys.signingPrivateKey,
         })
       : undefined;
   const publicationContext: PublicationContext = {
@@ -657,11 +719,101 @@ export const loadWorkflowSession = async (
   };
 };
 
+// Rebuilds the Project's epoch key ring by walking the key chain down from
+// the current key. When the chain has gaps (Projects rotated before links
+// existed) and this Device holds the Account Master Key, the User's past-epoch
+// Account Key Envelopes are the backfill source: the missing links are
+// created, published, and the chain walked again. The ring itself only ever
+// comes from verified links.
+const projectEpochKeyRing = async (input: {
+  readonly options: WorkflowOptions;
+  readonly deviceId: string;
+  readonly boundary: Boundary;
+  readonly projectId: string;
+  readonly teamId: string;
+  readonly currentKey: Uint8Array;
+  readonly accountMasterKey: Uint8Array | null;
+  readonly userId: Uint8Array;
+  readonly localSigningKey: Uint8Array;
+  readonly signingPrivateKey: CryptoKey;
+}): Promise<SharedValueKeyRing> => {
+  const currentEpoch = safeProjectEpoch(
+    input.boundary.environment.projectEpoch,
+  );
+  const links: Uint8Array[] = [];
+  for (const link of input.boundary.epochKeyLinks) {
+    try {
+      links.push(fromBase64(link, "Project epoch key link"));
+    } catch {
+      // A malformed entry claims no epoch.
+    }
+  }
+  const binding = {
+    serverProfileId: input.options.profile.pin.serverProfileId,
+    teamId: input.teamId,
+    projectId: input.projectId,
+  };
+  const trustedSigningKeys = accountKeyTrustedKeys(
+    input.boundary,
+    input.localSigningKey,
+  ).keys;
+  const walk = (candidates: readonly Uint8Array[]) =>
+    openProjectEpochKeyChain({
+      ...binding,
+      links: candidates,
+      currentEpoch,
+      currentKey: input.currentKey,
+      trustedSigningKeys,
+    });
+  const chain = await walk(links);
+  if (chain.break?.reason !== "missing" || input.accountMasterKey === null)
+    return chain.ring;
+  const past = await pastProjectEpochKeys({
+    options: input.options,
+    deviceId: input.deviceId,
+    boundary: input.boundary,
+    accountMasterKey: input.accountMasterKey,
+    userId: input.userId,
+    localSigningKey: input.localSigningKey,
+  });
+  const created = await createProjectEpochKeyLinkBackfill({
+    ...binding,
+    links,
+    currentEpoch,
+    knownKeys: new Map([...past, ...chain.ring]),
+    signingDeviceId: input.deviceId,
+    signingPrivateKey: input.signingPrivateKey,
+  });
+  if (created.length === 0) return chain.ring;
+  const admin = createDeviceAdmin(input.options, input.deviceId);
+  const published: Uint8Array[] = [];
+  for (const link of created) {
+    const operationId = crypto.randomUUID();
+    try {
+      await admin.post(
+        `/api/v1/projects/${input.projectId}/epoch-key-links`,
+        {
+          operationId,
+          objectId: link.objectId,
+          object: base64(link.canonicalBytes),
+        },
+        ["objectId", "idempotent"],
+        { idempotencyKey: operationId },
+      );
+      published.push(link.canonicalBytes);
+    } catch {
+      // Another client may have won this epoch; its link arrives next sync.
+    }
+  }
+  return published.length > 0
+    ? (await walk([...links, ...published])).ring
+    : chain.ring;
+};
+
 // Opens the User's Account Key Envelopes for this Project's earlier epochs.
-// The service keeps them after a rotation, so a Device that holds the Account
-// Master Key can still read lanes sealed before it. An envelope that is
-// malformed, for another Project, or fails verification is skipped: its
-// lanes then stay unreadable and the sync names them.
+// They are only the backfill source for missing key chain links; the ring
+// itself comes from the chain. An envelope that is malformed, for another
+// Project, or fails verification is skipped.
 const pastProjectEpochKeys = async (input: {
   readonly options: WorkflowOptions;
   readonly deviceId: string;

@@ -61,6 +61,14 @@ export const buildVectorObject = (
     fields.set(71, 32);
     fields.set(72, 48);
   }
+  if (kind === 23) {
+    fields.set(47, zeros(48));
+    fields.set(71, 32);
+    fields.set(72, 48);
+    fields.set(62, 1);
+    fields.set(63, 2);
+    for (const [field, value] of overrides) fields.set(field, value);
+  }
   if (kind === 20 && fields.get(86) === 1) {
     fields.set(93, zeros(16, 0x21));
     fields.set(94, zeros(32, 0x22));
@@ -94,6 +102,10 @@ const GENERATED_NEGATIVE_IDS = new Set([
   "wrapper-format-version-not-2",
   "wrapper-kdf-out-of-policy",
   "wrapper-kdf-name-not-argon2id",
+  "epoch-key-link-not-contiguous",
+  "epoch-key-link-from-epoch-zero",
+  "epoch-key-link-wrong-key-length",
+  "epoch-key-link-missing-to-epoch",
 ]);
 export const VECTOR_CASES = Object.freeze([
   ...Object.keys(OBJECT_REGISTRY)
@@ -356,6 +368,61 @@ const NEGATIVE_VECTOR_CASES_BASE = [
         [92, 1],
       ]),
     ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // A Project Epoch Key Link must advance exactly one epoch (ADR 0014).
+    id: "epoch-key-link-not-contiguous",
+    bytes: buildVectorObjectBytes(
+      23,
+      new Map<number, CborValue>([
+        [62, 1],
+        [63, 3],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // Epochs start at 1, so no link can come from epoch 0.
+    id: "epoch-key-link-from-epoch-zero",
+    bytes: buildVectorObjectBytes(
+      23,
+      new Map<number, CborValue>([
+        [62, 0],
+        [63, 1],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // A link seals exactly one 32-byte Project Epoch Key.
+    id: "epoch-key-link-wrong-key-length",
+    bytes: buildVectorObjectBytes(
+      23,
+      new Map<number, CborValue>([
+        [47, zeros(32)],
+        [71, 16],
+        [72, 32],
+      ]),
+    ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // The to-epoch is a required field.
+    id: "epoch-key-link-missing-to-epoch",
+    bytes: (() => {
+      const object = new Map(buildVectorObject(23));
+      object.delete(63);
+      object.set(
+        3,
+        canonicalEncode(
+          new Map(
+            [...object.entries()].filter(([field]) => field > 4 || field < 3),
+          ),
+        ),
+      );
+      return canonicalEncode(object);
+    })(),
     error: "invalid_crypto_object",
   },
 ];

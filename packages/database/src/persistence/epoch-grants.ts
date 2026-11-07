@@ -14,6 +14,7 @@ import {
   databaseBytes,
   DeviceNotActiveError,
   inPersistenceTransaction,
+  OperationConflictError,
   type PersistenceClient,
   requireTeamAction,
   StaleEpochError,
@@ -35,8 +36,71 @@ export type EpochRotationInput = Readonly<{
       readonly publication: RevisionPublicationInput;
     }>
   >;
+  /** The Project Epoch Key Link from expectedEpoch to newEpoch (ADR 0014). */
+  readonly keyLink: ProjectEpochKeyLinkInput;
   readonly now?: Date;
 }>;
+
+// The service-checked projection of a kind-23 link. The API verifies the
+// signature and identity binding before it reaches the repository.
+export type ProjectEpochKeyLinkInput = Readonly<{
+  readonly protocolObject: ProtocolObjectInput;
+  readonly fromEpoch: bigint;
+  readonly toEpoch: bigint;
+  readonly signingDeviceId: string;
+}>;
+
+export class ProjectEpochKeyLinkConflictError extends Error {
+  constructor() {
+    super("a different project epoch key link already exists for this epoch");
+    this.name = "ProjectEpochKeyLinkConflictError";
+  }
+}
+
+const sameDigest = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.length === right.length &&
+  left.every((byte, index) => byte === right[index]);
+
+const requireLinkShape = (
+  link: ProjectEpochKeyLinkInput,
+  projectId: string,
+  actorDeviceId: string,
+): void => {
+  if (
+    link.protocolObject.kind !== 23 ||
+    (link.protocolObject.projectId !== undefined &&
+      link.protocolObject.projectId !== projectId) ||
+    link.fromEpoch < 1n ||
+    link.toEpoch !== link.fromEpoch + 1n ||
+    link.signingDeviceId !== actorDeviceId
+  )
+    throw new Error("project epoch key link is invalid");
+};
+
+const createLinkRow = async (
+  transaction: Parameters<Parameters<typeof inShortTransaction>[1]>[0],
+  protocolObjects: ProtocolObjectRepository,
+  input: Readonly<{
+    projectId: string;
+    operationId: string;
+    link: ProjectEpochKeyLinkInput;
+  }>,
+) => {
+  const protocolObject = await protocolObjects.create(transaction, {
+    ...input.link.protocolObject,
+    projectId: input.projectId,
+  });
+  return transaction.projectEpochKeyLinkObject.create({
+    data: {
+      protocolObjectId: protocolObject.id,
+      projectId: input.projectId,
+      fromEpoch: input.link.fromEpoch,
+      toEpoch: input.link.toEpoch,
+      signingDeviceId: input.link.signingDeviceId,
+      operationId: input.operationId,
+    },
+  });
+};
 
 export class ProjectEpochRepository {
   private readonly operations = new OperationRepository();
@@ -59,15 +123,43 @@ export class ProjectEpochRepository {
         project.teamId,
         "ADMINISTER_PROJECT",
       );
+      requireLinkShape(
+        input.keyLink,
+        input.projectId,
+        input.operation.actorDeviceId,
+      );
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
-      if (operation.idempotent) return operation;
+      if (operation.idempotent) {
+        // The command digest covers only the first transition; a replay must
+        // also carry the link that was committed.
+        const committed = await transaction.projectEpochKeyLinkObject.findFirst(
+          {
+            where: { operationId: operation.operation.id },
+            select: { protocolObject: { select: { digest: true } } },
+          },
+        );
+        if (
+          !committed ||
+          !sameDigest(
+            new Uint8Array(committed.protocolObject.digest),
+            input.keyLink.protocolObject.digest,
+          )
+        )
+          throw new OperationConflictError();
+        return operation;
+      }
       if (project.currentEpoch !== input.expectedEpoch)
         throw new StaleEpochError(project.currentEpoch);
       if (input.newEpoch !== input.expectedEpoch + 1n)
         throw new Error("Project epoch must advance by one");
+      if (
+        input.keyLink.fromEpoch !== input.expectedEpoch ||
+        input.keyLink.toEpoch !== input.newEpoch
+      )
+        throw new Error("project epoch key link does not match the rotation");
       const transitions = [...input.transitions].sort((left, right) =>
         left.environmentId.localeCompare(right.environmentId),
       );
@@ -140,6 +232,23 @@ export class ProjectEpochRepository {
           data: { currentHeadId: transition.newHeadId },
         });
       }
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.keyLink.protocolObject.id,
+            canonicalBytes: input.keyLink.protocolObject.canonicalBytes,
+            digest: input.keyLink.protocolObject.digest,
+          },
+        ],
+      });
+      await createLinkRow(transaction, this.protocolObjects, {
+        projectId: input.projectId,
+        operationId: operation.operation.id,
+        link: input.keyLink,
+      });
       await transaction.project.update({
         where: { id: input.projectId },
         data: { currentEpoch: input.newEpoch },
@@ -160,6 +269,125 @@ export class ProjectEpochRepository {
         newLifecycle: `epoch:${input.newEpoch.toString()}`,
       });
       return { operation: operation.operation, projectEpoch: input.newEpoch };
+    });
+  }
+}
+
+export type ProjectEpochKeyLinkBackfillInput = Readonly<{
+  readonly operation: OperationInput & { readonly actorDeviceId: string };
+  readonly projectId: string;
+  readonly keyLink: ProjectEpochKeyLinkInput;
+  readonly now?: Date;
+}>;
+
+// Backfills a link for an epoch rotated before links existed. Any active
+// Member's active Device may publish; the first link for a to-epoch wins, a
+// byte-identical retry is idempotent, and a different link conflicts.
+export class ProjectEpochKeyLinkRepository {
+  private readonly operations = new OperationRepository();
+  private readonly protocolObjects = new ProtocolObjectRepository();
+  private readonly audit = new AuditFactRepository();
+  private readonly stagedObjects = new StagedObjectRepository();
+
+  async publish(
+    database: TransactionDatabase,
+    input: ProjectEpochKeyLinkBackfillInput,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
+      const project = await transaction.project.findUnique({
+        where: { id: input.projectId },
+      });
+      if (!project) throw new Error("Project not found");
+      await requireTeamAction(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        project.teamId,
+        "VIEW",
+      );
+      requireLinkShape(
+        input.keyLink,
+        input.projectId,
+        input.operation.actorDeviceId,
+      );
+      if (input.keyLink.toEpoch > project.currentEpoch)
+        throw new Error(
+          "project epoch key link must not target a future epoch",
+        );
+      const existing = await transaction.projectEpochKeyLinkObject.findUnique({
+        where: {
+          projectId_toEpoch: {
+            projectId: input.projectId,
+            toEpoch: input.keyLink.toEpoch,
+          },
+        },
+        select: {
+          protocolObjectId: true,
+          protocolObject: { select: { digest: true } },
+        },
+      });
+      if (
+        existing &&
+        !sameDigest(
+          new Uint8Array(existing.protocolObject.digest),
+          input.keyLink.protocolObject.digest,
+        )
+      )
+        throw new ProjectEpochKeyLinkConflictError();
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent)
+        return { ...operation, protocolObjectId: existing?.protocolObjectId };
+      const now = input.now ?? new Date();
+      if (existing) {
+        await transaction.operation.update({
+          where: { id: operation.operation.id },
+          data: { status: "COMMITTED", committedAt: now },
+        });
+        return {
+          operation: operation.operation,
+          protocolObjectId: existing.protocolObjectId,
+          idempotent: true as const,
+        };
+      }
+      await this.stagedObjects.promote(transaction, {
+        operationId: operation.operation.id,
+        actorDeviceId: input.operation.actorDeviceId,
+        now,
+        objects: [
+          {
+            objectId: input.keyLink.protocolObject.id,
+            canonicalBytes: input.keyLink.protocolObject.canonicalBytes,
+            digest: input.keyLink.protocolObject.digest,
+          },
+        ],
+      });
+      const link = await createLinkRow(transaction, this.protocolObjects, {
+        projectId: input.projectId,
+        operationId: operation.operation.id,
+        link: input.keyLink,
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "EPOCH_KEY_LINK_PUBLISHED",
+        actorUserId: input.operation.actorUserId,
+        actorDeviceId: input.operation.actorDeviceId,
+        entityKind: "PROJECT",
+        entityId: input.projectId,
+        outcomeObjectId: link.protocolObjectId,
+      });
+      return {
+        operation: operation.operation,
+        protocolObjectId: link.protocolObjectId,
+        idempotent: false as const,
+      };
     });
   }
 }

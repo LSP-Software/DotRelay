@@ -1,14 +1,17 @@
 import {
   createBrowserDeviceStorage,
+  createProjectEpochKeyLinkBackfill,
   createProtocolTransport,
   loadDeviceKeyMaterial,
   openProjectEpochGrant,
+  openProjectEpochKeyChain,
   type RevisionSigningTrustEntry,
   uuidToBytes,
 } from "@dotrelay/client";
 import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
+  accountKeyTrustedKeys,
   createAccountKeyEnvelope,
   fetchAccountKeyEnvelopes,
   fromBase64,
@@ -16,6 +19,7 @@ import {
   openProjectEpochEnvelope,
   projectGrantVerification,
   publishAccountKeyEnvelope,
+  publishProjectEpochKeyLink,
 } from "@/lib/account-keys";
 import {
   accountKeyVerification,
@@ -91,9 +95,95 @@ const SETUP_BOUNDARY_REFRESH_MS = 2_000;
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
 
+// Rebuilds the Project's epoch key ring from the key chain (ADR 0014), walking
+// down from the current key. When links are missing and the Account Master
+// Key is unlocked, the User's past-epoch Account Key Envelopes are only the
+// backfill source: the missing links are published and the chain walked
+// again. Mirrors projectEpochKeyRing in the CLI.
+const projectEpochKeyRing = async (input: {
+  readonly boundary: WorkspaceBoundary;
+  readonly serverProfileId: string;
+  readonly teamId: string;
+  readonly projectId: string;
+  readonly currentEpoch: number;
+  readonly currentKey: Uint8Array;
+  readonly backfill: Readonly<{
+    readonly actor: AccountKeyActor;
+    readonly recoveryWrappers: readonly AccountKeyWrapperEntry[];
+    readonly accountMasterKey: Uint8Array;
+  }> | null;
+}): Promise<Map<number, Uint8Array>> => {
+  const { boundary } = input;
+  const deviceId = boundary.device.id;
+  const localKey = boundary.device.signingPublicKey;
+  if (!deviceId || !localKey) return new Map();
+  const links: Uint8Array[] = [];
+  for (const link of boundary.epochKeyLinks ?? []) {
+    try {
+      links.push(fromBase64(link));
+    } catch {
+      // A malformed entry claims no epoch.
+    }
+  }
+  const binding = {
+    serverProfileId: input.serverProfileId,
+    teamId: input.teamId,
+    projectId: input.projectId,
+  };
+  const trustedSigningKeys = accountKeyTrustedKeys(
+    boundary,
+    hexToBytes(localKey),
+  ).keys;
+  const walk = (candidates: readonly Uint8Array[]) =>
+    openProjectEpochKeyChain({
+      ...binding,
+      links: candidates,
+      currentEpoch: input.currentEpoch,
+      currentKey: input.currentKey,
+      trustedSigningKeys,
+    });
+  const chain = await walk(links);
+  if (chain.break?.reason !== "missing" || !input.backfill)
+    return new Map(chain.ring);
+  const signingPrivateKey = await loadDeviceSigningKey(boundary);
+  if (!signingPrivateKey) return new Map(chain.ring);
+  const past = await pastProjectEpochKeys({
+    ...input.backfill,
+    boundary,
+    projectId: input.projectId,
+    currentEpoch: input.currentEpoch,
+  });
+  const created = await createProjectEpochKeyLinkBackfill({
+    ...binding,
+    links,
+    currentEpoch: input.currentEpoch,
+    knownKeys: new Map([...past, ...chain.ring]),
+    signingDeviceId: deviceId,
+    signingPrivateKey,
+  });
+  const published: Uint8Array[] = [];
+  for (const link of created) {
+    try {
+      await publishProjectEpochKeyLink(
+        input.backfill.actor,
+        input.projectId,
+        link,
+      );
+      published.push(link.canonicalBytes);
+    } catch {
+      // Another client may have won this epoch; its link arrives next refresh.
+    }
+  }
+  return new Map(
+    published.length > 0
+      ? (await walk([...links, ...published])).ring
+      : chain.ring,
+  );
+};
+
 // Opens this User's Account Key Envelopes for the Project's earlier epochs.
-// The service keeps them after a rotation, so content sealed before it stays
-// readable here; an envelope that fails verification contributes no key.
+// They are only the backfill source for missing key chain links; an envelope
+// that fails verification contributes no key.
 const pastProjectEpochKeys = async (input: {
   readonly actor: AccountKeyActor;
   readonly boundary: WorkspaceBoundary;
@@ -714,14 +804,25 @@ export const loadWorkspaceSession = (
       if (cancelled()) return;
       const pastEpochKeyMaster = accountMasterKey.get();
       const sharedValueKeyRing =
-        pastEpochKeyMaster && recoveryActor && environment.projectId
-          ? await pastProjectEpochKeys({
-              actor: recoveryActor,
+        sharedValueSecret &&
+        environment.projectId &&
+        environment.teamId &&
+        profile.serverProfileId
+          ? await projectEpochKeyRing({
               boundary,
-              recoveryWrappers,
-              accountMasterKey: pastEpochKeyMaster,
+              serverProfileId: profile.serverProfileId,
+              teamId: environment.teamId,
               projectId: environment.projectId,
               currentEpoch: Number(environment.projectEpoch ?? 1),
+              currentKey: sharedValueSecret,
+              backfill:
+                pastEpochKeyMaster && recoveryActor
+                  ? {
+                      actor: recoveryActor,
+                      recoveryWrappers,
+                      accountMasterKey: pastEpochKeyMaster,
+                    }
+                  : null,
             })
           : undefined;
       if (cancelled()) return;
