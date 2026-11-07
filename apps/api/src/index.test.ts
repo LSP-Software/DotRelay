@@ -77,7 +77,7 @@ describe("API foundation", () => {
       NODE_ENV: "production",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       GITHUB_CLIENT_ID: "github-client",
       GITHUB_CLIENT_SECRET: "github-secret",
     });
@@ -497,7 +497,7 @@ describe("API foundation", () => {
       NODE_ENV: "production",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       GITHUB_CLIENT_ID: "github-client",
       GITHUB_CLIENT_SECRET: "github-secret",
     });
@@ -547,7 +547,7 @@ describe("API foundation", () => {
       SERVER_PROFILE_ORIGIN: "https://api.example",
       WEB_ORIGIN: "https://app.example",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       GITHUB_CLIENT_ID: "github-client",
       GITHUB_CLIENT_SECRET: "github-secret",
     });

@@ -12,6 +12,8 @@ test-results
 .git
 .env
 .env.*
+**/.env
+**/.env.*
 
 # This repository's documentation and CI metadata are not needed in images.
 docs

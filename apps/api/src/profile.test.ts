@@ -40,12 +40,61 @@ describe("Server Profile configuration", () => {
     ).toThrow("BETTER_AUTH_SECRET");
   });
 
+  test("rejects placeholder and weak production secrets and identifiers", () => {
+    const production = {
+      NODE_ENV: "production",
+      SERVER_PROFILE_ORIGIN: "https://relay.example",
+      SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
+      GITHUB_CLIENT_ID: "Iv1.test",
+      GITHUB_CLIENT_SECRET: "github-secret",
+    };
+    expect(() => loadServerProfileConfig(production)).not.toThrow();
+    expect(() =>
+      loadServerProfileConfig({
+        ...production,
+        BETTER_AUTH_SECRET: "replace-with-at-least-32-random-characters",
+      }),
+    ).toThrow("placeholder");
+    expect(() =>
+      loadServerProfileConfig({
+        ...production,
+        BETTER_AUTH_SECRET: "Replace-With-my-own-very-long-secret-value",
+      }),
+    ).toThrow("placeholder");
+    expect(() =>
+      loadServerProfileConfig({
+        ...production,
+        BETTER_AUTH_SECRET: "x".repeat(40),
+      }),
+    ).toThrow("distinct characters");
+    expect(() =>
+      loadServerProfileConfig({
+        ...production,
+        SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000001",
+      }),
+    ).toThrow("uuidgen");
+    expect(() =>
+      loadServerProfileConfig({
+        ...production,
+        DATABASE_URL: "postgresql://dotrelay:dotrelay@db:5432/dotrelay",
+      }),
+    ).toThrow("DATABASE_URL");
+    expect(() =>
+      loadServerProfileConfig({
+        NODE_ENV: "test",
+        BETTER_AUTH_SECRET: "x".repeat(40),
+        DATABASE_URL: "postgresql://dotrelay:dotrelay@db:5432/dotrelay",
+      }),
+    ).not.toThrow();
+  });
+
   test("requires a complete GitHub OAuth configuration in production", () => {
     const production = {
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
     };
     expect(() => loadServerProfileConfig(production)).toThrow(
       "GITHUB_CLIENT_ID",
@@ -70,7 +119,7 @@ describe("Server Profile configuration", () => {
       ...githubOAuthEnvironment,
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       ADMIN_BODY_BYTES: "1024",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
     });
@@ -81,7 +130,7 @@ describe("Server Profile configuration", () => {
         ...githubOAuthEnvironment,
         NODE_ENV: "production",
         SERVER_PROFILE_ORIGIN: "https://relay.example",
-        BETTER_AUTH_SECRET: "x".repeat(32),
+        BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
         ADMIN_BODY_BYTES: "300000",
         SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
       }),
@@ -92,7 +141,7 @@ describe("Server Profile configuration", () => {
     const profile = loadServerProfileConfig({
       WEB_ORIGIN: "https://app.example",
       SERVER_PROFILE_ORIGIN: "https://api.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
     });
     expect(isAllowedOrigin("https://app.example", profile)).toBe(true);
     expect(isAllowedOrigin("https://api.example", profile)).toBe(true);
@@ -105,7 +154,7 @@ describe("Server Profile configuration", () => {
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://dev-api.dotrelay.dev",
       WEB_ORIGIN: "https://dev.dotrelay.dev",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
     });
     expect(sharedCookieDomain(hosted)).toBe("dotrelay.dev");
@@ -113,21 +162,21 @@ describe("Server Profile configuration", () => {
     const splitDomains = loadServerProfileConfig({
       SERVER_PROFILE_ORIGIN: "https://api.example",
       WEB_ORIGIN: "https://web.other",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
     });
     expect(sharedCookieDomain(splitDomains)).toBeUndefined();
 
     const sameHost = loadServerProfileConfig({
       SERVER_PROFILE_ORIGIN: "https://relay.example",
       WEB_ORIGIN: "https://relay.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
     });
     expect(sharedCookieDomain(sameHost)).toBeUndefined();
 
     const loopback = loadServerProfileConfig({
       SERVER_PROFILE_ORIGIN: "http://localhost:3001",
       WEB_ORIGIN: "http://localhost:3000",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
     });
     expect(sharedCookieDomain(loopback)).toBeUndefined();
   });
@@ -153,7 +202,7 @@ describe("Server Profile configuration", () => {
       ...githubOAuthEnvironment,
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
     };
     expect(isSecureRequest(request, loadServerProfileConfig(base))).toBe(false);
@@ -174,7 +223,7 @@ describe("Server Profile configuration", () => {
       ...githubOAuthEnvironment,
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
       SERVER_PROFILE_TRUST_PROXY: "true",
       SERVER_PROFILE_TRUSTED_PROXIES: "192.0.2.10",
@@ -183,7 +232,7 @@ describe("Server Profile configuration", () => {
       ...githubOAuthEnvironment,
       NODE_ENV: "production",
       SERVER_PROFILE_ORIGIN: "https://relay.example",
-      BETTER_AUTH_SECRET: "x".repeat(32),
+      BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
     });
     const forwarded = (value: string | null) =>
@@ -212,7 +261,7 @@ describe("Server Profile configuration", () => {
         ...githubOAuthEnvironment,
         NODE_ENV: "production",
         SERVER_PROFILE_ORIGIN: "https://relay.example",
-        BETTER_AUTH_SECRET: "x".repeat(32),
+        BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
         SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
         SERVER_PROFILE_TRUST_PROXY: "true",
       }),
@@ -223,7 +272,7 @@ describe("Server Profile configuration", () => {
         ...githubOAuthEnvironment,
         NODE_ENV: "production",
         SERVER_PROFILE_ORIGIN: "https://relay.example",
-        BETTER_AUTH_SECRET: "x".repeat(32),
+        BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
         SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
         SERVER_PROFILE_TRUST_PROXY: "true",
         SERVER_PROFILE_TRUSTED_PROXIES: "192.0.2.10, 2001:db8::/32",

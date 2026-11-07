@@ -27,6 +27,33 @@ const protocolRedis = (url: string): Redis => {
   return client;
 };
 
+// Readiness probe for the configured Valkey. Unconfigured counts as ready
+// (development); production configuration requires VALKEY_URL.
+export const valkeyReady = async (
+  url: string | undefined = process.env.VALKEY_URL ?? process.env.REDIS_URL,
+  timeoutMs = 2000,
+): Promise<boolean> => {
+  if (!url) return true;
+  const redis = protocolRedis(url);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        if (redis.status === "wait" || redis.status === "end")
+          await redis.connect();
+        return (await redis.ping()) === "PONG";
+      })(),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
 export const actorRateLimitKey = async (userId: string): Promise<string> => {
   const digest = await sha384(new TextEncoder().encode(userId));
   const actorKey = [...digest]

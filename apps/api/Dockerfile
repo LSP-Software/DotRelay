@@ -32,7 +32,7 @@ COPY --from=builder --chown=dotrelay:dotrelay /app .
 COPY scripts/api-entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
 ENV NODE_ENV=production
-HEALTHCHECK --interval=10s --timeout=5s --retries=3 CMD ["bun", "scripts/probe-ready.ts"]
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 CMD ["bun", "scripts/probe-health.ts"]
 
 # Alpha images fail closed if the operator forgets the admission list.
 # Public/self-hosted operators may explicitly opt out with false.
