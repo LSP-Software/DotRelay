@@ -301,6 +301,19 @@ const validateConditionalValues = (
         contractError("invalid_crypto_object");
     }
   }
+  if (kind === 23) {
+    const fromEpoch = bigintValue(mapValue(object, 62));
+    const toEpoch = bigintValue(mapValue(object, 63));
+    if (
+      fromEpoch === undefined ||
+      toEpoch === undefined ||
+      fromEpoch < 1n ||
+      toEpoch !== fromEpoch + 1n ||
+      plaintextLength !== 32n ||
+      ciphertextLength !== 48n
+    )
+      contractError("invalid_crypto_object");
+  }
   if (kind === 22) {
     if (numberValue(mapValue(object, 88)) !== 2)
       contractError("invalid_crypto_object");

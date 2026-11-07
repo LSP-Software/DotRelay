@@ -22,8 +22,12 @@ Valkey endpoint; non-production skips enforcement when neither URL is set.
    finalizes an `EPOCH_ROTATION` operation across every active Environment in a
    Project through `ProjectEpochRepository.rotate`. An Owner or Admin starts
    that operation with `dotrelay project rotate` when the Project has one
-   active Environment. The command then seals a new Project Epoch Key for the
-   account's Devices.
+   active Environment. The client generates the new Project Epoch Key first,
+   seals the current key under it in a Project Epoch Key Link, and stages the
+   link with the transitions; the request names it in `keyLink`. The API
+   rejects a rotation without exactly one valid link. After the rotation the
+   command seals the new key for the account's Devices. See
+   [the Project key chain](./trust.md#project-key-chain).
 5. **Cancel** — `DELETE /api/v1/operations/:operationId` cancels an uncommitted
    staged operation.
 
@@ -43,6 +47,12 @@ values bind a Revision id and hash so pagination never skips verification.
 
 Read-side authorization excludes User-defined Value lanes owned by another User
 before objects are returned. Sync integrity failures surface as `state_conflict`.
+
+Lanes keep the Project epoch they were sealed under. Clients rebuild earlier
+epoch keys from the Project's `epochKeyLinks` on the workspace boundary and
+open each lane with its own epoch's key. A missing link is backfilled through
+`POST /api/v1/projects/:projectId/epoch-key-links` by a client that holds both
+keys.
 
 ## Related docs
 

@@ -14,7 +14,8 @@ const sha384 = async (bytes: Uint8Array) =>
 
 test("a committed epoch rotation replay is idempotent, not a missing-stage 409", async () => {
   const profile = loadServerProfileConfig({});
-  const serverProfileId = crypto.randomUUID();
+  // The key link binds the Server Profile the API serves (ADR 0014).
+  const serverProfileId = profile.id;
   const teamId = crypto.randomUUID();
   const projectId = crypto.randomUUID();
   const environmentId = crypto.randomUUID();
@@ -39,6 +40,7 @@ test("a committed epoch rotation replay is idempotent, not a missing-stage 409",
     actorDeviceId,
     expectedEpoch: 1,
     signingPrivateKey: keyPair.privateKey,
+    previousEpochKey: new Uint8Array(32).fill(7),
     environments: [
       {
         environmentId,
@@ -141,6 +143,19 @@ test("a committed epoch rotation replay is idempotent, not a missing-stage 409",
               ? true
               : where.committedAt === row.committedAt),
         ),
+    },
+    // The committed rotation recorded its key link under this operation.
+    projectEpochKeyLinkObject: {
+      findFirst: async () => ({
+        protocolObject: {
+          digest: await sha384(
+            artifacts.stagedObjects.find(
+              (staged) =>
+                staged.objectId === artifacts.request.keyLink.protocolObjectId,
+            )!.bytes,
+          ),
+        },
+      }),
     },
     project: {
       findUnique: async () => ({

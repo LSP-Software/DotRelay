@@ -39,6 +39,7 @@ describe("epoch rotation artifacts", () => {
         ),
       ],
       signingPrivateKey: signing.privateKey,
+      previousEpochKey: new Uint8Array(32).fill(7),
       authoredAtMs: 1_700_000_000_000,
     });
     expect(artifacts.request.expectedEpoch).toBe(1);
@@ -88,6 +89,7 @@ describe("epoch rotation artifacts", () => {
         ),
       ],
       signingPrivateKey: signing.privateKey,
+      previousEpochKey: new Uint8Array(32).fill(7),
       authoredAtMs: 1_700_000_000_000,
     });
     expect(artifacts.request.expectedEpoch).toBe(3);
@@ -106,7 +108,7 @@ describe("epoch rotation artifacts", () => {
       expect(transition.publication.lanes).toHaveLength(0);
     }
     // Each environment stages its own descriptor, revision, and transition.
-    expect(artifacts.stagedObjects).toHaveLength(6);
+    expect(artifacts.stagedObjects).toHaveLength(7);
     // The single command object is the first (smallest environmentId)
     // transition, sharing the project-wide epoch bump.
     const first = artifacts.request.transitions[0];
@@ -137,6 +139,7 @@ describe("epoch rotation artifacts", () => {
           ),
         ],
         signingPrivateKey: signing.privateKey,
+        previousEpochKey: new Uint8Array(32).fill(7),
       }),
     ).rejects.toThrow("project epoch rotation context is invalid");
   });

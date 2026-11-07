@@ -32,6 +32,8 @@ export type EpochRotationTransportRequest = Readonly<{
       readonly publication: FinalizePublicationRequest;
     }>
   >;
+  /** The staged Project Epoch Key Link (ADR 0014). */
+  readonly keyLink: Readonly<{ readonly protocolObjectId: string }>;
 }>;
 
 export type EpochRotateInput = Readonly<{
@@ -332,6 +334,9 @@ export const createProtocolTransport = (
               protocolObjectId: transition.protocolObjectId,
               publication: serializeFinalize(transition.publication),
             })),
+            keyLink: {
+              protocolObjectId: request.request.keyLink.protocolObjectId,
+            },
           }),
           credentials: "include",
         },

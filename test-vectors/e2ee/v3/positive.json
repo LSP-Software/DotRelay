@@ -77,6 +77,10 @@
     {
       "id": "object-22",
       "kind": 22
+    },
+    {
+      "id": "object-23",
+      "kind": 23
     }
   ],
   "enumCoverage": {

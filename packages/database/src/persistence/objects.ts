@@ -278,7 +278,8 @@ export type OperationInput = Readonly<{
     | "ENVIRONMENT_GENESIS"
     | "REVISION_PUBLICATION"
     | "ROLLBACK"
-    | "EPOCH_ROTATION";
+    | "EPOCH_ROTATION"
+    | "EPOCH_KEY_LINK";
   readonly commandBytes: Uint8Array;
   readonly commandDigest: Uint8Array;
   readonly expiresAt?: Date;
@@ -477,6 +478,7 @@ export type AuditFactInput = Readonly<{
     | "REVISION_PUBLISHED"
     | "ROLLBACK_PUBLISHED"
     | "EPOCH_ROTATED"
+    | "EPOCH_KEY_LINK_PUBLISHED"
     | "GRANT_CREATED"
     | "DEVICE_ENROLLMENT_STARTED"
     | "DEVICE_ENROLLMENT_APPROVED"

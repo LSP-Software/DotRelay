@@ -18,6 +18,7 @@ import {
   createMemoryCredentialStore,
   createMemoryDeviceRecordStore,
   createProjectEpochGrantBootstrap,
+  createProjectEpochKeyLink,
   createPublicationArtifacts,
   encodeRecoveryCode,
   generateAccountMasterKey,
@@ -5303,9 +5304,11 @@ describe("peer grant provisioning during ordinary reads", () => {
   });
 });
 
-describe("pull after a Project epoch rotation", () => {
-  test("reads Shared Values sealed under the earlier epoch with that epoch's Account Key Envelope", async () => {
-    const amk = generateAccountMasterKey();
+describe("pull after Project epoch rotations", () => {
+  // Builds a Project that one author rotated twice: DATABASE_URL was sealed
+  // at epoch 1, API_KEY at epoch 2 and LOG_LEVEL at epoch 3. Every rotation
+  // published its Project Epoch Key Link (ADR 0014).
+  const rotatedProject = async () => {
     const bootstrap = await createDeviceBootstrap({
       pin: profile.pin,
       userId: ids.user,
@@ -5314,82 +5317,31 @@ describe("pull after a Project epoch rotation", () => {
     const signingPrivateKey = bootstrap.keyMaterial.signingPrivateKey;
     if (!signingPrivateKey)
       throw new Error("Device signing private key is missing");
-    const epochEnvelope = async (
-      projectEpoch: number,
-      contentKey: Uint8Array,
-    ) =>
-      Buffer.from(
-        encodeProtocolObject(
-          (
-            await createAccountKeyEnvelope({
-              serverProfileId: profile.pin.serverProfileId,
-              userId: uuidToBytes(ids.user),
-              deviceId: uuidToBytes(ids.device),
-              createdAtMs: Date.now(),
-              accountMasterKey: amk,
-              signingPrivateKey,
-              kind: {
-                type: "projectEpochKey",
-                projectId: uuidToBytes(ids.project),
-                projectEpoch,
-                contentKey,
-              },
-            })
-          ).object,
-        ),
-      ).toString("base64");
-    const epochOneKey = crypto.getRandomValues(new Uint8Array(32));
-    const epochTwoKey = crypto.getRandomValues(new Uint8Array(32));
-    const epochOneEnvelope = await epochEnvelope(1, epochOneKey);
-    const epochTwoEnvelope = await epochEnvelope(2, epochTwoKey);
     const author = await generateSigningKeyPair();
-    // Only the epoch keys open the Value: the lanes are not sealed to this
-    // Device.
+    const authorDeviceId = "88888888-8888-4888-8888-888888888888";
+    // The lanes are sealed to the epoch keys only, never to this Device.
     const elsewhere = await generateEncryptionKeyPair();
-    const published = await createPublicationArtifacts(
-      [
-        {
-          id: "77777777-7777-4777-8777-777777777777",
-          name: "DATABASE_URL",
-          description: "Connection string",
-          ownership: "SHARED_VALUE",
-          value: "postgres://before-rotation",
-          required: true,
-          hasDraftChange: true,
-        },
-      ],
-      {
-        serverProfileId: profile.pin.serverProfileId,
-        teamId: ids.team,
-        projectId: ids.project,
-        environmentId: ids.environment,
-        actorUserId: ids.user,
-        actorDeviceId: ids.device,
-        projectEpoch: 1,
-        expectedHeadId: null,
-        expectedHeadHash: null,
-        valueRecipientPublicKey: elsewhere.publicKey,
-        sharedValueSecret: epochOneKey,
-        signingPrivateKey: author.privateKey,
-        mutation: "GENESIS",
-      },
-    );
+    const epochKeys = new Map<number, Uint8Array>([
+      [1, crypto.getRandomValues(new Uint8Array(32))],
+    ]);
+    const revisions: SyncPageWire["revisions"][number][] = [];
+    const links: string[] = [];
     const syncRevision = async (
       staged: readonly Readonly<{ objectId: string; bytes: Uint8Array }>[],
       revisionObjectId: string,
       id: string,
-      parent: Readonly<{ id: string; digest: Uint8Array }>,
     ): Promise<SyncPageWire["revisions"][number]> => {
       const object = staged.find(
         (candidate) => candidate.objectId === revisionObjectId,
       );
       if (!object) throw new Error("revision object is missing");
       const parsed = parseProtocolObject(object.bytes);
+      const parent = revisions.at(-1);
       return {
         id,
         digest: await sha384(object.bytes),
-        parentId: parent.id,
-        parentHash: parent.digest,
+        parentId: parent?.id ?? ids.environment,
+        parentHash: parent?.digest ?? new Uint8Array(48),
         mutation: parsed.get(35) as number,
         projectEpoch: BigInt(parsed.get(30) as number),
         authoredAtMs: BigInt(parsed.get(34) as number),
@@ -5405,111 +5357,284 @@ describe("pull after a Project epoch rotation", () => {
         ),
       };
     };
-    const genesis = await syncRevision(
-      published.stagedObjects,
-      published.request.revision.protocolObjectId,
-      published.request.revision.id,
-      { id: ids.environment, digest: new Uint8Array(48) },
-    );
-    const rotation = await createEpochRotationArtifacts({
-      serverProfileId: profile.pin.serverProfileId,
-      teamId: ids.team,
-      projectId: ids.project,
-      actorUserId: ids.user,
-      actorDeviceId: ids.device,
-      expectedEpoch: 1,
-      environments: [
+    const publish = async (
+      projectEpoch: number,
+      variable: Readonly<{ id: string; name: string; value: string }>,
+    ) => {
+      const parent = revisions.at(-1);
+      const published = await createPublicationArtifacts(
+        [
+          {
+            ...variable,
+            description: "",
+            ownership: "SHARED_VALUE",
+            required: true,
+            hasDraftChange: true,
+          },
+        ],
         {
+          serverProfileId: profile.pin.serverProfileId,
+          teamId: ids.team,
+          projectId: ids.project,
           environmentId: ids.environment,
-          expectedHeadId: genesis.id,
-          expectedHeadHash: genesis.digest,
+          actorUserId: ids.user,
+          actorDeviceId: authorDeviceId,
+          projectEpoch,
+          expectedHeadId: parent?.id ?? null,
+          expectedHeadHash: parent?.digest ?? null,
+          valueRecipientPublicKey: elsewhere.publicKey,
+          sharedValueSecret: epochKeys.get(projectEpoch)!,
+          signingPrivateKey: author.privateKey,
+          mutation: parent ? "MANIFEST_UPDATE" : "GENESIS",
         },
-      ],
-      signingPrivateKey: author.privateKey,
+      );
+      revisions.push(
+        await syncRevision(
+          published.stagedObjects,
+          published.request.revision.protocolObjectId,
+          published.request.revision.id,
+        ),
+      );
+    };
+    const rotate = async (expectedEpoch: number) => {
+      const parent = revisions.at(-1)!;
+      const rotation = await createEpochRotationArtifacts({
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        actorUserId: ids.user,
+        actorDeviceId: authorDeviceId,
+        expectedEpoch,
+        environments: [
+          {
+            environmentId: ids.environment,
+            expectedHeadId: parent.id,
+            expectedHeadHash: parent.digest,
+          },
+        ],
+        signingPrivateKey: author.privateKey,
+        previousEpochKey: epochKeys.get(expectedEpoch)!,
+      });
+      epochKeys.set(expectedEpoch + 1, rotation.newEpochKey);
+      const transition = rotation.request.transitions[0]!;
+      const link = rotation.stagedObjects.find(
+        (object) =>
+          object.objectId === rotation.request.keyLink.protocolObjectId,
+      )!;
+      links.push(Buffer.from(link.bytes).toString("base64"));
+      revisions.push(
+        await syncRevision(
+          rotation.stagedObjects.filter(
+            (object) =>
+              object.objectId !== transition.protocolObjectId &&
+              object.objectId !== link.objectId,
+          ),
+          transition.publication.revision.protocolObjectId,
+          transition.newHeadId,
+        ),
+      );
+    };
+    await publish(1, {
+      id: "77777777-7777-4777-8777-777777777771",
+      name: "DATABASE_URL",
+      value: "postgres://epoch-one",
     });
-    const transition = rotation.request.transitions[0];
-    if (!transition) throw new Error("transition is missing");
-    const rotated = await syncRevision(
-      rotation.stagedObjects.filter(
-        (object) => object.objectId !== transition.protocolObjectId,
-      ),
-      transition.publication.revision.protocolObjectId,
-      transition.newHeadId,
-      genesis,
-    );
-    const runtime = await setup({
+    await rotate(1);
+    await publish(2, {
+      id: "77777777-7777-4777-8777-777777777772",
+      name: "API_KEY",
+      value: "epoch-two-value",
+    });
+    await rotate(2);
+    await publish(3, {
+      id: "77777777-7777-4777-8777-777777777773",
+      name: "LOG_LEVEL",
+      value: "epoch-three",
+    });
+    const amk = generateAccountMasterKey();
+    const epochEnvelope = async (projectEpoch: number) =>
+      Buffer.from(
+        encodeProtocolObject(
+          (
+            await createAccountKeyEnvelope({
+              serverProfileId: profile.pin.serverProfileId,
+              userId: uuidToBytes(ids.user),
+              deviceId: uuidToBytes(ids.device),
+              createdAtMs: Date.now(),
+              accountMasterKey: amk,
+              signingPrivateKey,
+              kind: {
+                type: "projectEpochKey",
+                projectId: uuidToBytes(ids.project),
+                projectEpoch,
+                contentKey: epochKeys.get(projectEpoch)!,
+              },
+            })
+          ).object,
+        ),
+      ).toString("base64");
+    return {
       bootstrap,
+      author,
+      amk,
+      revisions,
+      links,
+      epochEnvelope,
+      epochKeys,
+      authorKeyHex: bytesToHex(await rawSigningPublicKey(author.publicKey)),
+    };
+  };
+
+  const pullWith = async (
+    project: Awaited<ReturnType<typeof rotatedProject>>,
+    options: Readonly<{
+      readonly links: readonly string[];
+      readonly listedEpochs: readonly number[];
+      readonly signingTrustKeys?: readonly string[];
+    }>,
+  ) => {
+    const runtime = await setup({
+      bootstrap: project.bootstrap,
       grantsReady: true,
-      accountKeyEnvelope: epochTwoEnvelope,
-      signingTrustKeys: [
-        bytesToHex(await rawSigningPublicKey(author.publicKey)),
-      ],
-      revisions: [genesis, rotated],
+      // A Member who joined after the rotations holds only the current key.
+      accountKeyEnvelope: await project.epochEnvelope(3),
+      signingTrustKeys: options.signingTrustKeys ?? [project.authorKeyHex],
+      revisions: project.revisions,
     });
     await runtime.deviceStorage.saveAccountKey(
       { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
-      amk,
+      project.amk,
+    );
+    const listed = await Promise.all(
+      options.listedEpochs.map(async (projectEpoch) => ({
+        envelopeType: "project-epoch-key",
+        object: await project.epochEnvelope(projectEpoch),
+        projectId: ids.project,
+        projectEpoch: String(projectEpoch),
+      })),
     );
     const service = accountKeyService(runtime.admin);
-    const pull = (listEnvelopes: boolean) =>
-      run(
-        [
-          "pull",
-          "--profile",
-          "relay",
-          "--environment",
-          ids.environment,
-          "--stdout",
-          "--no-input",
-        ],
-        {
-          ...runtime,
-          admin: {
-            ...service.admin,
-            get: async (path, fields) => {
-              if (path === "/api/v1/account-keys/envelopes")
-                return {
-                  envelopes: listEnvelopes
-                    ? [
-                        {
-                          envelopeType: "project-epoch-key",
-                          object: epochOneEnvelope,
-                          projectId: ids.project,
-                          projectEpoch: "1",
-                        },
-                        {
-                          envelopeType: "project-epoch-key",
-                          object: epochTwoEnvelope,
-                          projectId: ids.project,
-                          projectEpoch: "2",
-                        },
-                      ]
-                    : [],
-                };
-              const body = await service.admin.get(path, fields);
-              if (
-                body === null ||
-                typeof body !== "object" ||
-                !("grantsReady" in body)
-              )
-                return body;
-              const environment = body.environment as Record<string, unknown>;
-              return {
-                ...body,
-                environment: { ...environment, projectEpoch: "2" },
-              };
-            },
+    const postedLinks: Record<string, unknown>[] = [];
+    const result = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+        "--no-input",
+      ],
+      {
+        ...runtime,
+        admin: {
+          ...service.admin,
+          post: async (path, body, fields, requestOptions) => {
+            if (path === `/api/v1/projects/${ids.project}/epoch-key-links`) {
+              postedLinks.push(body);
+              return { objectId: body.objectId, idempotent: false };
+            }
+            return service.admin.post(path, body, fields, requestOptions);
+          },
+          get: async (path, fields) => {
+            if (path === "/api/v1/account-keys/envelopes")
+              return { envelopes: listed };
+            const body = await service.admin.get(path, fields);
+            if (
+              body === null ||
+              typeof body !== "object" ||
+              !("grantsReady" in body)
+            )
+              return body;
+            const environment = body.environment as Record<string, unknown>;
+            return {
+              ...body,
+              epochKeyLinks: options.links,
+              environment: { ...environment, projectEpoch: "3" },
+            };
           },
         },
-      );
-    // Without the earlier epoch's key the Value sealed before the rotation is
-    // unreadable.
-    expect((await pull(false)).exitCode).not.toBe(0);
-    const result = await pull(true);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(
-      "DATABASE_URL='postgres://before-rotation'",
+      },
     );
+    return { result, postedLinks };
+  };
+
+  test("a Member who joins after two rotations reads every Value through the key chain", async () => {
+    const project = await rotatedProject();
+    const { result, postedLinks } = await pullWith(project, {
+      links: project.links,
+      listedEpochs: [],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DATABASE_URL='postgres://epoch-one'");
+    expect(result.stdout).toContain("API_KEY='epoch-two-value'");
+    expect(result.stdout).toContain("LOG_LEVEL='epoch-three'");
+    expect(postedLinks).toHaveLength(0);
+  });
+
+  test("refuses a key chain signed by a Device outside the trust set", async () => {
+    const project = await rotatedProject();
+    // Links that open, but carry a signature no trusted Device made.
+    const stranger = await generateSigningKeyPair();
+    const forged = await Promise.all(
+      [1, 2].map(async (fromEpoch) =>
+        Buffer.from(
+          (
+            await createProjectEpochKeyLink({
+              serverProfileId: profile.pin.serverProfileId,
+              teamId: ids.team,
+              projectId: ids.project,
+              fromEpoch,
+              fromKey: project.epochKeys.get(fromEpoch)!,
+              toKey: project.epochKeys.get(fromEpoch + 1)!,
+              signingDeviceId: ids.approver,
+              signingPrivateKey: stranger.privateKey,
+            })
+          ).canonicalBytes,
+        ).toString("base64"),
+      ),
+    );
+    const { result } = await pullWith(project, {
+      links: forged,
+      listedEpochs: [],
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("postgres://epoch-one");
+    expect(result.stdout).not.toContain("epoch-two-value");
+  });
+
+  test("without links or past-epoch envelopes, earlier Values stay unreadable", async () => {
+    const project = await rotatedProject();
+    const { result, postedLinks } = await pullWith(project, {
+      links: [],
+      listedEpochs: [],
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("postgres://epoch-one");
+    expect(postedLinks).toHaveLength(0);
+  });
+
+  test("backfills the missing links from past-epoch Account Key Envelopes", async () => {
+    const project = await rotatedProject();
+    const { result, postedLinks } = await pullWith(project, {
+      links: [],
+      listedEpochs: [1, 2],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DATABASE_URL='postgres://epoch-one'");
+    expect(result.stdout).toContain("API_KEY='epoch-two-value'");
+    expect(postedLinks).toHaveLength(2);
+    const epochs = postedLinks.map((body) => {
+      const link = parseProtocolObject(
+        Buffer.from(String(body.object), "base64"),
+      );
+      expect(link.get(1)).toBe(23);
+      return [link.get(62), link.get(63)];
+    });
+    expect(epochs).toEqual([
+      [1, 2],
+      [2, 3],
+    ]);
   });
 });
 

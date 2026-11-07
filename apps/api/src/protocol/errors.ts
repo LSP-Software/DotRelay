@@ -9,6 +9,7 @@ import {
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
+  ProjectEpochKeyLinkConflictError,
   ProjectNotActiveError,
   StagedObjectConflictError,
   StagingQuotaExceededError,
@@ -39,6 +40,8 @@ export const mapPersistenceError = (
   if (error instanceof OperationConflictError)
     return { code: "operation_conflict" };
   if (error instanceof StagedObjectConflictError)
+    return { code: "state_conflict" };
+  if (error instanceof ProjectEpochKeyLinkConflictError)
     return { code: "state_conflict" };
   if (error instanceof StagingQuotaExceededError)
     return { code: "payload_too_large" };

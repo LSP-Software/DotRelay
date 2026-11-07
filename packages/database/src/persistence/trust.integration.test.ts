@@ -32,6 +32,8 @@ import {
   MembershipRepository,
   OperationConflictError,
   OperationRepository,
+  ProjectEpochKeyLinkConflictError,
+  ProjectEpochKeyLinkRepository,
   ProjectEpochRepository,
   ProjectRepository,
   PublicationRepository,
@@ -271,6 +273,29 @@ const createActiveDevice = async (userId: string, identityGeneration = 1n) => {
     },
   });
 };
+// A stand-in kind-23 link projection. The repository trusts the API to have
+// verified the signature and binding; it checks only the shape and epochs.
+const keyLinkInput = async (
+  deviceId: string,
+  fromEpoch: bigint,
+  operation?: OperationInput & { readonly actorDeviceId: string },
+) => {
+  const protocolObject = await createProtocolObjectInput(23);
+  if (operation)
+    await stageObject({
+      operation,
+      objectId: protocolObject.id,
+      canonicalBytes: protocolObject.canonicalBytes,
+      digest: protocolObject.digest,
+    });
+  return {
+    protocolObject,
+    fromEpoch,
+    toEpoch: fromEpoch + 1n,
+    signingDeviceId: deviceId,
+  };
+};
+
 const stageObject = async (input: {
   readonly operation: OperationInput & {
     readonly actorDeviceId: string;
@@ -1591,6 +1616,7 @@ integrationDescribe("trust workflow integration", () => {
         expectedEpoch: 2n,
         newEpoch: 3n,
         transitions: [],
+        keyLink: await keyLinkInput(device.id, 2n),
       }),
     ).rejects.toBeInstanceOf(StaleEpochError);
 
@@ -1608,6 +1634,130 @@ integrationDescribe("trust workflow integration", () => {
       }),
     ).rejects.toBeInstanceOf(OperationConflictError);
   });
+  test("backfills Project Epoch Key Links: first wins, retries are idempotent, other links conflict", async () => {
+    const owner = await createUserFixture();
+    const ownerDevice = await createActiveDevice(owner.id);
+    const outsider = await createUserFixture();
+    const outsiderDevice = await createActiveDevice(outsider.id);
+    const serverProfile = await database.serverProfile.findFirstOrThrow({
+      where: { users: { some: { id: owner.id } } },
+    });
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId: serverProfile.id,
+      ownerUserId: owner.id,
+      name: "link-team",
+      operation: {
+        ...(await createOperationInput(owner.id, "link-team")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now() + 3),
+      operation: {
+        ...(await createOperationInput(owner.id, "link-project")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    // A Project rotated twice before links existed (epochs advance by one).
+    for (const currentEpoch of [2n, 3n])
+      await database.project.update({
+        where: { id: projectId },
+        data: { currentEpoch },
+      });
+    const links = new ProjectEpochKeyLinkRepository();
+    const backfill = async (
+      userId: string,
+      deviceId: string,
+      fromEpoch: bigint,
+      label: string,
+      link?: Awaited<ReturnType<typeof keyLinkInput>>,
+    ) => {
+      const operation = {
+        ...(await createOperationInput(userId, label, "EPOCH_KEY_LINK")),
+        actorDeviceId: deviceId,
+      };
+      const keyLink = link
+        ? link
+        : await keyLinkInput(deviceId, fromEpoch, operation);
+      if (link)
+        await stageObject({
+          operation,
+          objectId: link.protocolObject.id,
+          canonicalBytes: link.protocolObject.canonicalBytes,
+          digest: link.protocolObject.digest,
+        });
+      return {
+        keyLink,
+        result: () =>
+          links.publish(database, { operation, projectId, keyLink }),
+      };
+    };
+
+    const first = await backfill(owner.id, ownerDevice.id, 1n, "link-1-2");
+    const published = await first.result();
+    expect(published.idempotent).toBe(false);
+    expect(
+      await database.projectEpochKeyLinkObject.count({ where: { projectId } }),
+    ).toBe(1);
+    expect(
+      await database.auditEvent.count({
+        where: { kind: "EPOCH_KEY_LINK_PUBLISHED", entityId: projectId },
+      }),
+    ).toBe(1);
+
+    // The same operation replayed is idempotent.
+    expect((await first.result()).idempotent).toBe(true);
+
+    // The same link bytes under a fresh operation are idempotent too.
+    const again = await backfill(
+      owner.id,
+      ownerDevice.id,
+      1n,
+      "link-1-2-again",
+      first.keyLink,
+    );
+    expect((await again.result()).idempotent).toBe(true);
+
+    // A different link for the same to-epoch conflicts; the first stays.
+    const rival = await backfill(owner.id, ownerDevice.id, 1n, "link-rival");
+    await expect(rival.result()).rejects.toBeInstanceOf(
+      ProjectEpochKeyLinkConflictError,
+    );
+
+    // No link may target a future epoch.
+    const future = await backfill(owner.id, ownerDevice.id, 3n, "link-3-4");
+    await expect(future.result()).rejects.toThrow("future epoch");
+
+    // A link signed by a Device other than the actor's is refused.
+    const foreignSigner = await backfill(
+      owner.id,
+      ownerDevice.id,
+      2n,
+      "link-foreign",
+      await keyLinkInput(outsiderDevice.id, 2n),
+    );
+    await expect(foreignSigner.result()).rejects.toThrow(
+      "project epoch key link is invalid",
+    );
+
+    // A User outside the Team cannot publish.
+    const outside = await backfill(
+      outsider.id,
+      outsiderDevice.id,
+      2n,
+      "link-outsider",
+    );
+    await expect(outside.result()).rejects.toThrow("not authorized");
+    expect(
+      await database.projectEpochKeyLinkObject.count({ where: { projectId } }),
+    ).toBe(1);
+  });
+
   test("rotates the Project epoch, re-anchors Environment heads, and refuses stale or replayed transitions", async () => {
     const user = await createUserFixture();
     const device = await createActiveDevice(user.id);
@@ -1730,6 +1880,7 @@ integrationDescribe("trust workflow integration", () => {
       projectId,
       expectedEpoch: 1n,
       newEpoch: 2n,
+      keyLink: await keyLinkInput(device.id, 1n, rotationOperation),
       transitions: [
         {
           environmentId,
@@ -1789,6 +1940,24 @@ integrationDescribe("trust workflow integration", () => {
         .currentEpoch,
     ).toBe(2n);
 
+    // The rotation committed exactly one key link for 1 -> 2 (ADR 0014), and
+    // a replay under the same operation with a different link conflicts.
+    const links = await database.projectEpochKeyLinkObject.findMany({
+      where: { projectId },
+    });
+    expect(links).toHaveLength(1);
+    expect(links[0]?.fromEpoch).toBe(1n);
+    expect(links[0]?.toEpoch).toBe(2n);
+    expect(links[0]?.protocolObjectId).toBe(
+      rotateInput.keyLink.protocolObject.id,
+    );
+    await expect(
+      epochRotation.rotate(database, {
+        ...rotateInput,
+        keyLink: await keyLinkInput(device.id, 1n),
+      }),
+    ).rejects.toBeInstanceOf(OperationConflictError);
+
     // A transition that still names the old epoch is stale.
     const staleEpochRotation = {
       ...(await createOperationInput(
@@ -1806,6 +1975,7 @@ integrationDescribe("trust workflow integration", () => {
         expectedEpoch: 1n,
         newEpoch: 2n,
         transitions: [],
+        keyLink: await keyLinkInput(device.id, 1n),
       }),
     ).rejects.toBeInstanceOf(StaleEpochError);
 
@@ -1847,6 +2017,7 @@ integrationDescribe("trust workflow integration", () => {
         projectId,
         expectedEpoch: 2n,
         newEpoch: 3n,
+        keyLink: await keyLinkInput(device.id, 2n),
         transitions: [
           {
             environmentId,
@@ -2191,6 +2362,7 @@ integrationDescribe("trust workflow integration", () => {
       expectedEpoch: 1n,
       newEpoch: 2n,
       transitions: rotateTransitions,
+      keyLink: await keyLinkInput(device.id, 1n, rotationOperation),
     };
 
     const result = await epochRotation.rotate(database, rotateInput);
@@ -2285,6 +2457,7 @@ integrationDescribe("trust workflow integration", () => {
       expectedEpoch: 2n,
       newEpoch: 3n,
       transitions: [] as typeof rotateInput.transitions,
+      keyLink: await keyLinkInput(device.id, 2n, failureOperation),
     };
     for (const environmentId of environmentIds) {
       const isFailingEnvironment = environmentId === failingEnvironmentId;

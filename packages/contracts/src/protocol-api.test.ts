@@ -276,10 +276,11 @@ describe("protocol API contracts", () => {
   test("parses epoch rotation requests with embedded publications", () => {
     const digest = sha384ToHex(new Uint8Array(48).fill(0x04));
     const environmentId = "00000000-0000-4000-8000-000000000030";
-    const parsed = parseEpochRotationRequest({
+    const request = {
       projectId: "00000000-0000-4000-8000-000000000031",
       expectedEpoch: 1,
       newEpoch: 2,
+      keyLink: { protocolObjectId: "00000000-0000-4000-8000-000000000037" },
       transitions: [
         {
           environmentId,
@@ -307,8 +308,27 @@ describe("protocol API contracts", () => {
           },
         },
       ],
-    });
+    };
+    const parsed = parseEpochRotationRequest(request);
     expect(parsed.newEpoch).toBe(2);
+    expect(parsed.keyLink.protocolObjectId).toBe(
+      "00000000-0000-4000-8000-000000000037",
+    );
+    // A rotation without exactly one key link (ADR 0014) is malformed.
+    const { keyLink: _keyLink, ...withoutLink } = request;
+    expect(() => parseEpochRotationRequest(withoutLink)).toThrow(ContractError);
+    expect(() =>
+      parseEpochRotationRequest({
+        ...request,
+        keyLink: [request.keyLink, request.keyLink],
+      }),
+    ).toThrow(ContractError);
+    expect(() =>
+      parseEpochRotationRequest({
+        ...request,
+        keyLink: { protocolObjectId: "not-a-uuid" },
+      }),
+    ).toThrow(ContractError);
     expect(parsed.transitions[0]?.publication.revision.mutation).toBe(
       "EPOCH_TRANSITION",
     );

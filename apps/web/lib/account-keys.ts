@@ -290,6 +290,24 @@ export type AccountKeyEnvelopeEntry = Readonly<{
 }>;
 
 // GET /api/v1/account-keys/envelopes — active envelopes for this User.
+// Backfills one Project Epoch Key Link (ADR 0014). The first link for a
+// to-epoch wins; a conflict means another client already published it.
+export const publishProjectEpochKeyLink = async (
+  actor: AccountKeyActor,
+  projectId: string,
+  link: Readonly<{
+    readonly objectId: string;
+    readonly canonicalBytes: Uint8Array;
+  }>,
+): Promise<void> => {
+  await jsonPost(
+    actor,
+    `/api/v1/projects/${projectId}/epoch-key-links`,
+    globalThis.crypto.randomUUID(),
+    { objectId: link.objectId, object: toBase64(link.canonicalBytes) },
+  );
+};
+
 export const fetchAccountKeyEnvelopes = async (
   actor: AccountKeyActor,
 ): Promise<readonly AccountKeyEnvelopeEntry[]> => {

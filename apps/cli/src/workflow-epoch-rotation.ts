@@ -124,6 +124,17 @@ export const rotateProjectEpoch = async (
     context.environmentId,
   );
   const previousEpoch = safeProjectEpoch(synced.page.projectEpoch);
+  // The rotation links the current epoch key to the new one (ADR 0014), so a
+  // Device without the current key cannot rotate: fail before anything is
+  // sent.
+  const previousEpochKey = context.sharedValueSecret;
+  if (!previousEpochKey || context.projectEpoch !== previousEpoch)
+    throw new CliError(
+      "conflict",
+      "this device does not hold the project's current key, so it cannot link the new key to it. Run dotrelay pull, then try again",
+      {},
+      "epoch_key_unavailable",
+    );
   const artifacts = await createEpochRotationArtifacts({
     serverProfileId: context.serverProfileId,
     teamId: context.teamId,
@@ -133,6 +144,7 @@ export const rotateProjectEpoch = async (
     expectedEpoch: previousEpoch,
     environments: rotationEnvironments,
     signingPrivateKey: context.signingPrivateKey,
+    previousEpochKey,
   });
   const operationId = crypto.randomUUID();
   let rotated: { readonly projectEpoch: string };
@@ -160,11 +172,17 @@ export const rotateProjectEpoch = async (
     await synced.workflow.transport
       .cancel({ operationId, deviceId: synced.workflow.deviceId })
       .catch(() => undefined);
+    artifacts.newEpochKey.fill(0);
     if (error instanceof CliError || error instanceof CliInvocationError)
       throw error;
     throw rotationTransportFailure(error);
   }
-  await storeRotatedEpochKey(options, synced.workflow, previousEpoch + 1);
+  await storeRotatedEpochKey(
+    options,
+    synced.workflow,
+    previousEpoch + 1,
+    artifacts.newEpochKey,
+  );
   const environmentIds = rotationEnvironments.map(
     (target) => target.environmentId,
   );
@@ -184,8 +202,9 @@ const storeRotatedEpochKey = async (
   options: WorkflowOptions,
   workflow: Awaited<ReturnType<typeof syncWorkflow>>["workflow"],
   projectEpoch: number,
+  // The key the committed rotation's link was sealed under; zeroed here.
+  epochKey: Uint8Array,
 ): Promise<void> => {
-  const epochKey = crypto.getRandomValues(new Uint8Array(32));
   try {
     const accountMasterKey = await loadAccountMasterKey(
       options,

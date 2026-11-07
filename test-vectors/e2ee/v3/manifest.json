@@ -14,15 +14,15 @@
     },
     {
       "path": "negative.json",
-      "sha384": "d6c0a050b57c651fd8c954a68b9aa7d8047e2b86875150762f32b23a37fc7991fb829295366a5c1665b8fc3df143a5a3"
+      "sha384": "9754ad4d90c5811012010214645f9c48c4420138e122a2d23384eb3aae3eb33671e88780d20f263d58e6b2aeb31550f6"
     },
     {
       "path": "objects.json",
-      "sha384": "631c27355ed06727038b5b10c21dd212c66206e3730b75e7cdde8ef7b76eac0971119c0a3cc90285bc345ce9aa3fdf29"
+      "sha384": "836f8d444d0cb6159515007359ff307b156119ce87ae328cbea8f376f3cbc299fa033eaeb0ba0de711e004cefe265a95"
     },
     {
       "path": "positive.json",
-      "sha384": "e8110b38c7252ddeccb1dbdea758a9866daf7f30ec8265871ea050b95003754b9c4c3706fba96aa6d2018d4d038c6061"
+      "sha384": "1507645861feb7a5f5124ceb7f2241afad03d4cefae2b9af6b82f4d0855a67018aa9e067caf5aada69b687d8f89bc5c9"
     },
     {
       "path": "primitives.json",

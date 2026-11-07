@@ -339,3 +339,66 @@ export const digestFinalizationRequest = async (
     ),
   );
 };
+
+const sameIdBytes = (value: unknown, expected: string): boolean => {
+  if (!(value instanceof Uint8Array) || value.length !== 16) return false;
+  try {
+    return bytesToUuid(value) === expected;
+  } catch {
+    return false;
+  }
+};
+
+const epochOf = (value: unknown): bigint | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? BigInt(value)
+    : typeof value === "bigint" && value >= 0n
+      ? value
+      : null;
+
+/**
+ * Checks a Project Epoch Key Link (ADR 0014) the actor Device signed: kind
+ * 23, bound to this Server Profile, Team and Project, field 23 naming the
+ * actor Device, contiguous epochs, and an Ed25519 signature by that Device's
+ * stored key. The sealed key itself stays opaque to the service.
+ */
+export const verifyProjectEpochKeyLink = async (input: {
+  readonly canonicalBytes: Uint8Array;
+  readonly serverProfileId: string;
+  readonly teamId: string;
+  readonly projectId: string;
+  readonly actorDeviceId: string;
+  readonly actorSigningPublicKey: Uint8Array | Buffer;
+}): Promise<
+  Readonly<{ fromEpoch: bigint; toEpoch: bigint; signingDeviceId: string }>
+> => {
+  const object = parseProtocolObject(input.canonicalBytes);
+  const fromEpoch = epochOf(object.get(62));
+  const toEpoch = epochOf(object.get(63));
+  if (
+    object.get(1) !== 23 ||
+    !sameIdBytes(object.get(8), input.serverProfileId) ||
+    !sameIdBytes(object.get(11), input.teamId) ||
+    !sameIdBytes(object.get(13), input.projectId) ||
+    !sameIdBytes(object.get(23), input.actorDeviceId) ||
+    fromEpoch === null ||
+    toEpoch === null ||
+    fromEpoch < 1n ||
+    toEpoch !== fromEpoch + 1n
+  )
+    throw new ContractError("invalid_crypto_object");
+  const signature = object.get(4);
+  const rawKey = new Uint8Array(input.actorSigningPublicKey);
+  if (!(signature instanceof Uint8Array) || rawKey.byteLength !== 32)
+    throw new ContractError("invalid_crypto_object");
+  const publicKey = await crypto.subtle.importKey(
+    "raw",
+    rawKey.slice().buffer,
+    { name: "Ed25519" },
+    false,
+    ["verify"],
+  );
+  if (!(await verifyProtocolObject(object, signature, publicKey)))
+    throw new ContractError("invalid_crypto_object");
+  return { fromEpoch, toEpoch, signingDeviceId: input.actorDeviceId };
+};

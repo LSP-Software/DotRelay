@@ -185,6 +185,14 @@ summary before beginning staging. It then uploads the signed command and encrypt
 objects, finalizes the operation with the expected head and epoch, and cancels a failed operation
 when the Server Profile permits cancellation.
 
+`project rotate` advances the Project to a new epoch across every active Environment. It needs
+the current Project Epoch Key: it seals that key under the new one in a Project Epoch Key Link
+and sends the link with the rotation, so a Device that cannot read the current epoch is refused
+before anything is sent. Rotation keeps a removed Member from reading Values published afterwards;
+it does not revoke Values they already saw, so rotate a leaked secret itself as well. Every `pull`
+rebuilds earlier epoch keys from the Project's key chain, and publishes any link missing from a
+Project rotated before links existed when the Account Master Key holds both keys.
+
 `pull` writes decrypted Values to `.env` by default. Before any Value is decrypted or moved, `pull`
 checks the output path's Git tracking state in the repository it resolves against (including linked
 worktrees and custom `--output` paths). A Git-tracked output is refused with the two safe choices:

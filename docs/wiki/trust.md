@@ -94,6 +94,41 @@ that do not match the stored wrapper.
 `EPOCH_TRANSITION` revisions for every active Environment, and records epoch transition objects.
 Stale expected epochs surface as reconciliation failures rather than silent rewrites.
 
+### Project key chain
+
+Rotation does not re-encrypt existing lanes, so Values published before a rotation stay sealed
+under the older epoch key. Every rotation therefore also publishes one **Project Epoch Key Link**
+(protocol object kind 23, ADR 0014): the previous epoch key sealed under the new one with
+AES-256-GCM, with associated data that binds the Server Profile, Team, Project, from-epoch and
+to-epoch, and signed by the rotating Device.
+
+- The rotating client generates the new key first and stages the link with the transitions. A
+  client that does not hold the current key cannot rotate.
+- The API rejects a rotation that does not carry exactly one valid link for `expectedEpoch ->
+newEpoch`, signed by the acting Device. The link is stored in `project_epoch_key_links` in the
+  same transaction as the epoch advance. A byte-identical retry is idempotent.
+- The workspace boundary serves the Project's links as `epochKeyLinks`. Clients walk them from
+  the current key down to epoch 1, checking binding, contiguity, single link per epoch, the
+  signature against the Team's Device signing keys, and the AES-GCM tag. The first failure stops
+  the walk, and the older epochs stay unreadable.
+- A Member who joins after any number of rotations, or a Device that only holds a
+  `CURRENT_PROJECT_EPOCH` grant, needs only the current key to read every Value.
+
+Projects rotated before links existed are backfilled. A client that finds a missing link and
+holds the Account Master Key opens the User's past-epoch Account Key Envelopes, creates every
+link it holds both keys for, and publishes it through
+`POST /api/v1/projects/:projectId/epoch-key-links`. Any active Member's active Device may
+backfill. The first link for a to-epoch wins; a different link for it is a `state_conflict`.
+
+The service cannot forge a link that opens, because it never holds an epoch key. Until the
+account Device roster lands, the signing keys used to check a link come from the service's Team
+trust set.
+
+**What rotation does and does not do.** Rotation stops a removed Member from reading Values
+published after it. It never revokes Values they already saw, and every current Member can still
+read every older Value through the chain. To cut a removed Member off from a secret, rotate the
+secret itself and publish the new Value.
+
 ## Security boundaries
 
 Trust repositories never persist private keys, Recovery Codes, AMK wrappers in plaintext, bearer
