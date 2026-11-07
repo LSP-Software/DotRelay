@@ -187,7 +187,7 @@ describe("an uncertain Project epoch rotation", () => {
     expect(await exists(run.path)).toBe(false);
   });
 
-  test("discards the key when another rotation reached the epoch", async () => {
+  test("a link that does not open keeps the key unless cancel proves another rotation won", async () => {
     const run = await scenario();
     const other = await createProjectEpochKeyLink({
       serverProfileId: ids.serverProfileId,
@@ -199,6 +199,32 @@ describe("an uncertain Project epoch rotation", () => {
       signingDeviceId: ids.device,
       signingPrivateKey: (await generateSigningKeyPair()).privateKey,
     });
+    // A withheld link, or one this key does not open, with an operation
+    // that cannot be cancelled (it may have committed): keep the record.
+    for (const links of [[], [other.canonicalBytes]])
+      expect(
+        await resolvePendingRotation({
+          options: run.options,
+          boundary: run.boundaryAt("2", links),
+          encryptionPrivateKey: run.encryption.privateKey,
+          trustedSigningKeys: run.trustedSigningKeys,
+          cancel: async () => false,
+        }),
+      ).toBeNull();
+    expect(await exists(run.path)).toBe(true);
+    // The original Device still recovers the key once the link is served.
+    expect(
+      (
+        await resolvePendingRotation({
+          options: run.options,
+          boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
+          encryptionPrivateKey: run.encryption.privateKey,
+          trustedSigningKeys: run.trustedSigningKeys,
+          cancel: async () => false,
+        })
+      )?.key,
+    ).toEqual(run.newKey);
+    // A successful cancel proves another rotation took the epoch.
     expect(
       await resolvePendingRotation({
         options: run.options,
@@ -211,7 +237,7 @@ describe("an uncertain Project epoch rotation", () => {
     expect(await exists(run.path)).toBe(false);
   });
 
-  test("only this Device can open the kept key", async () => {
+  test("another Device that cannot open the key leaves it for the original Device", async () => {
     const run = await scenario();
     const stranger = await generateEncryptionKeyPair();
     expect(
@@ -223,6 +249,18 @@ describe("an uncertain Project epoch rotation", () => {
         cancel: async () => true,
       }),
     ).toBeNull();
+    expect(await exists(run.path)).toBe(true);
+    expect(
+      (
+        await resolvePendingRotation({
+          options: run.options,
+          boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
+          encryptionPrivateKey: run.encryption.privateKey,
+          trustedSigningKeys: run.trustedSigningKeys,
+          cancel: async () => false,
+        })
+      )?.key,
+    ).toEqual(run.newKey);
   });
 });
 

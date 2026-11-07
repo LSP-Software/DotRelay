@@ -231,8 +231,8 @@ export const submitRotation = async <T>(
 // Settles a pending rotation against the boundary. Returns the new epoch key
 // when the Project is at that epoch and its served link opens with the key,
 // which proves this Device's rotation committed. The record is discarded only
-// when the rotation provably cannot commit: another rotation took the epoch,
-// or the Project is still behind it and cancelling the operation succeeded.
+// when the rotation provably cannot commit: the Project moved past the epoch
+// (whoever rotated it on held the key), or cancelling the operation succeeded.
 export const resolvePendingRotation = async (
   input: Readonly<{
     options: WorkflowOptions;
@@ -269,7 +269,8 @@ export const resolvePendingRotation = async (
       associatedData(projectId, pending.newEpoch),
     );
   } catch {
-    await clearPendingRotation(input.options, projectId, pending.operationId);
+    // Another Device sharing this state directory cannot open it, but the
+    // Device that sealed it still can: keep the record for that Device.
     return null;
   }
   for (const encoded of input.boundary.epochKeyLinks) {
@@ -291,7 +292,11 @@ export const resolvePendingRotation = async (
     }
   }
   key.fill(0);
-  await clearPendingRotation(input.options, projectId, pending.operationId);
+  // No served link opens with this key. That proves nothing by itself: the
+  // service may have withheld the link. Only a successful cancel shows this
+  // operation did not commit (another rotation took the epoch).
+  if (await input.cancel(pending.operationId))
+    await clearPendingRotation(input.options, projectId, pending.operationId);
   return null;
 };
 
