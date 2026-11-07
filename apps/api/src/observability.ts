@@ -1,10 +1,12 @@
 import { PROBLEM_STATUS, type ProblemCode } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
+  OperationRepository,
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
   SECURITY_REQUEST_LOG_RETENTION_MS,
   type SecurityRequestEndpointTemplate,
   SecurityRequestLogRepository,
+  StagedObjectRepository,
 } from "@dotrelay/database";
 
 export const API_CORRELATION_HEADER = "X-Correlation-ID";
@@ -16,6 +18,7 @@ export const SERVER_DIAGNOSTIC_EVENT_NAMES = Object.freeze([
   "api.request.completed",
   "api.security_request_log.write_failed",
   "api.security_request_log.expiry_failed",
+  "api.staging.expiry_failed",
 ] as const);
 export type ServerDiagnosticEventName =
   (typeof SERVER_DIAGNOSTIC_EVENT_NAMES)[number];
@@ -91,6 +94,17 @@ const runtimeDiagnosticTimer: DiagnosticTimer = {
 export type ApiObservability = Readonly<{
   readonly diagnostics: ServerDiagnosticSink;
   readonly expireSecurityRequestLogs: (at?: Date) => Promise<number>;
+  readonly expireStaging: (
+    at?: Date,
+  ) => Promise<
+    Readonly<{ readonly operations: number; readonly stagedObjects: number }>
+  >;
+  /**
+   * The scheduled retention job: expires staging and Security Request Logs.
+   * Each step runs even if an earlier one failed; the first failure is
+   * rethrown after all steps ran.
+   */
+  readonly runRetentionCleanup: (at?: Date) => Promise<void>;
   readonly recordRequest: (input: {
     readonly request: Request;
     readonly path: string;
@@ -335,19 +349,54 @@ export const createApiObservability = (
   if (!Number.isFinite(sampleRate) || sampleRate < 0 || sampleRate > 1)
     throw new Error("diagnostic sample rate is invalid");
   const securityLogs = new SecurityRequestLogRepository();
+  const operations = new OperationRepository();
+  const stagedObjects = new StagedObjectRepository();
+  const expireSecurityRequestLogs = async (at = now()) => {
+    try {
+      return (await securityLogs.expire(database, at)).count;
+    } catch (error) {
+      emitDiagnosticFailure(
+        diagnostics,
+        "api.security_request_log.expiry_failed",
+        createServerCorrelationId(),
+      );
+      throw error;
+    }
+  };
+  const expireStaging = async (at = now()) => {
+    try {
+      const expiredOperations = await operations.expireStaging(database, at);
+      const expiredObjects = await stagedObjects.expire(database, at);
+      return Object.freeze({
+        operations: expiredOperations,
+        stagedObjects: expiredObjects.count,
+      });
+    } catch (error) {
+      emitDiagnosticFailure(
+        diagnostics,
+        "api.staging.expiry_failed",
+        createServerCorrelationId(),
+      );
+      throw error;
+    }
+  };
   return Object.freeze({
     diagnostics,
-    expireSecurityRequestLogs: async (at = now()) => {
-      try {
-        return (await securityLogs.expire(database, at)).count;
-      } catch (error) {
-        emitDiagnosticFailure(
-          diagnostics,
-          "api.security_request_log.expiry_failed",
-          createServerCorrelationId(),
-        );
-        throw error;
-      }
+    expireSecurityRequestLogs,
+    expireStaging,
+    runRetentionCleanup: async (at = now()) => {
+      const results = [
+        await expireStaging(at).then(
+          () => null,
+          (error: unknown) => ({ error }),
+        ),
+        await expireSecurityRequestLogs(at).then(
+          () => null,
+          (error: unknown) => ({ error }),
+        ),
+      ];
+      const failure = results.find((result) => result !== null);
+      if (failure) throw failure.error;
     },
     recordRequest: (input) => {
       try {

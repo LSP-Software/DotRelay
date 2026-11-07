@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import type { DotRelayAuth } from "./auth";
 import {
+  clearGitHubRepositoryDisplayCache,
   lookupGitHubRepositoryDisplay,
   parseGitHubRepositoryDisplay,
   resolveGitHubRepositoryIdentity,
@@ -16,19 +17,146 @@ test("parses a GitHub repository display name from the public API payload", () =
   ).toEqual({ owner: "LSP-Software", name: "DotRelay" });
 });
 
-test("looks up a GitHub repository display name once and caches it", async () => {
-  const calls: string[] = [];
-  const fetchImpl = (async (input: string | URL | Request) => {
-    calls.push(String(input));
-    return Response.json({ full_name: "LSP-Software/DotRelay" });
-  }) as typeof fetch;
+describe("repository display lookup", () => {
+  beforeEach(() => clearGitHubRepositoryDisplayCache());
 
-  const first = await lookupGitHubRepositoryDisplay("4242424242", fetchImpl);
-  const second = await lookupGitHubRepositoryDisplay("4242424242", fetchImpl);
+  const recordingFetch = (
+    respond: (init?: RequestInit) => Response | Promise<Response>,
+  ) => {
+    const calls: Array<
+      Readonly<{ url: string; authorization: string | null }>
+    > = [];
+    const fetchImpl = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      calls.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get("Authorization"),
+      });
+      return respond(init);
+    }) as typeof fetch;
+    return { calls, fetchImpl };
+  };
 
-  expect(first).toEqual({ owner: "LSP-Software", name: "DotRelay" });
-  expect(second).toEqual(first);
-  expect(calls).toEqual(["https://api.github.com/repositories/4242424242"]);
+  test("looks up a display name once and caches it for ten minutes", async () => {
+    let time = 0;
+    const { calls, fetchImpl } = recordingFetch(() =>
+      Response.json({ full_name: "LSP-Software/DotRelay" }),
+    );
+    const options = { fetch: fetchImpl, now: () => time };
+
+    const first = await lookupGitHubRepositoryDisplay("4242424242", options);
+    time = 9 * 60 * 1000;
+    const second = await lookupGitHubRepositoryDisplay("4242424242", options);
+    expect(first).toEqual({ owner: "LSP-Software", name: "DotRelay" });
+    expect(second).toEqual(first);
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.github.com/repositories/4242424242",
+    ]);
+
+    time = 11 * 60 * 1000;
+    await lookupGitHubRepositoryDisplay("4242424242", options);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("caches a 404 as a miss for the lookup scope", async () => {
+    let time = 0;
+    const { calls, fetchImpl } = recordingFetch(
+      () => new Response(null, { status: 404 }),
+    );
+    const options = { fetch: fetchImpl, now: () => time, cacheScope: "a" };
+
+    expect(
+      await lookupGitHubRepositoryDisplay("4242424242", options),
+    ).toBeUndefined();
+    expect(
+      await lookupGitHubRepositoryDisplay("4242424242", options),
+    ).toBeUndefined();
+    expect(calls).toHaveLength(1);
+
+    // Another viewer's delegated access may see the repository.
+    await lookupGitHubRepositoryDisplay("4242424242", {
+      ...options,
+      cacheScope: "b",
+    });
+    expect(calls).toHaveLength(2);
+
+    time = 6 * 60 * 1000;
+    await lookupGitHubRepositoryDisplay("4242424242", options);
+    expect(calls).toHaveLength(3);
+  });
+
+  test("gives up after the timeout and retries only after a short pause", async () => {
+    let time = 0;
+    const { calls, fetchImpl } = recordingFetch(
+      (init) =>
+        new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason),
+          );
+        }),
+    );
+    const options = { fetch: fetchImpl, now: () => time, timeoutMs: 10 };
+
+    expect(
+      await lookupGitHubRepositoryDisplay("4242424242", options),
+    ).toBeUndefined();
+    expect(
+      await lookupGitHubRepositoryDisplay("4242424242", options),
+    ).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    time = 2 * 60 * 1000;
+    await lookupGitHubRepositoryDisplay("4242424242", options);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("uses the viewer's delegated access when available", async () => {
+    const { calls, fetchImpl } = recordingFetch(() =>
+      Response.json({ full_name: "LSP-Software/Private" }),
+    );
+    let tokenRequests = 0;
+    const display = await lookupGitHubRepositoryDisplay("4242424242", {
+      fetch: fetchImpl,
+      accessToken: async () => {
+        tokenRequests += 1;
+        return "ghu_delegated-token";
+      },
+    });
+    expect(display).toEqual({ owner: "LSP-Software", name: "Private" });
+    expect(calls[0]?.authorization).toBe("Bearer ghu_delegated-token");
+
+    // A cached name needs no token.
+    await lookupGitHubRepositoryDisplay("4242424242", {
+      fetch: fetchImpl,
+      accessToken: async () => {
+        tokenRequests += 1;
+        return "ghu_delegated-token";
+      },
+    });
+    expect(tokenRequests).toBe(1);
+  });
+
+  test("falls back to an anonymous lookup without delegated access", async () => {
+    const { calls, fetchImpl } = recordingFetch(() =>
+      Response.json({ full_name: "LSP-Software/DotRelay" }),
+    );
+    await lookupGitHubRepositoryDisplay("4242424242", {
+      fetch: fetchImpl,
+      accessToken: async () => {
+        throw new Error("token store unavailable");
+      },
+    });
+    expect(calls[0]?.authorization).toBeNull();
+  });
+
+  test("rejects a malformed repository id without a request", async () => {
+    const { calls, fetchImpl } = recordingFetch(() => Response.json({}));
+    expect(
+      await lookupGitHubRepositoryDisplay("../users", { fetch: fetchImpl }),
+    ).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
 });
 
 // A stand-in for the better-auth instance: the seam only reads the acting

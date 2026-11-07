@@ -148,7 +148,7 @@ describe("Server Profile configuration", () => {
     expect(isAllowedOrigin("https://attacker.example", profile)).toBe(false);
   });
 
-  test("derives a shared cookie domain only for same-domain split web and API hosts", () => {
+  test("derives a shared cookie domain only when one host is the parent of the other", () => {
     const hosted = loadServerProfileConfig({
       ...githubOAuthEnvironment,
       NODE_ENV: "production",
@@ -157,7 +157,37 @@ describe("Server Profile configuration", () => {
       BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
       SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000042",
     });
-    expect(sharedCookieDomain(hosted)).toBe("dotrelay.dev");
+    // Sibling hosts no longer share cookies implicitly: on a shared platform
+    // domain the common suffix may be a public suffix.
+    expect(sharedCookieDomain(hosted)).toBeUndefined();
+
+    const sharedPlatform = loadServerProfileConfig({
+      SERVER_PROFILE_ORIGIN: "https://tenant-api.platform.app",
+      WEB_ORIGIN: "https://tenant-web.platform.app",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    });
+    expect(sharedCookieDomain(sharedPlatform)).toBeUndefined();
+
+    const parentWeb = loadServerProfileConfig({
+      SERVER_PROFILE_ORIGIN: "https://api.example.com",
+      WEB_ORIGIN: "https://example.com",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    });
+    expect(sharedCookieDomain(parentWeb)).toBe("example.com");
+
+    const parentApi = loadServerProfileConfig({
+      SERVER_PROFILE_ORIGIN: "https://example.com",
+      WEB_ORIGIN: "https://app.example.com",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    });
+    expect(sharedCookieDomain(parentApi)).toBe("example.com");
+
+    const lookalike = loadServerProfileConfig({
+      SERVER_PROFILE_ORIGIN: "https://api.notexample.com",
+      WEB_ORIGIN: "https://example.com",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    });
+    expect(sharedCookieDomain(lookalike)).toBeUndefined();
 
     const splitDomains = loadServerProfileConfig({
       SERVER_PROFILE_ORIGIN: "https://api.example",
@@ -179,6 +209,37 @@ describe("Server Profile configuration", () => {
       BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
     });
     expect(sharedCookieDomain(loopback)).toBeUndefined();
+  });
+
+  test("uses an explicit COOKIE_DOMAIN that covers both hosts", () => {
+    const base = {
+      SERVER_PROFILE_ORIGIN: "https://dev-api.dotrelay.dev",
+      WEB_ORIGIN: "https://dev.dotrelay.dev",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    };
+    expect(
+      sharedCookieDomain(
+        loadServerProfileConfig({ ...base, COOKIE_DOMAIN: ".DotRelay.dev" }),
+      ),
+    ).toBe("dotrelay.dev");
+    expect(() =>
+      loadServerProfileConfig({ ...base, COOKIE_DOMAIN: "other.dev" }),
+    ).toThrow("COOKIE_DOMAIN");
+    expect(() =>
+      loadServerProfileConfig({
+        ...base,
+        COOKIE_DOMAIN: "dev-api.dotrelay.dev",
+      }),
+    ).toThrow("COOKIE_DOMAIN");
+    expect(() =>
+      loadServerProfileConfig({ ...base, COOKIE_DOMAIN: "dev" }),
+    ).toThrow("COOKIE_DOMAIN");
+    expect(() =>
+      loadServerProfileConfig({ ...base, COOKIE_DOMAIN: "dotrelay.dev/x" }),
+    ).toThrow("COOKIE_DOMAIN");
+    expect(
+      loadServerProfileConfig({ ...base, COOKIE_DOMAIN: "" }).cookieDomain,
+    ).toBeUndefined();
   });
 
   test("detects a request that attempts to combine cookie and bearer credentials", () => {

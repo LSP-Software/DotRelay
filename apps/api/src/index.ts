@@ -37,8 +37,13 @@ import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
+import { createClientIpResolver } from "./client-ip";
 import { registerDeviceRoutes } from "./device-routes";
-import { lookupGitHubRepositoryDisplay } from "./github-repository";
+import { delegatedGitHubAccessToken } from "./github-access";
+import {
+  type GitHubRepositoryDisplayOptions,
+  lookupGitHubRepositoryDisplay,
+} from "./github-repository";
 import { registerMembershipProvisioningRoutes } from "./membership-provisioning-routes";
 import { registerMembershipRoutes } from "./membership-routes";
 import {
@@ -241,6 +246,7 @@ const bytesToBase64 = (value: Uint8Array): string =>
 const loadWorkspaceCatalog = async (
   database: DatabaseClient,
   userId: string,
+  repositoryDisplay: GitHubRepositoryDisplayOptions,
 ) => {
   const memberships = await database.membership.findMany({
     where: { userId, lifecycle: "ACTIVE" },
@@ -281,8 +287,12 @@ const loadWorkspaceCatalog = async (
     projects: await Promise.all(
       projects.map(async (project) => {
         const githubRepositoryId = project.githubRepositoryId.toString();
-        const repository =
-          await lookupGitHubRepositoryDisplay(githubRepositoryId);
+        // Best effort: on a miss or timeout the Project is shown by its
+        // stored GitHub repository id.
+        const repository = await lookupGitHubRepositoryDisplay(
+          githubRepositoryId,
+          repositoryDisplay,
+        );
         return {
           id: project.id,
           teamId: project.teamId,
@@ -1052,6 +1062,7 @@ const createApi = ({
       allowRebind: profile.allowRebind,
     });
     if (!user) return jsonProblem(context, "service_unavailable");
+    let catalogAccessToken: Promise<string | null> | undefined;
 
     const requestedEnvironmentId = context.req.query("environment");
     const requestedRepositoryId = context.req.query("githubRepositoryId");
@@ -1347,7 +1358,16 @@ const createApi = ({
           serverProfileId: profile.id,
         },
         crypto: { available: true },
-        catalog: await loadWorkspaceCatalog(database, user.id),
+        catalog: await loadWorkspaceCatalog(database, user.id, {
+          ...(githubFetch ? { fetch: githubFetch } : {}),
+          // Resolved at most once per request, and only on a cache miss.
+          accessToken: () =>
+            (catalogAccessToken ??= delegatedGitHubAccessToken(
+              auth,
+              session.user.id,
+            )),
+          cacheScope: session.user.id,
+        }),
       },
       200,
       { "Cache-Control": "no-store" },
@@ -1478,9 +1498,14 @@ type RequestIpServer = {
   readonly requestIP: (request: Request) => { readonly address: string } | null;
 };
 let server: RequestIpServer | undefined;
+const resolveClientIp = createClientIpResolver(profile);
 const runtimeObservability = createApiObservability(database, {
   ...(import.meta.main ? { diagnostics: createConsoleDiagnosticSink() } : {}),
-  resolveClientIp: (request) => server?.requestIP(request)?.address ?? null,
+  resolveClientIp: (request) =>
+    resolveClientIp(
+      server?.requestIP(request)?.address ?? null,
+      request.headers,
+    ),
 });
 export const auth = createAuth(
   createBetterAuthDatabaseAdapter(database),
@@ -1512,11 +1537,12 @@ if (import.meta.main) {
   console.error(`DotRelay API listening on ${profile.origin}`);
   const cleanupTimer = setInterval(
     () => {
-      void runtimeObservability.expireSecurityRequestLogs().catch(() => {
+      void runtimeObservability.runRetentionCleanup().catch(() => {
         // The expiry failure is already recorded by the observability adapter.
       });
     },
-    60 * 60 * 1000,
+    // Expired staging counts against the quota until it is deleted.
+    10 * 60 * 1000,
   );
   cleanupTimer.unref?.();
   let stopping = false;

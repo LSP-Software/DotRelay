@@ -79,6 +79,71 @@ describe("API observability boundary", () => {
       ),
     ).toBe("/api/v1/operations/:operationId/begin");
     expect(endpointTemplateFor("/api/v1/unknown?secret=value")).toBeNull();
+    expect(endpointTemplateFor("/health")).toBeNull();
+    expect(endpointTemplateFor("/api/v1/capabilities")).toBeNull();
+  });
+
+  test("does not write Security Request Logs for anonymous probes", async () => {
+    const writes: unknown[] = [];
+    const observability = createApiObservability(
+      {
+        $executeRaw: async (...input: unknown[]) => {
+          writes.push(input);
+          return 1;
+        },
+      } as never,
+      {
+        diagnostics: createInMemoryDiagnosticSink(() => 0),
+        resolveClientIp: () => "192.0.2.10",
+      },
+    );
+    for (const path of ["/health", "/api/v1/capabilities"])
+      observability.recordRequest({
+        request: new Request(`https://relay.example${path}`),
+        path,
+        status: 200,
+        correlationId: createServerCorrelationId(),
+        durationMs: 1,
+      });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(writes).toHaveLength(0);
+  });
+
+  test("retention cleanup expires staging and logs, reporting failures", async () => {
+    const diagnostics = createInMemoryDiagnosticSink(() => 0);
+    const calls: string[] = [];
+    const transaction = {
+      operation: {
+        findMany: async () => {
+          calls.push("operations");
+          throw new Error("staging unavailable");
+        },
+      },
+      securityRequestLog: {
+        deleteMany: async () => {
+          calls.push("security-logs");
+          return { count: 3 };
+        },
+      },
+    };
+    const observability = createApiObservability(
+      {
+        $transaction: async (callback: (value: unknown) => unknown) =>
+          callback(transaction),
+      } as never,
+      { diagnostics },
+    );
+
+    await expect(observability.runRetentionCleanup()).rejects.toThrow(
+      "staging unavailable",
+    );
+    expect(calls).toEqual(["operations", "security-logs"]);
+    expect(diagnostics.records()).toEqual([
+      expect.objectContaining({
+        eventName: "api.staging.expiry_failed",
+        outcome: "failure",
+      }),
+    ]);
   });
 
   test("evicts diagnostic entries together with their retention timers", () => {
@@ -231,8 +296,8 @@ describe("API observability boundary", () => {
     );
 
     observability.recordRequest({
-      request: new Request("https://relay.example/health"),
-      path: "/health",
+      request: new Request("https://relay.example/api/v1/session"),
+      path: "/api/v1/session",
       status: 200,
       correlationId: createServerCorrelationId(),
       durationMs: 1,
