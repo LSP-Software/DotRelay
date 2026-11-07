@@ -32,6 +32,24 @@ export type ServerProfileConfig = Readonly<{
 const defaultProfileId = "00000000-0000-4000-8000-000000000001";
 const defaultOrigin = "http://localhost:3001";
 const defaultAuthSecret = "dotrelay-development-auth-secret-change-me";
+const knownPlaceholderSecrets: ReadonlySet<string> = new Set([
+  defaultAuthSecret,
+  "replace-with-at-least-32-random-characters",
+]);
+const minimumSecretDistinctCharacters = 16;
+
+const usesDefaultDatabaseCredentials = (value: string | undefined) => {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return (
+      decodeURIComponent(url.username) === "dotrelay" &&
+      decodeURIComponent(url.password) === "dotrelay"
+    );
+  } catch {
+    return false;
+  }
+};
 
 const parsePositiveInteger = (
   name: string,
@@ -149,6 +167,27 @@ export const loadServerProfileConfig = (
   }
   if (authSecret.length < 32)
     throw new Error("BETTER_AUTH_SECRET must contain at least 32 characters");
+  if (isProduction) {
+    if (
+      authSecret.toLowerCase().startsWith("replace-with") ||
+      knownPlaceholderSecrets.has(authSecret)
+    )
+      throw new Error(
+        "BETTER_AUTH_SECRET is a placeholder; generate one with `openssl rand -base64 48`",
+      );
+    if (new Set(authSecret).size < minimumSecretDistinctCharacters)
+      throw new Error(
+        `BETTER_AUTH_SECRET must contain at least ${minimumSecretDistinctCharacters} distinct characters; generate one with \`openssl rand -base64 48\``,
+      );
+    if (environment.SERVER_PROFILE_ID?.toLowerCase() === defaultProfileId)
+      throw new Error(
+        "SERVER_PROFILE_ID must not use the development default; generate one with `uuidgen`",
+      );
+    if (usesDefaultDatabaseCredentials(environment.DATABASE_URL))
+      throw new Error(
+        "DATABASE_URL must not use the development dotrelay:dotrelay credentials in production",
+      );
+  }
   const githubClientId = environment.GITHUB_CLIENT_ID;
   const githubClientSecret = environment.GITHUB_CLIENT_SECRET;
   if (Boolean(githubClientId) !== Boolean(githubClientSecret)) {

@@ -10,9 +10,10 @@ const valid = {
   SERVER_PROFILE_ORIGIN: "https://api.example",
   WEB_ORIGIN: "https://web.example",
   DATABASE_URL: "postgresql://test:test@db:5432/dotrelay",
-  BETTER_AUTH_SECRET: "a".repeat(40),
+  BETTER_AUTH_SECRET: "Zq7Xk2Lm9Pw4Rt6Yv8Bn3Cd5Fg1Hj0Ks",
   GITHUB_CLIENT_ID: "Iv1.test",
   GITHUB_CLIENT_SECRET: "client-secret",
+  VALKEY_URL: "redis://valkey:6379",
 };
 test("production requires every essential setting, explicit mode, secure origins and App credentials", () => {
   expect(loadProductionEnvironment(valid).NODE_ENV).toBe("production");
@@ -30,6 +31,11 @@ test("production requires every essential setting, explicit mode, secure origins
     { SERVER_PROFILE_ORIGIN: "http://api.example" },
     { WEB_ORIGIN: "http://localhost:3000" },
     { BETTER_AUTH_SECRET: "short" },
+    { BETTER_AUTH_SECRET: "replace-with-at-least-32-random-characters" },
+    { BETTER_AUTH_SECRET: "a".repeat(40) },
+    { SERVER_PROFILE_ID: "00000000-0000-4000-8000-000000000001" },
+    { DATABASE_URL: "postgresql://dotrelay:dotrelay@db:5432/dotrelay" },
+    { VALKEY_URL: "http://valkey:6379" },
     { GITHUB_CLIENT_ID: "classic-client" },
     { DATABASE_URL: "not-a-url" },
     { DATABASE_URL: "https://user:do-not-print@private.example/app" },

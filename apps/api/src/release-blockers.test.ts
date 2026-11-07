@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import { createInMemoryAuth } from "./auth";
-import { createApi, loadServerProfileConfig } from "./index";
+import {
+  createApi,
+  loadServerProfileConfig,
+  maxRequestBodyBytes,
+  shutdownDrainMs,
+} from "./index";
 import { databaseReady, expectedMigrations } from "./readiness";
 
 const profile = loadServerProfileConfig({
@@ -152,6 +157,9 @@ test("browser and CLI sessions cannot request delegated OAuth credentials", asyn
     "refresh-token",
     "get-access-token/",
     "%67et-access-token",
+    "update-user",
+    "Update-User/",
+    "change-email",
   ]) {
     const response = await app.request(`/api/auth/${path}`, {
       method: "POST",
@@ -162,4 +170,52 @@ test("browser and CLI sessions cannot request delegated OAuth credentials", asyn
     expect(await response.text()).not.toContain("must-not-leave-service");
   }
   expect(called).toBe(false);
+});
+
+test("auth CORS never exposes the bearer session token to browser script", async () => {
+  const app = createApi({
+    profile,
+    database: {} as never,
+    auth: { handler: async () => Response.json({}) } as never,
+  });
+  const response = await app.request("/api/auth/get-session", {
+    headers: { Origin: profile.origin },
+  });
+  expect(
+    (response.headers.get("access-control-expose-headers") ?? "").toLowerCase(),
+  ).not.toContain("set-auth-token");
+});
+
+test("auth bodies are bounded far below the staging ceiling", async () => {
+  let called = false;
+  const app = createApi({
+    profile,
+    database: {} as never,
+    auth: {
+      handler: async () => {
+        called = true;
+        return Response.json({});
+      },
+    } as never,
+  });
+  const response = await app.request("/api/auth/sign-in/social", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: profile.origin },
+    body: JSON.stringify({
+      padding: "x".repeat(profile.limits.adminBodyBytes),
+    }),
+  });
+  expect(response.status).toBe(413);
+  expect(called).toBe(false);
+});
+
+test("server body ceiling and drain delay are bounded", () => {
+  expect(maxRequestBodyBytes(profile)).toBe(
+    Math.min(profile.limits.protocolObjectBytes, profile.limits.stagingBytes),
+  );
+  expect(maxRequestBodyBytes(profile)).toBeLessThan(128 * 1024 * 1024);
+  expect(shutdownDrainMs(undefined)).toBe(5000);
+  expect(shutdownDrainMs("0")).toBe(0);
+  expect(shutdownDrainMs("60000")).toBe(7000);
+  expect(shutdownDrainMs("nope")).toBe(5000);
 });

@@ -65,6 +65,7 @@ export {
   OperationNotCancellableError,
   OperationNotFoundError,
   ProjectNotActiveError,
+  requireTeamAction,
   StagedObjectConflictError,
   StagingQuotaExceededError,
   StaleEpochError,
