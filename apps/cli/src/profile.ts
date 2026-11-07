@@ -616,6 +616,9 @@ export const rebindServerProfile = async (
 ): Promise<
   Readonly<{
     readonly profile: CliServerProfile;
+    // The pin the profile had before the rebind, or null when the catalog
+    // was invalid or the profile was missing.
+    readonly previous: ServerProfilePin | null;
     readonly backupPath: string;
     readonly identityChanged: boolean;
     readonly statement: string;
@@ -641,6 +644,7 @@ export const rebindServerProfile = async (
   if (!identityChanged)
     return Object.freeze({
       profile: current ?? Object.freeze({ name, ...discovered }),
+      previous: current?.pin ?? null,
       backupPath: "",
       identityChanged: false,
       statement,
@@ -672,6 +676,7 @@ export const rebindServerProfile = async (
   );
   return Object.freeze({
     profile,
+    previous: invalid ? null : (current?.pin ?? null),
     backupPath,
     identityChanged: true,
     statement,

@@ -172,13 +172,21 @@ export const checkServerProfileSession = async (
   }
 };
 
-export const attemptDeviceApproval = async (
+export type DeviceDecision = "approve" | "deny";
+
+/**
+ * Post the signed-in user's decision on a code. Approve and deny share the
+ * same response shapes, so a successful denial is reported as "approved"
+ * (the request was accepted) and mapped by deviceDenialAttemptView.
+ */
+export const attemptDeviceDecision = async (
   apiOrigin: string,
   userCode: string,
+  decision: DeviceDecision,
   fetcher: FetchLike = fetch,
 ): Promise<DeviceApprovalAttempt> => {
   try {
-    const response = await fetcher(`${apiOrigin}/api/auth/device/approve`, {
+    const response = await fetcher(`${apiOrigin}/api/auth/device/${decision}`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -189,3 +197,24 @@ export const attemptDeviceApproval = async (
     return { kind: "unavailable" };
   }
 };
+
+export const attemptDeviceApproval = (
+  apiOrigin: string,
+  userCode: string,
+  fetcher: FetchLike = fetch,
+): Promise<DeviceApprovalAttempt> =>
+  attemptDeviceDecision(apiOrigin, userCode, "approve", fetcher);
+
+export const attemptDeviceDenial = (
+  apiOrigin: string,
+  userCode: string,
+  fetcher: FetchLike = fetch,
+): Promise<DeviceApprovalAttempt> =>
+  attemptDeviceDecision(apiOrigin, userCode, "deny", fetcher);
+
+export const deviceDenialAttemptView = (
+  attempt: DeviceApprovalAttempt,
+): DeviceApprovalResolution =>
+  attempt.kind === "approved"
+    ? { kind: "declined" }
+    : deviceApprovalAttemptView(attempt);

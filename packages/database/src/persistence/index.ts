@@ -65,6 +65,7 @@ export {
   OperationNotCancellableError,
   OperationNotFoundError,
   ProjectNotActiveError,
+  requireTeamAction,
   StagedObjectConflictError,
   StagingQuotaExceededError,
   StaleEpochError,
@@ -73,8 +74,14 @@ export {
 } from "./repository-core";
 export type { SyncInput, SyncObject, SyncPage, SyncRevision } from "./sync";
 export { mutationToWire, SyncIntegrityError, SyncRepository } from "./sync";
-export type { TransactionDatabase } from "./transaction";
-export { DEFAULT_TRANSACTION_OPTIONS, inShortTransaction } from "./transaction";
+export type { ExpiryBatchOptions, TransactionDatabase } from "./transaction";
+export {
+  DEFAULT_EXPIRY_BATCH_SIZE,
+  DEFAULT_EXPIRY_TIME_BUDGET_MS,
+  DEFAULT_TRANSACTION_OPTIONS,
+  inShortTransaction,
+  runExpiryBatches,
+} from "./transaction";
 export {
   copyBytes,
   DOTRELAY_PROTOCOL_FORMAT_VERSION,

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  advanceDraftBase,
   applyConflictResolution,
   applyRollbackToVariables,
   bareVerifiedRevision,
@@ -10,6 +11,7 @@ import {
   createRollbackPlan,
   deleteEnvironmentVariable,
   displayedSetupAction,
+  draftBaseFromRemote,
   draftValueDiffs,
   type EnvironmentVariable,
   loadRollbackHistory,
@@ -17,6 +19,7 @@ import {
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   nextSetupAction,
+  rebaseDraftOntoRemote,
   prepareEncryptedPublication,
   protectedWorkflowBlockers,
   publicationMutationForHead,
@@ -1279,4 +1282,121 @@ test("a Member cannot keep a deletion draft after losing admin rights", () => {
   });
   expect(asAdmin.droppedVariableNames).toEqual([]);
   expect(asAdmin.variables[0]?.tombstone).toBe(true);
+});
+
+const remoteLane = (id: string, name: string, value: string) => ({
+  ...createEnvironmentVariable({ ...sharedDraft, name, value }, id),
+  hasDraftChange: false,
+});
+
+test("a reload onto a new head reports a lane both sides changed as a conflict", () => {
+  const baseOrigin = remoteLane("lane-1", "API_ORIGIN", "base");
+  const baseToken = remoteLane("lane-2", "API_TOKEN", "token");
+  const base = draftBaseFromRemote([baseOrigin, baseToken]);
+  const local = [
+    { ...baseOrigin, value: "mine", hasDraftChange: true },
+    baseToken,
+  ];
+  const teammate = [{ ...baseOrigin, value: "theirs" }, baseToken];
+
+  const rebased = rebaseDraftOntoRemote(local, base, teammate);
+
+  expect(rebased.conflictVariableIds).toEqual(["lane-1"]);
+  // The draft is kept, never replaced by the teammate's value.
+  expect(rebased.variables[0]?.value).toBe("mine");
+  expect(rebased.variables[0]?.hasDraftChange).toBe(true);
+  // The conflicting lane keeps its original base until it is resolved, so a
+  // further reload still reports it.
+  expect(rebased.base.get("lane-1")?.value).toBe("base");
+  expect(
+    rebaseDraftOntoRemote(rebased.variables, rebased.base, teammate)
+      .conflictVariableIds,
+  ).toEqual(["lane-1"]);
+});
+
+test("a reload rebases lanes only this draft changed without a conflict", () => {
+  const baseOrigin = remoteLane("lane-1", "API_ORIGIN", "base");
+  const baseToken = remoteLane("lane-2", "API_TOKEN", "token");
+  const base = draftBaseFromRemote([baseOrigin, baseToken]);
+  const created = createEnvironmentVariable(
+    { ...sharedDraft, name: "NEW_FLAG", value: "on" },
+    "lane-3",
+  );
+  const local = [
+    { ...baseOrigin, value: "mine", hasDraftChange: true },
+    baseToken,
+    created,
+  ];
+  const teammate = [baseOrigin, { ...baseToken, value: "rotated" }];
+
+  const rebased = rebaseDraftOntoRemote(local, base, teammate);
+
+  expect(rebased.conflictVariableIds).toEqual([]);
+  expect(rebased.variables.map((variable) => variable.value)).toEqual([
+    "mine",
+    "rotated",
+    "on",
+  ]);
+  expect(rebased.variables.map((variable) => variable.hasDraftChange)).toEqual([
+    true,
+    false,
+    true,
+  ]);
+  expect(rebased.base.get("lane-2")?.value).toBe("rotated");
+});
+
+test("a teammate's definition change or deletion of a drafted lane is a conflict", () => {
+  const baseOrigin = remoteLane("lane-1", "API_ORIGIN", "base");
+  const baseToken = remoteLane("lane-2", "API_TOKEN", "token");
+  const base = draftBaseFromRemote([baseOrigin, baseToken]);
+  const local = [
+    { ...baseOrigin, value: "mine", hasDraftChange: true },
+    { ...baseToken, value: "mine-too", hasDraftChange: true },
+  ];
+  const teammate = [
+    { ...baseOrigin, description: "Renamed purpose." },
+    deleteEnvironmentVariable(baseToken),
+  ];
+
+  expect(
+    rebaseDraftOntoRemote(local, base, teammate).conflictVariableIds,
+  ).toEqual(["lane-1", "lane-2"]);
+});
+
+test("a remote change that already matches the draft is not a conflict", () => {
+  const baseOrigin = remoteLane("lane-1", "API_ORIGIN", "base");
+  const local = [{ ...baseOrigin, value: "same", hasDraftChange: true }];
+  const rebased = rebaseDraftOntoRemote(
+    local,
+    draftBaseFromRemote([baseOrigin]),
+    [{ ...baseOrigin, value: "same" }],
+  );
+  expect(rebased.conflictVariableIds).toEqual([]);
+  expect(rebased.variables[0]?.hasDraftChange).toBe(false);
+});
+
+test("without a known base the first load rebases the draft as before", () => {
+  const baseOrigin = remoteLane("lane-1", "API_ORIGIN", "remote");
+  const local = [{ ...baseOrigin, value: "typed", hasDraftChange: true }];
+  const rebased = rebaseDraftOntoRemote(local, null, [baseOrigin]);
+  expect(rebased.conflictVariableIds).toEqual([]);
+  expect(rebased.variables).toEqual(
+    mergeDraftVariablesOverRemote(local, [baseOrigin]),
+  );
+  expect(rebased.base.get("lane-1")?.value).toBe("remote");
+});
+
+test("advancing the base keeps pinned conflict lanes on their old base", () => {
+  const baseOrigin = remoteLane("lane-1", "API_ORIGIN", "base");
+  const baseToken = remoteLane("lane-2", "API_TOKEN", "token");
+  const next = advanceDraftBase(
+    draftBaseFromRemote([baseOrigin, baseToken]),
+    [
+      { ...baseOrigin, value: "theirs" },
+      { ...baseToken, value: "rotated" },
+    ],
+    ["lane-1"],
+  );
+  expect(next.get("lane-1")?.value).toBe("base");
+  expect(next.get("lane-2")?.value).toBe("rotated");
 });

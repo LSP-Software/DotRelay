@@ -14,7 +14,7 @@ export type ClassifiedDotenvEntry = DotenvEntry &
 
 const variableName = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const escapeHelp = 'only \\\\, \\", \\n, \\r and \\t are supported';
+const escapeHelp = 'only \\\\, \\", \\$, \\`, \\n, \\r and \\t are supported';
 
 const readQuotedValue = (
   lines: readonly string[],
@@ -49,7 +49,9 @@ const readQuotedValue = (
           next !== "r" &&
           next !== "t" &&
           next !== "\\" &&
-          next !== '"'
+          next !== '"' &&
+          next !== "$" &&
+          next !== "`"
         )
           throw new CliInvocationError(
             `unsupported escape "\\${next}" on line ${line + 1}, column ${col + 1} in the double-quoted dotenv value for ${name}; ${escapeHelp}`,
@@ -108,7 +110,7 @@ export const parseDotenv = (source: string): readonly DotenvEntry[] => {
       throw new CliInvocationError(
         `invalid dotenv assignment on line ${line}, column ${lead + 1}: the line contains a stray carriage return; use LF or CRLF line endings`,
       );
-    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/d.exec(
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/ds.exec(
       trimmed,
     );
     if (!match)
@@ -258,15 +260,36 @@ export const diffDotenvEntries = (
   return Object.freeze(changes);
 };
 
-export const serializeDotenv = (entries: readonly DotenvEntry[]): string =>
-  `${entries
-    .map(({ name, value }) => {
-      const escaped = value
-        .replaceAll("\\", "\\\\")
-        .replaceAll("\n", "\\n")
-        .replaceAll("\r", "\\r")
-        .replaceAll("\t", "\\t")
-        .replaceAll('"', '\\"');
-      return `${name}="${escaped}"`;
-    })
+// Single quotes are literal for sh and python-dotenv, but Bun's loader still
+// expands `$` inside them, so any value with `$` or a backtick takes the
+// escaped double-quoted form, which Bun, sh and dotenv-expand read literally.
+const serializeValue = (value: string): string => {
+  if (!/['\n\r$`]/.test(value)) return `'${value}'`;
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t")
+    .replaceAll('"', '\\"')
+    .replaceAll("$", "\\$")
+    .replaceAll("`", "\\`");
+  return `"${escaped}"`;
+};
+
+export const serializeDotenv = (entries: readonly DotenvEntry[]): string => {
+  const seen = new Set<string>();
+  for (const { name } of entries) {
+    if (!variableName.test(name))
+      throw new CliInvocationError(
+        `cannot write dotenv Variable ${JSON.stringify(name)}: names must match [A-Za-z_][A-Za-z0-9_]*`,
+      );
+    if (seen.has(name))
+      throw new CliInvocationError(
+        `cannot write duplicate dotenv Variable: ${name}`,
+      );
+    seen.add(name);
+  }
+  return `${entries
+    .map(({ name, value }) => `${name}=${serializeValue(value)}`)
     .join("\n")}\n`;
+};

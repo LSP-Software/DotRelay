@@ -842,7 +842,7 @@ try {
   const output = await readFile(outputPath, "utf8");
   const outputMode = (await stat(outputPath)).mode & 0o777;
   if (
-    output !== 'SHARED_VALUE="two"\nUSER_VALUE="secret"\nEMPTY=""\n' ||
+    output !== "SHARED_VALUE='two'\nUSER_VALUE='secret'\nEMPTY=''\n" ||
     (process.platform !== "win32" && outputMode !== 0o600)
   )
     throw new Error("packaged CLI safe pull contract failed");
@@ -887,8 +887,8 @@ try {
     if (
       terminal.exitCode !== 2 ||
       !terminalOutput.includes("Refusing to write Values to terminal stdout") ||
-      terminalOutput.includes('USER_VALUE="secret"') ||
-      terminalOutput.includes('SHARED_VALUE="two"')
+      terminalOutput.includes("USER_VALUE='secret'") ||
+      terminalOutput.includes("SHARED_VALUE='two'")
     )
       throw new Error("packaged CLI TTY stdout safety contract failed");
   }
@@ -908,7 +908,7 @@ try {
     );
     if (
       revealed.exitCode !== 0 ||
-      !revealed.stdout.includes('USER_VALUE="secret"') ||
+      !revealed.stdout.includes("USER_VALUE='secret'") ||
       revealed.stderr.includes("secret")
     )
       throw new Error("packaged CLI explicit-reveal contract failed");
@@ -1065,8 +1065,8 @@ try {
   );
   if (
     rolledBack.exitCode !== 0 ||
-    !rolledBack.stdout.includes('SHARED_VALUE="one"') ||
-    !rolledBack.stdout.includes('USER_VALUE="secret"') ||
+    !rolledBack.stdout.includes("SHARED_VALUE='one'") ||
+    !rolledBack.stdout.includes("USER_VALUE='secret'") ||
     rolledBack.stderr.includes("secret")
   )
     throw new Error("packaged CLI lane rollback contract failed");

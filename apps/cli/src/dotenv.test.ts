@@ -151,10 +151,10 @@ describe("local dotenv parsing", () => {
 
   test("reports unsupported quoted syntax with line and column diagnostics", () => {
     expect(() => parseDotenv('A="x\\qx"')).toThrow(
-      /unsupported escape "\\q" on line 1, column 5 in the double-quoted dotenv value for A; only \\\\, \\", \\n, \\r and \\t are supported/,
+      /unsupported escape "\\q" on line 1, column 5 in the double-quoted dotenv value for A; only \\\\, \\", \\\$, \\`, \\n, \\r and \\t are supported/,
     );
     expect(() => parseDotenv('A="line1\\')).toThrow(
-      /a backslash at the end of line 1, column 9 in the double-quoted dotenv value for A is not a supported escape; only \\\\, \\", \\n, \\r and \\t are supported/,
+      /a backslash at the end of line 1, column 9 in the double-quoted dotenv value for A is not a supported escape; only \\\\, \\", \\\$, \\`, \\n, \\r and \\t are supported/,
     );
     expect(() => parseDotenv('A="x\nmore')).toThrow(
       /unterminated double-quoted dotenv value for A starting on line 1, column 3/,
@@ -218,5 +218,70 @@ describe("local dotenv parsing", () => {
         [{ name: "EMPTY", value: "" }],
       ),
     ).toEqual([]);
+  });
+});
+
+describe("serializeDotenv safety", () => {
+  test("does not leave $ or backticks open to interpolation", () => {
+    // Bun's loader expands `$` even in single quotes, so `$` forces escaping.
+    expect(serializeDotenv([{ name: "A", value: "pa$HOME$x`id`" }])).toBe(
+      'A="pa\\$HOME\\$x\\`id\\`"\n',
+    );
+    expect(serializeDotenv([{ name: "A", value: "plain value" }])).toBe(
+      "A='plain value'\n",
+    );
+    expect(serializeDotenv([{ name: "A", value: "it's $HOME `id`\n" }])).toBe(
+      'A="it\'s \\$HOME \\`id\\`\\n"\n',
+    );
+    expect(parseDotenv('A="\\$X \\`y\\`"\n')).toEqual([
+      { name: "A", value: "$X `y`" },
+    ]);
+  });
+
+  test("rejects invalid and duplicate names", () => {
+    expect(() => serializeDotenv([{ name: "1A", value: "" }])).toThrow(
+      /names must match/,
+    );
+    expect(() =>
+      serializeDotenv([
+        { name: "A", value: "1" },
+        { name: "A", value: "2" },
+      ]),
+    ).toThrow(/duplicate/);
+  });
+
+  test("round-trips U+2028 and U+2029", () => {
+    const entries = [
+      { name: "A", value: "x\u2028y\u2029z" },
+      { name: "B", value: "\u2028'\u2029" },
+    ];
+    expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
+  });
+
+  test("round-trips random Unicode strings", () => {
+    let seed = 0x2f6e2b1;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x80000000;
+    };
+    const special = [..."'\"\\$`\n\r\t #=\u2028\u2029\u0000\u0085"];
+    const randomChar = (): string => {
+      const r = random();
+      if (r < 0.4) return special[Math.floor(random() * special.length)] ?? "";
+      if (r < 0.7) return String.fromCodePoint(32 + Math.floor(random() * 95));
+      const cp = Math.floor(random() * 0x110000);
+      return String.fromCodePoint(cp >= 0xd800 && cp <= 0xdfff ? 0xfffd : cp);
+    };
+    for (let i = 0; i < 2000; i += 1) {
+      const value = Array.from(
+        { length: Math.floor(random() * 24) },
+        randomChar,
+      ).join("");
+      const entries = [
+        { name: "A", value },
+        { name: "B_2", value: `${value}\r` },
+      ];
+      expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
+    }
   });
 });

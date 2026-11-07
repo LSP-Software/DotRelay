@@ -1,6 +1,7 @@
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -19,7 +20,10 @@ export const metadata: Metadata = {
     "DotRelay shares your project's .env files with your team and your other machines. Values are encrypted on your device before they leave it, so only your team can read them.",
 };
 
-const RootLayout = ({ children }: Readonly<{ children: ReactNode }>) => {
+const RootLayout = async ({ children }: Readonly<{ children: ReactNode }>) => {
+  // The CSP set in proxy.ts carries a per-request script nonce, which Next.js
+  // can only apply to pages rendered per request, so no page is prerendered.
+  await connection();
   return (
     <html
       lang="en"

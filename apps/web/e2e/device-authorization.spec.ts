@@ -82,6 +82,8 @@ const mockDeviceFlow = async (
       return route.fulfill(statusFulfill(getState().status));
     if (url.pathname === "/api/auth/device/approve")
       return route.fulfill(approveFulfill(getState().approve));
+    if (url.pathname === "/api/auth/device/deny")
+      return route.fulfill(json(200, { success: true }));
     return route.fulfill(json(404, unavailable.body));
   });
   await page.route("**/api/auth/get-session", (route) =>
@@ -104,9 +106,41 @@ test("a signed-in user allows a pending code and sees the completed outcome", as
   await openDevicePage(page);
 
   await expect(page.getByTestId("device-approval-allow")).toBeVisible();
+  await page.getByTestId("device-approval-confirm").check();
   await page.getByTestId("device-approval-allow").click();
   await expect(page.getByTestId("device-approval-approved")).toBeVisible();
   await expect(page.getByText(USER_CODE)).toBeVisible();
+});
+
+test("allowing a pre-filled code needs an explicit confirmation", async ({
+  page,
+}) => {
+  await mockDeviceFlow(page, () => ({
+    status: { kind: "pending" },
+    session: "signed-in",
+    approve: "success",
+  }));
+  await openDevicePage(page);
+
+  await expect(page.getByTestId("device-approval-allow")).toBeDisabled();
+  await page.getByTestId("device-approval-confirm").check();
+  await expect(page.getByTestId("device-approval-allow")).toBeEnabled();
+});
+
+test("a signed-in user can deny a code they did not start", async ({
+  page,
+}) => {
+  await mockDeviceFlow(page, () => ({
+    status: { kind: "pending" },
+    session: "signed-in",
+    approve: "success",
+  }));
+  await openDevicePage(page);
+
+  await page.getByTestId("device-approval-deny").click();
+  await expect(page.getByTestId("device-approval-declined")).toBeVisible();
+  await expect(page).toHaveURL(/\/device$/);
+  await expect(page.getByTestId("device-approval-allow")).toHaveCount(0);
 });
 
 test("a signed-out user with a pending code sees only the sign-in control", async ({
@@ -217,6 +251,7 @@ test("a transient approval failure preserves the code until retry succeeds", asy
   await openDevicePage(page);
 
   await expect(page.getByTestId("device-approval-allow")).toBeVisible();
+  await page.getByTestId("device-approval-confirm").check();
   await page.getByTestId("device-approval-allow").click();
   await expect(page.getByTestId("device-approval-connection")).toBeVisible();
   await expect(page.getByText(USER_CODE)).toBeVisible();
@@ -228,6 +263,7 @@ test("a transient approval failure preserves the code until retry succeeds", asy
   };
   await page.getByTestId("device-approval-retry").click();
   await expect(page.getByTestId("device-approval-allow")).toBeVisible();
+  await page.getByTestId("device-approval-confirm").check();
   await page.getByTestId("device-approval-allow").click();
   await expect(page.getByTestId("device-approval-approved")).toBeVisible();
 });
@@ -257,6 +293,7 @@ test("a lapsed session during approval returns to the sign-in control", async ({
 
   await expect(page.getByTestId("device-approval-allow")).toBeVisible();
   lapsed = true;
+  await page.getByTestId("device-approval-confirm").check();
   await page.getByTestId("device-approval-allow").click();
   await expect(
     page.getByRole("button", { name: "Continue with GitHub" }),

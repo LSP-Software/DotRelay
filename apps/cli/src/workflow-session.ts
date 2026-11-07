@@ -13,6 +13,7 @@ import {
   openProjectEpochGrant,
   type PublicationContext,
   parseAccountKeyEnvelope,
+  type SharedValueKeyRing,
   type SyncPageWire,
   UnreadableLaneError,
   USER_VALUE_KEY_GENERATION,
@@ -33,6 +34,7 @@ import { CliError, CliInvocationError } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
 import {
   accountKeyTrustedKeys,
+  type Boundary,
   adminClient,
   base64,
   bytesToHex,
@@ -41,6 +43,7 @@ import {
   fromBase64,
   opaqueEnvironmentId,
   parseBoundary,
+  projectGrantVerification,
   readTrustedHead,
   resolveRequestedEnvironmentReference,
   safeProjectEpoch,
@@ -368,6 +371,12 @@ export const loadWorkflowSession = async (
     epochKey = await openProjectEpochGrant(
       fromBase64(boundary.epochGrant, "Project epoch grant"),
       keys.encryptionPrivateKey,
+      projectGrantVerification(
+        boundary,
+        deviceId,
+        options.profile.pin.serverProfileId,
+        await exportSigningPublicKey(deviceSigningPublicKey),
+      ),
     );
   } else if (
     epochKey === undefined &&
@@ -593,6 +602,19 @@ export const loadWorkflowSession = async (
       userValueKey = undefined;
     }
   }
+  // Lanes sealed before a Project epoch rotation keep the earlier epoch's
+  // key; the User's Account Key Envelopes for those epochs carry it.
+  const sharedValueKeyRing =
+    accountMasterKey !== null && boundary.environment.projectId !== null
+      ? await pastProjectEpochKeys({
+          options,
+          deviceId,
+          boundary,
+          accountMasterKey,
+          userId: bundle.userId,
+          localSigningKey: signingPublicKey,
+        })
+      : undefined;
   const publicationContext: PublicationContext = {
     serverProfileId: options.profile.pin.serverProfileId,
     teamId: boundary.environment.teamId,
@@ -617,6 +639,9 @@ export const loadWorkflowSession = async (
     userDefinedValuePrivateKey: keys.encryptionPrivateKey,
     signingTrustKeys,
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),
+    ...(sharedValueKeyRing && sharedValueKeyRing.size > 0
+      ? { sharedValueKeyRing }
+      : {}),
     ...(userValueKey ? { userDefinedValueSecret: userValueKey } : {}),
   });
   return {
@@ -630,6 +655,92 @@ export const loadWorkflowSession = async (
     pendingActions,
     ...(createdEnvironmentId ? { createdEnvironmentId } : {}),
   };
+};
+
+// Opens the User's Account Key Envelopes for this Project's earlier epochs.
+// The service keeps them after a rotation, so a Device that holds the Account
+// Master Key can still read lanes sealed before it. An envelope that is
+// malformed, for another Project, or fails verification is skipped: its
+// lanes then stay unreadable and the sync names them.
+const pastProjectEpochKeys = async (input: {
+  readonly options: WorkflowOptions;
+  readonly deviceId: string;
+  readonly boundary: Boundary;
+  readonly accountMasterKey: Uint8Array;
+  readonly userId: Uint8Array;
+  readonly localSigningKey: Uint8Array;
+}): Promise<SharedValueKeyRing> => {
+  const ring = new Map<number, Uint8Array>();
+  const { boundary } = input;
+  const projectId = boundary.environment.projectId;
+  const currentEpoch = safeProjectEpoch(boundary.environment.projectEpoch);
+  if (!projectId || currentEpoch <= 1) return ring;
+  let envelopes: unknown;
+  try {
+    envelopes = (
+      await createDeviceAdmin(input.options, input.deviceId).get(
+        "/api/v1/account-keys/envelopes",
+        ["envelopes"],
+      )
+    ).envelopes;
+  } catch {
+    return ring;
+  }
+  if (!Array.isArray(envelopes)) return ring;
+  const projectIdHex = bytesToHex(uuidToBytes(projectId));
+  for (const entry of envelopes) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      entry.envelopeType !== "project-epoch-key" ||
+      typeof entry.object !== "string"
+    )
+      continue;
+    try {
+      const envelope = parseAccountKeyEnvelope(
+        fromBase64(entry.object, "Account key envelope"),
+      );
+      const epoch = envelope.projectEpoch;
+      if (
+        envelope.projectId === undefined ||
+        bytesToHex(envelope.projectId) !== projectIdHex ||
+        epoch === undefined ||
+        epoch >= currentEpoch ||
+        ring.has(epoch)
+      )
+        continue;
+      const claimed =
+        typeof entry.creatorPublicKey === "string"
+          ? [entry.creatorPublicKey]
+          : [];
+      const extras = authenticatedCreatorKeys(
+        claimed,
+        deviceHistorySigningKeys(boundary),
+      );
+      ring.set(
+        epoch,
+        await openAccountKeyEnvelope(envelope, input.accountMasterKey, {
+          trustedKeys: accountKeyTrustedKeys(
+            boundary,
+            input.localSigningKey,
+            extras,
+          ),
+          context: {
+            serverProfileId: uuidToBytes(
+              input.options.profile.pin.serverProfileId,
+            ),
+            userId: input.userId,
+            envelopeType: envelope.envelopeType,
+            projectId: envelope.projectId,
+            projectEpoch: epoch,
+          },
+        }),
+      );
+    } catch {
+      // Unverifiable envelopes contribute no key.
+    }
+  }
+  return ring;
 };
 
 export const syncWorkflow = async (
@@ -706,6 +817,7 @@ export const syncWorkflow = async (
       statePath(options.stateDirectory, environmentId),
       page.currentHeadId,
       page.currentHeadHash,
+      options.profile.pin.serverProfileId,
     );
   const variables = synced.variables;
   return { workflow, page, variables };

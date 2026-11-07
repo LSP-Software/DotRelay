@@ -25,6 +25,7 @@ import {
   GrantRepository,
   OperationConflictError,
   OperationRepository,
+  requireTeamAction,
   resolveDotRelayUser,
   StagedObjectRepository,
   sha384Digest,
@@ -36,8 +37,13 @@ import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth } from "./auth";
+import { createClientIpResolver } from "./client-ip";
 import { registerDeviceRoutes } from "./device-routes";
-import { lookupGitHubRepositoryDisplay } from "./github-repository";
+import { delegatedGitHubAccessToken } from "./github-access";
+import {
+  type GitHubRepositoryDisplayOptions,
+  lookupGitHubRepositoryDisplay,
+} from "./github-repository";
 import { registerMembershipProvisioningRoutes } from "./membership-provisioning-routes";
 import { registerMembershipRoutes } from "./membership-routes";
 import {
@@ -61,6 +67,7 @@ import {
 } from "./profile";
 import { registerProtocolRoutes } from "./protocol";
 import { requireProtocolActor } from "./protocol/context";
+import { valkeyReady } from "./protocol/rate-limit";
 
 export type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
@@ -239,6 +246,7 @@ const bytesToBase64 = (value: Uint8Array): string =>
 const loadWorkspaceCatalog = async (
   database: DatabaseClient,
   userId: string,
+  repositoryDisplay: GitHubRepositoryDisplayOptions,
 ) => {
   const memberships = await database.membership.findMany({
     where: { userId, lifecycle: "ACTIVE" },
@@ -279,8 +287,12 @@ const loadWorkspaceCatalog = async (
     projects: await Promise.all(
       projects.map(async (project) => {
         const githubRepositoryId = project.githubRepositoryId.toString();
-        const repository =
-          await lookupGitHubRepositoryDisplay(githubRepositoryId);
+        // Best effort: on a miss or timeout the Project is shown by its
+        // stored GitHub repository id.
+        const repository = await lookupGitHubRepositoryDisplay(
+          githubRepositoryId,
+          repositoryDisplay,
+        );
         return {
           id: project.id,
           teamId: project.teamId,
@@ -529,6 +541,22 @@ const parseUuidBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
+// The largest legitimate body is a CBOR staging upload (bounded by the
+// protocol object and staging byte limits); everything else is an admin body.
+export const maxRequestBodyBytes = (profile: ServerProfileConfig): number =>
+  Math.max(
+    Math.min(profile.limits.protocolObjectBytes, profile.limits.stagingBytes),
+    profile.limits.adminBodyBytes,
+  );
+
+// Docker's default stop timeout is 10 s: drain plus shutdown must fit in it.
+export const shutdownDrainMs = (value: string | undefined): number => {
+  const parsed = value === undefined ? 5000 : Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0
+    ? Math.min(parsed, 7000)
+    : 5000;
+};
+
 const createApi = ({
   database,
   profile,
@@ -538,6 +566,11 @@ const createApi = ({
   resolveClientIp,
 }: ApiDependencies) => {
   const app = new Hono();
+  // Auth, Device bootstrap/self and grant bootstrap bodies are a few KB.
+  const smallBodyLimit = bodyLimit({
+    maxSize: profile.limits.adminBodyBytes,
+    onError: (context) => jsonProblem(context, "payload_too_large"),
+  });
   const observability =
     suppliedObservability ??
     createApiObservability(
@@ -623,7 +656,9 @@ const createApi = ({
       credentials: true,
       allowHeaders: ["Content-Type", "Authorization"],
       allowMethods: ["GET", "POST", "OPTIONS"],
-      exposeHeaders: ["X-Correlation-ID", "X-Retry-After", "Set-Auth-Token"],
+      // Set-Auth-Token is deliberately not exposed: browser script must never
+      // read the bearer session token. Non-browser clients are unaffected.
+      exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
       maxAge: 600,
     }),
   );
@@ -664,7 +699,9 @@ const createApi = ({
     context.header("Cache-Control", "no-store");
     const ready =
       process.env.MAINTENANCE_MODE !== "true" &&
-      (await databaseReady(database));
+      (await Promise.all([databaseReady(database), valkeyReady()])).every(
+        Boolean,
+      );
     return context.json(
       { status: ready ? "ready" : "unavailable" },
       ready ? 200 : 503,
@@ -696,17 +733,22 @@ const createApi = ({
     return context.redirect(target.toString(), 302);
   });
 
-  app.all("/api/auth/*", async (context) => {
+  app.all("/api/auth/*", smallBodyLimit, async (context) => {
     // Delegated GitHub credentials are service-only. Keep Better Auth's
     // server-side refresh API usable without exposing token-returning HTTP
     // endpoints to browser or CLI sessions.
     const authPath = decodeURIComponent(context.req.path)
       .replace(/\/+$/, "")
       .toLowerCase();
+    // Profile and email edits are blocked too: display names are shown in
+    // Team views, so self-service renames could impersonate an owner.
     if (
-      ["/api/auth/get-access-token", "/api/auth/refresh-token"].includes(
-        authPath,
-      )
+      [
+        "/api/auth/get-access-token",
+        "/api/auth/refresh-token",
+        "/api/auth/update-user",
+        "/api/auth/change-email",
+      ].includes(authPath)
     )
       return jsonProblem(context, "forbidden");
     try {
@@ -767,274 +809,246 @@ const createApi = ({
   app.use("/api/v1/invitations", protocolCors(profile));
   app.use("/api/v1/invitations/*", protocolCors(profile));
   app.use("/api/v1/github-users/*", protocolCors(profile));
-  app.post(
-    "/api/v1/devices/bootstrap",
-    bodyLimit({
-      maxSize: profile.limits.protocolObjectBytes,
-      onError: (context) => jsonProblem(context, "payload_too_large"),
-    }),
-    async (context) => {
-      const session = await auth.api.getSession({
-        headers: context.req.raw.headers,
-      });
-      if (!session) return jsonProblem(context, "authentication_required");
-      const user = await resolveDotRelayUser(database, {
-        serverProfileId: profile.id,
-        authSubject: session.user.id,
-        serverProfileOrigin: profile.origin,
-        allowRebind: profile.allowRebind,
-      });
-      if (!user) return jsonProblem(context, "service_unavailable");
-      try {
-        const request = await parseBootstrapRequest(
-          context,
-          profile.id,
-          user.id,
-        );
-        if (
-          !equalBytes(
-            request.keyId,
-            await sha384Digest(request.x25519PublicKey),
-          )
-        )
-          return jsonProblem(context, "invalid_request");
-        const result = await new DeviceRepository().completeBootstrap(
-          database,
-          {
-            operation: {
-              id: request.operationId,
-              actorUserId: user.id,
-              kind: "DEVICE_ENROLLMENT",
-              commandBytes: request.certificateBytes,
-              commandDigest: await sha384Digest(request.certificateBytes),
-            },
-            ...(request.recovery ? { recovery: request.recovery } : {}),
-            device: {
-              id: request.deviceId,
-              identityGeneration: BigInt(request.identityGeneration),
-              keyId: request.keyId,
-              x25519PublicKey: request.x25519PublicKey,
-              ed25519PublicKey: request.ed25519PublicKey,
-            },
-            certificateObject: {
-              id: request.certificateId,
-              suite: profile.suite.name,
-              formatVersion: 3,
-              kind: 2,
-              canonicalBytes: request.certificateBytes,
-              digest: await sha384Digest(request.certificateBytes),
-            },
-            ...(request.client
-              ? { client: toClientMetadata(request.client) }
-              : {}),
-          },
-        );
-        return context.json(
-          {
-            deviceId: request.deviceId,
-            identityGeneration: request.identityGeneration,
-            active:
-              "device" in result ? result.device.lifecycle === "ACTIVE" : true,
-          },
-          201,
-          { "Cache-Control": "no-store" },
-        );
-      } catch (error) {
-        if (error instanceof ContractError)
-          return jsonProblem(context, error.code);
-        return jsonProblem(context, "state_conflict");
-      }
-    },
-  );
-
-  app.post(
-    "/api/v1/grants/bootstrap",
-    bodyLimit({
-      maxSize: profile.limits.protocolObjectBytes,
-      onError: (context) => jsonProblem(context, "payload_too_large"),
-    }),
-    async (context) => {
-      const actor = await requireProtocolActor(
-        context,
-        database,
-        profile,
-        auth,
-      );
-      if (actor instanceof Response) return actor;
-      try {
-        const request = await parseGrantBootstrapRequest(context);
-        const grant = parseProtocolObject(request.grantBytes);
-        validateProtocolObject(grant);
-        if (grant.get(1) !== 7)
-          throw new ContractError("invalid_crypto_object");
-        const requiredBytes = (field: number, length: number): Uint8Array => {
-          const value = grant.get(field);
-          if (!(value instanceof Uint8Array) || value.length !== length)
-            throw new ContractError("invalid_crypto_object");
-          return value;
-        };
-        const requiredUuid = (field: number): string =>
-          bytesToUuid(requiredBytes(field, 16));
-        const senderDeviceId = requiredUuid(24);
-        const recipientDeviceId = requiredUuid(25);
-        if (
-          requiredUuid(11) !== request.teamId ||
-          requiredUuid(13) !== request.projectId ||
-          senderDeviceId !== actor.deviceId
-        )
-          throw new ContractError("invalid_crypto_object");
-        const project = await database.project.findUnique({
-          where: { id: request.projectId },
-          select: { teamId: true, currentEpoch: true, lifecycle: true },
-        });
-        if (!project || project.teamId !== request.teamId)
-          throw new Error("Project not found");
-        if (project.lifecycle !== "ACTIVE")
-          throw new Error("Project is archived");
-        const sender = await database.device.findUnique({
-          where: { id: actor.deviceId },
-          select: {
-            x25519PublicKey: true,
-            ed25519PublicKey: true,
-            userId: true,
-          },
-        });
-        if (!sender) throw new DeviceNotActiveError();
-        const recipient =
-          recipientDeviceId === actor.deviceId
-            ? sender
-            : await database.device.findFirst({
-                where: {
-                  id: recipientDeviceId,
-                  userId: sender.userId,
-                  lifecycle: "ACTIVE",
-                },
-                select: {
-                  x25519PublicKey: true,
-                  ed25519PublicKey: true,
-                  userId: true,
-                },
-              });
-        if (!recipient)
-          throw new DeviceNotActiveError(
-            "grant recipient device is not active",
-          );
-        if (
-          !equalBytes(
-            requiredBytes(39, 32),
-            new Uint8Array(recipient.x25519PublicKey),
-          )
-        )
-          throw new ContractError("invalid_crypto_object");
-        const epoch = grant.get(30);
-        if (
-          (typeof epoch !== "number" && typeof epoch !== "bigint") ||
-          BigInt(epoch) !== project.currentEpoch ||
-          grant.get(37) !== 1 ||
-          grant.get(70) !== 1 ||
-          grant.get(71) !== 32
-        )
-          throw new ContractError("stale_epoch");
-        const ciphertext = requiredBytes(47, Number(grant.get(72)));
-        const ciphertextHash = requiredBytes(48, 48);
-        if (
-          !equalBytes(ciphertextHash, await sha384Digest(ciphertext)) ||
-          !equalBytes(requiredBytes(8, 16), parseUuidBytes(profile.id))
-        )
-          throw new ContractError("invalid_crypto_object");
-        const signature = requiredBytes(4, 64);
-        const signingKey = await crypto.subtle.importKey(
-          "raw",
-          new Uint8Array(sender.ed25519PublicKey).buffer,
-          { name: "Ed25519" },
-          false,
-          ["verify"],
-        );
-        if (!(await verifyProtocolObject(grant, signature, signingKey)))
-          throw new ContractError("invalid_crypto_object");
-        if (!equalBytes(request.digest, await sha384Digest(request.grantBytes)))
-          throw new ContractError("invalid_crypto_object");
-        const operation = {
+  app.post("/api/v1/devices/bootstrap", smallBodyLimit, async (context) => {
+    const session = await auth.api.getSession({
+      headers: context.req.raw.headers,
+    });
+    if (!session) return jsonProblem(context, "authentication_required");
+    const user = await resolveDotRelayUser(database, {
+      serverProfileId: profile.id,
+      authSubject: session.user.id,
+      serverProfileOrigin: profile.origin,
+      allowRebind: profile.allowRebind,
+    });
+    if (!user) return jsonProblem(context, "service_unavailable");
+    try {
+      const request = await parseBootstrapRequest(context, profile.id, user.id);
+      if (
+        !equalBytes(request.keyId, await sha384Digest(request.x25519PublicKey))
+      )
+        return jsonProblem(context, "invalid_request");
+      const result = await new DeviceRepository().completeBootstrap(database, {
+        operation: {
           id: request.operationId,
-          actorUserId: actor.userId,
-          actorDeviceId: actor.deviceId,
-          kind: "ADMINISTRATION" as const,
-          commandBytes: request.grantBytes,
-          commandDigest: request.digest,
-        };
-        const begun = await new OperationRepository().begin(
-          database,
-          operation,
-        );
-        if (begun.idempotent)
-          return context.json({ idempotent: true }, 200, {
-            "Cache-Control": "no-store",
-          });
-        const now = new Date();
-        const expiresAt = new Date(
-          now.getTime() + profile.limits.stagingTtlSeconds * 1000,
-        );
-        await new StagedObjectRepository().put(database, {
-          operationId: request.operationId,
-          objectId: request.objectId,
-          actorDeviceId: actor.deviceId,
-          canonicalBytes: request.grantBytes,
-          digest: request.digest,
-          createdAt: now,
-          expiresAt,
+          actorUserId: user.id,
+          kind: "DEVICE_ENROLLMENT",
+          commandBytes: request.certificateBytes,
+          commandDigest: await sha384Digest(request.certificateBytes),
+        },
+        ...(request.recovery ? { recovery: request.recovery } : {}),
+        device: {
+          id: request.deviceId,
+          identityGeneration: BigInt(request.identityGeneration),
+          keyId: request.keyId,
+          x25519PublicKey: request.x25519PublicKey,
+          ed25519PublicKey: request.ed25519PublicKey,
+        },
+        certificateObject: {
+          id: request.certificateId,
+          suite: profile.suite.name,
+          formatVersion: 3,
+          kind: 2,
+          canonicalBytes: request.certificateBytes,
+          digest: await sha384Digest(request.certificateBytes),
+        },
+        ...(request.client ? { client: toClientMetadata(request.client) } : {}),
+      });
+      return context.json(
+        {
+          deviceId: request.deviceId,
+          identityGeneration: request.identityGeneration,
+          active:
+            "device" in result ? result.device.lifecycle === "ACTIVE" : true,
+        },
+        201,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      if (error instanceof ContractError)
+        return jsonProblem(context, error.code);
+      return jsonProblem(context, "state_conflict");
+    }
+  });
+
+  app.post("/api/v1/grants/bootstrap", smallBodyLimit, async (context) => {
+    const actor = await requireProtocolActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const request = await parseGrantBootstrapRequest(context);
+      const grant = parseProtocolObject(request.grantBytes);
+      validateProtocolObject(grant);
+      if (grant.get(1) !== 7) throw new ContractError("invalid_crypto_object");
+      const requiredBytes = (field: number, length: number): Uint8Array => {
+        const value = grant.get(field);
+        if (!(value instanceof Uint8Array) || value.length !== length)
+          throw new ContractError("invalid_crypto_object");
+        return value;
+      };
+      const requiredUuid = (field: number): string =>
+        bytesToUuid(requiredBytes(field, 16));
+      const senderDeviceId = requiredUuid(24);
+      const recipientDeviceId = requiredUuid(25);
+      if (
+        requiredUuid(11) !== request.teamId ||
+        requiredUuid(13) !== request.projectId ||
+        senderDeviceId !== actor.deviceId
+      )
+        throw new ContractError("invalid_crypto_object");
+      const project = await database.project.findUnique({
+        where: { id: request.projectId },
+        select: { teamId: true, currentEpoch: true, lifecycle: true },
+      });
+      if (!project || project.teamId !== request.teamId)
+        throw new Error("Project not found");
+      if (project.lifecycle !== "ACTIVE")
+        throw new Error("Project is archived");
+      // Cheap authorization pre-check before anything is staged; the
+      // repository repeats it inside the creating transaction.
+      await requireTeamAction(
+        database,
+        actor.userId,
+        actor.deviceId,
+        request.teamId,
+        "ADMINISTER_PROJECT",
+      );
+      const sender = await database.device.findUnique({
+        where: { id: actor.deviceId },
+        select: {
+          x25519PublicKey: true,
+          ed25519PublicKey: true,
+          userId: true,
+        },
+      });
+      if (!sender) throw new DeviceNotActiveError();
+      const recipient =
+        recipientDeviceId === actor.deviceId
+          ? sender
+          : await database.device.findFirst({
+              where: {
+                id: recipientDeviceId,
+                userId: sender.userId,
+                lifecycle: "ACTIVE",
+              },
+              select: {
+                x25519PublicKey: true,
+                ed25519PublicKey: true,
+                userId: true,
+              },
+            });
+      if (!recipient)
+        throw new DeviceNotActiveError("grant recipient device is not active");
+      if (
+        !equalBytes(
+          requiredBytes(39, 32),
+          new Uint8Array(recipient.x25519PublicKey),
+        )
+      )
+        throw new ContractError("invalid_crypto_object");
+      const epoch = grant.get(30);
+      if (
+        (typeof epoch !== "number" && typeof epoch !== "bigint") ||
+        BigInt(epoch) !== project.currentEpoch ||
+        grant.get(37) !== 1 ||
+        grant.get(70) !== 1 ||
+        grant.get(71) !== 32
+      )
+        throw new ContractError("stale_epoch");
+      const ciphertext = requiredBytes(47, Number(grant.get(72)));
+      const ciphertextHash = requiredBytes(48, 48);
+      if (
+        !equalBytes(ciphertextHash, await sha384Digest(ciphertext)) ||
+        !equalBytes(requiredBytes(8, 16), parseUuidBytes(profile.id))
+      )
+        throw new ContractError("invalid_crypto_object");
+      const signature = requiredBytes(4, 64);
+      const signingKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(sender.ed25519PublicKey).buffer,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      if (!(await verifyProtocolObject(grant, signature, signingKey)))
+        throw new ContractError("invalid_crypto_object");
+      if (!equalBytes(request.digest, await sha384Digest(request.grantBytes)))
+        throw new ContractError("invalid_crypto_object");
+      const operation = {
+        id: request.operationId,
+        actorUserId: actor.userId,
+        actorDeviceId: actor.deviceId,
+        kind: "ADMINISTRATION" as const,
+        commandBytes: request.grantBytes,
+        commandDigest: request.digest,
+      };
+      const begun = await new OperationRepository().begin(database, operation);
+      if (begun.idempotent)
+        return context.json({ idempotent: true }, 200, {
+          "Cache-Control": "no-store",
         });
-        const result = await new GrantRepository().create(database, {
-          operation,
-          grant: {
-            protocolObject: {
-              id: request.objectId,
-              suite: profile.suite.name,
-              formatVersion: 3,
-              kind: 7,
-              canonicalBytes: request.grantBytes,
-              digest: request.digest,
-              projectId: request.projectId,
-            },
+      const now = new Date();
+      const expiresAt = new Date(
+        now.getTime() + profile.limits.stagingTtlSeconds * 1000,
+      );
+      await new StagedObjectRepository().put(database, {
+        operationId: request.operationId,
+        objectId: request.objectId,
+        actorDeviceId: actor.deviceId,
+        canonicalBytes: request.grantBytes,
+        digest: request.digest,
+        createdAt: now,
+        expiresAt,
+      });
+      const result = await new GrantRepository().create(database, {
+        operation,
+        grant: {
+          protocolObject: {
+            id: request.objectId,
+            suite: profile.suite.name,
+            formatVersion: 3,
+            kind: 7,
+            canonicalBytes: request.grantBytes,
+            digest: request.digest,
             projectId: request.projectId,
-            teamId: request.teamId,
-            senderDeviceId: actor.deviceId,
-            recipientDeviceId,
-            keyKind: "PROJECT_EPOCH",
-            grantKind: "CURRENT_PROJECT_EPOCH",
-            projectEpoch: BigInt(epoch),
-            plaintextLength: Number(grant.get(71)),
-            ciphertextLength: ciphertext.length,
-            ciphertextHash,
-            recipientDeviceIds: [recipientDeviceId],
           },
+          projectId: request.projectId,
+          teamId: request.teamId,
+          senderDeviceId: actor.deviceId,
+          recipientDeviceId,
+          keyKind: "PROJECT_EPOCH",
+          grantKind: "CURRENT_PROJECT_EPOCH",
+          projectEpoch: BigInt(epoch),
+          plaintextLength: Number(grant.get(71)),
+          ciphertextLength: ciphertext.length,
+          ciphertextHash,
+          recipientDeviceIds: [recipientDeviceId],
+        },
+      });
+      if ("idempotent" in result && result.idempotent)
+        return context.json({ idempotent: true }, 200, {
+          "Cache-Control": "no-store",
         });
-        if ("idempotent" in result && result.idempotent)
-          return context.json({ idempotent: true }, 200, {
-            "Cache-Control": "no-store",
-          });
-        if (!("grant" in result)) return jsonProblem(context, "state_conflict");
-        return context.json(
-          { grantObjectId: result.grant.protocolObjectId, idempotent: false },
-          201,
-          { "Cache-Control": "no-store" },
-        );
-      } catch (error) {
-        if (error instanceof ContractError)
-          return jsonProblem(context, error.code);
-        if (error instanceof OperationConflictError)
-          return jsonProblem(context, "operation_conflict");
-        if (error instanceof DeviceNotActiveError)
-          return jsonProblem(context, "device_not_active");
-        if (error instanceof Error && error.message.includes("not active"))
-          return jsonProblem(context, "device_not_active");
-        if (error instanceof Error && error.message.includes("not authorized"))
-          return jsonProblem(context, "forbidden");
-        if (error instanceof Error && error.message.includes("not found"))
-          return jsonProblem(context, "resource_not_found");
-        return jsonProblem(context, "state_conflict");
-      }
-    },
-  );
+      if (!("grant" in result)) return jsonProblem(context, "state_conflict");
+      return context.json(
+        { grantObjectId: result.grant.protocolObjectId, idempotent: false },
+        201,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      if (error instanceof ContractError)
+        return jsonProblem(context, error.code);
+      if (error instanceof OperationConflictError)
+        return jsonProblem(context, "operation_conflict");
+      if (error instanceof DeviceNotActiveError)
+        return jsonProblem(context, "device_not_active");
+      if (error instanceof Error && error.message.includes("not active"))
+        return jsonProblem(context, "device_not_active");
+      if (error instanceof Error && error.message.includes("not authorized"))
+        return jsonProblem(context, "forbidden");
+      if (error instanceof Error && error.message.includes("not found"))
+        return jsonProblem(context, "resource_not_found");
+      return jsonProblem(context, "state_conflict");
+    }
+  });
 
   app.get("/api/v1/workspace/boundary", async (context) => {
     const session = await auth.api.getSession({
@@ -1048,6 +1062,7 @@ const createApi = ({
       allowRebind: profile.allowRebind,
     });
     if (!user) return jsonProblem(context, "service_unavailable");
+    let catalogAccessToken: Promise<string | null> | undefined;
 
     const requestedEnvironmentId = context.req.query("environment");
     const requestedRepositoryId = context.req.query("githubRepositoryId");
@@ -1343,7 +1358,16 @@ const createApi = ({
           serverProfileId: profile.id,
         },
         crypto: { available: true },
-        catalog: await loadWorkspaceCatalog(database, user.id),
+        catalog: await loadWorkspaceCatalog(database, user.id, {
+          ...(githubFetch ? { fetch: githubFetch } : {}),
+          // Resolved at most once per request, and only on a cache miss.
+          accessToken: () =>
+            (catalogAccessToken ??= delegatedGitHubAccessToken(
+              auth,
+              session.user.id,
+            )),
+          cacheScope: session.user.id,
+        }),
       },
       200,
       { "Cache-Control": "no-store" },
@@ -1356,7 +1380,7 @@ const createApi = ({
   // payload renames and sets nameOverridden so later describes stop
   // clobbering it. Body has no Idempotency-Key: a repeated describe is
   // idempotent by construction, and a repeated rename rewrites the same row.
-  app.post("/api/v1/devices/self", async (context) => {
+  app.post("/api/v1/devices/self", smallBodyLimit, async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
     try {
@@ -1474,9 +1498,14 @@ type RequestIpServer = {
   readonly requestIP: (request: Request) => { readonly address: string } | null;
 };
 let server: RequestIpServer | undefined;
+const resolveClientIp = createClientIpResolver(profile);
 const runtimeObservability = createApiObservability(database, {
   ...(import.meta.main ? { diagnostics: createConsoleDiagnosticSink() } : {}),
-  resolveClientIp: (request) => server?.requestIP(request)?.address ?? null,
+  resolveClientIp: (request) =>
+    resolveClientIp(
+      server?.requestIP(request)?.address ?? null,
+      request.headers,
+    ),
 });
 export const auth = createAuth(
   createBetterAuthDatabaseAdapter(database),
@@ -1503,15 +1532,17 @@ if (import.meta.main) {
   server = Bun.serve({
     fetch: app.fetch,
     port: Number(process.env.PORT ?? 3001),
+    maxRequestBodySize: maxRequestBodyBytes(profile),
   });
   console.error(`DotRelay API listening on ${profile.origin}`);
   const cleanupTimer = setInterval(
     () => {
-      void runtimeObservability.expireSecurityRequestLogs().catch(() => {
+      void runtimeObservability.runRetentionCleanup().catch(() => {
         // The expiry failure is already recorded by the observability adapter.
       });
     },
-    60 * 60 * 1000,
+    // Expired staging counts against the quota until it is deleted.
+    10 * 60 * 1000,
   );
   cleanupTimer.unref?.();
   let stopping = false;
@@ -1521,10 +1552,13 @@ if (import.meta.main) {
       stopping = true;
       process.env.MAINTENANCE_MODE = "true";
       clearInterval(cleanupTimer);
-      const deadline = setTimeout(() => process.exit(1), 20_000);
+      // Keep the whole sequence under Docker's default 10 s stop timeout.
+      const deadline = setTimeout(() => process.exit(1), 9_500);
       deadline.unref();
       void (async () => {
         try {
+          // /ready now fails; give load balancers time to stop routing here.
+          await Bun.sleep(shutdownDrainMs(process.env.SHUTDOWN_DRAIN_MS));
           await server?.stop(false);
           await database.$disconnect();
           clearTimeout(deadline);

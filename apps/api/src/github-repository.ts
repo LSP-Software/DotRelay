@@ -6,8 +6,6 @@ export type GitHubRepositoryDisplay = Readonly<{
   readonly name: string;
 }>;
 
-const cache = new Map<string, GitHubRepositoryDisplay>();
-
 export const parseGitHubRepositoryDisplay = (
   body: unknown,
 ): GitHubRepositoryDisplay | undefined => {
@@ -36,29 +34,135 @@ export const parseGitHubRepositoryDisplay = (
   return { owner, name };
 };
 
+const DISPLAY_TIMEOUT_MS = 3_000;
+const DISPLAY_POSITIVE_TTL_MS = 10 * 60 * 1000;
+const DISPLAY_NEGATIVE_TTL_MS = 5 * 60 * 1000;
+const DISPLAY_FAILURE_TTL_MS = 60 * 1000;
+const DISPLAY_CACHE_MAX_ENTRIES = 10_000;
+
+type DisplayCacheEntry = Readonly<{
+  readonly display: GitHubRepositoryDisplay | undefined;
+  readonly expiresAt: number;
+}>;
+
+// Process-global, bounded and time-limited. A resolved name is shared by
+// every viewer (each sees the Project in their own catalog); a miss is
+// remembered per lookup scope, because a private repository that one User's
+// delegated access cannot see may still be visible to another's.
+const displayCache = new Map<string, DisplayCacheEntry>();
+
+const rememberDisplay = (key: string, entry: DisplayCacheEntry) => {
+  displayCache.delete(key);
+  displayCache.set(key, entry);
+  while (displayCache.size > DISPLAY_CACHE_MAX_ENTRIES) {
+    const oldest = displayCache.keys().next().value;
+    if (oldest === undefined) break;
+    displayCache.delete(oldest);
+  }
+};
+
+const freshEntry = (key: string, now: number) => {
+  const entry = displayCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt > now) return entry;
+  displayCache.delete(key);
+  return undefined;
+};
+
+/** Test seam: forget every cached repository display name. */
+export const clearGitHubRepositoryDisplayCache = () => displayCache.clear();
+
+export type GitHubRepositoryDisplayOptions = Readonly<{
+  readonly fetch?: typeof fetch;
+  /**
+   * The viewer's Delegated GitHub Access, resolved lazily and only on a cache
+   * miss. Without it (or when it resolves to null) the lookup is anonymous.
+   */
+  readonly accessToken?: () => Promise<string | null>;
+  /** Separates cached misses between viewers; defaults to anonymous. */
+  readonly cacheScope?: string;
+  readonly timeoutMs?: number;
+  readonly now?: () => number;
+}>;
+
+const fetchDisplay = async (
+  fetcher: typeof fetch,
+  githubRepositoryId: string,
+  token: string | null,
+  timeoutMs: number,
+): Promise<
+  Readonly<{ status: number; display?: GitHubRepositoryDisplay }> | undefined
+> => {
+  try {
+    // One signal bounds both the response and its body.
+    const signal = AbortSignal.timeout(timeoutMs);
+    const response = await fetcher(
+      `https://api.github.com/repositories/${githubRepositoryId}`,
+      {
+        method: "GET",
+        redirect: "error",
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "DotRelay",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        cache: "no-store",
+        signal,
+      },
+    );
+    if (!response.ok) return { status: response.status };
+    const display = parseGitHubRepositoryDisplay(await response.json());
+    return display ? { status: response.status, display } : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Best-effort display name for a linked repository. It never throws and
+ * never waits longer than the timeout: on a miss, timeout or failure the
+ * caller shows the Project by its stored GitHub repository id instead.
+ */
 export const lookupGitHubRepositoryDisplay = async (
   githubRepositoryId: string,
-  fetchImpl: typeof fetch = fetch,
+  options: GitHubRepositoryDisplayOptions = {},
 ): Promise<GitHubRepositoryDisplay | undefined> => {
-  const cached = cache.get(githubRepositoryId);
-  if (cached) return cached;
   if (!/^[1-9][0-9]{0,18}$/.test(githubRepositoryId)) return undefined;
-  const response = await fetchImpl(
-    `https://api.github.com/repositories/${githubRepositoryId}`,
-    {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "DotRelay",
-      },
-      cache: "no-store",
-    },
-  ).catch(() => undefined);
-  if (!response?.ok) return undefined;
-  const display = parseGitHubRepositoryDisplay(
-    await response.json().catch(() => null),
+  const now = options.now ?? Date.now;
+  const positiveKey = `display:${githubRepositoryId}`;
+  const negativeKey = `miss:${options.cacheScope ?? "anonymous"}:${githubRepositoryId}`;
+  const positive = freshEntry(positiveKey, now());
+  if (positive) return positive.display;
+  if (freshEntry(negativeKey, now())) return undefined;
+  const token = options.accessToken
+    ? await options.accessToken().catch(() => null)
+    : null;
+  const result = await fetchDisplay(
+    options.fetch ?? fetch,
+    githubRepositoryId,
+    token,
+    options.timeoutMs ?? DISPLAY_TIMEOUT_MS,
   );
-  if (display) cache.set(githubRepositoryId, display);
-  return display;
+  if (result?.display) {
+    rememberDisplay(positiveKey, {
+      display: result.display,
+      expiresAt: now() + DISPLAY_POSITIVE_TTL_MS,
+    });
+    return result.display;
+  }
+  // A definitive 4xx answer is remembered longer than an outage, timeout,
+  // rate limit or unusable payload.
+  const definitive =
+    result !== undefined &&
+    result.status >= 400 &&
+    result.status < 500 &&
+    result.status !== 429;
+  rememberDisplay(negativeKey, {
+    display: undefined,
+    expiresAt:
+      now() + (definitive ? DISPLAY_NEGATIVE_TTL_MS : DISPLAY_FAILURE_TTL_MS),
+  });
+  return undefined;
 };
 
 // Every outbound GitHub call the Server Profile makes passes through this

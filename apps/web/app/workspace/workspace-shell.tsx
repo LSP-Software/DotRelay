@@ -2181,8 +2181,8 @@ export const WorkspaceShell = ({
   }, [connection, verifiedAt, profileId]);
 
   useEffect(() => {
-    let cancelled = false;
-    loadWorkspaceSession(
+    const cancellation = { current: false };
+    void loadWorkspaceSession(
       {
         boundary,
         profileId,
@@ -2199,10 +2199,10 @@ export const WorkspaceShell = ({
         setSessionsByKey,
         setContextStale,
       },
-      cancelled,
+      cancellation,
     );
     return () => {
-      cancelled = true;
+      cancellation.current = true;
     };
     // The Account Master Key lives in a ref: an in-session unlock or
     // rotation (recoveryGeneration) re-derives the project's shared value

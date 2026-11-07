@@ -4,11 +4,11 @@
   "scripts": {
     "dev": "bun run build:worker && next dev",
     "build:worker": "bun scripts/build-argon2-worker.ts",
-    "build": "next build",
+    "build": "bun run build:worker && next build",
     "smoke": "bun ../../scripts/smoke-web.ts",
     "format": "bun fmt",
     "format:check": "bun fmt --check",
-    "lint": "bun lint",
+    "lint": "bun ../../scripts/lint.ts",
     "typecheck": "bun check",
     "test:unit": "bun test app lib",
     "test:e2e": "playwright test --config=../../playwright.config.ts"
@@ -25,7 +25,6 @@
     "next": "16.4.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "shadcn": "4.23.0",
     "tailwind-merge": "3.6.0",
     "tw-animate-css": "1.4.0"
   },
@@ -34,6 +33,7 @@
     "@types/node": "26.2.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
+    "shadcn": "^4.23.0",
     "tailwindcss": "4.3.3",
     "typescript": "7"
   }

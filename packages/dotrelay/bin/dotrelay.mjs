@@ -2,7 +2,8 @@
 
 import { spawn } from "node:child_process";
 import { access, constants, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { constants as osConstants } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isLaunchableExecutable } from "./is-launchable-executable.mjs";
 
@@ -46,7 +47,18 @@ try {
   shippedPlatforms = [];
 }
 
+// Only binaries inside this package, or one named explicitly by absolute
+// path, are candidates. The selector never looks outside its own package
+// directory: for a project-local install that would be a file inside the
+// user's own (possibly untrusted) repository. Local development points
+// DOTRELAY_BINARY at the monorepo build instead.
 const binaryOverride = process.env.DOTRELAY_BINARY;
+if (binaryOverride !== undefined && !isAbsolute(binaryOverride)) {
+  console.error(
+    `${label}: DOTRELAY_BINARY must be an absolute path to a native binary (got ${binaryOverride}).`,
+  );
+  process.exit(1);
+}
 const candidates = [
   ...(binaryOverride !== undefined
     ? [{ path: binaryOverride, override: true }]
@@ -56,18 +68,6 @@ const candidates = [
     override: false,
   },
   { path: join(packageDirectory, "dist", platformBinary), override: false },
-  {
-    path: join(
-      packageDirectory,
-      "..",
-      "..",
-      "apps",
-      "cli",
-      "dist",
-      platformBinary,
-    ),
-    override: false,
-  },
 ];
 
 // Each candidate is probed for presence, executability, and format, so a
@@ -121,9 +121,29 @@ if (selected) {
     const child = spawn(selected.path, process.argv.slice(2), {
       stdio: "inherit",
     });
+    // The selector stays alive while the binary runs, so termination
+    // signals sent to it are passed on instead of orphaning the binary.
+    const forwardedSignals = ["SIGINT", "SIGTERM", "SIGHUP"];
+    const forward = (signal) => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill(signal);
+    };
+    for (const signal of forwardedSignals) process.on(signal, forward);
     child.once("error", () => reportUnlaunchable(selected.path));
     child.once("exit", (code, signal) => {
-      process.exitCode = signal ? 1 : (code ?? 1);
+      for (const forwarded of forwardedSignals) process.off(forwarded, forward);
+      if (!signal) {
+        process.exitCode = code ?? 1;
+        return;
+      }
+      // Re-raise the signal that ended the binary so the caller sees the
+      // same termination; if it does not end this process, report 128+n.
+      process.exitCode = 128 + (osConstants.signals[signal] ?? 0);
+      try {
+        process.kill(process.pid, signal);
+      } catch {
+        // The exit code above already reports the signal.
+      }
     });
   } catch {
     // Bun surfaces an unlaunchable binary as a synchronous spawn failure

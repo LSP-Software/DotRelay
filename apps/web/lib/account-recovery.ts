@@ -36,6 +36,7 @@ import {
   hexToBytes,
   openAccountKeyTransferForDevice,
   openProjectEpochEnvelope,
+  projectGrantVerification,
   publishAccountKeyEnvelope,
   publishAccountKeyWrapper,
   revokeAccountKeyWrapper,
@@ -155,7 +156,9 @@ const loadRecoveryBundle = async (
 // device, plus any creator key the service named on a listed wrapper.
 export const accountKeyVerification = (
   boundary: WorkspaceBoundary,
-  wrappers: readonly AccountKeyWrapperEntry[],
+  // Wrapper or envelope listings whose claimed creator keys may verify an
+  // object created by a since-departed Device of this User.
+  wrappers: ReadonlyArray<Readonly<{ readonly creatorPublicKey?: string }>>,
 ): Readonly<{
   readonly trustedKeys: AccountKeyTrustedKeys;
   readonly context: AccountKeyVerificationContext;
@@ -519,6 +522,7 @@ const prepareRecoveryCeremony = async (
                 }),
               )
             ).encryptionPrivateKey,
+            projectGrantVerification(boundary),
           )
         : globalThis.crypto.getRandomValues(new Uint8Array(32));
       envelopeProjectEpoch = Number(environment.projectEpoch ?? 1);

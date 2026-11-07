@@ -22,7 +22,9 @@ for another architecture) — it exits with code 1 and reports the release it is
 repair: reinstall this release or the latest from npm (`npm install -g dotrelay@<version>`,
 `npm install -g dotrelay@latest`) or run the matching native binary from a DotRelay GitHub
 release. A `DOTRELAY_BINARY` override that points at a missing or unlaunchable binary is named
-in the same report.
+in the same report; the override must be an absolute path. The selector never launches a binary
+from outside its own package otherwise. It forwards `SIGINT`, `SIGTERM`, and `SIGHUP` to the
+binary and re-raises the signal that ended it.
 
 ## Release channels
 
@@ -120,8 +122,10 @@ keys or trusted Revision history. `--no-input` requires `--force`.
 
 `dotrelay profile rebind <name> <origin>` re-pins a saved profile after its origin or server
 identity moves. The approval names the previous and next origin and server profile id, keeps
-Device keys, and resets trusted Revision continuity only for Environments whose saved head is
-no longer in verified history. `--no-input` requires `--force`.
+Device keys, and resets trusted Revision continuity (saved heads and publication baselines) only
+for Environments whose saved head was verified against that profile's previous server profile id.
+Saved heads of other profiles, and older saved heads that do not record a server profile id, are
+kept. `--no-input` requires `--force`.
 
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. The Server Profile creates a default Environment in the same transaction when the

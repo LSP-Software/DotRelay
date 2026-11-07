@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 image = "dotrelay-api-test"
-settings = {"DATABASE_URL": "postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay", "SERVER_PROFILE_ID": "11111111-1111-4111-8111-111111111111", "SERVER_PROFILE_ORIGIN": "https://api.example", "WEB_ORIGIN": "https://web.example", "GITHUB_CLIENT_ID": "Iv1.test", "GITHUB_CLIENT_SECRET": "synthetic-test-client-secret", "BETTER_AUTH_SECRET": "synthetic-auth-secret-012345678901234567890123456789"}
+settings = {"DATABASE_URL": "postgresql://dotrelay:container-ci-only@127.0.0.1:5432/dotrelay", "VALKEY_URL": "redis://127.0.0.1:6379", "SERVER_PROFILE_ID": "11111111-1111-4111-8111-111111111111", "SERVER_PROFILE_ORIGIN": "https://api.example", "WEB_ORIGIN": "https://web.example", "GITHUB_CLIENT_ID": "Iv1.test", "GITHUB_CLIENT_SECRET": "synthetic-test-client-secret", "BETTER_AUTH_SECRET": "synthetic-auth-secret-012345678901234567890123456789"}
 
 
 def arguments(values):

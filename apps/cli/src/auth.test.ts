@@ -109,6 +109,28 @@ describe("CLI device authorization", () => {
     ]);
   });
 
+  test("rejects a user code outside the device code alphabet", async () => {
+    const credentials = {
+      get: async () => null,
+      set: async () => undefined,
+      delete: async () => undefined,
+    };
+    for (const userCode of [
+      "KITE\x1b]8;;https://evil.example\x07MOSS",
+      "KITE-\x1b[2JMOSS",
+      "KITE MOSS",
+      "KITE\u202eMOSS",
+      "-KITE",
+    ]) {
+      await expect(
+        loginWithDeviceAuthorization(profile, createSessionStore(credentials), {
+          noOpen: true,
+          fetch: async () => deviceCodeResponse({ user_code: userCode }),
+        }),
+      ).rejects.toThrow("invalid device authorization response");
+    }
+  });
+
   test("rejects a verification URL from another origin", async () => {
     const credentials = {
       get: async () => null,

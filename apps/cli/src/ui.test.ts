@@ -338,6 +338,16 @@ describe("readTerminalSecret raw TTY", () => {
     expect(await pending).toBe("AB");
   });
 
+  test("keeps non-ASCII characters and drops control characters", async () => {
+    const { terminal, input } = rawSecretTerminal();
+    const pending = readTerminalSecret("Recovery Code", { terminal });
+    input.write("pässwörd😀\u0001\u0085x😀\u007f");
+    await tick();
+    input.write("\r");
+    input.end();
+    expect(await pending).toBe("pässwörd😀x");
+  });
+
   test("an empty secret is rejected", async () => {
     const { terminal, input } = rawSecretTerminal();
     const pending = readTerminalSecret("Recovery Code", { terminal });

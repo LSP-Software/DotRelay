@@ -25,9 +25,11 @@ import { resolveLiveApiOrigin } from "@/lib/workspace-boundary";
 // sign-in, so a degraded API never flips the landing page out of its
 // public state.
 const isSessionActive = async (): Promise<boolean> => {
+  // Read the request first so the page always renders per request (and a
+  // missing production origin surfaces at request time, not prerender).
+  const cookie = (await headers()).get("cookie");
   const apiOrigin = resolveLiveApiOrigin();
   if (!apiOrigin) return false;
-  const cookie = (await headers()).get("cookie");
   const response = await fetch(`${apiOrigin}/api/v1/session`, {
     headers: cookie ? { cookie } : {},
     cache: "no-store",

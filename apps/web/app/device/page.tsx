@@ -46,10 +46,12 @@ const DevicePage = async ({
               <h1>Allow this CLI?</h1>
             </CardTitle>
             <CardDescription>
-              A DotRelay CLI is asking to sign in. Check that the code matches
-              the one in its terminal, then allow it. This gives the CLI a
-              session on this account; it doesn&apos;t move or reveal any
-              values.
+              A DotRelay CLI is asking to sign in as you. Only allow it if you
+              started this sign-in from your own terminal just now and it shows
+              the code below. Allowing gives that terminal full access to your
+              DotRelay account, including your teams, invitations and roles. It
+              still can&apos;t decrypt your values until you set it up as one of
+              your devices.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">

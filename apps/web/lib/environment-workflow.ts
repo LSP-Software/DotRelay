@@ -360,6 +360,92 @@ export const mergeDraftVariablesOverRemote = (
   return Object.freeze([...merged, ...localOnly]);
 };
 
+// The remote version each lane's local copy was derived from, keyed by
+// Variable id. A lane missing from the map had no remote version (created
+// locally, or not yet loaded).
+export type DraftBase = ReadonlyMap<string, EnvironmentVariable>;
+
+export const draftBaseFromRemote = (
+  remoteVariables: readonly EnvironmentVariable[],
+): DraftBase =>
+  new Map(
+    remoteVariables.map((variable) => [
+      variable.id,
+      Object.freeze({ ...variable, hasDraftChange: false }),
+    ]),
+  );
+
+const laneDiffers = (
+  base: EnvironmentVariable | undefined,
+  remote: EnvironmentVariable | undefined,
+): boolean => {
+  if (!base || !remote) return base !== remote;
+  return (
+    Boolean(base.tombstone) !== Boolean(remote.tombstone) ||
+    base.value !== remote.value ||
+    base.name !== remote.name ||
+    base.description !== remote.description ||
+    base.ownership !== remote.ownership ||
+    base.required !== remote.required
+  );
+};
+
+// Moves the base onto remoteVariables for every lane except pinnedIds, whose
+// base stays where it was until the user resolves their conflict.
+export const advanceDraftBase = (
+  base: DraftBase | null,
+  remoteVariables: readonly EnvironmentVariable[],
+  pinnedIds: Iterable<string> = [],
+): DraftBase => {
+  const next = new Map(draftBaseFromRemote(remoteVariables));
+  for (const id of pinnedIds) {
+    const previous = base?.get(id);
+    if (previous) next.set(id, previous);
+    else next.delete(id);
+  }
+  return next;
+};
+
+export type DraftRebase = Readonly<{
+  readonly variables: readonly EnvironmentVariable[];
+  readonly conflictVariableIds: readonly string[];
+  readonly base: DraftBase;
+}>;
+
+// Rebases a draft onto a newly loaded remote. A drafted lane that the remote
+// also changed since the draft's base is a Variable Conflict: it is reported
+// for the interactive Keep mine / Use theirs flow instead of being silently
+// re-flagged against the new head. With no known base (the first load), no
+// conflict can be established and the draft is rebased as before.
+export const rebaseDraftOntoRemote = (
+  localVariables: readonly EnvironmentVariable[],
+  base: DraftBase | null,
+  remoteVariables: readonly EnvironmentVariable[],
+): DraftRebase => {
+  const variables = mergeDraftVariablesOverRemote(
+    localVariables,
+    remoteVariables,
+  );
+  const remoteById = new Map(
+    remoteVariables.map((variable) => [variable.id, variable]),
+  );
+  const conflictVariableIds =
+    base === null
+      ? []
+      : variables
+          .filter(
+            (variable) =>
+              variable.hasDraftChange &&
+              laneDiffers(base.get(variable.id), remoteById.get(variable.id)),
+          )
+          .map((variable) => variable.id);
+  return Object.freeze({
+    variables,
+    conflictVariableIds: Object.freeze(conflictVariableIds),
+    base: advanceDraftBase(base, remoteVariables, conflictVariableIds),
+  });
+};
+
 export const settlePublishedDraft = (
   currentVariables: readonly EnvironmentVariable[],
   publishedSnapshot: readonly EnvironmentVariable[],

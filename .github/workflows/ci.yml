@@ -198,18 +198,26 @@ jobs:
     name: production API image and readiness
     runs-on: ubuntu-latest
     services:
+      # Production refuses the development dotrelay:dotrelay credentials, so
+      # this job's disposable database uses a distinct password.
       postgres:
         image: postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
         env:
           POSTGRES_USER: dotrelay
-          POSTGRES_PASSWORD: dotrelay
+          POSTGRES_PASSWORD: container-ci-only
           POSTGRES_DB: dotrelay
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U dotrelay -d dotrelay"
           --health-interval 10s --health-timeout 5s --health-retries 5
+      valkey:
+        image: valkey/valkey@sha256:495e4fecdc98ee48a20b207726caa5ab6451e0fac3642a9be10d9e70b3068df6
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     env:
-      DATABASE_URL: postgresql://dotrelay:dotrelay@127.0.0.1:5432/dotrelay
+      DATABASE_URL: postgresql://dotrelay:container-ci-only@127.0.0.1:5432/dotrelay
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
@@ -276,14 +284,18 @@ jobs:
           context: .
           file: apps/api/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:dev
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ github.sha }}
       - name: build and push dev web image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: apps/web/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:dev
+            ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web:${{ github.sha }}
           build-args: |
             NEXT_PUBLIC_WEB_ORIGIN=https://dev.dotrelay.dev
             NEXT_PUBLIC_DOTRELAY_API_ORIGIN=https://dev-api.dotrelay.dev
@@ -325,7 +337,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os:
+          [
+            ubuntu-latest,
+            ubuntu-24.04-arm,
+            macos-latest,
+            macos-15-intel,
+            windows-latest,
+          ]
     env:
       DOTRELAY_CLI_ORIGIN: https://dev-api.dotrelay.dev
     steps:

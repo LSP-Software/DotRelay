@@ -42,8 +42,12 @@ test("provisioning shares the existing project keys with every invited Device an
       crypto.getRandomValues(new Uint8Array(32)),
     ]),
   );
+  const serverProfileId = crypto.randomUUID();
+  const trustedSigningKeys = [
+    new Uint8Array(await crypto.subtle.exportKey("spki", signing.publicKey)),
+  ];
   const request = await createMembershipProvisioning({
-    serverProfileId: crypto.randomUUID(),
+    serverProfileId,
     deviceId: crypto.randomUUID(),
     signingPrivateKey: signing.privateKey,
     plan,
@@ -61,11 +65,22 @@ test("provisioning shares the existing project keys with every invited Device an
       ),
     ).toBe(true);
     const recipient = recipients[index % 2];
+    const device = plan.devices[index % 2];
     const project = plan.projects[Math.floor(index / 2)];
-    if (!recipient || !project) throw new Error("fixture incomplete");
-    expect(await openProjectEpochGrant(raw, recipient.privateKey)).toEqual(
-      projectKeys.get(project.id),
-    );
+    if (!recipient || !device || !project)
+      throw new Error("fixture incomplete");
+    expect(
+      await openProjectEpochGrant(raw, recipient.privateKey, {
+        expected: {
+          recipientDeviceId: device.id,
+          projectId: project.id,
+          projectEpoch: project.epoch,
+          serverProfileId,
+          teamId: plan.teamId,
+        },
+        trustedSigningKeys,
+      }),
+    ).toEqual(projectKeys.get(project.id));
     expect(JSON.stringify(request)).not.toContain(
       Buffer.from(projectKeys.get(project.id) ?? []).toString("base64"),
     );

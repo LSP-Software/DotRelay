@@ -7,24 +7,33 @@ import { CommandText } from "@/components/inline-command";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
-  attemptDeviceApproval,
+  attemptDeviceDecision,
   checkDeviceStatus,
   checkServerProfileSession,
   type DeviceApprovalView,
+  type DeviceDecision,
   deviceApprovalAttemptView,
   deviceApprovalView,
+  deviceDenialAttemptView,
 } from "@/lib/device-approval";
-import { resolveApiOrigin, resolveWebOrigin } from "@/lib/workspace-boundary";
+import {
+  resolveLiveApiOrigin,
+  resolveWebOrigin,
+} from "@/lib/workspace-boundary";
 
 type DeviceApproveCardProps = Readonly<{
   readonly userCode: string;
 }>;
 
 export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
-  const apiOrigin = resolveApiOrigin() ?? "http://localhost:3001";
+  const apiOrigin = resolveLiveApiOrigin() ?? "http://localhost:3001";
   const callbackUrl = `${resolveWebOrigin()}/device?user_code=${encodeURIComponent(userCode)}`;
   const [view, setView] = useState<"checking" | DeviceApprovalView>("checking");
   const [busy, setBusy] = useState(false);
+  // The code arrives pre-filled from the URL, so a link someone else sent
+  // could carry their terminal's code. Allowing needs an explicit statement
+  // that this sign-in was started here.
+  const [confirmed, setConfirmed] = useState(false);
   const runRef = useRef(0);
 
   const settle = useCallback(
@@ -49,15 +58,26 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
     void checkState();
   }, [checkState]);
 
-  const allowCli = async () => {
+  const decide = async (decision: DeviceDecision) => {
     const run = ++runRef.current;
     setBusy(true);
     try {
-      const attempt = await attemptDeviceApproval(apiOrigin, userCode);
+      const attempt = await attemptDeviceDecision(
+        apiOrigin,
+        userCode,
+        decision,
+      );
       if (run !== runRef.current) return;
-      const resolved = deviceApprovalAttemptView(attempt);
+      const resolved =
+        decision === "approve"
+          ? deviceApprovalAttemptView(attempt)
+          : deviceDenialAttemptView(attempt);
       if (resolved.kind !== "recheck") {
         setView(resolved);
+        // A denied code is finished; drop it from the address bar so a reload
+        // or shared URL does not bring it back.
+        if (resolved.kind === "declined")
+          window.history.replaceState(null, "", "/device");
         return;
       }
       // The code may have been processed or the session may have lapsed while
@@ -92,16 +112,46 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
       );
     case "allow":
       return (
-        <Button
-          className="w-full"
-          data-testid="device-approval-allow"
-          disabled={busy}
-          onClick={() => void allowCli()}
-          size="lg"
-          type="button"
-        >
-          Allow this CLI
-        </Button>
+        <div className="space-y-4">
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              checked={confirmed}
+              className="mt-0.5"
+              data-testid="device-approval-confirm"
+              disabled={busy}
+              onChange={(event) => setConfirmed(event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              I started this sign-in from my own terminal just now, and it shows
+              this code.
+            </span>
+          </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button
+              data-testid="device-approval-deny"
+              disabled={busy}
+              onClick={() => void decide("deny")}
+              size="lg"
+              type="button"
+              variant="outline"
+            >
+              Deny
+            </Button>
+            <Button
+              data-testid="device-approval-allow"
+              disabled={busy || !confirmed}
+              onClick={() => void decide("approve")}
+              size="lg"
+              type="button"
+            >
+              Allow this CLI
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            If you didn&apos;t start this, choose Deny.
+          </p>
+        </div>
       );
     case "approved":
       return (
@@ -120,7 +170,7 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
           data-testid="device-approval-declined"
           role="status"
         >
-          This CLI request was declined. You can return to the CLI.
+          This CLI request was denied. It has no access to your account.
         </p>
       );
     case "expired":

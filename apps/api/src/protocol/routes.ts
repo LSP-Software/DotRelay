@@ -41,6 +41,7 @@ import {
 import { createProtocolRateLimit } from "./rate-limit";
 import {
   buildProtocolObjectFromStage,
+  clampStagingExpiry,
   buildPublicationInput,
   digestFinalizationRequest,
   collectStagedObjectIds,
@@ -78,19 +79,6 @@ const respondContractError = (error: unknown) => {
 
 const readPathUuid = (context: Context, name: string) =>
   parseUuid(context.req.param(name), name);
-
-const clampStagingExpiry = (
-  expiresHeader: string | undefined,
-  stagingTtlSeconds: number,
-): Date => {
-  const now = Date.now();
-  const ceiling = now + stagingTtlSeconds * 1000;
-  if (!expiresHeader || Number.isNaN(Date.parse(expiresHeader)))
-    return new Date(ceiling);
-  const requested = Date.parse(expiresHeader);
-  if (requested <= now) return new Date(Math.min(now + 1, ceiling));
-  return new Date(Math.min(requested, ceiling));
-};
 
 const readProtocolBody = async (
   request: Request,
@@ -281,6 +269,7 @@ export const registerProtocolRoutes = (
       const expiresAt = clampStagingExpiry(
         context.req.header("X-DotRelay-Expires-At") ?? undefined,
         profile.limits.stagingTtlSeconds,
+        Date.now(),
       );
       const createdAt = new Date();
       try {

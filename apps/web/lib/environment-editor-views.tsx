@@ -548,12 +548,17 @@ export const VariableRow = ({
             </Label>
             <Input
               aria-readonly={!canEdit}
-              autoComplete="off"
+              autoCapitalize="off"
+              autoComplete="new-password"
+              autoCorrect="off"
               className="font-mono"
+              data-1p-ignore
+              data-lpignore="true"
               disabled={editingDisabled || !canEdit}
               id={`value-${variable.id}`}
               onChange={(event) => onValueChange(event.target.value)}
               placeholder={variable.value === null ? "Not set" : "Empty value"}
+              spellCheck={false}
               type={revealed ? "text" : "password"}
               value={variable.value ?? ""}
             />
@@ -709,13 +714,18 @@ export const AddVariableDialog = ({
             <Label htmlFor="new-variable-value">Initial value</Label>
             <div className="flex items-center gap-2">
               <Input
-                autoComplete="off"
+                autoCapitalize="off"
+                autoComplete="new-password"
+                autoCorrect="off"
                 className="font-mono"
+                data-1p-ignore
+                data-lpignore="true"
                 id="new-variable-value"
                 onChange={(event) =>
                   onDraftChange({ ...draft, value: event.target.value })
                 }
                 placeholder="Leave blank to save an empty string"
+                spellCheck={false}
                 type={valueRevealed ? "text" : "password"}
                 value={draft.value}
               />

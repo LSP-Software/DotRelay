@@ -1,12 +1,5 @@
-import {
-  chmod,
-  mkdir,
-  readFile,
-  stat,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile, stat, unlink } from "node:fs/promises";
+import { join } from "node:path";
 import {
   prepareDeviceRecovery,
   authenticatedCreatorKeys,
@@ -33,6 +26,7 @@ import {
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
+import { atomicWriteProtectedFile } from "./output";
 import { readTerminalSecret, selectOption } from "./ui";
 import {
   accountKeyTrustedKeys,
@@ -173,10 +167,10 @@ const writePendingRecoveryCode = async (
   deviceId: string,
   pending: PendingRecoveryCode,
 ): Promise<void> => {
-  const path = pendingRecoveryPath(options, deviceId);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(pending), { mode: 0o600 });
-  await chmod(path, 0o600);
+  await atomicWriteProtectedFile(
+    pendingRecoveryPath(options, deviceId),
+    JSON.stringify(pending),
+  );
 };
 
 export const clearPresentedRecoveryCode = async (

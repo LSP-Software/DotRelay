@@ -275,9 +275,36 @@ type Argon2WorkerReply = Readonly<{
   readonly ikm: Uint8Array;
 }>;
 
+// A KDF run that has not answered in this long is treated as a dead worker.
+// The policy ceiling is well under this on any device that can unlock at all.
+const ARGON2_WORKER_TIMEOUT_MS = 120_000;
+
+type PendingArgon2 = Readonly<{
+  readonly resolve: (ikm: Uint8Array) => void;
+  readonly reject: (error: Error) => void;
+  readonly timer: ReturnType<typeof setTimeout>;
+}>;
+
 let argon2Worker: Worker | null = null;
-const pendingArgon2 = new Map<number, (ikm: Uint8Array) => void>();
+const pendingArgon2 = new Map<number, PendingArgon2>();
 let argon2RequestId = 0;
+
+// A worker that errors, cannot deserialize a reply, or stops answering is
+// discarded: every pending unlock is rejected so none hangs forever, and the
+// next request starts a fresh worker.
+const failArgon2Worker = (worker: Worker, error: Error): void => {
+  if (argon2Worker === worker) argon2Worker = null;
+  worker.onmessage = null;
+  worker.onerror = null;
+  worker.onmessageerror = null;
+  worker.terminate();
+  const pending = [...pendingArgon2.values()];
+  pendingArgon2.clear();
+  for (const request of pending) {
+    clearTimeout(request.timer);
+    request.reject(error);
+  }
+};
 
 const getArgon2Worker = (): Worker | null => {
   const source = argon2WorkerSource();
@@ -286,14 +313,23 @@ const getArgon2Worker = (): Worker | null => {
     const url = URL.createObjectURL(
       new Blob([source], { type: "application/javascript" }),
     );
-    argon2Worker = new Worker(url);
-    argon2Worker.onmessage = (event: MessageEvent<Argon2WorkerReply>) => {
-      const resolve = pendingArgon2.get(event.data.id);
-      if (resolve) {
+    const worker = new Worker(url);
+    worker.onmessage = (event: MessageEvent<Argon2WorkerReply>) => {
+      const request = pendingArgon2.get(event.data.id);
+      if (request) {
         pendingArgon2.delete(event.data.id);
-        resolve(event.data.ikm);
+        clearTimeout(request.timer);
+        request.resolve(event.data.ikm);
       }
     };
+    worker.onerror = (event: ErrorEvent) => {
+      event.preventDefault();
+      failArgon2Worker(worker, new Error("password key derivation failed"));
+    };
+    worker.onmessageerror = () => {
+      failArgon2Worker(worker, new Error("password key derivation failed"));
+    };
+    argon2Worker = worker;
   }
   return argon2Worker;
 };
@@ -306,14 +342,31 @@ const runArgon2id = async (
   const worker = getArgon2Worker();
   if (worker) {
     const id = ++argon2RequestId;
-    return await new Promise<Uint8Array>((resolve) => {
-      pendingArgon2.set(id, resolve);
-      worker.postMessage({
-        id,
-        password,
-        salt,
-        params: kdf,
-      } satisfies Argon2WorkerRequest);
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          failArgon2Worker(
+            worker,
+            new Error("password key derivation timed out"),
+          ),
+        ARGON2_WORKER_TIMEOUT_MS,
+      );
+      pendingArgon2.set(id, { resolve, reject, timer });
+      try {
+        worker.postMessage({
+          id,
+          password,
+          salt,
+          params: kdf,
+        } satisfies Argon2WorkerRequest);
+      } catch (error) {
+        failArgon2Worker(
+          worker,
+          error instanceof Error
+            ? error
+            : new Error("password key derivation failed"),
+        );
+      }
     });
   }
   return argon2id(password, salt, {

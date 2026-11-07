@@ -10,9 +10,11 @@ import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
   createAccountKeyEnvelope,
+  fetchAccountKeyEnvelopes,
   fromBase64,
   hexToBytes,
   openProjectEpochEnvelope,
+  projectGrantVerification,
   publishAccountKeyEnvelope,
 } from "@/lib/account-keys";
 import {
@@ -88,6 +90,57 @@ const WORKSPACE_REFRESH_MS = Math.max(
 const SETUP_BOUNDARY_REFRESH_MS = 2_000;
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
+
+// Opens this User's Account Key Envelopes for the Project's earlier epochs.
+// The service keeps them after a rotation, so content sealed before it stays
+// readable here; an envelope that fails verification contributes no key.
+const pastProjectEpochKeys = async (input: {
+  readonly actor: AccountKeyActor;
+  readonly boundary: WorkspaceBoundary;
+  readonly recoveryWrappers: readonly AccountKeyWrapperEntry[];
+  readonly accountMasterKey: Uint8Array;
+  readonly projectId: string;
+  readonly currentEpoch: number;
+}): Promise<Map<number, Uint8Array>> => {
+  const ring = new Map<number, Uint8Array>();
+  if (input.currentEpoch <= 1) return ring;
+  let envelopes: Awaited<ReturnType<typeof fetchAccountKeyEnvelopes>>;
+  try {
+    envelopes = await fetchAccountKeyEnvelopes(input.actor);
+  } catch {
+    return ring;
+  }
+  const verification = accountKeyVerification(input.boundary, [
+    ...input.recoveryWrappers,
+    ...envelopes,
+  ]);
+  if (!verification) return ring;
+  for (const entry of envelopes) {
+    const epoch = Number(entry.projectEpoch);
+    if (
+      entry.envelopeType !== "project-epoch-key" ||
+      entry.projectId !== input.projectId ||
+      !Number.isSafeInteger(epoch) ||
+      epoch < 1 ||
+      epoch >= input.currentEpoch ||
+      ring.has(epoch)
+    )
+      continue;
+    // The envelope's own signed Project and epoch must match the listing.
+    const key = await openProjectEpochEnvelope(
+      entry.object,
+      input.accountMasterKey,
+      {
+        trustedKeys: verification.trustedKeys,
+        context: verification.context,
+        projectId: input.projectId,
+        projectEpoch: epoch,
+      },
+    );
+    if (key) ring.set(epoch, key);
+  }
+  return ring;
+};
 
 export const workspaceBoundaryRefreshMs = (setupPending: boolean): number =>
   setupPending
@@ -337,8 +390,10 @@ type WorkspaceSessionContext = Readonly<{
 
 export const loadWorkspaceSession = (
   ctx: WorkspaceSessionContext,
-  cancelled: boolean,
-): void => {
+  // A ref, not a boolean: the caller's effect cleanup flips it after this
+  // loader has started, and every await below must observe that.
+  cancellation: { readonly current: boolean },
+): Promise<void> => {
   const {
     boundary,
     profileId,
@@ -367,12 +422,13 @@ export const loadWorkspaceSession = (
     (boundary.environment.id === environmentId &&
       boundary.environment.projectId === projectId &&
       boundary.environment.teamId === teamId);
+  const cancelled = () => cancellation.current;
   const clearSelectedSession = () => {
-    if (cancelled) return;
+    if (cancelled()) return;
     removeSessionByKey(targetKey);
   };
   const settleContext = () => {
-    if (!cancelled) setContextStale(false);
+    if (!cancelled()) setContextStale(false);
   };
   const loadSession = async () => {
     const environment = boundary.environment;
@@ -404,7 +460,9 @@ export const loadWorkspaceSession = (
         pin,
         deviceId: uuidToBytes(device.id),
       });
+      if (cancelled()) return;
       const keyMaterial = await loadDeviceKeyMaterial(bundle);
+      if (cancelled()) return;
       if (!keyMaterial.encryptionPublicKey)
         throw new Error("stored Device public key is missing");
       let userDefinedValueSecret: Uint8Array | undefined;
@@ -436,6 +494,7 @@ export const loadWorkspaceSession = (
           if (opened) userDefinedValueSecret = opened;
         }
       }
+      if (cancelled()) return;
       const expectedHeadId =
         boundary.environment.headRevision === "empty-environment"
           ? null
@@ -460,18 +519,21 @@ export const loadWorkspaceSession = (
         revisionSigningPublicKey: hexToBytes(device.signingPublicKey),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       };
+      // Scope the journal to the server, Environment and Device so a pending
+      // publication never replays against a different server or Environment.
+      const publicationKeyPrefix = `dotrelay-publication:${encodeURIComponent(profile.origin)}:${profile.serverProfileId ?? profile.id}:${environment.id}:${device.id}:`;
       const transport = createProtocolTransport({
         origin: profile.origin,
         pendingPublication: {
           read: async () => {
-            const prefix = `dotrelay-publication:${profile.id}:${device.id}:`;
+            const prefix = publicationKeyPrefix;
             const key = Object.keys(localStorage)
               .filter((key) => key.startsWith(prefix))
               .sort()[0];
             return key ? localStorage.getItem(key) : null;
           },
           write: async (value, operationId) => {
-            const key = `dotrelay-publication:${profile.id}:${device.id}:${operationId}`;
+            const key = `${publicationKeyPrefix}${operationId}`;
             if (value === null) localStorage.removeItem(key);
             else localStorage.setItem(key, value);
           },
@@ -514,11 +576,13 @@ export const loadWorkspaceSession = (
           sharedValueSecret = await openProjectEpochGrant(
             fromBase64(boundary.epochGrant),
             keyMaterial.encryptionPrivateKey,
+            projectGrantVerification(boundary),
           );
         } catch {
           sharedValueSecret = undefined;
         }
       }
+      if (cancelled()) return;
       // A direct grant can predate recovery setup. Once the account key is
       // unlocked, seal that exact Project key for future devices; never mint
       // a replacement for an existing encrypted environment.
@@ -560,6 +624,7 @@ export const loadWorkspaceSession = (
           // opens this environment; a refresh will show the winning envelope.
         }
       }
+      if (cancelled()) return;
       // A session that unlocked the Account Master Key in this browser
       // (setup or unlock in the Recovery area) reads the project's
       // current epoch key from the boundary's Account Key Envelope, so a
@@ -590,6 +655,7 @@ export const loadWorkspaceSession = (
           if (envelopeKey) sharedValueSecret = envelopeKey;
         }
       }
+      if (cancelled()) return;
       // The last-resort self-mint, mirroring the CLI: only when the
       // account key is unlocked, no Device holds this epoch's key, and
       // no peer holds one — otherwise a fresh random key could never
@@ -645,6 +711,20 @@ export const loadWorkspaceSession = (
           sharedValueSecret = epochKey;
         }
       }
+      if (cancelled()) return;
+      const pastEpochKeyMaster = accountMasterKey.get();
+      const sharedValueKeyRing =
+        pastEpochKeyMaster && recoveryActor && environment.projectId
+          ? await pastProjectEpochKeys({
+              actor: recoveryActor,
+              boundary,
+              recoveryWrappers,
+              accountMasterKey: pastEpochKeyMaster,
+              projectId: environment.projectId,
+              currentEpoch: Number(environment.projectEpoch ?? 1),
+            })
+          : undefined;
+      if (cancelled()) return;
       const session = createEnvironmentProtocolSession({
         context: sharedValueSecret
           ? { ...context, sharedValueSecret }
@@ -659,9 +739,12 @@ export const loadWorkspaceSession = (
               ? signingTrustKeys
               : [hexToBytes(device.signingPublicKey)],
         ...(sharedValueSecret ? { sharedValueSecret } : {}),
+        ...(sharedValueKeyRing && sharedValueKeyRing.size > 0
+          ? { sharedValueKeyRing }
+          : {}),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
       });
-      if (cancelled) return;
+      if (cancelled()) return;
       if (
         environment.id !== environmentId ||
         environment.projectId !== projectId ||
@@ -679,5 +762,5 @@ export const loadWorkspaceSession = (
       if (boundaryMatchesSelection) settleContext();
     }
   };
-  void loadSession();
+  return loadSession();
 };

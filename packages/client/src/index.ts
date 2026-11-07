@@ -91,6 +91,9 @@ export {
   createProjectEpochGrantBootstrap,
   openProjectEpochGrant,
   type ProjectEpochGrantBootstrap,
+  type ProjectEpochGrantExpectation,
+  type ProjectEpochGrantVerification,
+  ProjectEpochGrantVerificationError,
 } from "./device/grant-bootstrap";
 export {
   createMembershipProvisioning,
@@ -198,6 +201,7 @@ export {
   decodeSyncManifest,
   decodeSyncVariables,
   isRollbackRevision,
+  MAX_REVISION_CLOCK_SKEW_MS,
   openLane,
   type PublicationArtifacts,
   type PublicationContext,
@@ -207,21 +211,17 @@ export {
   type RevisionSigningTrust,
   type RevisionSigningTrustEntry,
   reviewPublication,
+  type SharedValueKeyRing,
+  type SharedValueSecrets,
   type StagedPublicationObject,
   type SyncManifestDecode,
+  type SyncPageVerificationOptions,
   UnreadableLaneError,
   type UnreadableLaneKind,
   validatePublicationVariables,
   validateRollbackRevision,
   verifySyncPage,
 } from "./sync/publication";
-export {
-  detectEquivocation,
-  type EquivocationReport,
-  type ReconciliationInput,
-  type ReconciliationOutcome,
-  reconcileHead,
-} from "./sync/reconcile";
 export {
   createVerifiedEnvironmentSession,
   type VerifiedEnvironmentSession,
@@ -242,17 +242,6 @@ export {
   type SyncInput,
 } from "./sync/transport";
 export {
-  acknowledgeHistoryTrustReset,
-  createTrustedHeadStore,
-  HistoryTrustResetRequiredError,
-  hashRevisionBytes,
-  revisionParentLink,
-  type TrustedHead,
-  TrustedHeadContinuityError,
-  type TrustedHeadStore,
-  trustedHeadFromRevision,
-} from "./trust/head";
-export {
   type ClientCryptoState,
   type ClientTrustPhase,
   createClientCryptoState,
@@ -260,10 +249,8 @@ export {
   validateKeyGenerationTransition,
 } from "./trust/state";
 export {
+  isSignedByTrustedKey,
   ProtocolVerificationError,
-  verifyGrantDigest,
-  verifyRevisionChainLink,
-  verifyRevisionIntegrity,
   verifySignedProtocolObject,
 } from "./trust/verify";
 export { type InlineValueHunk, splitInlineValueDiff } from "./values/diff";

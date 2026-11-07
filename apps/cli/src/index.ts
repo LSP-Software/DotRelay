@@ -73,6 +73,7 @@ import {
   diagnosticForError,
   EXIT_CODES,
   presentationForError,
+  sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
 import { createGitTrackingProbe, type GitTrackingProbe } from "./git-tracking";
@@ -619,15 +620,15 @@ const renderSuccess = (
   if (typeof value.message === "string") {
     const message = sanitizeCliText(value.message);
     if (parsed.command === "logout")
-      return `${epilogue(`Signed out of ${String(value.profile ?? "the Server Profile")}.`)}\n`;
+      return `${epilogue(`Signed out of ${sanitizeCliLine(String(value.profile ?? "the Server Profile"))}.`)}\n`;
     if (parsed.command === "profile" && parsed.subcommand === "use")
-      return `${epilogue(`Selected ${String(value.profile)}.`)}\n`;
+      return `${epilogue(`Selected ${sanitizeCliLine(String(value.profile))}.`)}\n`;
     if (parsed.command === "env" && parsed.subcommand === "use")
       return `${epilogue(
-        `Environment set to ${String(value.environmentId ?? value.environment ?? "the selection")}.`,
+        `Environment set to ${sanitizeCliLine(String(value.environmentId ?? value.environment ?? "the selection"))}.`,
       )}\n`;
     if (parsed.command === "project" && parsed.subcommand === "link")
-      return `${epilogue(`Linked ${String(value.repository ?? "the Repository")} to this worktree.`)}\n`;
+      return `${epilogue(`Linked ${sanitizeCliLine(String(value.repository ?? "the Repository"))} to this worktree.`)}\n`;
     return `${message}\n`;
   }
   return `${renderGenericResult(value)}\n`;
@@ -1368,7 +1369,13 @@ const execute = async (
           message: "Server Profile identity is unchanged",
         },
       };
-    const resetCount = await resetTrustedEnvironmentHistory(stateDirectory);
+    const resetCount =
+      rebound.previous === null
+        ? 0
+        : await resetTrustedEnvironmentHistory(
+            stateDirectory,
+            rebound.previous.serverProfileId,
+          );
     return {
       value: {
         profile: rebound.profile.name,
@@ -2196,6 +2203,11 @@ export const run = async (
   }
 };
 
+const writeFully = (stream: NodeJS.WriteStream, text: string): Promise<void> =>
+  new Promise((resolve) => {
+    stream.write(text, () => resolve());
+  });
+
 if (import.meta.main) {
   const result = await run(
     Bun.argv.slice(2),
@@ -2203,14 +2215,16 @@ if (import.meta.main) {
       ? {}
       : { stdoutIsTerminal: process.stdout.isTTY },
   );
-  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stdout) await writeFully(process.stdout, result.stdout);
   if (result.exitCode === 0) {
     const displayed = consumeDisplayedRecoveryCodePath();
     if (displayed) await unlink(displayed).catch(() => {});
   }
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.stderr) await writeFully(process.stderr, result.stderr);
   if (typeof process.stdin.setRawMode === "function")
     process.stdin.setRawMode(false);
   process.stdin.pause();
+  // Exit only after both writes have been flushed so piped output is not
+  // truncated.
   process.exit(result.exitCode);
 }

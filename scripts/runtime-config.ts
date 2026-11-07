@@ -48,6 +48,7 @@ export const loadProductionEnvironment = (
     "BETTER_AUTH_SECRET",
     "GITHUB_CLIENT_ID",
     "GITHUB_CLIENT_SECRET",
+    "VALKEY_URL",
   ]) {
     if (!environment[name]?.trim()) throw new Error(`${name} is required`);
   }
@@ -67,6 +68,16 @@ export const loadProductionEnvironment = (
     database.pathname === "/"
   )
     throw new Error("DATABASE_URL must identify a PostgreSQL database");
+
+  // Protocol routes fail closed without Valkey, so a production API must have it.
+  let valkey: URL;
+  try {
+    valkey = new URL(environment.VALKEY_URL!);
+  } catch {
+    throw new Error("VALKEY_URL must identify a Valkey server");
+  }
+  if (!["redis:", "rediss:"].includes(valkey.protocol) || !valkey.hostname)
+    throw new Error("VALKEY_URL must identify a Valkey server");
 
   loadServerProfileConfig(environment);
   return environment;

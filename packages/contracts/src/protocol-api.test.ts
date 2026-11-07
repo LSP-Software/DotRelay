@@ -1,4 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import {
+  CBOR_LIMITS,
+  type CborValue,
+  canonicalDecode,
+  canonicalEncode,
+} from "./cbor";
 import { ContractError } from "./errors";
 import {
   bytesToUuid,
@@ -75,6 +81,128 @@ describe("protocol API contracts", () => {
     });
     expect(parsed.revision.mutation).toBe("GENESIS");
     expect(parsed.descriptor.laneCount).toBe(0);
+  });
+
+  test("rejects unsafe, negative and oversized publication numbers", () => {
+    const valid = {
+      environmentId: "00000000-0000-4000-8000-000000000010",
+      expectedHeadId: null,
+      revision: {
+        id: "00000000-0000-4000-8000-000000000011",
+        protocolObjectId: "00000000-0000-4000-8000-000000000012",
+        projectEpoch: 1,
+        mutation: "GENESIS",
+        authoredAtMs: 1,
+      },
+      descriptor: {
+        protocolObjectId: "00000000-0000-4000-8000-000000000013",
+        schemaVersion: 1,
+        descriptorHash: sha384ToHex(new Uint8Array(48).fill(0x02)),
+        laneCount: 0,
+      },
+      lanes: [],
+      commitments: [],
+    };
+    expect(() => parseFinalizePublicationRequest(valid)).not.toThrow();
+    for (const revision of [
+      { projectEpoch: 2 ** 53 },
+      { authoredAtMs: Number.MAX_SAFE_INTEGER + 2 },
+    ])
+      expect(() =>
+        parseFinalizePublicationRequest({
+          ...valid,
+          revision: { ...valid.revision, ...revision },
+        }),
+      ).toThrow(ContractError);
+    for (const descriptor of [
+      { laneCount: CBOR_LIMITS.maxManifestLaneCommitments + 1 },
+      { laneCount: -1 },
+      { laneCount: 2 ** 60 },
+      { schemaVersion: 0 },
+    ])
+      expect(() =>
+        parseFinalizePublicationRequest({
+          ...valid,
+          descriptor: { ...valid.descriptor, ...descriptor },
+        }),
+      ).toThrow(ContractError);
+    const commitment = {
+      ordinal: 0,
+      laneObjectId: "00000000-0000-4000-8000-000000000014",
+      objectHash: sha384ToHex(new Uint8Array(48).fill(0x03)),
+      projectEpoch: 1,
+      scope: "ENVIRONMENT_DEFINITION",
+      ciphertextLength: 16,
+    };
+    expect(() =>
+      parseFinalizePublicationRequest({ ...valid, commitments: [commitment] }),
+    ).not.toThrow();
+    for (const change of [
+      { ciphertextLength: CBOR_LIMITS.maxObjectBytes + 1 },
+      { ordinal: CBOR_LIMITS.maxManifestLaneCommitments },
+      { ordinal: 1.5 },
+    ])
+      expect(() =>
+        parseFinalizePublicationRequest({
+          ...valid,
+          commitments: [{ ...commitment, ...change }],
+        }),
+      ).toThrow(ContractError);
+    expect(() =>
+      parseEpochRotationRequest({
+        projectId: "00000000-0000-4000-8000-000000000015",
+        expectedEpoch: 2 ** 53,
+        newEpoch: 2 ** 53 + 2,
+        transitions: [],
+      }),
+    ).toThrow(ContractError);
+  });
+
+  test("decodeSyncPage enforces page and cursor limits", () => {
+    const digest = new Uint8Array(48).fill(0x04);
+    const base = {
+      environmentId: "00000000-0000-4000-8000-000000000030",
+      trustedRevisionId: "00000000-0000-4000-8000-000000000031",
+      trustedRevisionHash: digest,
+      currentHeadId: null,
+      currentHeadHash: null,
+      projectEpoch: 1n,
+      revisions: [
+        {
+          id: "00000000-0000-4000-8000-000000000032",
+          digest,
+          parentId: null,
+          parentHash: null,
+          mutation: 1,
+          projectEpoch: 1n,
+          authoredAtMs: 1n,
+          rollbackTargetId: null,
+          objects: [],
+        },
+      ],
+      nextCursor: null,
+    } as const;
+    expect(() =>
+      decodeSyncPage(encodeSyncPage({ ...base, nextCursor: "c".repeat(1025) })),
+    ).toThrow(ContractError);
+    const envelope = canonicalDecode(encodeSyncPage(base)) as Map<
+      number,
+      CborValue
+    >;
+    const [revisionsKey, revisions] = [...envelope].find(([, value]) =>
+      Array.isArray(value),
+    ) as [number, CborValue[]];
+    const oversized = new Map(envelope);
+    oversized.set(
+      revisionsKey,
+      Array.from(
+        { length: CBOR_LIMITS.maxSyncObjects + 1 },
+        () => revisions[0] as CborValue,
+      ),
+    );
+    expect(() => decodeSyncPage(canonicalEncode(oversized))).toThrow(
+      ContractError,
+    );
   });
 
   test("round-trips synchronization pages through CBOR", () => {

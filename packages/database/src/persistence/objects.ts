@@ -11,7 +11,12 @@ import {
   StagingQuotaExceededError,
   sameBytes,
 } from "./repository-core";
-import { inShortTransaction, type TransactionDatabase } from "./transaction";
+import {
+  type ExpiryBatchOptions,
+  inShortTransaction,
+  runExpiryBatches,
+  type TransactionDatabase,
+} from "./transaction";
 import {
   copyBytes,
   PERSISTENCE_LIMITS,
@@ -139,7 +144,9 @@ export class StagedObjectRepository {
         SELECT COUNT(*) AS "count", COALESCE(SUM(octet_length(s."canonicalBytes")), 0) AS "bytes"
         FROM "staged_objects" s JOIN "devices" d ON d."id" = s."actorDeviceId"
         WHERE d."userId" = ${operation.actorUserId}
-          AND s."committedAt" IS NULL AND s."expiresAt" > ${input.createdAt}`;
+          AND s."committedAt" IS NULL`;
+    // Expired but not yet deleted rows still occupy storage, so they count
+    // against the quota until the scheduled expiry removes them.
     const maxObjects = Math.min(
       input.limits?.stagingObjects ?? PERSISTENCE_LIMITS.maxStagingObjects,
       PERSISTENCE_LIMITS.maxStagingObjects,
@@ -186,10 +193,31 @@ export class StagedObjectRepository {
     return staged;
   }
 
-  async expire(database: PersistenceClient, now: Date) {
-    return database.stagedObject.deleteMany({
-      where: { expiresAt: { lte: now }, committedAt: null },
-    });
+  /**
+   * Deletes expired uncommitted staged rows in bounded batches, one short
+   * transaction per batch. Committed rows stay: the
+   * `staged_objects_committed_immutable` trigger keeps them for replays.
+   */
+  async expire(
+    database: TransactionDatabase,
+    now: Date,
+    options?: ExpiryBatchOptions,
+  ) {
+    const count = await runExpiryBatches(async (batchSize) => {
+      const deleted = await inShortTransaction(
+        database,
+        (transaction) => transaction.$executeRaw`
+          DELETE FROM "staged_objects"
+          WHERE ("operationId", "objectId") IN (
+            SELECT "operationId", "objectId" FROM "staged_objects"
+            WHERE "committedAt" IS NULL AND "expiresAt" <= ${now}
+            LIMIT ${batchSize}
+            FOR UPDATE SKIP LOCKED
+          )`,
+      );
+      return { scanned: deleted, affected: deleted };
+    }, options);
+    return { count };
   }
 
   async promote(
@@ -309,13 +337,33 @@ export class OperationRepository {
     };
   }
 
-  async expireStaging(database: TransactionDatabase, now: Date) {
+  /**
+   * Expires STAGED operations past their expiry in bounded batches, one short
+   * transaction per batch, deleting their uncommitted staged rows.
+   */
+  async expireStaging(
+    database: TransactionDatabase,
+    now: Date,
+    options?: ExpiryBatchOptions,
+  ) {
+    return runExpiryBatches(
+      (batchSize) => this.expireStagingBatch(database, now, batchSize),
+      options,
+    );
+  }
+
+  private async expireStagingBatch(
+    database: TransactionDatabase,
+    now: Date,
+    batchSize: number,
+  ) {
     return inShortTransaction(database, async (transaction) => {
       const expired = await transaction.operation.findMany({
         where: { status: "STAGED", expiresAt: { lte: now } },
         select: { id: true, actorUserId: true, actorDeviceId: true },
+        orderBy: { expiresAt: "asc" },
+        take: batchSize,
       });
-      if (expired.length === 0) return 0;
       let expiredCount = 0;
       for (const operation of expired) {
         const result = await transaction.operation.updateMany({
@@ -340,7 +388,7 @@ export class OperationRepository {
         });
         expiredCount += 1;
       }
-      return expiredCount;
+      return { scanned: expired.length, affected: expiredCount };
     });
   }
 
@@ -586,9 +634,10 @@ export class SecurityRequestLogRepository {
 
 export const SECURITY_REQUEST_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Anonymous, unauthenticated probes (`/health`, `/api/v1/capabilities`) are
+// deliberately not recorded: a flood of them must not become database writes.
+// The database CHECK constraint still accepts the historical values.
 export const SECURITY_REQUEST_ENDPOINT_TEMPLATES = Object.freeze([
-  "/health",
-  "/api/v1/capabilities",
   "/api/v1/session",
   "/device",
   "/api/auth/*",

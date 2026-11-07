@@ -119,8 +119,6 @@ export class AdministrationRepository {
         where: { id: input.projectId },
       });
       if (!lockedProject) throw new Error("Project not found");
-      if (lockedProject.lifecycle !== "ACTIVE")
-        throw new ProjectNotActiveError();
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -128,11 +126,15 @@ export class AdministrationRepository {
         lockedProject.teamId,
         "ADMINISTER_PROJECT",
       );
+      // A committed command with this Idempotency-Key is final: replay its
+      // recorded outcome before checking the lifecycle it already changed.
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      if (lockedProject.lifecycle !== "ACTIVE")
+        throw new ProjectNotActiveError();
       const project = await transaction.project.update({
         where: { id: input.projectId },
         data: { lifecycle: "ARCHIVED", archivedAt: input.now ?? new Date() },
@@ -172,8 +174,6 @@ export class AdministrationRepository {
         where: { id: input.projectId },
       });
       if (!lockedProject) throw new Error("Project not found");
-      if (lockedProject.lifecycle !== "ARCHIVED")
-        throw new Error("Project is not archived");
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -181,11 +181,15 @@ export class AdministrationRepository {
         lockedProject.teamId,
         "ADMINISTER_PROJECT",
       );
+      // A committed command with this Idempotency-Key is final: replay its
+      // recorded outcome before checking the lifecycle it already changed.
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      if (lockedProject.lifecycle !== "ARCHIVED")
+        throw new Error("Project is not archived");
       const project = await transaction.project.update({
         where: { id: input.projectId },
         data: { lifecycle: "ACTIVE", archivedAt: null },
@@ -235,8 +239,6 @@ export class AdministrationRepository {
         include: { project: true },
       });
       if (!lockedEnvironment) throw new Error("Environment not found");
-      if (lockedEnvironment.lifecycle !== "ACTIVE")
-        throw new EnvironmentNotActiveError();
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -244,11 +246,15 @@ export class AdministrationRepository {
         lockedEnvironment.project.teamId,
         "ADMINISTER_ENVIRONMENT",
       );
+      // A committed command with this Idempotency-Key is final: replay its
+      // recorded outcome before checking the lifecycle it already changed.
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      if (lockedEnvironment.lifecycle !== "ACTIVE")
+        throw new EnvironmentNotActiveError();
       const environment = await transaction.environment.update({
         where: { id: input.environmentId },
         data: {
@@ -303,10 +309,6 @@ export class AdministrationRepository {
         include: { project: true },
       });
       if (!lockedEnvironment) throw new Error("Environment not found");
-      if (lockedEnvironment.lifecycle !== "ARCHIVED")
-        throw new Error("Environment is not archived");
-      if (lockedEnvironment.project.lifecycle !== "ACTIVE")
-        throw new Error("Project is archived");
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -314,11 +316,17 @@ export class AdministrationRepository {
         lockedEnvironment.project.teamId,
         "ADMINISTER_ENVIRONMENT",
       );
+      // A committed command with this Idempotency-Key is final: replay its
+      // recorded outcome before checking the lifecycle it already changed.
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      if (lockedEnvironment.lifecycle !== "ARCHIVED")
+        throw new Error("Environment is not archived");
+      if (lockedEnvironment.project.lifecycle !== "ACTIVE")
+        throw new Error("Project is archived");
       const environment = await transaction.environment.update({
         where: { id: input.environmentId },
         data: { lifecycle: "ACTIVE", archivedAt: null },
@@ -588,8 +596,6 @@ export class MembershipAdministrationRepository {
       });
       if (!membership || membership.teamId !== input.teamId)
         throw new Error("Membership not found");
-      if (membership.lifecycle === "REMOVED")
-        throw new Error("Membership is already removed");
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
@@ -597,11 +603,15 @@ export class MembershipAdministrationRepository {
         input.teamId,
         managedRoleAction(membership.role),
       );
+      // A committed command with this Idempotency-Key is final: replay its
+      // recorded outcome before checking the lifecycle it already changed.
       const operation = await this.operations.begin(
         transaction,
         input.operation,
       );
       if (operation.idempotent) return operation;
+      if (membership.lifecycle === "REMOVED")
+        throw new Error("Membership is already removed");
       const now = input.now ?? new Date();
       const removed = await transaction.membership.update({
         where: { id: membership.id },

@@ -5,6 +5,7 @@ import {
   parsePeerDevices,
   parseSigningTrustDevices,
   parseWorkspaceCatalog,
+  isWorkspaceFixtureEnabled,
   resolveLiveApiOrigin,
   resolveWorkspaceProfileId,
   type WorkspaceBoundary,
@@ -220,22 +221,21 @@ export const GET = async (request: Request) => {
   // request's profile parameter is honored only by the development fixture.
   const deploymentProfileId = resolveWorkspaceProfileId();
   const profileParam = url.searchParams.get("profile");
-  const profileId =
-    process.env.DOTRELAY_WORKSPACE_FIXTURE === "1"
-      ? isProfileId(profileParam)
-        ? profileParam
-        : deploymentProfileId
-      : deploymentProfileId;
+  const fixture = isWorkspaceFixtureEnabled();
+  const profileId = fixture
+    ? isProfileId(profileParam)
+      ? profileParam
+      : deploymentProfileId
+    : deploymentProfileId;
   const apiOrigin = resolveLiveApiOrigin();
   const environmentParam = url.searchParams.get("environment");
   const deviceId = request.headers.get(BROWSER_DEVICE_ID_HEADER);
-  const boundary =
-    process.env.DOTRELAY_WORKSPACE_FIXTURE === "1"
-      ? e2eWorkspaceBoundary(profileId, {
-          ...(environmentParam ? { environmentId: environmentParam } : {}),
-          ...(deviceId ? { deviceId } : {}),
-        })
-      : await fetchLiveBoundary(profileId, request, apiOrigin);
+  const boundary = fixture
+    ? e2eWorkspaceBoundary(profileId, {
+        ...(environmentParam ? { environmentId: environmentParam } : {}),
+        ...(deviceId ? { deviceId } : {}),
+      })
+    : await fetchLiveBoundary(profileId, request, apiOrigin);
   const localBoundary =
     boundary.source === "fixture" && apiOrigin
       ? {

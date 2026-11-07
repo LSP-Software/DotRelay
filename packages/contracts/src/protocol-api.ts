@@ -266,29 +266,35 @@ export const parseFinalizePublicationRequest = (
   ]);
   if (
     typeof revisionBody.projectEpoch !== "number" ||
-    !Number.isInteger(revisionBody.projectEpoch) ||
+    !Number.isSafeInteger(revisionBody.projectEpoch) ||
     revisionBody.projectEpoch < 0
   )
     contractError("invalid_request");
   if (
     typeof revisionBody.authoredAtMs !== "number" ||
-    !Number.isInteger(revisionBody.authoredAtMs) ||
+    !Number.isSafeInteger(revisionBody.authoredAtMs) ||
     revisionBody.authoredAtMs < 0
   )
     contractError("invalid_request");
   if (
     typeof descriptorBody.schemaVersion !== "number" ||
-    !Number.isInteger(descriptorBody.schemaVersion) ||
+    !Number.isSafeInteger(descriptorBody.schemaVersion) ||
     descriptorBody.schemaVersion < 1
   )
     contractError("invalid_request");
   if (
     typeof descriptorBody.laneCount !== "number" ||
-    !Number.isInteger(descriptorBody.laneCount) ||
-    descriptorBody.laneCount < 0
+    !Number.isSafeInteger(descriptorBody.laneCount) ||
+    descriptorBody.laneCount < 0 ||
+    descriptorBody.laneCount > CBOR_LIMITS.maxManifestLaneCommitments
   )
     contractError("invalid_request");
-  if (!Array.isArray(body.lanes) || !Array.isArray(body.commitments))
+  if (
+    !Array.isArray(body.lanes) ||
+    !Array.isArray(body.commitments) ||
+    body.lanes.length > CBOR_LIMITS.maxManifestLaneCommitments ||
+    body.commitments.length > CBOR_LIMITS.maxManifestLaneCommitments
+  )
     contractError("invalid_request");
   return Object.freeze({
     environmentId: parseUuid(body.environmentId, "environmentId"),
@@ -361,14 +367,16 @@ export const parseFinalizePublicationRequest = (
         ]);
         if (
           typeof lane.projectEpoch !== "number" ||
-          !Number.isInteger(lane.projectEpoch) ||
+          !Number.isSafeInteger(lane.projectEpoch) ||
           lane.projectEpoch < 0 ||
           typeof lane.plaintextLength !== "number" ||
-          !Number.isInteger(lane.plaintextLength) ||
+          !Number.isSafeInteger(lane.plaintextLength) ||
           lane.plaintextLength < 0 ||
+          lane.plaintextLength > CBOR_LIMITS.maxObjectBytes ||
           typeof lane.ciphertextLength !== "number" ||
-          !Number.isInteger(lane.ciphertextLength) ||
-          lane.ciphertextLength < 0
+          !Number.isSafeInteger(lane.ciphertextLength) ||
+          lane.ciphertextLength < 0 ||
+          lane.ciphertextLength > CBOR_LIMITS.maxObjectBytes
         )
           contractError("invalid_request");
         const parsed: {
@@ -407,7 +415,7 @@ export const parseFinalizePublicationRequest = (
         if (lane.valueGeneration !== undefined) {
           if (
             typeof lane.valueGeneration !== "number" ||
-            !Number.isInteger(lane.valueGeneration) ||
+            !Number.isSafeInteger(lane.valueGeneration) ||
             lane.valueGeneration < 0
           )
             contractError("invalid_request");
@@ -441,14 +449,16 @@ export const parseFinalizePublicationRequest = (
         ]);
         if (
           typeof commitment.ordinal !== "number" ||
-          !Number.isInteger(commitment.ordinal) ||
+          !Number.isSafeInteger(commitment.ordinal) ||
           commitment.ordinal < 0 ||
+          commitment.ordinal >= CBOR_LIMITS.maxManifestLaneCommitments ||
           typeof commitment.projectEpoch !== "number" ||
-          !Number.isInteger(commitment.projectEpoch) ||
+          !Number.isSafeInteger(commitment.projectEpoch) ||
           commitment.projectEpoch < 0 ||
           typeof commitment.ciphertextLength !== "number" ||
-          !Number.isInteger(commitment.ciphertextLength) ||
-          commitment.ciphertextLength < 0
+          !Number.isSafeInteger(commitment.ciphertextLength) ||
+          commitment.ciphertextLength < 0 ||
+          commitment.ciphertextLength > CBOR_LIMITS.maxObjectBytes
         )
           contractError("invalid_request");
         const parsed: {
@@ -478,7 +488,7 @@ export const parseFinalizePublicationRequest = (
         if (commitment.valueGeneration !== undefined) {
           if (
             typeof commitment.valueGeneration !== "number" ||
-            !Number.isInteger(commitment.valueGeneration) ||
+            !Number.isSafeInteger(commitment.valueGeneration) ||
             commitment.valueGeneration < 0
           )
             contractError("invalid_request");
@@ -638,11 +648,34 @@ const readUintField = (value: CborValue | undefined): bigint => {
   contractError("invalid_request");
 };
 
+const MAX_SYNC_CURSOR_LENGTH = 1024;
+
 export const decodeSyncPage = (encoded: Uint8Array): SyncPageWire => {
   const decoded = canonicalDecode(encoded);
   if (!(decoded instanceof Map)) contractError("invalid_request");
   const revisionsValue = decoded.get(SYNC_FIELD.revisions);
   if (!Array.isArray(revisionsValue)) contractError("invalid_request");
+  // Mirror encodeSyncPage: a server cannot hand a client an oversized page.
+  let objectCount = 0;
+  let byteCount = 0;
+  for (const revisionValue of revisionsValue) {
+    if (!(revisionValue instanceof Map)) contractError("invalid_request");
+    const objectsValue = revisionValue.get(SYNC_FIELD.objects);
+    if (!Array.isArray(objectsValue)) contractError("invalid_request");
+    objectCount += objectsValue.length + 1;
+    for (const objectValue of objectsValue) {
+      const bytes =
+        objectValue instanceof Map
+          ? objectValue.get(SYNC_FIELD.canonicalBytes)
+          : undefined;
+      if (bytes instanceof Uint8Array) byteCount += bytes.length;
+    }
+  }
+  if (
+    objectCount > CBOR_LIMITS.maxSyncObjects ||
+    byteCount > CBOR_LIMITS.maxSyncBytes
+  )
+    contractError("payload_too_large");
   const revisions = revisionsValue.map((revisionValue) => {
     if (!(revisionValue instanceof Map)) contractError("invalid_request");
     const objectsValue = revisionValue.get(SYNC_FIELD.objects);
@@ -704,7 +737,8 @@ export const decodeSyncPage = (encoded: Uint8Array): SyncPageWire => {
     projectEpoch: readUintField(decoded.get(SYNC_FIELD.projectEpoch)),
     revisions: Object.freeze(revisions),
     nextCursor:
-      typeof nextCursorValue === "string"
+      typeof nextCursorValue === "string" &&
+      nextCursorValue.length <= MAX_SYNC_CURSOR_LENGTH
         ? nextCursorValue
         : nextCursorValue === undefined
           ? null
@@ -738,10 +772,10 @@ export const parseEpochRotationRequest = (
   }>(value, ["projectId", "expectedEpoch", "newEpoch", "transitions"]);
   if (
     typeof body.expectedEpoch !== "number" ||
-    !Number.isInteger(body.expectedEpoch) ||
+    !Number.isSafeInteger(body.expectedEpoch) ||
     body.expectedEpoch < 0 ||
     typeof body.newEpoch !== "number" ||
-    !Number.isInteger(body.newEpoch) ||
+    !Number.isSafeInteger(body.newEpoch) ||
     body.newEpoch < 0 ||
     !Array.isArray(body.transitions)
   )

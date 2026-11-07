@@ -9,6 +9,12 @@
       "integrity": "sha512-vSnhkW4Ay9KaEnkGqjvwqsLp7aW3Dr+7TLvlFzN08oL9ZLu1Fxy8aSH1uAwlF6cJiSUPK99EIIpBQ4BQ68XZGA=="
     },
     {
+      "name": "@oven/bun-linux-aarch64",
+      "version": "1.4.4-canary.20261030.1",
+      "url": "https://registry.npmjs.org/@oven/bun-linux-aarch64/-/bun-linux-aarch64-1.4.4-canary.20261030.1.tgz",
+      "integrity": "sha512-O5n6tjvgTgQNx3wngh/GooSfDvNvYGNz7+8x+D20f7fAA7wDkuOoQDVzjoHWy6KH+EggqtJLQNRyFxj2X5qAKw=="
+    },
+    {
       "name": "@oven/bun-darwin-aarch64",
       "version": "1.4.4-canary.20261030.1",
       "url": "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.4.4-canary.20261030.1.tgz",

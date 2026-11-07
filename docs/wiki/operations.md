@@ -41,7 +41,8 @@ approved stable numeric IDs. Explicit `ALPHA_ADMISSION_REQUIRED=false` disables
 admission, and must never be set accidentally. Behind TLS termination configure
 `SERVER_PROFILE_TRUST_PROXY=true` and the exact trusted proxy CIDRs; prevent any
 public direct access to the API container. Use a trusted proxy that overwrites
-forwarding headers. Expose only the TLS proxy, keep PostgreSQL/Valkey private,
+forwarding headers. When the web app and the API use sibling hosts, set `COOKIE_DOMAIN` to
+their shared registrable domain (see [authentication](authentication.md)). Expose only the TLS proxy, keep PostgreSQL/Valkey private,
 run API/web non-root with read-only roots, drop capabilities, set no-new-privileges,
 apply memory/CPU/PID limits and provide bounded private `/tmp` tmpfs volumes.
 The root `compose.yaml` is **development services only**, not a production bundle.
@@ -49,10 +50,13 @@ The root `compose.yaml` is **development services only**, not a production bundl
 `/health` is process liveness. `/ready` checks PostgreSQL connectivity and exact
 applied migration names/checksums, including failed migrations and unexpected
 newer migrations; it returns only a generic 200 or 503. It has a three-second
-response budget. `MAINTENANCE_MODE=true` makes readiness fail. Keep health endpoints
+response budget. When `VALKEY_URL` is set, readiness also pings Valkey.
+`MAINTENANCE_MODE=true` makes readiness fail, as does SIGTERM, which then waits
+`SHUTDOWN_DRAIN_MS` (default 5000) before closing the listener. Keep health endpoints
 on private monitoring paths where possible. Production startup never migrates.
 If the orchestrator overrides Docker's built-in healthcheck, configure
-`bun /app/scripts/probe-ready.ts` instead of an inherited curl/wget command;
+`bun /app/scripts/probe-health.ts` (liveness, `/health`) or
+`bun /app/scripts/probe-ready.ts` (readiness) instead of an inherited curl/wget command;
 the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 
 ## Upgrade and migrations

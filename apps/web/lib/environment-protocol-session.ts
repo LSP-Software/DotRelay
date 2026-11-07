@@ -3,6 +3,7 @@ import {
   type ProtocolTransport,
   type PublicationContext,
   type RevisionSigningTrust,
+  type SharedValueKeyRing,
   type SyncPageWire,
 } from "@dotrelay/client";
 import type { EnvironmentVariable } from "./environment-workflow";
@@ -28,6 +29,9 @@ export const createEnvironmentProtocolSession = (input: {
   readonly userDefinedValuePrivateKey?: CryptoKey;
   readonly signingTrustKeys?: RevisionSigningTrust;
   readonly sharedValueSecret?: Uint8Array;
+  // Keys of earlier Project epochs, so content sealed before a rotation
+  // stays readable; publications always use sharedValueSecret.
+  readonly sharedValueKeyRing?: SharedValueKeyRing;
   readonly userDefinedValueSecret?: Uint8Array;
 }): EnvironmentProtocolSession => {
   const signingTrustKeys =
