@@ -27,6 +27,12 @@ const ids = {
   actorDeviceId: "66666666-6666-4666-8666-666666666666",
 };
 
+// Every sync in these tests starts from the Environment's genesis anchor.
+const fromGenesis = {
+  expectedTrustedRevisionId: ids.environmentId,
+  expectedTrustedRevisionHash: new Uint8Array(48),
+} as const;
+
 const variable = (
   overrides: Partial<PublicationVariable> = {},
 ): PublicationVariable => ({
@@ -220,6 +226,7 @@ describe("publication artifacts", () => {
     await verifySyncPage(
       await syncPageFor(artifacts),
       await exportSigningPublicKey(signing.publicKey),
+      fromGenesis,
     );
   });
 
@@ -271,10 +278,10 @@ describe("publication artifacts", () => {
     const page = await syncPageFor(artifacts);
     const otherKey = await exportSigningPublicKey(other.publicKey);
     const authorKey = await exportSigningPublicKey(author.publicKey);
-    await expect(verifySyncPage(page, otherKey)).rejects.toThrow(
+    await expect(verifySyncPage(page, otherKey, fromGenesis)).rejects.toThrow(
       "signature verification failed",
     );
-    await verifySyncPage(page, [otherKey, authorKey]);
+    await verifySyncPage(page, [otherKey, authorKey], fromGenesis);
   });
 
   test("rolls back only the selected Value lane without rewriting its definition", async () => {
@@ -352,6 +359,7 @@ describe("publication artifacts", () => {
           nextCursor: null,
         },
         await exportSigningPublicKey(signing.publicKey),
+        fromGenesis,
       ),
     ).rejects.toThrow("revision digest mismatch");
   });
@@ -410,6 +418,7 @@ describe("publication artifacts", () => {
         nextCursor: null,
       },
       await exportSigningPublicKey(signing.publicKey),
+      fromGenesis,
     );
   });
 
@@ -546,7 +555,7 @@ describe("publication artifacts", () => {
     await verifySyncPage(
       page,
       await exportSigningPublicKey(signing.publicKey),
-      { actorUserId: ids.actorUserId },
+      { ...fromGenesis, actorUserId: ids.actorUserId },
     );
     const decoded = await decodeSyncVariables(
       page,

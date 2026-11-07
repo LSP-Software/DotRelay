@@ -1,3 +1,4 @@
+import { ProtocolVerificationError } from "../trust/verify";
 import { ProtocolTransportError } from "./transport-error";
 import {
   finalizePublication,
@@ -188,6 +189,10 @@ const requireOk = async (response: ResponseLike): Promise<void> => {
 };
 
 const hex = (bytes: Uint8Array): string => sha384ToHex(bytes);
+
+const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.length === right.length &&
+  left.every((byte, index) => byte === right[index]);
 
 const serializeFinalize = (
   request: FinalizePublicationRequest,
@@ -383,6 +388,19 @@ export const createProtocolTransport = (
         );
         if (pageCount > MAX_SYNC_PAGES || accumulatedBytes > MAX_SYNC_BYTES)
           throw new Error("protocol sync pagination budget exceeded");
+        // Every page must answer from the starting point this Device asked
+        // for; the merged page carries it, so a page that moved it would
+        // let verification accept a history that skips earlier Revisions.
+        if (
+          page.trustedRevisionId !== request.request.trustedRevisionId ||
+          !sameBytes(
+            page.trustedRevisionHash,
+            request.request.trustedRevisionHash,
+          )
+        )
+          throw new ProtocolVerificationError(
+            "protocol sync page does not start from the requested trusted revision",
+          );
         revisions.push(...page.revisions);
         if (page.nextCursor === null) break;
         if (seenCursors.has(page.nextCursor))
@@ -401,6 +419,8 @@ export const createProtocolTransport = (
       }
       return Object.freeze({
         ...page,
+        trustedRevisionId: request.request.trustedRevisionId,
+        trustedRevisionHash: request.request.trustedRevisionHash,
         revisions: Object.freeze(revisions),
         nextCursor: null,
       });

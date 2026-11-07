@@ -281,6 +281,8 @@ export const publishAccountKeyEnvelope = async (
 export type AccountKeyEnvelopeEntry = Readonly<{
   readonly envelopeType: "project-epoch-key" | "user-value-key";
   readonly object: string;
+  readonly projectId?: string;
+  readonly projectEpoch?: string;
   readonly ownerUserId?: string;
   readonly valueGeneration?: string;
   readonly creatorPublicKey?: string;
@@ -308,6 +310,12 @@ export const fetchAccountKeyEnvelopes = async (
       Object.freeze({
         envelopeType: candidate.envelopeType,
         object: candidate.object,
+        ...(typeof candidate.projectId === "string"
+          ? { projectId: candidate.projectId }
+          : {}),
+        ...(typeof candidate.projectEpoch === "string"
+          ? { projectEpoch: candidate.projectEpoch }
+          : {}),
         ...(typeof candidate.ownerUserId === "string"
           ? { ownerUserId: candidate.ownerUserId }
           : {}),
