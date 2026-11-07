@@ -2196,6 +2196,11 @@ export const run = async (
   }
 };
 
+const writeFully = (stream: NodeJS.WriteStream, text: string): Promise<void> =>
+  new Promise((resolve) => {
+    stream.write(text, () => resolve());
+  });
+
 if (import.meta.main) {
   const result = await run(
     Bun.argv.slice(2),
@@ -2203,14 +2208,16 @@ if (import.meta.main) {
       ? {}
       : { stdoutIsTerminal: process.stdout.isTTY },
   );
-  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stdout) await writeFully(process.stdout, result.stdout);
   if (result.exitCode === 0) {
     const displayed = consumeDisplayedRecoveryCodePath();
     if (displayed) await unlink(displayed).catch(() => {});
   }
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.stderr) await writeFully(process.stderr, result.stderr);
   if (typeof process.stdin.setRawMode === "function")
     process.stdin.setRawMode(false);
   process.stdin.pause();
+  // Exit only after both writes have been flushed so piped output is not
+  // truncated.
   process.exit(result.exitCode);
 }

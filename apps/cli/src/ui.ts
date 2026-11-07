@@ -369,14 +369,14 @@ export const readTerminalSecret = async (
           }
           if (ch === "\u0008" || ch === "\u007f") {
             if (buffer.length > 0) {
-              buffer = buffer.slice(0, -1);
-              render("·".repeat(buffer.length));
+              buffer = [...buffer].slice(0, -1).join("");
+              render("·".repeat([...buffer].length));
             }
             continue;
           }
-          if (ch >= " " && ch <= "~") {
+          if (!/[\u0000-\u001f\u007f-\u009f]/.test(ch)) {
             buffer += ch;
-            render("·".repeat(buffer.length));
+            render("·".repeat([...buffer].length));
           }
         }
       }
