@@ -1,4 +1,5 @@
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, open as openFile, readFile, rm } from "node:fs/promises";
+import { dirname } from "node:path";
 import {
   createProjectEpochGrantBootstrap,
   openProjectEpochKeyLink,
@@ -6,7 +7,6 @@ import {
 } from "@dotrelay/client";
 import { open, seal, sha384 } from "@dotrelay/contracts";
 import { CliError } from "./errors";
-import { atomicWriteProtectedFile } from "./output";
 import {
   base64,
   type Boundary,
@@ -65,17 +65,48 @@ export const writePendingRotation = async (
     newEpoch: input.newEpoch,
     sealedKey: base64(sealed),
   };
-  await atomicWriteProtectedFile(
-    pendingRotationPath(options, input.projectId),
-    `${JSON.stringify(record)}\n`,
-  );
+  // An exclusive create is the reservation: of two concurrent rotations of
+  // one Project, only the first holds the record; the other must abort.
+  const path = pendingRotationPath(options, input.projectId);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  let handle: Awaited<ReturnType<typeof openFile>>;
+  try {
+    handle = await openFile(path, "wx", 0o600);
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "EEXIST")
+      throw new PendingRotationExistsError();
+    throw error;
+  }
+  try {
+    await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 };
 
-export const clearPendingRotation = (
+export class PendingRotationExistsError extends CliError {
+  constructor() {
+    super(
+      "conflict",
+      "another rotation of this project is in progress or has an unknown outcome on this device. Run dotrelay pull, then rotate again if you still need to",
+      {},
+      "epoch_rotation_uncertain",
+    );
+  }
+}
+
+// Removes the record only when it belongs to this operation, so one
+// rotation can never discard the key another rotation reserved.
+export const clearPendingRotation = async (
   options: WorkflowOptions,
   projectId: string,
-): Promise<void> =>
-  rm(pendingRotationPath(options, projectId), { force: true });
+  operationId: string,
+): Promise<void> => {
+  const pending = await readPendingRotation(options, projectId);
+  if (pending?.operationId === operationId)
+    await rm(pendingRotationPath(options, projectId), { force: true });
+};
 
 const readPendingRotation = async (
   options: WorkflowOptions,
@@ -172,7 +203,7 @@ export const resolvePendingRotation = async (
     trustedSigningKeys: readonly Uint8Array[];
     cancel: CancelRotation;
   }>,
-): Promise<Uint8Array | null> => {
+): Promise<Readonly<{ key: Uint8Array; operationId: string }> | null> => {
   const { projectId, teamId } = input.boundary.environment;
   if (!projectId || !teamId) return null;
   const pending = await readPendingRotation(input.options, projectId);
@@ -183,13 +214,13 @@ export const resolvePendingRotation = async (
   if (currentEpoch < pending.newEpoch) {
     // The request may still be in flight; only a cancel settles it.
     if (await input.cancel(pending.operationId))
-      await clearPendingRotation(input.options, projectId);
+      await clearPendingRotation(input.options, projectId, pending.operationId);
     return null;
   }
   if (currentEpoch > pending.newEpoch) {
     // Whichever rotation reached that epoch, its successor's link carries
     // the key; a staged operation for an older epoch can no longer commit.
-    await clearPendingRotation(input.options, projectId);
+    await clearPendingRotation(input.options, projectId, pending.operationId);
     return null;
   }
   let key: Uint8Array;
@@ -200,7 +231,7 @@ export const resolvePendingRotation = async (
       associatedData(projectId, pending.newEpoch),
     );
   } catch {
-    await clearPendingRotation(input.options, projectId);
+    await clearPendingRotation(input.options, projectId, pending.operationId);
     return null;
   }
   for (const encoded of input.boundary.epochKeyLinks) {
@@ -216,13 +247,13 @@ export const resolvePendingRotation = async (
         toKey: key,
         trustedSigningKeys: input.trustedSigningKeys,
       });
-      return key;
+      return { key, operationId: pending.operationId };
     } catch {
       // Not this rotation's link.
     }
   }
   key.fill(0);
-  await clearPendingRotation(input.options, projectId);
+  await clearPendingRotation(input.options, projectId, pending.operationId);
   return null;
 };
 

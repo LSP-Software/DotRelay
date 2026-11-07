@@ -14,6 +14,8 @@ import {
 import { type Boundary, parseBoundary } from "./workflow-core";
 import {
   assertNoPendingRotation,
+  clearPendingRotation,
+  PendingRotationExistsError,
   pendingRotationPath,
   RotationOutcomeUnknownError,
   resolvePendingRotation,
@@ -109,14 +111,14 @@ const exists = async (path: string) =>
 describe("an uncertain Project epoch rotation", () => {
   test("recovers the new key once the served link proves the rotation committed", async () => {
     const run = await scenario();
-    const key = await resolvePendingRotation({
+    const recovered = await resolvePendingRotation({
       options: run.options,
       boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
       encryptionPrivateKey: run.encryption.privateKey,
       trustedSigningKeys: run.trustedSigningKeys,
       cancel: async () => true,
     });
-    expect(key).toEqual(run.newKey);
+    expect(recovered?.key).toEqual(run.newKey);
     // The caller clears the record after storing the key.
     expect(await exists(pendingRotationPath(run.options, ids.project))).toBe(
       true,
@@ -154,13 +156,15 @@ describe("an uncertain Project epoch rotation", () => {
     expect(await readFile(path, "utf8")).toBe(before);
     // Once it commits, the next session recovers the key.
     expect(
-      await resolvePendingRotation({
-        options: run.options,
-        boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
-        encryptionPrivateKey: run.encryption.privateKey,
-        trustedSigningKeys: run.trustedSigningKeys,
-        cancel: async () => false,
-      }),
+      (
+        await resolvePendingRotation({
+          options: run.options,
+          boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
+          encryptionPrivateKey: run.encryption.privateKey,
+          trustedSigningKeys: run.trustedSigningKeys,
+          cancel: async () => false,
+        })
+      )?.key,
     ).toEqual(run.newKey);
   });
 
@@ -224,6 +228,40 @@ describe("an uncertain Project epoch rotation", () => {
         cancel: async () => true,
       }),
     ).toBeNull();
+  });
+});
+
+describe("concurrent rotations of one Project", () => {
+  test("the second rotation cannot reserve or discard the first one's key", async () => {
+    // Both processes passed the guard; the first reserved the record.
+    const run = await scenario();
+    const path = pendingRotationPath(run.options, ids.project);
+    const reserved = await readFile(path, "utf8");
+    const second = crypto.randomUUID();
+    await expect(
+      writePendingRotation(run.options, {
+        operationId: second,
+        projectId: ids.project,
+        newEpoch: 2,
+        newEpochKey: crypto.getRandomValues(new Uint8Array(32)),
+        encryptionPublicKey: run.encryption.publicKey,
+      }),
+    ).rejects.toBeInstanceOf(PendingRotationExistsError);
+    // The second process fails and cleans up only its own operation.
+    await clearPendingRotation(run.options, ids.project, second);
+    expect(await readFile(path, "utf8")).toBe(reserved);
+    // The first rotation's key is still recoverable once it commits.
+    expect(
+      (
+        await resolvePendingRotation({
+          options: run.options,
+          boundary: run.boundaryAt("2", [run.link.canonicalBytes]),
+          encryptionPrivateKey: run.encryption.privateKey,
+          trustedSigningKeys: run.trustedSigningKeys,
+          cancel: async () => false,
+        })
+      )?.key,
+    ).toEqual(run.newKey);
   });
 });
 

@@ -277,7 +277,7 @@ export const loadWorkflowSession = async (
   // A rotation from this Device whose commit was uncertain left its new key
   // sealed locally. When the served link proves it committed, that key is
   // this epoch's key: adopt it before anything could mint another one.
-  const recoveredRotationKey = await resolvePendingRotation({
+  const recoveredRotation = await resolvePendingRotation({
     options,
     boundary,
     encryptionPrivateKey: keys.encryptionPrivateKey,
@@ -297,6 +297,7 @@ export const loadWorkflowSession = async (
           () => false,
         ),
   });
+  const recoveredRotationKey = recoveredRotation?.key;
   if (recoveredRotationKey) epochKey = recoveredRotationKey;
   else if (
     boundary.environment.projectId &&
@@ -488,7 +489,11 @@ export const loadWorkflowSession = async (
         signingPrivateKey: keys.signingPrivateKey,
         epochKey: recoveredRotationKey,
       });
-    await clearPendingRotation(options, boundary.environment.projectId);
+    await clearPendingRotation(
+      options,
+      boundary.environment.projectId,
+      recoveredRotation?.operationId ?? "",
+    );
   }
   // A locked Device's missing Account Master Key is surfaced by the device
   // backup/recover commands, not here: the missing-grant action above already

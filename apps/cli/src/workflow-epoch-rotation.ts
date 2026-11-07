@@ -173,7 +173,6 @@ export const rotateProjectEpoch = async (
     await workflow.transport
       .cancel({ operationId, deviceId: workflow.deviceId })
       .catch(() => undefined);
-    await clearPendingRotation(options, context.projectId);
     artifacts.newEpochKey.fill(0);
     if (error instanceof CliError || error instanceof CliInvocationError)
       throw error;
@@ -201,13 +200,19 @@ export const rotateProjectEpoch = async (
   }
   // From here the rotation may commit even if no answer arrives, so the new
   // key is kept sealed to this Device until the outcome is known.
-  await writePendingRotation(options, {
-    operationId,
-    projectId: context.projectId,
-    newEpoch: previousEpoch + 1,
-    newEpochKey: artifacts.newEpochKey,
-    encryptionPublicKey,
-  });
+  // Losing the reservation to a concurrent rotation aborts this one before
+  // it can commit; the cancel cannot touch the other rotation's record.
+  try {
+    await writePendingRotation(options, {
+      operationId,
+      projectId: context.projectId,
+      newEpoch: previousEpoch + 1,
+      newEpochKey: artifacts.newEpochKey,
+      encryptionPublicKey,
+    });
+  } catch (error) {
+    return settleFailure(error);
+  }
   try {
     rotated = await submitRotation({
       attempt: () =>
@@ -223,7 +228,8 @@ export const rotateProjectEpoch = async (
             () => true,
             () => false,
           ),
-      discardPending: () => clearPendingRotation(options, context.projectId),
+      discardPending: () =>
+        clearPendingRotation(options, context.projectId, operationId),
     });
   } catch (error) {
     artifacts.newEpochKey.fill(0);
@@ -244,7 +250,7 @@ export const rotateProjectEpoch = async (
     previousEpoch + 1,
     artifacts.newEpochKey,
   );
-  await clearPendingRotation(options, context.projectId);
+  await clearPendingRotation(options, context.projectId, operationId);
   const environmentIds = rotationEnvironments.map(
     (target) => target.environmentId,
   );
