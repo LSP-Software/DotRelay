@@ -58,6 +58,20 @@ export type WorkspaceMembershipPeriod = Readonly<{
   readonly untilMs: number | null;
 }>;
 
+/**
+ * The service's note that the selected Project's key should be rotated: a
+ * Member was removed or a Device revoked after the current epoch began, so
+ * the old key may still be held outside the Team. It never blocks
+ * publication; it clears when a rotation commits.
+ */
+export type RotationOwed = Readonly<{
+  /** ISO instant of the first removal or revocation since the last rotation. */
+  readonly since: string;
+  readonly sinceEpoch: string;
+  readonly membershipRemovals: number;
+  readonly deviceRevocations: number;
+}>;
+
 export type WorkspaceBoundary = Readonly<{
   readonly source: "fixture" | "live";
   readonly connection: "online" | "offline";
@@ -70,6 +84,8 @@ export type WorkspaceBoundary = Readonly<{
     readonly teamId?: string;
     readonly headHash?: string | null;
     readonly projectEpoch?: string;
+    /** A key rotation owed since a Member was removed or a Device revoked. */
+    readonly rotationOwed?: RotationOwed | null;
   }>;
   readonly session: Readonly<{
     readonly active: boolean;
@@ -323,6 +339,40 @@ export const parseSigningTrustDevices = (
     ];
   });
 };
+
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+export const parseRotationOwed = (value: unknown): RotationOwed | null => {
+  if (!isRecord(value)) return null;
+  const { since, sinceEpoch, membershipRemovals, deviceRevocations } = value;
+  if (
+    typeof since !== "string" ||
+    Number.isNaN(Date.parse(since)) ||
+    typeof sinceEpoch !== "string" ||
+    !isCount(membershipRemovals) ||
+    !isCount(deviceRevocations) ||
+    membershipRemovals + deviceRevocations === 0
+  )
+    return null;
+  return { since, sinceEpoch, membershipRemovals, deviceRevocations };
+};
+
+const plural = (count: number, one: string, many: string): string =>
+  `${count} ${count === 1 ? one : many}`;
+
+/** What happened since the last rotation, e.g. "1 member removed". */
+export const rotationOwedCause = (owed: RotationOwed): string =>
+  [
+    owed.membershipRemovals > 0
+      ? `${plural(owed.membershipRemovals, "member", "members")} removed`
+      : null,
+    owed.deviceRevocations > 0
+      ? `${plural(owed.deviceRevocations, "device", "devices")} revoked`
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" and ");
 
 export const enrolledDeviceRows = (
   boundary: Pick<WorkspaceBoundary, "device" | "peerDevices" | "grantsReady">,

@@ -6,10 +6,12 @@ import {
   fetchWorkspaceBoundary,
   isWorkspaceFixtureEnabled,
   parsePeerDevices,
+  parseRotationOwed,
   parseWorkspaceCatalog,
   projectDisplayName,
   resolveLiveApiOrigin,
   resolveWorkspaceProfileId,
+  rotationOwedCause,
 } from "./workspace-boundary";
 
 test("local workspace talks to the loopback API when no origin env is set", () => {
@@ -385,4 +387,33 @@ test("parsePeerDevices keeps optional display fields", () => {
       clientSummary: "dotrelay-cli",
     },
   ]);
+});
+
+test("an owed rotation is kept only when it is well formed and names a cause", () => {
+  const owed = {
+    since: "2026-11-12T09:30:00.000Z",
+    sinceEpoch: "3",
+    membershipRemovals: 1,
+    deviceRevocations: 0,
+  };
+  expect(parseRotationOwed(owed)).toEqual(owed);
+  expect(parseRotationOwed(null)).toBeNull();
+  expect(parseRotationOwed(undefined)).toBeNull();
+  expect(parseRotationOwed({ ...owed, since: "yesterday" })).toBeNull();
+  expect(parseRotationOwed({ ...owed, sinceEpoch: 3 })).toBeNull();
+  expect(parseRotationOwed({ ...owed, membershipRemovals: -1 })).toBeNull();
+  expect(parseRotationOwed({ ...owed, membershipRemovals: 0 })).toBeNull();
+});
+
+test("the owed rotation's cause names removals and revocations", () => {
+  const base = { since: "2026-11-12T09:30:00.000Z", sinceEpoch: "3" };
+  expect(
+    rotationOwedCause({ ...base, membershipRemovals: 1, deviceRevocations: 0 }),
+  ).toBe("1 member removed");
+  expect(
+    rotationOwedCause({ ...base, membershipRemovals: 0, deviceRevocations: 2 }),
+  ).toBe("2 devices revoked");
+  expect(
+    rotationOwedCause({ ...base, membershipRemovals: 3, deviceRevocations: 1 }),
+  ).toBe("3 members removed and 1 device revoked");
 });

@@ -148,6 +148,7 @@ import {
   type ResourceLifecycle,
   resolveApiOrigin,
   resolveWorkspaceProfileId,
+  rotationOwedCause,
   type WorkspaceBoundary,
   type WorkspaceProfileId,
   type WorkspaceProject,
@@ -183,6 +184,7 @@ import {
 import {
   DeviceRevokedDialog,
   MemberRemovedNotice,
+  PROJECT_ROTATE_COMMAND,
   type RemovalTarget,
   RemoveMemberDialog,
   RevokeDeviceDialog,
@@ -304,6 +306,12 @@ const MemberAccountTrust = ({
     </div>
   );
 };
+
+const shortDate = (iso: string): string =>
+  new Date(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
 
 const roleLabel = (role: MembershipRole | undefined): string =>
   role === "OWNER" ? "Owner" : role === "ADMIN" ? "Admin" : "Member";
@@ -871,6 +879,14 @@ export const WorkspaceShell = ({
       : (teams.find((team) => team.id === teamId)?.role ?? "MEMBER");
   const effectiveRole = teamRoleFor(selectedTeam?.id ?? null);
   const canAdminister = isPrivilegedRole(effectiveRole);
+  // Advice only: an owed rotation never blocks publication, and only the
+  // owners and admins who can rotate are asked to.
+  const rotationOwed =
+    canAdminister &&
+    selectedProject &&
+    displayBoundary.environment.projectId === selectedProject.id
+      ? (displayBoundary.environment.rotationOwed ?? null)
+      : null;
   const cliCommand = `dotrelay setup ${displayBoundary.profile.origin}`;
   const currentIdentity = environmentContextIdentity({
     profileId,
@@ -3381,6 +3397,31 @@ export const WorkspaceShell = ({
                     </Tabs>
                     {newEnvironmentControl(selectedProject)}
                   </div>
+                  {rotationOwed ? (
+                    <Alert
+                      className="mb-6 border-amber-300/30 bg-amber-300/5"
+                      data-testid="rotation-owed"
+                    >
+                      <KeyRound aria-hidden="true" className="text-amber-300" />
+                      <AlertTitle>
+                        {rotationOwedCause(rotationOwed)} since{" "}
+                        {shortDate(rotationOwed.since)}
+                      </AlertTitle>
+                      <AlertDescription className="space-y-3">
+                        <p>
+                          They may still hold this project's key. Rotate it by
+                          running this in the project's repository, so new
+                          values use a key they never had. Then change any
+                          secrets they could already read. Publishing keeps
+                          working meanwhile.
+                        </p>
+                        <CopyableCommand
+                          data-testid="rotation-owed-command"
+                          value={PROJECT_ROTATE_COMMAND}
+                        />
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
                 </section>
               ) : null}
 

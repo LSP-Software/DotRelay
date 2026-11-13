@@ -3,6 +3,7 @@ import {
   e2eWorkspaceBoundary,
   emptyWorkspaceBoundary,
   parsePeerDevices,
+  parseRotationOwed,
   parseSigningTrustDevices,
   parseWorkspaceCatalog,
   isWorkspaceFixtureEnabled,
@@ -92,6 +93,7 @@ const fetchLiveBoundary = async (
               teamId?: unknown;
               headHash?: unknown;
               projectEpoch?: unknown;
+              rotationOwed?: unknown;
             };
             device?: {
               id?: unknown;
@@ -159,6 +161,7 @@ const fetchLiveBoundary = async (
       ...(typeof workspaceBody.environment?.projectEpoch === "string"
         ? { projectEpoch: workspaceBody.environment.projectEpoch }
         : {}),
+      rotationOwed: parseRotationOwed(workspaceBody.environment?.rotationOwed),
     },
     session,
     profile: profileWithServerProfile,
