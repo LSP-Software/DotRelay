@@ -255,6 +255,11 @@ test("an invitee accepts the invitation addressed to them and goes pending", asy
   // After the service confirms acceptance, the record moves to the pending
   // key-grant state.
   await expect(card.getByText("Waiting for encryption keys")).toBeVisible();
+  // The wait is not a dead end: it names who acts next and what to do once
+  // they have.
+  await expect(card).toContainText("Share project keys for you");
+  await expect(card).toContainText("refresh this page");
+  await expect(card).toContainText("dotrelay pull");
   await expect(
     card.getByRole("button", { name: "Accept invitation" }),
   ).toHaveCount(0);

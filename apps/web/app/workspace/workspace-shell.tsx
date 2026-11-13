@@ -179,6 +179,15 @@ import {
   GettingStartedGuide,
   GettingStartedResume,
 } from "./getting-started-guide";
+import {
+  DeviceRevokedDialog,
+  MemberRemovedNotice,
+  type RemovalTarget,
+  RemoveMemberDialog,
+  RevokeDeviceDialog,
+  RoleChangeDialog,
+  type RoleChangeTarget,
+} from "./team-dialogs";
 
 type ProfileId = WorkspaceProfileId;
 type ConnectionState = "loading" | "online" | "offline";
@@ -266,7 +275,9 @@ const MemberAccountTrust = ({
           <Badge variant="destructive">
             {trust.status === "identity-changed"
               ? "Account key changed"
-              : "Account list rolled back"}
+              : trust.status === "rollback"
+                ? "Device list rolled back"
+                : "Device list failed verification"}
           </Badge>
         )}
         {trust.status === "identity-changed" ? (
@@ -282,8 +293,11 @@ const MemberAccountTrust = ({
       ) : null}
       {blocked ? (
         <p className="text-xs text-destructive">
-          Keys aren't shared with this member until you compare the fingerprint
-          with them and trust it.
+          {trust.status === "identity-changed"
+            ? "Keys aren't shared with this member until you compare the fingerprint with them and trust it."
+            : trust.status === "rollback"
+              ? "Keys aren't shared with this member: their device list is older than one this browser already saw. Ask them to open DotRelay on one of their devices; if this persists, contact your server administrator."
+              : "Keys aren't shared with this member: their device list didn't verify against their account key. Ask them to open DotRelay on one of their devices; if this persists, contact your server administrator."}
         </p>
       ) : null}
     </div>
@@ -292,6 +306,10 @@ const MemberAccountTrust = ({
 
 const roleLabel = (role: MembershipRole | undefined): string =>
   role === "OWNER" ? "Owner" : role === "ADMIN" ? "Admin" : "Member";
+
+const memberLabel = (
+  member: Readonly<{ name: string | null; githubSubject: string }>,
+): string => member.name ?? `GitHub ${member.githubSubject}`;
 
 // Invitation and expiry timestamps are absolute, so a human-readable date is
 // shown rather than a raw offset.
@@ -626,6 +644,22 @@ export const WorkspaceShell = ({
     readonly membershipId: string;
     readonly message: string;
   } | null>(null);
+  // Destructive Team and Device actions open a confirmation first, and the
+  // ones that cannot take back downloaded keys end with rotation guidance.
+  const [removalTarget, setRemovalTarget] = useState<RemovalTarget | null>(
+    null,
+  );
+  const [removedNotice, setRemovedNotice] = useState<Readonly<{
+    readonly teamId: string;
+    readonly label: string;
+  }> | null>(null);
+  const [roleChangeTarget, setRoleChangeTarget] =
+    useState<RoleChangeTarget | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<Readonly<{
+    readonly id: string;
+    readonly label: string;
+  }> | null>(null);
+  const [deviceRevoked, setDeviceRevoked] = useState(false);
   const [revokingDevice, setRevokingDevice] = useState<string | null>(null);
   const [revokeDeviceError, setRevokeDeviceError] = useState<string | null>(
     null,
@@ -1029,7 +1063,7 @@ export const WorkspaceShell = ({
     memberTrustTick,
   ]);
 
-  const trustMemberKey = async (userId: string) => {
+  const trustMemberKey = async (userId: string, membershipId: string) => {
     const serverProfileId = displayBoundary.profile.serverProfileId;
     const trust = memberTrust.get(userId);
     if (!serverProfileId || !browserDeviceId || !trust?.presentedIdentity)
@@ -1040,12 +1074,22 @@ export const WorkspaceShell = ({
       )
     )
       return;
-    await retrustMember(
-      { serverProfileId, origin: displayBoundary.profile.origin },
-      browserDeviceId,
-      userId,
-      trust.presentedIdentity,
-    );
+    setMemberMutationError(null);
+    try {
+      await retrustMember(
+        { serverProfileId, origin: displayBoundary.profile.origin },
+        browserDeviceId,
+        userId,
+        trust.presentedIdentity,
+      );
+    } catch {
+      setMemberMutationError({
+        membershipId,
+        message:
+          "This browser couldn't save the new fingerprint, so it is still untrusted. Try again.",
+      });
+      return;
+    }
     setMemberTrustTick((tick) => tick + 1);
   };
 
@@ -1413,13 +1457,8 @@ export const WorkspaceShell = ({
   };
 
   const revokeDevice = async (deviceId: string) => {
+    setRevokeTarget(null);
     if (!apiOrigin || !browserDeviceId || revokingDevice) return;
-    if (
-      !window.confirm(
-        "Revoke this device and sign out all your browsers and CLI sessions? Previously downloaded secrets cannot be erased.",
-      )
-    )
-      return;
     setRevokingDevice(deviceId);
     setRevokeDeviceError(null);
     try {
@@ -1453,7 +1492,9 @@ export const WorkspaceShell = ({
       if (!response.ok) throw new Error();
       accountMasterKeyRef.current?.fill(0);
       accountMasterKeyRef.current = null;
-      window.location.assign("/sign-in");
+      // Every session was signed out. The revoked device still holds what
+      // it downloaded, so the rotation guidance comes before sign-in.
+      setDeviceRevoked(true);
     } catch {
       setRevokeDeviceError(
         "We couldn't revoke this device. Refresh and try again.",
@@ -1463,11 +1504,13 @@ export const WorkspaceShell = ({
     }
   };
 
-  const removeMember = async (membershipId: string) => {
+  const removeMember = async ({ membershipId, label }: RemovalTarget) => {
+    setRemovalTarget(null);
     const selectedTeamId = selectedTeam?.id;
     if (!apiOrigin || !selectedTeamId || memberMutation) return;
     setMemberMutation({ membershipId, kind: "remove" });
     setMemberMutationError(null);
+    setRemovedNotice(null);
     const result = await removeTeamMember(
       apiOrigin,
       selectedTeamId,
@@ -1476,6 +1519,7 @@ export const WorkspaceShell = ({
     );
     setMemberMutation(null);
     if (result.ok) {
+      setRemovedNotice({ teamId: selectedTeamId, label });
       refreshTeamAdministration();
     } else {
       setMemberMutationError({ membershipId, message: result.message });
@@ -3113,7 +3157,11 @@ export const WorkspaceShell = ({
                         <div>
                           <div className="font-medium">{pending.teamName}</div>
                           <div className="text-sm text-muted-foreground">
-                            You accepted this team's invitation.
+                            You accepted this team's invitation. An owner or
+                            admin of {pending.teamName || "the team"} now has to
+                            open Team and choose Share project keys for you.
+                            When they have, refresh this page, or run{" "}
+                            <InlineCommand value="dotrelay pull" /> in the CLI.
                           </div>
                         </div>
                         <Badge
@@ -3341,6 +3389,27 @@ export const WorkspaceShell = ({
                         {roleDisclosure[effectiveRole]}
                       </AlertDescription>
                     </Alert>
+                    {removedNotice &&
+                    removedNotice.teamId === selectedTeam?.id ? (
+                      <MemberRemovedNotice
+                        label={removedNotice.label}
+                        onDismiss={() => setRemovedNotice(null)}
+                      />
+                    ) : null}
+                    <RemoveMemberDialog
+                      onCancel={() => setRemovalTarget(null)}
+                      onConfirm={(target) => void removeMember(target)}
+                      target={removalTarget}
+                      teamName={selectedTeam?.name ?? "this team"}
+                    />
+                    <RoleChangeDialog
+                      onCancel={() => setRoleChangeTarget(null)}
+                      onConfirm={(target) => {
+                        setRoleChangeTarget(null);
+                        void changeMemberRole(target.membershipId, target.to);
+                      }}
+                      target={roleChangeTarget}
+                    />
                     <Card data-testid="members-card">
                       <CardHeader>
                         <CardTitle>Members</CardTitle>
@@ -3405,97 +3474,126 @@ export const WorkspaceShell = ({
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {membershipState.memberships.map((member) => (
-                                <TableRow
-                                  key={member.membershipId}
-                                  data-testid={`member-row-${member.membershipId}`}
-                                >
-                                  <TableCell>
-                                    <div className="font-medium">
-                                      {member.name ??
-                                        `GitHub ${member.githubSubject}`}
-                                    </div>
-                                    <MemberAccountTrust
-                                      trust={memberTrust.get(member.userId)}
-                                      onTrust={() =>
-                                        void trustMemberKey(member.userId)
-                                      }
-                                    />
-                                  </TableCell>
-                                  {canAdminister ? (
+                              {membershipState.memberships.map((member) => {
+                                const label = memberLabel(member);
+                                const isSelf =
+                                  member.userId ===
+                                  displayBoundary.session.userId;
+                                const canManageRow =
+                                  member.lifecycle !== "REMOVED" &&
+                                  !isSelf &&
+                                  (effectiveRole === "OWNER" ||
+                                    member.role === "MEMBER");
+                                return (
+                                  <TableRow
+                                    key={member.membershipId}
+                                    data-testid={`member-row-${member.membershipId}`}
+                                  >
                                     <TableCell>
-                                      {roleLabel(member.role)}
+                                      <div className="font-medium">{label}</div>
+                                      <MemberAccountTrust
+                                        trust={memberTrust.get(member.userId)}
+                                        onTrust={() =>
+                                          void trustMemberKey(
+                                            member.userId,
+                                            member.membershipId,
+                                          )
+                                        }
+                                      />
                                     </TableCell>
-                                  ) : null}
-                                  <TableCell>
-                                    {member.lifecycle === "ACTIVE" ? (
-                                      <Badge variant="outline">Active</Badge>
-                                    ) : member.lifecycle === "REMOVED" ? (
-                                      <Badge variant="secondary">Removed</Badge>
-                                    ) : (
-                                      <Badge
-                                        className="border-amber-300/25 text-amber-200"
-                                        variant="outline"
-                                      >
-                                        Waiting for encryption keys
-                                      </Badge>
-                                    )}
-                                  </TableCell>
-                                  {canAdminister ? (
+                                    {canAdminister ? (
+                                      <TableCell>
+                                        {roleLabel(member.role)}
+                                      </TableCell>
+                                    ) : null}
                                     <TableCell>
-                                      {member.lifecycle !== "REMOVED" &&
-                                      member.userId !==
-                                        displayBoundary.session.userId &&
-                                      (effectiveRole === "OWNER" ||
-                                        member.role === "MEMBER") ? (
-                                        <div className="flex flex-col gap-2">
-                                          <Button
-                                            size="sm"
+                                      {member.lifecycle === "ACTIVE" ? (
+                                        <Badge variant="outline">Active</Badge>
+                                      ) : member.lifecycle === "REMOVED" ? (
+                                        <Badge variant="secondary">
+                                          Removed
+                                        </Badge>
+                                      ) : canAdminister ? (
+                                        <div className="flex max-w-56 flex-col gap-1">
+                                          <Badge
+                                            className="border-amber-300/25 text-amber-200"
                                             variant="outline"
-                                            disabled={
-                                              memberMutation !== null ||
-                                              !browserDeviceId
-                                            }
-                                            onClick={() =>
-                                              void provisionMember(
-                                                member.membershipId,
-                                              )
-                                            }
                                           >
-                                            {memberMutation?.kind ===
-                                              "provision" &&
-                                            memberMutation.membershipId ===
-                                              member.membershipId
-                                              ? "Sharing keys…"
-                                              : "Share project keys"}
-                                          </Button>
+                                            Action needed: share project keys
+                                          </Badge>
+                                          <p className="text-xs whitespace-normal text-muted-foreground">
+                                            They joined but can't read any
+                                            values yet. Use Share project keys
+                                            while this browser is set up and
+                                            unlocked.
+                                          </p>
                                         </div>
-                                      ) : null}
-                                      {member.lifecycle === "ACTIVE" &&
-                                      member.userId !==
-                                        displayBoundary.session.userId &&
-                                      (effectiveRole === "OWNER" ||
-                                        member.role === "MEMBER") ? (
-                                        <div className="flex flex-col gap-2">
-                                          <div className="flex items-center gap-2">
+                                      ) : (
+                                        <Badge
+                                          className="border-amber-300/25 text-amber-200"
+                                          variant="outline"
+                                        >
+                                          Waiting for encryption keys
+                                        </Badge>
+                                      )}
+                                    </TableCell>
+                                    {canAdminister ? (
+                                      <TableCell>
+                                        {canManageRow ? (
+                                          <div className="flex flex-col gap-2">
+                                            <Button
+                                              aria-label={`Share project keys with ${label}`}
+                                              size="sm"
+                                              variant={
+                                                member.lifecycle ===
+                                                "PENDING_KEY_GRANT"
+                                                  ? "default"
+                                                  : "outline"
+                                              }
+                                              disabled={
+                                                memberMutation !== null ||
+                                                !browserDeviceId
+                                              }
+                                              onClick={() =>
+                                                void provisionMember(
+                                                  member.membershipId,
+                                                )
+                                              }
+                                            >
+                                              {memberMutation?.kind ===
+                                                "provision" &&
+                                              memberMutation.membershipId ===
+                                                member.membershipId
+                                                ? "Sharing keys…"
+                                                : "Share project keys"}
+                                            </Button>
+                                          </div>
+                                        ) : null}
+                                        {member.lifecycle === "ACTIVE" &&
+                                        canManageRow ? (
+                                          <div className="mt-2 flex items-center gap-2">
                                             {effectiveRole === "OWNER" ? (
                                               <select
-                                                aria-label={`Role for ${
-                                                  member.name ??
-                                                  `GitHub ${member.githubSubject}`
-                                                }`}
+                                                aria-label={`Role for ${label}`}
                                                 className="h-8 rounded-lg border border-input bg-input/30 px-2 text-sm"
                                                 disabled={
                                                   memberMutation !== null
                                                 }
                                                 value={member.role ?? "MEMBER"}
-                                                onChange={(event) =>
-                                                  void changeMemberRole(
-                                                    member.membershipId,
-                                                    event.target
-                                                      .value as MembershipRole,
-                                                  )
-                                                }
+                                                onChange={(event) => {
+                                                  const to = event.target
+                                                    .value as MembershipRole;
+                                                  const from =
+                                                    member.role ?? "MEMBER";
+                                                  if (to === from) return;
+                                                  setRoleChangeTarget({
+                                                    membershipId:
+                                                      member.membershipId,
+                                                    label,
+                                                    from,
+                                                    to,
+                                                  });
+                                                }}
                                               >
                                                 <option value="OWNER">
                                                   Owner
@@ -3509,32 +3607,46 @@ export const WorkspaceShell = ({
                                               </select>
                                             ) : null}
                                             <Button
+                                              aria-label={`Remove member ${label}`}
                                               size="sm"
                                               variant="outline"
                                               disabled={memberMutation !== null}
                                               onClick={() =>
-                                                void removeMember(
-                                                  member.membershipId,
-                                                )
+                                                setRemovalTarget({
+                                                  membershipId:
+                                                    member.membershipId,
+                                                  label,
+                                                })
                                               }
                                             >
-                                              Remove member
+                                              {memberMutation?.kind ===
+                                                "remove" &&
+                                              memberMutation.membershipId ===
+                                                member.membershipId
+                                                ? "Removing…"
+                                                : "Remove member"}
                                             </Button>
                                           </div>
-                                        </div>
-                                      ) : null}
-                                      {memberMutationError?.membershipId ===
-                                      member.membershipId ? (
-                                        <p className="text-xs text-destructive">
-                                          {memberMutationError.message}
-                                        </p>
-                                      ) : null}
-                                    </TableCell>
-                                  ) : null}
-                                </TableRow>
-                              ))}
+                                        ) : null}
+                                        {memberMutationError?.membershipId ===
+                                        member.membershipId ? (
+                                          <p
+                                            className="mt-2 text-xs text-destructive"
+                                            role="alert"
+                                          >
+                                            {memberMutationError.message}
+                                          </p>
+                                        ) : null}
+                                      </TableCell>
+                                    ) : null}
+                                  </TableRow>
+                                );
+                              })}
                               {membershipState.invitations.map((invitation) => (
-                                <TableRow key={invitation.invitationId}>
+                                <TableRow
+                                  data-testid={`invitation-row-${invitation.invitationId}`}
+                                  key={invitation.invitationId}
+                                >
                                   <TableCell>
                                     <div className="font-medium">
                                       Invitation
@@ -3546,7 +3658,6 @@ export const WorkspaceShell = ({
                                   {canAdminister ? (
                                     <TableCell>Member</TableCell>
                                   ) : null}
-                                  {canAdminister ? <TableCell /> : null}
                                   <TableCell>
                                     <Badge
                                       className="border-amber-300/25 text-amber-200"
@@ -3556,6 +3667,7 @@ export const WorkspaceShell = ({
                                       {formatDate(invitation.expiresAt)}
                                     </Badge>
                                   </TableCell>
+                                  {canAdminister ? <TableCell /> : null}
                                 </TableRow>
                               ))}
                               {membershipState.memberships.length === 0 &&
@@ -3769,6 +3881,12 @@ export const WorkspaceShell = ({
                                 </TableCell>
                                 <TableCell>
                                   <Button
+                                    aria-label={`Revoke device ${
+                                      device.name ??
+                                      (device.current
+                                        ? "This browser"
+                                        : device.id)
+                                    }`}
                                     size="sm"
                                     variant="outline"
                                     disabled={
@@ -3776,7 +3894,16 @@ export const WorkspaceShell = ({
                                       !browserDeviceId ||
                                       protectedPreview
                                     }
-                                    onClick={() => void revokeDevice(device.id)}
+                                    onClick={() =>
+                                      setRevokeTarget({
+                                        id: device.id,
+                                        label:
+                                          device.name ??
+                                          (device.current
+                                            ? "this browser"
+                                            : "this device"),
+                                      })
+                                    }
                                   >
                                     {revokingDevice === device.id
                                       ? "Revoking…"
@@ -3788,10 +3915,22 @@ export const WorkspaceShell = ({
                           </TableBody>
                         </Table>
                         {revokeDeviceError ? (
-                          <p className="mt-2 text-sm text-destructive">
+                          <p
+                            className="mt-2 text-sm text-destructive"
+                            role="alert"
+                          >
                             {revokeDeviceError}
                           </p>
                         ) : null}
+                        <RevokeDeviceDialog
+                          onCancel={() => setRevokeTarget(null)}
+                          onConfirm={(deviceId) => void revokeDevice(deviceId)}
+                          target={revokeTarget}
+                        />
+                        <DeviceRevokedDialog
+                          onContinue={() => window.location.assign("/sign-in")}
+                          open={deviceRevoked}
+                        />
                       </CardContent>
                     </Card>
                   ) : null}
