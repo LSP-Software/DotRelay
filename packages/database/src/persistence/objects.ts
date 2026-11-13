@@ -484,7 +484,9 @@ export type AuditFactInput = Readonly<{
     | "DEVICE_ENROLLMENT_STARTED"
     | "DEVICE_ENROLLMENT_APPROVED"
     | "OPERATION_CANCELLED"
-    | "OPERATION_EXPIRED";
+    | "OPERATION_EXPIRED"
+    | "INVITATION_REVOKED"
+    | "INVITATION_DECLINED";
   readonly actorUserId?: string;
   readonly actorDeviceId?: string;
   readonly entityKind:

@@ -3,16 +3,32 @@ import {
   type OperationInput,
   OperationRepository,
 } from "./objects";
+import { archiveMembershipPeriod } from "./membership-periods";
 import {
   DEFAULT_ENVIRONMENT_LABEL,
   EnvironmentNotActiveError,
+  InvitationNotPendingError,
   managedRoleAction,
+  PendingInvitationLimitError,
   ProjectNotActiveError,
   requireActiveDevice,
   requireTeamAction,
   TeamNotActiveError,
 } from "./repository-core";
+import { ProjectRotationObligationRepository } from "./rotation-obligations";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
+
+/** Unused, unexpired, unrevoked, undeclined invitations one Team may hold. */
+export const MAX_PENDING_INVITATIONS_PER_TEAM = 50;
+
+const MEMBERSHIP_INVITATION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1_000;
+
+const pendingInvitationWhere = (now: Date) => ({
+  acceptedAt: null,
+  revokedAt: null,
+  declinedAt: null,
+  expiresAt: { gt: now },
+});
 export type TeamCreationInput = Readonly<{
   readonly teamId?: string;
   readonly serverProfileId: string;
@@ -356,6 +372,8 @@ export class AdministrationRepository {
 export class MembershipAdministrationRepository {
   private readonly operations = new OperationRepository();
   private readonly audit = new AuditFactRepository();
+  private readonly rotationObligations =
+    new ProjectRotationObligationRepository();
 
   async invite(
     database: TransactionDatabase,
@@ -389,12 +407,21 @@ export class MembershipAdministrationRepository {
       if (input.providerSubject.length === 0)
         throw new Error("GitHub provider subject is required");
       const now = input.now ?? new Date();
+      // The Team row is locked above, so concurrent invitations count
+      // against the cap one at a time.
+      const pending = await transaction.membershipInvitation.count({
+        where: { teamId: input.teamId, ...pendingInvitationWhere(now) },
+      });
+      if (pending >= MAX_PENDING_INVITATIONS_PER_TEAM)
+        throw new PendingInvitationLimitError();
       const invitation = await transaction.membershipInvitation.create({
         data: {
           id: input.invitationId ?? crypto.randomUUID(),
           teamId: input.teamId,
           providerSubject: input.providerSubject,
-          expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000),
+          expiresAt: new Date(
+            now.getTime() + MEMBERSHIP_INVITATION_LIFETIME_MS,
+          ),
           createdAt: now,
         },
       });
@@ -450,9 +477,11 @@ export class MembershipAdministrationRepository {
       if (!invitation || !user) throw new Error("Invitation or User not found");
       if (
         invitation.acceptedAt ||
+        invitation.revokedAt ||
+        invitation.declinedAt ||
         invitation.expiresAt <= (input.now ?? new Date())
       )
-        throw new Error("Membership invitation is expired or already used");
+        throw new InvitationNotPendingError();
       if (user.githubSubject !== invitation.providerSubject)
         throw new Error("Membership invitation is addressed to another User");
       const team = await transaction.team.findUnique({
@@ -472,6 +501,10 @@ export class MembershipAdministrationRepository {
       });
       if (priorMembership && priorMembership.lifecycle !== "REMOVED")
         throw new Error("User is already a member of the Team");
+      // Reviving a removed Membership reuses its row (ADR 0016); its
+      // finished period is archived first so history stays verifiable.
+      if (priorMembership)
+        await archiveMembershipPeriod(transaction, priorMembership);
       const membership = priorMembership
         ? await transaction.membership.update({
             where: { id: priorMembership.id },
@@ -515,6 +548,135 @@ export class MembershipAdministrationRepository {
         newLifecycle: "PENDING_KEY_GRANT",
       });
       return { operation: operation.operation, membership };
+    });
+  }
+
+  // An active owner or admin withdraws a pending invitation of the Team.
+  async revokeInvitation(
+    database: TransactionDatabase,
+    input: Readonly<{
+      readonly operation: OperationInput;
+      readonly teamId: string;
+      readonly invitationId: string;
+      readonly now?: Date;
+    }>,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
+      await transaction.$executeRaw`SELECT "id" FROM "membership_invitations" WHERE "id" = ${input.invitationId} FOR UPDATE`;
+      await requireTeamAction(
+        transaction,
+        input.operation.actorUserId,
+        input.operation.actorDeviceId,
+        input.teamId,
+        "INVITE_MEMBER",
+      );
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      const invitation = await transaction.membershipInvitation.findUnique({
+        where: { id: input.invitationId },
+      });
+      if (!invitation || invitation.teamId !== input.teamId)
+        throw new Error("Membership invitation not found");
+      const now = input.now ?? new Date();
+      if (
+        invitation.acceptedAt ||
+        invitation.revokedAt ||
+        invitation.declinedAt ||
+        invitation.expiresAt <= now
+      )
+        throw new InvitationNotPendingError();
+      const revoked = await transaction.membershipInvitation.update({
+        where: { id: invitation.id },
+        data: { revokedAt: now },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "INVITATION_REVOKED",
+        actorUserId: input.operation.actorUserId,
+        ...(input.operation.actorDeviceId
+          ? { actorDeviceId: input.operation.actorDeviceId }
+          : {}),
+        entityKind: "INVITATION",
+        entityId: invitation.id,
+        priorLifecycle: "PENDING",
+        newLifecycle: "REVOKED",
+      });
+      return { operation: operation.operation, invitation: revoked };
+    });
+  }
+
+  // The addressed User turns a pending invitation down. Like acceptance, it
+  // needs no Device.
+  async declineInvitation(
+    database: TransactionDatabase,
+    input: Readonly<{
+      readonly operation: OperationInput;
+      readonly invitationId: string;
+      readonly userId: string;
+      readonly now?: Date;
+    }>,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "membership_invitations" WHERE "id" = ${input.invitationId} FOR UPDATE`;
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      if (input.operation.actorUserId !== input.userId)
+        throw new Error("Membership invitation must be declined by its User");
+      const [invitation, user] = await Promise.all([
+        transaction.membershipInvitation.findUnique({
+          where: { id: input.invitationId },
+          include: { team: { select: { serverProfileId: true } } },
+        }),
+        transaction.user.findUnique({ where: { id: input.userId } }),
+      ]);
+      if (!invitation || !user) throw new Error("Invitation or User not found");
+      // Someone else's invitation is reported as missing, not forbidden, so
+      // the endpoint is not an oracle for invitation ids.
+      if (
+        user.githubSubject !== invitation.providerSubject ||
+        invitation.team.serverProfileId !== user.serverProfileId
+      )
+        throw new Error("Membership invitation not found");
+      const now = input.now ?? new Date();
+      if (
+        invitation.acceptedAt ||
+        invitation.revokedAt ||
+        invitation.declinedAt ||
+        invitation.expiresAt <= now
+      )
+        throw new InvitationNotPendingError();
+      const declined = await transaction.membershipInvitation.update({
+        where: { id: invitation.id },
+        data: { declinedAt: now },
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
+      });
+      await this.audit.append(transaction, {
+        operationId: operation.operation.id,
+        kind: "INVITATION_DECLINED",
+        actorUserId: input.operation.actorUserId,
+        ...(input.operation.actorDeviceId
+          ? { actorDeviceId: input.operation.actorDeviceId }
+          : {}),
+        entityKind: "INVITATION",
+        entityId: invitation.id,
+        priorLifecycle: "PENDING",
+        newLifecycle: "DECLINED",
+      });
+      return { operation: operation.operation, invitation: declined };
     });
   }
 
@@ -613,10 +775,19 @@ export class MembershipAdministrationRepository {
       if (membership.lifecycle === "REMOVED")
         throw new Error("Membership is already removed");
       const now = input.now ?? new Date();
+      const priorLifecycle = membership.lifecycle;
       const removed = await transaction.membership.update({
         where: { id: membership.id },
         data: { lifecycle: "REMOVED", removedAt: now },
       });
+      // An active Member held the Team's Project keys: owe each Project a
+      // rotation. A pending Member never received keys in this period.
+      if (priorLifecycle === "ACTIVE")
+        await this.rotationObligations.recordMembershipRemoval(transaction, {
+          teamId: input.teamId,
+          membershipId: membership.id,
+          now,
+        });
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },

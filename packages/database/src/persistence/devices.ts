@@ -16,6 +16,7 @@ import {
   requireActiveDevice,
   sameBytes,
 } from "./repository-core";
+import { ProjectRotationObligationRepository } from "./rotation-obligations";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import {
   validateDigest,
@@ -575,6 +576,13 @@ export class DeviceRepository {
         where: { id: device.id },
         data: { lifecycle: "REVOKED", revokedAt: now },
       });
+      // An active Device could hold its User's Project keys: owe each of
+      // those Projects a rotation. A pending Device never received keys.
+      if (device.lifecycle === "ACTIVE")
+        await new ProjectRotationObligationRepository().recordDeviceRevocation(
+          transaction,
+          { userId: device.userId, deviceId: device.id, now },
+        );
       // Sessions are not bound to Devices. A stolen session could otherwise
       // bootstrap a replacement Device immediately after revocation.
       const user = await transaction.user.findUniqueOrThrow({

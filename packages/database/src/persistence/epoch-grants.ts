@@ -20,6 +20,7 @@ import {
   StaleEpochError,
   StaleHeadError,
 } from "./repository-core";
+import { ProjectRotationObligationRepository } from "./rotation-obligations";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import { PERSISTENCE_LIMITS, validateDigest } from "./validation";
 export type EpochRotationInput = Readonly<{
@@ -253,6 +254,10 @@ export class ProjectEpochRepository {
         where: { id: input.projectId },
         data: { currentEpoch: input.newEpoch },
       });
+      await new ProjectRotationObligationRepository().clearForRotation(
+        transaction,
+        { projectId: input.projectId, newEpoch: input.newEpoch, now },
+      );
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },

@@ -1992,10 +1992,31 @@ integrationDescribe("trust workflow integration", () => {
         },
       ],
     };
+    // Revoking an active Device owes the Project a rotation; the rotation
+    // below clears it.
+    const revokedSpare = await createActiveDevice(user.id);
+    await new DeviceRepository().revoke(database, {
+      deviceId: revokedSpare.id,
+      operation: {
+        ...(await createOperationInput(user.id, "rotation-spare-revoke")),
+        actorDeviceId: device.id,
+      },
+    });
+    expect(
+      await database.projectRotationObligation.count({
+        where: { projectId, clearedAt: null },
+      }),
+    ).toBe(1);
     const result = await epochRotation.rotate(database, rotateInput);
     if (!("projectEpoch" in result))
       throw new Error("rotation reported an idempotent replay");
     expect(result.projectEpoch).toBe(2n);
+    expect(
+      await database.projectRotationObligation.findMany({
+        where: { projectId },
+        select: { clearedByEpoch: true, deviceId: true },
+      }),
+    ).toEqual([{ clearedByEpoch: 2n, deviceId: revokedSpare.id }]);
 
     const project = await database.project.findUniqueOrThrow({
       where: { id: projectId },

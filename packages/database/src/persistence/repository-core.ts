@@ -189,3 +189,36 @@ export const normalizeEnvironmentLabel = (value: unknown): string => {
 export const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
   left.length === right.length &&
   left.every((value, index) => value === right[index]);
+
+export class RevisionAuthoredAtError extends Error {
+  readonly verdict: "before_not_before" | "after_clock_skew";
+  readonly notBeforeMs: bigint;
+
+  constructor(
+    verdict: "before_not_before" | "after_clock_skew",
+    notBeforeMs: bigint,
+  ) {
+    super(
+      verdict === "before_not_before"
+        ? "the Revision authored-at instant precedes its Device, Membership, or parent Revision"
+        : "the Revision authored-at instant is too far in the future",
+    );
+    this.name = "RevisionAuthoredAtError";
+    this.verdict = verdict;
+    this.notBeforeMs = notBeforeMs;
+  }
+}
+
+export class PendingInvitationLimitError extends Error {
+  constructor() {
+    super("the Team has reached its pending invitation limit");
+    this.name = "PendingInvitationLimitError";
+  }
+}
+
+export class InvitationNotPendingError extends Error {
+  constructor() {
+    super("Membership invitation is expired or already used");
+    this.name = "InvitationNotPendingError";
+  }
+}

@@ -2,6 +2,7 @@ import {
   bytesToUuid,
   canonicalEncode,
   type CborValue,
+  checkRevisionAuthoredAt,
   parseProtocolObject,
   sha384,
 } from "@dotrelay/contracts";
@@ -22,6 +23,7 @@ import {
   OperationConflictError,
   ProjectNotActiveError,
   type PersistenceClient,
+  RevisionAuthoredAtError,
   requireTeamAction,
   StaleEpochError,
   StaleHeadError,
@@ -109,6 +111,8 @@ export type RevisionPublicationInput = Readonly<{
   // after every transition published, so an inner publication must not
   // commit it or let a COMMITTED status block the remaining Environments.
   readonly rotationInner?: boolean;
+  /** The service clock used to bound the authored-at instant. */
+  readonly now?: Date;
   readonly environmentId: string;
   readonly expectedHeadId: string | null;
   readonly revision: Readonly<{
@@ -300,6 +304,24 @@ export class PublicationRepository {
       },
     });
     if (!membership) throw new MembershipNotActiveError();
+    // Every client judges the signing Device's and the author's Membership
+    // windows, and the parent order, at the signed authored-at instant. A
+    // Revision outside them would be committed yet refused by every reader,
+    // which bricks the head; refuse it here with the same rule.
+    const notBeforeMs = [
+      (device.activatedAt ?? device.createdAt).getTime(),
+      (membership.activatedAt ?? membership.createdAt).getTime(),
+    ].reduce(
+      (latest, value) => (BigInt(value) > latest ? BigInt(value) : latest),
+      parentRevision ? parentRevision.authoredAtMs : 0n,
+    );
+    const authoredAtVerdict = checkRevisionAuthoredAt({
+      authoredAtMs: input.revision.authoredAtMs,
+      notBeforeMs,
+      nowMs: (input.now ?? new Date()).getTime(),
+    });
+    if (authoredAtVerdict !== "ok")
+      throw new RevisionAuthoredAtError(authoredAtVerdict, notBeforeMs);
 
     await validateSha384Digest(
       input.operation.commandBytes,
