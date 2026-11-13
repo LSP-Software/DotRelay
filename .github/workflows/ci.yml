@@ -385,6 +385,11 @@ jobs:
     # The dev CLI targets the dev API deployed by this same commit, so it is
     # published only after that deployment has cleared CI.
     needs: [build-cli-dev, deploy-dev]
+    # npm --provenance signs with the job's OIDC token; without id-token the
+    # publish fails before upload.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
@@ -399,6 +404,7 @@ jobs:
       - run: |
           mkdir -p packages/dotrelay/dist
           cp -R release-binaries/*/* packages/dotrelay/dist/
+          cp LICENSE.md packages/dotrelay/LICENSE.md
           # The artifact round-trip drops the executable bit off the staged
           # native binaries; restore it so the npm tarball ships 755
           # executables and the package smoke test can run them.

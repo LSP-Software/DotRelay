@@ -3,6 +3,16 @@
   "private": false,
   "version": "0.0.0",
   "description": "The npm selector for the DotRelay standalone CLI",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "homepage": "https://github.com/LSP-Software/DotRelay#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LSP-Software/DotRelay.git",
+    "directory": "packages/dotrelay"
+  },
+  "bugs": {
+    "url": "https://github.com/LSP-Software/DotRelay/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -14,7 +24,8 @@
   },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "LICENSE.md"
   ],
   "engines": {
     "node": ">=20"
