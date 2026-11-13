@@ -457,6 +457,44 @@ export const listEnvironments = async (
   return Object.freeze(response.environments.map(parseEnvironment));
 };
 
+// The Server Profile's own label rule, checked before a request so a typo
+// fails with the rule instead of a generic rejection.
+const ENVIRONMENT_LABEL = /^[A-Za-z][A-Za-z0-9._-]{0,62}$/;
+
+export const requireEnvironmentLabel = (label: string): string => {
+  const trimmed = label.trim();
+  if (!ENVIRONMENT_LABEL.test(trimmed))
+    throw new CliInvocationError(
+      "an Environment label starts with a letter and has up to 63 letters, digits, dots, dashes, or underscores",
+    );
+  return trimmed;
+};
+
+// A miss names what does exist, so the operator can correct a typo or see
+// that the Environment still has to be created.
+export const environmentNotFound = (
+  reference: string,
+  environments: readonly EnvironmentSummary[],
+): CliError => {
+  const active = environments.filter(
+    (candidate) => candidate.lifecycle === "active",
+  );
+  const labels = [...new Set(active.map((candidate) => candidate.label))];
+  const available =
+    labels.length === 0
+      ? "this Project has no active Environment yet"
+      : `available: ${labels.join(", ")}`;
+  const suggestion = ENVIRONMENT_LABEL.test(reference)
+    ? `dotrelay env create ${reference}`
+    : "dotrelay env create <label>";
+  return new CliError(
+    "invocation",
+    `no Environment is labelled ${JSON.stringify(reference.slice(0, 64))} in this Project (${available}).\nPick one of those, or create it with ${suggestion} (Team owners and admins).\nRun dotrelay env list to see every Environment.`,
+    {},
+    "environment_not_found",
+  );
+};
+
 export type EnvironmentReferenceOptions = Readonly<{
   readonly noInput: boolean;
   readonly prompt?: (question: string) => Promise<string>;
@@ -480,13 +518,7 @@ export const resolveEnvironmentReference = async (
     byId.length > 0
       ? byId
       : environments.filter((candidate) => candidate.label === reference);
-  if (matches.length === 0)
-    throw new CliError(
-      "invocation",
-      "the requested Environment was not found",
-      {},
-      "environment_not_found",
-    );
+  if (matches.length === 0) throw environmentNotFound(reference, environments);
   if (matches.length === 1) {
     const selected = matches[0];
     if (!selected)
@@ -537,11 +569,74 @@ export const createEnvironment = async (
 ): Promise<EnvironmentSummary> => {
   const response = await client.post(
     `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
-    { label },
-    ["id", "projectId", "label", "lifecycle", "currentHeadId"],
+    { label: requireEnvironmentLabel(label) },
+    [
+      "id",
+      "projectId",
+      "label",
+      "lifecycle",
+      "currentHeadId",
+      "currentHeadHash",
+    ],
     { idempotencyKey: crypto.randomUUID() },
   );
   return parseEnvironment(response);
+};
+
+export const archiveEnvironment = async (
+  client: Pick<StrictJsonClient, "post">,
+  environmentId: string,
+): Promise<EnvironmentSummary> =>
+  parseEnvironment(
+    await client.post(
+      `/api/v1/environments/${encodeURIComponent(requireOpaqueId(environmentId, "Environment id"))}/lifecycle`,
+      { action: "archive" },
+      [
+        "id",
+        "projectId",
+        "label",
+        "lifecycle",
+        "currentHeadId",
+        "currentHeadHash",
+      ],
+      { idempotencyKey: crypto.randomUUID() },
+    ),
+  );
+
+export type PendingTeamAccess = Readonly<{
+  /** Teams whose invitation this User accepted, still waiting for keys. */
+  readonly pendingMemberships: readonly TeamSummary[];
+  /** Invitations addressed to this User that are not accepted yet. */
+  readonly invitations: readonly TeamSummary[];
+}>;
+
+const teamEntries = (value: unknown): TeamSummary[] =>
+  Array.isArray(value)
+    ? value.flatMap((entry): TeamSummary[] =>
+        isRecord(entry) &&
+        typeof entry.teamId === "string" &&
+        opaqueId.test(entry.teamId) &&
+        typeof entry.teamName === "string" &&
+        entry.teamName.trim().length > 0
+          ? [Object.freeze({ id: entry.teamId, name: entry.teamName.trim() })]
+          : [],
+      )
+    : [];
+
+// The Teams this User was invited to or joined but cannot use yet. Neither
+// shows up in the Team or Project lists, which only span active Memberships,
+// so this is how the CLI tells "not linked" apart from "waiting for keys".
+export const listPendingTeamAccess = async (
+  client: Pick<StrictJsonClient, "get">,
+): Promise<PendingTeamAccess> => {
+  const response = await client.get("/api/v1/invitations", [
+    "invitations",
+    "pendingMemberships",
+  ]);
+  return Object.freeze({
+    pendingMemberships: Object.freeze(teamEntries(response.pendingMemberships)),
+    invitations: Object.freeze(teamEntries(response.invitations)),
+  });
 };
 
 export type ResolveEnvironmentOptions = Readonly<

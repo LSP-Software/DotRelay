@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { CBOR_LIMITS, type ServerProfilePin } from "@dotrelay/contracts";
 import {
+  createEnvironment,
   createStrictJsonClient,
   createTeam,
   findProjectByRepository,
@@ -297,8 +298,71 @@ describe("strict administration client", () => {
       }),
     ).rejects.toMatchObject({
       code: "environment_not_found",
-      message: "the requested Environment was not found",
+      message: [
+        'no Environment is labelled "staging" in this Project (available: development).',
+        "Pick one of those, or create it with dotrelay env create staging (Team owners and admins).",
+        "Run dotrelay env list to see every Environment.",
+      ].join("\n"),
     });
+  });
+
+  test("a miss on a Project with no active Environment says so", async () => {
+    const client = {
+      get: async () => ({
+        environments: [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "project-id",
+            label: "old",
+            lifecycle: "archived",
+            currentHeadId: null,
+            currentHeadHash: null,
+          },
+        ],
+      }),
+    };
+    await expect(
+      resolveEnvironmentReference(client, "project-id", "not a label", {
+        noInput: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "environment_not_found",
+      message: expect.stringContaining(
+        "(this Project has no active Environment yet).\nPick one of those, or create it with dotrelay env create <label>",
+      ),
+    });
+  });
+
+  test("createEnvironment sends the label and accepts the full response", async () => {
+    const posted: Array<Record<string, unknown>> = [];
+    const client = {
+      post: async (
+        path: string,
+        body: Record<string, unknown>,
+        fields: readonly string[],
+      ) => {
+        posted.push({ path, body, fields });
+        return {
+          id: "00000000-0000-4000-8000-000000000009",
+          projectId: "00000000-0000-4000-8000-000000000002",
+          label: "staging",
+          lifecycle: "active",
+          currentHeadId: null,
+          currentHeadHash: null,
+        };
+      },
+    };
+    const created = await createEnvironment(
+      client,
+      "00000000-0000-4000-8000-000000000002",
+      "staging",
+    );
+    expect(created.label).toBe("staging");
+    expect(posted[0]?.body).toEqual({ label: "staging" });
+    expect(posted[0]?.fields).toContain("currentHeadHash");
+    await expect(
+      createEnvironment(client, "00000000-0000-4000-8000-000000000002", "9x"),
+    ).rejects.toThrow("an Environment label starts with a letter");
   });
 
   test("duplicate labels offer explicit id guidance under --no-input", async () => {
