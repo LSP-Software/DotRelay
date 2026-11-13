@@ -3,8 +3,9 @@
 The `dotrelay` binary exposes the command contract. The `dotrelay` npm package selects the native
 binary staged for the current platform and forwards the same arguments to it.
 
-Everyday commands are `setup`, `login`, `init`, `push`, `pull`, `diff`, and `status`. Power commands stay
-available and are listed by `dotrelay help`. `dotrelay help <command>` — or `dotrelay <command> --help`,
+Everyday commands are `setup`, `login`, `init`, `push`, `pull`, `run`, `diff`, and `status`. Power
+commands stay available and are listed by `dotrelay help`. `-h` and `-v` are short for `--help` and
+`--version`, and `-o <path>` is short for `--output <path>`. `dotrelay help <command>` — or `dotrelay <command> --help`,
 including nested commands such as `dotrelay device recover --help` — renders the usage line, required
 arguments, options, defaults, noninteractive requirements, and safe examples for that one command. The
 help is generated from the same command registry the parser uses, so it cannot drift from the accepted
@@ -65,8 +66,10 @@ Session material and Device wrapping keys belong in the local credential store �
 in the CLI state directory (`DOTRELAY_CONFIG_DIR`) — scoped by Server Profile. The encrypted
 Device bundle itself is a protected local record.
 
-`logout` removes the local session. `--insecure`, certificate bypasses, and token/device-key flags
-are rejected.
+`logout` signs out: it revokes the session on the Server Profile (Better Auth sign-out with the
+stored bearer session) and deletes the local copy. When the server cannot be reached, the local copy
+is still deleted and the result says the server-side session was not revoked; it expires on its own.
+`--insecure`, certificate bypasses, and token/device-key flags are rejected.
 
 ## Repository and worktree context
 
@@ -126,6 +129,15 @@ Device keys, and resets trusted Revision continuity (saved heads and publication
 for Environments whose saved head was verified against that profile's previous server profile id.
 Saved heads of other profiles, and older saved heads that do not record a server profile id, are
 kept. `--no-input` requires `--force`.
+
+`env list` shows the worktree Project's Environments with their labels, ids, and state, and marks
+the selected one. `env create <label>` creates an Environment (Team owners and admins only); a label
+starts with a letter and has up to 63 letters, digits, dots, dashes, or underscores. It does not
+change the selection: follow it with `env use <label>`, or publish into it with
+`push --environment <label>`. A label that matches no Environment fails with the labels that do
+exist and the `env create` command to run. `init <label>` on a Project that the same run creates
+uses the label for the first Environment, and archives the empty `default` Environment the service
+created with the Project.
 
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. The Server Profile creates a default Environment in the same transaction when the
@@ -213,6 +225,22 @@ of band. The first time this installation sees a Member, it pins their identity.
 not accept that Member's Devices. Every protected command also verifies this account's own
 roster and publishes a new one when this Device holds the AMK and is not listed yet.
 
+`team list` lists the Teams you belong to with the ids `--team` takes. It also lists Teams you
+joined that are still waiting for their Project keys, and invitations you have not accepted yet.
+
+A new Member cannot read anything until a Team owner or admin shares the Project keys with them.
+`pull` only shares keys among the puller's own Devices, so a teammate's pull never helps. The owner
+or admin chooses **Share project keys** for the Member in the web app's Members view, or runs
+`dotrelay team share-keys <github-login-or-user-id>` from a Device that can read every Project in
+the Team. The command reads the service's provisioning plan for that Membership, opens each
+Project's current key, seals it only to Devices in the Member's signed Device roster, and posts
+the signed activation; `--no-input` requires `--force`. The Member then runs `dotrelay pull`.
+While a Membership is waiting for keys, protected commands in that Repository say so and name
+this step, instead of reporting the Repository as unlinked or creating a second Team and Project
+for it.
+
+`device list` lists this account's active Devices and marks this one.
+
 `pull` writes decrypted Values to `.env` by default. Before any Value is decrypted or moved, `pull`
 checks the output path's Git tracking state in the repository it resolves against (including linked
 worktrees and custom `--output` paths). A Git-tracked output is refused with the two safe choices:
@@ -254,6 +282,20 @@ a `\$` the source used for a literal dollar sign stays `\$`. Values with no quot
 `$`, or backtick are single-quoted. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
 `` \` `` are decoded, and any other backslash sequence, such as `"C:\Users"`, is kept as
 written. Parse errors name the file.
+
+`run [--environment <label>] -- <command> [<argument>…]` decrypts the Environment in memory and
+starts the command with the Values as environment variables. Nothing is written to disk. Values
+replace variables of the same name already set in the shell. Everything after `--` belongs to the
+command, so its flags are never read as DotRelay flags. `run` returns the command's exit code
+(128 plus the signal number when a signal ended it) and passes `SIGINT`, `SIGTERM`, and `SIGHUP`
+on to it. A Value this Device cannot decrypt, or a required Variable with no value, stops the run
+before the command starts.
+
+`export --format dotenv|json|shell` prints the decrypted Values to stdout (dotenv by default) and
+writes nothing to disk. Like `pull --stdout`, terminal stdout requires `--reveal`. `--format json`
+is a data format that contains the Values; it is not the `--json` diagnostic mode, which never
+does. `list` prints each Variable's name, ownership, and whether this Device has a Value for it,
+never the Values.
 
 `diff` compares `.env` with the decrypted Environment and prints added, updated, and removed
 Variables as names, ownership, and change types, with no Values. `--reveal` prints the unified
@@ -315,8 +357,12 @@ previously authenticated, enrolled persistent Device with explicit profile conte
 Portable plaintext or environment-variable credential bundles and auto-approved ephemeral Devices
 are not supported.
 
-`status` prints a short card: Server Profile, Origin, Session, and Device, ending with a state
-line or the next command to run. It never dumps key:value local state.
+`status` prints a short card: Server Profile, Origin, Session, Device, and, inside a linked
+worktree, the Repository, Project, and Environment, ending with a state line or the next command
+to run. In a worktree this machine has not linked yet, it suggests `dotrelay pull` (when a
+teammate already published the Repository) or `dotrelay init`. Without a Server Profile it names
+`dotrelay setup https://api.dotrelay.dev`, the hosted service; a self-hosted installation uses its
+own origin. It never dumps key:value local state.
 
 The first Device uses the server's initial trust bootstrap and stores the encrypted Device bundle
 in the local credential store, with a protected local record for its profile and Device id.
@@ -341,6 +387,29 @@ Recovery Code is entered at a hidden prompt, piped on stdin, or read from `--rec
 Profile. Recovery uses the Server Profile's account-key routes and never falls back to initial
 bootstrap. `--no-input` requires an explicit profile and a `--recovery-code-file` or `--transfer`
 channel, and never answers a prompt on the user's behalf.
+
+## Using DotRelay in CI and deploys
+
+The supported pattern is a persistent runner: a machine (or a container with a persistent volume
+for `DOTRELAY_CONFIG_DIR`) that a person signs in and enrolls once, like any other Device:
+
+1. On the runner, run `dotrelay setup https://api.dotrelay.dev` (or your own origin), or
+   `dotrelay login --profile <name>` for a saved profile. Sign in as the account the runner acts
+   for, and unlock the Device with `dotrelay device recover` if the account already has one.
+2. Make sure that account can read the Project. A dedicated account must be a Team Member whose
+   keys an owner or admin shared with `dotrelay team share-keys` or **Share project keys**.
+3. In the job, name everything explicitly and never prompt:
+
+   ```sh
+   dotrelay pull --stdout --no-input --profile ci --environment production > .env
+   # or, with nothing written to disk:
+   dotrelay run --no-input --profile ci --environment production -- ./deploy.sh
+   ```
+
+Limits today: there are no access tokens, service accounts, or ephemeral Devices. A job cannot
+bring credentials in an environment variable, and every runner is a long-lived Device with its own
+keys in its state directory, so treat that directory like any other secret store. When a runner
+is retired, revoke its Device in the web app.
 
 The stable exit categories are invocation/configuration (2), incomplete export (3), unresolved
 conflict (4), cryptographic/integrity/compatibility (5), authentication/device/authorization (6),
