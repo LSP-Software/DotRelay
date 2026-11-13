@@ -62,7 +62,23 @@ const asBufferSource = (input: Uint8Array): ArrayBuffer => {
   return copy.buffer;
 };
 
-type BuiltRevision = Awaited<ReturnType<typeof buildRevision>>;
+type BuiltRevision = Readonly<{
+  readonly id: string;
+  readonly digest: Uint8Array;
+  readonly parentId: string;
+  readonly parentHash: Uint8Array;
+  readonly mutation: number;
+  readonly projectEpoch: bigint;
+  readonly authoredAtMs: bigint;
+  readonly rollbackTargetId: null;
+  readonly objects: ReadonlyArray<
+    Readonly<{
+      readonly objectId: string;
+      readonly canonicalBytes: Uint8Array;
+      readonly digest: Uint8Array;
+    }>
+  >;
+}>;
 
 const buildRevision = async (
   variables: readonly PublicationVariable[],
@@ -71,7 +87,7 @@ const buildRevision = async (
     readonly parent: BuiltRevision | null;
   }>,
   devicePublicKey: Uint8Array,
-) => {
+): Promise<BuiltRevision> => {
   const signer = await importSigningPrivateKey(
     hexToBytes(REVISION_SIGNING_PRIVATE_KEY),
   );
