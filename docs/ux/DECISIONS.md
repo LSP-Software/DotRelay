@@ -149,30 +149,57 @@ Decision:
 Verification: `apps/web/e2e/workspace-recovery.spec.ts` asserts each
 state's anchor.
 
-## D-005 - The Account Master Key lives in browser memory only
+## D-005 - The browser keeps the Account Master Key sealed to its own Device
 
+Date: 2026-11-13 (corrected; the earlier text said the key was never
+persisted, which the code has not done since the returning-browser restore
+shipped)
 Context:
 
 - Key material in a browser: the browser unlocks the Account Master Key
   from the user's wrapper, so the key lands in the page's process.
+- Asking for a recovery code or password on every visit made the browser a
+  worse device than the CLI, which keeps its keys between runs.
 
 Decision:
 
-- The browser never persists the Account Master Key or wrapper key
-  material; the key lives in memory for the session and dies with the tab.
-- Every new session must unlock again via a wrapper (recovery code,
-  encryption password, or passkey PRF) or a device transfer.
-- The UI states this.
+- The plaintext Account Master Key is held only in page memory
+  (`accountMasterKeyRef`) and is zeroed when the account scope changes or
+  a Device is revoked.
+- After an unlock, the browser also stores a copy sealed to its own Device
+  encryption key (`apps/web/lib/browser-account-key.ts`). The copy lives in
+  `localStorage`, is bound to the server origin, Server Profile id, User,
+  Device, and the active recovery wrapper id, and is never sent to the
+  service. The Device's private keys sit in IndexedDB, encrypted under a
+  non-extractable WebCrypto wrapping key.
+- A returning browser opens that copy with its Device key instead of asking
+  for a recovery method again. A new browser, a cleared one, or one whose
+  recovery wrapper changed must unlock again with a recovery code,
+  encryption password, passkey PRF, or a device transfer.
+- Signing out does not delete the copy (D-001): the copy belongs to the
+  browser's Device, not to the session. Revoking the Device or clearing
+  site data does.
+- The UI says so: the returning-browser restore is described as a locally
+  sealed copy, never as "nothing is stored".
+
+Tradeoffs:
+
+- Anyone who can run code as this browser profile (malware with access to
+  the profile, or script running in the app's origin) can use the
+  non-extractable wrapping key to open the Device keys and then the copy.
+  That is the same exposure the CLI's on-disk Device keys have; the
+  service and other origins still never see the key.
 
 Rejected:
 
-- Local key persistence (IndexedDB or an encrypted vault) as a v1
-  surface. Rejected: it would put durable key material in the browser, the
-  risk the in-memory policy removes.
+- Memory-only keys with an unlock on every visit. Rejected: it pushed users
+  to keep recovery codes somewhere convenient, which is worse than a
+  Device-sealed copy.
+- Storing the key unsealed, or sealed under a key the service holds.
+  Rejected: either would let something other than this Device open it.
 
-Verification: the e2e reload-without-recovery-code scenarios in
-`apps/web/e2e/workspace-recovery.spec.ts`, plus the policy in the
-@dotrelay/client storage types.
+Verification: the returning-browser restore and the cleared-browser unlock
+in `apps/web/e2e/workspace-recovery.spec.ts`.
 
 ## D-006 - The Argon2 worker ships as a prebuilt IIFE
 
