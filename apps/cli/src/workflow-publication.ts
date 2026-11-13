@@ -828,6 +828,13 @@ export const publish = async (
   };
 };
 
+export const isUndisclosedUserDefinedValue = (
+  variable: DecodedVariable,
+): boolean =>
+  variable.ownership === "USER_DEFINED_VALUE" &&
+  !variable.tombstone &&
+  variable.value === null;
+
 export const shareEnvironmentWithPeerDevices = async (
   synced: Awaited<ReturnType<typeof syncWorkflow>>,
 ): Promise<void> => {
@@ -842,12 +849,18 @@ export const shareEnvironmentWithPeerDevices = async (
   )
     return;
   const probe = await generateEncryptionKeyPair();
+  const { publicationContext } = synced.workflow;
   try {
+    // Lanes sealed before a Project epoch rotation open with that epoch's
+    // key, so the probe needs the whole key ring; with only the current key
+    // every pre-rotation lane would look unshared and trigger a republish.
     await decodeSyncVariables(
       synced.page,
       () => probe.privateKey,
       [],
-      epochKey,
+      synced.workflow.sharedValueKeyRing ?? epochKey,
+      publicationContext.actorUserId,
+      publicationContext.userDefinedValueSecret,
     );
     return;
   } catch {
@@ -861,12 +874,19 @@ export const shareEnvironmentWithPeerDevices = async (
     projectEpoch: safeProjectEpoch(synced.page.projectEpoch),
     mutation: synced.page.currentHeadId ? "MANIFEST_UPDATE" : "GENESIS",
   };
-  const draft = synced.variables.map((variable) =>
-    Object.freeze({
-      ...variable,
-      hasDraftChange: true,
-    }),
-  );
+  // Another User's User-defined Value is never disclosed to this Device, so
+  // it decodes as null; republishing it would fail validation for a required
+  // Variable and could only ever restate its definition. Leave those lanes as
+  // they are.
+  const draft = synced.variables
+    .filter((variable) => !isUndisclosedUserDefinedValue(variable))
+    .map((variable) =>
+      Object.freeze({
+        ...variable,
+        hasDraftChange: true,
+      }),
+    );
+  if (draft.length === 0) return;
   const artifacts = await createPublicationArtifacts(draft, context);
   assertPublicationAccepted(reviewPublication(artifacts.commandBytes));
   const operationId = crypto.randomUUID();

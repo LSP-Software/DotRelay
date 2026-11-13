@@ -127,6 +127,8 @@ export type WorkflowSession = Readonly<{
   readonly publicationContext: PublicationContext;
   readonly session: ReturnType<typeof createVerifiedEnvironmentSession>;
   readonly createdEnvironmentId?: string;
+  /** Project epoch keys by epoch, recovered from the key chain (ADR 0014). */
+  readonly sharedValueKeyRing?: ReadonlyMap<number, Uint8Array>;
   readonly pendingActions: readonly string[];
 }>;
 

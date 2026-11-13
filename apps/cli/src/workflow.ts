@@ -110,7 +110,7 @@ export const runProtectedWorkflow = async (
       throw new CliError(
         "incomplete-export",
         groups.unreadable.length > 0
-          ? `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask an owner or admin to provision access, then try again.`
+          ? `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask a Team owner or admin to choose Share project keys for you in the web app (Members view), then try again.`
           : `${names} are required and have no value. Add them with dotrelay push, or run dotrelay pull to enter them.`,
         { missingCount: blocking.length, variableNames: names.slice(0, 512) },
         "missing_values",
@@ -178,7 +178,7 @@ export const runProtectedWorkflow = async (
       const names = pullVariableNames(groups.unreadable);
       throw new CliError(
         "incomplete-export",
-        `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask an owner or admin to provision access, then pull again. Nothing was written.`,
+        `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask a Team owner or admin to choose Share project keys for you in the web app (Members view), then pull again. Nothing was written.`,
         {
           missingCount: groups.unreadable.length,
           variableNames: names.slice(0, 512),

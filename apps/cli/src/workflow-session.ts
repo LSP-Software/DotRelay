@@ -773,6 +773,9 @@ export const loadWorkflowSession = async (
     publicationContext,
     session,
     pendingActions,
+    ...(sharedValueKeyRing && sharedValueKeyRing.size > 0
+      ? { sharedValueKeyRing }
+      : {}),
     ...(createdEnvironmentId ? { createdEnvironmentId } : {}),
   };
 };
