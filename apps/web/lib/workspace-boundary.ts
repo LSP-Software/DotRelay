@@ -44,6 +44,18 @@ export type WorkspaceSigningTrustDevice = Readonly<{
   readonly deviceActiveUntilMs: number | null;
   readonly memberSinceMs: number | null;
   readonly memberUntilMs: number | null;
+  /**
+   * Every period the author was an active Member, oldest first, current
+   * last (ADR 0016). memberSinceMs/memberUntilMs describe only the current
+   * period, so a Member who was removed and invited back needs this to keep
+   * their earlier Revisions verifiable.
+   */
+  readonly membershipPeriods?: readonly WorkspaceMembershipPeriod[];
+}>;
+
+export type WorkspaceMembershipPeriod = Readonly<{
+  readonly sinceMs: number;
+  readonly untilMs: number | null;
 }>;
 
 export type WorkspaceBoundary = Readonly<{
@@ -252,6 +264,30 @@ export const parsePeerDevices = (
   });
 };
 
+const isMillis = (candidate: unknown): candidate is number | null =>
+  candidate === null ||
+  (typeof candidate === "number" && Number.isSafeInteger(candidate));
+
+// undefined when the field is absent, null when it is malformed.
+const parseMembershipPeriods = (
+  value: unknown,
+): readonly WorkspaceMembershipPeriod[] | null | undefined => {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const periods: WorkspaceMembershipPeriod[] = [];
+  for (const period of value) {
+    if (
+      !isRecord(period) ||
+      typeof period.sinceMs !== "number" ||
+      !Number.isSafeInteger(period.sinceMs) ||
+      !isMillis(period.untilMs)
+    )
+      return null;
+    periods.push({ sinceMs: period.sinceMs, untilMs: period.untilMs });
+  }
+  return periods;
+};
+
 export const parseSigningTrustDevices = (
   value: unknown,
 ): readonly WorkspaceSigningTrustDevice[] => {
@@ -260,9 +296,8 @@ export const parseSigningTrustDevices = (
     if (!isRecord(entry)) return [];
     const signingPublicKey = asString(entry.signingPublicKey);
     if (!signingPublicKey) return [];
-    const isMillis = (candidate: unknown): candidate is number | null =>
-      candidate === null ||
-      (typeof candidate === "number" && Number.isSafeInteger(candidate));
+    const membershipPeriods = parseMembershipPeriods(entry.membershipPeriods);
+    if (membershipPeriods === null) return [];
     if (
       !isMillis(entry.deviceActiveFromMs) ||
       !isMillis(entry.deviceActiveUntilMs) ||
@@ -283,6 +318,7 @@ export const parseSigningTrustDevices = (
         deviceActiveUntilMs: entry.deviceActiveUntilMs,
         memberSinceMs: entry.memberSinceMs,
         memberUntilMs: entry.memberUntilMs,
+        ...(membershipPeriods ? { membershipPeriods } : {}),
       },
     ];
   });

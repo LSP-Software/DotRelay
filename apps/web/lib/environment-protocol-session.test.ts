@@ -4,6 +4,7 @@ import {
   createPublicationArtifacts,
   openLane,
   type ProtocolTransport,
+  verifySyncPage,
 } from "@dotrelay/client";
 import {
   exportSigningPublicKey,
@@ -14,7 +15,13 @@ import {
   type SyncPageWire,
   sha384,
 } from "@dotrelay/contracts";
-import { createEnvironmentProtocolSession } from "./environment-protocol-session";
+import { bytesToHex } from "./account-keys";
+import {
+  createEnvironmentProtocolSession,
+  deviceAuthoredAtNotBeforeMs,
+  revisionSigningTrustEntries,
+} from "./environment-protocol-session";
+import { parseSigningTrustDevices } from "./workspace-boundary";
 
 const ids = {
   serverProfileId: "11111111-1111-4111-8111-111111111111",
@@ -209,4 +216,149 @@ test("a browser session reads Shared Values sealed before a Project epoch rotati
   expect(decoded.map((variable) => variable.value)).toEqual([
     "postgres://before-rotation",
   ]);
+});
+
+test("a Revision from an earlier Membership period verifies through the boundary's trust entries", async () => {
+  const author = await generateSigningKeyPair();
+  const encryption = await generateEncryptionKeyPair();
+  const day = 24 * 60 * 60 * 1_000;
+  const now = Date.now();
+  const authoredAtMs = now - 10 * day;
+  const removedAtMs = now - 5 * day;
+  const rejoinedAtMs = now - day;
+  const published = await createPublicationArtifacts(
+    [
+      {
+        id: "77777777-7777-4777-8777-777777777777",
+        name: "DATABASE_URL",
+        description: "Connection string",
+        ownership: "SHARED_VALUE",
+        value: "postgres://first-period",
+        required: true,
+        hasDraftChange: true,
+      },
+    ],
+    {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: author.privateKey,
+      mutation: "GENESIS",
+      nowMs: authoredAtMs,
+    },
+  );
+  const revisionObject = published.stagedObjects.find(
+    (object) => object.objectId === published.request.revision.protocolObjectId,
+  );
+  if (!revisionObject) throw new Error("revision object is missing");
+  const digest = await sha384(revisionObject.bytes);
+  const page: SyncPageWire = {
+    environmentId: ids.environmentId,
+    trustedRevisionId: ids.environmentId,
+    trustedRevisionHash: new Uint8Array(48),
+    currentHeadId: published.request.revision.id,
+    currentHeadHash: digest,
+    projectEpoch: 1n,
+    revisions: [
+      {
+        id: published.request.revision.id,
+        digest,
+        parentId: ids.environmentId,
+        parentHash: new Uint8Array(48),
+        mutation: 1,
+        projectEpoch: 1n,
+        authoredAtMs: BigInt(authoredAtMs),
+        rollbackTargetId: null,
+        objects: await Promise.all(
+          published.stagedObjects.map(async (object) => ({
+            objectId: object.objectId,
+            canonicalBytes: object.bytes,
+            digest: await sha384(object.bytes),
+          })),
+        ),
+      },
+    ],
+    nextCursor: null,
+  };
+  // What GET /api/v1/workspace/boundary reports for a Member removed and
+  // invited back: memberSinceMs is the current period only.
+  const boundaryEntry = {
+    deviceId: ids.actorDeviceId,
+    userId: ids.actorUserId,
+    signingPublicKey: bytesToHex(
+      await exportSigningPublicKey(author.publicKey),
+    ),
+    deviceActiveFromMs: 0,
+    deviceActiveUntilMs: null,
+    memberSinceMs: rejoinedAtMs,
+    memberUntilMs: null,
+  };
+  const verify = (entry: unknown) =>
+    verifySyncPage(
+      page,
+      revisionSigningTrustEntries(parseSigningTrustDevices([entry])),
+      {
+        actorUserId: ids.actorUserId,
+        expectedTrustedRevisionId: ids.environmentId,
+        expectedTrustedRevisionHash: new Uint8Array(48),
+      },
+    );
+  await expect(verify(boundaryEntry)).rejects.toThrow(
+    "sync revision signature is not authorized",
+  );
+  await expect(
+    verify({
+      ...boundaryEntry,
+      membershipPeriods: [
+        { sinceMs: authoredAtMs - day, untilMs: removedAtMs },
+        { sinceMs: rejoinedAtMs, untilMs: null },
+      ],
+    }),
+  ).resolves.toBeUndefined();
+});
+
+test("malformed Membership periods drop the trust entry instead of widening it", () => {
+  const entry = {
+    signingPublicKey: "aa",
+    deviceActiveFromMs: 0,
+    deviceActiveUntilMs: null,
+    memberSinceMs: 0,
+    memberUntilMs: null,
+  };
+  expect(
+    parseSigningTrustDevices([
+      { ...entry, membershipPeriods: [{ sinceMs: "0", untilMs: null }] },
+      { ...entry, membershipPeriods: "all" },
+    ]),
+  ).toEqual([]);
+  expect(
+    parseSigningTrustDevices([
+      { ...entry, membershipPeriods: [{ sinceMs: 1, untilMs: 2 }] },
+    ])[0]?.membershipPeriods,
+  ).toEqual([{ sinceMs: 1, untilMs: 2 }]);
+});
+
+test("the authored-at floor comes from this Device's own trust entry", () => {
+  const devices = parseSigningTrustDevices([
+    {
+      deviceId: "other",
+      signingPublicKey: "aa",
+      deviceActiveFromMs: 9_000,
+      deviceActiveUntilMs: null,
+      memberSinceMs: 9_000,
+      memberUntilMs: null,
+    },
+    {
+      deviceId: ids.actorDeviceId,
+      signingPublicKey: "bb",
+      deviceActiveFromMs: 2_000,
+      deviceActiveUntilMs: null,
+      memberSinceMs: 5_000,
+      memberUntilMs: null,
+    },
+  ]);
+  expect(deviceAuthoredAtNotBeforeMs(devices, ids.actorDeviceId)).toBe(5_000);
+  expect(deviceAuthoredAtNotBeforeMs(devices, "missing")).toBeUndefined();
 });

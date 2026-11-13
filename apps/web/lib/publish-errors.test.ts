@@ -30,6 +30,7 @@ describe("publishFailureMessage", () => {
     ["forbidden", "doesn't allow this change"],
     ["membership_not_key_provisioned", "share project keys"],
     ["stale_epoch", "keys changed"],
+    ["authored_at_out_of_range", "clock looks wrong"],
     ["archived_resource", "archived"],
     ["operation_conflict", "Use Refresh in the editor"],
     ["staging_expired", "expired"],

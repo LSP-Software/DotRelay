@@ -3,10 +3,65 @@ import {
   type ProtocolTransport,
   type PublicationContext,
   type RevisionSigningTrust,
+  type RevisionSigningTrustEntry,
+  revisionAuthoredAtNotBeforeMs,
   type SharedValueKeyRing,
   type SyncPageWire,
 } from "@dotrelay/client";
+import { hexToBytes } from "./account-keys";
 import type { EnvironmentVariable } from "./environment-workflow";
+import type { WorkspaceSigningTrustDevice } from "./workspace-boundary";
+
+/**
+ * The boundary's signing trust devices as the entries Revision verification
+ * judges authors against. Every Membership period is forwarded (ADR 0016):
+ * without it a Member who was removed and invited back could not verify
+ * their own earlier Revisions. Entries with a malformed key are skipped.
+ */
+export const revisionSigningTrustEntries = (
+  devices: readonly WorkspaceSigningTrustDevice[],
+): RevisionSigningTrustEntry[] =>
+  devices.flatMap((device): RevisionSigningTrustEntry[] => {
+    let publicKey: Uint8Array;
+    try {
+      publicKey = hexToBytes(device.signingPublicKey);
+    } catch {
+      return [];
+    }
+    return [
+      {
+        publicKey,
+        ...(device.deviceId ? { deviceId: device.deviceId } : {}),
+        ...(device.userId ? { userId: device.userId } : {}),
+        deviceActiveFromMs: device.deviceActiveFromMs,
+        deviceActiveUntilMs: device.deviceActiveUntilMs,
+        memberSinceMs: device.memberSinceMs,
+        memberUntilMs: device.memberUntilMs,
+        ...(device.membershipPeriods
+          ? { membershipPeriods: device.membershipPeriods }
+          : {}),
+      },
+    ];
+  });
+
+/**
+ * The part of a new Revision's authored-at floor this Device knows from the
+ * boundary: its own activation and its author's current Membership
+ * activation. The editor raises it to the head Revision's authored-at
+ * instant at publish time (see publicationAuthoredAtNotBeforeMs).
+ */
+export const deviceAuthoredAtNotBeforeMs = (
+  devices: readonly WorkspaceSigningTrustDevice[],
+  deviceId: string,
+): number | undefined => {
+  const own = devices.find((device) => device.deviceId === deviceId);
+  return own
+    ? revisionAuthoredAtNotBeforeMs({
+        deviceActiveFromMs: own.deviceActiveFromMs,
+        memberSinceMs: own.memberSinceMs,
+      })
+    : undefined;
+};
 
 export type EnvironmentProtocolSession = Readonly<{
   readonly context: PublicationContext;

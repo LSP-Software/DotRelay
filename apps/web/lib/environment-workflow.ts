@@ -794,6 +794,29 @@ export const mergeVerifiedHistory = (
   return Object.freeze(next);
 };
 
+/**
+ * The authored-at floor for the next publication: the context's floor (this
+ * Device's and its Membership's activation) raised to the parent head
+ * Revision's authored-at instant when the verified history knows it. The
+ * service refuses (authored_at_out_of_range) a Revision authored before it.
+ */
+export const publicationAuthoredAtNotBeforeMs = (
+  contextNotBeforeMs: number | undefined,
+  headId: string | null,
+  history: readonly VerifiedRevision[],
+): number | undefined => {
+  const headAuthoredAtMs =
+    headId === null
+      ? null
+      : (history.find((revision) => revision.id === headId)?.authoredAtMs ??
+        null);
+  const candidates = [contextNotBeforeMs, headAuthoredAtMs].filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isSafeInteger(value),
+  );
+  return candidates.length === 0 ? undefined : Math.max(...candidates);
+};
+
 export const createRollbackPlan = (
   targetRevision: string,
   selectedVariableIds: readonly string[],

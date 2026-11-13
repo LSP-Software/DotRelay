@@ -28,6 +28,7 @@ import {
   rebaseDraftOntoRemote,
   prepareEncryptedPublication,
   protectedWorkflowBlockers,
+  publicationAuthoredAtNotBeforeMs,
   publicationMutationForHead,
   publishedBaseline,
   readOnlyReason,
@@ -1477,4 +1478,26 @@ test("advancing the base keeps pinned conflict lanes on their old base", () => {
   );
   expect(next.get("lane-1")?.value).toBe("base");
   expect(next.get("lane-2")?.value).toBe("rotated");
+});
+
+test("the publication authored-at floor is raised to the head Revision's authored-at instant", () => {
+  const head = locallyPublishedRevision({
+    id: "rev-head",
+    parentId: null,
+    mutation: "GENESIS",
+    projectEpoch: 1,
+    authoredAtMs: 8_000,
+    authorUserId: "user",
+  });
+  expect(publicationAuthoredAtNotBeforeMs(5_000, "rev-head", [head])).toBe(
+    8_000,
+  );
+  expect(publicationAuthoredAtNotBeforeMs(9_000, "rev-head", [head])).toBe(
+    9_000,
+  );
+  // An unknown head contributes nothing; no inputs at all leave it unset.
+  expect(publicationAuthoredAtNotBeforeMs(5_000, "rev-other", [head])).toBe(
+    5_000,
+  );
+  expect(publicationAuthoredAtNotBeforeMs(undefined, null, [])).toBe(undefined);
 });

@@ -37,6 +37,8 @@ export const publishFailureMessage = (
     case "stale_generation":
     case "rotation_required":
       return `This project's keys changed since this environment loaded, so nothing was published. ${KEPT} Wait for the workspace to pick up the new keys, then try again.`;
+    case "authored_at_out_of_range":
+      return `The server refused this revision's timestamp, so nothing was published. ${KEPT} This device's clock looks wrong: set it to update automatically, then try again.`;
     case "archived_resource":
       return `This environment or its project was archived, so nothing was published. ${KEPT}`;
     case "resource_not_found":

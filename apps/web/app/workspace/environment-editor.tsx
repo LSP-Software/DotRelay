@@ -106,6 +106,7 @@ import {
   mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
+  publicationAuthoredAtNotBeforeMs,
   publicationMutationForHead,
   publishedBaseline,
   type RollbackHistoryResolution,
@@ -737,11 +738,19 @@ export const EnvironmentEditor = ({
           expectedHeadId,
           rollbackTargetId: rollbackMutationTarget,
         });
+        const authoredAtNotBeforeMs = publicationAuthoredAtNotBeforeMs(
+          context.authoredAtNotBeforeMs,
+          expectedHeadId,
+          verifiedHistory,
+        );
         const artifacts = await createPublicationArtifacts(publishVariables, {
           ...context,
           expectedHeadId,
           expectedHeadHash,
           mutation,
+          ...(authoredAtNotBeforeMs === undefined
+            ? {}
+            : { authoredAtNotBeforeMs }),
           ...(rollbackMutationTarget
             ? {
                 rollbackTargetId: rollbackMutationTarget,

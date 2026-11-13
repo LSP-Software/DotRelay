@@ -5,7 +5,6 @@ import {
   loadDeviceKeyMaterial,
   openProjectEpochGrant,
   openProjectEpochKeyChain,
-  type RevisionSigningTrustEntry,
   uuidToBytes,
 } from "@dotrelay/client";
 import {
@@ -34,7 +33,9 @@ import {
 } from "@/lib/environment-context";
 import {
   createEnvironmentProtocolSession,
+  deviceAuthoredAtNotBeforeMs,
   type EnvironmentProtocolSession,
+  revisionSigningTrustEntries,
 } from "@/lib/environment-protocol-session";
 import { resolveUserValueKey } from "@/lib/user-value-key";
 import {
@@ -608,6 +609,12 @@ export const loadWorkspaceSession = (
         boundary.environment.headRevision === "empty-environment"
           ? null
           : boundary.environment.headRevision;
+      // The service refuses a Revision authored before this Device or its
+      // Membership became active; a slow clock is raised to that floor.
+      const authoredAtNotBeforeMs = deviceAuthoredAtNotBeforeMs(
+        boundary.signingTrustDevices ?? [],
+        device.id,
+      );
       const context = {
         serverProfileId: profile.serverProfileId,
         teamId: environment.teamId,
@@ -627,6 +634,9 @@ export const loadWorkspaceSession = (
         signingPrivateKey: keyMaterial.signingPrivateKey,
         revisionSigningPublicKey: hexToBytes(device.signingPublicKey),
         ...(userDefinedValueSecret ? { userDefinedValueSecret } : {}),
+        ...(authoredAtNotBeforeMs === undefined
+          ? {}
+          : { authoredAtNotBeforeMs }),
       };
       // Scope the journal to the server, Environment and Device so a pending
       // publication never replays against a different server or Environment.
@@ -657,27 +667,8 @@ export const loadWorkspaceSession = (
           }
         })
         .filter((key): key is Uint8Array => key !== null);
-      const signingTrustDevices: (RevisionSigningTrustEntry | null)[] = (
-        boundary.signingTrustDevices ?? []
-      ).map((device) => {
-        let publicKey: Uint8Array;
-        try {
-          publicKey = hexToBytes(device.signingPublicKey);
-        } catch {
-          return null;
-        }
-        return {
-          publicKey,
-          ...(device.deviceId ? { deviceId: device.deviceId } : {}),
-          ...(device.userId ? { userId: device.userId } : {}),
-          deviceActiveFromMs: device.deviceActiveFromMs,
-          deviceActiveUntilMs: device.deviceActiveUntilMs,
-          memberSinceMs: device.memberSinceMs,
-          memberUntilMs: device.memberUntilMs,
-        };
-      });
-      const scopedSigningTrustDevices = signingTrustDevices.filter(
-        (device): device is RevisionSigningTrustEntry => device !== null,
+      const scopedSigningTrustDevices = revisionSigningTrustEntries(
+        boundary.signingTrustDevices ?? [],
       );
       let sharedValueSecret: Uint8Array | undefined;
       if (boundary.epochGrant) {
