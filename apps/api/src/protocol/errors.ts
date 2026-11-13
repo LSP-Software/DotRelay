@@ -6,12 +6,15 @@ import {
   DeviceNotActiveError,
   EnvironmentNotActiveError,
   GenesisExistsError,
+  InvitationNotPendingError,
   MembershipNotActiveError,
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
+  PendingInvitationLimitError,
   ProjectEpochKeyLinkConflictError,
   ProjectNotActiveError,
+  RevisionAuthoredAtError,
   StagedObjectConflictError,
   StagingQuotaExceededError,
   StaleEpochError,
@@ -38,6 +41,12 @@ export const mapPersistenceError = (
       headId: error.currentHeadId,
     };
   if (error instanceof StaleEpochError) return { code: "stale_epoch" };
+  if (error instanceof RevisionAuthoredAtError)
+    return { code: "authored_at_out_of_range" };
+  if (error instanceof PendingInvitationLimitError)
+    return { code: "pending_invitation_limit" };
+  if (error instanceof InvitationNotPendingError)
+    return { code: "invitation_expired" };
   if (error instanceof OperationConflictError)
     return { code: "operation_conflict" };
   if (error instanceof StagedObjectConflictError)

@@ -177,6 +177,12 @@ type MembershipView =
       readonly lifecycle: "ACTIVE";
     }>;
 
+// Response caps for the Team tables. Pending invitations are already capped
+// per Team (MAX_PENDING_INVITATIONS_PER_TEAM); removed Memberships are the
+// ones dropped first when a Team's history outgrows the membership cap.
+const MAX_LISTED_MEMBERSHIPS = 500;
+const MAX_LISTED_INVITATIONS = 100;
+
 const loadTeamMembershipState = async (
   database: MembershipRouteDependencies["database"],
   teamId: string,
@@ -218,6 +224,13 @@ const loadTeamMembershipState = async (
       removedAt: true,
       user: { select: { authSubject: true, githubSubject: true } },
     },
+    // Current Memberships first, then the most recently removed ones.
+    orderBy: [
+      { removedAt: { sort: "desc", nulls: "first" } },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
+    take: MAX_LISTED_MEMBERSHIPS,
   });
   const rows: MembershipRow[] = memberships
     .map((membership) => ({
@@ -253,6 +266,8 @@ const loadTeamMembershipState = async (
         where: {
           teamId,
           acceptedByUserId: null,
+          revokedAt: null,
+          declinedAt: null,
           expiresAt: { gt: new Date() },
         },
         select: {
@@ -262,6 +277,7 @@ const loadTeamMembershipState = async (
           expiresAt: true,
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        take: MAX_LISTED_INVITATIONS,
       })
     : [];
   // Each Member's latest Account Device roster (ADR 0015), for fingerprint
@@ -463,6 +479,55 @@ export const registerMembershipRoutes = (
       return responseProblem(context, mapMembershipError(error));
     }
   });
+
+  // Withdraws a pending Membership Invitation of the Team. Only an active
+  // owner or admin may revoke; a revoked invitation can no longer be
+  // accepted and stops counting against the pending-invitation cap.
+  app.post(
+    "/api/v1/teams/:teamId/invitations/:invitationId/revoke",
+    async (context) => {
+      const actor = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (actor instanceof Response) return actor;
+      try {
+        const teamId = parseUuid(context.req.param("teamId"), "teamId");
+        const invitationId = parseUuid(
+          context.req.param("invitationId"),
+          "invitationId",
+        );
+        await readJsonBody(context, []);
+        const operationId = parseIdempotencyKey(
+          context.req.header("Idempotency-Key"),
+        );
+        const commandBytes = new TextEncoder().encode(
+          JSON.stringify({ action: "invitation.revoke", teamId, invitationId }),
+        );
+        const result = await memberships.revokeInvitation(database, {
+          teamId,
+          invitationId,
+          operation: {
+            id: operationId,
+            actorUserId: actor.userId,
+            actorDeviceId: actor.deviceId,
+            kind: "INVITATION",
+            commandBytes,
+            commandDigest: await sha384Digest(commandBytes),
+          },
+        });
+        return context.json(
+          { invitationId, teamId, status: "REVOKED" },
+          "invitation" in result ? 201 : 200,
+          { "Cache-Control": "no-store" },
+        );
+      } catch (error) {
+        return responseProblem(context, mapMembershipError(error));
+      }
+    },
+  );
 
   // The Team's pending Membership Invitations, visible to its active owners
   // and admins only: a plain Member never learns whom the Team is inviting.
@@ -703,6 +768,8 @@ export const registerMembershipRoutes = (
           where: {
             providerSubject: user.githubSubject,
             acceptedByUserId: null,
+            revokedAt: null,
+            declinedAt: null,
             expiresAt: { gt: now },
             team: {
               lifecycle: "ACTIVE",
@@ -718,6 +785,7 @@ export const registerMembershipRoutes = (
             team: { select: { name: true } },
           },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          take: MAX_LISTED_INVITATIONS,
         }),
         database.membership.findMany({
           where: {
@@ -748,6 +816,44 @@ export const registerMembershipRoutes = (
           })),
         },
         200,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      return responseProblem(context, mapMembershipError(error));
+    }
+  });
+
+  // The addressed User turns down a pending invitation. Like acceptance it
+  // needs only a session; an invitation addressed to someone else is
+  // reported as missing.
+  app.post("/api/v1/invitations/:invitationId/decline", async (context) => {
+    const actor = await requireWebActor(context, database, profile, auth);
+    if (actor instanceof Response) return actor;
+    try {
+      const invitationId = parseUuid(
+        context.req.param("invitationId"),
+        "invitationId",
+      );
+      const operationId = parseIdempotencyKey(
+        context.req.header("Idempotency-Key"),
+      );
+      const commandBytes = new TextEncoder().encode(
+        JSON.stringify({ action: "invitation.decline", invitationId }),
+      );
+      const result = await memberships.declineInvitation(database, {
+        invitationId,
+        userId: actor.userId,
+        operation: {
+          id: operationId,
+          actorUserId: actor.userId,
+          kind: "INVITATION",
+          commandBytes,
+          commandDigest: await sha384Digest(commandBytes),
+        },
+      });
+      return context.json(
+        { invitationId, status: "DECLINED" },
+        "invitation" in result ? 201 : 200,
         { "Cache-Control": "no-store" },
       );
     } catch (error) {

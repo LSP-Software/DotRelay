@@ -1857,6 +1857,9 @@ describe("workspace boundary Device binding", () => {
   const membershipActivatedAt = new Date("2026-01-01T00:00:00Z");
   const peerMembershipActivatedAt = new Date("2025-12-01T00:00:00Z");
   const peerMembershipRemovedAt = new Date("2026-02-01T00:00:00Z");
+  const peerEarlierPeriodActivatedAt = new Date("2025-06-01T00:00:00Z");
+  const peerEarlierPeriodRemovedAt = new Date("2025-08-01T00:00:00Z");
+  let rotationObligations: Array<Record<string, unknown>> = [];
   const olderDeviceActivatedAt = new Date("2026-01-02T00:00:00Z");
   const newerDeviceActivatedAt = new Date("2026-01-03T00:00:00Z");
   const peerDeviceActivatedAt = new Date("2025-12-15T00:00:00Z");
@@ -2000,11 +2003,27 @@ describe("workspace boundary Device binding", () => {
         }: {
           where: { userId?: string; teamId?: string; lifecycle?: string };
         }) =>
-          memberships.filter((candidate) => {
-            if (where.teamId) return candidate.teamId === where.teamId;
-            if (where.userId && candidate.userId !== where.userId) return false;
-            return !where.lifecycle || candidate.lifecycle === where.lifecycle;
-          }),
+          memberships
+            .filter((candidate) => {
+              if (where.teamId) return candidate.teamId === where.teamId;
+              if (where.userId && candidate.userId !== where.userId)
+                return false;
+              return (
+                !where.lifecycle || candidate.lifecycle === where.lifecycle
+              );
+            })
+            .map((candidate) => ({
+              ...candidate,
+              periods:
+                candidate.userId === peerUserId
+                  ? [
+                      {
+                        activatedAt: peerEarlierPeriodActivatedAt,
+                        removedAt: peerEarlierPeriodRemovedAt,
+                      },
+                    ]
+                  : [],
+            })),
       },
       project: {
         findFirst: async () => ({
@@ -2038,6 +2057,9 @@ describe("workspace boundary Device binding", () => {
       },
       accountDeviceRosterObject: {
         findMany: async () => [],
+      },
+      projectRotationObligation: {
+        findMany: async () => rotationObligations,
       },
     };
     const profile = loadServerProfileConfig({});
@@ -2194,6 +2216,9 @@ describe("workspace boundary Device binding", () => {
         deviceActiveUntilMs: null,
         memberSinceMs: membershipActivatedAt.getTime(),
         memberUntilMs: null,
+        membershipPeriods: [
+          { sinceMs: membershipActivatedAt.getTime(), untilMs: null },
+        ],
       },
       {
         deviceId: newerDeviceId,
@@ -2204,6 +2229,9 @@ describe("workspace boundary Device binding", () => {
         deviceActiveUntilMs: null,
         memberSinceMs: membershipActivatedAt.getTime(),
         memberUntilMs: null,
+        membershipPeriods: [
+          { sinceMs: membershipActivatedAt.getTime(), untilMs: null },
+        ],
       },
       {
         deviceId: peerDeviceId,
@@ -2214,8 +2242,69 @@ describe("workspace boundary Device binding", () => {
         deviceActiveUntilMs: peerDeviceRevokedAt.getTime(),
         memberSinceMs: peerMembershipActivatedAt.getTime(),
         memberUntilMs: peerMembershipRemovedAt.getTime(),
+        // An earlier, archived period comes first (ADR 0016).
+        membershipPeriods: [
+          {
+            sinceMs: peerEarlierPeriodActivatedAt.getTime(),
+            untilMs: peerEarlierPeriodRemovedAt.getTime(),
+          },
+          {
+            sinceMs: peerMembershipActivatedAt.getTime(),
+            untilMs: peerMembershipRemovedAt.getTime(),
+          },
+        ],
       },
     ]);
+  });
+
+  test("reports an owed rotation in environment.rotationOwed without gating publication", async () => {
+    const profile = loadServerProfileConfig({});
+    rotationObligations = [];
+    const quiet = (await (
+      await boundaryRequest(createTestApp(), profile, newerDeviceId)
+    ).json()) as {
+      environment: Record<string, unknown>;
+      rotationRequired: boolean;
+    };
+    expect(quiet.environment.rotationOwed).toBeNull();
+    const since = new Date("2026-10-01T00:00:00.000Z");
+    rotationObligations = [
+      {
+        reason: "MEMBERSHIP_REMOVED",
+        membershipId: "membership-a",
+        deviceId: null,
+        projectEpoch: 1n,
+        createdAt: since,
+      },
+      {
+        reason: "DEVICE_REVOKED",
+        membershipId: null,
+        deviceId: "device-a",
+        projectEpoch: 1n,
+        createdAt: new Date(since.getTime() + 1_000),
+      },
+      {
+        reason: "DEVICE_REVOKED",
+        membershipId: null,
+        deviceId: "device-a",
+        projectEpoch: 1n,
+        createdAt: new Date(since.getTime() + 2_000),
+      },
+    ];
+    const owed = (await (
+      await boundaryRequest(createTestApp(), profile, newerDeviceId)
+    ).json()) as {
+      environment: Record<string, unknown>;
+      rotationRequired: boolean;
+    };
+    rotationObligations = [];
+    expect(owed.environment.rotationOwed).toEqual({
+      since: since.toISOString(),
+      sinceEpoch: "1",
+      membershipRemovals: 1,
+      deviceRevocations: 1,
+    });
+    expect(owed.rotationRequired).toBe(false);
   });
 });
 

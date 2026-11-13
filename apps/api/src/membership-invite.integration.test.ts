@@ -6,6 +6,8 @@ import {
   createDatabaseClient,
   ensureServerProfile,
   type DatabaseClient,
+  MembershipAdministrationRepository,
+  ProjectRepository,
   sha384Digest,
 } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
@@ -67,6 +69,7 @@ let database: DatabaseClient;
 let testApp: ReturnType<typeof createApi>;
 let teamId = "";
 let deviceId = "";
+let ownerUserId = "";
 const profile = loadServerProfileConfig(process.env);
 const OWNER_TOKEN = "owner-token";
 const authSubject = `auth-invite-${crypto.randomUUID()}`;
@@ -89,6 +92,7 @@ const createAuthStub = (): DotRelayAuth =>
     $context: Promise.resolve({
       options: {},
       secretConfig: { secret: "test-secret" },
+      internalAdapter: { findAccounts: async () => [] },
     }),
   }) as unknown as DotRelayAuth;
 
@@ -138,6 +142,7 @@ integrationDescribe(
           githubSubject: "1001",
         },
       });
+      ownerUserId = user.id;
       await database.authUser.create({
         data: {
           id: authSubject,
@@ -279,6 +284,153 @@ integrationDescribe(
       expect(replayTwo.status).toBe(200);
       const replayTwoBody = (await replayTwo.json()) as Record<string, unknown>;
       expect(replayTwoBody.invitationId).toBe(secondBody.invitationId);
+    }, 30_000);
+
+    const operation = async (actorUserId: string, label: string) => {
+      const commandBytes = new TextEncoder().encode(
+        `${label}-${crypto.randomUUID()}`,
+      );
+      return {
+        id: crypto.randomUUID(),
+        actorUserId,
+        kind: "ADMINISTRATION" as const,
+        commandBytes,
+        commandDigest: await sha384Digest(commandBytes),
+      };
+    };
+
+    test("a removed and re-invited Member keeps every period in the signing trust, and removal owes a rotation", async () => {
+      const githubRepositoryId = BigInt(Date.now());
+      await new ProjectRepository().create(database, {
+        teamId,
+        githubRepositoryId,
+        operation: {
+          ...(await operation(ownerUserId, "history-project")),
+          actorDeviceId: deviceId,
+        },
+      });
+      const inviteeKey = crypto.getRandomValues(new Uint8Array(32));
+      const invitee = await database.user.create({
+        data: {
+          serverProfileId: profile.id,
+          authSubject: `auth-history-${crypto.randomUUID()}`,
+          githubSubject: "5150",
+        },
+      });
+      const inviteeDevice = await database.device.create({
+        data: {
+          id: crypto.randomUUID(),
+          userId: invitee.id,
+          lifecycle: "ACTIVE",
+          identityGeneration: 1n,
+          keyId: new Uint8Array(await sha384Digest(inviteeKey)),
+          x25519PublicKey: inviteeKey,
+          ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+          activatedAt: new Date(Date.now() - 60 * 24 * 60 * 60_000),
+        },
+      });
+      const memberships = new MembershipAdministrationRepository();
+      const join = async (label: string) => {
+        const invited = await memberships.invite(database, {
+          teamId,
+          providerSubject: "5150",
+          operation: {
+            ...(await operation(ownerUserId, `${label}-invite`)),
+            actorDeviceId: deviceId,
+          },
+        });
+        if (!("invitation" in invited)) throw new Error("invite replayed");
+        const accepted = await memberships.accept(database, {
+          invitationId: invited.invitation.id,
+          userId: invitee.id,
+          operation: await operation(invitee.id, `${label}-accept`),
+        });
+        if (!("membership" in accepted)) throw new Error("accept replayed");
+        // Key provisioning is covered elsewhere; activate directly.
+        return database.membership.update({
+          where: { id: accepted.membership.id },
+          data: { lifecycle: "ACTIVE", activatedAt: new Date() },
+        });
+      };
+      const first = await join("history-first");
+      const removed = await memberships.remove(database, {
+        teamId,
+        membershipId: first.id,
+        operation: {
+          ...(await operation(ownerUserId, "history-remove")),
+          actorDeviceId: deviceId,
+        },
+      });
+      if (!("membership" in removed)) throw new Error("removal replayed");
+      const second = await join("history-second");
+
+      const response = await testApp.request(
+        `${profile.origin}/api/v1/workspace/boundary?githubRepositoryId=${githubRepositoryId}`,
+        {
+          headers: {
+            Origin: profile.origin,
+            Authorization: `Bearer ${OWNER_TOKEN}`,
+            "X-DotRelay-Device-Id": deviceId,
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        environment: { rotationOwed: Record<string, unknown> | null };
+        rotationRequired: boolean;
+        signingTrustDevices: Array<Record<string, unknown>>;
+      };
+      const entry = body.signingTrustDevices.find(
+        (candidate) => candidate.deviceId === inviteeDevice.id,
+      );
+      expect(entry?.memberSinceMs).toBe(second.activatedAt?.getTime());
+      expect(entry?.membershipPeriods).toEqual([
+        {
+          sinceMs: first.activatedAt?.getTime(),
+          untilMs: removed.membership.removedAt?.getTime(),
+        },
+        { sinceMs: second.activatedAt?.getTime(), untilMs: null },
+      ]);
+      expect(body.environment.rotationOwed).toMatchObject({
+        sinceEpoch: "1",
+        membershipRemovals: 1,
+        deviceRevocations: 0,
+      });
+      expect(body.rotationRequired).toBe(false);
+    }, 30_000);
+
+    test("an owner revokes an invitation over HTTP and it stops being pending", async () => {
+      const created = await inviteRequest(
+        "f0000000-0000-4000-8000-0000000000b1",
+        "777000",
+      );
+      const { invitationId } = (await created.json()) as {
+        invitationId: string;
+      };
+      const revoke = await testApp.request(
+        `${profile.origin}/api/v1/teams/${teamId}/invitations/${invitationId}/revoke`,
+        {
+          method: "POST",
+          headers: {
+            Origin: profile.origin,
+            Authorization: `Bearer ${OWNER_TOKEN}`,
+            "X-DotRelay-Device-Id": deviceId,
+            "Idempotency-Key": "f0000000-0000-4000-8000-0000000000b2",
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        },
+      );
+      expect(revoke.status).toBe(201);
+      const row = await database.membershipInvitation.findUniqueOrThrow({
+        where: { id: invitationId },
+      });
+      expect(row.revokedAt).toBeInstanceOf(Date);
+      expect(
+        await database.auditEvent.count({
+          where: { entityId: invitationId, kind: "INVITATION_REVOKED" },
+        }),
+      ).toBe(1);
     }, 30_000);
   },
 );

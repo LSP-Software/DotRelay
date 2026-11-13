@@ -58,6 +58,8 @@ const fixture = async () => {
       findUniqueOrThrow: async () => ({ authSubject: "auth-user" }),
     },
     authAccount: { findFirst: async () => ({ accountId: "1001" }) },
+    project: { findMany: async () => [] },
+    projectRotationObligation: { createMany: async () => ({ count: 0 }) },
     authSession: {
       deleteMany: async ({ where }: { where: { userId: string } }) => {
         deletedUsers.push(where.userId);

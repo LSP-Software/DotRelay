@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MAX_PENDING_INVITATIONS_PER_TEAM } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
@@ -19,6 +20,7 @@ const INV_EXPIRED = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const INV_OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const INV_ACCEPTED = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const INV_B = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const PROJECT_A = "e1111111-e111-4e11-8e11-e1111111e111";
 const DAY = 24 * 60 * 60 * 1000;
 // Frozen at module load: both the dataset and the expected values derive from
 // the same instant, so only the route's own "now" moves between them.
@@ -48,6 +50,8 @@ type StubInvitation = {
   acceptedAt: Date | null;
   createdAt: Date;
   expiresAt: Date;
+  revokedAt?: Date | null;
+  declinedAt?: Date | null;
 };
 
 const profile = loadServerProfileConfig({});
@@ -350,6 +354,8 @@ const createDatabaseStub = () => {
   const auditEvents: Array<Record<string, unknown>> = [];
   const createdMemberships: StubMembership[] = [];
   const createdInvitations: StubInvitation[] = [];
+  const rotationObligations: Array<Record<string, unknown>> = [];
+  const membershipPeriods: Array<Record<string, unknown>> = [];
 
   const database = {
     $transaction: async (
@@ -533,6 +539,30 @@ const createDatabaseStub = () => {
     accountDeviceRosterObject: {
       findMany: async () => [],
     },
+    project: {
+      findMany: async ({ where }: { where: { teamId?: string } }) =>
+        where.teamId === TEAM_A ? [{ id: PROJECT_A, currentEpoch: 3n }] : [],
+    },
+    projectRotationObligation: {
+      createMany: async ({
+        data,
+      }: {
+        data: Array<Record<string, unknown>>;
+      }) => {
+        rotationObligations.push(...data);
+        return { count: data.length };
+      },
+    },
+    membershipPeriod: {
+      createMany: async ({
+        data,
+      }: {
+        data: Array<Record<string, unknown>>;
+      }) => {
+        membershipPeriods.push(...data);
+        return { count: data.length };
+      },
+    },
     membershipInvitation: {
       findFirst: async ({
         where,
@@ -556,10 +586,31 @@ const createDatabaseStub = () => {
         );
         return matches[0] ?? null;
       },
-      findUnique: async ({ where }: { where: { id: string } }) =>
+      findUnique: async ({ where }: { where: { id: string } }) => {
+        const invitation = localInvitations
+          .concat(createdInvitations)
+          .find((entry) => entry.id === where.id);
+        return invitation
+          ? Object.assign(invitation, {
+              team: teams.find((entry) => entry.id === invitation.teamId),
+            })
+          : null;
+      },
+      count: async ({
+        where,
+      }: {
+        where: { teamId: string; expiresAt: { gt: Date } };
+      }) =>
         localInvitations
           .concat(createdInvitations)
-          .find((invitation) => invitation.id === where.id) ?? null,
+          .filter(
+            (invitation) =>
+              invitation.teamId === where.teamId &&
+              invitation.acceptedAt === null &&
+              !invitation.revokedAt &&
+              !invitation.declinedAt &&
+              invitation.expiresAt > where.expiresAt.gt,
+          ).length,
       findMany: async ({
         where,
       }: {
@@ -567,6 +618,8 @@ const createDatabaseStub = () => {
           teamId?: string;
           providerSubject?: string;
           acceptedByUserId?: null;
+          revokedAt?: null;
+          declinedAt?: null;
           expiresAt?: { gt: Date };
           team?: Readonly<{
             lifecycle: string;
@@ -585,6 +638,8 @@ const createDatabaseStub = () => {
                 invitation.providerSubject === where.providerSubject) &&
               (where.acceptedByUserId === undefined ||
                 invitation.acceptedByUserId === where.acceptedByUserId) &&
+              (where.revokedAt === undefined || !invitation.revokedAt) &&
+              (where.declinedAt === undefined || !invitation.declinedAt) &&
               (where.expiresAt === undefined ||
                 invitation.expiresAt > where.expiresAt.gt) &&
               (where.team === undefined ||
@@ -624,14 +679,18 @@ const createDatabaseStub = () => {
         data,
       }: {
         where: { id: string };
-        data: { acceptedByUserId: string; acceptedAt: Date };
+        data: {
+          acceptedByUserId?: string;
+          acceptedAt?: Date;
+          revokedAt?: Date;
+          declinedAt?: Date;
+        };
       }) => {
         const invitation = localInvitations
           .concat(createdInvitations)
           .find((entry) => entry.id === where.id);
         if (!invitation) throw new Error("invitation not found");
-        invitation.acceptedByUserId = data.acceptedByUserId;
-        invitation.acceptedAt = data.acceptedAt;
+        Object.assign(invitation, data);
         return invitation;
       },
     },
@@ -702,6 +761,8 @@ const createDatabaseStub = () => {
     createdMemberships,
     createdInvitations,
     localInvitations,
+    rotationObligations,
+    membershipPeriods,
   };
 };
 
@@ -713,6 +774,7 @@ const createTestApp = (options: { githubFetch?: typeof fetch } = {}) => {
     createdMemberships,
     createdInvitations,
     localInvitations,
+    rotationObligations,
   } = createDatabaseStub();
   const testApp = createApi({
     database: database as never,
@@ -727,6 +789,7 @@ const createTestApp = (options: { githubFetch?: typeof fetch } = {}) => {
     createdMemberships,
     createdInvitations,
     localInvitations,
+    rotationObligations,
   };
 };
 
@@ -1433,7 +1496,7 @@ describe("Team membership role and removal routes", () => {
   });
 
   test("an owner removes a member and the removal is the Team's record", async () => {
-    const { testApp, auditEvents } = createTestApp();
+    const { testApp, auditEvents, rotationObligations } = createTestApp();
     const response = await request(
       testApp,
       `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
@@ -1473,6 +1536,203 @@ describe("Team membership role and removal routes", () => {
       (row) => row.membershipId === MEMBER_M2,
     );
     expect(removed?.lifecycle).toBe("REMOVED");
+    // An active Member held the Team's Project keys: each Project now owes
+    // a rotation, recorded at the epoch current at removal.
+    expect(rotationObligations).toEqual([
+      expect.objectContaining({
+        projectId: PROJECT_A,
+        reason: "MEMBERSHIP_REMOVED",
+        membershipId: MEMBER_M2,
+        projectEpoch: 3n,
+      }),
+    ]);
+  });
+
+  test("an owner revokes a pending invitation and it can no longer be accepted", async () => {
+    const { testApp, auditEvents, localInvitations } = createTestApp();
+    const revoke = () =>
+      request(
+        testApp,
+        `/api/v1/teams/${TEAM_A}/invitations/${INV_ACTIVE}/revoke`,
+        {
+          method: "POST",
+          token: "owner-token",
+          deviceId: DEVICE_OWNER,
+          idempotencyKey: "d1000000-0000-4000-8000-000000000001",
+          body: {},
+        },
+      );
+    const response = await revoke();
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({
+      invitationId: INV_ACTIVE,
+      teamId: TEAM_A,
+      status: "REVOKED",
+    });
+    expect(
+      localInvitations.find((entry) => entry.id === INV_ACTIVE)?.revokedAt,
+    ).toBeInstanceOf(Date);
+    expect(auditEvents).toEqual([
+      expect.objectContaining({
+        kind: "INVITATION_REVOKED",
+        actorUserId: USER_OWNER,
+        entityKind: "INVITATION",
+        entityId: INV_ACTIVE,
+      }),
+    ]);
+    // A replay reports the recorded outcome.
+    expect((await revoke()).status).toBe(200);
+    const listed = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/invitations`,
+      { token: "owner-token" },
+    );
+    expect(await listed.json()).toEqual({ invitations: [] });
+    const accept = await request(
+      testApp,
+      `/api/v1/invitations/${INV_ACTIVE}/accept`,
+      {
+        method: "POST",
+        token: "invitee-token",
+        idempotencyKey: "d1000000-0000-4000-8000-000000000002",
+      },
+    );
+    expect(accept.status).toBe(410);
+    expect(await accept.json()).toMatchObject({ code: "invitation_expired" });
+  });
+
+  test("only owners and admins revoke, and only the Team's own pending invitations", async () => {
+    const { testApp } = createTestApp();
+    const member = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/invitations/${INV_ACTIVE}/revoke`,
+      {
+        method: "POST",
+        token: "member-token",
+        deviceId: DEVICE_MEMBER,
+        idempotencyKey: "d1000000-0000-4000-8000-000000000003",
+        body: {},
+      },
+    );
+    expect(member.status).toBe(403);
+    const otherTeam = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/invitations/${INV_OTHER}/revoke`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "d1000000-0000-4000-8000-000000000004",
+        body: {},
+      },
+    );
+    expect(otherTeam.status).toBe(404);
+    const expired = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/invitations/${INV_EXPIRED}/revoke`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: "d1000000-0000-4000-8000-000000000005",
+        body: {},
+      },
+    );
+    expect(expired.status).toBe(410);
+    const noDevice = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/invitations/${INV_ACTIVE}/revoke`,
+      {
+        method: "POST",
+        token: "owner-token",
+        idempotencyKey: "d1000000-0000-4000-8000-000000000006",
+        body: {},
+      },
+    );
+    expect(noDevice.status).toBe(400);
+  });
+
+  test("the invitee declines an invitation; nobody else can", async () => {
+    const { testApp, auditEvents, localInvitations } = createTestApp();
+    const bystander = await request(
+      testApp,
+      `/api/v1/invitations/${INV_ACTIVE}/decline`,
+      {
+        method: "POST",
+        token: "member-token",
+        idempotencyKey: "d2000000-0000-4000-8000-000000000001",
+      },
+    );
+    expect(bystander.status).toBe(404);
+    const response = await request(
+      testApp,
+      `/api/v1/invitations/${INV_ACTIVE}/decline`,
+      {
+        method: "POST",
+        token: "invitee-token",
+        idempotencyKey: "d2000000-0000-4000-8000-000000000002",
+      },
+    );
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({
+      invitationId: INV_ACTIVE,
+      status: "DECLINED",
+    });
+    expect(
+      localInvitations.find((entry) => entry.id === INV_ACTIVE)?.declinedAt,
+    ).toBeInstanceOf(Date);
+    expect(auditEvents).toEqual([
+      expect.objectContaining({
+        kind: "INVITATION_DECLINED",
+        actorUserId: USER_INVITEE,
+        entityKind: "INVITATION",
+        entityId: INV_ACTIVE,
+      }),
+    ]);
+    const listed = await request(testApp, "/api/v1/invitations", {
+      token: "invitee-token",
+    });
+    const body = (await listed.json()) as {
+      invitations: Array<{ invitationId: string }>;
+    };
+    expect(body.invitations.map((entry) => entry.invitationId)).not.toContain(
+      INV_ACTIVE,
+    );
+    const again = await request(
+      testApp,
+      `/api/v1/invitations/${INV_ACTIVE}/decline`,
+      {
+        method: "POST",
+        token: "invitee-token",
+        idempotencyKey: "d2000000-0000-4000-8000-000000000003",
+      },
+    );
+    expect(again.status).toBe(410);
+  });
+
+  test("a Team cannot hold more than the pending invitation cap", async () => {
+    const { testApp, createdInvitations } = createTestApp();
+    const invite = (index: number) =>
+      request(testApp, `/api/v1/teams/${TEAM_A}/invitations`, {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        idempotencyKey: `e0000000-0000-4000-8000-${index
+          .toString()
+          .padStart(12, "0")}`,
+        body: { providerSubject: `${700_000 + index}` },
+      });
+    // INV_ACTIVE is already pending for TEAM_A.
+    for (let index = 1; index < MAX_PENDING_INVITATIONS_PER_TEAM; index += 1)
+      expect((await invite(index)).status).toBe(201);
+    expect(createdInvitations).toHaveLength(
+      MAX_PENDING_INVITATIONS_PER_TEAM - 1,
+    );
+    const overflow = await invite(MAX_PENDING_INVITATIONS_PER_TEAM);
+    expect(overflow.status).toBe(409);
+    expect(await overflow.json()).toMatchObject({
+      code: "pending_invitation_limit",
+    });
   });
 
   test("an owner may remove a second owner while one stays active", async () => {

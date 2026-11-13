@@ -24,8 +24,10 @@ import {
   DeviceRepository,
   ensureServerProfile,
   GrantRepository,
+  loadTeamMembershipWindows,
   OperationConflictError,
   OperationRepository,
+  ProjectRotationObligationRepository,
   requireTeamAction,
   resolveDotRelayUser,
   StagedObjectRepository,
@@ -312,17 +314,14 @@ const loadWorkspaceCatalog = async (
 // Revision was authored. Windows let a legitimate historical Revision stay
 // verifiable after its signing Device is revoked or its Member leaves, while
 // a write made after the revocation or removal stays rejected.
+// memberSinceMs/memberUntilMs describe the current Membership period only;
+// membershipPeriods lists every period, so a Member who was removed and
+// invited back keeps their earlier Revisions verifiable (ADR 0016).
 const loadTeamSigningTrustDevices = async (
   database: DatabaseClient,
   teamId: string,
 ) => {
-  const memberships = await database.membership.findMany({
-    where: { teamId },
-    select: { userId: true, activatedAt: true, removedAt: true },
-  });
-  const membershipByUser = new Map(
-    memberships.map((membership) => [membership.userId, membership]),
-  );
+  const membershipByUser = await loadTeamMembershipWindows(database, teamId);
   const userIds = [...membershipByUser.keys()];
   if (userIds.length === 0) return [];
   const devices = await database.device.findMany({
@@ -348,8 +347,12 @@ const loadTeamSigningTrustDevices = async (
       encryptionPublicKey: bytesToHex(new Uint8Array(device.x25519PublicKey)),
       deviceActiveFromMs: toMillis(device.activatedAt),
       deviceActiveUntilMs: toMillis(device.revokedAt),
-      memberSinceMs: toMillis(membership?.activatedAt ?? null),
-      memberUntilMs: toMillis(membership?.removedAt ?? null),
+      memberSinceMs: toMillis(membership?.current.activatedAt ?? null),
+      memberUntilMs: toMillis(membership?.current.removedAt ?? null),
+      membershipPeriods: (membership?.periods ?? []).map((period) => ({
+        sinceMs: period.activatedAt.getTime(),
+        untilMs: toMillis(period.removedAt),
+      })),
     };
   });
 };
@@ -1284,6 +1287,15 @@ const createApi = ({
       database,
       [user.id, ...signingTrustDevices.map((entry) => entry.userId)],
     );
+    // A rotation owed since a Member was removed or a Device revoked. It is
+    // advice for UI copy and never blocks publication; rotationRequired
+    // stays the publication gate and is not set by it.
+    const rotationOwed = project
+      ? await new ProjectRotationObligationRepository().outstanding(
+          database,
+          project.id,
+        )
+      : null;
     return context.json(
       {
         session: {
@@ -1303,6 +1315,14 @@ const createApi = ({
               )
             : null,
           projectEpoch: project?.currentEpoch.toString() ?? null,
+          rotationOwed: rotationOwed
+            ? {
+                since: rotationOwed.since.toISOString(),
+                sinceEpoch: rotationOwed.sinceEpoch.toString(),
+                membershipRemovals: rotationOwed.membershipRemovals,
+                deviceRevocations: rotationOwed.deviceRevocations,
+              }
+            : null,
         },
         device: {
           active: deviceActive,
@@ -1380,6 +1400,9 @@ const createApi = ({
           currentEpochGrantCount > 0,
         activeDeviceCount: devices.length,
         epochCurrent: project !== null,
+        // Current CLI and web clients refuse to publish while this is true,
+        // so a removal or revocation reports environment.rotationOwed
+        // instead (publication must not be blocked).
         rotationRequired: false,
         projectEpoch: project?.currentEpoch.toString() ?? null,
         profile: {

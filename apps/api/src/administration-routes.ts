@@ -323,7 +323,9 @@ export const registerAdministrationRoutes = (
         memberships: { some: { userId: actor.userId, lifecycle: "ACTIVE" } },
       },
       select: { id: true, name: true },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      // A response cap, not pagination: no client lists this many Teams.
+      take: 256,
     });
     return context.json({ teams }, 200, { "Cache-Control": "no-store" });
   });
