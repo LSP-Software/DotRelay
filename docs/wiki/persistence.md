@@ -50,10 +50,23 @@ CI. `db push` is not a deployment path. Prisma describes the typed client model;
 add exact byte lengths, lifecycle and epoch checks, partial uniqueness, deferred last-owner and
 current-head constraints, foreign keys, and append-only triggers that Prisma cannot express.
 
-Durable Users, Devices, Memberships, Projects, Environments, protocol objects, Revisions, grants,
-commitments, and Audit Facts are not physically deleted. Archival, Membership removal, and Device
-revocation are logical lifecycle changes. Cleanup is limited to expired sessions and device codes,
-uncommitted expired staging rows, and expired Security Request Logs. Every uncommitted staged row
+Durable Users, Devices, Memberships, Membership periods, Projects, Environments, protocol objects,
+Revisions, grants, commitments, Operations, and Audit Facts are not physically deleted. Archival,
+Membership removal, and Device revocation are logical lifecycle changes. A removed Membership that
+is invited back keeps its row; its finished period is first archived in the append-only
+`membership_periods` table so signing windows for earlier Revisions survive
+([ADR 0016](../adr/0016-membership-periods-survive-reinvitation.md)). Removing an active Member or
+revoking an active Device records rows in `project_rotation_obligations`; a committed epoch
+rotation marks them cleared rather than deleting them.
+
+The retention job deletes, in bounded batches of short `SKIP LOCKED` transactions: uncommitted
+expired staging rows; expired Security Request Logs; Better Auth sessions past their sliding expiry
+or older than the 90-day absolute lifetime; expired device codes and verifications; expired Device
+enrollments that were never approved (approved or completed enrollments are referenced by
+append-only approval and enrollment objects); and expired invitations that were never accepted,
+including revoked and declined ones. It deliberately keeps expired and cancelled Operations, whose
+ids are idempotency guards referenced by append-only Audit Facts, and PENDING Device rows, which
+their enrollment Operation and Audit Fact reference. Every uncommitted staged row
 counts against the staging quota until cleanup deletes it, whatever its expiry, and a client's
 `X-DotRelay-Expires-At` is clamped to between five minutes and the staging TTL. Security Request Logs contain
 only the approved IP, endpoint template, status, transfer size, and retention timestamps; they do

@@ -41,7 +41,10 @@ approved stable numeric IDs. Explicit `ALPHA_ADMISSION_REQUIRED=false` disables
 admission, and must never be set accidentally. Behind TLS termination configure
 `SERVER_PROFILE_TRUST_PROXY=true` and the exact trusted proxy CIDRs; prevent any
 public direct access to the API container. Use a trusted proxy that overwrites
-forwarding headers. When the web app and the API use sibling hosts, set `COOKIE_DOMAIN` to
+forwarding headers. Better Auth's sign-in limiter keys its buckets by client IP, which the API can
+only learn from a trusted proxy: without `SERVER_PROFILE_TRUST_PROXY=true` and accurate
+`SERVER_PROFILE_TRUSTED_PROXIES`, every client shares one bucket per auth route and a single
+abusive client can lock everyone out of sign-in. When the web app and the API use sibling hosts, set `COOKIE_DOMAIN` to
 their shared registrable domain (see [authentication](authentication.md)). Expose only the TLS proxy, keep PostgreSQL/Valkey private,
 run API/web non-root with read-only roots, drop capabilities, set no-new-privileges,
 apply memory/CPU/PID limits and provide bounded private `/tmp` tmpfs volumes.
@@ -52,7 +55,17 @@ applied migration names/checksums, including failed migrations and unexpected
 newer migrations; it returns only a generic 200 or 503. It has a three-second
 response budget. When `VALKEY_URL` is set, readiness also pings Valkey.
 `MAINTENANCE_MODE=true` makes readiness fail, as does SIGTERM, which then waits
-`SHUTDOWN_DRAIN_MS` (default 5000) before closing the listener. Keep health endpoints
+`SHUTDOWN_DRAIN_MS` (default 5000) before closing the listener.
+
+Valkey is required in production for rate limiting, and is shared by every API replica. Each
+authenticated `/api/v1` request counts against its User's budget of 600 per minute. Requests that
+may call GitHub on the User's behalf (`github-users/resolve`, `github-repositories/resolve`, the
+workspace boundary) also count against 120 per minute, and requests that create durable rows
+(Teams, Projects, invitations, Device enrollments) against 60 per hour. A refused request answers
+`rate_limited` (429) with `Retry-After`. Without Valkey, production answers
+`rate_limit_unavailable` (503); development runs unlimited. Better Auth's own per-IP sign-in limits
+use the same Valkey, falling back to per-process memory if it is unreachable. Sessions slide for 30
+days of inactivity but end 90 days after creation, browser and CLI alike. Keep health endpoints
 on private monitoring paths where possible. The API process itself never migrates;
 hosted deploys run a migration step before it starts (see below).
 If the orchestrator overrides Docker's built-in healthcheck, configure

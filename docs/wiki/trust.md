@@ -176,7 +176,10 @@ clients with the AMK runs.
 Adding a new Device is still a user decision on what the service shows: the AMK handoff during
 enrollment approval, Account Key Transfer, or Recovery Code restore happens before the new Device
 can be listed. Once it lists itself, no other Device can join without an AMK holder. Membership
-windows still come from the service.
+windows still come from the service. Each `signingTrustDevices` entry carries `membershipPeriods`,
+every period in which the author was an active Member; a Member who was removed and invited back
+keeps one period per stint, so their earlier Revisions stay verifiable
+([ADR 0016](../adr/0016-membership-periods-survive-reinvitation.md)).
 
 ## Security boundaries
 

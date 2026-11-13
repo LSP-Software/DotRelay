@@ -54,7 +54,10 @@ bearer token and a cookie is rejected.
 Authentication establishes only the server-local DotRelay User. It does not grant Membership,
 Device authority, decryption ability, or mutation permission. Encrypted operations still require an
 active Device and the application-level signed protocol checks. Session expiry, logout, and remote
-revocation are database-backed and take effect on the next request.
+revocation are database-backed and take effect on the next request. Sessions slide: each day of use
+extends them to 30 days. Independently, any session, browser cookie or CLI bearer, ends 90 days
+after it was created; the API deletes an older session before any route reads it, and the
+retention job removes the rest.
 
 The user-facing login journey continues after GitHub verification. The browser gates the workspace
 until it has a durable Device key and can open the Account Master Key; returning browsers restore a
@@ -65,9 +68,11 @@ these steps because it is required to fetch encrypted wrappers; it never grants 
 
 Better Auth permits ten requests to one authentication route in a 60-second window. Device codes
 expire after 30 minutes and the CLI must wait at least five seconds between token polls; an early
-poll returns `slow_down`. The limiter uses per-process memory. A single API process is suitable for
-the MVP. A multi-replica deployment must add an edge or shared-store limit before accepting traffic.
-In production, requests without a trusted client address share one conservative route bucket. The
+poll returns `slow_down`. With `VALKEY_URL` set, the limiter's counters live in Valkey and every
+API replica shares them; if Valkey is unreachable it falls back to per-process memory. Development
+without Valkey uses per-process memory. In production, requests without a trusted client address
+share one conservative route bucket, so the trusted-proxy settings in
+[operations](operations.md#configuration-and-startup) are required for per-client limits. The
 API reads `X-Forwarded-For` only when trusted proxies are configured, and walks the chain past the
 listed proxy addresses. A `429` response carries `X-Retry-After`, which auth CORS exposes.
 

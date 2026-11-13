@@ -51,7 +51,10 @@ and Values `1 MiB` validated UTF-8.
 
 The public problem registry is in `packages/contracts/src/errors.ts`. It preserves the stable
 status mapping: malformed requests and crypto objects `400`; authentication `401`; authorization
-`403`; missing resources `404`; state conflicts `409`; expired invitations/staging `410`; size
+`403`; missing resources `404`; state conflicts `409` (including `authored_at_out_of_range`, a
+Revision signed before its Device, Membership, or parent or more than ten minutes ahead of the
+service clock, and `pending_invitation_limit`); expired, used, revoked, or declined
+invitations and expired staging `410`; size
 `413`; media type `415`; unsupported API/suite/runtime `422`; rate limiting `429`; and
 service/provider/rate-limit availability `503`. Protocol failures intentionally collapse to
 `invalid_crypto_object`, except a non-`3` suite, which is `unsupported_crypto_suite`. Runtime and

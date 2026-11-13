@@ -9,17 +9,38 @@ DotRelay authority.
 
 Team creation and its first active owner Membership commit atomically. A Team must always retain at
 least one active owner. Memberships move forward from `PENDING_KEY_GRANT` to `ACTIVE` or to
-`REMOVED`; removed Memberships are durable records and are not reactivated. Only active
+`REMOVED`. A removed Membership is a durable record; accepting a new invitation revives the same
+row as a `MEMBER` in `PENDING_KEY_GRANT`. Before the revival, the finished active period is archived
+in `membership_periods`, so the User's earlier Revisions stay verifiable against the period they
+were signed in ([ADR 0016](adr/0016-membership-periods-survive-reinvitation.md)). Only active
 Memberships authorize reads or mutations.
 
 | Capability                                       | Owner | Admin | Member |
 | ------------------------------------------------ | ----- | ----- | ------ |
 | View Team and active Project/Environment content | yes   | yes   | yes    |
-| Invite a Member                                  | yes   | yes   | no     |
+| Publish Revisions and roll back an Environment   | yes   | yes   | yes    |
+| Invite a Member or revoke a pending invitation   | yes   | yes   | no     |
 | Remove a Member                                  | yes   | yes   | no     |
 | Change Member/Admin/owner roles                  | yes   | no    | no     |
 | Create, archive, or restore a Project            | yes   | yes   | no     |
 | Create, archive, or restore an Environment       | yes   | yes   | no     |
+| Rotate a Project's epoch key                     | yes   | yes   | no     |
+
+Publishing and Rollback need an active Membership and an active Device, whatever the role. A
+Revision's authored-at instant must not precede the signing Device's activation, the author's
+Membership activation, or the parent Revision, and must not lie more than ten minutes past the
+service clock; the service refuses anything else with `authored_at_out_of_range` (409) instead of
+committing a head every client would reject.
+
+### Owed rotations
+
+Removing an active Member, or revoking an active Device, records a rotation owed by each Project
+the removed party could read: every Project of the Team for a Member, every Project of the User's
+active Teams for a Device. The workspace boundary reports the oldest outstanding one as
+`environment.rotationOwed` (`since`, `sinceEpoch`, `membershipRemovals`, `deviceRevocations`, or
+`null`). Rotating the Project's epoch clears every obligation recorded before the rotation. It is
+advice for owners and admins: it never blocks publication, and the boundary's
+`rotationRequired` publication gate stays `false` for it.
 
 An admin cannot promote itself, manage owners/admins, or bypass last-owner protection. Role does
 not broaden encrypted Value ownership: owners and admins cannot receive another User's User-defined
@@ -31,7 +52,13 @@ mutation/read boundaries.
 A Membership Invitation is addressed to the invitee's stable GitHub provider subject, never a
 mutable login or email address. The service sets expiry to exactly seven days after creation.
 Acceptance must be performed once, before expiry, by the matching server-local User in the same
-Server Profile. It creates a Member Membership in `PENDING_KEY_GRANT`; GitHub admission alone does
+Server Profile. An active owner or admin can revoke a pending invitation
+(`POST /api/v1/teams/:teamId/invitations/:invitationId/revoke`), and the addressed User can
+decline it (`POST /api/v1/invitations/:invitationId/decline`); either ends it, is recorded as an
+`INVITATION_REVOKED` or `INVITATION_DECLINED` Audit Fact, and makes acceptance answer
+`invitation_expired`. A Team holds at most 50 pending invitations (unused, unexpired, not revoked
+or declined); one more answers `pending_invitation_limit` (409). Expired invitations that were
+never accepted are deleted by the retention job. It creates a Member Membership in `PENDING_KEY_GRANT`; GitHub admission alone does
 not create or activate a Membership. Provisioning the complete required grant set and its signed
 activation object moves that Membership to `ACTIVE`.
 

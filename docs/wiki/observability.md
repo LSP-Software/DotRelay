@@ -10,8 +10,8 @@ security investigation. A record must never be used as a substitute for one of t
 The fixed schema is version `1`. Its Diagnostic Field Allowlist is:
 
 - `eventName`, one of the bounded operational tokens `api.request.completed`,
-  `api.security_request_log.write_failed`, `api.security_request_log.expiry_failed`, or
-  `api.staging.expiry_failed`;
+  `api.security_request_log.write_failed`, `api.security_request_log.expiry_failed`,
+  `api.staging.expiry_failed`, or `api.retention.expiry_failed`;
 - `correlationId`, a fresh opaque UUID used only to link one request or bounded execution;
 - `durationMs`, a non-negative bounded integer;
 - `outcome`, a bounded operational token;
@@ -58,9 +58,11 @@ The Bun adapter obtains the peer address from the server connection (`requestIP`
 `SERVER_PROFILE_TRUSTED_PROXIES`, and records the first untrusted hop. A forwarded header from an
 untrusted peer is ignored, and the leftmost, client-supplied entry is never trusted on its own.
 The API process runs the retention cleanup every 10 minutes: it expires abandoned staging
-operations and staged rows, then expired Security Request Logs, each in bounded batches of short
-transactions with a per-run time budget. Failures emit `api.staging.expiry_failed` or
-`api.security_request_log.expiry_failed`; operators must alert on them. Both deployment modes use
+operations and staged rows, then expired Security Request Logs, then short-lived auth, enrollment,
+and invitation rows (see [persistence](persistence.md#migration-and-retention-policy)), each in
+bounded batches of short transactions with a per-run time budget. Failures emit
+`api.staging.expiry_failed`, `api.security_request_log.expiry_failed`, or
+`api.retention.expiry_failed`; operators must alert on them. Both deployment modes use
 the same 30-day maximum and allowlist.
 
 Diagnostic access is limited to the operations role. Security Request Logs are limited to the
