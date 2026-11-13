@@ -4261,7 +4261,8 @@ describe("status verifies the session and this Device", () => {
         service: "skipped",
         session: "not-stored",
         device: "not-enrolled",
-        nextAction: "run dotrelay setup <origin>",
+        nextAction:
+          "run dotrelay setup https://api.dotrelay.dev (or your own origin if you self-host)",
       });
     } finally {
       await (

@@ -8,10 +8,14 @@ import {
 } from "@dotrelay/client";
 import { uuidToBytes } from "@dotrelay/contracts";
 import {
+  archiveEnvironment,
+  createEnvironment,
   createStrictJsonClient,
+  type EnvironmentSummary,
   findProjectByRepository,
   linkProject,
   listEnvironments,
+  listPendingTeamAccess,
   listTeams,
   type ProjectSummary,
   resolveEnvironmentForProject,
@@ -22,6 +26,7 @@ import {
   type TeamSummary,
 } from "./admin";
 import {
+  ownArguments,
   type ParsedArguments,
   parseArguments,
   rejectForbiddenFlags,
@@ -32,6 +37,7 @@ import {
   type LoginProgress,
   loginWithDeviceAuthorization,
   openVerificationPage,
+  revokeServerSession,
 } from "./auth";
 import {
   bold,
@@ -84,6 +90,7 @@ import {
   renderHelp,
   renderPowerHelp,
 } from "./help";
+import { setupHint } from "./hosted-origin";
 import {
   defaultNetworkPolicy,
   type NetworkPolicy,
@@ -125,8 +132,20 @@ import {
   workspaceBoundaryFields,
 } from "./workflow";
 import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
+import { SHARE_PROJECT_KEYS_STEP } from "./workflow-session";
+import {
+  parseBoundary,
+  workspaceBoundaryFields as boundaryFields,
+} from "./workflow-core";
 import { rotateProjectEpoch } from "./workflow-epoch-rotation";
+import { shareProjectKeys } from "./workflow-share-keys";
 import { listTeamMembers, trustTeamMember } from "./workflow-team";
+import {
+  type ChildProcessRunner,
+  exportEnvironment,
+  listEnvironmentVariables,
+  runWithEnvironment,
+} from "./workflow-values";
 
 export { renderHelp, renderPowerHelp } from "./help";
 
@@ -156,6 +175,8 @@ export type CliRuntime = Readonly<{
   readonly deviceStorage?: CliDeviceStorage;
   readonly stateDirectory?: string;
   readonly gitTrackingProbe?: GitTrackingProbe;
+  /** Starts the command `dotrelay run` wraps; tests substitute their own. */
+  readonly spawn?: ChildProcessRunner;
 }>;
 
 export type CliRunResult = Readonly<{
@@ -373,7 +394,7 @@ const statusNextAction = (value: Record<string, unknown>): string | null => {
   if (next === "run dotrelay device recover") return "dotrelay device recover";
   if (next.startsWith("run dotrelay env use"))
     return "dotrelay env use <environment-id-or-label>";
-  if (next.startsWith("run dotrelay setup")) return "dotrelay setup <origin>";
+  if (next.startsWith("run dotrelay setup")) return setupHint;
   if (next === "retry when the Server Profile is reachable")
     return "retry dotrelay status";
   if (next === "retry dotrelay status") return "retry dotrelay status";
@@ -401,6 +422,12 @@ const renderStatusCard = (value: Record<string, unknown>): string => {
     { key: "Session", value: sessionLine.text, tone: sessionLine.tone },
     { key: "Device", value: deviceLine.text, tone: deviceLine.tone },
   ];
+  if (typeof value.repository === "string")
+    rows.push({
+      key: "Repository",
+      value: sanitizeCliLine(value.repository),
+      tone: "fg",
+    });
   if (typeof value.projectId === "string")
     rows.push({
       key: "Project",
@@ -439,6 +466,8 @@ const renderStatusCard = (value: Record<string, unknown>): string => {
   if (next !== null) footers.push(`  ${glyph("info")}  Next: ${next}`);
   if (footers.length === 0)
     footers.push(`  ${glyph("ok")}  ${paint("Fully connected", "brand")}`);
+  if (next === null && typeof value.hint === "string")
+    footers.push(`  ${glyph("info")}  ${sanitizeCliLine(value.hint)}`);
   return `${statusCard(rows)}
 ${footers.join("\n")}
 `;
@@ -447,7 +476,7 @@ ${footers.join("\n")}
 const renderProfileList = (value: Record<string, unknown>): string => {
   const profiles = Array.isArray(value.profiles) ? value.profiles : [];
   if (profiles.length === 0)
-    return `${note("No Server Profiles saved. Run dotrelay setup <origin> to add one.")}\n`;
+    return `${note(`No Server Profiles saved. Run ${setupHint} to add one.`)}\n`;
   const rows = profiles.map((entry) => {
     const record = entry as Record<string, unknown>;
     return {
@@ -620,8 +649,7 @@ const renderSuccess = (
   }
   if (typeof value.message === "string") {
     const message = sanitizeCliText(value.message);
-    if (parsed.command === "logout")
-      return `${epilogue(`Signed out of ${sanitizeCliLine(String(value.profile ?? "the Server Profile"))}.`)}\n`;
+    if (parsed.command === "logout") return `${epilogue(message)}\n`;
     if (parsed.command === "profile" && parsed.subcommand === "use")
       return `${epilogue(`Selected ${sanitizeCliLine(String(value.profile))}.`)}\n`;
     if (parsed.command === "env" && parsed.subcommand === "use")
@@ -1036,10 +1064,14 @@ const verifyStatus = async (
     deviceKeys.encryptionPublicKey !== undefined &&
     deviceKeys.signingPublicKey !== undefined;
   let worktreeContext: WorktreeContext | null = null;
+  // Whether status runs inside a Git worktree at all, so the repository
+  // hint is only offered where init or pull could act.
+  let inWorktree = false;
   try {
     worktreeContext = await readWorktreeContext(
       runtime.worktreeConfig ?? (await defaultWorktreeConfigPath()),
     );
+    inWorktree = true;
   } catch {
     worktreeContext = null;
   }
@@ -1215,6 +1247,15 @@ const verifyStatus = async (
               : service !== "verified"
                 ? "retry dotrelay status"
                 : "none";
+  const repository =
+    context?.repositoryOwner && context.repositoryName
+      ? `github.com/${context.repositoryOwner}/${context.repositoryName}`
+      : null;
+  // Connected but this worktree is not linked yet: say what to run here.
+  const hint =
+    nextAction === "none" && inWorktree && context?.projectId === undefined
+      ? "this repository is not linked on this machine yet: run dotrelay pull if a teammate already published it, or dotrelay init to publish its .env"
+      : null;
   return {
     profile: selected.name,
     origin: selected.origin,
@@ -1223,6 +1264,8 @@ const verifyStatus = async (
     device: deviceState,
     ...(deviceName ? { deviceName } : {}),
     nextAction,
+    ...(hint ? { hint } : {}),
+    ...(repository ? { repository } : {}),
     ...(context ? { projectId: context.projectId } : {}),
     ...(contextEnvironmentId
       ? {
@@ -1233,6 +1276,87 @@ const verifyStatus = async (
     ...(environmentActive !== null ? { environmentActive } : {}),
     ...(environmentUnverified ? { environmentUnverified: true } : {}),
   };
+};
+
+// init on a Project created in this same run: the service created a
+// "default" Environment with the Project, but the operator named another
+// label. That label becomes the Environment published into, and the empty
+// default is archived (best effort) so teammates are not later asked to
+// choose between it and the real one.
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const initialEnvironmentFor = async (
+  admin: StrictJsonClient,
+  project: Awaited<ReturnType<typeof linkProject>>,
+  label: string,
+): Promise<EnvironmentSummary> => {
+  const created = await createEnvironment(admin, project.id, label);
+  const placeholder = project.environment;
+  if (
+    placeholder &&
+    placeholder.id !== created.id &&
+    placeholder.currentHeadId === null
+  )
+    await archiveEnvironment(admin, placeholder.id).catch(() => undefined);
+  return created;
+};
+
+// The worktree's linked Project for commands that act on its Environments.
+// A missing session is reported before a missing link, since resolving the
+// link needs one.
+const requireWorktreeProject = async (
+  runtime: CliRuntime,
+  profile: CliServerProfile,
+): Promise<
+  Readonly<{ contextPath: string; context: WorktreeContext; projectId: string }>
+> => {
+  const contextPath =
+    runtime.worktreeConfig ?? (await defaultWorktreeConfigPath());
+  const context = await readWorktreeContext(contextPath);
+  if (!context || context.projectId === undefined) {
+    const token = await createSessionStore(localCredentials(runtime)).get(
+      profile.pin,
+    );
+    if (!token)
+      throw new CliError(
+        "authentication",
+        "login is required for this Server Profile",
+        {},
+        "authentication_required",
+      );
+    throw new CliInvocationError(
+      "no Project is linked in this worktree yet; run dotrelay pull (or dotrelay init to publish this repository's .env) first",
+    );
+  }
+  if (context.serverProfileId !== profile.pin.serverProfileId)
+    throw new CliInvocationError(
+      "worktree Project belongs to a different Server Profile",
+    );
+  return { contextPath, context, projectId: context.projectId };
+};
+
+const renderEnvironmentList = (
+  environments: readonly EnvironmentSummary[],
+  selectedId: string | undefined,
+): string => {
+  if (environments.length === 0)
+    return `${note("This Project has no Environments yet. Create one with dotrelay env create <label>.")}\n`;
+  const width = Math.max(...environments.map((entry) => entry.label.length));
+  const lines = environments.map((entry) => {
+    const selected = entry.id === selectedId;
+    const marker = selected ? paint("▸", "brand") : paint("·", "ghost");
+    const label = sanitizeCliLine(entry.label).padEnd(width);
+    const state = [
+      entry.lifecycle === "archived" ? "archived" : null,
+      entry.currentHeadId === null ? "nothing published yet" : null,
+      selected ? "selected" : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(" · ");
+    return `  ${marker}  ${selected ? bold(label) : label}  ${paint(entry.id, "faint")}${state ? `  ${paint(state, "muted")}` : ""}`;
+  });
+  return `${lines.join("\n")}\n`;
 };
 
 const HUMAN_HEADING_COMMANDS = new Set([
@@ -1254,7 +1378,11 @@ const execute = async (
   args: readonly string[],
   runtime: CliRuntime,
 ): Promise<
-  Readonly<{ value: Record<string, unknown> | { stdout: string } }>
+  Readonly<{
+    value: Record<string, unknown> | { stdout: string };
+    /** Set by run: the wrapped command's exit code. */
+    exitCode?: number;
+  }>
 > => {
   const parsed = parseArguments(
     args,
@@ -1430,7 +1558,7 @@ const execute = async (
           device: "not-enrolled",
           nextAction: defaultOrigin
             ? `this build targets ${defaultOrigin}; run dotrelay login`
-            : "run dotrelay setup <origin>",
+            : `run ${setupHint}`,
         },
       };
     return { value: await verifyStatus(runtime, selected) };
@@ -1449,9 +1577,34 @@ const execute = async (
       parsed.profile,
       profileOptions(runtime),
     );
-    const credentials = localCredentials(runtime);
-    await createSessionStore(credentials).remove(profile.pin);
-    return { value: { profile: profile.name, loggedOut: true } };
+    const sessions = createSessionStore(localCredentials(runtime));
+    const token = await sessions.get(profile.pin);
+    // The server-side revocation is best effort; the local copy is removed
+    // either way, and the result says which of the two happened.
+    const serverSession = token
+      ? await revokeServerSession(profile.pin, token, {
+          ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+          networkPolicy: runtime.networkPolicy ?? probeNetworkPolicy,
+        })
+      : "none";
+    await sessions.remove(profile.pin);
+    const name = sanitizeCliLine(profile.name);
+    const message =
+      serverSession === "revoked"
+        ? `Signed out of ${name}: the session was revoked on the server and removed from this machine.`
+        : serverSession === "already-ended"
+          ? `Signed out of ${name}: the server session had already ended, and the local copy was removed.`
+          : serverSession === "unreachable"
+            ? `Removed the local session for ${name}. The server could not be reached, so the session was not revoked there; it expires on its own.`
+            : `No session was stored for ${name}; nothing to sign out of.`;
+    return {
+      value: {
+        profile: profile.name,
+        loggedOut: true,
+        serverSession,
+        message,
+      },
+    };
   }
   if (parsed.command === "context" && parsed.subcommand === "reselect") {
     const profilePath = runtime.profilePath ?? profileCatalogPath();
@@ -1633,6 +1786,66 @@ const execute = async (
       ),
     };
   }
+  if (parsed.command === "team" && parsed.subcommand === "list") {
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
+    const admin = await createAdminClient(
+      runtime,
+      profile,
+      localCredentials(runtime),
+    );
+    const teams = await listTeams(admin);
+    // Pending access is extra context; an older service without the
+    // invitation listing still answers the Team list.
+    const pending = await listPendingTeamAccess(admin).catch(() => null);
+    const lines = [
+      ...(teams.length === 0
+        ? [note("You are not an active Member of any Team yet.")]
+        : teams.map(
+            (team) =>
+              `  ${paint("·", "ghost")}  ${bold(sanitizeCliLine(team.name))}  ${paint(team.id, "faint")}`,
+          )),
+      ...(pending?.pendingMemberships.length
+        ? [
+            "",
+            note(
+              'Joined, waiting for an owner or admin to choose "Share project keys" for you:',
+              "warn",
+            ),
+            ...pending.pendingMemberships.map(
+              (team) =>
+                `  ${paint("·", "ghost")}  ${sanitizeCliLine(team.name)}  ${paint(team.id, "faint")}`,
+            ),
+          ]
+        : []),
+      ...(pending?.invitations.length
+        ? [
+            "",
+            note("Invitations to accept in the DotRelay web app:", "warn"),
+            ...pending.invitations.map(
+              (team) =>
+                `  ${paint("·", "ghost")}  ${sanitizeCliLine(team.name)}  ${paint(team.id, "faint")}`,
+            ),
+          ]
+        : []),
+    ];
+    return {
+      value: {
+        profile: profile.name,
+        teams,
+        ...(pending
+          ? {
+              pendingMemberships: pending.pendingMemberships,
+              invitations: pending.invitations,
+            }
+          : {}),
+        ...(parsed.json ? {} : { stdout: `${lines.join("\n")}\n` }),
+      },
+    };
+  }
   if (parsed.command === "team") {
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError(
@@ -1672,7 +1885,9 @@ const execute = async (
       value:
         parsed.subcommand === "trust"
           ? await trustTeamMember(options, parsed)
-          : await listTeamMembers(options, parsed),
+          : parsed.subcommand === "share-keys"
+            ? await shareProjectKeys(options, parsed)
+            : await listTeamMembers(options, parsed),
     };
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {
@@ -1787,6 +2002,117 @@ const execute = async (
       },
     };
   }
+  if (
+    parsed.command === "env" &&
+    (parsed.subcommand === "list" || parsed.subcommand === "create")
+  ) {
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
+    const { context, projectId } = await requireWorktreeProject(
+      runtime,
+      profile,
+    );
+    const admin = await createAdminClient(
+      runtime,
+      profile,
+      localCredentials(runtime),
+    );
+    if (parsed.subcommand === "create") {
+      const label = parsed.positionals[0] ?? "";
+      const existing = (await listEnvironments(admin, projectId)).find(
+        (entry) => entry.label === label.trim() && entry.lifecycle === "active",
+      );
+      const environment =
+        existing ?? (await createEnvironment(admin, projectId, label));
+      return {
+        value: {
+          profile: profile.name,
+          projectId,
+          environmentId: environment.id,
+          environment: environment.label,
+          created: existing === undefined,
+          message:
+            existing === undefined
+              ? `Created Environment ${sanitizeCliLine(environment.label)} (${environment.id}). Select it with dotrelay env use ${environment.label}, or publish to it with dotrelay push --environment ${environment.label}.`
+              : `Environment ${sanitizeCliLine(environment.label)} already exists (${environment.id}); nothing was created.`,
+        },
+      };
+    }
+    const environments = await listEnvironments(admin, projectId);
+    return {
+      value: {
+        profile: profile.name,
+        projectId,
+        environments: environments.map((entry) => ({
+          id: entry.id,
+          label: entry.label,
+          lifecycle: entry.lifecycle,
+          published: entry.currentHeadId !== null,
+          selected: entry.id === context.environmentId,
+        })),
+        ...(parsed.json
+          ? {}
+          : {
+              stdout: renderEnvironmentList(
+                environments,
+                context.environmentId,
+              ),
+            }),
+      },
+    };
+  }
+  if (parsed.command === "device" && parsed.subcommand === "list") {
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
+    const admin = await createAdminClient(
+      runtime,
+      profile,
+      localCredentials(runtime),
+    );
+    const boundary = parseBoundary(
+      await admin.get("/api/v1/workspace/boundary", boundaryFields),
+    );
+    const devices = [
+      ...(boundary.device.active && boundary.device.id
+        ? [
+            {
+              id: boundary.device.id,
+              name: boundary.device.name ?? null,
+              current: true,
+            },
+          ]
+        : []),
+      ...boundary.peerDevices.map((peer) => ({
+        id: peer.id,
+        name: peer.name ?? null,
+        current: false,
+      })),
+    ];
+    const lines = devices.map(
+      (device) =>
+        `  ${device.current ? paint("▸", "brand") : paint("·", "ghost")}  ${sanitizeCliLine(device.name ?? "unnamed Device")}  ${paint(device.id, "faint")}${device.current ? `  ${paint("this Device", "muted")}` : ""}`,
+    );
+    return {
+      value: {
+        profile: profile.name,
+        devices,
+        ...(parsed.json
+          ? {}
+          : {
+              stdout:
+                devices.length === 0
+                  ? `${note("No active Devices. Run dotrelay login to enroll this machine.")}\n`
+                  : `${lines.join("\n")}\n`,
+            }),
+      },
+    };
+  }
   const deviceTrustCommands = new Set([
     "enroll",
     "begin",
@@ -1895,6 +2221,9 @@ const execute = async (
     "diff",
     "history",
     "rollback",
+    "run",
+    "export",
+    "list",
   ]);
   if (protectedCommands.has(parsed.command)) {
     if (parsed.noInput && !parsed.profile)
@@ -2023,13 +2352,52 @@ const execute = async (
           throw new CliInvocationError("choose a Project from the list");
         existingProject = selected;
       }
+      // The Project lookup only spans active Memberships, so a User who
+      // accepted an invitation but has no keys yet sees no Project at all.
+      // Say so instead of "not linked" (or, for init and push, instead of
+      // creating a second Team and Project for the same Repository).
+      if (
+        !existingProject &&
+        resolution.candidates.length === 0 &&
+        !explicitTeamId
+      ) {
+        const pending = await listPendingTeamAccess(admin).catch(() => null);
+        const waiting = pending?.pendingMemberships ?? [];
+        const invited = pending?.invitations ?? [];
+        if (waiting.length > 0)
+          throw new CliError(
+            "authentication",
+            [
+              `you joined ${waiting.map((team) => sanitizeCliLine(team.name)).join(", ")}, but its Project keys have not been shared with you yet, so this Repository's Project is not visible to you.`,
+              SHARE_PROJECT_KEYS_STEP,
+              "Then run this command again. To publish this Repository in a different Team instead, pass --team <team-id>.",
+            ].join("\n"),
+            {},
+            "membership_pending",
+          );
+        if (
+          invited.length > 0 &&
+          parsed.command !== "init" &&
+          parsed.command !== "push"
+        )
+          throw new CliError(
+            "authentication",
+            [
+              `you have an invitation to ${invited.map((team) => sanitizeCliLine(team.name)).join(", ")} that is not accepted yet.`,
+              "Accept it in the DotRelay web app, then ask a Team owner or admin to share the Project keys with you.",
+              "Then run this command again.",
+            ].join("\n"),
+            {},
+            "membership_pending",
+          );
+      }
       if (
         !existingProject &&
         parsed.command !== "init" &&
         parsed.command !== "push"
       )
         throw new CliInvocationError(
-          "this GitHub Repository is not linked; run dotrelay init first",
+          "this GitHub Repository is not linked to a Project you can access. If a teammate published it, ask a Team owner or admin to invite you and share the Project keys with you; to publish it yourself, run dotrelay init",
         );
       const ask = async (question: string): Promise<string> => {
         if (runtime.prompt) return runtime.prompt(question);
@@ -2094,6 +2462,22 @@ const execute = async (
                 ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
                 ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
               },
+            ).catch((error: unknown) =>
+              // init on a Project this run created: the named label becomes
+              // its first Environment instead of failing as not found.
+              existingProject === null &&
+              parsed.command === "init" &&
+              !uuidPattern.test(explicitEnvironmentReference) &&
+              error instanceof CliError &&
+              error.code === "environment_not_found"
+                ? initialEnvironmentFor(
+                    admin,
+                    initializedProject as Awaited<
+                      ReturnType<typeof linkProject>
+                    >,
+                    explicitEnvironmentReference,
+                  )
+                : Promise.reject(error),
             );
       const savedEnvironmentId = localContext?.environmentId;
       // Usable means "present and still active"; a missing selection is
@@ -2147,34 +2531,48 @@ const execute = async (
         repositoryIdentity: resolved.identity,
       });
     }
-    const workflowResult = await runProtectedWorkflow(
-      {
-        profile,
-        credentials: localCredentials(runtime),
-        ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
-        ...(runtime.networkPolicy
-          ? { networkPolicy: runtime.networkPolicy }
-          : {}),
-        ...(runtime.deviceStorage
-          ? { deviceStorage: runtime.deviceStorage }
-          : {}),
-        ...(runtime.admin ? { admin: runtime.admin } : {}),
-        ...(deviceId ? { deviceId } : {}),
-        stateDirectory,
-        contextPath,
-        ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
-        ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
-        ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
-        noInput: parsed.noInput,
-        force: parsed.force,
-        stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
-        gitTracking: runtime.gitTrackingProbe ?? createGitTrackingProbe(),
-        ...(contextToSave?.environmentId
-          ? { environmentId: contextToSave.environmentId }
-          : {}),
-      },
-      parsed,
-    );
+    const workflowOptions = {
+      profile,
+      credentials: localCredentials(runtime),
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.networkPolicy
+        ? { networkPolicy: runtime.networkPolicy }
+        : {}),
+      ...(runtime.deviceStorage
+        ? { deviceStorage: runtime.deviceStorage }
+        : {}),
+      ...(runtime.admin ? { admin: runtime.admin } : {}),
+      ...(deviceId ? { deviceId } : {}),
+      stateDirectory,
+      contextPath,
+      ...(runtime.prompt ? { prompt: runtime.prompt } : {}),
+      ...(runtime.confirm ? { confirm: runtime.confirm } : {}),
+      ...(runtime.terminal ? { terminal: runtime.terminal } : {}),
+      noInput: parsed.noInput,
+      force: parsed.force,
+      stdoutIsTerminal: runtime.stdoutIsTerminal ?? false,
+      gitTracking: runtime.gitTrackingProbe ?? createGitTrackingProbe(),
+      ...(contextToSave?.environmentId
+        ? { environmentId: contextToSave.environmentId }
+        : {}),
+    };
+    // run, export, and list read the Environment like pull, without
+    // writing anything; the other protected commands are the sync workflow.
+    if (parsed.command === "run") {
+      const exitCode = await runWithEnvironment(
+        workflowOptions,
+        parsed,
+        runtime.spawn,
+      );
+      if (contextToSave) await writeWorktreeContext(contextPath, contextToSave);
+      return { value: { stdout: "" }, exitCode };
+    }
+    const workflowResult =
+      parsed.command === "export"
+        ? await exportEnvironment(workflowOptions, parsed)
+        : parsed.command === "list"
+          ? await listEnvironmentVariables(workflowOptions, parsed)
+          : await runProtectedWorkflow(workflowOptions, parsed);
     // The worktree selection is persisted only after the workflow succeeds,
     // so a failed or declined operation leaves the saved Environment
     // untouched.
@@ -2193,12 +2591,15 @@ export const run = async (
   args: readonly string[],
   runtime: CliRuntime = {},
 ): Promise<CliRunResult> => {
+  // Only the tokens before a bare -- are DotRelay's; the rest belong to
+  // the command `dotrelay run` starts.
+  const own = ownArguments(args);
   try {
     rejectForbiddenFlags(args);
-    if (args.includes("--help") || args.length === 0) {
+    if (own.includes("--help") || own.includes("-h") || args.length === 0) {
       // Route --help to the selected command's help when a command is named,
       // so `dotrelay rollback --help` never answers with the everyday list.
-      const label = helpLabelFor(helpTopicFor(args));
+      const label = helpLabelFor(helpTopicFor(own));
       const help = label ? renderCommandHelp(label) : renderHelp();
       return {
         exitCode: EXIT_CODES.success,
@@ -2206,7 +2607,7 @@ export const run = async (
         stderr: "",
       };
     }
-    if (args.includes("--version"))
+    if (own.includes("--version") || own.includes("-v"))
       return {
         exitCode: EXIT_CODES.success,
         stdout: `${version}\n`,
@@ -2220,7 +2621,7 @@ export const run = async (
         : { stdoutIsTerminal: runtime.stdoutIsTerminal },
     );
     return {
-      exitCode: EXIT_CODES.success,
+      exitCode: result.exitCode ?? EXIT_CODES.success,
       stdout:
         "stdout" in result.value
           ? String(result.value.stdout)
@@ -2228,20 +2629,14 @@ export const run = async (
       stderr: "",
     };
   } catch (error) {
-    const diagnostic = diagnosticForError(error, {
-      debug: args.includes("--debug"),
-    });
-    const parsed = args.includes("--json");
+    const debug = own.includes("--debug");
+    const diagnostic = diagnosticForError(error, { debug });
     return {
       exitCode: diagnostic.exitCode,
       stdout: "",
-      stderr: parsed
+      stderr: own.includes("--json")
         ? json(diagnostic)
-        : `${errorCard(
-            presentationForError(error, {
-              debug: args.includes("--debug"),
-            }),
-          )}\n`,
+        : `${errorCard(presentationForError(error, { debug }))}\n`,
     };
   }
 };
