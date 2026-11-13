@@ -12,6 +12,7 @@ import {
   PublicationTerminalError,
   PublicationJournalError,
   type PublicationContext,
+  ProtocolTransportError,
   reconcilePublicationBaseline,
   reviewPublication,
   type SyncPageWire,
@@ -35,7 +36,12 @@ import {
   parseDotenv,
 } from "./dotenv";
 import { previousFilePaths, protectedTemporaryPath } from "./output";
-import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
+import {
+  CliError,
+  CliInvocationError,
+  detailForProblem,
+  sanitizeCliText,
+} from "./errors";
 import {
   createGitTrackingProbe,
   ensureLocalGitExclusion,
@@ -56,8 +62,10 @@ import {
 import {
   adminClient,
   ask,
+  authoredAtFloor,
   bytesToHex,
   confirmSilent,
+  headAuthoredAtMs,
   safeProjectEpoch,
   type WorkflowOptions,
 } from "./workflow-core";
@@ -555,6 +563,20 @@ const draftForRollback = (
   return Object.freeze([...fromRemote, ...restored]);
 };
 
+// The authored-at floor for a Revision chained onto the synced head: this
+// Device's activation, its Membership activation, and the head's own
+// authored-at instant, whichever is latest.
+export const publicationFloor = (
+  synced: Pick<Awaited<ReturnType<typeof syncWorkflow>>, "workflow" | "page">,
+): Readonly<{ authoredAtNotBeforeMs?: number }> => {
+  const floor = authoredAtFloor(
+    synced.workflow.boundary,
+    synced.workflow.deviceId,
+    headAuthoredAtMs(synced.page),
+  );
+  return floor === undefined ? {} : { authoredAtNotBeforeMs: floor };
+};
+
 export const publish = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -634,6 +656,7 @@ export const publish = async (
         : "MANIFEST_UPDATE";
   const context: PublicationContext = {
     ...synced.workflow.publicationContext,
+    ...publicationFloor(synced),
     expectedHeadId: synced.page.currentHeadId,
     expectedHeadHash: synced.page.currentHeadHash,
     projectEpoch: safeProjectEpoch(synced.page.projectEpoch),
@@ -791,6 +814,7 @@ export const publish = async (
       "operation_conflict",
       "state_conflict",
       "genesis_exists",
+      "authored_at_out_of_range",
     ].includes(code)
       ? "conflict"
       : [
@@ -804,9 +828,11 @@ export const publish = async (
       category,
       code === "stale_head"
         ? "the Environment changed after this publication was reconciled. Nothing further was published. Run the command again to reconcile from the recorded baseline."
-        : category === "conflict"
-          ? "the publication conflicts with current Server Profile state"
-          : `the Server Profile could not publish the Revision (${code})`,
+        : code === "authored_at_out_of_range"
+          ? detailForProblem(code)
+          : category === "conflict"
+            ? "the publication conflicts with current Server Profile state"
+            : `the Server Profile could not publish the Revision (${code})`,
       {},
       code,
     );
@@ -869,6 +895,7 @@ export const shareEnvironmentWithPeerDevices = async (
   }
   const context: PublicationContext = {
     ...synced.workflow.publicationContext,
+    ...publicationFloor(synced),
     expectedHeadId: synced.page.currentHeadId,
     expectedHeadHash: synced.page.currentHeadHash,
     projectEpoch: safeProjectEpoch(synced.page.projectEpoch),
@@ -922,6 +949,16 @@ export const shareEnvironmentWithPeerDevices = async (
     await synced.workflow.transport
       .cancel({ operationId, deviceId })
       .catch(() => undefined);
+    if (
+      error instanceof ProtocolTransportError &&
+      error.problem.code === "authored_at_out_of_range"
+    )
+      throw new CliError(
+        "conflict",
+        detailForProblem(error.problem.code),
+        {},
+        error.problem.code,
+      );
     throw error instanceof CliError
       ? error
       : new CliError(

@@ -42,6 +42,7 @@ import {
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   parseProtocolObject,
+  type ProblemCode,
   type SyncPageWire,
   sha384,
   uuidToBytes,
@@ -343,6 +344,10 @@ type TestSigningTrustDevice = Readonly<{
   readonly deviceActiveUntilMs?: number | null;
   readonly memberSinceMs?: number | null;
   readonly memberUntilMs?: number | null;
+  readonly membershipPeriods?: readonly Readonly<{
+    readonly sinceMs: number;
+    readonly untilMs: number | null;
+  }>[];
 }>;
 
 const setup = async (
@@ -352,6 +357,8 @@ const setup = async (
     readonly revisions?: SyncPageWire["revisions"];
     readonly bootstrap?: Awaited<ReturnType<typeof createDeviceBootstrap>>;
     readonly withoutBoundaryEnvironment?: boolean;
+    readonly rotationOwed?: Readonly<Record<string, unknown>>;
+    readonly finalizeProblem?: ProblemCode;
     readonly grantsReady?: boolean;
     readonly epochGrant?: string;
     readonly accountKeyEnvelope?: string;
@@ -409,6 +416,7 @@ const setup = async (
     environment: {
       ...boundary.environment,
       id: options.withoutBoundaryEnvironment ? null : boundary.environment.id,
+      ...(options.rotationOwed ? { rotationOwed: options.rotationOwed } : {}),
     },
     ...(options.signingTrustKeys
       ? { signingTrustKeys: options.signingTrustKeys }
@@ -498,6 +506,10 @@ const setup = async (
       return Response.json({ staged: true }, { status: 201 });
     }
     if (path.endsWith("/finalize") && request.method === "POST") {
+      if (options.finalizeProblem) {
+        const problem = createProblem(options.finalizeProblem);
+        return Response.json(problem, { status: problem.status });
+      }
       const body = (await request.json()) as Record<string, unknown>;
       const revisionBody = body.revision as Record<string, unknown>;
       const revisionObjectId = revisionBody.protocolObjectId;
@@ -1080,6 +1092,337 @@ describe("protected CLI workflows", () => {
       category: "local-io",
       code: "unexpected_failure",
     });
+  });
+
+  // A genesis Revision signed by `signingPrivateKey` at `nowMs`, ready to
+  // seed the fake service's history.
+  const seedGenesis = async (
+    bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
+    signingPrivateKey: CryptoKey,
+    nowMs: number,
+  ): Promise<SyncPageWire["revisions"][number]> => {
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const artifacts = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://example",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.device,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey,
+        mutation: "GENESIS",
+        nowMs,
+      },
+    );
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    return {
+      id: artifacts.request.revision.id,
+      digest: await sha384(revisionObject.bytes),
+      parentId: ids.environment,
+      parentHash: new Uint8Array(48),
+      mutation: 1,
+      projectEpoch: 1n,
+      authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
+      rollbackTargetId: null,
+      objects: await Promise.all(
+        artifacts.stagedObjects.map(async (object) =>
+          Object.freeze({
+            objectId: object.objectId,
+            canonicalBytes: object.bytes,
+            digest: await sha384(object.bytes),
+          }),
+        ),
+      ),
+    };
+  };
+
+  const pullStdout = (runtime: Awaited<ReturnType<typeof setup>>) =>
+    run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+        "--no-input",
+      ],
+      runtime,
+    );
+
+  test("verifies a Revision authored during the author's earlier Membership period (ADR 0016)", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await generateSigningKeyPair();
+    const authoredAtMs = Date.now() - 3 * 60 * 60_000;
+    const revision = await seedGenesis(
+      bootstrap,
+      peer.privateKey,
+      authoredAtMs,
+    );
+    const currentSinceMs = Date.now() - 60_000;
+    const entry = {
+      signingPublicKey: bytesToHex(await rawSigningPublicKey(peer.publicKey)),
+      deviceId: ids.device,
+      userId: ids.user,
+      deviceActiveFromMs: 0,
+      deviceActiveUntilMs: null,
+      // The current period alone starts after the Revision was authored.
+      memberSinceMs: currentSinceMs,
+      memberUntilMs: null,
+    };
+    const withPeriods = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          ...entry,
+          membershipPeriods: [
+            { sinceMs: authoredAtMs - 60_000, untilMs: authoredAtMs + 60_000 },
+            { sinceMs: currentSinceMs, untilMs: null },
+          ],
+        },
+      ],
+      revisions: [revision],
+    });
+    const verified = await pullStdout(withPeriods);
+    expect(verified.exitCode).toBe(0);
+    expect(verified.stdout).toContain("DATABASE_URL='postgres://example'");
+    // Without the earlier period the same history is refused.
+    resetMemoryCredentialStore();
+    const currentOnly = await setup({
+      bootstrap,
+      signingTrustDevices: [entry],
+      revisions: [revision],
+    });
+    const refused = await pullStdout(currentOnly);
+    expect(refused.exitCode).toBe(8);
+    expect(refused.stdout).not.toContain("postgres://example");
+  });
+
+  test("refuses a Revision authored between two Membership periods", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await generateSigningKeyPair();
+    const authoredAtMs = Date.now() - 3 * 60 * 60_000;
+    const currentSinceMs = Date.now() - 60_000;
+    const runtime = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(peer.publicKey),
+          ),
+          deviceId: ids.device,
+          userId: ids.user,
+          deviceActiveFromMs: 0,
+          deviceActiveUntilMs: null,
+          memberSinceMs: currentSinceMs,
+          memberUntilMs: null,
+          membershipPeriods: [
+            { sinceMs: 0, untilMs: authoredAtMs - 60_000 },
+            { sinceMs: currentSinceMs, untilMs: null },
+          ],
+        },
+      ],
+      revisions: [await seedGenesis(bootstrap, peer.privateKey, authoredAtMs)],
+    });
+    const refused = await pullStdout(runtime);
+    expect(refused.exitCode).toBe(8);
+    expect(refused.stdout).not.toContain("postgres://example");
+  });
+
+  const historyJson = async (runtime: Awaited<ReturnType<typeof setup>>) => {
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    return JSON.parse(history.stdout) as {
+      revisions: Array<{ authoredAtMs: string }>;
+      pendingActions?: string[];
+    };
+  };
+
+  test("push raises a slow clock to this Device's Membership activation", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.signingPublicKey)
+      throw new Error("Device signing public key is missing");
+    // The service activated this Membership two minutes "ahead" of the
+    // local clock; a Revision stamped with the local time would be refused.
+    const memberSinceMs = Date.now() + 120_000;
+    const runtime = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(bootstrap.keyMaterial.signingPublicKey),
+          ),
+          deviceId: ids.device,
+          userId: ids.user,
+          deviceActiveFromMs: 0,
+          deviceActiveUntilMs: null,
+          memberSinceMs,
+          memberUntilMs: null,
+          membershipPeriods: [{ sinceMs: memberSinceMs, untilMs: null }],
+        },
+      ],
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    const [genesis] = (await historyJson(runtime)).revisions;
+    expect(BigInt(genesis?.authoredAtMs ?? "0")).toBeGreaterThanOrEqual(
+      BigInt(memberSinceMs),
+    );
+  });
+
+  test("push never stamps a Revision before the head it chains onto", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.signingPrivateKey)
+      throw new Error("Device signing private key is missing");
+    // The head was authored by a Device whose clock runs ahead of this one.
+    const headAuthoredAtMs = Date.now() + 120_000;
+    const runtime = await setup({
+      bootstrap,
+      revisions: [
+        await seedGenesis(
+          bootstrap,
+          bootstrap.keyMaterial.signingPrivateKey,
+          headAuthoredAtMs,
+        ),
+      ],
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://updated\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--force",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    const revisions = (await historyJson(runtime)).revisions;
+    expect(revisions).toHaveLength(2);
+    expect(BigInt(revisions[1]?.authoredAtMs ?? "0")).toBeGreaterThanOrEqual(
+      BigInt(headAuthoredAtMs),
+    );
+  });
+
+  test("a Revision the service refuses for its timestamp asks to check the clock", async () => {
+    const runtime = await setup({
+      finalizeProblem: "authored_at_out_of_range",
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(4);
+    const diagnostic = JSON.parse(pushed.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "authored_at_out_of_range",
+    });
+    expect(String(diagnostic.detail)).toContain("system clock");
+  });
+
+  test("reports an owed rotation as a pending action without blocking", async () => {
+    const runtime = await setup({
+      rotationOwed: {
+        since: "2026-11-01T09:30:00.000Z",
+        sinceEpoch: "1",
+        membershipRemovals: 1,
+        deviceRevocations: 2,
+      },
+    });
+    const body = await historyJson(runtime);
+    expect(body.pendingActions).toEqual([
+      "1 Member removed and 2 Devices revoked since 2026-11-01. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.",
+    ]);
+    // Advice only: a pull still completes.
+    const pulled = await pullStdout(runtime);
+    expect(pulled.exitCode).toBe(0);
   });
 
   test("stages and finalizes an encrypted genesis publication", async () => {

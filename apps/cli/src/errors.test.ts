@@ -9,10 +9,12 @@ import {
   CliError,
   type CliErrorCategory,
   CliInvocationError,
+  describeWait,
   detailForProblem,
   diagnosticForError,
   EXIT_CODES,
   humanDetailForError,
+  presentationForError,
   sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
@@ -302,6 +304,66 @@ describe("CLI diagnostics", () => {
     expect(humanDetailForError(runtimeError)).toBe(
       "The command could not complete.",
     );
+  });
+});
+
+describe("problem codes added with Membership periods and rate limits", () => {
+  const transport = (
+    code: ProblemCode,
+    details?: Parameters<typeof createProblem>[1],
+  ) => new ProtocolTransportError(createProblem(code, details));
+
+  test("authored_at_out_of_range is a conflict that points at the system clock", () => {
+    const diagnostic = diagnosticForError(
+      transport("authored_at_out_of_range"),
+    );
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "authored_at_out_of_range",
+      exitCode: EXIT_CODES.conflict,
+    });
+    expect(diagnostic.detail).toContain("system clock");
+    expect(
+      presentationForError(transport("authored_at_out_of_range")).title,
+    ).toBe("Clock out of range");
+  });
+
+  test("pending_invitation_limit is a conflict that says how to free a slot", () => {
+    const diagnostic = diagnosticForError(
+      transport("pending_invitation_limit"),
+    );
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "pending_invitation_limit",
+      exitCode: EXIT_CODES.conflict,
+    });
+    expect(diagnostic.detail).toContain("revoke invitations");
+  });
+
+  test("rate_limited names the wait the service asked for", () => {
+    const diagnostic = diagnosticForError(
+      transport("rate_limited", { retryAfterSeconds: 90 }),
+    );
+    expect(diagnostic).toMatchObject({
+      category: "transient",
+      code: "rate_limited",
+      retryAfterSeconds: 90,
+    });
+    expect(diagnostic.detail).toContain("wait 2 minutes and retry");
+    expect(
+      humanDetailForError(transport("rate_limited", { retryAfterSeconds: 1 })),
+    ).toContain("wait 1 second and retry");
+    expect(detailForProblem("rate_limited")).toBe(
+      "the Server Profile rate-limited the request; wait and retry",
+    );
+  });
+
+  test("describes waits in the largest whole unit", () => {
+    expect(describeWait(0)).toBe("1 second");
+    expect(describeWait(45)).toBe("45 seconds");
+    expect(describeWait(60)).toBe("1 minute");
+    expect(describeWait(3599)).toBe("60 minutes");
+    expect(describeWait(7200)).toBe("2 hours");
   });
 });
 

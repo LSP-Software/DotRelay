@@ -682,6 +682,34 @@ describe("strict administration client network behaviour", () => {
     expect(waits).toContain(2000);
   });
 
+  test("a rate limit that outlasts the retry budget names the wait", async () => {
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: { ...fastPolicy, maxAttempts: 1 },
+      fetch: async () =>
+        Response.json(
+          {
+            type: "https://dotrelay.dev/problems/v1",
+            title: "Rate limited",
+            status: 429,
+            code: "rate_limited",
+            detail: "slow down",
+          },
+          { status: 429, headers: { "Retry-After": "120" } },
+        ),
+    });
+    const error = await client
+      .get("/api/v1/teams", ["id"])
+      .catch((value) => value);
+    expect(error).toMatchObject({
+      category: "transient",
+      code: "rate_limited",
+      details: expect.objectContaining({ retryAfterSeconds: 120 }),
+    });
+    expect(String((error as Error).message)).toContain(
+      "wait 2 minutes and retry",
+    );
+  });
+
   test("does not retry a definitive authentication failure", async () => {
     let calls = 0;
     const client = createStrictJsonClient(profile, credentials, {

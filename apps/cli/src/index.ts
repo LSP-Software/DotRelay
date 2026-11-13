@@ -135,6 +135,9 @@ import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
 import { SHARE_PROJECT_KEYS_STEP } from "./workflow-session";
 import {
   parseBoundary,
+  parseRotationOwed,
+  type RotationOwed,
+  rotationOwedNotice,
   workspaceBoundaryFields as boundaryFields,
 } from "./workflow-core";
 import { rotateProjectEpoch } from "./workflow-epoch-rotation";
@@ -462,6 +465,10 @@ const renderStatusCard = (value: Record<string, unknown>): string => {
   if (value.environmentUnverified === true)
     footers.push(
       `  ${glyph("warn")}  The stored Environment could not be verified`,
+    );
+  if (typeof value.rotationOwedNotice === "string")
+    footers.push(
+      `  ${glyph("warn")}  ${sanitizeCliLine(value.rotationOwedNotice)}`,
     );
   if (next !== null) footers.push(`  ${glyph("info")}  Next: ${next}`);
   if (footers.length === 0)
@@ -1108,6 +1115,7 @@ const verifyStatus = async (
   let environmentLabel: string | null = null;
   let environmentActive: boolean | null = null;
   let environmentUnverified = false;
+  let rotationOwed: RotationOwed | null = null;
   if (sessionToken) {
     const admin =
       runtime.admin ??
@@ -1206,6 +1214,7 @@ const verifyStatus = async (
             environmentRecord.id === context.environmentId
           ) {
             environmentActive = true;
+            rotationOwed = parseRotationOwed(environmentRecord.rotationOwed);
             environmentLabel =
               typeof environmentRecord.label === "string" &&
               environmentRecord.label.trim().length > 0
@@ -1275,6 +1284,9 @@ const verifyStatus = async (
       : {}),
     ...(environmentActive !== null ? { environmentActive } : {}),
     ...(environmentUnverified ? { environmentUnverified: true } : {}),
+    ...(rotationOwed
+      ? { rotationOwed, rotationOwedNotice: rotationOwedNotice(rotationOwed) }
+      : {}),
   };
 };
 

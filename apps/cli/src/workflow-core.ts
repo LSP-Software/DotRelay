@@ -6,12 +6,14 @@ import {
   type createVerifiedEnvironmentSession,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
+  type MembershipPeriod,
   type ProjectEpochGrantVerification,
   loadDeviceKeyMaterial,
   type ProtocolTransport,
   type PublicationContext,
   type RevisionSigningTrust,
   type RevisionSigningTrustEntry,
+  revisionAuthoredAtNotBeforeMs,
 } from "@dotrelay/client";
 import { sha384ToHex, uuidToBytes } from "@dotrelay/contracts";
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
@@ -63,6 +65,12 @@ export type Boundary = Readonly<{
     readonly headRevision: string;
     readonly headHash: string | null;
     readonly projectEpoch: string | null;
+    /**
+     * Set while a Project key rotation is owed after a Member was removed or
+     * a Device revoked; cleared when a rotation commits. Advice only: it
+     * never blocks publication.
+     */
+    readonly rotationOwed: RotationOwed | null;
   }>;
   readonly session: Readonly<{
     readonly active: boolean;
@@ -107,6 +115,15 @@ export type Boundary = Readonly<{
   }>[];
 }>;
 
+export type RotationOwed = Readonly<{
+  /** When the first removal or revocation since the last rotation happened (ISO 8601). */
+  readonly since: string;
+  /** The Project epoch those removals and revocations happened in. */
+  readonly sinceEpoch: string;
+  readonly membershipRemovals: number;
+  readonly deviceRevocations: number;
+}>;
+
 export type SigningTrustDevice = Readonly<{
   readonly deviceId: string;
   readonly userId: string;
@@ -116,6 +133,12 @@ export type SigningTrustDevice = Readonly<{
   readonly deviceActiveUntilMs: number | null;
   readonly memberSinceMs: number | null;
   readonly memberUntilMs: number | null;
+  /**
+   * Every period the author was an active Member, oldest first, current
+   * last (ADR 0016). A re-invited Member's earlier Revisions verify only
+   * against these.
+   */
+  readonly membershipPeriods?: readonly MembershipPeriod[];
 }>;
 
 export type WorkflowSession = Readonly<{
@@ -168,6 +191,55 @@ export const workspaceBoundaryFields = [
   "peerDevices",
 ] as const;
 
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+// A malformed obligation is dropped rather than failing the workflow: it is
+// advice for the operator and never gates anything.
+export const parseRotationOwed = (value: unknown): RotationOwed | null => {
+  if (
+    !isRecord(value) ||
+    typeof value.since !== "string" ||
+    Number.isNaN(Date.parse(value.since)) ||
+    typeof value.sinceEpoch !== "string" ||
+    !/^\d+$/.test(value.sinceEpoch) ||
+    !isCount(value.membershipRemovals) ||
+    !isCount(value.deviceRevocations)
+  )
+    return null;
+  return Object.freeze({
+    since: value.since,
+    sinceEpoch: value.sinceEpoch,
+    membershipRemovals: value.membershipRemovals,
+    deviceRevocations: value.deviceRevocations,
+  });
+};
+
+// Periods arrive oldest first with only the current one open. A malformed
+// list is ignored, which falls back to the current memberSinceMs/memberUntilMs
+// window: current history still verifies, earlier periods do not.
+const parseMembershipPeriods = (
+  value: unknown,
+): readonly MembershipPeriod[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const periods: MembershipPeriod[] = [];
+  for (const period of value) {
+    if (
+      !isRecord(period) ||
+      typeof period.sinceMs !== "number" ||
+      !Number.isSafeInteger(period.sinceMs) ||
+      (period.untilMs !== null &&
+        (typeof period.untilMs !== "number" ||
+          !Number.isSafeInteger(period.untilMs)))
+    )
+      return undefined;
+    periods.push(
+      Object.freeze({ sinceMs: period.sinceMs, untilMs: period.untilMs }),
+    );
+  }
+  return Object.freeze(periods);
+};
+
 export const parseBoundary = (value: Record<string, unknown>): Boundary => {
   const environment = value.environment;
   const session = value.session;
@@ -194,6 +266,7 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
       ),
       headHash: optionalString(environment.headHash),
       projectEpoch: optionalString(environment.projectEpoch),
+      rotationOwed: parseRotationOwed(environment.rotationOwed),
     }),
     session: Object.freeze({
       active: session.active === true,
@@ -272,6 +345,9 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
             !isMillis(entry.memberUntilMs)
           )
             return [];
+          const membershipPeriods = parseMembershipPeriods(
+            entry.membershipPeriods,
+          );
           return [
             {
               deviceId: entry.deviceId,
@@ -284,6 +360,7 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
               deviceActiveUntilMs: entry.deviceActiveUntilMs,
               memberSinceMs: entry.memberSinceMs,
               memberUntilMs: entry.memberUntilMs,
+              ...(membershipPeriods ? { membershipPeriods } : {}),
             },
           ];
         })
@@ -352,7 +429,12 @@ export const collectSigningTrust = (
 ): RevisionSigningTrust => {
   if (boundary.signingTrustDevices.length > 0) {
     const entries: RevisionSigningTrustEntry[] = [];
+    // Keys that already have an entry, so the local fallback is not added
+    // twice. Entries themselves are kept even when they share a key: each
+    // carries its own windows (ADR 0016), and the verifier admits a
+    // Revision through any entry whose windows hold.
     const seen = new Set<string>();
+    const seenEntries = new Set<string>();
     for (const device of boundary.signingTrustDevices) {
       let publicKey: Uint8Array;
       try {
@@ -361,9 +443,8 @@ export const collectSigningTrust = (
         continue;
       }
       const hex = bytesToHex(publicKey);
-      if (seen.has(hex)) continue;
       seen.add(hex);
-      entries.push({
+      const entry: RevisionSigningTrustEntry = {
         publicKey,
         deviceId: device.deviceId,
         userId: device.userId,
@@ -371,7 +452,14 @@ export const collectSigningTrust = (
         deviceActiveUntilMs: device.deviceActiveUntilMs,
         memberSinceMs: device.memberSinceMs,
         memberUntilMs: device.memberUntilMs,
-      });
+        ...(device.membershipPeriods
+          ? { membershipPeriods: device.membershipPeriods }
+          : {}),
+      };
+      const identity = JSON.stringify({ ...entry, publicKey: hex });
+      if (seenEntries.has(identity)) continue;
+      seenEntries.add(identity);
+      entries.push(entry);
     }
     // This installation's own key is the one fallback that needs no window:
     // the service only ever accepted its writes while it was authorized.
@@ -398,6 +486,67 @@ export const collectSigningTrust = (
   for (const peer of boundary.peerDevices)
     if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
   return keys;
+};
+
+// The earliest authored-at instant the service accepts for a Revision this
+// Device signs: the latest of its own Device activation, its User's current
+// Membership activation (both from its signing trust entry), and the parent
+// Revision's authored-at instant. A slow local clock is raised to it instead
+// of producing a Revision the service rejects as authored_at_out_of_range.
+export const authoredAtFloor = (
+  boundary: Boundary,
+  deviceId: string,
+  parentAuthoredAtMs?: bigint | null,
+): number | undefined => {
+  const own = boundary.signingTrustDevices.find(
+    (device) => device.deviceId.toLowerCase() === deviceId.toLowerCase(),
+  );
+  return revisionAuthoredAtNotBeforeMs({
+    deviceActiveFromMs: own?.deviceActiveFromMs ?? null,
+    memberSinceMs: own?.memberSinceMs ?? null,
+    parentAuthoredAtMs: parentAuthoredAtMs ?? null,
+  });
+};
+
+// The authored-at instant of a synced page's head Revision. A page cut
+// short by --limit may not reach the head; its last Revision is then the
+// latest one known, which still bounds the head from below.
+export const headAuthoredAtMs = (
+  page: Readonly<{
+    readonly currentHeadId: string | null;
+    readonly revisions: readonly Readonly<{
+      readonly id: string;
+      readonly authoredAtMs: bigint;
+    }>[];
+  }>,
+): bigint | null => {
+  if (page.currentHeadId === null) return null;
+  return (
+    page.revisions.find((revision) => revision.id === page.currentHeadId)
+      ?.authoredAtMs ??
+    page.revisions.at(-1)?.authoredAtMs ??
+    null
+  );
+};
+
+const plural = (count: number, singular: string, pluralForm: string): string =>
+  `${count} ${count === 1 ? singular : pluralForm}`;
+
+// Advice for Team owners and admins after a removal or revocation: the
+// removed Member or revoked Device could read the Project's current key and
+// every secret it protects, until a rotation and new secrets.
+export const rotationOwedNotice = (owed: RotationOwed): string => {
+  const parts = [
+    ...(owed.membershipRemovals > 0
+      ? [`${plural(owed.membershipRemovals, "Member", "Members")} removed`]
+      : []),
+    ...(owed.deviceRevocations > 0
+      ? [`${plural(owed.deviceRevocations, "Device", "Devices")} revoked`]
+      : []),
+  ];
+  const what = parts.length > 0 ? parts.join(" and ") : "Access removed";
+  const since = owed.since.slice(0, 10);
+  return `${what} since ${since}. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.`;
 };
 
 // Assemble the set of Ed25519 signing public keys (raw 32-byte) that are

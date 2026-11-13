@@ -44,6 +44,7 @@ import {
 } from "./workflow-pending-rotation";
 import {
   accountKeyTrustedKeys,
+  authoredAtFloor,
   type Boundary,
   adminClient,
   base64,
@@ -57,6 +58,7 @@ import {
   rawPublicKey,
   readTrustedHead,
   resolveRequestedEnvironmentReference,
+  rotationOwedNotice,
   safeProjectEpoch,
   statePath,
   verifyDeviceBundle,
@@ -568,6 +570,13 @@ export const loadWorkflowSession = async (
     ))
       pendingActions.push(action);
   }
+  // The rotation itself is what clears the obligation, so project rotate
+  // does not repeat the advice it is acting on.
+  if (
+    boundary.environment.rotationOwed &&
+    !(parsed.command === "project" && parsed.subcommand === "rotate")
+  )
+    pendingActions.push(rotationOwedNotice(boundary.environment.rotationOwed));
   if (pendingActions.length > 0 && !parsed.json) {
     const output = options.terminal?.output ?? process.stderr;
     for (const action of pendingActions)
@@ -735,6 +744,9 @@ export const loadWorkflowSession = async (
           signingPrivateKey: keys.signingPrivateKey,
         })
       : undefined;
+  // Without the parent Revision this is only the Device and Membership
+  // floor; each publication raises it to its head's authored-at instant.
+  const authoredAtNotBeforeMs = authoredAtFloor(boundary, deviceId);
   const publicationContext: PublicationContext = {
     serverProfileId: options.profile.pin.serverProfileId,
     teamId: boundary.environment.teamId,
@@ -751,6 +763,7 @@ export const loadWorkflowSession = async (
     revisionSigningPublicKey: signingPublicKey,
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),
     ...(userValueKey ? { userDefinedValueSecret: userValueKey } : {}),
+    ...(authoredAtNotBeforeMs !== undefined ? { authoredAtNotBeforeMs } : {}),
   };
   const session = createVerifiedEnvironmentSession({
     context: publicationContext,

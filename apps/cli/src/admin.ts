@@ -19,6 +19,7 @@ import {
   NetworkAttemptError,
   type NetworkPolicy,
   networkFailureCliError,
+  retryAfterMsFromResponse,
   transientResponseVerdict,
 } from "./network";
 import type { FetchFunction } from "./profile";
@@ -827,9 +828,20 @@ export const createStrictJsonClient = (
     if (!response.ok) {
       try {
         const problem = parseProblem(body);
+        // The problem body states the wait; the Retry-After header is the
+        // fallback for a service that only sends the header.
+        const headerRetryMs = retryAfterMsFromResponse(response, policy.now);
+        const retryAfterSeconds =
+          problem.retryAfterSeconds ??
+          (headerRetryMs === undefined
+            ? undefined
+            : Math.ceil(headerRetryMs / 1000));
         throw new CliError(
           categoryForProblem(problem.code),
-          detailForProblem(problem.code),
+          detailForProblem(
+            problem.code,
+            retryAfterSeconds === undefined ? {} : { retryAfterSeconds },
+          ),
           {
             requestPath: path,
             ...(response.headers.get("X-Correlation-ID")
@@ -839,9 +851,7 @@ export const createStrictJsonClient = (
                   ) as string,
                 }
               : {}),
-            ...(problem.retryAfterSeconds === undefined
-              ? {}
-              : { retryAfterSeconds: problem.retryAfterSeconds }),
+            ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
           },
           problem.code,
         );

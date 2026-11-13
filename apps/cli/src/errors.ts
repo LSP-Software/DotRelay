@@ -65,6 +65,7 @@ const safeDiagnosticCodes = new Set([
   "artifact_read_failed",
   "artifact_too_large",
   "auth_response_invalid",
+  "authored_at_out_of_range",
   "authentication",
   "authentication_required",
   "browser_open_failed",
@@ -124,6 +125,7 @@ const safeDiagnosticCodes = new Set([
   "output_write_failed",
   "payload_too_large",
   "peer_share_failed",
+  "pending_invitation_limit",
   "profile_catalog_invalid",
   "profile_catalog_read_failed",
   "profile_catalog_write_failed",
@@ -225,6 +227,8 @@ export const categoryForProblem = (
       "invitation_expired",
       "staging_expired",
       "genesis_exists",
+      "authored_at_out_of_range",
+      "pending_invitation_limit",
     ].includes(code)
   )
     return "conflict";
@@ -248,7 +252,19 @@ export const categoryForProblem = (
   return "transient";
 };
 
-export const detailForProblem = (code: string): string => {
+// A wait the operator can act on: "30 seconds", "4 minutes", "2 hours".
+export const describeWait = (seconds: number): string => {
+  const unit = (value: number, name: string): string =>
+    `${value} ${name}${value === 1 ? "" : "s"}`;
+  if (seconds < 60) return unit(Math.max(1, Math.ceil(seconds)), "second");
+  if (seconds < 3600) return unit(Math.ceil(seconds / 60), "minute");
+  return unit(Math.ceil(seconds / 3600), "hour");
+};
+
+export const detailForProblem = (
+  code: string,
+  context: Readonly<{ readonly retryAfterSeconds?: number }> = {},
+): string => {
   if (code === "authentication_required")
     return "login is required for this Server Profile; run dotrelay login";
   if (code === "device_not_active")
@@ -282,7 +298,18 @@ export const detailForProblem = (code: string): string => {
   if (code === "github_unavailable")
     return "GitHub could not be reached through the Server Profile; established sync is unaffected, retry once GitHub is available";
   if (code === "rate_limited")
-    return "the Server Profile rate-limited the request; wait and retry";
+    return context.retryAfterSeconds !== undefined &&
+      Number.isFinite(context.retryAfterSeconds) &&
+      context.retryAfterSeconds >= 0
+      ? `the Server Profile rate-limited the request; wait ${describeWait(context.retryAfterSeconds)} and retry`
+      : "the Server Profile rate-limited the request; wait and retry";
+  if (code === "authored_at_out_of_range")
+    return [
+      "the Server Profile rejected the Revision's timestamp: it is earlier than this Device's activation, your Membership, or the Revision before it, or more than 10 minutes in the future.",
+      "Check that this machine's system clock and time zone are correct (enable automatic time sync), then run the command again.",
+    ].join("\n");
+  if (code === "pending_invitation_limit")
+    return "this Team has reached its limit of pending invitations; revoke invitations that are no longer needed in the DotRelay web app, or wait for them to be accepted, declined, or expire";
   if (code === "rate_limit_unavailable")
     return "the Server Profile's rate limiter is unavailable; retry later";
   if (categoryForProblem(code) === "conflict")
@@ -334,6 +361,8 @@ const errorTitles: Record<string, string> = {
   staging_expired: "Staged request expired",
   staged_object_missing: "Staged request missing",
   invitation_expired: "Invitation expired",
+  pending_invitation_limit: "Too many pending invitations",
+  authored_at_out_of_range: "Clock out of range",
   rollback_target_unavailable: "Rollback target unavailable",
   rollback_variable_absent: "Rollback target missing Variables",
   unreadable_manifest: "Unreadable manifest",
@@ -422,6 +451,26 @@ const isCryptoRuntimeError = (error: unknown): boolean => {
     return true;
   const name = (error as { readonly name?: unknown }).name;
   return typeof name === "string" && cryptoRuntimeErrorNames.has(name);
+};
+
+const retryContextFor = (
+  error: unknown,
+): Readonly<{ readonly retryAfterSeconds?: number }> =>
+  error instanceof ProtocolTransportError &&
+  error.problem.retryAfterSeconds !== undefined
+    ? { retryAfterSeconds: error.problem.retryAfterSeconds }
+    : {};
+
+const retryAfterDiagnostic = (
+  error: unknown,
+): Readonly<{ readonly retryAfterSeconds?: number }> => {
+  const seconds = retryContextFor(error).retryAfterSeconds;
+  return seconds !== undefined &&
+    Number.isInteger(seconds) &&
+    seconds >= 0 &&
+    seconds <= 1_000_000_000
+    ? { retryAfterSeconds: seconds }
+    : {};
 };
 
 const problemCodeFor = (error: unknown): string | null => {
@@ -525,7 +574,8 @@ export const diagnosticForError = (
       code: safeDiagnosticCodes.has(problemCode)
         ? problemCode
         : "unexpected_failure",
-      detail: detailForProblem(problemCode),
+      detail: detailForProblem(problemCode, retryContextFor(error)),
+      ...retryAfterDiagnostic(error),
       exitCode: categoryExitCode[category],
     };
   }
@@ -552,7 +602,8 @@ export const humanDetailForError = (
   options: Readonly<{ readonly debug?: boolean }> = {},
 ): string => {
   const problemCode = problemCodeFor(error);
-  if (problemCode !== null) return detailForProblem(problemCode);
+  if (problemCode !== null)
+    return detailForProblem(problemCode, retryContextFor(error));
   // A raw crypto runtime failure stays as opaque on human stderr as in the
   // JSON document, so both modes name the same severity and next action;
   // --debug opts both into the sanitized operational message.

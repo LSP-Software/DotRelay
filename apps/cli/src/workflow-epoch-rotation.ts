@@ -35,6 +35,7 @@ import {
   submitRotation,
   writePendingRotation,
 } from "./workflow-pending-rotation";
+import { publicationFloor } from "./workflow-publication";
 import { syncWorkflow } from "./workflow-session";
 
 const ROTATE_QUESTION = "Rotate this project's keys?";
@@ -158,6 +159,10 @@ export const rotateProjectEpoch = async (
     environments: rotationEnvironments,
     signingPrivateKey: context.signingPrivateKey,
     previousEpochKey,
+    // The transitions chain onto every active Environment's head; only this
+    // Environment's head was synced, so its authored-at instant joins this
+    // Device's activation and Membership floor.
+    ...publicationFloor(synced),
   });
   const operationId = crypto.randomUUID();
   const workflow = synced.workflow;

@@ -917,3 +917,44 @@ describe("status names the repository", () => {
     }
   });
 });
+
+describe("status reports an owed Project key rotation", () => {
+  test("names the removals and the rotate command without changing the next action", async () => {
+    const rotationOwed = {
+      since: "2026-11-01T09:30:00.000Z",
+      sinceEpoch: "1",
+      membershipRemovals: 1,
+      deviceRevocations: 0,
+    };
+    const server = startServer([
+      (request, url) =>
+        url.pathname === "/api/v1/workspace/boundary"
+          ? jsonResponse({
+              ...boundaryFor(url.searchParams.get("environment")),
+              environment: {
+                ...boundaryFor(url.searchParams.get("environment")).environment,
+                label: "production",
+                rotationOwed,
+              },
+            })
+          : undefined,
+    ]);
+    const state = await seedState(server.pin, { context: linkedContext });
+    try {
+      const result = await run(["status", "--json"], state.runtime);
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        nextAction: "none",
+        rotationOwed,
+        rotationOwedNotice: expect.stringContaining(
+          "1 Member removed since 2026-11-01",
+        ),
+      });
+      const human = await run(["status"], state.runtime);
+      expect(human.stdout).toContain("dotrelay project rotate");
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+});
