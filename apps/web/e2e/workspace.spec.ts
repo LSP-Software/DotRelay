@@ -228,6 +228,38 @@ test("landing page leads to the GitHub sign-in page", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("landing page offers install steps, docs, and placeholder policies", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("install-command")).toContainText(
+    "npm install -g dotrelay",
+  );
+  await expect(page.getByTestId("setup-command")).toContainText(
+    "dotrelay setup https://api.dotrelay.dev",
+  );
+  await expect(
+    page
+      .getByRole("navigation", { name: "Primary navigation" })
+      .getByRole("link", { name: "Docs" }),
+  ).toHaveAttribute("href", /docs\/wiki\/cli\.md$/);
+  // The security claim is specific about what the cryptography is.
+  await expect(page.getByText(/classical \(not post-quantum\)/)).toBeVisible();
+  await expect(page.getByText(/confirm the server's identity/)).toBeVisible();
+
+  const footer = page.getByRole("navigation", { name: "Footer" });
+  await footer.getByRole("link", { name: "Privacy" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Privacy policy" }),
+  ).toBeVisible();
+  await expect(page.getByText("This policy is being finalised")).toBeVisible();
+  await page.goto("/terms");
+  await expect(
+    page.getByRole("heading", { name: "Terms of service" }),
+  ).toBeVisible();
+  await expect(page.getByText("Placeholder", { exact: true })).toBeVisible();
+});
+
 test("the Team menu shows the current Team and lets you switch", async ({
   page,
 }) => {

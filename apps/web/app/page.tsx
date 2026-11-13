@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { headers } from "next/headers";
 import Link from "next/link";
+import { CopyableCommand } from "@/components/copyable-command";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -17,28 +18,21 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { isSessionActive } from "@/lib/server-session";
 import { cn } from "@/lib/utils";
 import { resolveLiveApiOrigin } from "@/lib/workspace-boundary";
 
-// Only a 200 from the session relay proves the visitor is signed in; a
-// signed-out, unreachable, or undeployed relay all fall back to offering
-// sign-in, so a degraded API never flips the landing page out of its
-// public state.
-const isSessionActive = async (): Promise<boolean> => {
+const REPOSITORY_URL = "https://github.com/LSP-Software/DotRelay";
+const DOCS_URL = `${REPOSITORY_URL}/blob/main/docs/wiki/cli.md`;
+
+const HomePage = async () => {
   // Read the request first so the page always renders per request (and a
   // missing production origin surfaces at request time, not prerender).
   const cookie = (await headers()).get("cookie");
-  const apiOrigin = resolveLiveApiOrigin();
-  if (!apiOrigin) return false;
-  const response = await fetch(`${apiOrigin}/api/v1/session`, {
-    headers: cookie ? { cookie } : {},
-    cache: "no-store",
-  }).catch(() => undefined);
-  return response?.status === 200;
-};
-
-const HomePage = async () => {
-  const signedIn = await isSessionActive();
+  const signedIn = await isSessionActive({
+    apiOrigin: resolveLiveApiOrigin(),
+    cookie,
+  });
   return (
     <main className="landing-grid min-h-screen overflow-hidden">
       <nav
@@ -60,7 +54,16 @@ const HomePage = async () => {
         <div className="flex items-center gap-2">
           <a
             className={buttonVariants({ variant: "ghost", size: "sm" })}
-            href="https://github.com/LSP-Software/DotRelay"
+            href={DOCS_URL}
+          >
+            Docs
+          </a>
+          <a
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "sm" }),
+              "hidden sm:inline-flex",
+            )}
+            href={REPOSITORY_URL}
           >
             GitHub
           </a>
@@ -104,6 +107,19 @@ const HomePage = async () => {
             >
               How it works
             </a>
+          </div>
+          <div className="mt-10 grid max-w-xl gap-2" id="install">
+            <p className="text-sm text-muted-foreground">
+              Install the CLI and connect it to DotRelay:
+            </p>
+            <CopyableCommand
+              data-testid="install-command"
+              value="npm install -g dotrelay"
+            />
+            <CopyableCommand
+              data-testid="setup-command"
+              value="dotrelay setup https://api.dotrelay.dev"
+            />
           </div>
           <div className="mt-12 flex flex-wrap gap-x-8 gap-y-3 font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
             <span>CLI and browser</span>
@@ -169,7 +185,7 @@ const HomePage = async () => {
               icon: KeyRound,
               step: "02 / PRIVACY",
               title: "Values are encrypted on your device",
-              body: "Your machine encrypts every value before it leaves, with keys that never leave it. The server stores only the encrypted form, so not even we can read your secrets.",
+              body: "Your machine encrypts every value before sending it. The server stores only encrypted values and keys it can't open. DotRelay uses classical (not post-quantum) cryptography, and each machine asks you to confirm the server's identity the first time it connects.",
             },
             {
               icon: GitBranch,
@@ -197,6 +213,24 @@ const HomePage = async () => {
           ))}
         </div>
       </section>
+
+      <footer className="mx-auto flex max-w-7xl flex-col gap-4 px-5 py-10 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between lg:px-8">
+        <p>DotRelay</p>
+        <nav aria-label="Footer" className="flex flex-wrap gap-x-6 gap-y-2">
+          <a className="hover:text-foreground" href={DOCS_URL}>
+            Docs
+          </a>
+          <a className="hover:text-foreground" href={REPOSITORY_URL}>
+            GitHub
+          </a>
+          <Link className="hover:text-foreground" href="/privacy">
+            Privacy
+          </Link>
+          <Link className="hover:text-foreground" href="/terms">
+            Terms
+          </Link>
+        </nav>
+      </footer>
     </main>
   );
 };
