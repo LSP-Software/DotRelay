@@ -71,6 +71,31 @@ import {
   wrapEpochKeyToPeers,
 } from "./workflow-epoch-grants";
 
+// What a teammate must do so this User's Devices can read the Project. The
+// service only lists this User's own Devices to a pull, so another person's
+// pull can never share keys with this User: an owner or admin has to choose
+// to share them, in the web app or with dotrelay team share-keys.
+const SHARE_PROJECT_KEYS_HOW =
+  'in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.';
+
+export const SHARE_PROJECT_KEYS_STEP = `A Team owner or admin has to share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`;
+
+// Names who can fix a missing Project key: another of this User's own
+// Devices when one holds the key, otherwise an owner or admin.
+export const missingProjectKeyNotice = (
+  input: Readonly<{
+    readonly ownDeviceHoldsKey: boolean;
+    readonly accountKeyUnlocked: boolean;
+  }>,
+): string => {
+  const unlock = input.accountKeyUnlocked
+    ? ""
+    : " Unlock this Device first with dotrelay device recover.";
+  return input.ownDeviceHoldsKey
+    ? `This Device is missing the Project epoch grant. Another of your Devices can read this Project: run dotrelay pull on that Device, then run dotrelay pull here again.${unlock} Otherwise a Team owner or admin can share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`
+    : `This Device is missing the Project epoch grant. ${SHARE_PROJECT_KEYS_STEP} Then run dotrelay pull again.`;
+};
+
 // id instead of creating another Environment to publish into. Each CLI process
 // builds a fresh options object per run, so object identity tracks the
 // invocation; in-process callers that reuse one options object across runs
@@ -463,7 +488,10 @@ export const loadWorkflowSession = async (
     );
   } else if (epochKey === undefined && !boundary.grantsReady) {
     pendingActions.push(
-      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+      missingProjectKeyNotice({
+        ownDeviceHoldsKey: peerHoldsEpochKey,
+        accountKeyUnlocked: accountMasterKey !== null,
+      }),
     );
   }
   // Older or independently bootstrapped Devices can hold a valid grant
@@ -962,7 +990,7 @@ export const syncWorkflow = async (
     const detail =
       error.laneKind === "USER_DEFINED_VALUE"
         ? "the Environment's User-defined Values cannot be decrypted with this Device's key grant; run dotrelay device enroll or dotrelay device recover, then re-publish the affected Values"
-        : "the Environment's Manifest cannot be decrypted with this Device's Project key grant; run dotrelay pull after an owner or admin re-shares it from their own Device";
+        : `the Environment's Manifest cannot be decrypted with this Device's Project key grant.\n${SHARE_PROJECT_KEYS_STEP}\nThen run dotrelay pull again.`;
     throw new CliError("incomplete-export", detail, {}, "unreadable_manifest");
   }
   const page = synced.page;

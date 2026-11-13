@@ -54,6 +54,7 @@ import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
 import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
+import { missingProjectKeyNotice } from "./workflow-session";
 
 const profile = {
   name: "relay",
@@ -5146,7 +5147,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(body.ok).toBe(true);
     expect(body.revisions).toEqual([]);
     expect(body.pendingActions).toEqual([
-      `Device ${peerDeviceId} is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device`,
+      `Device ${peerDeviceId} is missing the Project epoch grant, and this Device could not share it with that Device of yours. On that Device, run dotrelay device recover if it is locked, then dotrelay pull. If it still cannot read the Project, a Team owner or admin can share the Project keys with you from the Members view of the DotRelay web app ("Share project keys").`,
     ]);
     expect(scripted.calls).toHaveLength(1);
     expect(scriptedJson.calls).toHaveLength(1);
@@ -5298,7 +5299,10 @@ describe("peer grant provisioning during ordinary reads", () => {
     const body = JSON.parse(pull.stdout) as Record<string, unknown>;
     expect(body.ok).toBe(true);
     expect(body.pendingActions).toEqual([
-      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+      missingProjectKeyNotice({
+        ownDeviceHoldsKey: true,
+        accountKeyUnlocked: false,
+      }),
     ]);
     // A matching Environment reports "no changes"; the missing-grant
     // remediation must survive that output variant as well, so the
@@ -5325,7 +5329,10 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(unchangedBody.ok).toBe(true);
     expect(unchangedBody.unchanged).toBe(true);
     expect(unchangedBody.pendingActions).toEqual([
-      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+      missingProjectKeyNotice({
+        ownDeviceHoldsKey: true,
+        accountKeyUnlocked: false,
+      }),
     ]);
     // The read must not have minted or re-provisioned any Project epoch
     // grant: the peer already holds the key, so a grant write is both

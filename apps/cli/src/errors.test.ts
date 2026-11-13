@@ -212,6 +212,14 @@ describe("CLI diagnostics", () => {
     expect(inactive.category).toBe("conflict");
     expect(inactive.code).toBe("membership_not_active");
     expect(inactive.exitCode).toBe(EXIT_CODES.conflict);
+    // A pending Member needs keys shared, not a re-add; a removed one needs
+    // a new invitation. The problem cannot tell them apart, so both repairs
+    // are named, and neither claims a teammate's pull can share keys.
+    expect(inactive.detail).toContain('choose "Share project keys" for you');
+    expect(inactive.detail).toContain("dotrelay team share-keys");
+    expect(inactive.detail).toContain("invite you again");
+    expect(inactive.detail).not.toContain("re-add");
+    expect(inactive.detail.length).toBeLessThan(512);
     const cryptoRejection = diagnosticForError(
       transport("invalid_crypto_object"),
     );

@@ -251,7 +251,14 @@ export const detailForProblem = (code: string): string => {
   if (code === "device_not_active")
     return "this Device is not active; run dotrelay device enroll to re-authorize it";
   if (code === "membership_not_active")
-    return "your Membership in this Team is not active; ask a Team owner to re-add you, then run dotrelay pull to refresh it";
+    // The problem does not say whether the Membership is waiting for keys
+    // (PENDING_KEY_GRANT) or was removed, so both repairs are named.
+    return [
+      "your Membership in this Team is not active yet.",
+      'If you accepted an invitation, a Team owner or admin still has to share the Project keys with you: in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
+      "If you were removed from the Team, ask an owner or admin to invite you again.",
+      "Then run dotrelay pull.",
+    ].join("\n");
   if (code === "forbidden") return "the Server Profile denied the request";
   if (code === "resource_not_found")
     return "the requested resource was not found";

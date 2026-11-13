@@ -102,7 +102,10 @@ export const wrapEpochKeyToPeers = async (
       await submitEpochGrant(options, token, boundary, deviceId, grant);
     } catch {
       pending.push(
-        `Device ${peer.id} is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device`,
+        // The peer is another of this User's own Devices (the service lists
+        // no one else's). Only owners and admins may write a grant for it,
+        // so a Member's Device reads the key from the account key instead.
+        `Device ${peer.id} is missing the Project epoch grant, and this Device could not share it with that Device of yours. On that Device, run dotrelay device recover if it is locked, then dotrelay pull. If it still cannot read the Project, a Team owner or admin can share the Project keys with you from the Members view of the DotRelay web app ("Share project keys").`,
       );
     }
   }
