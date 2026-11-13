@@ -54,7 +54,9 @@ const loadTeamTrust = async (
     );
   const listed = await createDeviceAdmin(options, session.deviceId).get(
     `/api/v1/teams/${teamId}/memberships`,
-    ["memberships"],
+    // An owner's or admin's listing also carries open invitations; the
+    // strict client rejects a response field it was not told about.
+    ["memberships", "invitations"],
   );
   const members: MembershipEntry[] = Array.isArray(listed.memberships)
     ? listed.memberships.flatMap((entry): MembershipEntry[] =>
