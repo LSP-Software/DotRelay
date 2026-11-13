@@ -1275,3 +1275,95 @@ The decision record matches the code.
 Status:
 FIXED - D-005 now describes the sealed copy, what binds it, and the
 tradeoff; PRODUCT.md matches.
+
+## UX-044 - No reminder that a removal or revocation still needs a key rotation
+
+Journey:
+TEAM - remove a Member or revoke a Device, then come back to the Project.
+State:
+Owner or Admin; the Project's epoch began before the removal or revocation
+(the boundary reports `environment.rotationOwed`).
+Severity:
+MEDIUM
+Observed:
+The rotation guidance appeared once, right after the removal or revocation,
+and was gone after dismissing it or reloading. Nothing on the Project said its
+key was still the one the removed Member or revoked Device held.
+Expected:
+Until a rotation commits, Owners and Admins see what happened and since when,
+the rotate command, and a reminder to change secrets the removed party could
+read. Members see nothing. Publishing is never blocked by it.
+Status:
+FIXED - a non-blocking banner on the Project's environment view (e.g. "1
+member removed since 12 Nov") with a copyable `dotrelay project rotate`,
+shown only to Owners and Admins. E2E: `workspace-rotation-owed.spec.ts`.
+
+## UX-045 - A pending invitation could not be cancelled or declined
+
+Journey:
+TEAM - pending invitations; INVITEE - "Invitations for you".
+State:
+An Owner or Admin with a pending invitation; an invitee holding one.
+Severity:
+MEDIUM
+Observed:
+An invitation sent to the wrong GitHub account stayed acceptable for seven
+days with no way to withdraw it, and an invitee could only accept or ignore
+an invitation. A Team at the 50 pending-invitation cap got "Something went
+wrong".
+Expected:
+Owners and Admins cancel a pending invitation from its row; an invitee
+declines next to Accept. Both confirm first, since neither can be undone. The
+cap names its limit and how to make room.
+Status:
+FIXED - "Cancel invitation" on each pending row (`POST
+/api/v1/teams/:teamId/invitations/:invitationId/revoke`) and "Decline" beside
+"Accept invitation" (`POST /api/v1/invitations/:invitationId/decline`), each
+behind a confirmation; a refusal stays on the row or card. `pending_invitation_limit`
+has its own message. E2E: `workspace-invitations.spec.ts`.
+
+## UX-046 - Rate limits and clock skew gave no usable advice
+
+Journey:
+TEAM administration and environment publication.
+State:
+The service answers 429 `rate_limited` (with `retryAfterSeconds` and
+`Retry-After`), or refuses a Revision with 409 `authored_at_out_of_range`.
+Severity:
+LOW
+Observed:
+Team calls showed "Something went wrong. Try again." for a rate limit, with
+no wait time. A publication from a device whose clock was behind its own
+activation, its Membership activation, or the head Revision was refused with
+the generic "The server rejected this publication".
+Expected:
+Rate-limited calls say how many seconds to wait. The browser never signs a
+Revision before that floor, and a refused timestamp points at the device
+clock.
+Status:
+FIXED - Team and invitation calls and publication read the wait from the
+problem body or `Retry-After` ("Try again in 42 seconds."). Every web
+publication sets `authoredAtNotBeforeMs` from this Device's trust entry and
+the head Revision, and `authored_at_out_of_range` says to fix the device
+clock. Unit: `rate-limit.test.ts`, `team-administration.test.ts`,
+`publish-errors.test.ts`, `environment-workflow.test.ts`.
+
+## UX-047 - A re-invited Member's earlier Revisions failed verification
+
+Journey:
+WEB - Environment editor after a Member was removed and invited back.
+State:
+The boundary lists several `membershipPeriods` for the author.
+Severity:
+HIGH (the whole Environment failed to load)
+Observed:
+The browser kept only the current Membership window, so a Revision the Member
+signed in an earlier period was "not authorized" and the editor reported an
+integrity failure.
+Expected:
+Revisions verify against any period the author was a Member (ADR 0016);
+Revisions authored between periods stay rejected.
+Status:
+FIXED - the boundary route forwards `membershipPeriods` and the session
+passes them into every signing trust entry. Unit:
+`environment-protocol-session.test.ts`, `route.test.ts`.

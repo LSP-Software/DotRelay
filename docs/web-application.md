@@ -118,9 +118,16 @@ re-runs the approved publication against the re-anchored head rather than only r
 publish gate. When the head moved but no drafted Variable was touched, the teammate's Values are
 merged into view at once so the editor never shows stale Values. Other publish failures are
 reported by cause (offline or unreachable server, ended session, inactive Device, missing
-permission or keys, rotated keys, archived or missing Environment, expired staging, rate limits,
-server unavailability, or an invalid publication); every message says the draft is kept and none
-advises reloading the page, which would discard it. Rollback is lane-scoped and always publishes a new Revision, so the current head
+permission or keys, rotated keys, archived or missing Environment, expired staging, rate limits
+(naming the wait the service asked for), an authored-at instant the service refused (pointing at
+the device clock), server unavailability, or an invalid publication); every message says the
+draft is kept and none advises reloading the page, which would discard it. Every publication
+signs an authored-at instant no earlier than this browser Device's activation, its Member's
+current Membership activation (both from the Device's own signing trust entry on the boundary),
+and the head Revision's authored-at instant, so a slow clock is raised to that floor instead of
+producing a Revision the service refuses. Revision signatures are judged against every
+Membership period the boundary lists for the author (ADR 0016), so a Member who was removed and
+invited back still verifies their earlier Revisions. Rollback is lane-scoped and always publishes a new Revision, so the current head
 remains in immutable history. The History card lists the verified Revisions with their authored
 time, change kind (naming the target of a Rollback), author, the Variables the Revision changed,
 and a short id suffix so a Revision can be referenced without memorizing its full id; the publish
@@ -172,6 +179,10 @@ an API authorization boundary.
 
 Invitation creation accepts a stable GitHub provider subject, never an email or mutable login.
 Acceptance is shown as `PENDING_KEY_GRANT` until the complete grant set activates the Membership.
+Owners and Admins can cancel a pending invitation from its row after a confirmation; an invitee
+can decline an invitation addressed to them, also after a confirmation, next to the accept
+action. A Team holds at most 50 pending invitations; inviting past that explains how to make
+room. Any Team or invitation call the service rate-limits says how many seconds to wait.
 GitHub Repository names and stable ids are descriptive and explicitly do not grant authority.
 
 Removing a Member, changing a Member's role, and revoking a Device each require confirmation.
@@ -179,7 +190,11 @@ The removal confirmation names the Member, states that removal is permanent (re-
 new invitation and a new key share), and warns that it does not revoke keys or Values the Member
 already downloaded. A completed removal and a completed Device revocation both show the same
 follow-up: rotate each affected Project's key with `dotrelay project rotate` in its repository and
-change sensitive Values. The role confirmation states the old and new role and what the new role
+change sensitive Values. Until a rotation commits, the boundary reports the rotation as owed:
+Owners and Admins see a non-blocking banner on the Project's environment view naming how many
+Members were removed and Devices revoked since when, with the copyable rotate command and a
+reminder to change secrets they could read. Members do not see it, and it never blocks
+publication. The role confirmation states the old and new role and what the new role
 can do. Each row's controls carry the Member's name in their accessible names, and row errors are
 announced.
 
@@ -297,8 +312,13 @@ invitation lifecycle against the service's API: a failed GitHub login resolution
 form on the login field with an actionable explanation and never creates an invitation, a
 rejected creation keeps the resolved identity and the service's error ready to retry, the
 Members table reads the Team's persisted record and survives reloads and Team switching,
-and an invitee who has not joined a Team sees the invitation addressed to them and, after
-the service confirms acceptance, the record moves to the pending key-grant state.
+an invitee who has not joined a Team sees the invitation addressed to them and, after
+the service confirms acceptance, the record moves to the pending key-grant state, an invitee
+declines after confirming and the invitation disappears, an Owner cancels a pending invitation
+after confirming (backing out sends nothing, a refusal stays on the row), and the pending
+invitation cap is explained. `apps/web/e2e/workspace-rotation-owed.spec.ts` covers the owed
+rotation banner for Owners, its wording for removals and revocations, and its absence for
+Members and when nothing is owed.
 `apps/web/e2e/workspace-recovery.spec.ts` covers the in-browser Recovery area: the one-time recovery
 code displays in an `alertdialog`, a returning browser restores its locally sealed key, and a cleared
 browser unlocks and decrypts with the saved code. A wrong secret fails
