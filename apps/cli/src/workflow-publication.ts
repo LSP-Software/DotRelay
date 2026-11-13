@@ -34,7 +34,7 @@ import {
   diffDotenvEntries,
   parseDotenv,
 } from "./dotenv";
-import { protectedTemporaryPath } from "./output";
+import { previousFilePaths, protectedTemporaryPath } from "./output";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import {
   createGitTrackingProbe,
@@ -873,7 +873,7 @@ export const guardPullOutputAgainstGit = async (
   // The recoverable copy contains just as much plaintext as the output.
   // Check both before changing either file, including a previously tracked
   // backup which an ignore pattern cannot protect.
-  const paths = [outputPath, `${outputPath}.previous`];
+  const paths = [outputPath, ...previousFilePaths(outputPath)];
   const tracking = await Promise.all(paths.map((path) => probe(resolve(path))));
   for (const [index, info] of tracking.entries()) {
     if (info.state === "tracked")

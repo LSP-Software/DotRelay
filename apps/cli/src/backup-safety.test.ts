@@ -96,3 +96,20 @@ test("orphaned plaintext temporary files stay excluded before any write", async 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("every rotated pull backup stays out of git add", async () => {
+  const { directory, git, output } = await fixture();
+  try {
+    await writeFile(output, "SECRET=0\n");
+    await guardPullOutputAgainstGit({} as WorkflowOptions, output);
+    for (const value of ["1", "2", "3", "4"])
+      await atomicWriteProtectedFile(output, `SECRET=${value}\n`, {
+        retainPrevious: true,
+      });
+    expect(await readFile(`${output}.previous.2`, "utf8")).toBe("SECRET=1\n");
+    await git("add", ".");
+    expect(await git("ls-files")).toBe("");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
