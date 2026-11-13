@@ -2,12 +2,15 @@ import { PROBLEM_STATUS, type ProblemCode } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
   OperationRepository,
+  RetentionRepository,
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
   SECURITY_REQUEST_LOG_RETENTION_MS,
   type SecurityRequestEndpointTemplate,
   SecurityRequestLogRepository,
   StagedObjectRepository,
 } from "@dotrelay/database";
+
+import { SESSION_MAX_AGE_MS } from "./session";
 
 export const API_CORRELATION_HEADER = "X-Correlation-ID";
 export const DIAGNOSTIC_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -19,6 +22,7 @@ export const SERVER_DIAGNOSTIC_EVENT_NAMES = Object.freeze([
   "api.security_request_log.write_failed",
   "api.security_request_log.expiry_failed",
   "api.staging.expiry_failed",
+  "api.retention.expiry_failed",
 ] as const);
 export type ServerDiagnosticEventName =
   (typeof SERVER_DIAGNOSTIC_EVENT_NAMES)[number];
@@ -100,9 +104,17 @@ export type ApiObservability = Readonly<{
     Readonly<{ readonly operations: number; readonly stagedObjects: number }>
   >;
   /**
-   * The scheduled retention job: expires staging and Security Request Logs.
-   * Each step runs even if an earlier one failed; the first failure is
-   * rethrown after all steps ran.
+   * Deletes expired short-lived rows: Better Auth sessions (including those
+   * past the absolute session lifetime), device codes and verifications,
+   * unapproved Device enrollments, and unaccepted invitations.
+   */
+  readonly expireShortLivedRecords: (
+    at?: Date,
+  ) => Promise<Readonly<Record<string, number>>>;
+  /**
+   * The scheduled retention job: expires staging, Security Request Logs, and
+   * short-lived records. Each step runs even if an earlier one failed; the
+   * first failure is rethrown after all steps ran.
    */
   readonly runRetentionCleanup: (at?: Date) => Promise<void>;
   readonly recordRequest: (input: {
@@ -340,6 +352,7 @@ export const createApiObservability = (
     readonly random?: () => number;
     readonly resolveClientIp?: (request: Request) => string | null;
     readonly sampleRate?: number;
+    readonly maxSessionAgeMs?: number;
   }>,
 ): ApiObservability => {
   const diagnostics = options?.diagnostics ?? createInMemoryDiagnosticSink();
@@ -351,6 +364,34 @@ export const createApiObservability = (
   const securityLogs = new SecurityRequestLogRepository();
   const operations = new OperationRepository();
   const stagedObjects = new StagedObjectRepository();
+  const retention = new RetentionRepository();
+  const expireShortLivedRecords = async (at = now()) => {
+    try {
+      return Object.freeze({
+        authSessions: (
+          await retention.expireAuthSessions(database, at, {
+            maxSessionAgeMs: options?.maxSessionAgeMs ?? SESSION_MAX_AGE_MS,
+          })
+        ).count,
+        authDeviceCodes: (await retention.expireAuthDeviceCodes(database, at))
+          .count,
+        authVerifications: (
+          await retention.expireAuthVerifications(database, at)
+        ).count,
+        deviceEnrollments: (
+          await retention.expireDeviceEnrollments(database, at)
+        ).count,
+        invitations: (await retention.expireInvitations(database, at)).count,
+      });
+    } catch (error) {
+      emitDiagnosticFailure(
+        diagnostics,
+        "api.retention.expiry_failed",
+        createServerCorrelationId(),
+      );
+      throw error;
+    }
+  };
   const expireSecurityRequestLogs = async (at = now()) => {
     try {
       return (await securityLogs.expire(database, at)).count;
@@ -384,6 +425,7 @@ export const createApiObservability = (
     diagnostics,
     expireSecurityRequestLogs,
     expireStaging,
+    expireShortLivedRecords,
     runRetentionCleanup: async (at = now()) => {
       const results = [
         await expireStaging(at).then(
@@ -391,6 +433,10 @@ export const createApiObservability = (
           (error: unknown) => ({ error }),
         ),
         await expireSecurityRequestLogs(at).then(
+          () => null,
+          (error: unknown) => ({ error }),
+        ),
+        await expireShortLivedRecords(at).then(
           () => null,
           (error: unknown) => ({ error }),
         ),

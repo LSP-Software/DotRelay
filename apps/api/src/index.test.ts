@@ -128,6 +128,7 @@ describe("API foundation", () => {
       observability: {
         diagnostics: { emit: () => undefined },
         expireSecurityRequestLogs: async () => 0,
+        expireShortLivedRecords: async () => ({}),
         expireStaging: async () => ({ operations: 0, stagedObjects: 0 }),
         runRetentionCleanup: async () => undefined,
         recordRequest: () => {
@@ -210,6 +211,7 @@ describe("API foundation", () => {
       observability: {
         diagnostics: { emit: () => undefined },
         expireSecurityRequestLogs: async () => 0,
+        expireShortLivedRecords: async () => ({}),
         expireStaging: async () => ({ operations: 0, stagedObjects: 0 }),
         runRetentionCleanup: async () => undefined,
         recordRequest: (input) => records.push(input),

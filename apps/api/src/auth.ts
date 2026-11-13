@@ -1,7 +1,9 @@
 import type { BetterAuthDatabaseAdapter } from "@dotrelay/database";
 import { betterAuth, type DBAdapterInstance } from "better-auth";
 import { bearer, deviceAuthorization } from "better-auth/plugins";
+import { authRateLimitStorage } from "./auth-rate-limit";
 import { type ServerProfileConfig, sharedCookieDomain } from "./profile";
+import { configuredValkeyUrl } from "./protocol/rate-limit";
 
 export const AUTH_CLIENT_ID = "dotrelay-cli";
 
@@ -10,6 +12,9 @@ const createAuthWithAdapter = (
   profile: ServerProfileConfig,
 ) => {
   const cookieDomain = sharedCookieDomain(profile);
+  // Shared across API instances through Valkey; development and tests
+  // without VALKEY_URL keep Better Auth's in-process memory store.
+  const rateLimitStorage = authRateLimitStorage(configuredValkeyUrl());
   return betterAuth({
     appName: "DotRelay",
     baseURL: profile.origin,
@@ -28,6 +33,9 @@ const createAuthWithAdapter = (
           verification: { modelName: "authVerification" },
         }
       : {}),
+    // Sessions slide: each day of use extends them by 30 days. The absolute
+    // limit (SESSION_MAX_AGE_MS in session.ts) ends any session 90 days
+    // after creation, browser or CLI bearer alike.
     session: {
       modelName: "authSession",
       expiresIn: 60 * 60 * 24 * 30,
@@ -82,6 +90,7 @@ const createAuthWithAdapter = (
       enabled: true,
       window: 60,
       max: 10,
+      ...(rateLimitStorage ? { customStorage: rateLimitStorage } : {}),
       customRules: {
         // Device codes advertise a 5s poll. The per-code slow_down check is
         // what stops a client polling early; this bucket only has to fit one

@@ -125,6 +125,10 @@ describe("API observability boundary", () => {
           return { count: 3 };
         },
       },
+      $executeRaw: async () => {
+        calls.push("short-lived");
+        return 0;
+      },
     };
     const observability = createApiObservability(
       {
@@ -137,13 +141,46 @@ describe("API observability boundary", () => {
     await expect(observability.runRetentionCleanup()).rejects.toThrow(
       "staging unavailable",
     );
-    expect(calls).toEqual(["operations", "security-logs"]);
+    // Sessions, device codes, verifications, enrollments, invitations.
+    expect(calls).toEqual([
+      "operations",
+      "security-logs",
+      ...Array.from({ length: 5 }, () => "short-lived"),
+    ]);
     expect(diagnostics.records()).toEqual([
       expect.objectContaining({
         eventName: "api.staging.expiry_failed",
         outcome: "failure",
       }),
     ]);
+  });
+
+  test("retention cleanup reports a failed short-lived record expiry", async () => {
+    const diagnostics = createInMemoryDiagnosticSink(() => 0);
+    const transaction = {
+      operation: { findMany: async () => [] },
+      stagedObject: { deleteMany: async () => ({ count: 0 }) },
+      securityRequestLog: { deleteMany: async () => ({ count: 0 }) },
+      $executeRaw: async () => {
+        throw new Error("auth tables unavailable");
+      },
+    };
+    const observability = createApiObservability(
+      {
+        $transaction: async (callback: (value: unknown) => unknown) =>
+          callback(transaction),
+      } as never,
+      { diagnostics },
+    );
+    await expect(observability.runRetentionCleanup()).rejects.toThrow(
+      "auth tables unavailable",
+    );
+    expect(diagnostics.records()).toContainEqual(
+      expect.objectContaining({
+        eventName: "api.retention.expiry_failed",
+        outcome: "failure",
+      }),
+    );
   });
 
   test("evicts diagnostic entries together with their retention timers", () => {

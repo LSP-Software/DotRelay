@@ -38,7 +38,6 @@ import {
   enrichStaleHead,
   mapPersistenceError,
 } from "./errors";
-import { createProtocolRateLimit } from "./rate-limit";
 import {
   buildProtocolObjectFromStage,
   clampStagingExpiry,
@@ -161,13 +160,8 @@ export const registerProtocolRoutes = (
   const publications = new PublicationRepository();
   const synchronization = new SyncRepository();
   const epochRotations = new ProjectEpochRepository();
-  const rateLimit = createProtocolRateLimit(profile.isProduction, (context) =>
-    requireProtocolActor(context, database, profile, auth),
-  );
-
-  app.use("/api/v1/operations/*", rateLimit);
-  app.use("/api/v1/environments/*", rateLimit);
-  app.use("/api/v1/projects/*", rateLimit);
+  // Per-User rate limiting for these routes is the API-wide limiter
+  // registered in createApi (protocol/rate-limit.ts).
 
   // The staging byte ceiling applies only to the CBOR upload routes. The
   // administrative routes under the same prefix (/finalize, /epoch-transitions)

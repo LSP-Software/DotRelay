@@ -70,7 +70,12 @@ import {
 } from "./profile";
 import { registerProtocolRoutes } from "./protocol";
 import { requireProtocolActor } from "./protocol/context";
-import { valkeyReady } from "./protocol/rate-limit";
+import {
+  apiRateLimitBuckets,
+  createUserRateLimit,
+  valkeyReady,
+} from "./protocol/rate-limit";
+import { createSessionLifetimeGate, requestSession } from "./session";
 
 export type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
@@ -584,6 +589,7 @@ const createApi = ({
       resolveClientIp === undefined ? {} : { resolveClientIp },
     );
   const capabilities = createCapabilitiesDocument(profile);
+  const sessionLifetimeGate = createSessionLifetimeGate(database, auth);
   let capabilitiesEtagPromise: Promise<string> | undefined;
   const getCapabilitiesEtag = () => {
     capabilitiesEtagPromise ??= etagFor(capabilities);
@@ -669,6 +675,15 @@ const createApi = ({
     }),
   );
 
+  // Sessions slide; this caps their absolute age before anything reads them.
+  app.use("*", async (context, next) => {
+    if (["/health", "/ready"].includes(context.req.path)) {
+      await next();
+      return;
+    }
+    return sessionLifetimeGate(context, next);
+  });
+
   app.use("*", async (context, next) => {
     const allowed = profile.allowedGitHubIds;
     if (
@@ -681,9 +696,7 @@ const createApi = ({
       await next();
       return;
     }
-    const session = await auth.api.getSession({
-      headers: context.req.raw.headers,
-    });
+    const session = await requestSession(context, auth);
     if (session) {
       const account = await database.authAccount.findFirst({
         where: { userId: session.user.id, providerId: "github" },
@@ -698,6 +711,27 @@ const createApi = ({
       return jsonProblem(context, "authentication_required");
     }
     await next();
+  });
+
+  // Every authenticated /api/v1 request counts against its User's budget;
+  // GitHub-calling and row-creating routes also count against tighter ones.
+  // The bucket owner is the server-verified session, never a header.
+  const apiRateLimit = createUserRateLimit({
+    isProduction: profile.isProduction,
+    identify: async (context) =>
+      (await requestSession(context, auth).catch(() => null))?.user.id ?? null,
+    buckets: (context) =>
+      apiRateLimitBuckets(context.req.method, context.req.path),
+  });
+  app.use("/api/v1/*", async (context, next) => {
+    if (
+      context.req.method === "OPTIONS" ||
+      context.req.path === "/api/v1/capabilities"
+    ) {
+      await next();
+      return;
+    }
+    return apiRateLimit(context, next);
   });
 
   app.get("/health", (context) => context.json({ status: "ok" }));
