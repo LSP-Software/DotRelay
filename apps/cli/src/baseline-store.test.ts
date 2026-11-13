@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -63,5 +69,82 @@ describe("publication baseline store", () => {
     expect(
       (await readPublicationBaseline(dir, environmentId, ".env"))?.revisionId,
     ).toBe(revision(2));
+  });
+
+  test("keeps every entry when processes record baselines concurrently", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dotrelay-baseline-"));
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        writePublicationBaseline(dir, {
+          environmentId,
+          inputPath: join(dir, `file-${index}.env`),
+          revisionId: revision(1),
+          headHash: hash("a"),
+        }),
+      ),
+    );
+    const stored = JSON.parse(
+      await readFile(publicationBaselinePath(dir), "utf8"),
+    );
+    expect(stored.entries).toHaveLength(12);
+  });
+
+  test("breaks a lock left behind by a process that died", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dotrelay-baseline-"));
+    const lock = `${publicationBaselinePath(dir)}.lock`;
+    await writeFile(lock, "999999\n");
+    const old = new Date(Date.now() - 120_000);
+    await utimes(lock, old, old);
+    await writePublicationBaseline(dir, {
+      environmentId,
+      inputPath: join(dir, ".env"),
+      revisionId: revision(1),
+      headHash: hash("a"),
+    });
+    expect(
+      (await readPublicationBaseline(dir, environmentId, join(dir, ".env")))
+        ?.revisionId,
+    ).toBe(revision(1));
+  });
+
+  test("finds a baseline through a symlinked path to the same file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dotrelay-baseline-"));
+    const real = join(dir, "real.env");
+    const link = join(dir, "link.env");
+    await writeFile(real, "A=1\n");
+    await symlink(real, link);
+    await writePublicationBaseline(dir, {
+      environmentId,
+      inputPath: real,
+      revisionId: revision(3),
+      headHash: hash("c"),
+    });
+    expect(
+      (await readPublicationBaseline(dir, environmentId, link))?.revisionId,
+    ).toBe(revision(3));
+  });
+
+  test("records whether a baseline is only a fallback anchor", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dotrelay-baseline-"));
+    await writePublicationBaseline(dir, {
+      environmentId,
+      inputPath: join(dir, ".env"),
+      revisionId: revision(1),
+      headHash: hash("a"),
+      origin: "fallback",
+    });
+    expect(
+      await readPublicationBaseline(dir, environmentId, join(dir, ".env")),
+    ).toMatchObject({ origin: "fallback" });
+    await writePublicationBaseline(dir, {
+      environmentId,
+      inputPath: join(dir, ".env"),
+      revisionId: revision(2),
+      headHash: hash("b"),
+    });
+    expect(
+      (await readPublicationBaseline(dir, environmentId, join(dir, ".env")))
+        ?.origin,
+    ).toBeUndefined();
   });
 });
