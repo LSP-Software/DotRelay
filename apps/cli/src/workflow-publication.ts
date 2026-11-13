@@ -49,6 +49,7 @@ import {
   ROLLBACK_NOTE,
   reviewBody,
   rollbackConfirmQuestion,
+  type UnpushedLocalChange,
   type ValueOwnership,
   valueDiffsForPull,
 } from "./value-diff";
@@ -111,49 +112,73 @@ export const classify = async (
   );
 };
 
+const liveVariablesByName = (
+  variables: readonly DecodedVariable[],
+): ReadonlyMap<string, DecodedVariable> => {
+  const indexed = new Map<string, DecodedVariable>();
+  for (const variable of variables)
+    if (!variable.tombstone) indexed.set(variable.name, variable);
+  return indexed;
+};
+
+/**
+ * Builds the Draft from a dotenv file. The file derives from the
+ * Publication Baseline, so a name the baseline knew keeps the baseline's
+ * Variable id even when the Environment has since deleted or replaced that
+ * Variable; reconciliation then sees the teammate's deletion instead of a
+ * brand-new addition. Only names the baseline never held take the id of the
+ * Environment's live Variable, or a new id.
+ */
 export const variablesFromDotenv = (
   entries: readonly ClassifiedDotenvEntry[],
   existing: readonly DecodedVariable[],
+  baseline: readonly DecodedVariable[] = [],
 ): readonly DecodedVariable[] => {
   const used = new Set<string>();
+  const anchoredByName = liveVariablesByName(baseline);
+  const remoteByName = liveVariablesByName(existing);
+  const remoteById = new Map(
+    existing.map((variable) => [variable.id, variable]),
+  );
   const variables = entries.map((entry) => {
-    const prior = existing.find(
-      (candidate) => candidate.name === entry.name && !candidate.tombstone,
-    );
-    if (
-      prior &&
-      prior.ownership !==
-        (entry.classification === "shared"
-          ? "SHARED_VALUE"
-          : "USER_DEFINED_VALUE")
-    )
+    const anchored = anchoredByName.get(entry.name);
+    const prior = anchored ?? remoteByName.get(entry.name);
+    const sameRemote = prior ? remoteById.get(prior.id) : undefined;
+    // A file cannot express a description or the required flag, so those
+    // follow the Environment wherever the same Variable is still live.
+    const definition = sameRemote && !sameRemote.tombstone ? sameRemote : prior;
+    const ownershipSource = remoteByName.get(entry.name) ?? prior;
+    const ownership =
+      entry.classification === "shared"
+        ? ("SHARED_VALUE" as const)
+        : ("USER_DEFINED_VALUE" as const);
+    if (ownershipSource && ownershipSource.ownership !== ownership)
       throw new CliInvocationError(
         `classification for ${entry.name} does not match the existing Variable`,
       );
     const variable = {
       id: prior?.id ?? crypto.randomUUID(),
       name: entry.name,
-      description: prior?.description ?? "",
-      ownership:
-        entry.classification === "shared"
-          ? ("SHARED_VALUE" as const)
-          : ("USER_DEFINED_VALUE" as const),
+      description: definition?.description ?? "",
+      ownership,
       value: entry.value,
-      required: prior?.required ?? true,
+      required: definition?.required ?? true,
       tombstone: false,
     };
     used.add(variable.id);
     return Object.freeze(variable);
   });
+  const omitted = new Map<string, DecodedVariable>();
+  for (const variable of [...baseline, ...existing])
+    if (!used.has(variable.id) && !variable.tombstone)
+      omitted.set(variable.id, variable);
   return Object.freeze([
     ...variables,
-    ...existing
-      .filter((variable) => !used.has(variable.id) && !variable.tombstone)
-      .map((variable) =>
-        variable.value === null
-          ? Object.freeze({ ...variable })
-          : Object.freeze({ ...variable, value: null, tombstone: true }),
-      ),
+    ...[...omitted.values()].map((variable) =>
+      variable.value === null
+        ? Object.freeze({ ...variable })
+        : Object.freeze({ ...variable, value: null, tombstone: true }),
+    ),
   ]);
 };
 
@@ -247,6 +272,12 @@ export type PublicationReconciliation = Readonly<{
   readonly emptyAnchor: boolean;
   readonly environmentId: string;
   readonly actorUserId: string;
+  /**
+   * The baseline is the invocation-start head rather than the Revision the
+   * file was pulled from, so a differing Value may be a stale local copy.
+   */
+  readonly fallback?: boolean;
+  readonly inputPath?: string;
 }>;
 
 const sameHash = (left: Uint8Array, right: Uint8Array): boolean => {
@@ -362,21 +393,29 @@ const hashFromHex = (hex: string): Uint8Array => {
   return bytes;
 };
 
+/**
+ * Explains a publication reconciled against the invocation-start head
+ * because no Revision is recorded as the file's origin.
+ */
+export const missingBaselineNotice = (inputPath: string): string =>
+  `${inputPath} has no Publication Baseline recorded by dotrelay pull on this machine (a new machine, cleared state, or a differently spelled path), so it is compared with the Environment as it is now and every Value in it that differs will replace the remote Value. If the file may be out of date, stop here and run dotrelay pull first.`;
+
+type PreparedPublicationBaseline = Readonly<{
+  readonly snapshot: readonly DecodedVariable[];
+  readonly notice: string | null;
+  readonly reconciliation: Omit<PublicationReconciliation, "draft">;
+}>;
+
 export const preparePublicationBaseline = async (
   options: WorkflowOptions,
   synced: Awaited<ReturnType<typeof syncWorkflow>>,
   inputPath: string,
-): Promise<
-  Readonly<{
-    readonly snapshot: readonly DecodedVariable[];
-    readonly notice: string | null;
-    readonly reconciliation: Omit<PublicationReconciliation, "draft">;
-  }>
-> => {
+): Promise<PreparedPublicationBaseline> => {
   const environmentId = synced.page.environmentId;
   const currentId = synced.page.currentHeadId ?? environmentId;
   const currentHash = synced.page.currentHeadHash ?? zeroHash();
   const currentEmpty = synced.page.currentHeadId === null;
+  const actorUserId = synced.workflow.publicationContext.actorUserId;
   const recorded = await readPublicationBaseline(
     options.stateDirectory,
     environmentId,
@@ -394,22 +433,21 @@ export const preparePublicationBaseline = async (
           revision.id === recorded.revisionId &&
           bytesToHex(revision.digest) === recorded.headHash,
       ));
-  const fallbackNotice =
+  // A fallback anchor persisted by an earlier push still says nothing about
+  // where the file came from, so it keeps the notice and the --no-input
+  // guard until a pull records a real origin.
+  const fallback = recorded?.origin === "fallback";
+  const unverifiableNotice =
     "The recorded Publication Baseline is no longer in verified history, so this publication is reconciled against the Environment as it is now.";
   const persistFallback = async (
-    notice: string | null,
-  ): Promise<
-    Readonly<{
-      readonly snapshot: readonly DecodedVariable[];
-      readonly notice: string | null;
-      readonly reconciliation: Omit<PublicationReconciliation, "draft">;
-    }>
-  > => {
+    notice: string,
+  ): Promise<PreparedPublicationBaseline> => {
     await writePublicationBaseline(options.stateDirectory, {
       environmentId,
       inputPath,
       revisionId: currentId,
       headHash: bytesToHex(currentHash),
+      origin: "fallback",
     });
     return Object.freeze({
       snapshot: synced.variables,
@@ -420,40 +458,65 @@ export const preparePublicationBaseline = async (
         baselineHash: currentHash,
         emptyAnchor: currentEmpty,
         environmentId,
-        actorUserId: synced.workflow.publicationContext.actorUserId,
+        actorUserId,
+        fallback: true,
+        inputPath,
       }),
     });
   };
-  if (!recorded || !recordedVerifiable)
-    return persistFallback(recorded ? fallbackNotice : null);
+  if (!recorded) return persistFallback(missingBaselineNotice(inputPath));
+  if (!recordedVerifiable) return persistFallback(unverifiableNotice);
+  const notice = fallback ? missingBaselineNotice(inputPath) : null;
   if (recordedEmpty)
     return Object.freeze({
       snapshot: Object.freeze([]),
-      notice: null,
+      notice,
       reconciliation: Object.freeze({
         baseline: Object.freeze([]),
         baselineRevisionId: environmentId,
         baselineHash: zeroHash(),
         emptyAnchor: true,
         environmentId,
-        actorUserId: synced.workflow.publicationContext.actorUserId,
+        actorUserId,
+        fallback,
+        inputPath,
       }),
     });
   const snapshot = synced.workflow.session
     .revisionSnapshots()
     .get(recorded.revisionId);
-  if (!snapshot) return persistFallback(fallbackNotice);
+  if (!snapshot) return persistFallback(unverifiableNotice);
   return Object.freeze({
     snapshot,
-    notice: null,
+    notice,
     reconciliation: Object.freeze({
       baseline: snapshot,
       baselineRevisionId: recorded.revisionId,
       baselineHash: hashFromHex(recorded.headHash),
       emptyAnchor: false,
       environmentId,
-      actorUserId: synced.workflow.publicationContext.actorUserId,
+      actorUserId,
+      fallback,
+      inputPath,
     }),
+  });
+};
+
+// Once a publication anchored at a fallback baseline succeeds, every Value
+// in the file was either equal to the Environment or explicitly approved
+// over it, so the file stops being of unknown origin. Only the origin
+// changes: the anchor Revision stays put, because the file still does not
+// derive from the new head (ADR 0006).
+const settleFallbackBaseline = async (
+  options: WorkflowOptions,
+  reconciliation: PublicationReconciliation | undefined,
+): Promise<void> => {
+  if (!reconciliation?.fallback || !reconciliation.inputPath) return;
+  await writePublicationBaseline(options.stateDirectory, {
+    environmentId: reconciliation.environmentId,
+    inputPath: reconciliation.inputPath,
+    revisionId: reconciliation.baselineRevisionId,
+    headHash: bytesToHex(reconciliation.baselineHash),
   });
 };
 
@@ -582,7 +645,8 @@ export const publish = async (
         }
       : {}),
   };
-  if (!draftVariables.some((variable) => variable.hasDraftChange))
+  if (!draftVariables.some((variable) => variable.hasDraftChange)) {
+    await settleFallbackBaseline(options, reconciliation);
     return {
       revision: synced.page.currentHeadId,
       lanes: 0,
@@ -590,12 +654,31 @@ export const publish = async (
       message: "up to date, nothing to publish",
       ...pendingActionsField(synced.workflow.pendingActions),
     };
+  }
   const changes = draftVariables
     .map((variable) => publicationChangeFor(variable, synced.variables))
     .filter((change): change is PublicationChange => change !== null);
   const removedCount = changes.filter(
     (change) => change.kind === "removed",
   ).length;
+  const overwrittenCount = changes.filter(
+    (change) => change.kind !== "added",
+  ).length;
+  // Without a pulled baseline a differing Value may be a stale local copy
+  // rather than an edit, so automation must not replace or remove existing
+  // remote Values on that guess.
+  if (
+    options.noInput &&
+    !options.force &&
+    reconciliation?.fallback === true &&
+    overwrittenCount > 0
+  )
+    throw new CliError(
+      "conflict",
+      `${reconciliation.inputPath ?? "the input file"} has no Publication Baseline recorded by dotrelay pull, so publishing it would replace or remove ${overwrittenCount} existing ${overwrittenCount === 1 ? "Value" : "Values"} that may be newer than the file. Nothing was published. Run dotrelay pull first, or re-run with --force to publish the file as it is.`,
+      { changedCount: overwrittenCount },
+      "baseline_unverifiable",
+    );
   if (options.noInput && removedCount > 0 && !options.force)
     throw new CliError(
       "invocation",
@@ -729,6 +812,7 @@ export const publish = async (
     );
   }
   progress.done("Uploaded");
+  await settleFallbackBaseline(options, reconciliation);
   if (!options.noInput && !parsed.json)
     stepDone(
       mutation === "ROLLBACK"
@@ -865,6 +949,26 @@ export const trackedPullOutputDetail = (outputPath: string): string =>
     "DotRelay never changes Git history or removes tracked content on your behalf.",
   ].join("\n");
 
+/**
+ * A warning for push and init when the dotenv file they read is tracked by
+ * Git: its plaintext Values are then in the repository. Unlike pull, which
+ * would write new plaintext into the tracked file, reading one only warns.
+ * Returns null when the file is not tracked or Git cannot tell.
+ */
+export const trackedInputWarning = async (
+  options: WorkflowOptions,
+  inputPath: string,
+): Promise<string | null> => {
+  const probe = options.gitTracking ?? createGitTrackingProbe();
+  try {
+    const info = await probe(resolve(inputPath));
+    if (info.state !== "tracked") return null;
+  } catch {
+    return null;
+  }
+  return `${inputPath} is tracked by Git, so the plaintext Values in it are in the repository. Untrack it with git rm --cached ${inputPath}, and rotate any Value that was committed.`;
+};
+
 export const guardPullOutputAgainstGit = async (
   options: WorkflowOptions,
   outputPath: string,
@@ -928,6 +1032,100 @@ export const localPullChanges = async (
   } catch {
     return null;
   }
+};
+
+/**
+ * Local edits in `outputPath` since the recorded Publication Baseline that
+ * replacing the file with `incoming` would discard. Returns null when the
+ * file's origin is unknown (no pulled baseline, or one this sync cannot
+ * resolve), because a differing Value may then be either a local edit or a
+ * stale copy.
+ */
+export const unpushedLocalChanges = async (
+  options: WorkflowOptions,
+  synced: Awaited<ReturnType<typeof syncWorkflow>>,
+  outputPath: string,
+  incoming: readonly DotenvEntry[],
+): Promise<readonly UnpushedLocalChange[] | null> => {
+  const environmentId = synced.page.environmentId;
+  let recorded: Awaited<ReturnType<typeof readPublicationBaseline>>;
+  try {
+    recorded = await readPublicationBaseline(
+      options.stateDirectory,
+      environmentId,
+      outputPath,
+    );
+  } catch {
+    return null;
+  }
+  if (!recorded || recorded.origin === "fallback") return null;
+  const recordedEmpty =
+    recorded.revisionId === environmentId &&
+    recorded.headHash === "0".repeat(96);
+  const verified =
+    recordedEmpty ||
+    synced.page.revisions.some(
+      (revision) =>
+        revision.id === recorded.revisionId &&
+        bytesToHex(revision.digest) === recorded.headHash,
+    );
+  const snapshot = recordedEmpty
+    ? []
+    : synced.workflow.session.revisionSnapshots().get(recorded.revisionId);
+  if (!verified || !snapshot) return null;
+  let local: readonly DotenvEntry[];
+  try {
+    local = parseDotenv(await readFile(outputPath, "utf8"));
+  } catch {
+    return null;
+  }
+  const base = snapshot
+    .filter((variable) => !variable.tombstone && variable.value !== null)
+    .map((variable) => ({ name: variable.name, value: variable.value ?? "" }));
+  const incomingByName = new Map(
+    incoming.map((entry) => [entry.name, entry.value]),
+  );
+  // Baselines are not refreshed by publication (ADR 0006), so a Value this
+  // Device pushed after the pull still differs from the baseline. Any state
+  // a verified Revision since the baseline held was published by someone;
+  // only a state no Revision ever held is an unpushed local edit.
+  const published = new Map<string, Set<string | null>>();
+  const anchorIndex = recordedEmpty
+    ? -1
+    : synced.page.revisions.findIndex(
+        (revision) => revision.id === recorded.revisionId,
+      );
+  const snapshots = synced.workflow.session.revisionSnapshots();
+  for (const revision of synced.page.revisions.slice(anchorIndex + 1)) {
+    const variables = snapshots.get(revision.id);
+    if (!variables) continue;
+    const live = new Map(
+      variables
+        .filter((variable) => !variable.tombstone)
+        .map((variable) => [variable.name, variable.value]),
+    );
+    for (const name of new Set([
+      ...live.keys(),
+      ...local.map((entry) => entry.name),
+      ...base.map((entry) => entry.name),
+    ])) {
+      const states = published.get(name) ?? new Set<string | null>();
+      states.add(live.has(name) ? (live.get(name) ?? null) : null);
+      published.set(name, states);
+    }
+  }
+  return Object.freeze(
+    diffDotenvEntries(local, base)
+      .filter((change) => {
+        const arriving = incomingByName.get(change.name);
+        // The pull only loses an edit the incoming file does not already
+        // contain: a teammate may have made the same change.
+        const localState = change.kind === "removed" ? null : change.localValue;
+        if ((arriving ?? null) === localState) return false;
+        return !(published.get(change.name)?.has(localState) ?? false);
+      })
+      .map((change) => Object.freeze({ name: change.name, kind: change.kind })),
+  );
 };
 
 export const pendingActionsField = (

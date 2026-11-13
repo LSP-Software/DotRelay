@@ -11,6 +11,7 @@ import { isUnreadableTerminalError, paint, readTerminalSecret } from "./ui";
 import {
   destinationRows,
   pullConfirmQuestion,
+  pullReplacementNotes,
   renderEnvDiff,
   reviewBody,
 } from "./value-diff";
@@ -33,6 +34,8 @@ import {
   resolveRollbackTarget,
   resolveVariableReferences,
   shareEnvironmentWithPeerDevices,
+  trackedInputWarning,
+  unpushedLocalChanges,
   variablesFromDotenv,
   withOwnership,
 } from "./workflow-publication";
@@ -54,6 +57,24 @@ export {
   enrollFirstDevice,
 } from "./workflow-device-enrollment";
 
+// The dotenv file push, init and diff read; a missing file names the path
+// and the way to point the command at another one.
+const readDotenvInput = async (inputPath: string): Promise<string> => {
+  try {
+    return await readFile(inputPath, "utf8");
+  } catch (error) {
+    const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+    throw new CliError(
+      "local-io",
+      missing
+        ? `could not read the dotenv input file ${inputPath}: it does not exist. Create it, or pass --from <file> to read another file.`
+        : `could not read the dotenv input file ${inputPath}; check that it is a readable file, or pass --from <file> to read another file.`,
+      {},
+      "input_read_failed",
+    );
+  }
+};
+
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -74,18 +95,7 @@ export const runProtectedWorkflow = async (
   }
   if (parsed.command === "diff") {
     const inputPath = parsed.from ?? ".env";
-    let source: string;
-    try {
-      source = await readFile(inputPath, "utf8");
-    } catch {
-      throw new CliError(
-        "local-io",
-        "could not read the dotenv input file",
-        {},
-        "input_read_failed",
-      );
-    }
-    const local = parseDotenv(source);
+    const local = parseDotenv(await readDotenvInput(inputPath), inputPath);
     const synced = await syncWorkflow(options, parsed);
     const groups = classifyPullValues(
       synced.variables,
@@ -279,12 +289,33 @@ export const runProtectedWorkflow = async (
             message: `No changes found${omissionNote}`,
           };
         }
+        const unpushed = await unpushedLocalChanges(
+          options,
+          synced,
+          outputPath,
+          entries,
+        );
+        const unpushedNames = (unpushed ?? [])
+          .map((change) => change.name)
+          .join(", ");
         if (options.noInput) {
           if (!options.force)
             throw new CliError(
               "conflict",
               `${outputPath} differs from the Environment and was retained; re-run with --force to replace it`,
               changes !== null ? { changedCount: changes.length } : {},
+              "output_conflict",
+            );
+          // --force approves catching the file up, not losing work: edits
+          // made since the last pull need their own explicit approval.
+          if (unpushed && unpushed.length > 0 && !parsed.discardLocal)
+            throw new CliError(
+              "conflict",
+              `${outputPath} has local changes not yet pushed (${unpushedNames}) that this pull would discard. Nothing was written. Run dotrelay push first, or re-run with --force --discard-local to replace them.`,
+              {
+                changedCount: unpushed.length,
+                variableNames: unpushedNames.slice(0, 512),
+              },
               "output_conflict",
             );
         } else {
@@ -297,6 +328,7 @@ export const runProtectedWorkflow = async (
             title: `Review — replace ${outputPath}`,
             danger: true,
             body: reviewBody(changes, destination, parsed.reveal, [
+              ...pullReplacementNotes(outputPath, unpushed),
               `  ${paint(
                 `The current file is retained at ${outputPath}.previous`,
                 "faint",
@@ -319,6 +351,7 @@ export const runProtectedWorkflow = async (
     if (outputPath) {
       await atomicWriteProtectedFile(outputPath, contents, {
         ...(replaceExisting ? { retainPrevious: true } : {}),
+        followSymlink: true,
       });
       await rememberBaseline();
     }
@@ -344,38 +377,36 @@ export const runProtectedWorkflow = async (
   }
   if (parsed.command === "init" || parsed.command === "push") {
     const inputPath = parsed.from ?? ".env";
-    let source: string;
-    try {
-      source = await readFile(inputPath, "utf8");
-    } catch {
-      throw new CliError(
-        "local-io",
-        "could not read the dotenv input file",
-        {},
-        "input_read_failed",
-      );
-    }
+    const local = parseDotenv(await readDotenvInput(inputPath), inputPath);
+    const warnings: string[] = [];
+    const tracked = await trackedInputWarning(options, inputPath);
+    if (tracked) warnings.push(tracked);
     const synced = await syncWorkflow(options, parsed);
     const prepared = await preparePublicationBaseline(
       options,
       synced,
       inputPath,
     );
-    if (prepared.notice)
-      (options.terminal?.output ?? process.stderr).write(
-        `${note(prepared.notice)}\n`,
-      );
-    // Classification and draft ids follow the Environment this invocation
-    // just verified. The Publication Baseline is only the third side of
-    // reconciliation; using it here would treat a teammate's later publish
-    // as a brand-new Variable.
-    const entries = await classify(
-      options,
-      parsed,
-      parseDotenv(source),
+    if (prepared.notice) warnings.push(prepared.notice);
+    if (!parsed.json)
+      for (const warning of warnings)
+        (options.terminal?.output ?? process.stderr).write(
+          `${note(warning, "warn")}\n`,
+        );
+    // A name the Publication Baseline held keeps the baseline's id, so a
+    // teammate's later deletion or replacement of that Variable reaches
+    // reconciliation as such; classification and the ids of names the
+    // baseline never held follow the Environment this invocation verified,
+    // so a teammate's later addition is not treated as brand-new.
+    const entries = await classify(options, parsed, local, [
+      ...synced.variables,
+      ...prepared.snapshot,
+    ]);
+    const variables = variablesFromDotenv(
+      entries,
       synced.variables,
+      prepared.snapshot,
     );
-    const variables = variablesFromDotenv(entries, synced.variables);
     const result = await publish(
       options,
       parsed,
@@ -401,7 +432,9 @@ export const runProtectedWorkflow = async (
         environmentId: synced.workflow.createdEnvironmentId,
       });
     }
-    return result;
+    return parsed.json && warnings.length > 0
+      ? { ...result, warnings }
+      : result;
   }
   if (parsed.command === "rollback") {
     const synced = await syncWorkflow(options, parsed);

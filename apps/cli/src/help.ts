@@ -114,6 +114,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
         "Environment id or label to pull from (default: the worktree selection)",
       force:
         "approve replacing a differing output file under --no-input; the prior file is retained at <path>.previous",
+      discardLocal:
+        "with --force, also discard local changes made since the last pull that were never pushed",
       noInput:
         "never prompt or guess; requires explicit --profile and Environment context",
     },

@@ -46,6 +46,7 @@ export type ParsedArguments = Readonly<{
   readonly noOpen: boolean;
   readonly noInput: boolean;
   readonly force: boolean;
+  readonly discardLocal: boolean;
   readonly json: boolean;
   readonly debug: boolean;
   readonly stdout: boolean;
@@ -74,6 +75,7 @@ type MutableArguments = {
   noOpen: boolean;
   noInput: boolean;
   force: boolean;
+  discardLocal: boolean;
   json: boolean;
   debug: boolean;
   stdout: boolean;
@@ -171,6 +173,7 @@ export const FLAG_KEYS = [
   "noOpen",
   "noInput",
   "force",
+  "discardLocal",
   "json",
   "reveal",
   "stdout",
@@ -197,6 +200,7 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
   noOpen: "--no-open",
   noInput: "--no-input",
   force: "--force",
+  discardLocal: "--discard-local",
   json: "--json",
   reveal: "--reveal",
   stdout: "--stdout",
@@ -282,6 +286,7 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "stdout",
     "noInput",
     "force",
+    "discardLocal",
     "json",
     "limit",
     "reveal",
@@ -597,6 +602,7 @@ export const parseArguments = (
     noOpen: false,
     noInput: false,
     force: false,
+    discardLocal: false,
     json: false,
     debug: false,
     stdout: false,
@@ -638,6 +644,7 @@ export const parseArguments = (
       } else if (flag === "--no-open") parsed.noOpen = true;
       else if (flag === "--no-input") parsed.noInput = true;
       else if (flag === "--force") parsed.force = true;
+      else if (flag === "--discard-local") parsed.discardLocal = true;
       else if (flag === "--json") parsed.json = true;
       else if (flag === "--debug") parsed.debug = true;
       else if (flag === "--stdout") parsed.stdout = true;

@@ -2313,21 +2313,37 @@ describe("protected CLI workflows", () => {
     );
     expect(initialized.exitCode).toBe(0);
     await Bun.write(input, "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n");
-    const result = await run(
-      [
-        "pull",
-        "--profile",
-        "relay",
-        "--environment",
-        ids.environment,
-        "--output",
-        input,
-        "--no-input",
-        "--force",
-        "--json",
-      ],
-      { ...runtime, gitTrackingProbe: gitOutside },
+    const pullArguments = [
+      "pull",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--output",
+      input,
+      "--no-input",
+      "--force",
+      "--json",
+    ];
+    // Both local lines are edits no Revision ever held, so --force alone
+    // refuses to discard them.
+    const refused = await run(pullArguments, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(refused.exitCode).toBe(4);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: "output_conflict",
+      changedCount: 2,
+      variableNames: "DATABASE_URL, LOCAL_ONLY",
+    });
+    expect(await Bun.file(input).text()).toBe(
+      "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n",
     );
+    const result = await run([...pullArguments, "--discard-local"], {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
     expect(result.exitCode).toBe(0);
     const body = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(body).toMatchObject({
@@ -2486,9 +2502,11 @@ describe("protected CLI workflows", () => {
       const gitDirectory = `${gitRoot}/.git`;
       const output = `${gitRoot}/.env`;
       const probe: GitTrackingProbe = async (path) => {
-        const relativePath = path.endsWith(".previous")
-          ? ".env.previous"
-          : ".env";
+        // A temporary write target shares its output's exclusion.
+        const name = path.slice(gitRoot.length + 1);
+        const relativePath = name.endsWith(".tmp")
+          ? name.slice(1, name.lastIndexOf(".", name.length - 5))
+          : name;
         const exclusions = await readFile(
           `${gitDirectory}/info/exclude`,
           "utf8",
@@ -2526,7 +2544,7 @@ describe("protected CLI workflows", () => {
       expect(String(body.message)).toContain(".git/info/exclude");
       expect(String(body.message)).toContain("excluded from Git");
       expect(await Bun.file(`${gitDirectory}/info/exclude`).text()).toBe(
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2542,7 +2560,7 @@ describe("protected CLI workflows", () => {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
       await Bun.write(
         `${gitRoot}/.git/info/exclude`,
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
       await seededEnvironment(
         runtime,
@@ -2552,7 +2570,7 @@ describe("protected CLI workflows", () => {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
       await Bun.write(
         `${gitRoot}/.git/info/exclude`,
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
       const probe: GitTrackingProbe = async (path) =>
         Object.freeze({
@@ -2580,7 +2598,7 @@ describe("protected CLI workflows", () => {
       expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
       expect(String(body.message)).not.toContain(".git/info/exclude");
       expect(await Bun.file(`${gitRoot}/.git/info/exclude`).text()).toBe(
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2720,7 +2738,7 @@ describe("protected CLI workflows", () => {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
       await Bun.write(
         `${gitRoot}/.git/info/exclude`,
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
       const probe: GitTrackingProbe = async (path) =>
         Object.freeze({
@@ -3020,6 +3038,8 @@ describe("protected CLI workflows", () => {
     });
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "DATABASE_URL=abc123x\n");
+    // A hand-written file with no pulled baseline replaces an existing
+    // Value, which --no-input approves only with --force.
     const pushed = await run(
       [
         "push",
@@ -3030,6 +3050,7 @@ describe("protected CLI workflows", () => {
         "--from",
         input,
         "--no-input",
+        "--force",
         "--json",
       ],
       runtime,
@@ -3182,6 +3203,8 @@ describe("protected CLI workflows", () => {
     });
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "DATABASE_URL=abc123x\n");
+    // A hand-written file with no pulled baseline replaces an existing
+    // Value, which --no-input approves only with --force.
     const pushed = await run(
       [
         "push",
@@ -3192,6 +3215,7 @@ describe("protected CLI workflows", () => {
         "--from",
         input,
         "--no-input",
+        "--force",
         "--json",
       ],
       runtime,
@@ -6435,9 +6459,10 @@ describe("publication baseline reconciliation", () => {
   const seededRuntime = async (
     second: Readonly<{
       readonly name: string;
-      readonly value: string;
+      readonly value: string | null;
       readonly id: string;
       readonly hasDraftChange: boolean;
+      readonly tombstone?: boolean;
     }>[],
   ) => {
     const bootstrap = await createDeviceBootstrap({
@@ -6495,9 +6520,10 @@ describe("publication baseline reconciliation", () => {
         name: string;
         description: string;
         ownership: "SHARED_VALUE";
-        value: string;
+        value: string | null;
         required: true;
         hasDraftChange: boolean;
+        tombstone?: boolean;
       }
     >([
       [
@@ -6522,6 +6548,7 @@ describe("publication baseline reconciliation", () => {
         value: variable.value,
         required: true,
         hasDraftChange: variable.hasDraftChange,
+        ...(variable.tombstone ? { tombstone: true } : {}),
       });
     const chained = await createPublicationArtifacts(
       [...chainedVariables.values()],
@@ -6682,5 +6709,363 @@ describe("publication baseline reconciliation", () => {
     ).toBe(baselineBefore);
     expect(pushed.stderr).not.toContain("two");
     expect(pushed.stderr).not.toContain("three");
+  });
+
+  // A later Revision the sync never serves; only the first one is live.
+  const unrelatedLater = [
+    {
+      id: databaseUrl,
+      name: "DATABASE_URL",
+      value: "postgres",
+      hasDraftChange: true,
+    },
+  ];
+
+  const pullThenPush = async (
+    second: Parameters<typeof seededRuntime>[0],
+    edited: string,
+    extra: readonly string[] = [],
+  ) => {
+    const { runtime, firstWire, secondWire } = await seededRuntime(second);
+    const output = `${runtime.stateDirectory}/dotenv`;
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
+    await Bun.write(output, edited);
+    let finalized = 0;
+    const scripted = scriptSyncPage(runtime, {
+      environmentId: ids.environment,
+      trustedRevisionId: ids.environment,
+      trustedRevisionHash: new Uint8Array(48),
+      currentHeadId: secondWire.id,
+      currentHeadHash: secondWire.digest,
+      projectEpoch: 1n,
+      revisions: [firstWire, secondWire],
+      nextCursor: null,
+    });
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        output,
+        "--no-input",
+        "--json",
+        ...extra,
+      ],
+      {
+        ...runtime,
+        gitTrackingProbe: gitOutside,
+        fetch: async (input, init) => {
+          const request = new Request(input as never, init);
+          if (new URL(request.url).pathname.endsWith("/finalize"))
+            finalized += 1;
+          return scripted(input, init);
+        },
+      },
+    );
+    return { pushed, output, finalized: () => finalized };
+  };
+
+  test("an unchanged local line does not resurrect a teammate's deletion", async () => {
+    const { pushed, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='one'\n",
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout)).toMatchObject({
+      ok: true,
+      message: "up to date, nothing to publish",
+    });
+    expect(finalized()).toBe(0);
+  });
+
+  test("an edited local line meeting a teammate's deletion is a conflict", async () => {
+    const { pushed, output, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='edited'\n",
+    );
+    expect(pushed.exitCode).toBe(4);
+    expect(JSON.parse(pushed.stderr)).toMatchObject({
+      code: "variable_conflict",
+      variableNames: "API_TOKEN",
+    });
+    expect(finalized()).toBe(0);
+    expect(await Bun.file(output).text()).toBe("API_TOKEN='edited'\n");
+  });
+
+  test("a stale local line does not overwrite a Variable a teammate re-added", async () => {
+    const { pushed, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+        {
+          id: databaseUrl,
+          name: "API_TOKEN",
+          value: "new",
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='one'\n",
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout)).toMatchObject({
+      message: "up to date, nothing to publish",
+    });
+    expect(finalized()).toBe(0);
+  });
+
+  test("an edited local line meeting a re-added Variable is a conflict", async () => {
+    const { pushed, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+        {
+          id: databaseUrl,
+          name: "API_TOKEN",
+          value: "new",
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='mine'\n",
+    );
+    expect(pushed.exitCode).toBe(4);
+    expect(JSON.parse(pushed.stderr)).toMatchObject({
+      code: "variable_conflict",
+    });
+    expect(finalized()).toBe(0);
+  });
+
+  test("a push with no recorded baseline will not replace existing Values under --no-input", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/fresh.env`;
+    await Bun.write(input, "API_TOKEN=stale\n");
+    const pushArguments = [
+      "push",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--from",
+      input,
+      "--no-input",
+      "--json",
+    ];
+    const refused = await run(pushArguments, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(refused.exitCode).toBe(4);
+    const diagnostic = JSON.parse(refused.stderr);
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "baseline_unverifiable",
+      changedCount: 1,
+    });
+    expect(String(diagnostic.detail)).toContain("dotrelay pull");
+    expect(String(diagnostic.detail)).toContain("--force");
+    expect(refused.stderr).not.toContain("stale");
+    // A re-run is still refused: the persisted fallback anchor does not
+    // pass for a pulled baseline.
+    const again = await run(pushArguments, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(again.exitCode).toBe(4);
+    const forced = await run([...pushArguments, "--force"], {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(forced.exitCode).toBe(0);
+    expect(JSON.parse(forced.stdout)).toMatchObject({
+      message: "Published",
+      warnings: [expect.stringContaining("dotrelay pull first")],
+    });
+  });
+
+  test("a push with no recorded baseline shows a notice before the review", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/fresh.env`;
+    await Bun.write(input, "API_TOKEN=one\n");
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => {
+      rendered.push(chunk.toString("utf8"));
+    });
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+      ],
+      {
+        ...runtime,
+        gitTrackingProbe: gitOutside,
+        terminal: { input: new PassThrough(), output: terminalOutput },
+      },
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(rendered.join("")).toContain("has no Publication Baseline");
+    expect(rendered.join("")).toContain("dotrelay pull first");
+  });
+
+  test("push warns when the dotenv file is tracked by Git", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/tracked.env`;
+    await Bun.write(input, "API_TOKEN=one\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitTracked },
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout).warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`${input} is tracked by Git`),
+      ]),
+    );
+  });
+
+  test("push names a missing input file and how to point at another", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/missing.env`;
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pushed.exitCode).not.toBe(0);
+    const diagnostic = JSON.parse(pushed.stderr);
+    expect(diagnostic.code).toBe("input_read_failed");
+    expect(String(diagnostic.detail)).toContain(input);
+    expect(String(diagnostic.detail)).toContain("--from");
+  });
+
+  test("pull --force keeps unpushed local edits unless --discard-local is given", async () => {
+    const { runtime, firstWire, secondWire } = await seededRuntime([
+      {
+        id: apiToken,
+        name: "API_TOKEN",
+        value: "three",
+        hasDraftChange: true,
+      },
+    ]);
+    const output = `${runtime.stateDirectory}/dotenv`;
+    const pullArguments = [
+      "pull",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--output",
+      output,
+      "--no-input",
+      "--json",
+    ];
+    expect(
+      (await run(pullArguments, { ...runtime, gitTrackingProbe: gitOutside }))
+        .exitCode,
+    ).toBe(0);
+    const later = {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+      fetch: scriptSyncPage(runtime, {
+        environmentId: ids.environment,
+        trustedRevisionId: ids.environment,
+        trustedRevisionHash: new Uint8Array(48),
+        currentHeadId: secondWire.id,
+        currentHeadHash: secondWire.digest,
+        projectEpoch: 1n,
+        revisions: [firstWire, secondWire],
+        nextCursor: null,
+      }),
+    };
+    // A stale copy of the pulled Value is caught up without ceremony.
+    const caughtUp = await run([...pullArguments, "--force"], later);
+    expect(caughtUp.exitCode).toBe(0);
+    expect(await Bun.file(output).text()).toBe("API_TOKEN='three'\n");
+    // An edit no Revision ever held is not.
+    await Bun.write(output, "API_TOKEN=mine\n");
+    const refused = await run([...pullArguments, "--force"], later);
+    expect(refused.exitCode).toBe(4);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: "output_conflict",
+      variableNames: "API_TOKEN",
+    });
+    expect(refused.stderr).not.toContain("mine");
+    expect(await Bun.file(output).text()).toBe("API_TOKEN=mine\n");
+    const discarded = await run(
+      [...pullArguments, "--force", "--discard-local"],
+      later,
+    );
+    expect(discarded.exitCode).toBe(0);
+    expect(await Bun.file(output).text()).toBe("API_TOKEN='three'\n");
+    expect(await Bun.file(`${output}.previous`).text()).toBe(
+      "API_TOKEN=mine\n",
+    );
   });
 });

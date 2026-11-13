@@ -65,10 +65,9 @@ const writeProtected = async (
   data: string | Uint8Array,
   followSymlink: boolean,
 ) => {
-  let target = path;
   let temporary: string | undefined;
   try {
-    target = followSymlink ? await writeTarget(path) : path;
+    const target = followSymlink ? await writeTarget(path) : path;
     temporary = protectedTemporaryPath(target);
     const handle = await open(temporary, "wx", 0o600);
     try {
