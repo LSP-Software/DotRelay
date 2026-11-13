@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
+  createProjectEnvironment,
   createTeamInvitation,
+  environmentLabelError,
   fetchMyInvitations,
   fetchTeamMemberships,
   parseMyInvitations,
@@ -214,5 +216,91 @@ test("fetchMyInvitations reports a network failure actionably", async () => {
     expect(result.message).toContain("reach the server");
   } finally {
     globalThis.fetch = previous;
+  }
+});
+
+test("environment labels follow the server's rule", () => {
+  expect(environmentLabelError("staging")).toBeNull();
+  expect(environmentLabelError("  preview-2.eu_west ")).toBeNull();
+  expect(environmentLabelError("")).toContain("Name the environment");
+  expect(environmentLabelError("2nd")).toContain("Start with a letter");
+  expect(environmentLabelError("has space")).toContain("Start with a letter");
+});
+
+test("createProjectEnvironment posts the label and reports a new environment", async () => {
+  const captured = { url: "", headers: new Headers(), body: "" };
+  const restore = stubFetch((url, init) => {
+    captured.url = url;
+    captured.headers = new Headers(init?.headers);
+    captured.body = String(init?.body ?? "");
+    return Response.json(
+      {
+        id: "env-9",
+        projectId: "project-1",
+        label: "staging",
+        lifecycle: "active",
+        currentHeadId: null,
+        currentHeadHash: null,
+      },
+      { status: 201 },
+    );
+  });
+  try {
+    const result = await createProjectEnvironment(
+      "http://api.test",
+      "project-1",
+      " staging ",
+      "device-1",
+    );
+    expect(result).toEqual({
+      ok: true,
+      data: { environmentId: "env-9", label: "staging", created: true },
+    });
+    expect(captured.url).toBe(
+      "http://api.test/api/v1/projects/project-1/environments",
+    );
+    expect(JSON.parse(captured.body)).toEqual({ label: "staging" });
+    expect(captured.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(captured.headers.get("X-DotRelay-Device-Id")).toBe("device-1");
+  } finally {
+    restore();
+  }
+});
+
+test("createProjectEnvironment reports an existing label and refusals", async () => {
+  let status = 200;
+  const restore = stubFetch(() =>
+    status === 200
+      ? Response.json(
+          { id: "env-1", projectId: "p", label: "staging" },
+          { status: 200 },
+        )
+      : Response.json({ code: "forbidden" }, { status: 403 }),
+  );
+  try {
+    const existing = await createProjectEnvironment(
+      "http://api.test",
+      "p",
+      "staging",
+    );
+    expect(existing.ok && existing.data.created).toBe(false);
+    status = 403;
+    const refused = await createProjectEnvironment(
+      "http://api.test",
+      "p",
+      "qa",
+    );
+    expect(refused).toEqual({
+      ok: false,
+      message: "You don't have permission to do that on this team.",
+    });
+    const invalid = await createProjectEnvironment(
+      "http://api.test",
+      "p",
+      "1x",
+    );
+    expect(invalid.ok).toBe(false);
+  } finally {
+    restore();
   }
 });

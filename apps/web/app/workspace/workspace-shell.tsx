@@ -175,6 +175,7 @@ import {
   workspaceBoundaryRefreshMs,
 } from "@/lib/workspace-session";
 import { EnvironmentEditor } from "./environment-editor";
+import { NewEnvironmentDialog } from "./new-environment-dialog";
 import {
   GettingStartedGuide,
   GettingStartedResume,
@@ -660,6 +661,13 @@ export const WorkspaceShell = ({
     readonly label: string;
   }> | null>(null);
   const [deviceRevoked, setDeviceRevoked] = useState(false);
+  // An Environment just created from the web, opened once the refreshed
+  // boundary lists it.
+  const [pendingEnvironment, setPendingEnvironment] = useState<Readonly<{
+    readonly teamId: string;
+    readonly projectId: string;
+    readonly environmentId: string;
+  }> | null>(null);
   const [revokingDevice, setRevokingDevice] = useState<string | null>(null);
   const [revokeDeviceError, setRevokeDeviceError] = useState<string | null>(
     null,
@@ -1969,6 +1977,46 @@ export const WorkspaceShell = ({
 
   const openWorkspaceView = (nextView: WorkspaceView) => {
     requestSelection({ teamId, projectId, environmentId, view: nextView });
+  };
+
+  const pendingEnvironmentListed =
+    pendingEnvironment !== null &&
+    displayBoundary.catalog.projects.some(
+      (project) =>
+        project.id === pendingEnvironment.projectId &&
+        project.environments.some(
+          (environment) => environment.id === pendingEnvironment.environmentId,
+        ),
+    );
+  useEffect(() => {
+    if (!pendingEnvironment || !pendingEnvironmentListed) return;
+    setPendingEnvironment(null);
+    requestSelection({ ...pendingEnvironment, view: "environment" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requestSelection is rebuilt each render; this runs once, when the created Environment first appears in the catalog.
+  }, [pendingEnvironment, pendingEnvironmentListed]);
+
+  const newEnvironmentControl = (project: WorkspaceProject) => {
+    const origin = apiOrigin ?? boundary.profile.origin;
+    if (!canAdminister || !origin || protectedPreview) return null;
+    return (
+      <NewEnvironmentDialog
+        apiOrigin={origin}
+        deviceId={browserDeviceId}
+        existingLabels={project.environments.map(
+          (environment) => environment.label,
+        )}
+        onCreated={(created) => {
+          setPendingEnvironment({
+            teamId: project.teamId,
+            projectId: project.id,
+            environmentId: created.environmentId,
+          });
+          reconnectNowRef.current?.();
+        }}
+        projectId={project.id}
+        projectName={projectDisplayName(project)}
+      />
+    );
   };
 
   // Hydrate the location the URL names. Profile and view are validated up
@@ -3307,30 +3355,32 @@ export const WorkspaceShell = ({
                       </p>
                     ) : null}
                   </div>
-                  <Tabs
-                    className="mb-6"
-                    onValueChange={(nextId) => {
-                      if (typeof nextId !== "string") return;
-                      requestSelection({
-                        teamId: selectedTeam?.id ?? null,
-                        projectId: selectedProject.id,
-                        environmentId: nextId,
-                        view: "environment",
-                      });
-                    }}
-                    value={selectedEnvironment.id}
-                  >
-                    <TabsList aria-label="Environments">
-                      {selectedProject.environments.map((environment) => (
-                        <TabsTrigger
-                          key={environment.id}
-                          value={environment.id}
-                        >
-                          {environment.label}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                  </Tabs>
+                  <div className="mb-6 flex flex-wrap items-center gap-3">
+                    <Tabs
+                      onValueChange={(nextId) => {
+                        if (typeof nextId !== "string") return;
+                        requestSelection({
+                          teamId: selectedTeam?.id ?? null,
+                          projectId: selectedProject.id,
+                          environmentId: nextId,
+                          view: "environment",
+                        });
+                      }}
+                      value={selectedEnvironment.id}
+                    >
+                      <TabsList aria-label="Environments">
+                        {selectedProject.environments.map((environment) => (
+                          <TabsTrigger
+                            key={environment.id}
+                            value={environment.id}
+                          >
+                            {environment.label}
+                          </TabsTrigger>
+                        ))}
+                      </TabsList>
+                    </Tabs>
+                    {newEnvironmentControl(selectedProject)}
+                  </div>
                 </section>
               ) : null}
 
@@ -3352,8 +3402,14 @@ export const WorkspaceShell = ({
                       <CardDescription>
                         A project starts without an environment. Run{" "}
                         <InlineCommand value="dotrelay init" /> in this
-                        repository to create its first environment.
+                        repository to create its first environment
+                        {canAdminister ? ", or create one here" : ""}.
                       </CardDescription>
+                      {canAdminister ? (
+                        <CardAction>
+                          {newEnvironmentControl(selectedProject)}
+                        </CardAction>
+                      ) : null}
                     </CardHeader>
                   </Card>
                 </section>

@@ -526,3 +526,72 @@ export const changeEnvironmentLifecycle = async (
   if (!lifecycle) return failure("The server returned a malformed reply.");
   return { ok: true, data: { environmentId, lifecycle } };
 };
+
+// Environment labels the service accepts: a letter, then up to 62 letters,
+// digits, dots, underscores, or hyphens (mirrors the server's validation).
+export const ENVIRONMENT_LABEL_PATTERN = /^[A-Za-z][A-Za-z0-9._-]{0,62}$/;
+
+export const environmentLabelError = (label: string): string | null => {
+  const trimmed = label.trim();
+  if (trimmed === "") return "Name the environment, for example staging.";
+  if (!ENVIRONMENT_LABEL_PATTERN.test(trimmed))
+    return "Start with a letter, then use up to 62 letters, numbers, dots, underscores, or hyphens.";
+  return null;
+};
+
+export type CreatedEnvironment = Readonly<{
+  readonly environmentId: string;
+  readonly label: string;
+  /** False when an active environment with that label already existed. */
+  readonly created: boolean;
+}>;
+
+// Creates an empty Environment in a Project (Owners and Admins). An active
+// Environment with the same label is returned instead of a duplicate.
+export const createProjectEnvironment = async (
+  apiOrigin: string,
+  projectId: string,
+  label: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<CreatedEnvironment>> => {
+  const invalid = environmentLabelError(label);
+  if (invalid) return failure(invalid);
+  let response: Response;
+  try {
+    response = await fetch(
+      `${apiOrigin}/api/v1/projects/${projectId}/environments`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": globalThis.crypto.randomUUID(),
+          ...deviceHeaders(deviceId),
+        },
+        body: JSON.stringify({ label: label.trim() }),
+      },
+    );
+  } catch {
+    return failure(
+      "We couldn't reach the server. Check your connection and try again.",
+    );
+  }
+  const body = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok)
+    return failure(
+      problemMessage(isRecord(body) ? (body.code as unknown) : undefined),
+    );
+  if (!isRecord(body)) return failure("The server returned a malformed reply.");
+  const environmentId = asString(body.id);
+  const createdLabel = asString(body.label);
+  if (!environmentId || !createdLabel)
+    return failure("The server returned a malformed reply.");
+  return {
+    ok: true,
+    data: {
+      environmentId,
+      label: createdLabel,
+      created: response.status === 201,
+    },
+  };
+};
