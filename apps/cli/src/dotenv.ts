@@ -14,7 +14,19 @@ export type ClassifiedDotenvEntry = DotenvEntry &
 
 const variableName = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const escapeHelp = 'only \\\\, \\", \\$, \\`, \\n, \\r and \\t are supported';
+// Escapes that only exist to survive the double quotes are decoded. `\$`
+// is expansion syntax rather than quoting, so it stays in the Value as
+// written: dotenv-expand, Next.js and Bun read it as a literal dollar sign,
+// and writing the Value back emits the same text. Any other backslash
+// sequence is kept literally, as the npm dotenv package does.
+const DECODED_ESCAPES: Readonly<Record<string, string>> = {
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  "\\": "\\",
+  '"': '"',
+  "`": "`",
+};
 
 const readQuotedValue = (
   lines: readonly string[],
@@ -40,31 +52,15 @@ const readQuotedValue = (
       if (ch === quote) return { value: chunks.join(""), line, col };
       if (quote === '"' && ch === "\\") {
         const next = text[col + 1];
-        if (next === undefined)
-          throw new CliInvocationError(
-            `a backslash at the end of line ${line + 1}, column ${col + 1} in the double-quoted dotenv value for ${name} is not a supported escape; ${escapeHelp}`,
-          );
-        if (
-          next !== "n" &&
-          next !== "r" &&
-          next !== "t" &&
-          next !== "\\" &&
-          next !== '"' &&
-          next !== "$" &&
-          next !== "`"
-        )
-          throw new CliInvocationError(
-            `unsupported escape "\\${next}" on line ${line + 1}, column ${col + 1} in the double-quoted dotenv value for ${name}; ${escapeHelp}`,
-          );
-        chunks.push(
-          next === "n"
-            ? "\n"
-            : next === "r"
-              ? "\r"
-              : next === "t"
-                ? "\t"
-                : next,
-        );
+        if (next === undefined) {
+          chunks.push(ch);
+          col += 1;
+          continue;
+        }
+        const decoded = Object.hasOwn(DECODED_ESCAPES, next)
+          ? DECODED_ESCAPES[next]
+          : undefined;
+        chunks.push(decoded ?? `\\${next}`);
         col += 2;
         continue;
       }
@@ -88,7 +84,7 @@ const parseUnquotedValue = (text: string): string => {
   return text.slice(0, valueEnd).trim();
 };
 
-export const parseDotenv = (source: string): readonly DotenvEntry[] => {
+const parseEntries = (source: string): readonly DotenvEntry[] => {
   const rawLines = source.split("\n");
   const crlf = rawLines.map(
     (raw, i) => i < rawLines.length - 1 && raw.endsWith("\r"),
@@ -166,6 +162,23 @@ export const parseDotenv = (source: string): readonly DotenvEntry[] => {
     entries.push(Object.freeze({ name, value }));
   }
   return Object.freeze(entries);
+};
+
+/**
+ * Parses a dotenv file. Errors name `sourcePath` when it is given, so a
+ * malformed line points at the file that holds it.
+ */
+export const parseDotenv = (
+  source: string,
+  sourcePath?: string,
+): readonly DotenvEntry[] => {
+  try {
+    return parseEntries(source);
+  } catch (error) {
+    if (sourcePath !== undefined && error instanceof CliInvocationError)
+      throw new CliInvocationError(`${sourcePath}: ${error.message}`);
+    throw error;
+  }
 };
 
 export const classifyDotenv = (
@@ -260,19 +273,25 @@ export const diffDotenvEntries = (
   return Object.freeze(changes);
 };
 
-// Single quotes are literal for sh and python-dotenv, but Bun's loader still
-// expands `$` inside them, so any value with `$` or a backtick takes the
-// escaped double-quoted form, which Bun, sh and dotenv-expand read literally.
+// A Value is written so the parser above reads it back unchanged and an
+// expander (dotenv-expand, Next.js, Bun, sh) sees the same text it saw in
+// an unquoted or double-quoted source. `$` is therefore never escaped: a
+// `${HOME}` reference stays expandable and a `\$` the source used for a
+// literal dollar stays `\$`. Values with no quote, line break, `$` or
+// backtick use single quotes, which every reader takes literally.
 const serializeValue = (value: string): string => {
   if (!/['\n\r$`]/.test(value)) return `'${value}'`;
-  const escaped = value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("\n", "\\n")
-    .replaceAll("\r", "\\r")
-    .replaceAll("\t", "\\t")
-    .replaceAll('"', '\\"')
-    .replaceAll("$", "\\$")
-    .replaceAll("`", "\\`");
+  let escaped = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value.charAt(index);
+    if (ch === "\\") escaped += value[index + 1] === "$" ? "\\" : "\\\\";
+    else if (ch === "\n") escaped += "\\n";
+    else if (ch === "\r") escaped += "\\r";
+    else if (ch === "\t") escaped += "\\t";
+    else if (ch === '"') escaped += '\\"';
+    else if (ch === "`") escaped += "\\`";
+    else escaped += ch;
+  }
   return `"${escaped}"`;
 };
 
