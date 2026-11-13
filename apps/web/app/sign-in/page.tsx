@@ -1,9 +1,12 @@
 import { Braces } from "lucide-react";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { oauthErrorMessage } from "@/lib/oauth-error";
+import { isSessionActive } from "@/lib/server-session";
 import {
-  resolveApiOrigin,
+  resolveLiveApiOrigin,
   resolveOAuthCallbackUrl,
 } from "@/lib/workspace-boundary";
 import { GitHubSignInButton } from "./github-sign-in-button";
@@ -18,9 +21,22 @@ const SignInPage = async ({
 }: {
   readonly searchParams: Promise<{ readonly error?: string }>;
 }) => {
-  const apiOrigin = resolveApiOrigin() ?? "http://localhost:3001";
+  // Read the request first so the page renders per request, and a missing
+  // production API origin fails here instead of pointing sign-in at a
+  // localhost the visitor doesn't run. Only development (and the explicit
+  // fixture) fall back to the local API.
+  const cookie = (await headers()).get("cookie");
+  const liveApiOrigin = resolveLiveApiOrigin();
+  const apiOrigin = liveApiOrigin ?? "http://localhost:3001";
+  const { error } = await searchParams;
+  // A visitor who is already signed in has nothing to do here.
+  if (
+    error === undefined &&
+    (await isSessionActive({ apiOrigin: liveApiOrigin, cookie }))
+  )
+    redirect("/workspace");
   const callbackUrl = resolveOAuthCallbackUrl();
-  const signInError = oauthErrorMessage((await searchParams).error);
+  const signInError = oauthErrorMessage(error);
 
   return (
     <main className="landing-grid grid min-h-screen place-items-center px-5 py-12">
