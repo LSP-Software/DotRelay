@@ -4,6 +4,7 @@ import {
   createEnvironment,
   createStrictJsonClient,
   createTeam,
+  declineInvitation,
   findProjectByRepository,
   linkProject,
   listTeams,
@@ -708,6 +709,32 @@ describe("strict administration client network behaviour", () => {
     expect(String((error as Error).message)).toContain(
       "wait 2 minutes and retry",
     );
+  });
+
+  test("declines an invitation with an Idempotency-Key and no fields", async () => {
+    const invitationId = "99999999-9999-4999-8999-999999999999";
+    const requests: Request[] = [];
+    const client = createStrictJsonClient(profile, credentials, {
+      networkPolicy: fastPolicy,
+      fetch: async (input, init) => {
+        requests.push(new Request(input as string, init));
+        return Response.json(
+          { invitationId, status: "DECLINED" },
+          { status: 201 },
+        );
+      },
+    });
+    await expect(declineInvitation(client, invitationId)).resolves.toEqual({
+      invitationId,
+      status: "DECLINED",
+    });
+    const [request] = requests;
+    expect(new URL(request?.url ?? "").pathname).toBe(
+      `/api/v1/invitations/${invitationId}/decline`,
+    );
+    expect(request?.method).toBe("POST");
+    expect(request?.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await request?.text()).toBe("{}");
   });
 
   test("does not retry a definitive authentication failure", async () => {

@@ -604,11 +604,17 @@ export const archiveEnvironment = async (
     ),
   );
 
+export type InvitationSummary = TeamSummary &
+  Readonly<{
+    /** The Membership Invitation id, for dotrelay team decline. */
+    readonly invitationId: string;
+  }>;
+
 export type PendingTeamAccess = Readonly<{
   /** Teams whose invitation this User accepted, still waiting for keys. */
   readonly pendingMemberships: readonly TeamSummary[];
   /** Invitations addressed to this User that are not accepted yet. */
-  readonly invitations: readonly TeamSummary[];
+  readonly invitations: readonly InvitationSummary[];
 }>;
 
 const teamEntries = (value: unknown): TeamSummary[] =>
@@ -624,6 +630,56 @@ const teamEntries = (value: unknown): TeamSummary[] =>
       )
     : [];
 
+// An invitation without a well-formed id is dropped: it could not be
+// declined by id anyway, and the Team still shows through the others.
+const invitationEntries = (value: unknown): InvitationSummary[] =>
+  Array.isArray(value)
+    ? value.flatMap((entry): InvitationSummary[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.invitationId !== "string" ||
+          !opaqueId.test(entry.invitationId)
+        )
+          return [];
+        const [team] = teamEntries([entry]);
+        return team
+          ? [
+              Object.freeze({
+                ...team,
+                invitationId: entry.invitationId,
+              }),
+            ]
+          : [];
+      })
+    : [];
+
+// The addressed User turns down an invitation; it needs only a session. The
+// service answers resource_not_found for an invitation addressed to someone
+// else and invitation_expired once it is no longer pending.
+export const declineInvitation = async (
+  client: Pick<StrictJsonClient, "post">,
+  invitationId: string,
+): Promise<Readonly<{ invitationId: string; status: string }>> => {
+  const response = await client.post(
+    `/api/v1/invitations/${encodeURIComponent(requireOpaqueId(invitationId, "invitation id"))}/decline`,
+    {},
+    ["invitationId", "status"],
+    { idempotencyKey: crypto.randomUUID() },
+  );
+  if (
+    response.status !== "DECLINED" ||
+    typeof response.invitationId !== "string" ||
+    response.invitationId.toLowerCase() !== invitationId.toLowerCase()
+  )
+    throw new CliError(
+      "transient",
+      "the server returned an invalid invitation status",
+      {},
+      "response_invalid",
+    );
+  return Object.freeze({ invitationId, status: response.status });
+};
+
 // The Teams this User was invited to or joined but cannot use yet. Neither
 // shows up in the Team or Project lists, which only span active Memberships,
 // so this is how the CLI tells "not linked" apart from "waiting for keys".
@@ -636,7 +692,7 @@ export const listPendingTeamAccess = async (
   ]);
   return Object.freeze({
     pendingMemberships: Object.freeze(teamEntries(response.pendingMemberships)),
-    invitations: Object.freeze(teamEntries(response.invitations)),
+    invitations: Object.freeze(invitationEntries(response.invitations)),
   });
 };
 

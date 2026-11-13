@@ -475,6 +475,16 @@ describe("CLI argument contract", () => {
       "usage: dotrelay team share-keys <github-login-or-user-id>",
     );
     expect(parseArguments(["device", "list"]).subcommand).toBe("list");
+    expect(
+      parseArguments(["team", "decline", "Payments", "--no-input", "--force"])
+        .positionals,
+    ).toEqual(["Payments"]);
+    expect(() => parseArguments(["team", "decline"])).toThrow(
+      "usage: dotrelay team decline <invitation-id-or-team>",
+    );
+    expect(() =>
+      parseArguments(["team", "decline", "Payments", "--team", "t"]),
+    ).toThrow();
   });
 
   test("run takes the command after -- and leaves its flags alone", () => {

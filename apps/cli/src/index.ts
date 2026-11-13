@@ -142,6 +142,7 @@ import {
 } from "./workflow-core";
 import { rotateProjectEpoch } from "./workflow-epoch-rotation";
 import { shareProjectKeys } from "./workflow-share-keys";
+import { declineTeamInvitation } from "./workflow-invitations";
 import { listTeamMembers, trustTeamMember } from "./workflow-team";
 import {
   type ChildProcessRunner,
@@ -1836,10 +1837,13 @@ const execute = async (
       ...(pending?.invitations.length
         ? [
             "",
-            note("Invitations to accept in the DotRelay web app:", "warn"),
+            note(
+              "Invitations to accept in the DotRelay web app, or decline with dotrelay team decline <invitation-id>:",
+              "warn",
+            ),
             ...pending.invitations.map(
-              (team) =>
-                `  ${paint("·", "ghost")}  ${sanitizeCliLine(team.name)}  ${paint(team.id, "faint")}`,
+              (invitation) =>
+                `  ${paint("·", "ghost")}  ${sanitizeCliLine(invitation.name)}  ${paint(`invitation ${invitation.invitationId}`, "faint")}`,
             ),
           ]
         : []),
@@ -1899,7 +1903,9 @@ const execute = async (
           ? await trustTeamMember(options, parsed)
           : parsed.subcommand === "share-keys"
             ? await shareProjectKeys(options, parsed)
-            : await listTeamMembers(options, parsed),
+            : parsed.subcommand === "decline"
+              ? await declineTeamInvitation(options, parsed)
+              : await listTeamMembers(options, parsed),
     };
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {

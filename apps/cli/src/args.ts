@@ -266,6 +266,7 @@ export const USAGE: Record<string, string> = {
   "team members": "dotrelay team members | --fingerprints",
   "team trust": "dotrelay team trust <user-id>",
   "team share-keys": "dotrelay team share-keys <github-login-or-user-id>",
+  "team decline": "dotrelay team decline <invitation-id-or-team>",
   "env list": "dotrelay env list",
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
@@ -398,6 +399,7 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "team members": ["profile", "team", "fingerprints", "noInput", "json"],
   "team trust": ["profile", "team", "noInput", "force", "json"],
   "team share-keys": ["profile", "team", "noInput", "force", "json"],
+  "team decline": ["profile", "noInput", "force", "json"],
   "env list": ["profile", "json"],
   "env use": ["profile", "environment", "json"],
   "env create": ["profile", "json"],
@@ -423,7 +425,7 @@ export const SUBCOMMANDS: Readonly<
     "list",
   ],
   project: ["link", "rotate"],
-  team: ["list", "members", "trust", "share-keys"],
+  team: ["list", "members", "trust", "share-keys", "decline"],
   env: ["list", "use", "create"],
 };
 
@@ -556,7 +558,9 @@ const validateCommand = (parsed: MutableArguments) => {
     device: 0,
     project: 0,
     team:
-      parsed.subcommand === "trust" || parsed.subcommand === "share-keys"
+      parsed.subcommand === "trust" ||
+      parsed.subcommand === "share-keys" ||
+      parsed.subcommand === "decline"
         ? 1
         : 0,
     env:

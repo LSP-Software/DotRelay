@@ -486,6 +486,24 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "dotrelay team share-keys <user-id> --team <team-id>",
     ],
   },
+  "team decline": {
+    about:
+      "Decline a Team invitation addressed to you. Accepting stays in the DotRelay web app.",
+    positional: [
+      "<invitation-id-or-team>  The invitation id from dotrelay team list, or the inviting Team's id or name.",
+    ],
+    options: {
+      noInput: "never prompt; requires --force",
+      force: "confirm declining when --no-input is set",
+    },
+    notes: [
+      "A declined invitation cannot be accepted later; a Team owner or admin has to invite you again.",
+    ],
+    examples: [
+      "dotrelay team decline Platform",
+      "dotrelay team decline <invitation-id> --profile work --no-input --force",
+    ],
+  },
   "team members": {
     about:
       "List the linked Team's Members with the trust state of their account identity: verified (Devices come from a roster signed by the pinned account key), unverified (no signed roster yet), or a blocking key change or rollback.",
@@ -554,7 +572,7 @@ const GROUP_ABOUT: Readonly<Partial<Record<CommandName, string>>> = {
   device:
     "Manage Device enrollment, dual-control handoffs, and account recovery for this machine.",
   project: "Manage the Project linked to this GitHub Repository.",
-  team: "List your Teams and their Members, and share Project keys with a Member.",
+  team: "List your Teams and their Members, share Project keys with a Member, and decline invitations.",
   env: "List, create, and select the worktree Project's Environments.",
 };
 
@@ -790,6 +808,7 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["team members", "List Members and their account fingerprints"],
   ["team trust", "Re-trust a Member whose account key changed"],
   ["team share-keys", "Share the Project keys with a Member"],
+  ["team decline", "Decline a Team invitation addressed to you"],
   ["env list", "List the Project's Environments"],
   ["env use", "Select an Environment by id or label"],
   ["env create", "Create an Environment with a label"],

@@ -918,6 +918,232 @@ describe("status names the repository", () => {
   });
 });
 
+describe("team decline", () => {
+  const paymentsTeamId = "00000000-0000-4000-8000-000000000009";
+  const invitationId = "99999999-9999-4999-8999-999999999999";
+  const invitationRoutes = (
+    decline: (id: string) => Response = (id) =>
+      jsonResponse({ invitationId: id, status: "DECLINED" }, 201),
+    invitations: readonly Record<string, unknown>[] = [
+      {
+        invitationId,
+        teamId: paymentsTeamId,
+        teamName: "Payments",
+        providerSubject: "1",
+        createdAt: "2026-11-01T00:00:00.000Z",
+        expiresAt: "2026-11-15T00:00:00.000Z",
+      },
+    ],
+  ): Route[] => [
+    (request, url) =>
+      request.method === "GET" && url.pathname === "/api/v1/invitations"
+        ? jsonResponse({ invitations, pendingMemberships: [] })
+        : undefined,
+    (request, url) => {
+      const match = /^\/api\/v1\/invitations\/([^/]+)\/decline$/u.exec(
+        url.pathname,
+      );
+      return request.method === "POST" && match?.[1]
+        ? decline(match[1])
+        : undefined;
+    },
+  ];
+  const declinePosts = (requests: readonly Recorded[]) =>
+    requests.filter(
+      (request) =>
+        request.method === "POST" && request.path.endsWith("/decline"),
+    );
+
+  test("declines the invitation named by its Team", async () => {
+    const server = startServer(invitationRoutes());
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "team",
+          "decline",
+          "payments",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        invitationId,
+        teamId: paymentsTeamId,
+        team: "Payments",
+        status: "DECLINED",
+      });
+      expect(declinePosts(server.requests)).toEqual([
+        {
+          method: "POST",
+          path: `/api/v1/invitations/${invitationId}/decline`,
+          body: "{}",
+        },
+      ]);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("requires --force without input and sends nothing", async () => {
+    const server = startServer(invitationRoutes());
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        ["team", "decline", invitationId, "--profile", "relay", "--no-input"],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("--force");
+      expect(declinePosts(server.requests)).toHaveLength(0);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("asks before declining interactively", async () => {
+    const server = startServer(invitationRoutes());
+    const state = await seedState(server.pin);
+    const questions: string[] = [];
+    try {
+      const result = await run(["team", "decline", invitationId], {
+        ...state.runtime,
+        confirm: async (question) => {
+          questions.push(question);
+          return false;
+        },
+      });
+      expect(result.exitCode).toBe(2);
+      expect(questions).toEqual([
+        "Decline the invitation to Payments? A Team owner or admin would have to invite you again.",
+      ]);
+      expect(declinePosts(server.requests)).toHaveLength(0);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("reports an invitation that is no longer pending", async () => {
+    const server = startServer(
+      invitationRoutes(() => problemResponse("invitation_expired")),
+    );
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "team",
+          "decline",
+          invitationId,
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(4);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        code: "invitation_expired",
+        detail: expect.stringContaining("can no longer be declined"),
+      });
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("sends an unlisted invitation id and reports one addressed to someone else", async () => {
+    const unlisted = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const server = startServer(
+      invitationRoutes(() => problemResponse("resource_not_found")),
+    );
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "team",
+          "decline",
+          unlisted,
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("No pending invitation with that id");
+      expect(declinePosts(server.requests).map((r) => r.path)).toEqual([
+        `/api/v1/invitations/${unlisted}/decline`,
+      ]);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("asks for the invitation id when a Team name matches several", async () => {
+    const second = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const server = startServer(
+      invitationRoutes(undefined, [
+        { invitationId, teamId: paymentsTeamId, teamName: "Payments" },
+        { invitationId: second, teamId, teamName: "Payments" },
+      ]),
+    );
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "team",
+          "decline",
+          "Payments",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(invitationId);
+      expect(result.stderr).toContain(second);
+      expect(declinePosts(server.requests)).toHaveLength(0);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("team list shows each invitation's id and how to decline it", async () => {
+    const server = startServer(invitationRoutes());
+    const state = await seedState(server.pin);
+    try {
+      const human = await run(["team", "list"], state.runtime);
+      expect(human.exitCode).toBe(0);
+      expect(human.stdout).toContain("Payments");
+      expect(human.stdout).toContain(invitationId);
+      expect(human.stdout).toContain("dotrelay team decline");
+      const result = await run(["team", "list", "--json"], state.runtime);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        invitations: [{ id: paymentsTeamId, name: "Payments", invitationId }],
+      });
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+});
+
 describe("status reports an owed Project key rotation", () => {
   test("names the removals and the rotate command without changing the next action", async () => {
     const rotationOwed = {
