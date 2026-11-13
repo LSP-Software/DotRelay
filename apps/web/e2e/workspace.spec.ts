@@ -631,7 +631,7 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
 
   await page.getByRole("button", { name: "Stage rollback" }).click();
   await expect(
-    page.getByText(/Values from rev_0183 are in your draft/),
+    page.getByText(/Values from revision rev_0183 are in your draft/),
   ).toBeVisible();
 });
 
