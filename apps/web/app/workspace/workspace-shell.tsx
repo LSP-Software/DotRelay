@@ -2677,6 +2677,19 @@ export const WorkspaceShell = ({
     selectedEnvironment !== null;
   const selectedEntry: RetainedEditorContext | null =
     currentIdentity.environmentId ? selectedEditorContext() : null;
+  // Revision authors are named from the selected Team's membership record,
+  // which the Team view already loads; other Teams' editors get no names.
+  const memberNames = new Map(
+    (membershipState?.memberships ?? []).map(
+      (member) => [member.userId, memberLabel(member)] as const,
+    ),
+  );
+  const environmentLabelFor = (identity: EnvironmentContextIdentity) =>
+    displayBoundary.catalog.projects
+      .find((project) => project.id === identity.projectId)
+      ?.environments.find(
+        (environment) => environment.id === identity.environmentId,
+      )?.label;
   const editorEntries: readonly RetainedEditorContext[] = selectedEntry
     ? [
         selectedEntry,
@@ -4006,7 +4019,13 @@ export const WorkspaceShell = ({
                             : entry.available
                         }
                         contextIdentity={entry.identity}
+                        environmentLabel={environmentLabelFor(entry.identity)}
                         loading={isCurrent && contextStale}
+                        memberNames={
+                          entry.identity.teamId === selectedTeam?.id
+                            ? memberNames
+                            : undefined
+                        }
                         role={teamRoleFor(entry.identity.teamId)}
                         onDraftDirtyChange={(dirty, changedVariableNames) => {
                           draftStateRef.current.set(entryKey, {

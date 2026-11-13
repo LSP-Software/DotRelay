@@ -1,4 +1,10 @@
 import { expect, test } from "bun:test";
+import { createPublicationArtifacts } from "@dotrelay/client";
+import {
+  generateEncryptionKeyPair,
+  generateSigningKeyPair,
+  sha384,
+} from "@dotrelay/contracts";
 import {
   advanceDraftBase,
   applyConflictResolution,
@@ -751,6 +757,7 @@ const revision = (
   authoredAtMs: null,
   rollbackTargetId: null,
   authorUserId: null,
+  changedVariableIds: null,
   ...overrides,
 });
 
@@ -795,6 +802,77 @@ test("a wire Revision keeps its verified context and an unavailable author", () 
       projectEpoch: 1n,
       authoredAtMs: 1750000000001n,
       rollbackTargetId: "rev_0181",
+    }).authorUserId,
+  ).toBeNull();
+});
+
+test("a verified wire Revision reports the signed author and changed lanes", async () => {
+  const recipient = await generateEncryptionKeyPair();
+  const signing = await generateSigningKeyPair();
+  const authorUserId = "55555555-5555-4555-8555-555555555555";
+  const variableId = "77777777-7777-4777-8777-777777777777";
+  const artifacts = await createPublicationArtifacts(
+    [
+      {
+        id: variableId,
+        name: "DATABASE_URL",
+        description: "",
+        ownership: "SHARED_VALUE",
+        value: "postgres://x",
+        required: true,
+        hasDraftChange: true,
+      },
+    ],
+    {
+      serverProfileId: "11111111-1111-4111-8111-111111111111",
+      teamId: "22222222-2222-4222-8222-222222222222",
+      projectId: "33333333-3333-4333-8333-333333333333",
+      environmentId: "44444444-4444-4444-8444-444444444444",
+      actorUserId: authorUserId,
+      actorDeviceId: "66666666-6666-4666-8666-666666666666",
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: recipient.publicKey,
+      userDefinedValueRecipientPublicKey: recipient.publicKey,
+      signingPrivateKey: signing.privateKey,
+      mutation: "GENESIS",
+    },
+  );
+  const revisionObject = artifacts.stagedObjects.find(
+    (object) => object.objectId === artifacts.request.revision.protocolObjectId,
+  );
+  if (!revisionObject) throw new Error("revision object is missing");
+  const objects = await Promise.all(
+    artifacts.stagedObjects.map(async (object) => ({
+      objectId: object.objectId,
+      canonicalBytes: object.bytes,
+      digest: await sha384(object.bytes),
+    })),
+  );
+  const verified = verifiedRevisionFromWire({
+    id: artifacts.request.revision.id,
+    parentId: null,
+    mutation: 1,
+    projectEpoch: 1n,
+    authoredAtMs: 1750000000000n,
+    rollbackTargetId: null,
+    digest: await sha384(revisionObject.bytes),
+    objects,
+  });
+  expect(verified.authorUserId).toBe(authorUserId);
+  expect(verified.changedVariableIds).toEqual([variableId]);
+  // Without its revision object the author stays honestly unavailable.
+  expect(
+    verifiedRevisionFromWire({
+      id: "rev",
+      parentId: null,
+      mutation: 1,
+      projectEpoch: 1n,
+      authoredAtMs: 1n,
+      rollbackTargetId: null,
+      digest: new Uint8Array(48),
+      objects,
     }).authorUserId,
   ).toBeNull();
 });

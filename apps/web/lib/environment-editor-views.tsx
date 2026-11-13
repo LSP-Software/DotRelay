@@ -3,8 +3,8 @@ import type {
   RevisionSigningTrust,
   SyncPageWire,
 } from "@dotrelay/client";
-import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { Check, Copy, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -100,15 +100,39 @@ export const revisionTimeLabel = (authoredAtMs: number | null): string =>
         timeStyle: "short",
       });
 
+// Display names of the Team's members by User id, from the membership
+// record the workspace already loaded.
+export type MemberNames = ReadonlyMap<string, string>;
+
 export const revisionAuthorLabel = (
   revision: VerifiedRevision,
   actorUserId: string | undefined,
-): string =>
-  revision.authorUserId !== null &&
-  actorUserId !== undefined &&
-  revision.authorUserId === actorUserId
-    ? "You"
-    : "Author unavailable";
+  memberNames: MemberNames = new Map(),
+): string => {
+  if (revision.authorUserId === null) return "Author unavailable";
+  if (actorUserId !== undefined && revision.authorUserId === actorUserId)
+    return "You";
+  return memberNames.get(revision.authorUserId) ?? "Unknown member";
+};
+
+// "Changed A, B and 3 more", naming Variables by their current names. Lanes
+// whose Variable is not in the current list are counted, not named.
+export const revisionChangesLabel = (
+  revision: VerifiedRevision,
+  variableNames: ReadonlyMap<string, string>,
+  shown = 3,
+): string | null => {
+  const ids = revision.changedVariableIds;
+  if (ids === null || ids.length === 0) return null;
+  const names = ids
+    .map((id) => variableNames.get(id))
+    .filter((name): name is string => name !== undefined);
+  const listed = names.slice(0, shown);
+  const rest = ids.length - listed.length;
+  if (listed.length === 0)
+    return `Changed ${ids.length} variable${ids.length === 1 ? "" : "s"}`;
+  return `Changed ${listed.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}`;
+};
 
 export const verifiedRevisionsFromPage = (
   page: SyncPageWire,
@@ -118,15 +142,22 @@ export const verifiedRevisionsFromPage = (
 export const RevisionIdentity = ({
   revision,
   actorUserId,
+  memberNames,
+  variableNames,
   idClassName = "font-mono text-sm",
   lineSuffix = null,
 }: Readonly<{
   readonly revision: VerifiedRevision;
   readonly actorUserId: string | undefined;
+  readonly memberNames?: MemberNames | undefined;
+  readonly variableNames?: ReadonlyMap<string, string> | undefined;
   readonly idClassName?: string;
   readonly lineSuffix?: ReactNode;
 }>) => {
   const mutationLabel = revisionMutationLabel(revision.mutation);
+  const changes = variableNames
+    ? revisionChangesLabel(revision, variableNames)
+    : null;
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -142,9 +173,14 @@ export const RevisionIdentity = ({
       </div>
       <p className="text-xs text-muted-foreground">
         <span>{revisionTimeLabel(revision.authoredAtMs)}</span> ·{" "}
-        <span>{revisionAuthorLabel(revision, actorUserId)}</span>
+        <span>{revisionAuthorLabel(revision, actorUserId, memberNames)}</span>
         {lineSuffix}
       </p>
+      {changes ? (
+        <p className="break-all font-mono text-[11px] text-muted-foreground">
+          {changes}
+        </p>
+      ) : null}
     </>
   );
 };
@@ -460,6 +496,55 @@ export const ConflictLane = ({
   );
 };
 
+// Copies a readable value without rendering it: the value goes straight to
+// the clipboard, and the button confirms in place for a moment.
+const CopyValueButton = ({
+  name,
+  value,
+  disabled,
+}: Readonly<{
+  readonly name: string;
+  readonly value: string;
+  readonly disabled: boolean;
+}>) => {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => {
+    if (state === "idle") return;
+    const timeout = window.setTimeout(() => setState("idle"), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [state]);
+  return (
+    <>
+      <Button
+        aria-label={`Copy ${name}`}
+        disabled={disabled}
+        onClick={() => {
+          void navigator.clipboard
+            .writeText(value)
+            .then(() => setState("copied"))
+            .catch(() => setState("failed"));
+        }}
+        size="icon-sm"
+        title={state === "failed" ? "Couldn't copy" : `Copy ${name}`}
+        variant="ghost"
+      >
+        {state === "copied" ? (
+          <Check aria-hidden="true" className="text-primary" />
+        ) : (
+          <Copy aria-hidden="true" />
+        )}
+      </Button>
+      <span aria-live="polite" className="sr-only">
+        {state === "copied"
+          ? `Copied ${name}`
+          : state === "failed"
+            ? `Couldn't copy ${name}`
+            : ""}
+      </span>
+    </>
+  );
+};
+
 export const VariableRow = ({
   variable,
   revealed,
@@ -505,10 +590,7 @@ export const VariableRow = ({
               {ownershipLabel(variable.ownership)}
             </span>
             {readOnlyDisclosure ? (
-              <span
-                className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
-                title={readOnlyDisclosure}
-              >
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
                 Read-only
               </span>
             ) : null}
@@ -521,6 +603,14 @@ export const VariableRow = ({
           {variable.description ? (
             <p className="break-words text-xs leading-5 text-muted-foreground/80">
               {variable.description}
+            </p>
+          ) : null}
+          {readOnlyDisclosure ? (
+            <p
+              className="break-words text-[11px] leading-4 text-muted-foreground"
+              id={`read-only-${variable.id}`}
+            >
+              {readOnlyDisclosure}
             </p>
           ) : null}
         </div>
@@ -547,15 +637,18 @@ export const VariableRow = ({
               {variable.name} value
             </Label>
             <Input
-              aria-readonly={!canEdit}
+              aria-describedby={
+                readOnlyDisclosure ? `read-only-${variable.id}` : undefined
+              }
               autoCapitalize="off"
               autoComplete="new-password"
               autoCorrect="off"
-              className="font-mono"
+              className="font-mono read-only:bg-transparent"
               data-1p-ignore
               data-lpignore="true"
-              disabled={editingDisabled || !canEdit}
+              disabled={editingDisabled}
               id={`value-${variable.id}`}
+              readOnly={!canEdit}
               onChange={(event) => onValueChange(event.target.value)}
               placeholder={variable.value === null ? "Not set" : "Empty value"}
               spellCheck={false}
@@ -580,6 +673,13 @@ export const VariableRow = ({
                 <Eye aria-hidden="true" />
               )}
             </Button>
+            {variable.value !== null ? (
+              <CopyValueButton
+                disabled={editingDisabled}
+                name={variable.name}
+                value={variable.value}
+              />
+            ) : null}
             {!variable.required && variable.value !== null ? (
               <Button
                 disabled={editingDisabled || !canEdit}

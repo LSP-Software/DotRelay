@@ -17,14 +17,18 @@ import {
 } from "@dotrelay/client";
 import {
   Check,
+  Download,
   Eye,
   EyeOff,
+  FileUp,
   GitBranch,
   List,
   LockKeyhole,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
+  Search,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
@@ -50,6 +54,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { serializeDotenv } from "@/lib/dotenv";
+import { applyDotenvImport } from "@/lib/dotenv-import";
 import {
   type EnvironmentContextIdentity,
   environmentContextKey,
@@ -61,6 +68,7 @@ import {
   ConflictLane,
   displayRevisionId,
   headFromContext,
+  type MemberNames,
   nextVariableId,
   RevisionIdentity,
   revisionNumber,
@@ -69,6 +77,12 @@ import {
   VariableRow,
   verifiedRevisionsFromPage,
 } from "@/lib/environment-editor-views";
+import {
+  DownloadDotenvDialog,
+  dotenvFileName,
+  downloadTextFile,
+  ImportDotenvDialog,
+} from "@/lib/environment-editor-tools";
 import {
   advanceDraftBase,
   applyConflictResolution,
@@ -89,6 +103,7 @@ import {
   type EnvironmentVariable,
   loadRollbackHistory,
   locallyPublishedRevision,
+  mergeDraftVariablesOverRemote,
   mergeVerifiedHistory,
   prepareEncryptedPublication,
   publicationMutationForHead,
@@ -107,6 +122,7 @@ import {
   validateVariableDraft,
   variableHasDraftChange,
 } from "@/lib/environment-workflow";
+import { publishFailureMessage } from "@/lib/publish-errors";
 import type { MembershipRole } from "@/lib/workspace-boundary";
 
 type EnvironmentEditorProps = Readonly<{
@@ -115,6 +131,10 @@ type EnvironmentEditorProps = Readonly<{
   readonly loading?: boolean | undefined;
   readonly contextIdentity: EnvironmentContextIdentity;
   readonly role: MembershipRole;
+  /** The environment's label, used to name a downloaded .env file. */
+  readonly environmentLabel?: string | undefined;
+  /** Team members' display names by User id, for revision authors. */
+  readonly memberNames?: MemberNames | undefined;
   readonly onDraftDirtyChange?: (
     dirty: boolean,
     changedVariableNames: readonly string[],
@@ -185,6 +205,8 @@ export const EnvironmentEditor = ({
   loading,
   contextIdentity,
   role,
+  environmentLabel,
+  memberNames,
   onDraftDirtyChange,
   setupAction,
   setupCommand,
@@ -220,6 +242,9 @@ export const EnvironmentEditor = ({
   const [addDraft, setAddDraft] =
     useState<AddVariableState>(emptyVariableDraft);
   const [addError, setAddError] = useState<string | null>(null);
+  const [nameFilter, setNameFilter] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -423,6 +448,14 @@ export const EnvironmentEditor = ({
     setLoadPhase("loading");
     setLoadAttempt((attempt) => attempt + 1);
   };
+  // Re-reads the verified head on demand. The read rebases the draft onto
+  // it, so unpublished edits are kept and a teammate's change to a drafted
+  // Variable comes back as a conflict instead of being overwritten.
+  const refreshRead = () => {
+    if (loadPhase !== "ready" || publishing) return;
+    setPublishMessage(null);
+    setLoadAttempt((attempt) => attempt + 1);
+  };
   const currentScopeKeyRef = useRef(environmentContextKey(contextIdentity));
   useEffect(() => {
     currentScopeKeyRef.current = environmentContextKey(contextIdentity);
@@ -475,6 +508,8 @@ export const EnvironmentEditor = ({
   useEffect(() => {
     if (active !== false) return;
     setAddOpen(false);
+    setImportOpen(false);
+    setDownloadOpen(false);
     setReviewOpen(false);
     setReviewValuesRevealed(false);
     resetRollbackState();
@@ -690,7 +725,7 @@ export const EnvironmentEditor = ({
         const recovered = await publishSession.transport.recoverPublication?.();
         if (recovered) {
           setPublishMessage(
-            `Original publication confirmed as ${String(recovered.revisionId)}. Refresh to load it before making further changes.`,
+            `Your earlier publication went through as revision ${displayRevisionId(String(recovered.revisionId))}. Loading it now.`,
           );
           setLoadAttempt((attempt) => attempt + 1);
           return;
@@ -789,6 +824,9 @@ export const EnvironmentEditor = ({
                 rollbackTargetId:
                   artifacts.request.revision.rollbackTargetId ?? null,
                 authorUserId: context.actorUserId,
+                changedVariableIds: publishVariables
+                  .filter((variable) => variable.hasDraftChange)
+                  .map((variable) => variable.id),
               }),
             ]),
           );
@@ -802,7 +840,9 @@ export const EnvironmentEditor = ({
         setRollbackMutationTarget(null);
         clearConflictState();
         setReviewOpen(false);
-        setPublishMessage(`Published as ${artifacts.request.revision.id}.`);
+        setPublishMessage(
+          `Published as revision ${displayRevisionId(artifacts.request.revision.id)}.`,
+        );
         return;
       }
       await prepareEncryptedPublication(publishVariables);
@@ -842,7 +882,9 @@ export const EnvironmentEditor = ({
         error.problem.code === "stale_head"
       ) {
         if (scopeLost()) {
-          setPublishMessage("Publish was rejected. Refresh and try again.");
+          setPublishMessage(
+            "Someone else updated this environment first, so nothing was published. Your draft is kept. Open the environment again and try again.",
+          );
           return;
         }
         try {
@@ -903,6 +945,20 @@ export const EnvironmentEditor = ({
             hash: page.currentHeadHash,
           });
           setHeadRevision(page.currentHeadId);
+          // Without a conflict, bring the teammate's changes to the other
+          // Variables into view now, so the editor never shows (or later
+          // republishes over) values that are already stale.
+          if (
+            decodedVariables &&
+            conflictingVariableIds.length === 0 &&
+            page.nextCursor === null
+          )
+            setVariables([
+              ...mergeDraftVariablesOverRemote(
+                variablesRef.current,
+                decodedVariables,
+              ),
+            ]);
           setConflictLaneIds(new Set(conflictingVariableIds));
           setConflictChoices(new Map());
           setConflictValuesRevealed(false);
@@ -917,12 +973,16 @@ export const EnvironmentEditor = ({
           );
         } catch {
           setPublishMessage(
-            "Publish stopped because someone else updated this environment first. Refresh and try again.",
+            "Someone else updated this environment first, and their changes couldn't be loaded. Your draft is kept. Use Refresh to load them, then try again.",
           );
         }
         return;
       }
-      setPublishMessage("Publish was rejected. Refresh and try again.");
+      setPublishMessage(
+        publishFailureMessage(error, {
+          online: typeof navigator === "undefined" || navigator.onLine,
+        }),
+      );
     } finally {
       setPublishing(false);
     }
@@ -1014,8 +1074,55 @@ export const EnvironmentEditor = ({
     setRollbackTarget(null);
     setRollbackMutationTarget(rollbackTarget);
     setPublishMessage(
-      `Values from ${rollbackTarget} are in your draft. Review and publish to save the rollback as a new revision.`,
+      `Values from revision ${displayRevisionId(rollbackTarget)} are in your draft. Review and publish to save the rollback as a new revision.`,
     );
+  };
+
+  const normalizedFilter = nameFilter.trim().toLowerCase();
+  const visibleVariables =
+    normalizedFilter === ""
+      ? variables
+      : variables.filter((variable) =>
+          variable.name.toLowerCase().includes(normalizedFilter),
+        );
+  const variableNames = new Map<string, string>([
+    ...remoteVariables.map((variable) => [variable.id, variable.name] as const),
+    ...variables.map((variable) => [variable.id, variable.name] as const),
+  ]);
+  const downloadableEntries = remoteVariables.flatMap((variable) =>
+    !variable.tombstone && variable.value !== null
+      ? [{ name: variable.name, value: variable.value }]
+      : [],
+  );
+  const unsetDownloadCount = remoteVariables.filter(
+    (variable) => !variable.tombstone && variable.value === null,
+  ).length;
+  const fileName = dotenvFileName(environmentLabel);
+  const stageImport = (
+    ...[plan, ownership]: Parameters<
+      Parameters<typeof ImportDotenvDialog>[0]["onStage"]
+    >
+  ) => {
+    if (loadPhase !== "ready") return;
+    setPublishMessage(null);
+    setVariables((current) =>
+      applyDotenvImport(plan, current, {
+        ownership,
+        actorUserId,
+        baselineFor,
+        nextId: nextVariableId,
+      }),
+    );
+    const staged = plan.filter(
+      (action) => action.kind === "add" || action.kind === "update",
+    ).length;
+    setPublishMessage(
+      `${staged} variable${staged === 1 ? "" : "s"} from the import ${staged === 1 ? "is" : "are"} in your draft. Review and save to publish.`,
+    );
+  };
+  const downloadDotenv = () => {
+    downloadTextFile(fileName, serializeDotenv(downloadableEntries));
+    setDownloadOpen(false);
   };
 
   if (!available) {
@@ -1207,6 +1314,20 @@ export const EnvironmentEditor = ({
               >
                 <RotateCcw aria-hidden="true" /> Retry reading
               </Button>
+            ) : session ? (
+              <Button
+                disabled={loadPhase !== "ready" || publishing}
+                onClick={refreshRead}
+                size="sm"
+                title="Load the latest published values. Your draft is kept."
+                variant="ghost"
+              >
+                <RefreshCw
+                  aria-hidden="true"
+                  className={loadPhase === "loading" ? "animate-spin" : ""}
+                />{" "}
+                Refresh
+              </Button>
             ) : null}
           </CardAction>
           {!canChangeDefinitions ? (
@@ -1219,6 +1340,46 @@ export const EnvironmentEditor = ({
           ) : null}
         </CardHeader>
         <CardContent className="px-0">
+          {loadPhase !== "failed" ? (
+            <div className="flex flex-col gap-2 border-b px-4 pb-3 sm:flex-row sm:items-center">
+              {variables.length > 0 ? (
+                <div className="relative sm:max-w-xs sm:flex-1">
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    aria-label="Filter variables by name"
+                    className="h-8 pl-8"
+                    onChange={(event) => setNameFilter(event.target.value)}
+                    placeholder="Filter by name"
+                    type="search"
+                    value={nameFilter}
+                  />
+                </div>
+              ) : null}
+              <div className="flex flex-wrap gap-2 sm:ml-auto">
+                <Button
+                  disabled={loadPhase !== "ready"}
+                  onClick={() => setImportOpen(true)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  <FileUp aria-hidden="true" /> Import .env
+                </Button>
+                <Button
+                  disabled={
+                    loadPhase !== "ready" || downloadableEntries.length === 0
+                  }
+                  onClick={() => setDownloadOpen(true)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  <Download aria-hidden="true" /> Download .env
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {variables.length === 0 ? (
             loadPhase === "loading" ? (
               <p
@@ -1243,7 +1404,15 @@ export const EnvironmentEditor = ({
             )
           ) : (
             <ul className="divide-y divide-border">
-              {variables.map((variable) => (
+              {visibleVariables.length === 0 ? (
+                <li
+                  className="px-4 py-6 text-sm text-muted-foreground"
+                  role="status"
+                >
+                  No variables match “{nameFilter.trim()}”.
+                </li>
+              ) : null}
+              {visibleVariables.map((variable) => (
                 <VariableRow
                   canDelete={canChangeDefinitions}
                   canEdit={canActorChangeVariableValue(actor, variable)}
@@ -1300,6 +1469,8 @@ export const EnvironmentEditor = ({
                 <div className="min-w-0">
                   <RevisionIdentity
                     actorUserId={session?.context.actorUserId}
+                    memberNames={memberNames}
+                    variableNames={variableNames}
                     lineSuffix={
                       <>
                         {rollbackTargetId !== null
@@ -1330,6 +1501,24 @@ export const EnvironmentEditor = ({
           })}
         </CardContent>
       </Card>
+
+      <ImportDotenvDialog
+        actor={actor}
+        onOpenChange={setImportOpen}
+        onStage={stageImport}
+        open={importOpen}
+        variables={variables}
+      />
+
+      <DownloadDotenvDialog
+        fileName={fileName}
+        hasDraft={hasDirtyDraft}
+        onDownload={downloadDotenv}
+        onOpenChange={setDownloadOpen}
+        open={downloadOpen}
+        unsetCount={unsetDownloadCount}
+        valueCount={downloadableEntries.length}
+      />
 
       <AddVariableDialog
         draft={addDraft}
@@ -1412,7 +1601,9 @@ export const EnvironmentEditor = ({
               <RevisionIdentity
                 actorUserId={session?.context.actorUserId}
                 idClassName="font-mono text-sm font-medium"
+                memberNames={memberNames}
                 revision={rollbackTargetEntry}
+                variableNames={variableNames}
               />
               <p className="text-xs text-muted-foreground">
                 Staging puts the selected values in your draft. Review and

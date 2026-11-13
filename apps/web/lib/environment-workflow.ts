@@ -1,4 +1,5 @@
 import {
+  changedVariableIdsFromRevision,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   type PublicationMutationKind,
@@ -8,6 +9,7 @@ import {
   sign,
   validatePublicationVariables,
 } from "@dotrelay/client";
+import { bytesToUuid, parseProtocolObject } from "@dotrelay/contracts";
 import type { MembershipRole } from "./workspace-boundary";
 
 export { type InlineValueHunk, splitInlineValueDiff } from "@dotrelay/client";
@@ -658,6 +660,8 @@ export type VerifiedRevision = Readonly<{
   readonly authoredAtMs: number | null;
   readonly rollbackTargetId: string | null;
   readonly authorUserId: string | null;
+  /** Variables whose lanes this Revision changed; null when unknown. */
+  readonly changedVariableIds: readonly string[] | null;
 }>;
 
 const REVISION_MUTATION_LABELS: Readonly<Record<number, string>> =
@@ -691,7 +695,44 @@ export const bareVerifiedRevision = (id: string): VerifiedRevision =>
     authoredAtMs: null,
     rollbackTargetId: null,
     authorUserId: null,
+    changedVariableIds: null,
   });
+
+const bytesMatch = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
+
+// The author and changed lanes live in the signed Revision object, not the
+// wire record. Only call this on a page verifySyncPage accepted: the
+// signature covers both fields there, so they are what the signer wrote.
+const signedRevisionDetails = (
+  revision: Partial<Pick<SyncRevisionWire, "digest" | "objects">>,
+): Readonly<{
+  readonly authorUserId: string | null;
+  readonly changedVariableIds: readonly string[] | null;
+}> => {
+  const { digest, objects } = revision;
+  if (!digest || !objects)
+    return { authorUserId: null, changedVariableIds: null };
+  try {
+    const object = objects.find((candidate) =>
+      bytesMatch(candidate.digest, digest),
+    );
+    if (!object) return { authorUserId: null, changedVariableIds: null };
+    const author = parseProtocolObject(object.canonicalBytes).get(22);
+    return {
+      authorUserId:
+        author instanceof Uint8Array && author.length === 16
+          ? bytesToUuid(author)
+          : null,
+      changedVariableIds: [
+        ...changedVariableIdsFromRevision(revision as SyncRevisionWire),
+      ],
+    };
+  } catch {
+    return { authorUserId: null, changedVariableIds: null };
+  }
+};
 
 export const verifiedRevisionFromWire = (
   revision: Pick<
@@ -702,7 +743,8 @@ export const verifiedRevisionFromWire = (
     | "projectEpoch"
     | "authoredAtMs"
     | "rollbackTargetId"
-  >,
+  > &
+    Partial<Pick<SyncRevisionWire, "digest" | "objects">>,
 ): VerifiedRevision =>
   Object.freeze({
     id: revision.id,
@@ -711,9 +753,9 @@ export const verifiedRevisionFromWire = (
     projectEpoch: Number(revision.projectEpoch),
     authoredAtMs: Number(revision.authoredAtMs),
     rollbackTargetId: revision.rollbackTargetId,
-    // The sync wire record carries no author field, so Revisions received
-    // over sync report an unavailable author rather than guessing one.
-    authorUserId: null,
+    // A bare wire record carries no author; one with its signed objects
+    // reports the author and changed lanes the signed Revision names.
+    ...signedRevisionDetails(revision),
   });
 
 export const locallyPublishedRevision = (input: {
@@ -724,6 +766,7 @@ export const locallyPublishedRevision = (input: {
   readonly authoredAtMs: number;
   readonly rollbackTargetId?: string | null;
   readonly authorUserId: string;
+  readonly changedVariableIds?: readonly string[] | null;
 }): VerifiedRevision =>
   Object.freeze({
     id: input.id,
@@ -733,6 +776,7 @@ export const locallyPublishedRevision = (input: {
     authoredAtMs: input.authoredAtMs,
     rollbackTargetId: input.rollbackTargetId ?? null,
     authorUserId: input.authorUserId,
+    changedVariableIds: input.changedVariableIds ?? null,
   });
 
 export const mergeVerifiedHistory = (

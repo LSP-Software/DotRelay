@@ -268,13 +268,29 @@ test("a Member reads every Value but edits only the Values they provided or own"
 
   const otherRow = editor.getByTestId("environment-variable-OTHER_SHARED");
   const tokenRow = editor.getByTestId("environment-variable-MY_TOKEN");
-  await expect(editor.getByLabel("OTHER_SHARED Value")).toBeDisabled();
+  // A read-only value is a read-only input, not a disabled one, so it can
+  // still be focused, selected, and copied; the reason is on screen and
+  // announced with the field.
+  const otherValue = editor.getByLabel("OTHER_SHARED Value");
+  await expect(otherValue).toBeEnabled();
+  await expect(otherValue).not.toBeEditable();
   await expect(otherRow.getByText("Read-only", { exact: true })).toBeVisible();
-  await otherRow.getByRole("button", { name: "Reveal OTHER_SHARED" }).click();
-  await expect(editor.getByLabel("OTHER_SHARED Value")).toHaveAttribute(
-    "type",
-    "text",
+  await expect(
+    otherRow.getByText(
+      "Only the person who provided it, or a team admin, can change it.",
+    ),
+  ).toBeVisible();
+  await expect(otherValue).toHaveAccessibleDescription(
+    "Only the person who provided it, or a team admin, can change it.",
   );
+  await otherRow.getByRole("button", { name: "Reveal OTHER_SHARED" }).click();
+  await expect(otherValue).toHaveAttribute("type", "text");
+  await expect(otherValue).toHaveValue("v3");
+  // Copy puts the value on the clipboard and confirms in place.
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await otherRow.getByRole("button", { name: "Copy OTHER_SHARED" }).click();
+  await expect(otherRow.getByText("Copied OTHER_SHARED")).toBeAttached();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("v3");
   await expect(editor.getByLabel("MINE_SHARED Value")).toBeEnabled();
   await expect(editor.getByLabel("MY_TOKEN Value")).toBeEnabled();
   await expect(
@@ -355,7 +371,7 @@ test("demoting to Member mid-draft removes the Values the new role cannot publis
   });
   const otherRow = editor.getByTestId("environment-variable-OTHER_SHARED");
   const tokenRow = editor.getByTestId("environment-variable-MY_TOKEN");
-  await expect(editor.getByLabel("OTHER_SHARED Value")).toBeDisabled();
+  await expect(editor.getByLabel("OTHER_SHARED Value")).not.toBeEditable();
   await expect(otherRow.getByText("Read-only", { exact: true })).toBeVisible();
   await expect(otherRow).not.toContainText("Draft change");
   await expect(tokenRow).toContainText("Draft change");
@@ -407,4 +423,60 @@ test("an Owner edits every Value, adds Variables, and may roll back any Value", 
   ).toBeVisible();
   await expect(rollbackDialog.getByRole("checkbox")).toBeEnabled();
   await rollbackDialog.getByRole("button", { name: "Cancel" }).click();
+});
+
+test("history names each revision's author from the Team's members", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await installRoutes(page);
+  await page.route("**/api/v1/teams/*/memberships", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      json: {
+        memberships: [
+          {
+            membershipId: "mem-self",
+            userId: fixtureIds.actorUserId,
+            name: "Ari Stone",
+            image: null,
+            githubSubject: "18473192",
+            role: "OWNER",
+            lifecycle: "ACTIVE",
+          },
+          {
+            membershipId: "mem-other",
+            userId: OTHER_USER_ID,
+            name: "Olive Other",
+            image: null,
+            githubSubject: "200707",
+            role: "MEMBER",
+            lifecycle: "ACTIVE",
+          },
+        ],
+        invitations: [],
+      },
+    });
+  });
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await openFirstProject(page);
+  await enrollBrowserAndReturn(page);
+  const editor = await editorReady(page);
+
+  const rows = editor.getByTestId(/history-revision-/);
+  await expect(rows).toHaveCount(3);
+  // Newest first or oldest first, each row names who published it and
+  // which variables it changed.
+  const otherRows = rows.filter({ hasText: "Olive Other" });
+  await expect(otherRows).toHaveCount(2);
+  await expect(
+    otherRows.filter({ hasText: "Changed OTHER_SHARED" }),
+  ).toHaveCount(2);
+  await expect(
+    rows
+      .filter({ hasText: "You" })
+      .getByText("Changed MINE_SHARED, MY_TOKEN", { exact: true }),
+  ).toBeVisible();
+  await expect(editor.getByText("Author unavailable")).toHaveCount(0);
 });
