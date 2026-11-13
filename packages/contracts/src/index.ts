@@ -119,6 +119,12 @@ export {
   SUITE_VALUE,
 } from "./registry";
 export {
+  chooseRevisionAuthoredAtMs,
+  checkRevisionAuthoredAt,
+  MAX_REVISION_CLOCK_SKEW_MS,
+  type RevisionAuthoredAtVerdict,
+} from "./revision-time";
+export {
   establishServerProfileTrust,
   type ServerProfilePin,
   ServerProfileTrustError,

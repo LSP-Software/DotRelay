@@ -124,6 +124,50 @@ const authenticatedOperation = <T extends Record<string, unknown>>(
     security: PROTOCOL_OPENAPI_SECURITY,
   });
 
+const invitationParameters = Object.freeze({
+  TeamId: Object.freeze({
+    name: "teamId",
+    in: "path",
+    required: true,
+    schema: Object.freeze({ type: "string", format: "uuid" }),
+  }),
+  InvitationId: Object.freeze({
+    name: "invitationId",
+    in: "path",
+    required: true,
+    schema: Object.freeze({ type: "string", format: "uuid" }),
+  }),
+});
+
+// 201 for the first commit, 200 for an Idempotency-Key replay, and 410 once
+// the invitation is no longer pending (expired, accepted, revoked, or
+// declined).
+const invitationOutcomeResponses = (
+  schema: Readonly<Record<string, unknown>>,
+) => {
+  const success = (description: string) =>
+    Object.freeze({
+      description,
+      headers: Object.freeze({
+        "Cache-Control": Object.freeze({
+          schema: Object.freeze({ type: "string", const: "no-store" }),
+        }),
+      }),
+      content: Object.freeze({
+        "application/json": Object.freeze({ schema }),
+      }),
+    });
+  return Object.freeze({
+    "200": success("Replayed outcome"),
+    "201": success("Committed outcome"),
+    ...problemResponses,
+    "410": Object.freeze({
+      description: "Invitation no longer pending",
+      content: problemContent,
+    }),
+  });
+};
+
 export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
   "/api/v1/operations/{operationId}/begin": Object.freeze({
     post: authenticatedOperation(
@@ -294,6 +338,67 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
           }),
         }),
         responses: noStoreJsonResponse,
+      }),
+    ),
+  }),
+  "/api/v1/teams/{teamId}/invitations/{invitationId}/revoke": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "revokeMembershipInvitation",
+        description:
+          "An active owner or admin withdraws a pending Membership Invitation of the Team. A revoked invitation can no longer be accepted.",
+        parameters: Object.freeze([
+          invitationParameters.TeamId,
+          invitationParameters.InvitationId,
+          protocolParameters.DeviceIdHeader,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        requestBody: Object.freeze({
+          required: true,
+          content: Object.freeze({
+            "application/json": Object.freeze({
+              schema: Object.freeze({
+                $ref: "#/components/schemas/StrictJsonObject",
+              }),
+            }),
+          }),
+        }),
+        responses: invitationOutcomeResponses(
+          Object.freeze({
+            type: "object",
+            additionalProperties: false,
+            required: Object.freeze(["invitationId", "teamId", "status"]),
+            properties: Object.freeze({
+              invitationId: Object.freeze({ type: "string", format: "uuid" }),
+              teamId: Object.freeze({ type: "string", format: "uuid" }),
+              status: Object.freeze({ type: "string", const: "REVOKED" }),
+            }),
+          }),
+        ),
+      }),
+    ),
+  }),
+  "/api/v1/invitations/{invitationId}/decline": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "declineMembershipInvitation",
+        description:
+          "The User a pending Membership Invitation addresses turns it down. Needs a session, not a Device; an invitation addressed to someone else answers 404.",
+        parameters: Object.freeze([
+          invitationParameters.InvitationId,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        responses: invitationOutcomeResponses(
+          Object.freeze({
+            type: "object",
+            additionalProperties: false,
+            required: Object.freeze(["invitationId", "status"]),
+            properties: Object.freeze({
+              invitationId: Object.freeze({ type: "string", format: "uuid" }),
+              status: Object.freeze({ type: "string", const: "DECLINED" }),
+            }),
+          }),
+        ),
       }),
     ),
   }),
