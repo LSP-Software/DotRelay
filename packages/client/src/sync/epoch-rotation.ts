@@ -1,6 +1,7 @@
 import {
   type CborValue,
   canonicalEncode,
+  chooseRevisionAuthoredAtMs,
   encodeProtocolObject,
   type FinalizePublicationRequest,
   protocolObjectFromFields,
@@ -33,6 +34,13 @@ export type EpochRotationInput = Readonly<{
   /** The new epoch key; generated when omitted. */
   readonly newEpochKey?: Uint8Array;
   readonly authoredAtMs?: number;
+  /**
+   * The earliest authored-at instant the service accepts for every
+   * transition: the latest of the rotating Device's activation, the
+   * author's Membership activation, and each Environment head's authored-at
+   * instant. Used to raise a slow clock when authoredAtMs is omitted.
+   */
+  readonly authoredAtNotBeforeMs?: number;
 }>;
 
 export type EpochRotationArtifacts = Readonly<{
@@ -234,7 +242,9 @@ export const createEpochRotationArtifacts = async (
       "project epoch rotation needs the current epoch key to link the new one",
     );
   const newEpoch = input.expectedEpoch + 1;
-  const authoredAtMs = input.authoredAtMs ?? Date.now();
+  const authoredAtMs =
+    input.authoredAtMs ??
+    chooseRevisionAuthoredAtMs(Date.now(), input.authoredAtNotBeforeMs);
   const shared: RotationSharedContext = Object.freeze({
     serverProfileId: input.serverProfileId,
     teamId: input.teamId,

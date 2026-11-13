@@ -2,6 +2,8 @@ import {
   bytesToUuid,
   type CborValue,
   canonicalEncode,
+  checkRevisionAuthoredAt,
+  chooseRevisionAuthoredAtMs,
   decodeCiphertextEnvelope,
   encodeProtocolObject,
   type FinalizePublicationRequest,
@@ -119,7 +121,43 @@ export type PublicationContext = Readonly<{
   readonly mutation?: PublicationMutationKind;
   readonly rollbackTargetId?: string;
   readonly rollbackSelectedVariableIds?: readonly string[];
+  /**
+   * The earliest authored-at instant the service and every verifying client
+   * accept for this Revision: the latest of this Device's activation, the
+   * author's Membership activation, and the parent Revision's authored-at
+   * instant (see `revisionAuthoredAtNotBeforeMs`). A slow local clock is
+   * raised to it instead of producing a Revision nobody can verify.
+   */
+  readonly authoredAtNotBeforeMs?: number;
+  /** This Device's clock; defaults to Date.now(). */
+  readonly nowMs?: number;
 }>;
+
+/**
+ * The not-before floor for a new Revision's authored-at instant, from what
+ * the client already knows: its own Device activation and Membership
+ * activation (the boundary's signing trust entry for this Device), and the
+ * parent Revision's authored-at instant. Absent inputs are ignored.
+ */
+export const revisionAuthoredAtNotBeforeMs = (
+  input: Readonly<{
+    readonly deviceActiveFromMs?: number | null;
+    readonly memberSinceMs?: number | null;
+    readonly parentAuthoredAtMs?: number | bigint | null;
+  }>,
+): number | undefined => {
+  const candidates = [
+    input.deviceActiveFromMs,
+    input.memberSinceMs,
+    typeof input.parentAuthoredAtMs === "bigint"
+      ? Number(input.parentAuthoredAtMs)
+      : input.parentAuthoredAtMs,
+  ].filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isSafeInteger(value),
+  );
+  return candidates.length === 0 ? undefined : Math.max(...candidates);
+};
 
 export type SyncDisclosureOptions = Readonly<{
   readonly actorUserId?: string;
@@ -129,9 +167,10 @@ export type SyncDisclosureOptions = Readonly<{
  * How far past this Device's clock a Revision's signer-chosen authored-at
  * instant may lie. Device and Membership windows are judged at that instant,
  * so an unbounded future (or a past earlier than the parent) would let a
- * signer move a Revision into whichever window authorizes it.
+ * signer move a Revision into whichever window authorizes it. The service
+ * enforces the same bound at publication.
  */
-export const MAX_REVISION_CLOCK_SKEW_MS = 10 * 60 * 1000;
+export { MAX_REVISION_CLOCK_SKEW_MS } from "@dotrelay/contracts";
 
 export type SyncPageVerificationOptions = SyncDisclosureOptions &
   Readonly<{
@@ -172,6 +211,20 @@ export type RevisionSigningTrustEntry = Readonly<{
   readonly memberSinceMs?: number | null;
   /** When the author's Membership was removed (Unix milliseconds); null while still a Member. */
   readonly memberUntilMs?: number | null;
+  /**
+   * Every period in which the author was an active Member, oldest first. A
+   * User removed and invited back has one period per stint; their earlier
+   * Revisions verify against the period they were authored in. When present
+   * it replaces the single memberSinceMs/memberUntilMs window.
+   */
+  readonly membershipPeriods?: readonly MembershipPeriod[];
+}>;
+
+export type MembershipPeriod = Readonly<{
+  /** When the Membership became active (Unix milliseconds). */
+  readonly sinceMs: number;
+  /** When it was removed (Unix milliseconds); null while still active. */
+  readonly untilMs: number | null;
 }>;
 
 export type RevisionSigningTrust =
@@ -660,7 +713,10 @@ export const createPublicationArtifacts = async (
     changedVariableIds: changed.map((variable) => variable.id),
     mutationKind,
     rollbackFields,
-    authoredAtMs: Date.now(),
+    authoredAtMs: chooseRevisionAuthoredAtMs(
+      context.nowMs ?? Date.now(),
+      context.authoredAtNotBeforeMs,
+    ),
   } as const;
   const revision = await signedObject(
     16,
@@ -1185,7 +1241,28 @@ type SigningTrustEntry = Readonly<{
   readonly deviceActiveUntilMs?: number | null;
   readonly memberSinceMs?: number | null;
   readonly memberUntilMs?: number | null;
+  readonly membershipPeriods?: readonly MembershipPeriod[];
 }>;
+
+const normalizeMembershipPeriods = (
+  value: unknown,
+): readonly MembershipPeriod[] => {
+  if (!Array.isArray(value))
+    throw new ProtocolVerificationError("signing trust entry is malformed");
+  return value.map((period): MembershipPeriod => {
+    if (
+      typeof period !== "object" ||
+      period === null ||
+      typeof period.sinceMs !== "number" ||
+      !Number.isSafeInteger(period.sinceMs) ||
+      (period.untilMs !== null &&
+        (typeof period.untilMs !== "number" ||
+          !Number.isSafeInteger(period.untilMs)))
+    )
+      throw new ProtocolVerificationError("signing trust entry is malformed");
+    return { sinceMs: period.sinceMs, untilMs: period.untilMs };
+  });
+};
 
 const normalizeSigningTrust = (
   trust: RevisionSigningTrust,
@@ -1207,7 +1284,8 @@ const normalizeSigningTrust = (
       item.deviceActiveFromMs !== undefined ||
       item.deviceActiveUntilMs !== undefined ||
       item.memberSinceMs !== undefined ||
-      item.memberUntilMs !== undefined;
+      item.memberUntilMs !== undefined ||
+      item.membershipPeriods !== undefined;
     return {
       publicKey: item.publicKey,
       constrained,
@@ -1224,6 +1302,13 @@ const normalizeSigningTrust = (
         : {}),
       ...(item.memberUntilMs !== undefined
         ? { memberUntilMs: item.memberUntilMs }
+        : {}),
+      ...(item.membershipPeriods !== undefined
+        ? {
+            membershipPeriods: normalizeMembershipPeriods(
+              item.membershipPeriods,
+            ),
+          }
         : {}),
     };
   });
@@ -1258,7 +1343,11 @@ const entryAuthorizesRevision = (
       entry.deviceActiveUntilMs,
       authoredAtMs,
     ) ||
-    !windowAdmits(entry.memberSinceMs, entry.memberUntilMs, authoredAtMs)
+    !(entry.membershipPeriods === undefined
+      ? windowAdmits(entry.memberSinceMs, entry.memberUntilMs, authoredAtMs)
+      : entry.membershipPeriods.some((period) =>
+          windowAdmits(period.sinceMs, period.untilMs, authoredAtMs),
+        ))
   )
     return false;
   if (entry.deviceId !== undefined) {
@@ -1326,9 +1415,7 @@ export const verifySyncPage = async (
     throw new ProtocolVerificationError(
       "sync page does not start from the requested trusted revision",
     );
-  const latestAuthoredAtMs =
-    BigInt(Math.floor(options.nowMs ?? Date.now())) +
-    BigInt(MAX_REVISION_CLOCK_SKEW_MS);
+  const nowMs = Math.floor(options.nowMs ?? Date.now());
   let previousAuthoredAtMs = options.trustedRevisionAuthoredAtMs;
   const trustEntries = normalizeSigningTrust(signingTrust);
   const trustKeys = trustEntries.map((entry) => entry.publicKey);
@@ -1387,9 +1474,11 @@ export const verifySyncPage = async (
     // instant, so bound it: never before the parent, never in the future
     // beyond clock skew.
     if (
-      (previousAuthoredAtMs !== undefined &&
-        revision.authoredAtMs < previousAuthoredAtMs) ||
-      revision.authoredAtMs > latestAuthoredAtMs
+      checkRevisionAuthoredAt({
+        authoredAtMs: revision.authoredAtMs,
+        notBeforeMs: previousAuthoredAtMs ?? null,
+        nowMs,
+      }) !== "ok"
     )
       throw new ProtocolVerificationError(
         "sync revision authored-at instant is outside its allowed range",

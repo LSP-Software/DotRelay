@@ -10,6 +10,7 @@ import {
   createPublicationArtifacts,
   type PublicationVariable,
   type RevisionSigningTrustEntry,
+  revisionAuthoredAtNotBeforeMs,
   UnreadableLaneError,
 } from "./publication";
 import { createVerifiedEnvironmentSession } from "./session";
@@ -198,6 +199,7 @@ describe("verified Environment session", () => {
   const scopedSession = async (
     author: Awaited<ReturnType<typeof generateSigningKeyPair>>,
     entries: readonly RevisionSigningTrustEntry[],
+    authoredAtMs?: number,
   ) => {
     const encryption = await generateEncryptionKeyPair();
     const local = await generateSigningKeyPair();
@@ -209,6 +211,7 @@ describe("verified Environment session", () => {
       valueRecipientPublicKey: encryption.publicKey,
       signingPrivateKey: author.privateKey,
       mutation: "GENESIS",
+      ...(authoredAtMs === undefined ? {} : { nowMs: authoredAtMs }),
     });
     const page = await syncPageFor(artifacts);
     const localKey = await exportSigningPublicKey(local.publicKey);
@@ -318,6 +321,106 @@ describe("verified Environment session", () => {
     await expect(session.syncAndDecode(syncRequest)).rejects.toThrow(
       "sync revision signature is not authorized",
     );
+  });
+
+  test("verifies a Revision from an earlier Membership period of a Member who was invited back", async () => {
+    const author = await generateSigningKeyPair();
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    const day = 24 * 60 * 60 * 1_000;
+    const authoredAtMs = Date.now() - 10 * day;
+    const rejoinedAtMs = Date.now() - day;
+    const entry = {
+      publicKey: authorKey,
+      deviceId: ids.device,
+      userId: ids.user,
+      deviceActiveFromMs: 0,
+      deviceActiveUntilMs: null,
+      // The current period alone does not cover the old Revision.
+      memberSinceMs: rejoinedAtMs,
+      memberUntilMs: null,
+    } as const;
+    await expect(
+      (await scopedSession(author, [entry], authoredAtMs)).syncAndDecode(
+        syncRequest,
+      ),
+    ).rejects.toThrow("sync revision signature is not authorized");
+    const synced = await (
+      await scopedSession(
+        author,
+        [
+          {
+            ...entry,
+            membershipPeriods: [
+              { sinceMs: authoredAtMs - day, untilMs: authoredAtMs + day },
+              { sinceMs: rejoinedAtMs, untilMs: null },
+            ],
+          },
+        ],
+        authoredAtMs,
+      )
+    ).syncAndDecode(syncRequest);
+    expect(synced.variables).toEqual([
+      expect.objectContaining({ name: "DATABASE_URL" }),
+    ]);
+    // A Revision authored between the periods stays rejected.
+    await expect(
+      (
+        await scopedSession(
+          author,
+          [
+            {
+              ...entry,
+              membershipPeriods: [
+                { sinceMs: 0, untilMs: authoredAtMs - day },
+                { sinceMs: rejoinedAtMs, untilMs: null },
+              ],
+            },
+          ],
+          authoredAtMs,
+        )
+      ).syncAndDecode(syncRequest),
+    ).rejects.toThrow("sync revision signature is not authorized");
+  });
+
+  test("a slow clock signs at the not-before floor instead of before it", async () => {
+    const encryption = await generateEncryptionKeyPair();
+    const author = await generateSigningKeyPair();
+    const floor = revisionAuthoredAtNotBeforeMs({
+      deviceActiveFromMs: 5_000,
+      memberSinceMs: 7_000,
+      parentAuthoredAtMs: 6_000n,
+    });
+    expect(floor).toBe(7_000);
+    expect(revisionAuthoredAtNotBeforeMs({ memberSinceMs: null })).toBe(
+      undefined,
+    );
+    const base = {
+      ...ids,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: encryption.publicKey,
+      signingPrivateKey: author.privateKey,
+      mutation: "GENESIS",
+    } as const;
+    const slow = await createPublicationArtifacts([variable()], {
+      ...base,
+      nowMs: 1_000,
+      ...(floor === undefined ? {} : { authoredAtNotBeforeMs: floor }),
+    });
+    expect(slow.request.revision.authoredAtMs).toBe(7_000);
+    const revisionObject = slow.stagedObjects.find(
+      (object) => object.objectId === slow.request.revision.protocolObjectId,
+    );
+    expect(
+      parseProtocolObject(revisionObject?.bytes ?? new Uint8Array()).get(34),
+    ).toBe(7_000);
+    const onTime = await createPublicationArtifacts([variable()], {
+      ...base,
+      nowMs: 9_000,
+      authoredAtNotBeforeMs: 7_000,
+    });
+    expect(onTime.request.revision.authoredAtMs).toBe(9_000);
   });
 
   test("syncAndDecode rejects a Manifest this Device cannot decrypt", async () => {
