@@ -159,6 +159,18 @@ and leaves the file and the baseline untouched. A successful publication does no
 baseline. A Variable that is in the baseline and absent from the file becomes a signed
 tombstone.
 
+A line that still matches the baseline never undoes a teammate's change. If the Environment
+deleted a Variable since the baseline, an unchanged line lets the deletion stand, and an edited
+line pauses as a conflict. The same holds when a teammate deleted the Variable and then added a
+new one under the same name. A file with no recorded baseline (a new machine, cleared state, or a
+path spelled differently) prints a notice that each differing Value in it will replace the
+remote one, and suggests `dotrelay pull` first. Under `--no-input` that push is refused when it
+would replace or remove an existing Value, until the file is pulled or `--force` is passed;
+additions alone go through. After one publication from such a file succeeds, later pushes treat
+it as reconciled. Baselines are keyed by the file's real path, so a symlinked path and its
+target share one. `init` and `push` warn when the input file is tracked by Git, and a missing
+input file is named along with `--from <file>`.
+
 Interactive `init` and `push` confirm only Variables that will change. The default review is
 masked: each change lists the Variable name, its ownership (shared or user-defined), and the
 change type, and no plaintext Value is printed. Passing `--reveal` makes that one confirmation
@@ -227,6 +239,22 @@ Variable with no value is named too: interactive pull asks for it without echoin
 left out of the file, and the report counts them. Terminal stdout requires explicit `--reveal`
 and confirmation; ordinary diagnostics never contain Values.
 
+`pull` compares an existing file with the baseline it recorded. A local change that no verified
+Revision since that baseline ever held has not been pushed. The interactive review lists those
+changes separately as "will be lost", and under `--no-input --force` the pull is refused unless
+`--discard-local` is also passed. A pull rewrites the whole file from the Environment, so
+comments, blank lines, and the order of entries are not kept. Each replacement keeps up to three
+earlier copies (`<path>.previous`, `<path>.previous.1`, `<path>.previous.2`), all mode `0600` and
+excluded from Git. A copy identical to the new file or to the newest backup is not kept twice.
+When the output is a symlink, the file it points at is replaced and the link stays.
+
+Values are written so an expander sees the same text the source gave it. A `${HOME}` reference
+read from an unquoted or double-quoted line is written in double quotes with `$` unescaped, and
+a `\$` the source used for a literal dollar sign stays `\$`. Values with no quote, line break,
+`$`, or backtick are single-quoted. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
+`` \` `` are decoded, and any other backslash sequence, such as `"C:\Users"`, is kept as
+written. Parse errors name the file.
+
 `diff` compares `.env` with the decrypted Environment and prints added, updated, and removed
 Variables as names, ownership, and change types, with no Values. `--reveal` prints the unified
 Value diff for that one run instead. Unchanged Variables are omitted. `--from <dotenv>` selects
@@ -280,8 +308,9 @@ single JSON document and also carries `verificationUri` and `userCode`.
 ready, using an atomic replace and mode `0600`. `pull --stdout` is explicit and refuses terminal
 output unless `--reveal` is also supplied. `--no-input` never prompts, guesses, or approves:
 `--force` is the narrow, documented approval that lets automation replace a differing pull output
-file or publish removed Variables, and it is the only flag that does; it never overrides the
-refusal of a Git-tracked pull output. Automation is limited to a
+file or publish removed Variables, and it is the only flag that does (a pull that would drop
+changes not yet pushed also needs `--discard-local`); it never overrides the refusal of a
+Git-tracked pull output. Automation is limited to a
 previously authenticated, enrolled persistent Device with explicit profile context.
 Portable plaintext or environment-variable credential bundles and auto-approved ephemeral Devices
 are not supported.

@@ -54,6 +54,16 @@ open each lane with its own epoch's key. A missing link is backfilled through
 `POST /api/v1/projects/:projectId/epoch-key-links` by a client that holds both
 keys.
 
+## Baseline reconciliation
+
+Clients publish through a three-way reconciliation of the Publication
+Baseline, the Draft, and the Environment's current Manifest (ADR 0005). A Draft
+names each Variable the baseline held by the baseline's id. When the remote
+side deleted that Variable, an unchanged Draft entry lets the deletion stand,
+and a changed one is a `deletion` conflict. When a different live Variable
+now holds the same name, a changed Draft entry is a `name` conflict with it,
+so publishing never leaves two live Variables under one name.
+
 ## Related docs
 
 - [Architecture and wire boundaries](./architecture.md)
