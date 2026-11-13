@@ -44,6 +44,20 @@ describe("publishFailureMessage", () => {
     expect(message).toContain("Your draft is kept.");
   });
 
+  test("rate_limited names the wait the server asked for", () => {
+    const limited = new ProtocolTransportError({
+      type: "https://dotrelay.dev/problems/v1",
+      title: "Rate limited",
+      status: 429,
+      code: "rate_limited",
+      detail: "detail",
+      retryAfterSeconds: 20,
+    });
+    expect(publishFailureMessage(limited)).toContain(
+      "Try again in 20 seconds.",
+    );
+  });
+
   test("no message tells the user to refresh the page", () => {
     const codes = [
       "authentication_required",

@@ -2,12 +2,14 @@ import { expect, test } from "bun:test";
 import {
   createProjectEnvironment,
   createTeamInvitation,
+  declineTeamInvitation,
   environmentLabelError,
   fetchMyInvitations,
   fetchTeamMemberships,
   parseMyInvitations,
   parseTeamMembershipState,
   resolveGitHubLogin,
+  revokeTeamInvitation,
 } from "./team-administration";
 
 const privilegedBody = {
@@ -300,6 +302,98 @@ test("createProjectEnvironment reports an existing label and refusals", async ()
       "1x",
     );
     expect(invalid.ok).toBe(false);
+  } finally {
+    restore();
+  }
+});
+
+test("revokeTeamInvitation posts an empty body with an idempotency key and the device id", async () => {
+  const captured = { url: "", headers: new Headers(), body: "" };
+  const restore = stubFetch((url, init) => {
+    captured.url = url;
+    captured.headers = new Headers(init?.headers);
+    captured.body = String(init?.body);
+    return Response.json(
+      { invitationId: "i9", teamId: "team-1", status: "REVOKED" },
+      { status: 201 },
+    );
+  });
+  try {
+    const result = await revokeTeamInvitation(
+      "http://api.test",
+      "team-1",
+      "i9",
+      "device-1",
+    );
+    expect(result).toEqual({
+      ok: true,
+      data: { invitationId: "i9", teamId: "team-1", status: "REVOKED" },
+    });
+    expect(captured.url).toBe(
+      "http://api.test/api/v1/teams/team-1/invitations/i9/revoke",
+    );
+    expect(captured.body).toBe("{}");
+    expect(captured.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(captured.headers.get("X-DotRelay-Device-Id")).toBe("device-1");
+  } finally {
+    restore();
+  }
+});
+
+test("declineTeamInvitation sends only an idempotency key and reports a closed invitation", async () => {
+  const captured = {
+    url: "",
+    headers: new Headers(),
+    body: undefined as unknown,
+  };
+  let status = 201;
+  const restore = stubFetch((url, init) => {
+    captured.url = url;
+    captured.headers = new Headers(init?.headers);
+    captured.body = init?.body;
+    return status === 201
+      ? Response.json({ invitationId: "i9", status: "DECLINED" }, { status })
+      : Response.json({ code: "invitation_expired" }, { status });
+  });
+  try {
+    const result = await declineTeamInvitation("http://api.test", "i9");
+    expect(result.ok).toBe(true);
+    expect(captured.url).toBe("http://api.test/api/v1/invitations/i9/decline");
+    expect(captured.body).toBeUndefined();
+    expect(captured.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(captured.headers.get("X-DotRelay-Device-Id")).toBeNull();
+    status = 410;
+    const closed = await declineTeamInvitation("http://api.test", "i9");
+    expect(closed.ok).toBe(false);
+    if (closed.ok) return;
+    expect(closed.message).toContain("no longer open");
+  } finally {
+    restore();
+  }
+});
+
+test("the pending invitation cap and rate limits get actionable messages", async () => {
+  let reply = () =>
+    Response.json({ code: "pending_invitation_limit" }, { status: 409 });
+  const restore = stubFetch(() => reply());
+  try {
+    const capped = await createTeamInvitation(
+      "http://api.test",
+      "team-1",
+      "583231",
+    );
+    expect(capped.ok).toBe(false);
+    if (capped.ok) return;
+    expect(capped.message).toContain("50 pending invitations");
+    reply = () =>
+      Response.json(
+        { code: "rate_limited", retryAfterSeconds: 42 },
+        { status: 429, headers: { "Retry-After": "42" } },
+      );
+    const limited = await fetchTeamMemberships("http://api.test", "team-1");
+    expect(limited.ok).toBe(false);
+    if (limited.ok) return;
+    expect(limited.message).toContain("Try again in 42 seconds.");
   } finally {
     restore();
   }

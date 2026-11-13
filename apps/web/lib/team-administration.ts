@@ -1,3 +1,4 @@
+import { rateLimitedMessage, retryAfterSecondsFrom } from "./rate-limit";
 import {
   BROWSER_DEVICE_ID_HEADER,
   type MembershipRole,
@@ -81,8 +82,15 @@ const failure = <T>(message: string): TeamAdminResult<T> => ({
 
 // Maps the service's stable problem codes to a sentence a person can act on.
 // The raw code and any detail are deliberately not shown.
-const problemMessage = (code: unknown): string => {
+const problemMessage = (
+  code: unknown,
+  retryAfterSeconds?: number | undefined,
+): string => {
   switch (code) {
+    case "rate_limited":
+      return rateLimitedMessage(retryAfterSeconds);
+    case "pending_invitation_limit":
+      return "This team already has 50 pending invitations. Cancel ones that are no longer needed, or wait for them to be accepted or expire, then invite again.";
     case "authentication_required":
       return "Sign in again to manage this team.";
     case "device_not_active":
@@ -100,7 +108,7 @@ const problemMessage = (code: unknown): string => {
     case "forbidden":
       return "You don't have permission to do that on this team.";
     case "invitation_expired":
-      return "That invitation expired or was already used.";
+      return "That invitation is no longer open: it expired, or was already accepted, declined, or cancelled.";
     case "archived_resource":
       return "This team is archived.";
     case "operation_conflict":
@@ -156,7 +164,13 @@ const call = async (
   const body = (await response.json().catch(() => null)) as {
     readonly code?: unknown;
   } | null;
-  return { ok: false, message: problemMessage(body?.code) };
+  return {
+    ok: false,
+    message: problemMessage(
+      body?.code,
+      retryAfterSecondsFrom(body, response.headers),
+    ),
+  };
 };
 
 const asArray = (value: unknown): unknown[] =>
@@ -347,6 +361,76 @@ export const acceptTeamInvitation = async (
   if (!accepted) return failure("The server returned a malformed reply.");
   return { ok: true, data: accepted };
 };
+export type RevokedInvitation = Readonly<{
+  readonly invitationId: string;
+  readonly teamId: string;
+  readonly status: "REVOKED";
+}>;
+
+export type DeclinedInvitation = Readonly<{
+  readonly invitationId: string;
+  readonly status: "DECLINED";
+}>;
+
+// Cancels a pending invitation of the Team. Owners and admins only; a
+// cancelled invitation can no longer be accepted and stops counting against
+// the Team's pending-invitation cap.
+export const revokeTeamInvitation = async (
+  apiOrigin: string,
+  teamId: string,
+  invitationId: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<RevokedInvitation>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/teams/${teamId}/invitations/${invitationId}/revoke`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+        ...deviceHeaders(deviceId),
+      },
+      body: "{}",
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const body = outcome.body;
+  if (
+    !isRecord(body) ||
+    body.invitationId !== invitationId ||
+    body.teamId !== teamId ||
+    body.status !== "REVOKED"
+  )
+    return failure("The server returned a malformed reply.");
+  return { ok: true, data: { invitationId, teamId, status: "REVOKED" } };
+};
+
+// The invitee turns down an invitation addressed to them. Needs only a
+// session, like acceptance.
+export const declineTeamInvitation = async (
+  apiOrigin: string,
+  invitationId: string,
+): Promise<TeamAdminResult<DeclinedInvitation>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/invitations/${invitationId}/decline`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": globalThis.crypto.randomUUID() },
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const body = outcome.body;
+  if (
+    !isRecord(body) ||
+    body.invitationId !== invitationId ||
+    body.status !== "DECLINED"
+  )
+    return failure("The server returned a malformed reply.");
+  return { ok: true, data: { invitationId, status: "DECLINED" } };
+};
+
 export type MemberRoleChange = Readonly<{
   readonly membershipId: string;
   readonly teamId: string;
@@ -579,7 +663,10 @@ export const createProjectEnvironment = async (
   const body = (await response.json().catch(() => null)) as unknown;
   if (!response.ok)
     return failure(
-      problemMessage(isRecord(body) ? (body.code as unknown) : undefined),
+      problemMessage(
+        isRecord(body) ? (body.code as unknown) : undefined,
+        retryAfterSecondsFrom(body, response.headers),
+      ),
     );
   if (!isRecord(body)) return failure("The server returned a malformed reply.");
   const environmentId = asString(body.id);

@@ -131,12 +131,14 @@ import {
   changeProjectLifecycle,
   changeTeamMemberRole,
   createTeamInvitation,
+  declineTeamInvitation,
   fetchMyInvitations,
   fetchTeamMemberships,
   type MyInvitations,
   type ResolvedGitHubUser,
   removeTeamMember,
   resolveGitHubLogin,
+  revokeTeamInvitation,
   type TeamMembershipState,
 } from "@/lib/team-administration";
 import { cn } from "@/lib/utils";
@@ -182,7 +184,10 @@ import {
   GettingStartedResume,
 } from "./getting-started-guide";
 import {
+  CancelInvitationDialog,
+  DeclineInvitationDialog,
   DeviceRevokedDialog,
+  type InvitationTarget,
   MemberRemovedNotice,
   PROJECT_ROTATE_COMMAND,
   type RemovalTarget,
@@ -687,6 +692,22 @@ export const WorkspaceShell = ({
     string | null
   >(null);
   const [acceptError, setAcceptError] = useState<string | null>(null);
+  const [declineTarget, setDeclineTarget] = useState<InvitationTarget | null>(
+    null,
+  );
+  const [decliningInvitationId, setDecliningInvitationId] = useState<
+    string | null
+  >(null);
+  const [declineError, setDeclineError] = useState<string | null>(null);
+  const [cancelInvitationTarget, setCancelInvitationTarget] =
+    useState<InvitationTarget | null>(null);
+  const [cancellingInvitationId, setCancellingInvitationId] = useState<
+    string | null
+  >(null);
+  const [cancelInvitationError, setCancelInvitationError] = useState<Readonly<{
+    readonly invitationId: string;
+    readonly message: string;
+  }> | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sessionsByKey, setSessionsByKey] = useState<
     ReadonlyMap<string, EnvironmentProtocolSession>
@@ -1421,6 +1442,46 @@ export const WorkspaceShell = ({
       refreshTeamAdministration();
     } else {
       setAcceptError(result.message);
+    }
+  };
+  // The invitee turns the invitation down; the service then hides it from
+  // both their list and the Team's pending invitations.
+  const declineInvitation = async (target: InvitationTarget) => {
+    setDeclineTarget(null);
+    if (!apiOrigin || decliningInvitationId || acceptingInvitationId) return;
+    setDecliningInvitationId(target.invitationId);
+    setDeclineError(null);
+    setAcceptError(null);
+    const result = await declineTeamInvitation(apiOrigin, target.invitationId);
+    setDecliningInvitationId(null);
+    if (result.ok) {
+      refreshTeamAdministration();
+    } else {
+      setDeclineError(result.message);
+    }
+  };
+  // An owner or admin withdraws a pending invitation. A refusal stays on
+  // the invitation's row.
+  const cancelInvitation = async (target: InvitationTarget) => {
+    setCancelInvitationTarget(null);
+    const selectedTeamId = selectedTeam?.id;
+    if (!apiOrigin || !selectedTeamId || cancellingInvitationId) return;
+    setCancellingInvitationId(target.invitationId);
+    setCancelInvitationError(null);
+    const result = await revokeTeamInvitation(
+      apiOrigin,
+      selectedTeamId,
+      target.invitationId,
+      browserDeviceId,
+    );
+    setCancellingInvitationId(null);
+    if (result.ok) {
+      refreshTeamAdministration();
+    } else {
+      setCancelInvitationError({
+        invitationId: target.invitationId,
+        message: result.message,
+      });
     }
   };
   // Changes the Member's role in the Team. The server withholds the owner
@@ -3212,18 +3273,39 @@ export const WorkspaceShell = ({
                             {formatDate(invitation.expiresAt)}
                           </div>
                         </div>
-                        <Button
-                          disabled={
-                            acceptingInvitationId === invitation.invitationId
-                          }
-                          onClick={() =>
-                            acceptInvitation(invitation.invitationId)
-                          }
-                        >
-                          {acceptingInvitationId === invitation.invitationId
-                            ? "Accepting…"
-                            : "Accept invitation"}
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            disabled={
+                              acceptingInvitationId !== null ||
+                              decliningInvitationId !== null
+                            }
+                            onClick={() =>
+                              acceptInvitation(invitation.invitationId)
+                            }
+                          >
+                            {acceptingInvitationId === invitation.invitationId
+                              ? "Accepting…"
+                              : "Accept invitation"}
+                          </Button>
+                          <Button
+                            aria-label={`Decline invitation to ${invitation.teamName}`}
+                            disabled={
+                              acceptingInvitationId !== null ||
+                              decliningInvitationId !== null
+                            }
+                            onClick={() =>
+                              setDeclineTarget({
+                                invitationId: invitation.invitationId,
+                                label: invitation.teamName,
+                              })
+                            }
+                            variant="outline"
+                          >
+                            {decliningInvitationId === invitation.invitationId
+                              ? "Declining…"
+                              : "Decline"}
+                          </Button>
+                        </div>
                       </div>
                     ))}
                     {myInvitations.pendingMemberships.map((pending) => (
@@ -3255,6 +3337,19 @@ export const WorkspaceShell = ({
                         <AlertDescription>{acceptError}</AlertDescription>
                       </Alert>
                     ) : null}
+                    {declineError ? (
+                      <Alert className="border-destructive/30 bg-destructive/10">
+                        <AlertTitle>
+                          Couldn't decline that invitation
+                        </AlertTitle>
+                        <AlertDescription>{declineError}</AlertDescription>
+                      </Alert>
+                    ) : null}
+                    <DeclineInvitationDialog
+                      onCancel={() => setDeclineTarget(null)}
+                      onConfirm={(target) => void declineInvitation(target)}
+                      target={declineTarget}
+                    />
                   </CardContent>
                 </Card>
               ) : null}
@@ -3511,6 +3606,11 @@ export const WorkspaceShell = ({
                       onConfirm={(target) => void removeMember(target)}
                       target={removalTarget}
                       teamName={selectedTeam?.name ?? "this team"}
+                    />
+                    <CancelInvitationDialog
+                      onCancel={() => setCancelInvitationTarget(null)}
+                      onConfirm={(target) => void cancelInvitation(target)}
+                      target={cancelInvitationTarget}
                     />
                     <RoleChangeDialog
                       onCancel={() => setRoleChangeTarget(null)}
@@ -3777,7 +3877,39 @@ export const WorkspaceShell = ({
                                       {formatDate(invitation.expiresAt)}
                                     </Badge>
                                   </TableCell>
-                                  {canAdminister ? <TableCell /> : null}
+                                  {canAdminister ? (
+                                    <TableCell>
+                                      <Button
+                                        aria-label={`Cancel invitation for GitHub ${invitation.providerSubject}`}
+                                        disabled={
+                                          cancellingInvitationId !== null
+                                        }
+                                        onClick={() =>
+                                          setCancelInvitationTarget({
+                                            invitationId:
+                                              invitation.invitationId,
+                                            label: `GitHub ${invitation.providerSubject}`,
+                                          })
+                                        }
+                                        size="sm"
+                                        variant="outline"
+                                      >
+                                        {cancellingInvitationId ===
+                                        invitation.invitationId
+                                          ? "Cancelling…"
+                                          : "Cancel invitation"}
+                                      </Button>
+                                      {cancelInvitationError?.invitationId ===
+                                      invitation.invitationId ? (
+                                        <p
+                                          className="mt-2 text-xs text-destructive"
+                                          role="alert"
+                                        >
+                                          {cancelInvitationError.message}
+                                        </p>
+                                      ) : null}
+                                    </TableCell>
+                                  ) : null}
                                 </TableRow>
                               ))}
                               {membershipState.memberships.length === 0 &&

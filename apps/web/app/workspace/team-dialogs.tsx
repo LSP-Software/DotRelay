@@ -109,6 +109,96 @@ export const RemoveMemberDialog = ({
   </Dialog>
 );
 
+export type InvitationTarget = Readonly<{
+  readonly invitationId: string;
+  readonly label: string;
+}>;
+
+// Cancelling stops the invitation from being accepted. Nothing was shared
+// with an invitee yet, so there is no rotation to follow.
+export const CancelInvitationDialog = ({
+  target,
+  onCancel,
+  onConfirm,
+}: Readonly<{
+  readonly target: InvitationTarget | null;
+  readonly onCancel: () => void;
+  readonly onConfirm: (target: InvitationTarget) => void;
+}>) => (
+  <Dialog
+    onOpenChange={(open) => {
+      if (!open) onCancel();
+    }}
+    open={target !== null}
+  >
+    <DialogContent data-testid="cancel-invitation-dialog" role="alertdialog">
+      <DialogHeader>
+        <DialogTitle>
+          Cancel the invitation for {target?.label ?? "this person"}?
+        </DialogTitle>
+        <DialogDescription>
+          They won't be able to accept it. To add them later, send a new
+          invitation.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <DialogClose render={<Button variant="outline" />}>
+          Keep invitation
+        </DialogClose>
+        <Button
+          onClick={() => {
+            if (target) onConfirm(target);
+          }}
+          variant="destructive"
+        >
+          Cancel invitation
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+);
+
+export const DeclineInvitationDialog = ({
+  target,
+  onCancel,
+  onConfirm,
+}: Readonly<{
+  readonly target: InvitationTarget | null;
+  readonly onCancel: () => void;
+  readonly onConfirm: (target: InvitationTarget) => void;
+}>) => (
+  <Dialog
+    onOpenChange={(open) => {
+      if (!open) onCancel();
+    }}
+    open={target !== null}
+  >
+    <DialogContent data-testid="decline-invitation-dialog" role="alertdialog">
+      <DialogHeader>
+        <DialogTitle>
+          Decline the invitation to {target?.label ?? "this team"}?
+        </DialogTitle>
+        <DialogDescription>
+          To join later, an owner or admin of the team has to invite you again.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <DialogClose render={<Button variant="outline" />}>
+          Keep invitation
+        </DialogClose>
+        <Button
+          onClick={() => {
+            if (target) onConfirm(target);
+          }}
+          variant="destructive"
+        >
+          Decline
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+);
+
 export const MemberRemovedNotice = ({
   label,
   onDismiss,

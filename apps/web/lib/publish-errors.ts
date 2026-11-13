@@ -1,4 +1,5 @@
 import { ProtocolTransportError } from "@dotrelay/client";
+import { rateLimitedMessage } from "./rate-limit";
 
 // Turns a failed publication into a sentence a person can act on. Every
 // message says the draft is kept, because it is: the editor holds it in
@@ -53,6 +54,7 @@ export const publishFailureMessage = (
     case "payload_too_large":
       return `This change is too large to publish at once. ${KEPT} Publish it in smaller parts.`;
     case "rate_limited":
+      return `${rateLimitedMessage(error.problem.retryAfterSeconds)} ${KEPT}`;
     case "rate_limit_unavailable":
       return `The server is limiting requests right now. ${KEPT} Wait a moment, then try again.`;
     case "service_unavailable":
