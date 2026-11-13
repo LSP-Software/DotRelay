@@ -453,7 +453,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       force: "confirm the rotation when --no-input is set",
     },
     notes: [
-      "The Project must have exactly one active Environment, and that Environment must already have a Revision.",
+      "Rotation is Project-wide: it advances every active Environment, so each one must already have a Revision. Run it from a worktree whose selected Environment is active.",
       "A Device that could not read the previous epoch receives the new key. Run dotrelay pull on that Device afterwards.",
     ],
     examples: [

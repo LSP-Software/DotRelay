@@ -145,8 +145,9 @@ type GrantCall = Readonly<{
 }>;
 
 const installStaleEpochService = async (page: Page, state: StaleEpochState) => {
-  // playwright.config.ts serves the web app and the API on this fixed origin.
-  const origin = `http://${process.env.CI ? "127.0.0.1" : "localhost"}:3000`;
+  // playwright.config.ts serves the web app and the API on this origin; the
+  // CSP only admits it, so honour E2E_WEB_PORT like the config does.
+  const origin = `http://${process.env.CI ? "127.0.0.1" : "localhost"}:${process.env.E2E_WEB_PORT ?? "3000"}`;
   await page.route("**/api/workspace/boundary**", (route) => {
     const url = new URL(route.request().url());
     const environmentId = url.searchParams.get("environment");
