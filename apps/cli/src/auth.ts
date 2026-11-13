@@ -545,3 +545,41 @@ export const openVerificationPage = async (
     if (grace !== undefined) clearTimeout(grace);
   }
 };
+
+export type SessionRevocation = "revoked" | "already-ended" | "unreachable";
+
+// Ends the bearer session on the Server Profile (Better Auth sign-out) so a
+// copied token stops working too. Best effort: the caller deletes the local
+// copy whatever this returns, and reports which of the two happened.
+export const revokeServerSession = async (
+  profile: ServerProfilePin,
+  token: string,
+  options: Readonly<{
+    readonly fetch?: FetchFunction;
+    readonly networkPolicy?: NetworkPolicy;
+  }> = {},
+): Promise<SessionRevocation> => {
+  try {
+    const response = await fetchWithDeadline(
+      options.fetch ?? fetch,
+      `${profile.origin}/api/auth/sign-out`,
+      {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      options.networkPolicy ?? defaultNetworkPolicy,
+    );
+    await response.body?.cancel().catch(() => undefined);
+    if (response.ok) return "revoked";
+    // An expired or already revoked session is rejected as unauthenticated:
+    // there is nothing left to end on the server.
+    if (response.status === 401) return "already-ended";
+    return "unreachable";
+  } catch {
+    return "unreachable";
+  }
+};
