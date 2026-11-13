@@ -209,6 +209,16 @@ summary before beginning staging. It then uploads the signed command and encrypt
 objects, finalizes the operation with the expected head and epoch, and cancels a failed operation
 when the Server Profile permits cancellation.
 
+Every Revision carries a signed authored-at time. The CLI never stamps one earlier than this
+Device's activation, your current Membership's activation, or the head Revision it builds on; a
+slow local clock is raised to that floor. The Server Profile also refuses a time more than 10
+minutes ahead of its own clock. Either refusal fails with `authored_at_out_of_range` (exit 4):
+check the machine's system clock and time zone, then run the command again.
+
+A Member who was removed and invited back keeps their earlier Revisions verifiable. The Server
+Profile lists every Membership period for each signing Device, and the CLI checks each Revision
+against the period it was authored in. A Revision authored between two periods is still refused.
+
 `project rotate` advances the Project to a new epoch across every active Environment. It needs
 the current Project Epoch Key: it seals that key under the new one in a Project Epoch Key Link
 and sends the link with the rotation, so a Device that cannot read the current epoch is refused
@@ -216,6 +226,13 @@ before anything is sent. Rotation keeps a removed Member from reading Values pub
 it does not revoke Values they already saw, so rotate a leaked secret itself as well. Every `pull`
 rebuilds earlier epoch keys from the Project's key chain, and publishes any link missing from a
 Project rotated before links existed when the Account Master Key holds both keys.
+
+After a Member is removed or a Device revoked, the Server Profile records that the Project owes a
+rotation until one commits. Every protected command in that Project then prints a pending action,
+for example `1 Member removed since 2026-11-01. A Team owner or admin should rotate this Project's
+key with dotrelay project rotate, then change the secrets they could read.` JSON results carry it
+in `pendingActions`, and `status --json` reports `rotationOwed` with the counts. It is advice
+only: nothing is blocked while the rotation is owed.
 
 `team members` lists the linked Team's Members with the state of their account identity:
 verified, unverified (no signed Device roster yet), or blocked because the account key changed or
@@ -226,7 +243,12 @@ not accept that Member's Devices. Every protected command also verifies this acc
 roster and publishes a new one when this Device holds the AMK and is not listed yet.
 
 `team list` lists the Teams you belong to with the ids `--team` takes. It also lists Teams you
-joined that are still waiting for their Project keys, and invitations you have not accepted yet.
+joined that are still waiting for their Project keys, and invitations you have not accepted yet,
+each with its invitation id. Accept an invitation in the web app. `team decline
+<invitation-id-or-team>` declines one, named by its invitation id or the inviting Team's id or
+name, after a confirmation; `--no-input` requires `--force`. A declined invitation cannot be
+accepted later: an owner or admin has to invite you again. The CLI cannot send or revoke
+invitations; owners and admins do that in the web app.
 
 A new Member cannot read anything until a Team owner or admin shares the Project keys with them.
 `pull` only shares keys among the puller's own Devices, so a teammate's pull never helps. The owner
@@ -336,7 +358,10 @@ mutation and writes no output file.
 Protected Values are never included in status, ordinary progress, JSON responses, or diagnostics.
 Human stderr is the next action. `--json` diagnostics contain category, code, sanitized detail,
 exit code, and non-secret counts only. `--debug` replaces opaque unexpected-error detail with the
-sanitized operational message.
+sanitized operational message. When the Server Profile rate-limits a request (`rate_limited`), the
+CLI retries within its budget and then names the wait the service asked for, such as `wait 2
+minutes and retry`; `--json` diagnostics carry it as `retryAfterSeconds`. A Team that has reached
+its limit of pending invitations reports `pending_invitation_limit` (exit 4).
 
 During `setup` and `login`, `--json` mode emits one authorization event to stderr as soon as the
 device code is issued, before the final result, so an external UI can present the sign-in and
@@ -359,7 +384,8 @@ are not supported.
 
 `status` prints a short card: Server Profile, Origin, Session, Device, and, inside a linked
 worktree, the Repository, Project, and Environment, ending with a state line or the next command
-to run. In a worktree this machine has not linked yet, it suggests `dotrelay pull` (when a
+to run. When the selected Project owes a key rotation, the card adds the same advice line that
+protected commands print. In a worktree this machine has not linked yet, it suggests `dotrelay pull` (when a
 teammate already published the Repository) or `dotrelay init`. Without a Server Profile it names
 `dotrelay setup https://api.dotrelay.dev`, the hosted service; a self-hosted installation uses its
 own origin. It never dumps key:value local state.
