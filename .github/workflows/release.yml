@@ -314,9 +314,11 @@ jobs:
             ${{ steps.provenance.outputs.bundle-path }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
       - name: publish npm selector
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: bun scripts/publish-cli.ts
       - name: publish the GitHub release
         env:

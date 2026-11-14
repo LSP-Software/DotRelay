@@ -411,9 +411,11 @@ jobs:
           find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
       - run: bun scripts/test-cli-package.ts
       - run: npm pack --dry-run ./packages/dotrelay
+      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
       - name: publish npm dev selector
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: bun scripts/publish-cli.ts
 
   tracked-tree-clean:

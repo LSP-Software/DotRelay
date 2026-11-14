@@ -92,12 +92,24 @@ bounded before protocol parsing. Committed history is retained separately from p
 
 ## npm publishing
 
-The repository's `NPM_TOKEN` secret must identify an npm publisher with write access to `dotrelay`
-and permit non-interactive CI publishing. Replace an expired or unauthorized token in repository
-settings; source changes cannot grant npm permissions. Never put the token in this repository.
+The CLI publishes to npm with trusted publishing (OIDC). No npm token is stored in GitHub: each
+publishing job requests a short-lived credential with its `id-token: write` permission, and npm
+accepts it only from a trusted publisher configured on the `dotrelay` package. Configure two on
+npmjs.com under **dotrelay → Settings → Trusted publishing → GitHub Actions**:
 
-Both workflows run `scripts/publish-cli.ts`, which validates the token with npm before publishing
-and removes its temporary npm configuration afterward. Stable versions use `latest`; prereleases
+| Workflow filename | Environment       | Publishes                       |
+| ----------------- | ----------------- | ------------------------------- |
+| `release.yml`     | `security-review` | tagged releases and prereleases |
+| `ci.yml`          | (none)            | the `dev` selector from `main`  |
+
+Organization `LSP-Software`, repository `DotRelay`. Then choose **Publishing access → Require
+two-factor authentication and disallow tokens**; trusted publishers are unaffected. Delete the
+`NPM_TOKEN` repository secret once a publish has succeeded. Trusted publishing needs npm 11.5.1 or
+later, so both jobs install Node 24 with `actions/setup-node` before `scripts/publish-cli.ts`,
+which refuses to run without the OIDC token or with an older npm. Provenance is generated
+automatically for this public repository.
+
+Stable versions use `latest`; prereleases
 use their first prerelease identifier (`alpha`, `beta`, `rc`, or `dev`). An alpha therefore does not
 replace the stable channel. The `latest` identifier is reserved for stable releases: a tag such as
 `v1.2.3-latest.1` is rejected at publication time instead of moving the stable npm selector. Before announcing, verify the GitHub publish job succeeds and test
