@@ -159,7 +159,8 @@ not depend on GitHub's replaceable canary asset IDs. Direct package versions and
 This is repeatable dependency resolution, not a claim of bit-for-bit reproducible
 Next.js/native binaries across different hosts.
 
-Release images on Docker Hub attach SBOM/provenance and are for self-hosted
+Release images are public on Docker Hub as `lspsoftware/dotrelay-api` and
+`lspsoftware/dotrelay-web`. They attach SBOM/provenance and are for self-hosted
 operators. Self-hosters should record and promote exact image digests, not
 mutable tags, and retain the CLI artifact hashes.
 
