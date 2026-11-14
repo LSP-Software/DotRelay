@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Trigger Coolify deploys for DotRelay apps and wait for completion.
+"""Pin DotRelay apps to a commit, trigger Coolify deploys and wait for them.
 
 Usage:
-  scripts/coolify-deploy.py --environment dev  [app names...]
-  scripts/coolify-deploy.py --environment production
+  scripts/coolify-deploy.py --environment dev --commit SHA [app names...]
+  scripts/coolify-deploy.py --environment production --commit SHA
+
+Coolify builds the apps from Git with railpack. Each app tracks `main` with
+auto-deploy off; this script sets the app's `git_commit_sha` to the exact
+commit CI checked (dev) or the release tag points at (production), then starts
+the deploy, so Coolify builds that commit and nothing else.
 
 App selection: by exact name (instance-unique); both environments live in the
 "DotRelay" project:
@@ -13,7 +18,7 @@ Passing explicit app names overrides the defaults for the environment.
 
 Required environment variables:
   COOLIFY_ENDPOINT  e.g. https://app.coolify.io
-  COOLIFY_TOKEN     API token with `deploy` permission (and read for apps/deployments)
+  COOLIFY_TOKEN     API token with `write` and `deploy` permission (and read for apps/deployments)
 
 Exit code 0 only when every triggered app reaches the `finished` status.
 """
@@ -21,6 +26,7 @@ Exit code 0 only when every triggered app reaches the `finished` status.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -40,7 +46,11 @@ def api(method, path, token, endpoint, payload=None):
     data = None
     # Explicit User-Agent: Coolify sits behind Cloudflare, which rejects the
     # default python-urllib UA (error 1010).
-    headers = {"Authorization": f"Bearer {token}", "User-Agent": "dotrelay-ci/1.0"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": "dotrelay-ci/1.0",
+    }
     if payload is not None:
         data = json.dumps(payload).encode()
         headers["Content-Type"] = "application/json"
@@ -75,6 +85,13 @@ def find_apps_by_name(endpoint, token, wanted):
             raise RuntimeError(f"application name {name!r} is ambiguous: {len(matches)} matches")
         found[name] = matches[0]["uuid"]
     return found
+
+
+def pin_commit(endpoint, token, app_uuid, commit):
+    api("PATCH", f"/api/v1/applications/{app_uuid}", token, endpoint, {"git_commit_sha": commit})
+    pinned = (api("GET", f"/api/v1/applications/{app_uuid}", token, endpoint) or {}).get("git_commit_sha")
+    if pinned != commit:
+        raise RuntimeError(f"app {app_uuid} is pinned to {pinned!r}, expected {commit}")
 
 
 def trigger_deploy(endpoint, token, app_uuid):
@@ -155,8 +172,11 @@ def deploy_app(endpoint, token, app_uuid):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--environment", required=True, choices=sorted(ENVIRONMENTS))
+    parser.add_argument("--commit", required=True, help="full 40-character commit SHA to build")
     parser.add_argument("apps", nargs="*", help="explicit app names (override defaults)")
     args = parser.parse_args()
+    if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
+        sys.exit("--commit must be a full 40-character lowercase commit SHA")
 
     endpoint = os.environ.get("COOLIFY_ENDPOINT", "").strip()
     token = os.environ.get("COOLIFY_TOKEN", "").strip()
@@ -166,6 +186,10 @@ def main():
     env = ENVIRONMENTS[args.environment]
     wanted = args.apps or env
     found = find_apps_by_name(endpoint, token, wanted)
+    # Pin every app before deploying any, so a failed pin deploys nothing.
+    for name in wanted:
+        pin_commit(endpoint, token, found[name], args.commit)
+        print(f"pinned {name} (app {found[name]}) to {args.commit}")
     for name in wanted:
         print(f"deploying {name} (app {found[name]})...")
         status = deploy_app(endpoint, token, found[name])

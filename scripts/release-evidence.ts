@@ -29,8 +29,6 @@ export const writeReleaseEvidence = async (
     approvedCommit: string;
     reviewReportSha256: string;
     tag: string;
-    apiImage: string;
-    webImage: string;
   }>,
 ) => {
   if (
@@ -39,13 +37,8 @@ export const writeReleaseEvidence = async (
     !/^[a-f0-9]{64}$/.test(settings.reviewReportSha256)
   )
     throw new Error("Exact-source independent-review metadata is required");
-  if (
-    !/^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(settings.tag) ||
-    ![settings.apiImage, settings.webImage].every((ref) =>
-      /^[a-zA-Z0-9./_-]+@sha256:[a-f0-9]{64}$/.test(ref),
-    )
-  )
-    throw new Error("Version and immutable image references are required");
+  if (!/^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(settings.tag))
+    throw new Error("A release version tag is required");
   const files: Record<string, string> = {};
   const binaries: Record<string, string> = {};
   const collect = async (folder: string): Promise<void> => {
@@ -72,8 +65,11 @@ export const writeReleaseEvidence = async (
     throw new Error("Every CLI binary must have its uniquely named archive");
   await verifyReleaseFiles(root, files);
   const manifest = {
-    version: 1,
+    version: 2,
     ...settings,
+    // Hosted deploys build this exact commit from Git with railpack
+    // (railpack.json); there is no hosted image digest to record.
+    hostedDeployCommit: settings.sourceCommit,
     suite: "dotrelay-e2ee-v3-classical-webcrypto",
     toolchain: JSON.parse(await readFile("ops/bun-toolchain.json", "utf8")),
     lockSha256: digest(await readFile("bun.lock")),
@@ -106,6 +102,4 @@ if (import.meta.main)
     approvedCommit: process.env.SECURITY_REVIEW_APPROVED_SHA ?? "",
     reviewReportSha256: process.env.SECURITY_REVIEW_REPORT_SHA256 ?? "",
     tag: process.env.RELEASE_TAG ?? "",
-    apiImage: process.env.API_IMAGE_REF ?? "",
-    webImage: process.env.WEB_IMAGE_REF ?? "",
   });
