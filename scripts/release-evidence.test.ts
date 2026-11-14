@@ -9,8 +9,6 @@ const settings = {
   approvedCommit: "a".repeat(40),
   reviewReportSha256: "b".repeat(64),
   tag: "v1.2.3-alpha.1",
-  apiImage: `example/api@sha256:${"c".repeat(64)}`,
-  webImage: `example/web@sha256:${"d".repeat(64)}`,
 };
 test("release evidence binds all exact artifacts and rejects tampering", async () => {
   const root = await mkdtemp(join(tmpdir(), "dotrelay-release-"));
@@ -38,6 +36,12 @@ test("release evidence binds all exact artifacts and rejects tampering", async (
     expect(await archive.exited).toBe(0);
     const manifest = await writeReleaseEvidence(root, settings);
     expect(Object.keys(manifest.files)).toHaveLength(3);
+    expect(manifest.hostedDeployCommit).toBe(settings.sourceCommit);
+    expect(manifest).not.toHaveProperty("apiImage");
+    expect(
+      JSON.parse(await readFile(join(root, "release-manifest.json"), "utf8"))
+        .hostedDeployCommit,
+    ).toBe(settings.sourceCommit);
     expect(await readFile(join(root, "SHA256SUMS"), "utf8")).toContain(
       "release-manifest.json",
     );
@@ -55,11 +59,8 @@ test("release evidence binds all exact artifacts and rejects tampering", async (
       }),
     ).rejects.toThrow("independent-review");
     await expect(
-      writeReleaseEvidence(root, {
-        ...settings,
-        apiImage: "example/api:latest",
-      }),
-    ).rejects.toThrow("immutable image");
+      writeReleaseEvidence(root, { ...settings, tag: "latest-stable" }),
+    ).rejects.toThrow("release version tag");
     await rm(join(root, "win32-x64"), { recursive: true });
     await expect(writeReleaseEvidence(root, settings)).rejects.toThrow(
       "missing a supported",

@@ -61,7 +61,8 @@ the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 
 ## Upgrade and migrations
 
-1. Select the checked commit and verified image digests. Retain old artifacts.
+1. Select the checked commit (and, for self-hosted images, the verified image
+   digests). Retain old artifacts.
    Stop traffic and **all** writers (API replicas, jobs and maintenance commands).
    `DOTRELAY_WRITERS_STOPPED=true` is an operator assertion, not an automatic fence.
 2. Use that revision's checkout, pinned Bun and `bun install --frozen-lockfile`.
@@ -89,7 +90,7 @@ the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 6. Start the exact API/web/CLI release together. Require `/ready`, public HTTPS
    `/api/v1/capabilities` (check profile UUID and suite), web and an authenticated
    synthetic encrypted round trip. Readiness does not prove key recovery or TLS.
-   Only then enable traffic. Record the tested commit, image digests, backup hash,
+   Only then enable traffic. Record the tested commit, any image digests, backup hash,
    restore rehearsal, operator and time in the deployment record.
 
 For a failed migration keep writers stopped, retain the failed DB and backup,
@@ -158,14 +159,25 @@ not depend on GitHub's replaceable canary asset IDs. Direct package versions and
 This is repeatable dependency resolution, not a claim of bit-for-bit reproducible
 Next.js/native binaries across different hosts.
 
-Release images attach SBOM/provenance. Record and promote exact image digests,
-not mutable tags, and retain the CLI artifact hashes. Hosted deployment requires
-an operator migration receipt for the exact source SHA (`DEV_MIGRATED_COMMIT_SHA`
-or `PRODUCTION_MIGRATED_COMMIT_SHA`). Configure Coolify to consume the reviewed
-image digests before acknowledging that receipt. Releases package each CLI platform
-into a unique timestamp-normalized archive, attach `SHA256SUMS` and a
-`release-manifest.json` binding source SHA, toolchain/integrity pins, dependency
-lock hash, exact image digests, CLI bytes and the independent-review report hash.
+Release images on Docker Hub attach SBOM/provenance and are for self-hosted
+operators. Self-hosters should record and promote exact image digests, not
+mutable tags, and retain the CLI artifact hashes.
+
+DotRelay's hosted deployments do not pull images. Coolify builds the API and
+web apps from Git with railpack: `railpack.json` pins the runtime Bun and Node,
+and `scripts/railpack-build.sh` and `scripts/railpack-start.sh` reproduce the
+Dockerfile build and the non-root start. The apps track `main` with auto-deploy
+off. CI pins them to an exact commit (`git_commit_sha`) through the Coolify API
+and then deploys: dev gets each `main` commit that passes CI, production gets
+the commit a stable tag points at. Each needs an operator migration receipt for
+that exact source SHA (`DEV_MIGRATED_COMMIT_SHA` or
+`PRODUCTION_MIGRATED_COMMIT_SHA`). The web app's `NEXT_PUBLIC_*` values are
+build-time variables in Coolify, set per environment.
+
+Releases package each CLI platform into a unique timestamp-normalized archive,
+attach `SHA256SUMS` and a `release-manifest.json` binding source SHA (which is
+also the hosted deploy commit), toolchain/integrity pins, dependency lock hash,
+CLI bytes and the independent-review report hash.
 GitHub OIDC signs provenance for those exact release files; the already-built
 binaries are packaged and promoted without recompilation. Download the provenance
 bundle and verify each archive and the manifest with

@@ -95,14 +95,11 @@ jobs:
   build-images:
     name: build and push images
     needs: [verify, e2e-full]
-    # The mutable latest-stable tag is published in this job, so it must clear
-    # the same security-review gate as publish/deploy-prod before it can move
-    # the tag that production pulls.
+    # Public images for self-hosters. Hosted production does not pull them:
+    # Coolify builds the tagged commit with railpack (deploy-prod). The mutable
+    # latest-stable tag still clears the security-review gate before it moves.
     environment: security-review
     runs-on: ubuntu-latest
-    outputs:
-      api-digest: ${{ steps.api.outputs.digest }}
-      web-digest: ${{ steps.web.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
@@ -141,7 +138,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: build and push API image
-        id: api
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
@@ -153,7 +149,6 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api:${{ contains(github.ref_name, '-') && 'latest-alpha' || 'latest-stable' }}
       - name: build and push web image
-        id: web
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
@@ -259,8 +254,6 @@ jobs:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
           RELEASE_TAG: ${{ github.ref_name }}
-          API_IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-api@${{ needs.build-images.outputs.api-digest }}
-          WEB_IMAGE_REF: ${{ secrets.DOCKERHUB_USERNAME }}/dotrelay-web@${{ needs.build-images.outputs.web-digest }}
         run: bun scripts/release-evidence.ts
       - name: Sign exact release artifact provenance
         id: provenance
@@ -302,11 +295,13 @@ jobs:
         env:
           MIGRATED_COMMIT_SHA: ${{ vars.PRODUCTION_MIGRATED_COMMIT_SHA }}
         run: test "$MIGRATED_COMMIT_SHA" = "$GITHUB_SHA"
+      # Coolify builds the production apps from Git with railpack, pinned to
+      # the tagged commit the security review approved.
       - name: deploy prod apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
-        run: python3 scripts/coolify-deploy.py --environment production
+        run: python3 scripts/coolify-deploy.py --environment production --commit "$GITHUB_SHA"
       - name: smoke deployment readiness and trust boundary
         env:
           SMOKE_API_ORIGIN: https://api.dotrelay.dev
