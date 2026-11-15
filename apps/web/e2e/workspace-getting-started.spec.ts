@@ -87,7 +87,7 @@ test("a new account is walked from the CLI install to the first team", async ({
   await expect(
     guide.getByRole("heading", { name: "Set up the CLI" }),
   ).toBeVisible();
-  await expect(guide).toContainText("npm install -g dotrelay@latest");
+  await expect(guide).toContainText("npm install -g @dotrelay/cli@latest");
   await expect(
     guide.getByTestId("getting-started-setup-command"),
   ).toContainText("dotrelay setup");
@@ -108,7 +108,7 @@ test("the CLI install step offers package managers and keeps the choice", async 
   ).toBeVisible();
 
   const install = guide.getByTestId("getting-started-install-command");
-  await expect(install).toContainText("npm install -g dotrelay@latest");
+  await expect(install).toContainText("npm install -g @dotrelay/cli@latest");
 
   const bunChoice = guide.getByRole("button", { name: "bun" });
   await bunChoice.click();
@@ -138,7 +138,7 @@ test("highlighting part of a command stays on that part", async ({ page }) => {
   const command = page
     .getByTestId("getting-started")
     .getByTestId("getting-started-install-command");
-  await expect(command).toContainText("npm install -g dotrelay@latest");
+  await expect(command).toContainText("npm install -g @dotrelay/cli@latest");
   await command.scrollIntoViewIfNeeded();
 
   // Setting a Range in script does not expand under user-select: all.

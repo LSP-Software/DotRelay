@@ -233,7 +233,7 @@ test("landing page offers install steps, docs, and placeholder policies", async 
 }) => {
   await page.goto("/");
   await expect(page.getByTestId("install-command")).toContainText(
-    "npm install -g dotrelay",
+    "npm install -g @dotrelay/cli",
   );
   await expect(page.getByTestId("setup-command")).toContainText(
     "dotrelay setup https://api.dotrelay.dev",

@@ -114,7 +114,7 @@ const HomePage = async () => {
             </p>
             <CopyableCommand
               data-testid="install-command"
-              value="npm install -g dotrelay"
+              value="npm install -g @dotrelay/cli"
             />
             <CopyableCommand
               data-testid="setup-command"

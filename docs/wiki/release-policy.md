@@ -7,7 +7,7 @@ request with an explanation.
 Production releases are tag-only. A tag matching `v*.*.*` starts the release workflow; the workflow
 checks that the tagged commit is an ancestor of `main`, reruns `bun run verify`, and builds native
 CLI binaries on Linux, macOS, and Windows. It publishes all three binaries as GitHub Release assets
-and publishes the intentional `dotrelay` npm selector containing the matching platform binaries.
+and publishes the intentional `@dotrelay/cli` npm selector containing the matching platform binaries.
 Merging to `main` never deploys production.
 The workflow does not enforce immutable tag references or strict SemVer beyond the tag glob.
 Before the build matrix runs, the workflow records the tag's release version in the npm

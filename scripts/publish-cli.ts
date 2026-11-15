@@ -53,7 +53,7 @@ export const stableReleaseExists = async (
 // Trusted publishing (OIDC): npm exchanges the job's GitHub OIDC token for a
 // short-lived publish credential, so no long-lived npm token exists anywhere.
 // The registry matches the token against the trusted publishers configured on
-// the dotrelay package (repository, workflow filename, environment).
+// the @dotrelay/cli package (repository, workflow filename, environment).
 // --provenance is automatic under trusted publishing; it is kept explicit so a
 // publish that somehow fell back to a token still carries a provenance
 // statement.
@@ -104,13 +104,13 @@ const publish = async () => {
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: this release-only command runs directly, outside Turbo.
   if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
     throw new Error(
-      "Trusted publishing needs the GitHub OIDC token. Give the publishing job `permissions: id-token: write`, and run it only from the workflows configured as trusted publishers for dotrelay on npmjs.com.",
+      "Trusted publishing needs the GitHub OIDC token. Give the publishing job `permissions: id-token: write`, and run it only from the workflows configured as trusted publishers for @dotrelay/cli on npmjs.com.",
     );
   const packageDirectory = resolve(import.meta.dir, "../packages/dotrelay");
   const metadata = JSON.parse(
     await readFile(join(packageDirectory, "package.json"), "utf8"),
   ) as { name: string; version: string };
-  if (metadata.name !== "dotrelay")
+  if (metadata.name !== "@dotrelay/cli")
     throw new Error("Unexpected CLI package name");
   const tag = publicationTag(
     metadata.version,
@@ -142,7 +142,7 @@ const publish = async () => {
     });
     if ((await child.exited) !== 0)
       throw new Error(
-        "CLI publication failed. Check that dotrelay on npmjs.com lists this repository and workflow file (and, for release.yml, the security-review environment) as a trusted publisher. The release has not been published successfully.",
+        "CLI publication failed. Check that @dotrelay/cli on npmjs.com lists this repository and workflow file (and, for release.yml, the security-review environment) as a trusted publisher. The release has not been published successfully.",
       );
   } finally {
     await rm(directory, { recursive: true, force: true });

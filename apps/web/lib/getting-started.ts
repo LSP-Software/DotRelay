@@ -9,7 +9,7 @@ export const CLI_PACKAGE_MANAGERS = ["npm", "yarn", "pnpm", "bun"] as const;
 export type CliPackageManager = (typeof CLI_PACKAGE_MANAGERS)[number];
 
 const CLI_INSTALL_COMMANDS: Record<CliPackageManager, string> = {
-  npm: "npm install -g dotrelay@latest",
+  npm: "npm install -g @dotrelay/cli@latest",
   yarn: "yarn global add dotrelay",
   pnpm: "pnpm add -g dotrelay",
   bun: "bun add -g dotrelay",

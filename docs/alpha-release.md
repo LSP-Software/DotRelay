@@ -94,8 +94,8 @@ bounded before protocol parsing. Committed history is retained separately from p
 
 The CLI publishes to npm with trusted publishing (OIDC). No npm token is stored in GitHub: each
 publishing job requests a short-lived credential with its `id-token: write` permission, and npm
-accepts it only from a trusted publisher configured on the `dotrelay` package. Configure two on
-npmjs.com under **dotrelay → Settings → Trusted publishing → GitHub Actions**:
+accepts it only from a trusted publisher configured on the `@dotrelay/cli` package. Configure two on
+npmjs.com under **@dotrelay/cli → Settings → Trusted publishing → GitHub Actions**:
 
 | Workflow filename | Environment       | Publishes                       |
 | ----------------- | ----------------- | ------------------------------- |
@@ -113,7 +113,7 @@ Stable versions use `latest`; prereleases
 use their first prerelease identifier (`alpha`, `beta`, `rc`, or `dev`). An alpha therefore does not
 replace the stable channel. The `latest` identifier is reserved for stable releases: a tag such as
 `v1.2.3-latest.1` is rejected at publication time instead of moving the stable npm selector. Before announcing, verify the GitHub publish job succeeds and test
-`npx dotrelay@alpha --version` in a clean environment. This change does not publish a package or
+`npx @dotrelay/cli@alpha --version` in a clean environment. This change does not publish a package or
 create a production release tag.
 
 ## Dependency audit

@@ -1,18 +1,18 @@
-# dotrelay npm selector
+# @dotrelay/cli
 
-This package is the public npm selector for the DotRelay standalone CLI. It chooses the native
+`@dotrelay/cli` is the public npm selector for the DotRelay standalone CLI. It chooses the native
 binary staged for the current platform and forwards the complete argument contract unchanged.
-It contains no JavaScript secret client and does not accept portable credentials.
+It installs the `dotrelay` command and contains no JavaScript secret client and does not accept portable credentials.
 
 The release package must include a native binary under `dist/<platform>-<arch>/`. In a checkout,
 run `bun run build` followed by `bun run package:cli` to stage the current platform binary before
-testing or packing the package. `npx dotrelay --help` then uses the same command contract as the
+testing or packing the package. `npx @dotrelay/cli --help` then uses the same command contract as the
 standalone binary.
 
 ## Release channels
 
-`dotrelay@latest` is the stable selector published from release tags; its binary targets no
-Server Profile origin, so a new machine starts with `dotrelay setup <origin>`. `dotrelay@dev`
+`@dotrelay/cli@latest` is the stable selector published from release tags; its binary targets no
+Server Profile origin, so a new machine starts with `dotrelay setup <origin>`. `@dotrelay/cli@dev`
 is rebuilt from the most recent commit on `main` on every push (version
 `0.0.0-dev.<commit-sha>`); its binary targets the dev API and, when no Server Profile is
 selected, trusts and selects `https://dev-api.dotrelay.dev` on first use.
@@ -25,7 +25,7 @@ cannot launch the binary — it is missing for this machine's platform and archi
 but not executable, or unlaunchable (for example built for another architecture) — it exits
 with code 1 and reports the release it is running, the `<platform>-<arch>` this machine needs,
 the platforms the package ships, and the supported repair: reinstall this release or the latest
-from npm (`npm install -g dotrelay@<version>`, `npm install -g dotrelay@latest`) or run the
+from npm (`npm install -g @dotrelay/cli@<version>`, `npm install -g @dotrelay/cli@latest`) or run the
 matching native binary from a DotRelay GitHub release. A `DOTRELAY_BINARY` override that points
 at a missing or unlaunchable binary is named in the same report. The selector only launches a
 binary from its own package or the absolute path in `DOTRELAY_BINARY`; it never falls back to a

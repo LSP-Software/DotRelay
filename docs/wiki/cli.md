@@ -1,6 +1,6 @@
 # Standalone CLI
 
-The `dotrelay` binary exposes the command contract. The `dotrelay` npm package selects the native
+The `dotrelay` binary exposes the command contract. The `@dotrelay/cli` npm package installs it and selects the native
 binary staged for the current platform and forwards the same arguments to it.
 
 Everyday commands are `setup`, `login`, `init`, `push`, `pull`, `run`, `diff`, and `status`. Power
@@ -20,8 +20,8 @@ it launches. When the selector cannot launch the native binary — it is missing
 machine's `<platform>-<arch>`, present but not executable, or unlaunchable (for example built
 for another architecture) — it exits with code 1 and reports the release it is running, the
 `<platform>-<arch>` the machine needs, the platforms the package ships, and the supported
-repair: reinstall this release or the latest from npm (`npm install -g dotrelay@<version>`,
-`npm install -g dotrelay@latest`) or run the matching native binary from a DotRelay GitHub
+repair: reinstall this release or the latest from npm (`npm install -g @dotrelay/cli@<version>`,
+`npm install -g @dotrelay/cli@latest`) or run the matching native binary from a DotRelay GitHub
 release. A `DOTRELAY_BINARY` override that points at a missing or unlaunchable binary is named
 in the same report; the override must be an absolute path. The selector never launches a binary
 from outside its own package otherwise. It forwards `SIGINT`, `SIGTERM`, and `SIGHUP` to the
@@ -32,7 +32,7 @@ binary and re-raises the signal that ended it.
 The npm selector is published in two flavors. The `dev` flavor is rebuilt from the most recent
 commit on `main` on every push: its binary targets the dev API, and when no Server Profile is
 selected it trusts and selects `https://dev-api.dotrelay.dev` on first use — a fresh machine runs
-`npm install -g dotrelay@dev` and then `dotrelay login` without a `setup` step. Its version
+`npm install -g @dotrelay/cli@dev` and then `dotrelay login` without a `setup` step. Its version
 records the commit it was built from (`dotrelay@0.0.0-dev.<commit-sha>`), and
 `dotrelay --version` reporting a `0.0.0-dev` identifier names a dev build. Release tags publish
 the `latest` flavor instead: that binary targets no origin, so a new machine still begins with
