@@ -15,7 +15,7 @@ export const backupMetadataContents = async (
   label: string,
   contents: string,
 ): Promise<string> => {
-  await mkdir(stateDirectory, { recursive: true });
+  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
   const path = join(stateDirectory, `${label}-${stamp()}.json`);
   const body = contents.endsWith("\n") ? contents : `${contents}\n`;
   await atomicWriteProtectedFile(path, body);

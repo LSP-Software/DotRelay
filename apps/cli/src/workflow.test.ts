@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  rm,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
   createAccountKeyEnvelope,
@@ -54,7 +47,10 @@ import { CliError } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
-import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
+import {
+  consumeDisplayedRecoveryCode,
+  PENDING_RECOVERY_CODE_SERVICE,
+} from "./workflow-account-key";
 import { missingProjectKeyNotice } from "./workflow-session";
 
 const profile = {
@@ -4878,13 +4874,30 @@ describe("protected CLI workflows", () => {
     expect(service.publishedWrappers()).toEqual([wrapperId]);
     const recoveryCode = report.recoveryCode;
     if (typeof recoveryCode !== "string") throw new Error("code missing");
-    const pendingPath = consumeDisplayedRecoveryCodePath();
-    if (!pendingPath) throw new Error("pending path missing");
-    const pending = JSON.parse(await readFile(pendingPath, "utf8")) as {
+    const clearDisplayed = consumeDisplayedRecoveryCode();
+    if (!clearDisplayed) throw new Error("pending code missing");
+    // The pending code is kept in the encrypted credential store, never as
+    // a plaintext file in the state directory.
+    const { readdir } = await import("node:fs/promises");
+    expect(
+      (await readdir(runtime.stateDirectory)).filter((name) =>
+        name.includes("recovery-code"),
+      ),
+    ).toEqual([]);
+    const deviceId = String(report.deviceId ?? "");
+    const stored = await runtime.credentials.get(
+      PENDING_RECOVERY_CODE_SERVICE,
+      deviceId,
+    );
+    if (!stored) throw new Error("pending code not stored");
+    const pending = JSON.parse(new TextDecoder().decode(stored)) as {
       recoveryCode?: string;
     };
     expect(pending.recoveryCode).toBe(recoveryCode);
-    await unlink(pendingPath);
+    await clearDisplayed();
+    expect(
+      await runtime.credentials.get(PENDING_RECOVERY_CODE_SERVICE, deviceId),
+    ).toBeNull();
   });
 
   test("device setup does not publish when the local key cannot be saved", async () => {

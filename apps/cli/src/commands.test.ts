@@ -643,9 +643,7 @@ describe("run, export, and list read the Environment without writing", () => {
     expect(() => childEnvironment(base, entries, ["PATH"])).toThrow(
       "--allow-env LD_PRELOAD",
     );
-    expect(
-      childEnvironment(base, entries, ["path", "LD_PRELOAD"]),
-    ).toEqual({
+    expect(childEnvironment(base, entries, ["path", "LD_PRELOAD"])).toEqual({
       PATH: "/tmp/evil",
       HOME: "/home/me",
       API_URL: "https://x.example",

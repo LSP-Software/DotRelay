@@ -237,11 +237,14 @@ export const runProtectedWorkflow = async (
       for (const variable of groups.requiredMissing) {
         supplied.set(
           variable.name,
-          await readTerminalSecret(`Value for ${sanitizeCliLine(variable.name)}`, {
-            ...(options.terminal ? { terminal: options.terminal } : {}),
-            ...(options.prompt ? { prompt: options.prompt } : {}),
-            noInput: options.noInput,
-          }),
+          await readTerminalSecret(
+            `Value for ${sanitizeCliLine(variable.name)}`,
+            {
+              ...(options.terminal ? { terminal: options.terminal } : {}),
+              ...(options.prompt ? { prompt: options.prompt } : {}),
+              noInput: options.noInput,
+            },
+          ),
         );
       }
     }
@@ -281,7 +284,8 @@ export const runProtectedWorkflow = async (
     if (outputPath)
       try {
         const previous = await readFile(outputPath, "utf8");
-        for (const entry of parseDotenv(previous)) previousNames.add(entry.name);
+        for (const entry of parseDotenv(previous))
+          previousNames.add(entry.name);
         literalNames = literalDotenvNames(previous);
       } catch {
         // No readable previous file: every entry is new.

@@ -298,9 +298,10 @@ export const diffDotenvEntries = (
 // (`$NAME`, `${NAME}`, `${NAME:-default}`) or one the source escaped as
 // `\$`. Anything else, such as `$(command)`, `$2b$` or a trailing `$`, is
 // not something an expander should see.
-const REFERENCE_AT = /^\$(?:[A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?][^}]*)?\})/;
+const REFERENCE_AT =
+  /^\$(?:[A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?][^}]*)?\})/;
 const onlyReferences = (value: string): boolean => {
-  for (let index = value.indexOf("$"); index >= 0; ) {
+  for (let index = value.indexOf("$"); index >= 0;) {
     if (value[index - 1] !== "\\" && !REFERENCE_AT.test(value.slice(index)))
       return false;
     index = value.indexOf("$", index + 1);

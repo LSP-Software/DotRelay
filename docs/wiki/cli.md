@@ -64,7 +64,14 @@ URL manually. When the browser launcher is unavailable, fails to start, or exits
 shows that manual path instead of aborting and keeps polling for the authorization to complete.
 Session material and Device wrapping keys belong in the local credential store — encrypted files
 in the CLI state directory (`DOTRELAY_CONFIG_DIR`) — scoped by Server Profile. The encrypted
-Device bundle itself is a protected local record.
+Device bundle itself is a protected local record. The store's key sits beside the data it wraps,
+so the state directory is only as private as its modes: every command except `help` restricts the
+directory and its `credentials` directory to `0700` and the files the CLI keeps there to `0600`,
+repairing older or copied state, never follows a symlink while doing so, and stops if an entry
+belongs to another user. Without `DOTRELAY_CONFIG_DIR`, the state directory comes from an absolute
+`XDG_CONFIG_HOME` or `HOME` (`APPDATA` on Windows); when none is set the command stops rather than
+keeping keys in the working directory. A new Recovery Code waits in the credential store, not in
+a plaintext file, until a run has shown it.
 
 `logout` signs out: it revokes the session on the Server Profile (Better Auth sign-out with the
 stored bearer session) and deletes the local copy. When the server cannot be reached, the local copy
@@ -430,7 +437,7 @@ output; it unlocks the account's Account Master Key and is the only recovery pat
 a headless machine. A new code invalidates the previous one, so store it somewhere safe.
 `device recover` unlocks this Device from a Recovery Code or an Account Key Transfer. The
 Recovery Code is entered at a hidden prompt, piped on stdin, or read from `--recovery-code-file
-<path>` (a 0600 file); it is never placed on the command line and never sent to the Server
+<path>` (a regular 0600 file, never a symlink); it is never placed on the command line and never sent to the Server
 Profile. Recovery uses the Server Profile's account-key routes and never falls back to initial
 bootstrap. `--no-input` requires an explicit profile and a `--recovery-code-file` or `--transfer`
 channel, and never answers a prompt on the user's behalf.

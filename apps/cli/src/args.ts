@@ -797,8 +797,6 @@ export const parseArguments = (
     positionals: Object.freeze(parsed.positionals),
     classifications: Object.freeze({ ...parsed.classifications }),
     variableReferences: Object.freeze([...parsed.variableReferences]),
-    allowedEnvironmentNames: Object.freeze([
-      ...parsed.allowedEnvironmentNames,
-    ]),
+    allowedEnvironmentNames: Object.freeze([...parsed.allowedEnvironmentNames]),
   }) as ParsedArguments;
 };

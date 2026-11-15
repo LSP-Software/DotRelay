@@ -120,6 +120,8 @@ const safeDiagnosticCodes = new Set([
   "membership_pending",
   "missing_values",
   "process_control_variable",
+  "state_directory_unavailable",
+  "state_permissions_invalid",
   "operation_conflict",
   "output_conflict",
   "output_tracked",

@@ -292,7 +292,7 @@ describe("serializeDotenv safety", () => {
     expect([...literal]).toEqual(["P"]);
     const entries = parseDotenv(source);
     expect(serializeDotenv(entries, { literalNames: literal })).toBe(
-      "P='pa$word'\nR=\"${HOME}/x\"\nU=\"$HOME\"\n",
+      'P=\'pa$word\'\nR="${HOME}/x"\nU="$HOME"\n',
     );
     expect(
       parseDotenv(serializeDotenv(entries, { literalNames: literal })),
