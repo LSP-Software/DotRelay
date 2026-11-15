@@ -27,6 +27,13 @@ export const SERVER_DIAGNOSTIC_EVENT_NAMES = Object.freeze([
   "api.email.sent",
   "api.email.failed",
   "api.email.skipped",
+  "api.retention.cleanup_completed",
+  "api.readiness.checked",
+  "api.rate_limit.user_refused",
+  "api.rate_limit.github_refused",
+  "api.rate_limit.creation_refused",
+  "api.rate_limit.auth_refused",
+  "api.rate_limit.unavailable",
 ] as const);
 export type ServerDiagnosticEventName =
   (typeof SERVER_DIAGNOSTIC_EVENT_NAMES)[number];
@@ -94,6 +101,17 @@ export type ServerDiagnosticSink = Readonly<{
   readonly emit: (event: ServerDiagnosticEvent) => void;
 }>;
 
+/**
+ * Receives every sanitized event before diagnostic sampling, plus each
+ * request's status and duration. See ./metrics for the bounded registry.
+ */
+export type ServerMetricsObserver = Readonly<{
+  readonly observeEvent: (event: ServerDiagnosticEvent) => void;
+  readonly observeRequest: (
+    input: Readonly<{ readonly status: number; readonly durationMs: number }>,
+  ) => void;
+}>;
+
 export const createConsoleDiagnosticSink = (
   write: (line: string) => void = (line) => console.error(line),
 ): ServerDiagnosticSink =>
@@ -145,6 +163,8 @@ export type ApiObservability = Readonly<{
    * first failure is rethrown after all steps ran.
    */
   readonly runRetentionCleanup: (at?: Date) => Promise<void>;
+  /** Records one readiness check; failures are also diagnostics. */
+  readonly recordReadiness: (ready: boolean) => void;
   readonly recordRequest: (input: {
     readonly request: Request;
     readonly path: string;
@@ -158,6 +178,8 @@ export type ApiObservability = Readonly<{
      * write Security Request Log rows only within a budget.
      */
     readonly authenticated?: boolean;
+    /** The per-User limiter bucket that refused the request, if any. */
+    readonly rateLimitBucket?: string;
   }) => void;
 }>;
 
@@ -345,6 +367,32 @@ export const endpointTemplateFor = (
 ): SecurityRequestEndpointTemplate | null =>
   ENDPOINT_PATTERNS.find(({ pattern }) => pattern.test(path))?.template ?? null;
 
+// Probe traffic is not request traffic; /ready feeds the readiness counter.
+const PROBE_PATHS = new Set(["/health", "/ready"]);
+const RATE_LIMIT_REFUSAL_EVENTS: Readonly<
+  Record<string, ServerDiagnosticEventName>
+> = Object.freeze({
+  api: "api.rate_limit.user_refused",
+  protocol: "api.rate_limit.user_refused",
+  github: "api.rate_limit.github_refused",
+  create: "api.rate_limit.creation_refused",
+});
+
+const rateLimitEventFor = (
+  path: string,
+  problemCode: ServerDiagnosticProblemCode | undefined,
+  bucket: string | undefined,
+): ServerDiagnosticEventName | undefined => {
+  if (problemCode === "rate_limit_unavailable")
+    return "api.rate_limit.unavailable";
+  if (problemCode !== "rate_limited") return undefined;
+  if (path.startsWith("/api/auth/")) return "api.rate_limit.auth_refused";
+  return (
+    (bucket === undefined ? undefined : RATE_LIMIT_REFUSAL_EVENTS[bucket]) ??
+    "api.rate_limit.user_refused"
+  );
+};
+
 const emitSafely = (
   sink: ServerDiagnosticSink,
   event: ServerDiagnosticEvent,
@@ -448,6 +496,7 @@ export const createApiObservability = (
   database: DatabaseClient,
   options?: Readonly<{
     readonly diagnostics?: ServerDiagnosticSink;
+    readonly metrics?: ServerMetricsObserver;
     readonly now?: () => Date;
     readonly random?: () => number;
     readonly resolveClientIp?: (request: Request) => string | null;
@@ -459,7 +508,33 @@ export const createApiObservability = (
   const allowAnonymousLog = createAnonymousLogBudget(
     options?.anonymousLogBudget ?? DEFAULT_ANONYMOUS_LOG_BUDGET,
   );
-  const diagnostics = options?.diagnostics ?? createInMemoryDiagnosticSink();
+  const diagnosticSink = options?.diagnostics ?? createInMemoryDiagnosticSink();
+  const metrics = options?.metrics;
+  // Metrics see every event; the diagnostic sink sees only what is logged.
+  const observe = (event: ServerDiagnosticEvent) => {
+    try {
+      const sanitized = sanitizeServerDiagnosticEvent(event);
+      if (sanitized) metrics?.observeEvent(sanitized);
+    } catch {
+      // Losing a metric must never affect the request or domain behavior.
+    }
+  };
+  const diagnostics: ServerDiagnosticSink = Object.freeze({
+    emit: (event: ServerDiagnosticEvent) => {
+      observe(event);
+      diagnosticSink.emit(event);
+    },
+  });
+  const recordReadiness = (ready: boolean) => {
+    const event: ServerDiagnosticEvent = {
+      schemaVersion: 1,
+      eventName: "api.readiness.checked",
+      correlationId: createServerCorrelationId(),
+      outcome: ready ? "success" : "failure",
+    };
+    if (ready) observe(event);
+    else emitSafely(diagnostics, event);
+  };
   const now = options?.now ?? (() => new Date());
   const random = options?.random ?? Math.random;
   const sampleRate = options?.sampleRate ?? DEFAULT_DIAGNOSTIC_SAMPLE_RATE;
@@ -529,11 +604,12 @@ export const createApiObservability = (
     }
   };
   return Object.freeze({
-    diagnostics,
+    diagnostics: diagnosticSink,
     expireSecurityRequestLogs,
     expireStaging,
     expireShortLivedRecords,
     runRetentionCleanup: async (at = now()) => {
+      const startedAt = performance.now();
       const results = [
         await expireStaging(at).then(
           () => null,
@@ -549,28 +625,68 @@ export const createApiObservability = (
         ),
       ];
       const failure = results.find((result) => result !== null);
+      emitSafely(diagnostics, {
+        schemaVersion: 1,
+        eventName: "api.retention.cleanup_completed",
+        correlationId: createServerCorrelationId(),
+        durationMs: Math.max(
+          0,
+          Math.min(Math.round(performance.now() - startedAt), 86_400_000),
+        ),
+        outcome: failure ? "failure" : "success",
+      });
       if (failure) throw failure.error;
     },
+    recordReadiness,
     recordRequest: (input) => {
       try {
         const status = Number.isInteger(input.status) ? input.status : 500;
         const retryAfterSeconds = toServerDiagnosticRetryAfterSeconds(
           input.retryAfterSeconds,
         );
+        const durationMs = Math.max(
+          0,
+          Math.min(Math.round(input.durationMs), 86_400_000),
+        );
+        const event: ServerDiagnosticEvent = {
+          schemaVersion: 1,
+          eventName: "api.request.completed",
+          correlationId: input.correlationId,
+          durationMs,
+          outcome: status >= 400 ? "failure" : "success",
+          ...(input.problemCode === undefined
+            ? {}
+            : { problemCode: input.problemCode }),
+          ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+        };
+        if (input.path === "/ready") recordReadiness(status === 200);
+        if (!PROBE_PATHS.has(input.path)) {
+          try {
+            metrics?.observeRequest({
+              status,
+              durationMs: input.durationMs,
+            });
+          } catch {
+            // Losing a metric must never affect the request.
+          }
+          observe(event);
+        }
         if (status >= 400 || random() < sampleRate)
+          emitSafely(diagnosticSink, event);
+        const rateLimitEvent = rateLimitEventFor(
+          input.path,
+          input.problemCode,
+          input.rateLimitBucket,
+        );
+        if (rateLimitEvent !== undefined)
           emitSafely(diagnostics, {
             schemaVersion: 1,
-            eventName: "api.request.completed",
+            eventName: rateLimitEvent,
             correlationId: input.correlationId,
-            durationMs: Math.max(
-              0,
-              Math.min(Math.round(input.durationMs), 86_400_000),
-            ),
-            outcome: status >= 400 ? "failure" : "success",
+            outcome: "failure",
             ...(input.problemCode === undefined
               ? {}
               : { problemCode: input.problemCode }),
-            ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
           });
 
         const endpointTemplate = endpointTemplateFor(input.path);

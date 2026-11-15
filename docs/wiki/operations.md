@@ -69,7 +69,7 @@ workspace boundary) also count against 120 per minute, and requests that create 
 `rate_limit_unavailable` (503); development runs unlimited. Better Auth's own per-IP sign-in limits
 use the same Valkey, falling back to per-process memory if it is unreachable. Sessions slide for 30
 days of inactivity but end 90 days after creation, browser and CLI alike. Keep health endpoints
-on private monitoring paths where possible. The API process itself never migrates;
+on private monitoring paths where possible; see [Metrics and alerting](#metrics-and-alerting). The API process itself never migrates;
 hosted deploys run a migration step before it starts (see below).
 If the orchestrator overrides Docker's built-in healthcheck, configure
 `bun /app/scripts/probe-health.ts` (liveness, `/health`) or
@@ -134,6 +134,46 @@ Start DMARC in monitoring mode, `v=DMARC1; p=none; rua=mailto:<reports address>`
 `p=quarantine` once reports show only aligned mail from Resend and any other senders on the
 domain. Keep the apex SPF record unchanged; Resend's SPF lives on `send`. Wait for Resend to show
 the domain as verified before setting `RESEND_API_KEY` in Coolify.
+
+## Metrics and alerting
+
+DotRelay sends no telemetry and has no access to self-hosted instances. Metrics are opt-in and
+pulled by the operator's own Prometheus-compatible scraper.
+
+Set `METRICS_ENABLED=true` to start a second, private listener on `METRICS_PORT` (default 9464).
+It serves only `GET /metrics` in the Prometheus text format; it shares no routes, CORS, cookies or
+sessions with the API on `PORT`. Production requires `METRICS_TOKEN` (at least 32 characters),
+compared in constant time against `Authorization: Bearer <token>`; other requests get 401. Keep
+`/health` and `/ready` on the API port for probes. Do not publish the metrics port or route it
+through the TLS proxy; scrape it from the private network:
+
+```yaml
+scrape_configs:
+  - job_name: dotrelay-api
+    authorization:
+      credentials_file: /etc/prometheus/dotrelay-metrics-token
+    static_configs:
+      - targets: ["api:9464"]
+```
+
+The metric names and the label policy are in [observability](observability.md#metrics).
+Counters reset when the process restarts and are per replica; aggregate with `sum`.
+
+`ops/alerts/dotrelay.rules.yml` has Prometheus alerting rules for: any expiry failure or failed
+retention run in the last hour; Security Request Log write failures; a rate-limit refusal spike
+(default: over 1 per second and 5 times the rate a day earlier, for 5 minutes); any
+`rate_limit_unavailable`; readiness failing for 5 minutes; a missing scrape; and a 5xx ratio over
+5% for 10 minutes. The thresholds are marked defaults; tune them to your traffic. Check edits with
+`promtool check rules` and `promtool test rules ops/alerts/dotrelay.rules.test.yml`.
+
+Without Prometheus, alert on the API's JSON log lines (stderr) instead. Each line has an
+`eventName` and, for failures, `outcome: "failure"`. Alert on any
+`api.staging.expiry_failed`, `api.security_request_log.expiry_failed`,
+`api.retention.expiry_failed`, `api.retention.cleanup_completed` with `outcome: "failure"`,
+`api.security_request_log.write_failed`, `api.rate_limit.unavailable`, or repeated
+`api.readiness.checked` failures; and on a rising count of `api.rate_limit.user_refused`,
+`github_refused`, `creation_refused` or `auth_refused`. `api.request.completed` lines carry the
+`problemCode` of every failed request; successful requests are sampled.
 
 ## Upgrade and migrations
 

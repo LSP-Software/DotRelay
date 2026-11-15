@@ -64,6 +64,29 @@ test("production requires every essential setting, explicit mode, secure origins
   expect(message).not.toContain("secret-invalid-url");
 });
 
+test("metrics stay off by default and need a long bearer token when enabled", () => {
+  const metricsToken = ["metrics", "fixture", "token", "0123456789"].join("-");
+  expect(loadProductionEnvironment(valid).METRICS_ENABLED).toBeUndefined();
+  expect(
+    loadProductionEnvironment({
+      ...valid,
+      METRICS_ENABLED: "true",
+      METRICS_TOKEN: metricsToken,
+    }).METRICS_TOKEN,
+  ).toBe(metricsToken);
+  for (const change of [
+    { METRICS_ENABLED: "true" },
+    { METRICS_ENABLED: "true", METRICS_TOKEN: "short" },
+    {
+      METRICS_ENABLED: "true",
+      METRICS_TOKEN: metricsToken,
+      METRICS_PORT: "3001",
+    },
+    { METRICS_ENABLED: "on", METRICS_TOKEN: metricsToken },
+  ])
+    expect(() => loadProductionEnvironment({ ...valid, ...change })).toThrow();
+});
+
 test("private secret files work; conflicting, public, symlink and directory inputs fail closed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dotrelay-config-"));
   try {

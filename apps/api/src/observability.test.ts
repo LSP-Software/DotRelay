@@ -215,6 +215,10 @@ describe("API observability boundary", () => {
         eventName: "api.staging.expiry_failed",
         outcome: "failure",
       }),
+      expect.objectContaining({
+        eventName: "api.retention.cleanup_completed",
+        outcome: "failure",
+      }),
     ]);
   });
 

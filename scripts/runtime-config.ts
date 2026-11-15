@@ -6,6 +6,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { loadEmailConfig } from "../apps/api/src/email";
+import { loadMetricsConfig } from "../apps/api/src/metrics-config";
 import { loadServerProfileConfig } from "../apps/api/src/profile";
 
 export const loadProductionEnvironment = (
@@ -84,5 +85,7 @@ export const loadProductionEnvironment = (
   loadServerProfileConfig(environment);
   // Email is optional; when configured, its values must be well-formed.
   loadEmailConfig(environment);
+  // Opt-in private metrics need a bearer token in production.
+  loadMetricsConfig(environment, true);
   return environment;
 };

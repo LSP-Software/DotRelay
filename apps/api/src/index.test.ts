@@ -152,6 +152,7 @@ describe("API foundation", () => {
         expireShortLivedRecords: async () => ({}),
         expireStaging: async () => ({ operations: 0, stagedObjects: 0 }),
         runRetentionCleanup: async () => undefined,
+        recordReadiness: () => undefined,
         recordRequest: () => {
           throw new Error("observability sink unavailable");
         },
@@ -235,6 +236,7 @@ describe("API foundation", () => {
         expireShortLivedRecords: async () => ({}),
         expireStaging: async () => ({ operations: 0, stagedObjects: 0 }),
         runRetentionCleanup: async () => undefined,
+        recordReadiness: () => undefined,
         recordRequest: (input) => records.push(input),
       },
     });

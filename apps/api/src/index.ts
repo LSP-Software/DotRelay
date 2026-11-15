@@ -1,4 +1,4 @@
-import { databaseReady } from "./readiness";
+import { apiReady, databaseReady } from "./readiness";
 import {
   bytesToUuid,
   ContractError,
@@ -59,6 +59,8 @@ import {
 } from "./github-repository";
 import { registerMembershipProvisioningRoutes } from "./membership-provisioning-routes";
 import { registerMembershipRoutes } from "./membership-routes";
+import { createMetricsRegistry, startMetricsServer } from "./metrics";
+import { loadMetricsConfig } from "./metrics-config";
 import {
   API_CORRELATION_HEADER,
   type ApiObservability,
@@ -86,7 +88,7 @@ import {
 import {
   apiRateLimitBuckets,
   createUserRateLimit,
-  valkeyReady,
+  RATE_LIMIT_BUCKET_CONTEXT_KEY,
 } from "./protocol/rate-limit";
 import {
   createSessionLifetimeGate,
@@ -671,6 +673,11 @@ export const shutdownDrainMs = (value: string | undefined): number => {
     : 5000;
 };
 
+const rateLimitBucketOf = (context: Context) => {
+  const bucket = context.get(RATE_LIMIT_BUCKET_CONTEXT_KEY as never) as unknown;
+  return typeof bucket === "string" ? { rateLimitBucket: bucket } : {};
+};
+
 const createApi = ({
   database,
   profile,
@@ -718,6 +725,7 @@ const createApi = ({
           durationMs: performance.now() - startedAt,
           authenticated: await requestWasAuthenticated(context),
           ...problemDetails,
+          ...rateLimitBucketOf(context),
         });
       } catch {
         // Observability loss must never affect the response or domain behavior.
@@ -928,11 +936,7 @@ const createApi = ({
   app.get("/health", (context) => context.json({ status: "ok" }));
   app.get("/ready", async (context) => {
     context.header("Cache-Control", "no-store");
-    const ready =
-      process.env.MAINTENANCE_MODE !== "true" &&
-      (await Promise.all([databaseReady(database), valkeyReady()])).every(
-        Boolean,
-      );
+    const ready = await apiReady(database);
     return context.json(
       { status: ready ? "ready" : "unavailable" },
       ready ? 200 : 503,
@@ -1831,8 +1835,10 @@ type RequestIpServer = {
 };
 let server: RequestIpServer | undefined;
 const resolveClientIp = createClientIpResolver(profile);
+const runtimeMetrics = createMetricsRegistry();
 const runtimeObservability = createApiObservability(database, {
   ...(import.meta.main ? { diagnostics: createConsoleDiagnosticSink() } : {}),
+  metrics: runtimeMetrics,
   resolveClientIp: (request) =>
     resolveClientIp(
       server?.requestIP(request)?.address ?? null,
@@ -1892,6 +1898,7 @@ if (import.meta.main) {
     origin: profile.origin,
     allowRebind: profile.allowRebind,
   });
+  const metricsConfig = loadMetricsConfig(process.env, profile.isProduction);
   server = Bun.serve({
     fetch: app.fetch,
     port: Number(process.env.PORT ?? 3001),
@@ -1900,6 +1907,12 @@ if (import.meta.main) {
   console.error(`DotRelay API listening on ${profile.origin}`);
   if (!emailConfig.apiKey)
     console.error("Transactional email is off: RESEND_API_KEY is not set");
+  // Private, opt-in listener; never routed through the public API surface.
+  startMetricsServer(metricsConfig, {
+    registry: runtimeMetrics,
+    ready: () => apiReady(database),
+    onReadiness: runtimeObservability.recordReadiness,
+  });
   const cleanupTimer = setInterval(
     () => {
       void runtimeObservability.runRetentionCleanup().catch(() => {
