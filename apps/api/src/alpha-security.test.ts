@@ -17,6 +17,12 @@ test("alpha gate checks stable GitHub identity for browser, CLI and old sessions
       "/api/v1/devices/bootstrap",
       "/api/auth/device/approve",
       "/api/auth/get-session",
+      // The alpha answer comes before any Device proof (ADR 0020): an
+      // account outside the list never sees device_proof_required.
+      "/api/v1/devices/proofs/challenges",
+      "/api/v1/devices/proofs",
+      "/api/v1/grants/bootstrap",
+      "/api/v1/teams/00000000-0000-4000-8000-000000000001/delete",
     ]) {
       let upserts = 0;
       const profile = loadServerProfileConfig({ ALPHA_GITHUB_IDS: "1001" });
@@ -37,7 +43,11 @@ test("alpha gate checks stable GitHub identity for browser, CLI and old sessions
       });
       const response = await app.request(`${profile.origin}${path}`, {
         method: path === "/api/v1/session" ? "GET" : "POST",
-        headers: { ...credential, Origin: profile.origin },
+        headers: {
+          ...credential,
+          Origin: profile.origin,
+          "X-DotRelay-Device-Id": "00000000-0000-4000-8000-0000000000d1",
+        },
       });
       expect(response.status).toBe(403);
       const body = await response.text();
