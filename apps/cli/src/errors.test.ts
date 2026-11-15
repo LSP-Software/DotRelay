@@ -179,6 +179,7 @@ describe("CLI diagnostics", () => {
       ["stale_head", "conflict", EXIT_CODES.conflict],
       ["device_not_active", "authentication", EXIT_CODES.authentication],
       ["membership_not_active", "conflict", EXIT_CODES.conflict],
+      ["membership_not_key_provisioned", "conflict", EXIT_CODES.conflict],
       ["service_unavailable", "transient", EXIT_CODES.transient],
     ];
     for (const [code, category, exitCode] of cases) {
@@ -222,6 +223,15 @@ describe("CLI diagnostics", () => {
     expect(inactive.detail).toContain("invite you again");
     expect(inactive.detail).not.toContain("re-add");
     expect(inactive.detail.length).toBeLessThan(512);
+    // A Membership waiting for keys has its own code and names only the
+    // key share, not a new invitation.
+    const waiting = diagnosticForError(
+      transport("membership_not_key_provisioned"),
+    );
+    expect(waiting.category).toBe("conflict");
+    expect(waiting.code).toBe("membership_not_key_provisioned");
+    expect(waiting.detail).toContain("dotrelay team share-keys");
+    expect(waiting.detail).not.toContain("invite you again");
     const cryptoRejection = diagnosticForError(
       transport("invalid_crypto_object"),
     );

@@ -7,6 +7,7 @@ import {
   EnvironmentNotActiveError,
   GenesisExistsError,
   InvitationNotPendingError,
+  MembershipAwaitingKeysError,
   MembershipNotActiveError,
   OperationConflictError,
   OperationNotCancellableError,
@@ -64,6 +65,9 @@ export const mapPersistenceError = (
     return { code: "state_conflict" };
   if (error instanceof DeviceNotActiveError)
     return { code: "device_not_active" };
+  // Waiting for keys first: it is also a MembershipNotActiveError.
+  if (error instanceof MembershipAwaitingKeysError)
+    return { code: "membership_not_key_provisioned" };
   if (error instanceof MembershipNotActiveError)
     return { code: "membership_not_active" };
   if (

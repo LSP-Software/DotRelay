@@ -4,6 +4,7 @@ import {
   AccountKeyWrapperNotActiveError,
   DeviceNotActiveError,
   EnvironmentNotActiveError,
+  MembershipAwaitingKeysError,
   MembershipNotActiveError,
   ProjectNotActiveError,
   TeamNotActiveError,
@@ -17,6 +18,12 @@ describe("mapPersistenceError not-active family", () => {
     expect(device?.code).toBe("device_not_active");
     expect(membership?.code).toBe("membership_not_active");
     expect(device?.code).not.toBe(membership?.code);
+  });
+
+  test("a Membership waiting for keys has its own code", () => {
+    expect(mapPersistenceError(new MembershipAwaitingKeysError())?.code).toBe(
+      "membership_not_key_provisioned",
+    );
   });
 
   test("device not-active variants all map to device_not_active", () => {

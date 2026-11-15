@@ -283,9 +283,15 @@ export const detailForProblem = (
     return "this Device is not active; run dotrelay device enroll to re-authorize it";
   if (code === "device_proof_required")
     return "the Server Profile did not accept this Device's proof of its key; run the command again, and run dotrelay login if it keeps failing";
+  if (code === "membership_not_key_provisioned")
+    return [
+      "you joined this Team, but its Project keys have not been shared with you yet.",
+      'A Team owner or admin has to share them: in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
+      "Then run dotrelay pull.",
+    ].join("\n");
   if (code === "membership_not_active")
-    // The problem does not say whether the Membership is waiting for keys
-    // (PENDING_KEY_GRANT) or was removed, so both repairs are named.
+    // Servers before membership_not_key_provisioned send this code for a
+    // Membership waiting for keys too, so both repairs are still named.
     return [
       "your Membership in this Team is not active yet.",
       'If you accepted an invitation, a Team owner or admin still has to share the Project keys with you: in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
@@ -347,6 +353,7 @@ const errorTitles: Record<string, string> = {
   device_not_active: "Device not active",
   device_proof_required: "Device not proven",
   membership_not_active: "Membership not active",
+  membership_not_key_provisioned: "Waiting for Project keys",
   device_bundle_missing: "No Device enrolled",
   device_enrollment_failed: "Device enrollment failed",
   device_enrollment_unavailable: "Device enrollment unavailable",

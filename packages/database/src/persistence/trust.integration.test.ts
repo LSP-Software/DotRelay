@@ -30,7 +30,10 @@ import {
   DeviceRepository,
   EnvironmentRepository,
   GrantRepository,
+  inactiveMembershipError,
   MembershipAdministrationRepository,
+  MembershipAwaitingKeysError,
+  MembershipNotActiveError,
   MembershipRepository,
   OperationConflictError,
   OperationRepository,
@@ -1451,6 +1454,17 @@ integrationDescribe("trust workflow integration", () => {
       await expect(
         grantTo(memberLaptop.id, `own-grant-${lifecycle}`),
       ).rejects.toThrow("not authorized for the Team: membership_not_active");
+      // Sync and publication tell a Membership waiting for keys apart from
+      // a removed one.
+      const inactive = await inactiveMembershipError(
+        database,
+        teamId,
+        member.id,
+      );
+      expect(inactive).toBeInstanceOf(MembershipNotActiveError);
+      expect(inactive instanceof MembershipAwaitingKeysError).toBe(
+        lifecycle === "PENDING_KEY_GRANT",
+      );
     }
   });
 
