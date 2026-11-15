@@ -102,8 +102,10 @@ bounded before protocol parsing. Committed history is retained separately from p
 
 The CLI publishes to npm with trusted publishing (OIDC). No npm token is stored in GitHub: each
 publishing job requests a short-lived credential with its `id-token: write` permission, and npm
-accepts it only from a trusted publisher configured on the `@dotrelay/cli` package. Configure two on
-npmjs.com under **@dotrelay/cli → Settings → Trusted publishing → GitHub Actions**:
+accepts it only from a trusted publisher configured on each package it publishes: `@dotrelay/cli`
+and the five `@dotrelay/cli-<platform>-<arch>` platform packages. The per-package bootstrap
+checklist is in the [release policy](wiki/release-policy.md#npm-packages-and-trusted-publishing).
+Configure two on npmjs.com under **`<package>` → Settings → Trusted publishing → GitHub Actions**:
 
 | Workflow filename | Environment       | Publishes                       |
 | ----------------- | ----------------- | ------------------------------- |

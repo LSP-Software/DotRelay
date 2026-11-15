@@ -265,7 +265,12 @@ jobs:
       - run: |
           mkdir -p packages/dotrelay/dist
           cp -R release-binaries/*/* packages/dotrelay/dist/
-          find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
+      - run: bun run package:cli:npm --all
+      # The package test installs the packed tarballs with npm 11, as publish
+      # does.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
       - run: bun scripts/test-cli-package.ts
 
   publish:
@@ -312,12 +317,15 @@ jobs:
       - run: |
           mkdir -p packages/dotrelay/dist
           cp -R release-binaries/*/* packages/dotrelay/dist/
-          cp LICENSE.md packages/dotrelay/LICENSE.md
-          # The artifact round-trip drops the executable bit off the staged
-          # native binaries; restore it so the npm tarball ships 755
-          # executables. This job never runs them: smoke-cli-package did.
-          find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
-      - run: npm pack --dry-run --ignore-scripts ./packages/dotrelay
+      # One npm package per platform binary plus the selector that pins them;
+      # --all fails if any release target is missing. Staging restores the
+      # execute bit the artifact round trip drops, but this job never runs
+      # the binaries: smoke-cli-package did.
+      - run: bun run package:cli:npm --all
+      - run: |
+          for directory in dist/npm/*/; do
+            npm pack --dry-run --ignore-scripts "$directory"
+          done
       - name: Package unique platform release archives
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -335,7 +343,7 @@ jobs:
           subject-path: release-binaries/**/*
       # The GitHub release is created as a draft first so a failed upload
       # stops before npm publication, which cannot be undone. It is made
-      # public only after npm accepts the selector.
+      # public only after npm accepts every package.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           draft: true
@@ -347,11 +355,9 @@ jobs:
             ${{ steps.provenance.outputs.bundle-path }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.22.3
-      - name: publish npm selector
+      # Platform packages publish first and the selector last; a re-run
+      # skips versions npm already has.
+      - name: publish npm platform packages, then the selector
         run: bun scripts/publish-cli.ts
       - name: publish the GitHub release
         env:

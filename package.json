@@ -13,6 +13,7 @@
     "issues:panel:test": "bun test scripts/run-issues-panel.test.ts",
     "issues:run": "./run-issues.sh",
     "package:cli": "bun scripts/stage-cli-package.ts",
+    "package:cli:npm": "bun scripts/stage-cli-package.ts npm",
     "package:cli:version": "bun scripts/set-cli-version.ts",
     "smoke": "turbo run smoke",
     "format": "bun fmt",

@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import { CLI_TARGETS, cliPlatformPackageName } from "./cli-targets";
 import {
+  isPublished,
+  publicationOrder,
   publicationTag,
   publishCommand,
   stableReleaseExists,
@@ -70,4 +73,41 @@ test("trusted publishing requires npm 11.5.1 or later", () => {
   expect(supportsTrustedPublishing("11.5.0")).toBe(false);
   expect(supportsTrustedPublishing("10.9.4")).toBe(false);
   expect(supportsTrustedPublishing("")).toBe(false);
+});
+
+test("every platform package publishes before the selector", () => {
+  const names = publicationOrder().map((entry) => entry.name);
+  expect(names.at(-1)).toBe("@dotrelay/cli");
+  expect(names.slice(0, -1)).toEqual(CLI_TARGETS.map(cliPlatformPackageName));
+  expect(names).toEqual([
+    "@dotrelay/cli-linux-x64",
+    "@dotrelay/cli-linux-arm64",
+    "@dotrelay/cli-darwin-x64",
+    "@dotrelay/cli-darwin-arm64",
+    "@dotrelay/cli-win32-x64",
+    "@dotrelay/cli",
+  ]);
+});
+
+test("a re-run skips only versions the registry already has", () => {
+  const ok = (stdout: string) => ({ stdout, stderr: "", exitCode: 0 });
+  expect(isPublished(ok("1.2.3\n"), "1.2.3")).toBe(true);
+  expect(isPublished(ok(""), "1.2.3")).toBe(false);
+  expect(
+    isPublished(
+      {
+        stdout: "",
+        stderr: "npm error code E404\nnpm error 404 Not Found",
+        exitCode: 1,
+      },
+      "1.2.3",
+    ),
+  ).toBe(false);
+  expect(() =>
+    isPublished(
+      { stdout: "", stderr: "npm error code ECONNRESET", exitCode: 1 },
+      "1.2.3",
+    ),
+  ).toThrow(/npm view failed/);
+  expect(() => isPublished(ok("1.2.4"), "1.2.3")).toThrow(/unexpected/);
 });

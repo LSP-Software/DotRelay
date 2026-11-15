@@ -22,14 +22,16 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-// A project-local install: <project>/node_modules/dotrelay with the
-// selector's bin directory and, optionally, a packaged binary script.
+// A project-local install: <project>/node_modules/@dotrelay/cli with the
+// selector's bin directory and, optionally, the matching platform package
+// holding a binary script.
 const installSelector = async (
   binary?: string,
 ): Promise<Readonly<{ project: string; selector: string }>> => {
   const project = await mkdtemp(join(tmpdir(), "dotrelay-launcher-"));
   directories.push(project);
-  const packageDirectory = join(project, "node_modules", "dotrelay");
+  const scope = join(project, "node_modules", "@dotrelay");
+  const packageDirectory = join(scope, "cli");
   await mkdir(join(packageDirectory, "bin"), { recursive: true });
   for (const file of ["dotrelay.mjs", "is-launchable-executable.mjs"])
     await writeFile(
@@ -41,15 +43,13 @@ const installSelector = async (
     `${JSON.stringify({ name: "@dotrelay/cli", version: "1.2.3" })}\n`,
   );
   if (binary !== undefined) {
-    const target = join(
-      packageDirectory,
-      "dist",
-      platformDirectory,
-      "dotrelay",
+    const platformPackage = join(scope, `cli-${platformDirectory}`);
+    await mkdir(join(platformPackage, "bin"), { recursive: true });
+    await writeFile(
+      join(platformPackage, "package.json"),
+      `${JSON.stringify({ name: `@dotrelay/cli-${platformDirectory}`, version: "1.2.3" })}\n`,
     );
-    await mkdir(join(packageDirectory, "dist", platformDirectory), {
-      recursive: true,
-    });
+    const target = join(platformPackage, "bin", "dotrelay");
     await writeFile(target, binary);
     await chmod(target, 0o755);
   }
@@ -86,7 +86,7 @@ describe.skipIf(process.platform === "win32")("npm selector launcher", () => {
     expect(stdout).not.toContain("planted-binary-ran");
     expect(exitCode).toBe(1);
     expect(stderr).toContain(
-      `no native binary is packaged for ${platformDirectory}`,
+      `the @dotrelay/cli-${platformDirectory} package is missing`,
     );
   });
 
@@ -109,6 +109,19 @@ describe.skipIf(process.platform === "win32")("npm selector launcher", () => {
     expect(stdout).not.toContain("relative-ran");
     expect(exitCode).toBe(1);
     expect(stderr).toContain("DOTRELAY_BINARY must be an absolute path");
+  });
+
+  test("launches the binary from the matching platform package", async () => {
+    const { project, selector } = await installSelector(
+      '#!/bin/sh\necho "platform-package $*"\n',
+    );
+    const child = launch(selector, project);
+    const [stdout, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      child.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe("platform-package --version");
   });
 
   test("forwards SIGTERM to the binary and reports its exit", async () => {

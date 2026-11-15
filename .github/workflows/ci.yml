@@ -404,18 +404,17 @@ jobs:
       - run: |
           mkdir -p packages/dotrelay/dist
           cp -R release-binaries/*/* packages/dotrelay/dist/
-          cp LICENSE.md packages/dotrelay/LICENSE.md
-          # The artifact round-trip drops the executable bit off the staged
-          # native binaries; restore it so the npm tarball ships 755
-          # executables and the package smoke test can run them.
-          find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
-      - run: bun scripts/test-cli-package.ts
-      - run: npm pack --dry-run ./packages/dotrelay
-      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
+      # One npm package per platform binary plus the selector that pins them;
+      # --all fails if any release target is missing. Staging restores the
+      # execute bit the artifact round trip drops.
+      - run: bun run package:cli:npm --all
+      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+. The
+      # package test installs the packed tarballs with the same npm.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.3
-      - name: publish npm dev selector
+      - run: bun scripts/test-cli-package.ts
+      - name: publish npm dev platform packages, then the selector
         run: bun scripts/publish-cli.ts
 
   tracked-tree-clean:
