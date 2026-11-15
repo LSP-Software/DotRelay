@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, open, readFile, unlink } from "node:fs/promises";
+import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   prepareDeviceRecovery,
@@ -355,14 +355,9 @@ export const readRecoveryCode = async (
   if (path !== undefined) {
     let file = "";
     try {
-      // lstat, so a symlink is seen as one: a symlink or non-regular file
-      // never qualifies as a 0600 secret.
-      const info = await lstat(path);
-      if (!info.isFile() || info.isSymbolicLink())
-        throw new Error("not a regular file");
-      if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600)
-        throw new Error("wrong mode");
-      // O_NOFOLLOW closes the gap between the check and the read.
+      // Open first (O_NOFOLLOW refuses a symlink), then check the opened
+      // file itself, so nothing can be swapped in between the check and the
+      // read. A symlink or non-regular file never qualifies as a 0600 secret.
       const handle = await open(
         path,
         process.platform === "win32"
@@ -370,6 +365,10 @@ export const readRecoveryCode = async (
           : constants.O_RDONLY | constants.O_NOFOLLOW,
       );
       try {
+        const info = await handle.stat();
+        if (!info.isFile()) throw new Error("not a regular file");
+        if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600)
+          throw new Error("wrong mode");
         file = await handle.readFile("utf8");
       } finally {
         await handle.close();
