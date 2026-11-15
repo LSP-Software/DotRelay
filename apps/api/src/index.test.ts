@@ -257,6 +257,38 @@ describe("API foundation", () => {
     expect(cached.status).toBe(304);
   });
 
+  test("tells clients where to install the server's GitHub App", async () => {
+    const profile = loadServerProfileConfig({
+      GITHUB_APP_SLUG: "dotrelay-dev",
+      // The alpha gate must not hide it: clients read it without a session.
+      ALPHA_GITHUB_IDS: "1001",
+    });
+    const testApp = createApi({
+      database: {} as never,
+      profile,
+      auth: { api: { getSession: async () => null } } as never,
+    });
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/github-app`,
+      { headers: { Origin: profile.webOrigin } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      installUrl: "https://github.com/apps/dotrelay-dev/installations/new",
+    });
+    expect(response.headers.get("cache-control")).toBe("public, max-age=300");
+  });
+
+  test("answers 404 for the GitHub App when the server has no slug", async () => {
+    const response = await app.request("http://localhost/api/v1/github-app");
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({
+      code: "resource_not_found",
+    });
+  });
+
   test("rejects an untrusted origin and mixed cookie/bearer credentials", async () => {
     const originResponse = await app.request(
       "http://localhost/api/v1/capabilities",

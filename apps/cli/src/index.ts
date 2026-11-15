@@ -76,6 +76,7 @@ import {
   sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
+import { withGitHubAppInstallHint } from "./github-app";
 import { createGitTrackingProbe, type GitTrackingProbe } from "./git-tracking";
 import {
   helpLabelFor,
@@ -2189,6 +2190,17 @@ const execute = async (
   );
 };
 
+const profileNameFromArgs = (
+  args: readonly string[],
+): Readonly<{ profileName?: string }> => {
+  try {
+    const { profile } = parseArguments(args);
+    return profile ? { profileName: profile } : {};
+  } catch {
+    return {};
+  }
+};
+
 export const run = async (
   args: readonly string[],
   runtime: CliRuntime = {},
@@ -2227,7 +2239,18 @@ export const run = async (
           : renderSuccess(parsed, result.value),
       stderr: "",
     };
-  } catch (error) {
+  } catch (thrown) {
+    const error = await withGitHubAppInstallHint(thrown, {
+      store: createFileProfileCatalog(
+        runtime.profilePath ?? profileCatalogPath(),
+      ),
+      ...profileNameFromArgs(args),
+      ...(defaultOrigin ? { defaultOrigin } : {}),
+      ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+      ...(runtime.networkPolicy
+        ? { networkPolicy: runtime.networkPolicy }
+        : {}),
+    });
     const diagnostic = diagnosticForError(error, {
       debug: args.includes("--debug"),
     });

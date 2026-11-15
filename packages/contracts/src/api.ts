@@ -270,6 +270,39 @@ export const parseCapabilitiesDocument = (
   });
 };
 
+// GitHub only shows a GitHub App the repositories it is installed on, and
+// signing in installs nothing. `GET /api/v1/github-app` tells clients where
+// to install the server's app. It is its own document so the capabilities
+// document and problem responses, which installed clients parse strictly,
+// keep their shape.
+export type GitHubAppDocument = Readonly<{
+  readonly installUrl: string;
+}>;
+
+const gitHubAppSlugPattern = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/;
+
+export const isGitHubAppSlug = (value: string): boolean =>
+  gitHubAppSlugPattern.test(value);
+
+export const gitHubAppInstallUrl = (slug: string): string => {
+  if (!isGitHubAppSlug(slug)) contractError("invalid_request");
+  return `https://github.com/apps/${slug}/installations/new`;
+};
+
+const gitHubAppInstallUrlPattern =
+  /^https:\/\/github\.com\/apps\/([a-z0-9-]{1,100})\/installations\/new$/;
+
+export const parseGitHubAppDocument = (value: unknown): GitHubAppDocument => {
+  const body = parseJsonObject<{ installUrl?: unknown }>(value, ["installUrl"]);
+  const match =
+    typeof body.installUrl === "string"
+      ? gitHubAppInstallUrlPattern.exec(body.installUrl)
+      : null;
+  if (!match?.[1] || !isGitHubAppSlug(match[1]))
+    contractError("invalid_request");
+  return Object.freeze({ installUrl: body.installUrl as string });
+};
+
 export type ApiProblem = Readonly<{
   readonly code: ProblemCode;
   readonly status: number;
@@ -350,6 +383,33 @@ export const OPENAPI_DOCUMENT = Object.freeze({
           }),
           "400": Object.freeze({
             description: "Invalid request",
+            content: Object.freeze({
+              "application/problem+json": Object.freeze({
+                schema: Object.freeze({ $ref: "#/components/schemas/Problem" }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+    "/api/v1/github-app": Object.freeze({
+      get: Object.freeze({
+        operationId: "getGitHubApp",
+        description:
+          "Where to install this server's GitHub App. Unauthenticated. 404 when the server has no GITHUB_APP_SLUG.",
+        responses: Object.freeze({
+          "200": Object.freeze({
+            description: "GitHub App install link",
+            content: Object.freeze({
+              "application/json": Object.freeze({
+                schema: Object.freeze({
+                  $ref: "#/components/schemas/GitHubApp",
+                }),
+              }),
+            }),
+          }),
+          "404": Object.freeze({
+            description: "No GitHub App configured",
             content: Object.freeze({
               "application/problem+json": Object.freeze({
                 schema: Object.freeze({ $ref: "#/components/schemas/Problem" }),
@@ -454,6 +514,19 @@ export const OPENAPI_DOCUMENT = Object.freeze({
               descriptionBytes: Object.freeze({ type: "integer", minimum: 0 }),
               valueBytes: Object.freeze({ type: "integer", minimum: 0 }),
             }),
+          }),
+        }),
+      }),
+      GitHubApp: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze(["installUrl"]),
+        properties: Object.freeze({
+          installUrl: Object.freeze({
+            type: "string",
+            format: "uri",
+            pattern:
+              "^https://github\\.com/apps/[a-z0-9-]{1,100}/installations/new$",
           }),
         }),
       }),

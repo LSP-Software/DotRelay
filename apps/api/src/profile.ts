@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import {
   type CapabilitiesDocument,
   CBOR_LIMITS,
+  isGitHubAppSlug,
   SUITE_NAME,
   SUITE_VALUE,
 } from "@dotrelay/contracts";
@@ -22,6 +23,11 @@ export type ServerProfileConfig = Readonly<{
   readonly authSecret: string;
   readonly githubClientId?: string;
   readonly githubClientSecret?: string;
+  /**
+   * `GITHUB_APP_SLUG`, the app's name in `https://github.com/apps/<slug>`.
+   * Clients link users there to install the app on their repositories.
+   */
+  readonly githubAppSlug?: string;
   readonly isProduction: boolean;
   readonly trustProxy: boolean;
   readonly trustedProxies: readonly TrustedProxy[];
@@ -191,6 +197,16 @@ const parseCookiePrefix = (value: string | undefined): string | undefined => {
   return trimmed;
 };
 
+const parseGitHubAppSlug = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (!isGitHubAppSlug(trimmed))
+    throw new Error(
+      "GITHUB_APP_SLUG must be the app's URL name: lowercase letters, digits or inner hyphens",
+    );
+  return trimmed;
+};
+
 export const loadServerProfileConfig = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerProfileConfig => {
@@ -253,6 +269,7 @@ export const loadServerProfileConfig = (
       "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be configured in production",
     );
   }
+  const githubAppSlug = parseGitHubAppSlug(environment.GITHUB_APP_SLUG);
   const trustProxy = environment.SERVER_PROFILE_TRUST_PROXY === "true";
   const trustedProxies = Object.freeze(
     (environment.SERVER_PROFILE_TRUSTED_PROXIES ?? "")
@@ -363,6 +380,7 @@ export const loadServerProfileConfig = (
     authSecret,
     ...(githubClientId ? { githubClientId } : {}),
     ...(githubClientSecret ? { githubClientSecret } : {}),
+    ...(githubAppSlug ? { githubAppSlug } : {}),
     isProduction,
     trustProxy,
     trustedProxies,

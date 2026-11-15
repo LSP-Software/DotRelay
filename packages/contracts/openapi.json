@@ -76,6 +76,34 @@
         }
       }
     },
+    "/api/v1/github-app": {
+      "get": {
+        "operationId": "getGitHubApp",
+        "description": "Where to install this server's GitHub App. Unauthenticated. 404 when the server has no GITHUB_APP_SLUG.",
+        "responses": {
+          "200": {
+            "description": "GitHub App install link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubApp"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No GitHub App configured",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations/{operationId}/begin": {
       "post": {
         "operationId": "beginOperation",
@@ -1600,6 +1628,18 @@
                 "minimum": 0
               }
             }
+          }
+        }
+      },
+      "GitHubApp": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["installUrl"],
+        "properties": {
+          "installUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://github\\.com/apps/[a-z0-9-]{1,100}/installations/new$"
           }
         }
       },

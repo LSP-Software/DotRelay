@@ -282,6 +282,30 @@ describe("Server Profile configuration", () => {
       ).toThrow("COOKIE_PREFIX");
   });
 
+  test("accepts a GITHUB_APP_SLUG shaped like a GitHub App URL name", () => {
+    const base = { BETTER_AUTH_SECRET: "x".repeat(32) };
+    expect(loadServerProfileConfig(base).githubAppSlug).toBeUndefined();
+    expect(
+      loadServerProfileConfig({ ...base, GITHUB_APP_SLUG: " " }).githubAppSlug,
+    ).toBeUndefined();
+    expect(
+      loadServerProfileConfig({ ...base, GITHUB_APP_SLUG: " dotrelay-dev " })
+        .githubAppSlug,
+    ).toBe("dotrelay-dev");
+    for (const invalid of [
+      "DotRelay",
+      "-dotrelay",
+      "dotrelay-",
+      "dot_relay",
+      "dot relay",
+      "https://github.com/apps/dotrelay",
+      "x".repeat(101),
+    ])
+      expect(() =>
+        loadServerProfileConfig({ ...base, GITHUB_APP_SLUG: invalid }),
+      ).toThrow("GITHUB_APP_SLUG");
+  });
+
   test("detects a request that attempts to combine cookie and bearer credentials", () => {
     expect(
       hasMixedCredentials(
