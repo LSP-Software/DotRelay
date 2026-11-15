@@ -8,7 +8,9 @@ from urllib.parse import urlsplit
 
 
 def get(origin, path, origin_header=None):
-    headers = {"Accept": "application/json"}
+    # Cloudflare's browser integrity check rejects Python's default
+    # "Python-urllib" User-Agent with error 1010 (HTTP 403).
+    headers = {"Accept": "application/json", "User-Agent": "dotrelay-deployment-smoke/1"}
     if origin_header:
         headers["Origin"] = origin_header
     request = urllib.request.Request(origin + path, headers=headers)
