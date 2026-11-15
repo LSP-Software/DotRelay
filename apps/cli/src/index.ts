@@ -4,6 +4,7 @@ import {
   type CliDeviceStorage,
   createCliDeviceStorage,
   type DeviceKeyMaterial,
+  deviceKeyFingerprint,
   loadDeviceKeyMaterial,
 } from "@dotrelay/client";
 import { uuidToBytes } from "@dotrelay/contracts";
@@ -599,13 +600,26 @@ const renderDeviceResult = (
         value.via === "recovery-code" ? "recovery code" : "device transfer",
       tone: "accent",
     });
-  if (typeof value.transferId === "string")
+  if (typeof value.transferCode === "string")
+    rows.push({
+      key: "Transfer code",
+      // The person has to carry this value to another device, so the card
+      // prints it whole. It ends with the account fingerprint the receiving
+      // Device checks. Other ids on this card are labels and stay short.
+      value: value.transferCode,
+      tone: "accent",
+    });
+  else if (typeof value.transferId === "string")
     rows.push({
       key: "Transfer ID",
-      // The person has to carry this value to another device, so the card
-      // prints it whole. Other ids on this card are labels and stay short.
       value: value.transferId,
       tone: "accent",
+    });
+  if (typeof value.accountFingerprint === "string")
+    rows.push({
+      key: "Account",
+      value: value.accountFingerprint,
+      tone: "muted",
     });
   if (typeof value.recipientDeviceId === "string")
     rows.push({
@@ -2142,6 +2156,40 @@ const execute = async (
     const boundary = parseBoundary(
       await admin.get("/api/v1/workspace/boundary", boundaryFields),
     );
+    // This Device's key fingerprint comes from its own keys, never from
+    // the service: another Device compares it before sending this one the
+    // account key (ADR 0022).
+    const fingerprint =
+      boundary.device.active && boundary.device.id
+        ? await (async () => {
+            try {
+              const storage =
+                runtime.deviceStorage ??
+                createCliDeviceStorage(profile.pin, localCredentials(runtime), {
+                  recordStore: createFileDeviceRecordStore(
+                    runtime.stateDirectory ??
+                      dirname(runtime.profilePath ?? profileCatalogPath()),
+                  ),
+                });
+              const keys = await loadDeviceKeyMaterial(
+                await storage.load({
+                  pin: profile.pin,
+                  deviceId: uuidToBytes(boundary.device.id ?? ""),
+                }),
+              );
+              if (!keys.encryptionPublicKey || !keys.signingPublicKey)
+                return null;
+              const raw = async (key: CryptoKey) =>
+                new Uint8Array(await crypto.subtle.exportKey("raw", key));
+              return await deviceKeyFingerprint({
+                encryptionPublicKey: await raw(keys.encryptionPublicKey),
+                signingPublicKey: await raw(keys.signingPublicKey),
+              });
+            } catch {
+              return null;
+            }
+          })()
+        : null;
     const devices = [
       ...(boundary.device.active && boundary.device.id
         ? [
@@ -2149,6 +2197,7 @@ const execute = async (
               id: boundary.device.id,
               name: boundary.device.name ?? null,
               current: true,
+              ...(fingerprint ? { fingerprint } : {}),
             },
           ]
         : []),
@@ -2160,7 +2209,11 @@ const execute = async (
     ];
     const lines = devices.map(
       (device) =>
-        `  ${device.current ? paint("▸", "brand") : paint("·", "ghost")}  ${sanitizeCliLine(device.name ?? "unnamed Device")}  ${paint(device.id, "faint")}${device.current ? `  ${paint("this Device", "muted")}` : ""}`,
+        `  ${device.current ? paint("▸", "brand") : paint("·", "ghost")}  ${sanitizeCliLine(device.name ?? "unnamed Device")}  ${paint(device.id, "faint")}${device.current ? `  ${paint("this Device", "muted")}` : ""}${
+          "fingerprint" in device && device.fingerprint
+            ? `\n     ${paint(`key fingerprint ${device.fingerprint}`, "muted")}`
+            : ""
+        }`,
     );
     return {
       value: {

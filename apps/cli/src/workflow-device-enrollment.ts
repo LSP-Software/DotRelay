@@ -33,6 +33,7 @@ import {
   networkFailureCliError,
 } from "./network";
 import { atomicWriteProtectedFile } from "./output";
+import { establishAccountTrust } from "./workflow-account-trust";
 import {
   base64,
   bytesToHex,
@@ -632,7 +633,12 @@ export const approveDeviceEnrollment = async (
   options: WorkflowOptions,
   path: string,
 ): Promise<
-  Readonly<{ enrollmentId: string; deviceId: string; approved: boolean }>
+  Readonly<{
+    enrollmentId: string;
+    deviceId: string;
+    approved: boolean;
+    message: string;
+  }>
 > => {
   const artifact = await readEnrollmentArtifact(path);
   if (
@@ -686,10 +692,59 @@ export const approveDeviceEnrollment = async (
     ["approved", "idempotent"],
     { idempotencyKey: operationId },
   );
+  // The user carried this request from the new Device, so its keys are the
+  // ones they approved. An approver that holds the Account Master Key adds
+  // that Device to the account's signed roster now (ADR 0022): a roster that
+  // lists it is the anchor the new Device checks when it receives the key.
+  const accountMasterKey = await resolveDeviceStorage(options)
+    .loadAccountKey({
+      pin: options.profile.pin,
+      deviceId: uuidToBytes(authorized.deviceId),
+    })
+    .catch(() => null);
+  let listed = false;
+  if (accountMasterKey) {
+    const transcript = await parseDeviceEnrollmentTranscript(
+      parsed.request.transcriptBytes,
+      parsed.request.initiatorSigningPublicKey,
+    );
+    const trust = await establishAccountTrust({
+      options,
+      boundary: authorized.boundary,
+      userId: authorized.userId,
+      deviceId: authorized.deviceId,
+      accountMasterKey,
+      encryptionPublicKey: await rawPublicKey(
+        authorized.keys.encryptionPublicKey as CryptoKey,
+      ),
+      signingPublicKey: await rawPublicKey(
+        authorized.keys.signingPublicKey as CryptoKey,
+      ),
+      approved: [
+        {
+          deviceId: transcript.deviceId,
+          encryptionPublicKey: transcript.encryptionPublicKey,
+          signingPublicKey: transcript.signingPublicKey,
+          addedAtMs: Date.now(),
+        },
+      ],
+    });
+    listed =
+      trust.resolution.users
+        .get(authorized.userId)
+        ?.roster?.devices.some(
+          (device) =>
+            device.deviceId === transcript.deviceId &&
+            device.revokedAtMs === undefined,
+        ) === true;
+  }
   return {
     enrollmentId: artifact.enrollmentId,
     deviceId: artifact.deviceId,
     approved: true,
+    message: listed
+      ? "the new Device is approved and listed in your signed Device list; send it the account key with dotrelay device transfer"
+      : "the new Device is approved. This Device holds no account key, so the new Device joins your signed Device list once it is unlocked",
   };
 };
 

@@ -2,6 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
+  accountFingerprint,
+  deviceKeyFingerprint,
+  formatAccountKeyTransferCode,
   createAccountKeyEnvelope,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
@@ -16,7 +19,6 @@ import {
   createPublicationArtifacts,
   deriveAccountSigningKey,
   emptyAccountTrustPins,
-  retrustTeammate,
   serializeAccountTrustPins,
   verifyAccountDeviceRoster,
   encodeRecoveryCode,
@@ -346,8 +348,109 @@ type TestSigningTrustDevice = Readonly<{
   }>[];
 }>;
 
+// The base64 Account Device roster a User's AMK signs (ADR 0015).
+const signedRosterB64 = async (
+  amk: Uint8Array,
+  userId: string,
+  version: number,
+  devices: Parameters<typeof createAccountDeviceRoster>[0]["devices"],
+): Promise<string> =>
+  Buffer.from(
+    (
+      await createAccountDeviceRoster({
+        serverProfileId: profile.pin.serverProfileId,
+        userId,
+        version,
+        devices,
+        signingKey: await deriveAccountSigningKey(amk, {
+          serverProfileId: profile.pin.serverProfileId,
+          userId,
+        }),
+      })
+    ).canonicalBytes,
+  ).toString("base64");
+
+const hexKey = (value: string): Uint8Array =>
+  Uint8Array.from(Buffer.from(value, "hex"));
+
+// An honest Server Profile after ADR 0015: every teammate a signing trust
+// entry names has published a roster, signed by their own account key, that
+// lists those Devices. This Device's account is covered when the test hands
+// it the Account Master Key.
+const honestRosters = async (
+  input: Readonly<{
+    readonly bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>;
+    readonly signingTrustDevices: readonly TestSigningTrustDevice[];
+    readonly peerDevices: readonly Readonly<{
+      readonly id: string;
+      readonly encryptionPublicKey: string;
+      readonly signingPublicKey?: string;
+    }>[];
+    readonly accountMasterKey?: Uint8Array;
+  }>,
+): Promise<Record<string, string>> => {
+  const byUser = new Map<string, TestSigningTrustDevice[]>();
+  for (const device of input.signingTrustDevices) {
+    if (!device.userId || !device.deviceId) continue;
+    byUser.set(device.userId, [...(byUser.get(device.userId) ?? []), device]);
+  }
+  const entry = (device: TestSigningTrustDevice) => ({
+    deviceId: device.deviceId ?? "",
+    encryptionPublicKey: crypto.getRandomValues(new Uint8Array(32)),
+    signingPublicKey: hexKey(device.signingPublicKey),
+    addedAtMs: 0,
+    ...(typeof device.deviceActiveUntilMs === "number"
+      ? { revokedAtMs: device.deviceActiveUntilMs }
+      : {}),
+  });
+  const rosters: Record<string, string> = {};
+  for (const [userId, devices] of byUser) {
+    if (userId === ids.user) continue;
+    rosters[userId] = await signedRosterB64(
+      generateAccountMasterKey(),
+      userId,
+      1,
+      devices.map(entry),
+    );
+  }
+  if (input.accountMasterKey) {
+    const own = new Map<
+      string,
+      Parameters<typeof createAccountDeviceRoster>[0]["devices"][number]
+    >();
+    own.set(input.bootstrap.deviceId, {
+      deviceId: input.bootstrap.deviceId,
+      encryptionPublicKey: input.bootstrap.x25519PublicKey,
+      signingPublicKey: input.bootstrap.ed25519PublicKey,
+      addedAtMs: 0,
+    });
+    for (const device of byUser.get(ids.user) ?? [])
+      if (!own.has(device.deviceId ?? ""))
+        own.set(device.deviceId ?? "", entry(device));
+    for (const peer of input.peerDevices)
+      if (peer.signingPublicKey && !own.has(peer.id))
+        own.set(peer.id, {
+          deviceId: peer.id,
+          encryptionPublicKey: hexKey(peer.encryptionPublicKey),
+          signingPublicKey: hexKey(peer.signingPublicKey),
+          addedAtMs: 0,
+        });
+    rosters[ids.user] = await signedRosterB64(
+      input.accountMasterKey,
+      ids.user,
+      1,
+      [...own.values()],
+    );
+  }
+  return rosters;
+};
+
 const setup = async (
   options: Readonly<{
+    /** Stored for this Device; its account roster is then served too. */
+    readonly accountMasterKey?: Uint8Array;
+    /** Overrides the honest rosters for the Users it names. */
+    readonly accountRosters?: Readonly<Record<string, string | null>>;
     readonly signingTrustKeys?: readonly string[];
     readonly signingTrustDevices?: readonly TestSigningTrustDevice[];
     readonly revisions?: SyncPageWire["revisions"];
@@ -399,6 +502,11 @@ const setup = async (
       deviceId: ids.device,
     }));
   await deviceStorage.save(bootstrap.bundle);
+  if (options.accountMasterKey)
+    await deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(bootstrap.deviceId) },
+      options.accountMasterKey,
+    );
   // A completed enrollment always records its Device id next to the bundle.
   const { writeDeviceId, deviceMetadataPath } =
     await import("./device-storage");
@@ -428,6 +536,17 @@ const setup = async (
     ...(options.grantsReady !== undefined
       ? { grantsReady: options.grantsReady }
       : {}),
+    accountRosters: {
+      ...(await honestRosters({
+        bootstrap,
+        signingTrustDevices: options.signingTrustDevices ?? [],
+        peerDevices: (options.peerDevices ?? []) as never,
+        ...(options.accountMasterKey
+          ? { accountMasterKey: options.accountMasterKey }
+          : {}),
+      })),
+      ...(options.accountRosters ?? {}),
+    },
   };
   const createdEnvironments: string[] = [];
   const admin: StrictJsonClient = {
@@ -474,7 +593,13 @@ const setup = async (
       trustedRevisionHash: new Uint8Array(48),
       currentHeadId: previous?.id ?? null,
       currentHeadHash: previous?.digest ?? null,
-      projectEpoch: 1n,
+      // An honest page reports the Project's current epoch, never one below
+      // its own history.
+      projectEpoch: revisions.reduce(
+        (highest, revision) =>
+          revision.projectEpoch > highest ? revision.projectEpoch : highest,
+        1n,
+      ),
       revisions,
       nextCursor: null,
     });
@@ -807,7 +932,10 @@ describe("protected CLI workflows", () => {
     });
     if (!bootstrap.keyMaterial.encryptionPublicKey)
       throw new Error("Device encryption public key is missing");
+    // Another Device of this account, listed in its signed roster.
     const peer = await generateSigningKeyPair();
+    const peerId = "bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc";
+    const peerHex = bytesToHex(await rawSigningPublicKey(peer.publicKey));
     const artifacts = await createPublicationArtifacts(
       [
         {
@@ -826,7 +954,7 @@ describe("protected CLI workflows", () => {
         projectId: ids.project,
         environmentId: ids.environment,
         actorUserId: ids.user,
-        actorDeviceId: ids.device,
+        actorDeviceId: peerId,
         projectEpoch: 1,
         expectedHeadId: null,
         expectedHeadHash: null,
@@ -844,7 +972,16 @@ describe("protected CLI workflows", () => {
     const digest = await sha384(revisionObject.bytes);
     const runtime = await setup({
       bootstrap,
-      signingTrustKeys: [bytesToHex(await rawSigningPublicKey(peer.publicKey))],
+      accountMasterKey: generateAccountMasterKey(),
+      signingTrustKeys: [peerHex],
+      peerDevices: [
+        {
+          id: peerId,
+          encryptionPublicKey: "22".repeat(32),
+          signingPublicKey: peerHex,
+          hasEpochGrant: true,
+        } as never,
+      ],
       revisions: [
         {
           id: artifacts.request.revision.id,
@@ -892,7 +1029,9 @@ describe("protected CLI workflows", () => {
     });
     if (!bootstrap.keyMaterial.encryptionPublicKey)
       throw new Error("Device encryption public key is missing");
+    // Another Device of this account, listed in its signed roster.
     const peer = await generateSigningKeyPair();
+    const peerId = "bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc";
     const artifacts = await createPublicationArtifacts(
       [
         {
@@ -911,7 +1050,7 @@ describe("protected CLI workflows", () => {
         projectId: ids.project,
         environmentId: ids.environment,
         actorUserId: ids.user,
-        actorDeviceId: ids.device,
+        actorDeviceId: peerId,
         projectEpoch: 1,
         expectedHeadId: null,
         expectedHeadHash: null,
@@ -929,12 +1068,13 @@ describe("protected CLI workflows", () => {
     const digest = await sha384(revisionObject.bytes);
     const runtime = await setup({
       bootstrap,
+      accountMasterKey: generateAccountMasterKey(),
       signingTrustDevices: [
         {
           signingPublicKey: bytesToHex(
             await rawSigningPublicKey(peer.publicKey),
           ),
-          deviceId: ids.device,
+          deviceId: peerId,
           userId: ids.user,
           deviceActiveFromMs: 0,
           deviceActiveUntilMs: null,
@@ -1093,10 +1233,21 @@ describe("protected CLI workflows", () => {
 
   // A genesis Revision signed by `signingPrivateKey` at `nowMs`, ready to
   // seed the fake service's history.
+  // A teammate whose Membership periods ADR 0017 is about; the honest
+  // Server Profile serves their signed roster.
+  const teammate = {
+    userId: "abababab-abab-4bab-8bab-abababababab",
+    deviceId: "acacacac-acac-4cac-8cac-acacacacacac",
+  } as const;
+
   const seedGenesis = async (
     bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
     signingPrivateKey: CryptoKey,
     nowMs: number,
+    actor: Readonly<{ userId: string; deviceId: string }> = {
+      userId: ids.user,
+      deviceId: ids.device,
+    },
   ): Promise<SyncPageWire["revisions"][number]> => {
     if (!bootstrap.keyMaterial.encryptionPublicKey)
       throw new Error("Device encryption public key is missing");
@@ -1117,8 +1268,8 @@ describe("protected CLI workflows", () => {
         teamId: ids.team,
         projectId: ids.project,
         environmentId: ids.environment,
-        actorUserId: ids.user,
-        actorDeviceId: ids.device,
+        actorUserId: actor.userId,
+        actorDeviceId: actor.deviceId,
         projectEpoch: 1,
         expectedHeadId: null,
         expectedHeadHash: null,
@@ -1180,12 +1331,13 @@ describe("protected CLI workflows", () => {
       bootstrap,
       peer.privateKey,
       authoredAtMs,
+      teammate,
     );
     const currentSinceMs = Date.now() - 60_000;
     const entry = {
       signingPublicKey: bytesToHex(await rawSigningPublicKey(peer.publicKey)),
-      deviceId: ids.device,
-      userId: ids.user,
+      deviceId: teammate.deviceId,
+      userId: teammate.userId,
       deviceActiveFromMs: 0,
       deviceActiveUntilMs: null,
       // The current period alone starts after the Revision was authored.
@@ -1236,8 +1388,8 @@ describe("protected CLI workflows", () => {
           signingPublicKey: bytesToHex(
             await rawSigningPublicKey(peer.publicKey),
           ),
-          deviceId: ids.device,
-          userId: ids.user,
+          deviceId: teammate.deviceId,
+          userId: teammate.userId,
           deviceActiveFromMs: 0,
           deviceActiveUntilMs: null,
           memberSinceMs: currentSinceMs,
@@ -1248,7 +1400,9 @@ describe("protected CLI workflows", () => {
           ],
         },
       ],
-      revisions: [await seedGenesis(bootstrap, peer.privateKey, authoredAtMs)],
+      revisions: [
+        await seedGenesis(bootstrap, peer.privateKey, authoredAtMs, teammate),
+      ],
     });
     const refused = await pullStdout(runtime);
     expect(refused.exitCode).toBe(8);
@@ -4580,7 +4734,26 @@ describe("protected CLI workflows", () => {
 
   test("device recover unlocks a Device from an Account Key Transfer", async () => {
     const amk = generateAccountMasterKey();
-    const runtime = await setup();
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    // The account roster, signed by the key the transfer carries, lists the
+    // sending Device and this one (ADR 0022). Here both are this Device.
+    const runtime = await setup({
+      bootstrap,
+      accountRosters: {
+        [ids.user]: await signedRosterB64(amk, ids.user, 1, [
+          {
+            deviceId: ids.device,
+            encryptionPublicKey: bootstrap.x25519PublicKey,
+            signingPublicKey: bootstrap.ed25519PublicKey,
+            addedAtMs: 0,
+          },
+        ]),
+      },
+    });
     const keyMaterial = runtime.bootstrap.keyMaterial;
     const signingPrivateKey = keyMaterial.signingPrivateKey;
     const encryptionPublicKey = keyMaterial.encryptionPublicKey;
@@ -4602,8 +4775,111 @@ describe("protected CLI workflows", () => {
     const objectB64 = Buffer.from(
       encodeProtocolObject(transfer.object),
     ).toString("base64");
+    const fingerprint = await accountFingerprint(
+      (
+        await deriveAccountSigningKey(amk, {
+          serverProfileId: profile.pin.serverProfileId,
+          userId: ids.user,
+        })
+      ).identity,
+    );
+    const recoverWith = async (code: string) => {
+      const service = accountKeyService(runtime.admin, {
+        transfer: { id: transferIdHex, object: objectB64 },
+      });
+      const result = await run(
+        [
+          "device",
+          "recover",
+          "--profile",
+          "relay",
+          "--transfer",
+          code,
+          "--no-input",
+          "--json",
+        ],
+        {
+          ...runtime,
+          admin: service.admin,
+          fetch: async () => Response.json({}),
+        },
+      );
+      return { result, service };
+    };
+    // A bare transfer id carries no fingerprint, so --no-input refuses it.
+    const bare = await recoverWith(transferIdHex);
+    expect(bare.result.exitCode).toBe(2);
+    expect(JSON.parse(bare.result.stderr)).toMatchObject({
+      code: "account_fingerprint_required",
+    });
+    // A code naming another account's fingerprint is refused.
+    const wrong = await recoverWith(
+      formatAccountKeyTransferCode(transferIdHex, "00".repeat(20)),
+    );
+    expect(wrong.result.exitCode).toBe(5);
+    expect(JSON.parse(wrong.result.stderr)).toMatchObject({
+      code: "account_fingerprint_mismatch",
+    });
+    expect(wrong.service.acknowledgedTransfers()).toHaveLength(0);
+    const { result: recover, service } = await recoverWith(
+      formatAccountKeyTransferCode(transferIdHex, fingerprint),
+    );
+    expect(recover.exitCode).toBe(0);
+    const report = JSON.parse(recover.stdout) as Record<string, unknown>;
+    expect(report.ok).toBe(true);
+    expect(report.via).toBe("transfer");
+    const stored = await runtime.deviceStorage.loadAccountKey({
+      pin: profile.pin,
+      deviceId: uuidToBytes(ids.device),
+    });
+    expect(stored).toBeDefined();
+    expect(new Uint8Array(stored as Uint8Array)).toEqual(new Uint8Array(amk));
+    expect(service.acknowledgedTransfers()).toEqual([transferIdHex]);
+  });
+
+  test("device recover refuses an Account Key the service sealed and signed itself", async () => {
+    // C-3: the service builds a transfer carrying a key it chose, sealed to
+    // this Device and signed by a key it lists as trusted. Only a Device in
+    // the account's own signed roster may hand over the Account Master Key.
+    const attacker = await generateSigningKeyPair();
+    const attackerKeyHex = bytesToHex(
+      await rawSigningPublicKey(attacker.publicKey),
+    );
+    const runtime = await setup({
+      signingTrustKeys: [attackerKeyHex],
+      peerDevices: [
+        {
+          id: ids.approver,
+          encryptionPublicKey: "11".repeat(32),
+          signingPublicKey: attackerKeyHex,
+          hasEpochGrant: true,
+        } as never,
+      ],
+    });
+    const encryptionPublicKey =
+      runtime.bootstrap.keyMaterial.encryptionPublicKey;
+    if (!encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const now = Date.now();
+    const transfer = await createAccountKeyTransfer({
+      serverProfileId: profile.pin.serverProfileId,
+      userId: uuidToBytes(ids.user),
+      deviceId: uuidToBytes(ids.approver),
+      createdAtMs: now,
+      expiresAtMs: now + 3_600_000,
+      accountMasterKey: generateAccountMasterKey(),
+      recipientDeviceId: ids.device,
+      recipientEncryptionPublicKey: encryptionPublicKey,
+      signingPrivateKey: attacker.privateKey,
+    });
+    const transferIdHex = bytesToHex(transfer.transferId);
     const service = accountKeyService(runtime.admin, {
-      transfer: { id: transferIdHex, object: objectB64 },
+      transfer: {
+        id: transferIdHex,
+        object: Buffer.from(encodeProtocolObject(transfer.object)).toString(
+          "base64",
+        ),
+      },
     });
     const recover = await run(
       [
@@ -4622,17 +4898,15 @@ describe("protected CLI workflows", () => {
         fetch: async () => Response.json({}),
       },
     );
-    expect(recover.exitCode).toBe(0);
-    const report = JSON.parse(recover.stdout) as Record<string, unknown>;
-    expect(report.ok).toBe(true);
-    expect(report.via).toBe("transfer");
-    const stored = await runtime.deviceStorage.loadAccountKey({
-      pin: profile.pin,
-      deviceId: uuidToBytes(ids.device),
-    });
-    expect(stored).toBeDefined();
-    expect(new Uint8Array(stored as Uint8Array).length).toBe(32);
-    expect(service.acknowledgedTransfers()).toEqual([transferIdHex]);
+    expect(recover.exitCode).not.toBe(0);
+    expect(service.acknowledgedTransfers()).toHaveLength(0);
+    const stored = await runtime.deviceStorage
+      .loadAccountKey({
+        pin: profile.pin,
+        deviceId: uuidToBytes(ids.device),
+      })
+      .catch(() => null);
+    expect(stored).toBeNull();
   });
 
   test("device recover does not acknowledge a transfer it cannot open", async () => {
@@ -4965,19 +5239,22 @@ describe("protected CLI workflows", () => {
   test("device transfer seals the account key to the receiving Device and it opens back to the same key", async () => {
     const amk = generateAccountMasterKey();
     const peer = await peerX25519();
+    // The receiving Device is in this account's signed roster, so the key
+    // is sealed to its rostered key without a prompt.
+    const peerSigning = await generateSigningKeyPair();
     const runtime = await setup({
+      accountMasterKey: amk,
       peerDevices: [
         {
           id: peer.id,
           encryptionPublicKey: peer.encryptionPublicKey,
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(peerSigning.publicKey),
+          ),
           hasEpochGrant: false,
-        },
+        } as never,
       ],
     });
-    await runtime.deviceStorage.saveAccountKey(
-      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
-      amk,
-    );
     const service = accountKeyService(runtime.admin);
     const result = await run(
       [
@@ -5003,6 +5280,19 @@ describe("protected CLI workflows", () => {
     expect(report.transferId).toBeString();
     expect(report.recipientDeviceId).toBe(peer.id);
     expect(report.expiresAt).toBeString();
+    // The code the person carries ends with this account's fingerprint.
+    const fingerprint = await accountFingerprint(
+      (
+        await deriveAccountSigningKey(amk, {
+          serverProfileId: profile.pin.serverProfileId,
+          userId: ids.user,
+        })
+      ).identity,
+    );
+    expect(report.accountFingerprint).toBe(fingerprint);
+    expect(report.transferCode).toBe(
+      formatAccountKeyTransferCode(String(report.transferId), fingerprint),
+    );
     const posted = service.postedTransfers();
     expect(posted).toHaveLength(1);
     const transferBody = posted[0];
@@ -5043,30 +5333,62 @@ describe("protected CLI workflows", () => {
     const amk = generateAccountMasterKey();
     const first = await peerX25519();
     const second = await peerX25519();
+    const firstSigning = await generateSigningKeyPair();
+    const secondSigning = await generateSigningKeyPair();
+    const secondSigningHex = bytesToHex(
+      await rawSigningPublicKey(secondSigning.publicKey),
+    );
     const runtime = await setup({
+      accountMasterKey: amk,
       peerDevices: [
         {
           id: first.id,
           encryptionPublicKey: first.encryptionPublicKey,
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(firstSigning.publicKey),
+          ),
           hasEpochGrant: true,
           name: "CatchOS",
           clientKind: "cli",
           osName: "Linux",
           clientSummary: "dotrelay-cli",
-        },
-        {
-          // Unlabeled: the picker falls back to the Device id.
-          id: second.id,
-          encryptionPublicKey: second.encryptionPublicKey,
-          hasEpochGrant: false,
-        },
+        } as never,
       ],
     });
-    await runtime.deviceStorage.saveAccountKey(
-      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
-      amk,
-    );
-    const service = accountKeyService(runtime.admin);
+    // The second Device is active but not in the signed roster yet: the
+    // service reports it, and the person compares its fingerprint.
+    const reportsSecond: StrictJsonClient = {
+      ...runtime.admin,
+      get: async (path, fields) => {
+        const body = await runtime.admin.get(path, fields);
+        if (path !== "/api/v1/workspace/boundary") return body;
+        return {
+          ...body,
+          peerDevices: [
+            ...((body.peerDevices as unknown[]) ?? []),
+            {
+              // Unlabeled: the picker falls back to the Device id.
+              id: second.id,
+              encryptionPublicKey: second.encryptionPublicKey,
+              signingPublicKey: secondSigningHex,
+              hasEpochGrant: false,
+            },
+          ],
+        };
+      },
+    };
+    const postedRosters: string[] = [];
+    const service = accountKeyService({
+      ...reportsSecond,
+      post: async (path, body, fields, options) => {
+        if (path === "/api/v1/account-keys/rosters") {
+          postedRosters.push(String(body.object));
+          return { objectId: body.objectId, idempotent: false };
+        }
+        return reportsSecond.post(path, body, fields, options);
+      },
+    });
+    const questions: string[] = [];
     const terminalInput = new PassThrough();
     terminalInput.end();
     const terminalOutput = new PassThrough();
@@ -5081,6 +5403,12 @@ describe("protected CLI workflows", () => {
         terminal: { input: terminalInput, output: terminalOutput },
         prompt: async (question) => {
           if (question === "Device to receive the key") return "2";
+          if (
+            question.startsWith(`Device ${second.id} is not in your signed`)
+          ) {
+            questions.push(question);
+            return "y";
+          }
           throw new Error(`unexpected prompt: ${question}`);
         },
       },
@@ -5096,7 +5424,79 @@ describe("protected CLI workflows", () => {
     // ...and an unlabeled one falls back to its Device id.
     expect(shown).toContain(second.id);
     expect(shown).toContain("holds the project key");
+    expect(shown).toContain("not in your signed Device list yet");
+    // The person confirmed the reported key fingerprint, and the Device was
+    // added to the signed roster before the key was sealed to it.
+    expect(questions[0]).toContain(
+      await deviceKeyFingerprint({
+        encryptionPublicKey: hexKey(second.encryptionPublicKey),
+        signingPublicKey: hexKey(secondSigningHex),
+      }),
+    );
+    expect(postedRosters).toHaveLength(1);
+    const { identity } = await deriveAccountSigningKey(amk, {
+      serverProfileId: profile.pin.serverProfileId,
+      userId: ids.user,
+    });
+    const extended = await verifyAccountDeviceRoster(
+      Buffer.from(postedRosters[0] ?? "", "base64"),
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        userId: ids.user,
+        identity,
+      },
+    );
+    expect(extended.devices.map((device) => device.deviceId)).toContain(
+      second.id,
+    );
     expect(service.postedTransfers()[0]?.recipientDeviceId).toBe(second.id);
+  });
+
+  test("device transfer under --no-input refuses a Device the signed roster does not list", async () => {
+    const amk = generateAccountMasterKey();
+    const peer = await peerX25519();
+    const runtime = await setup({ accountMasterKey: amk });
+    const unlisted: StrictJsonClient = {
+      ...runtime.admin,
+      get: async (path, fields) => {
+        const body = await runtime.admin.get(path, fields);
+        if (path !== "/api/v1/workspace/boundary") return body;
+        return {
+          ...body,
+          peerDevices: [
+            {
+              id: peer.id,
+              encryptionPublicKey: peer.encryptionPublicKey,
+              signingPublicKey: "33".repeat(32),
+              hasEpochGrant: false,
+            },
+          ],
+        };
+      },
+    };
+    const service = accountKeyService(unlisted);
+    const result = await run(
+      [
+        "device",
+        "transfer",
+        "--profile",
+        "relay",
+        "--to",
+        peer.id,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(4);
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      code: "transfer_recipient_unverified",
+    });
+    expect(service.postedTransfers()).toHaveLength(0);
   });
 
   test("device transfer refuses a recipient that is not an active Device", async () => {
@@ -5477,8 +5877,15 @@ describe("peer grant provisioning during ordinary reads", () => {
   type TestPeer = Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
+    readonly signingPublicKey: string;
     readonly hasEpochGrant: boolean;
   }>;
+
+  // Keys go only to another Device of this account that its signed roster
+  // lists (ADR 0015, ADR 0022), so this Device holds the account key and the
+  // honest roster lists the peer.
+  const setupWithAccount = (options: Parameters<typeof setup>[0] = {}) =>
+    setup({ accountMasterKey: generateAccountMasterKey(), ...options });
 
   // Seals a known Project epoch key into the grant the service returns for
   // the presented Device, so the CLI exercises the reuse-and-wrap path.
@@ -5507,10 +5914,14 @@ describe("peer grant provisioning during ordinary reads", () => {
 
   const makePeer = async (hasEpochGrant: boolean): Promise<TestPeer> => {
     const peer = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
     return {
       id: peerDeviceId,
       encryptionPublicKey: bytesToHex(
         new Uint8Array(await crypto.subtle.exportKey("raw", peer.publicKey)),
+      ),
+      signingPublicKey: bytesToHex(
+        await rawSigningPublicKey(signing.publicKey),
       ),
       hasEpochGrant,
     };
@@ -5546,7 +5957,7 @@ describe("peer grant provisioning during ordinary reads", () => {
       deviceId: ids.device,
     });
     const peer = await makePeer(true);
-    const runtime = await setup({
+    const runtime = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(
         bootstrap,
@@ -5600,7 +6011,7 @@ describe("peer grant provisioning during ordinary reads", () => {
       deviceId: ids.device,
     });
     const peer = await makePeer(false);
-    const runtime = await setup({
+    const runtime = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(
         bootstrap,
@@ -5674,7 +6085,7 @@ describe("peer grant provisioning during ordinary reads", () => {
       deviceId: ids.device,
     });
     const peer = await makePeer(false);
-    const runtime = await setup({
+    const runtime = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(
         bootstrap,
@@ -5721,7 +6132,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     });
     const peer = await makePeer(false);
     const epochKey = crypto.getRandomValues(new Uint8Array(32));
-    const first = await setup({
+    const first = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(bootstrap, epochKey),
       peerDevices: [{ ...peer, hasEpochGrant: false }],
@@ -5751,7 +6162,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(firstScripted.calls).toHaveLength(1);
     // The service now reports the peer as holding the epoch grant; the next
     // read must reuse it and write nothing.
-    const second = await setup({
+    const second = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(bootstrap, epochKey),
       peerDevices: [{ ...peer, hasEpochGrant: true }],
@@ -6026,6 +6437,9 @@ describe("pull after Project epoch rotations", () => {
           ).object,
         ),
       ).toString("base64");
+    const authorKeyHex = bytesToHex(
+      await rawSigningPublicKey(author.publicKey),
+    );
     return {
       bootstrap,
       author,
@@ -6036,7 +6450,22 @@ describe("pull after Project epoch rotations", () => {
       epochKeys,
       authorUserId,
       authorDeviceId,
-      authorKeyHex: bytesToHex(await rawSigningPublicKey(author.publicKey)),
+      authorKeyHex,
+      // The author's own account has published a roster listing the
+      // Device that signs every Revision (ADR 0015).
+      authorRoster: await signedRosterB64(
+        generateAccountMasterKey(),
+        authorUserId,
+        1,
+        [
+          {
+            deviceId: authorDeviceId,
+            encryptionPublicKey: new Uint8Array(32).fill(9),
+            signingPublicKey: hexKey(authorKeyHex),
+            addedAtMs: 0,
+          },
+        ],
+      ),
     };
   };
 
@@ -6096,6 +6525,7 @@ describe("pull after Project epoch rotations", () => {
     const postedLinks: Record<string, unknown>[] = [];
     const postedRosters: Record<string, unknown>[] = [];
     const rosters: Record<string, string | null> = {
+      [project.authorUserId]: project.authorRoster,
       ...(options.accountRosters ?? {}),
     };
     const result = await run(
@@ -6601,7 +7031,11 @@ describe("pull against an unreadable Manifest", () => {
     });
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const heldKey = crypto.getRandomValues(new Uint8Array(32));
     const laneKey = crypto.getRandomValues(new Uint8Array(32));
     const artifacts = await createPublicationArtifacts(
@@ -6686,7 +7120,11 @@ describe("pull against an unreadable Manifest", () => {
     });
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const heldKey = crypto.getRandomValues(new Uint8Array(32));
     const laneKey = crypto.getRandomValues(new Uint8Array(32));
     const first = await createPublicationArtifacts(
@@ -6845,7 +7283,11 @@ describe("pull against an unreadable Manifest", () => {
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
     const stale = await generateEncryptionKeyPair();
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const artifacts = await createPublicationArtifacts(
       [
         {
@@ -6993,7 +7435,11 @@ describe("publication baseline reconciliation", () => {
     });
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const heldKey = crypto.getRandomValues(new Uint8Array(32));
     const baseContext = {
       serverProfileId: profile.pin.serverProfileId,

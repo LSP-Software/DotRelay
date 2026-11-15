@@ -570,6 +570,17 @@ const draftForRollback = (
   return Object.freeze([...fromRemote, ...restored]);
 };
 
+// The verified head's Project epoch: a publication never seals under an
+// older one (ADR 0022).
+const parentEpoch = (
+  page: Awaited<ReturnType<typeof syncWorkflow>>["page"],
+): Readonly<{ parentProjectEpoch?: number }> => {
+  const head = page.revisions.find(
+    (revision) => revision.id === page.currentHeadId,
+  );
+  return head ? { parentProjectEpoch: Number(head.projectEpoch) } : {};
+};
+
 // The authored-at floor for a Revision chained onto the synced head: this
 // Device's activation, its Membership activation, and the head's own
 // authored-at instant, whichever is latest.
@@ -667,6 +678,7 @@ export const publish = async (
     expectedHeadId: synced.page.currentHeadId,
     expectedHeadHash: synced.page.currentHeadHash,
     projectEpoch: safeProjectEpoch(synced.page.projectEpoch),
+    ...parentEpoch(synced.page),
     mutation: effectiveMutation,
     ...(rollback
       ? {
@@ -906,6 +918,7 @@ export const shareEnvironmentWithPeerDevices = async (
     expectedHeadId: synced.page.currentHeadId,
     expectedHeadHash: synced.page.currentHeadHash,
     projectEpoch: safeProjectEpoch(synced.page.projectEpoch),
+    ...parentEpoch(synced.page),
     mutation: synced.page.currentHeadId ? "MANIFEST_UPDATE" : "GENESIS",
   };
   // Another User's User-defined Value is never disclosed to this Device, so

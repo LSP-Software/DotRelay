@@ -1,5 +1,7 @@
 import {
+  accountFingerprint,
   type AccountTrustResolution,
+  confirmTeammateIdentity,
   createMembershipProvisioning,
   decideDeviceTrust,
   deriveAccountSigningKey,
@@ -16,7 +18,7 @@ import {
   saveAccountTrustPins,
 } from "./workflow-account-trust";
 import {
-  confirmSilent,
+  confirmPrompt,
   createDeviceAdmin,
   fromBase64,
   hexToBytes,
@@ -151,6 +153,15 @@ export const assertShareRecipients = (
     throw new CliError(
       "crypto",
       `this Member's account key changed. Compare their fingerprint (dotrelay team members --fingerprints) and run dotrelay team trust ${memberUserId} before sharing keys`,
+      {},
+      "trust_failed",
+    );
+  // Keys go only to Devices a roster signed by the Member's account key
+  // lists; without one there is nothing to seal to (ADR 0022).
+  if (!member || member.status !== "verified")
+    throw new CliError(
+      "conflict",
+      "this Member has no signed Device list yet. Ask them to unlock DotRelay on one of their Devices (dotrelay device recover, or the web app), then share the keys again",
       {},
       "trust_failed",
     );
@@ -356,15 +367,45 @@ export const shareProjectKeys = async (
   const who = member.name ?? reference;
   const projectCount = plan.projects.length;
   const deviceCount = plan.devices.length;
-  const question = `Share the keys for ${projectCount} Project${projectCount === 1 ? "" : "s"} with ${who} (${deviceCount} Device${deviceCount === 1 ? "" : "s"})?`;
+  // Sharing keys is the decision that makes a new Member's account key
+  // trusted for keys (ADR 0022), so the question names its fingerprint.
+  const memberTrust = resolution.users.get(plan.userId);
+  const fingerprint = memberTrust?.identity
+    ? await accountFingerprint(memberTrust.identity)
+    : null;
+  const question = `Share the keys for ${projectCount} Project${projectCount === 1 ? "" : "s"} with ${who} (${deviceCount} Device${deviceCount === 1 ? "" : "s"})?${
+    fingerprint && !memberTrust?.confirmed
+      ? ` Their account fingerprint is ${fingerprint}; compare it with them first.`
+      : ""
+  }`;
   if (options.noInput && !options.force)
     throw new CliInvocationError(
       "--no-input requires --force to confirm sharing the Project keys",
     );
   if (!(options.noInput && options.force)) {
-    if (!(await confirmSilent(options, question)))
+    if (!(await confirmPrompt(options, question)))
       throw new CliInvocationError("sharing the Project keys was declined");
   }
+  if (memberTrust && !memberTrust.confirmed && roster !== null)
+    try {
+      await saveAccountTrustPins(
+        options,
+        (
+          await confirmTeammateIdentity(resolution.pins, {
+            serverProfileId: options.profile.pin.serverProfileId,
+            userId: plan.userId,
+            roster: fromBase64(roster, "Account roster"),
+          })
+        ).pins,
+      );
+    } catch {
+      throw new CliError(
+        "crypto",
+        "the Member's signed Device list does not verify; no keys were shared",
+        {},
+        "trust_failed",
+      );
+    }
   const projectKeys = new Map<string, Uint8Array>();
   try {
     for (const project of plan.projects) {

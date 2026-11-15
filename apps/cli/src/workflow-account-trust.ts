@@ -22,7 +22,9 @@ import {
   createDeviceAdmin,
   fromBase64,
   hexToBytes,
+  reportedAccountSigningKeys,
   type SigningTrustDevice,
+  type VerifiedSigners,
   type WorkflowOptions,
 } from "./workflow-core";
 
@@ -74,8 +76,8 @@ const rosterBytes = (boundary: Boundary): Map<string, Uint8Array | null> =>
     }),
   );
 
-// The Devices the service reports for this User, used only for the first
-// roster (TOFU at upgrade) and to record revocations in later versions.
+// The Devices the service reports revoked for this User. A roster version
+// records them as revoked; nothing the service reports ever adds a Device.
 const reportedOwnDevices = (
   boundary: Boundary,
   userId: string,
@@ -97,28 +99,43 @@ const reportedOwnDevices = (
       // A malformed key is not reported.
     }
   }
-  for (const peer of boundary.peerDevices) {
-    if (reported.has(peer.id)) continue;
-    try {
-      reported.set(peer.id, {
-        deviceId: peer.id,
-        encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
-        signingPublicKey: hexToBytes(peer.signingPublicKey),
-        addedAtMs: 0,
-      });
-    } catch {
-      // A malformed key is not reported.
-    }
-  }
   return [...reported.values()];
 };
 
-// Narrows the boundary to keys a verified roster vouches for. Users without
-// a roster keep today's behaviour; blocked Users contribute nothing.
+// The keys verified rosters vouch for, by what each may sign.
+const verifiedSignersFor = (
+  boundary: Boundary,
+  resolution: AccountTrustResolution,
+  ownUserId: string,
+): VerifiedSigners => {
+  const account: string[] = [];
+  const grant: string[] = [];
+  const history: string[] = [];
+  for (const user of resolution.users.values()) {
+    if (user.status !== "verified" || !user.roster) continue;
+    for (const device of user.roster.devices) {
+      const key = bytesToHex(device.signingPublicKey);
+      history.push(key);
+      if (user.userId === ownUserId) account.push(key);
+      if (user.confirmed && device.revokedAtMs === undefined) grant.push(key);
+    }
+  }
+  return Object.freeze({
+    account: Object.freeze(account),
+    reportedAccount: Object.freeze([...reportedAccountSigningKeys(boundary)]),
+    grant: Object.freeze(grant),
+    history: Object.freeze(history),
+  });
+};
+
+// Narrows the boundary to keys a verified roster vouches for (ADR 0015,
+// ADR 0022). A User without a verifiable roster, and a User the rosters
+// leave out, contributes nothing; so does a blocked User.
 export const applyAccountTrust = (
   boundary: Boundary,
   resolution: AccountTrustResolution,
   ownUserId: string,
+  local?: Readonly<{ deviceId: string; signingPublicKey: Uint8Array }>,
 ): Boundary => {
   const signingTrustDevices: SigningTrustDevice[] = [];
   for (const device of boundary.signingTrustDevices) {
@@ -128,16 +145,24 @@ export const applyAccountTrust = (
     } catch {
       continue;
     }
+    // This Device's own entry carries its own key, which no roster needs to
+    // vouch for; its windows also set the authored-at floor.
+    if (
+      local &&
+      device.userId === ownUserId &&
+      device.deviceId.toLowerCase() === local.deviceId.toLowerCase() &&
+      bytesToHex(signingPublicKey) === bytesToHex(local.signingPublicKey)
+    ) {
+      signingTrustDevices.push(device);
+      continue;
+    }
     const decision = decideDeviceTrust(resolution, {
       userId: device.userId,
       deviceId: device.deviceId,
       signingPublicKey,
     });
     if (!decision.trusted) continue;
-    const revokedAtMs =
-      decision.verified && "revokedAtMs" in decision
-        ? decision.revokedAtMs
-        : undefined;
+    const revokedAtMs = decision.revokedAtMs;
     signingTrustDevices.push(
       revokedAtMs === undefined
         ? device
@@ -150,42 +175,25 @@ export const applyAccountTrust = (
           },
     );
   }
-  const own = resolution.users.get(ownUserId);
-  const ownRosterKeys =
-    own?.status === "verified" && own.roster
-      ? new Set(
-          own.roster.devices.map((device) =>
-            bytesToHex(device.signingPublicKey),
-          ),
-        )
-      : null;
-  const keptKeys = new Set(
-    signingTrustDevices.map((device) => device.signingPublicKey.toLowerCase()),
-  );
+  const verifiedSigners = verifiedSignersFor(boundary, resolution, ownUserId);
+  const vouched = new Set(verifiedSigners.history);
   const signingTrustKeys = boundary.signingTrustKeys.filter((key) =>
-    boundary.signingTrustDevices.length > 0
-      ? keptKeys.has(key.toLowerCase())
-      : ownRosterKeys === null
-        ? own === undefined || !isBlockingStatus(own.status)
-        : ownRosterKeys.has(key.toLowerCase()),
+    vouched.has(key.toLowerCase()),
   );
+  // Peers receive the Project Epoch Key and the Account Master Key, so each
+  // must be an active Device of this account's verified roster with both of
+  // its rostered keys.
   const peerDevices = boundary.peerDevices.filter((peer) => {
     try {
-      // A roster-verified peer must match both keys; without a roster the
-      // service's report is all there is.
-      if (own?.status === "verified" && peer.signingPublicKey.length !== 64)
-        return false;
       return decideDeviceTrust(
         resolution,
         {
           userId: ownUserId,
           deviceId: peer.id,
-          ...(peer.signingPublicKey.length > 0
-            ? { signingPublicKey: hexToBytes(peer.signingPublicKey) }
-            : {}),
+          signingPublicKey: hexToBytes(peer.signingPublicKey),
           encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
         },
-        { requireActive: true },
+        { requireActive: true, purpose: "keys" },
       ).trusted;
     } catch {
       return false;
@@ -195,6 +203,7 @@ export const applyAccountTrust = (
     ...boundary,
     signingTrustDevices,
     signingTrustKeys,
+    verifiedSigners,
     peerDevices,
   });
 };
@@ -208,6 +217,9 @@ export type AccountTrustOutcome = Readonly<{
 // Verifies the service's rosters, publishes this User's next roster when
 // this Device holds the AMK and the roster is missing or stale, saves the
 // pins, and returns the boundary narrowed to roster-verified keys.
+// `approved` names Devices the user approved on this Device (an enrollment
+// it approved, an Account Key Transfer target the user confirmed); they join
+// the roster with this publication.
 export const establishAccountTrust = async (
   input: Readonly<{
     readonly options: WorkflowOptions;
@@ -217,6 +229,7 @@ export const establishAccountTrust = async (
     readonly accountMasterKey: Uint8Array | null;
     readonly encryptionPublicKey: Uint8Array;
     readonly signingPublicKey: Uint8Array;
+    readonly approved?: readonly OwnDeviceReport[];
   }>,
 ): Promise<AccountTrustOutcome> => {
   const { options, boundary, userId } = input;
@@ -237,14 +250,17 @@ export const establishAccountTrust = async (
       ownUserId: userId,
       ownIdentity: signingKey?.identity ?? null,
       rosters,
+      mentionedUserIds: boundary.signingTrustDevices.map(
+        (device) => device.userId,
+      ),
     });
   let resolution = await resolve();
-  let own = resolution.users.get(userId);
+  const own = resolution.users.get(userId);
   if (own && isBlockingStatus(own.status))
     throw new CliError(
       "crypto",
       own.status === "rollback"
-        ? "the Server Profile returned an older Device roster for this account than this installation already verified. Do not trust this Server Profile until you have checked it"
+        ? "the Server Profile returned an older Device roster for this account than this installation already verified, or none at all. Do not trust this Server Profile until you have checked it"
         : "the Server Profile returned a Device roster for this account that the account key did not sign. Do not trust this Server Profile until you have checked it",
       { status: own.status },
       "account_roster_untrusted",
@@ -263,6 +279,7 @@ export const establishAccountTrust = async (
         addedAtMs: Date.now(),
       },
       reported: reportedOwnDevices(boundary, userId),
+      ...(input.approved ? { approved: input.approved } : {}),
     });
     if (plan) {
       const roster = await createAccountDeviceRoster({
@@ -286,7 +303,6 @@ export const establishAccountTrust = async (
         );
         rosters.set(userId, roster.canonicalBytes);
         resolution = await resolve();
-        own = resolution.users.get(userId);
       } catch {
         // Another Device of this User published first; the next run reads
         // and extends its roster.
@@ -302,8 +318,18 @@ export const establishAccountTrust = async (
     notices.push(
       `${blocked.length} teammate account key${blocked.length === 1 ? "" : "s"} changed or rolled back; their Devices are not trusted. Run dotrelay team members --fingerprints, compare out of band, then dotrelay team trust <user-id>`,
     );
+  const firstSight = [...resolution.users.values()].filter(
+    (user) => user.newlyPinned,
+  );
+  if (firstSight.length > 0)
+    notices.push(
+      `Pinned ${firstSight.length} teammate account key${firstSight.length === 1 ? "" : "s"} seen for the first time on this installation. Their Revisions verify, but no Project key is taken from them until you compare fingerprints (dotrelay team members --fingerprints) and run dotrelay team trust <user-id>`,
+    );
   return Object.freeze({
-    boundary: applyAccountTrust(boundary, resolution, userId),
+    boundary: applyAccountTrust(boundary, resolution, userId, {
+      deviceId: input.deviceId,
+      signingPublicKey: input.signingPublicKey,
+    }),
     resolution,
     notices,
   });

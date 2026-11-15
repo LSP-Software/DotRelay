@@ -3,9 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  createAccountDeviceRoster,
   createCliDeviceStorage,
   createDeviceBootstrap,
   createMemoryDeviceRecordStore,
+  deriveAccountSigningKey,
 } from "@dotrelay/client";
 import {
   createProblem,
@@ -837,6 +839,33 @@ describe("team share-keys", () => {
     const memberPublic = Buffer.from(
       await crypto.subtle.exportKey("raw", memberKey.publicKey),
     ).toString("hex");
+    // The Member's own account key signed the roster listing that Device
+    // (ADR 0015); keys go only to the Devices it lists.
+    const memberAccountKey = crypto.getRandomValues(new Uint8Array(32));
+    const memberRoster = Buffer.from(
+      (
+        await createAccountDeviceRoster({
+          serverProfileId,
+          userId: memberUserId,
+          version: 1,
+          devices: [
+            {
+              deviceId: memberDeviceId,
+              encryptionPublicKey: new Uint8Array(
+                Buffer.from(memberPublic, "hex"),
+              ),
+              signingPublicKey: crypto.getRandomValues(new Uint8Array(32)),
+              addedAtMs: 0,
+            },
+          ],
+          signingKey: await deriveAccountSigningKey(memberAccountKey, {
+            serverProfileId,
+            userId: memberUserId,
+          }),
+        })
+      ).canonicalBytes,
+    ).toString("base64");
+    let servedRoster: string | null = memberRoster;
     const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
     const admin: StrictJsonClient = {
       get: async (path) => {
@@ -866,7 +895,7 @@ describe("team share-keys", () => {
             devices: [
               { id: memberDeviceId, encryptionPublicKey: memberPublic },
             ],
-            accountRoster: null,
+            accountRoster: servedRoster,
           };
         if (path === "/api/v1/workspace/boundary") return boundaryFor(null);
         throw new Error(`unexpected GET ${path}`);
@@ -905,6 +934,29 @@ describe("team share-keys", () => {
       );
       expect(activation?.body).toMatchObject({ grants: [] });
       expect(typeof activation?.body.operationId).toBe("string");
+      // Without a signed roster for the Member there is nothing to seal to.
+      servedRoster = null;
+      posts.length = 0;
+      const refused = await run(
+        [
+          "team",
+          "share-keys",
+          "octocat",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        { ...state.runtime, admin },
+      );
+      expect(refused.exitCode).not.toBe(0);
+      expect(JSON.parse(refused.stderr)).toMatchObject({
+        code: "trust_failed",
+      });
+      expect(posts.some((post) => post.path.endsWith("/provision"))).toBe(
+        false,
+      );
     } finally {
       await state.cleanup();
     }
