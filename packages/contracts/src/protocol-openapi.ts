@@ -185,6 +185,71 @@ const invitationOutcomeResponses = (
   });
 };
 
+const noStoreJson = (
+  description: string,
+  schema: Readonly<Record<string, unknown>>,
+) =>
+  Object.freeze({
+    description,
+    headers: Object.freeze({
+      "Cache-Control": Object.freeze({
+        schema: Object.freeze({ type: "string", const: "no-store" }),
+      }),
+    }),
+    content: Object.freeze({
+      "application/json": Object.freeze({ schema }),
+    }),
+  });
+
+const nullable = (schema: Readonly<Record<string, unknown>>) =>
+  Object.freeze({ oneOf: Object.freeze([schema, { type: "null" }]) });
+
+const environmentSummarySchema = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "id",
+    "projectId",
+    "label",
+    "lifecycle",
+    "currentHeadId",
+    "currentHeadHash",
+  ]),
+  properties: Object.freeze({
+    id: Object.freeze({ type: "string", format: "uuid" }),
+    projectId: Object.freeze({ type: "string", format: "uuid" }),
+    label: Object.freeze({ type: "string" }),
+    lifecycle: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["active", "archived"]),
+    }),
+    currentHeadId: nullable({ type: "string", format: "uuid" }),
+    currentHeadHash: nullable({ type: "string", pattern: "^[0-9a-f]{96}$" }),
+  }),
+});
+
+const projectWithEnvironmentSchema = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "id",
+    "teamId",
+    "githubRepositoryId",
+    "lifecycle",
+    "environment",
+  ]),
+  properties: Object.freeze({
+    id: Object.freeze({ type: "string", format: "uuid" }),
+    teamId: Object.freeze({ type: "string", format: "uuid" }),
+    githubRepositoryId: Object.freeze({ type: "string" }),
+    lifecycle: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["active", "archived"]),
+    }),
+    environment: environmentSummarySchema,
+  }),
+});
+
 export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
   // Device proof of possession (ADR 0020): a session obtains a challenge,
   // the Device signs it, and the signature buys a short-lived proof that
@@ -451,6 +516,116 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
       }),
     ),
   }),
+  "/api/v1/teams/{teamId}/memberships": Object.freeze({
+    get: authenticatedOperation(
+      Object.freeze({
+        operationId: "listTeamMemberships",
+        description:
+          "Lists the Team's Memberships for a signed-in Member (no Device needed). Owners and admins also get roles, timestamps, pending and removed Memberships, and pending invitations. githubLogin is the login the Member last signed in with (null until recorded): display data that may be stale, never an identity.",
+        parameters: Object.freeze([invitationParameters.TeamId]),
+        responses: Object.freeze({
+          "200": noStoreJson(
+            "Memberships",
+            Object.freeze({
+              type: "object",
+              additionalProperties: false,
+              required: Object.freeze(["memberships", "invitations"]),
+              properties: Object.freeze({
+                memberships: Object.freeze({
+                  type: "array",
+                  items: Object.freeze({
+                    type: "object",
+                    additionalProperties: false,
+                    required: Object.freeze([
+                      "membershipId",
+                      "userId",
+                      "name",
+                      "image",
+                      "githubSubject",
+                      "githubLogin",
+                      "accountRoster",
+                      "lifecycle",
+                    ]),
+                    properties: Object.freeze({
+                      membershipId: Object.freeze({
+                        type: "string",
+                        format: "uuid",
+                      }),
+                      userId: Object.freeze({ type: "string", format: "uuid" }),
+                      name: nullable({ type: "string" }),
+                      image: nullable({ type: "string" }),
+                      githubSubject: Object.freeze({ type: "string" }),
+                      githubLogin: nullable({
+                        type: "string",
+                        pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$",
+                      }),
+                      accountRoster: nullable({
+                        type: "string",
+                        contentEncoding: "base64",
+                      }),
+                      role: Object.freeze({
+                        type: "string",
+                        enum: Object.freeze(["OWNER", "ADMIN", "MEMBER"]),
+                      }),
+                      lifecycle: Object.freeze({
+                        type: "string",
+                        enum: Object.freeze([
+                          "ACTIVE",
+                          "PENDING_KEY_GRANT",
+                          "REMOVED",
+                        ]),
+                      }),
+                      createdAt: Object.freeze({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                      activatedAt: nullable({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                      removedAt: nullable({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                    }),
+                  }),
+                }),
+                invitations: Object.freeze({
+                  type: "array",
+                  items: Object.freeze({
+                    type: "object",
+                    additionalProperties: false,
+                    required: Object.freeze([
+                      "invitationId",
+                      "providerSubject",
+                      "createdAt",
+                      "expiresAt",
+                    ]),
+                    properties: Object.freeze({
+                      invitationId: Object.freeze({
+                        type: "string",
+                        format: "uuid",
+                      }),
+                      providerSubject: Object.freeze({ type: "string" }),
+                      createdAt: Object.freeze({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                      expiresAt: Object.freeze({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          ),
+          ...problemResponses,
+        }),
+      }),
+    ),
+  }),
   "/api/v1/teams/{teamId}/invitations/{invitationId}/revoke": Object.freeze({
     post: authenticatedOperation(
       Object.freeze({
@@ -510,6 +685,108 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
             }),
           }),
         ),
+      }),
+    ),
+  }),
+  "/api/v1/projects": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "linkProject",
+        description:
+          "An owner or admin links a GitHub Repository to a new Project in the Team, with its first Environment. environmentLabel names that Environment (same rules as creating one; default `default`). A Repository that already has an active Project returns it with its first active Environment and ignores the label.",
+        parameters: Object.freeze([
+          protocolParameters.DeviceIdHeader,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        requestBody: Object.freeze({
+          required: true,
+          content: Object.freeze({
+            "application/json": Object.freeze({
+              schema: Object.freeze({
+                type: "object",
+                additionalProperties: false,
+                required: Object.freeze([
+                  "teamId",
+                  "repositoryHost",
+                  "repositoryOwner",
+                  "repositoryName",
+                  "githubRepositoryId",
+                ]),
+                properties: Object.freeze({
+                  teamId: Object.freeze({ type: "string", format: "uuid" }),
+                  repositoryHost: Object.freeze({
+                    type: "string",
+                    const: "github.com",
+                  }),
+                  repositoryOwner: Object.freeze({
+                    type: "string",
+                    minLength: 1,
+                  }),
+                  repositoryName: Object.freeze({
+                    type: "string",
+                    minLength: 1,
+                  }),
+                  githubRepositoryId: Object.freeze({
+                    type: "string",
+                    pattern: "^[1-9][0-9]{0,18}$",
+                  }),
+                  environmentLabel: Object.freeze({
+                    type: "string",
+                    pattern: "^[A-Za-z][A-Za-z0-9._-]{0,62}$",
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+        responses: Object.freeze({
+          "200": noStoreJson("Existing Project", projectWithEnvironmentSchema),
+          "201": noStoreJson("Linked Project", projectWithEnvironmentSchema),
+          ...problemResponses,
+        }),
+      }),
+    ),
+  }),
+  "/api/v1/projects/{projectId}/environments": Object.freeze({
+    get: authenticatedOperation(
+      Object.freeze({
+        operationId: "listProjectEnvironments",
+        description:
+          "Lists the Project's Environments for an active Member, oldest first. currentHeadAuthoredAtMs is the head Revision's authored-at instant (null without a Revision); a Project rotation floors its signing time on the latest one.",
+        parameters: Object.freeze([
+          protocolParameters.ProjectId,
+          protocolParameters.DeviceIdHeader,
+        ]),
+        responses: Object.freeze({
+          "200": noStoreJson(
+            "Environments",
+            Object.freeze({
+              type: "object",
+              additionalProperties: false,
+              required: Object.freeze(["environments"]),
+              properties: Object.freeze({
+                environments: Object.freeze({
+                  type: "array",
+                  items: Object.freeze({
+                    ...environmentSummarySchema,
+                    required: Object.freeze([
+                      ...environmentSummarySchema.required,
+                      "currentHeadAuthoredAtMs",
+                    ]),
+                    properties: Object.freeze({
+                      ...environmentSummarySchema.properties,
+                      currentHeadAuthoredAtMs: nullable({
+                        type: "integer",
+                        minimum: 0,
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          ),
+          ...problemResponses,
+        }),
       }),
     ),
   }),

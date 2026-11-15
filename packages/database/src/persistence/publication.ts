@@ -18,7 +18,7 @@ import {
   databaseBytes,
   DeviceNotActiveError,
   GenesisExistsError,
-  MembershipNotActiveError,
+  inactiveMembershipError,
   normalizeEnvironmentLabel,
   OperationConflictError,
   ProjectNotActiveError,
@@ -268,7 +268,12 @@ export class PublicationRepository {
         lifecycle: "ACTIVE",
       },
     });
-    if (!membership) throw new MembershipNotActiveError();
+    if (!membership)
+      throw await inactiveMembershipError(
+        transaction,
+        environment.project.teamId,
+        input.operation.actorUserId,
+      );
     if (
       input.revision.mutation === "GENESIS" &&
       environment.currentHeadId !== null

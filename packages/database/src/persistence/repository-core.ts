@@ -107,11 +107,38 @@ export class DeviceNotActiveError extends Error {
 }
 
 export class MembershipNotActiveError extends Error {
-  constructor() {
-    super("Membership is not active");
+  constructor(message = "Membership is not active") {
+    super(message);
     this.name = "MembershipNotActiveError";
   }
 }
+
+// An accepted Membership still waiting for its Project keys
+// (PENDING_KEY_GRANT). It is a MembershipNotActiveError, so callers that do
+// not tell the two apart keep working.
+export class MembershipAwaitingKeysError extends MembershipNotActiveError {
+  constructor() {
+    super("Membership is waiting for Project keys");
+    this.name = "MembershipAwaitingKeysError";
+  }
+}
+
+// The error for a User without an active Membership in the Team: waiting for
+// keys when the Membership is pending, plain not-active otherwise (removed,
+// or no Membership at all).
+export const inactiveMembershipError = async (
+  database: PersistenceClient,
+  teamId: string,
+  userId: string,
+): Promise<MembershipNotActiveError> => {
+  const pending = await database.membership.findFirst({
+    where: { teamId, userId, lifecycle: "PENDING_KEY_GRANT" },
+    select: { id: true },
+  });
+  return pending
+    ? new MembershipAwaitingKeysError()
+    : new MembershipNotActiveError();
+};
 
 export class ProjectNotActiveError extends Error {
   constructor() {

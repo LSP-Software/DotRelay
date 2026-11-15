@@ -42,6 +42,12 @@ Revision signature with the actor Device's Ed25519 public key before committing.
 `stale_epoch` problems surface when an epoch transition no longer matches the
 Project's current epoch.
 
+Sync and publication need an active Membership. A Member who accepted an
+invitation but has no Project keys yet (`PENDING_KEY_GRANT`) gets
+`membership_not_key_provisioned`; a removed Member, or a User with no
+Membership, gets `membership_not_active`. Older servers sent
+`membership_not_active` for both, so clients still name both repairs for it.
+
 ## Synchronization
 
 `POST /api/v1/environments/:environmentId/sync` accepts strict JSON describing

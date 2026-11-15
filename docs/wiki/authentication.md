@@ -96,7 +96,8 @@ without Valkey uses per-process memory. In production, requests without a truste
 share one conservative route bucket, so the trusted-proxy settings in
 [operations](operations.md#configuration-and-startup) are required for per-client limits. The
 API reads `X-Forwarded-For` only when trusted proxies are configured, and walks the chain past the
-listed proxy addresses. A `429` response carries `X-Retry-After`, which auth CORS exposes.
+listed proxy addresses. A `429` response carries `X-Retry-After`. Auth and protocol CORS expose both
+`X-Retry-After` and the protocol rate limiter's `Retry-After`, so the web app can show the wait.
 
 The capabilities response is public and may be cached briefly with its ETag. Authenticated
 responses are `no-store`. Errors use the stable `application/problem+json` contract and never
@@ -109,6 +110,11 @@ The auth tables and opaque DotRelay User table have separate identifiers. A succ
 callback creates or updates Better Auth records; `/api/v1/session` resolves the GitHub subject to a
 server-local DotRelay User without granting a Membership or authorizing a Device. Better Auth
 encrypts stored OAuth tokens. The CLI receives only its database-backed session token.
+
+Each GitHub sign-in also records the profile's login for its GitHub user id in `github_logins`, so
+the Team membership list can show it and `dotrelay team share-keys <login>` can find a Member
+without a GitHub lookup. The login is display data: it can be stale after a rename and is never
+used for authorization or key decisions. A failure to record it does not block the sign-in.
 
 Cookie and bearer credentials are separate request modes. Browser state changes need an exact
 configured Origin, and production cookies are Secure, HttpOnly, and SameSite=Lax. CLI bearer

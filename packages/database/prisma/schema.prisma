@@ -258,6 +258,18 @@ model AuthDeviceCode {
   @@map("auth_device_codes")
 }
 
+// The GitHub login last seen for a GitHub user id, recorded from the
+// verified GitHub profile on every sign-in. Display data only: it lets the
+// CLI find a Member by login without asking GitHub, and it is never a trust
+// anchor. Logins can change and be reused, so it may be stale.
+model GitHubLogin {
+  githubSubject String   @id @db.VarChar(255)
+  login         String   @db.VarChar(39)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("github_logins")
+}
+
 model User {
   id                 String   @id @default(uuid()) @db.Uuid
   serverProfileId    String   @db.Uuid

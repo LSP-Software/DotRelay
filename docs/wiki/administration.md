@@ -37,6 +37,11 @@ An Environment is created, archived, or restored explicitly by a Team owner or a
 logical: immutable Revisions remain retained, but Manifest lanes are not disclosed until the
 Environment is restored under an active Project.
 
+`POST /api/v1/projects` creates the Project's first Environment in the same transaction. An
+optional `environmentLabel` names it, under the same rules as `POST
+/api/v1/projects/:projectId/environments`; without one it is `default`. Linking a Repository that
+already has an active Project returns that Project and ignores the label.
+
 The service stores opaque Environment ids, an operator-visible label (default `default`),
 lifecycle, and current-head metadata. Variable names still live only in verified encrypted
 Manifests. Operator-visible authorization state is limited to opaque resource ids, Environment

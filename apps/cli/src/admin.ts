@@ -132,6 +132,9 @@ export type ProjectLinkInput = Readonly<{
     readonly name: string;
     readonly githubRepositoryId: string;
   }>;
+  // Label of a new Project's first Environment; the server defaults to
+  // `default` and ignores it for a Project that already exists.
+  readonly environmentLabel?: string;
 }>;
 
 export type ProjectSummary = Readonly<{
@@ -152,6 +155,9 @@ export type EnvironmentSummary = Readonly<{
   readonly lifecycle: "active" | "archived";
   readonly currentHeadId: string | null;
   readonly currentHeadHash: string | null;
+  // The head Revision's authored-at instant, when the listing reports one
+  // (older servers and create/lifecycle responses do not).
+  readonly currentHeadAuthoredAtMs?: number;
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
@@ -228,7 +234,25 @@ const parseEnvironment = (value: unknown): EnvironmentSummary => {
       value.currentHeadHash == null
         ? null
         : requireEnvironmentHeadHash(value.currentHeadHash),
+    ...(value.currentHeadAuthoredAtMs == null
+      ? {}
+      : {
+          currentHeadAuthoredAtMs: requireAuthoredAtMs(
+            value.currentHeadAuthoredAtMs,
+          ),
+        }),
   });
+};
+
+const requireAuthoredAtMs = (value: unknown): number => {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Environment head time",
+      {},
+      "response_invalid",
+    );
+  return value;
 };
 
 export const linkProject = async (
@@ -243,6 +267,9 @@ export const linkProject = async (
       repositoryOwner: input.repository.owner,
       repositoryName: input.repository.name,
       githubRepositoryId: input.repository.githubRepositoryId,
+      ...(input.environmentLabel === undefined
+        ? {}
+        : { environmentLabel: input.environmentLabel }),
     },
     ["id", "teamId", "githubRepositoryId", "lifecycle", "environment"],
     { idempotencyKey: crypto.randomUUID() },

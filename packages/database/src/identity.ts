@@ -62,3 +62,30 @@ export const resolveDotRelayUser = async (
     return persist();
   }
 };
+
+// 1 to 39 letters, digits, or hyphens, not starting with a hyphen. Looser
+// than GitHub's rule for new accounts, so older logins still fit.
+const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const GITHUB_SUBJECT = /^[1-9][0-9]{0,19}$/;
+
+/**
+ * Records the login of a verified GitHub profile for its user id. Called on
+ * every GitHub sign-in so a rename is picked up. The login is display data:
+ * it helps find a Member by login and never authorizes anything.
+ */
+export const recordGitHubLogin = async (
+  database: Pick<PrismaClient, "gitHubLogin">,
+  input: Readonly<{ readonly githubSubject: string; readonly login: string }>,
+): Promise<boolean> => {
+  if (
+    !GITHUB_SUBJECT.test(input.githubSubject) ||
+    !GITHUB_LOGIN.test(input.login)
+  )
+    return false;
+  await database.gitHubLogin.upsert({
+    where: { githubSubject: input.githubSubject },
+    create: { githubSubject: input.githubSubject, login: input.login },
+    update: { login: input.login },
+  });
+  return true;
+};

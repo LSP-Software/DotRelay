@@ -59,8 +59,8 @@ export const bootstrapProjectGrant = async (
 
 // Peer provisioning is optional: it must never abort a read this Device can
 // already verify, and a peer that holds the current epoch grant is reused
-// rather than re-provisioned. Grants are only written when the service
-// confirms the actor holds the project-administration authority.
+// rather than re-provisioned. The peers come from this User's verified
+// roster, and any active Member may seal the key to their own Devices.
 export const wrapEpochKeyToPeers = async (
   options: WorkflowOptions,
   token: string,
@@ -105,8 +105,8 @@ export const wrapEpochKeyToPeers = async (
     } catch {
       pending.push(
         // The peer is another of this User's own Devices (the service lists
-        // no one else's). Only owners and admins may write a grant for it,
-        // so a Member's Device reads the key from the account key instead.
+        // no one else's); that Device can still read the key from the
+        // account key once it is unlocked.
         `Device ${peer.id} is missing the Project epoch grant, and this Device could not share it with that Device of yours. On that Device, run dotrelay device recover if it is locked, then dotrelay pull. If it still cannot read the Project, a Team owner or admin can share the Project keys with you from the Members view of the DotRelay web app ("Share project keys").`,
       );
     }

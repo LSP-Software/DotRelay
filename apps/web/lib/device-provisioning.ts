@@ -18,6 +18,7 @@ import {
   writeStoredBrowserDeviceId,
 } from "@/lib/browser-storage";
 import { describeThisBrowser } from "@/lib/device-describe";
+import { retryAfterSecondsFrom } from "@/lib/rate-limit";
 import {
   browserDeviceProof,
   fetchDeviceBoundary,
@@ -102,7 +103,10 @@ class ProvisioningMessage extends Error {
 // Every problem code the server's devices/bootstrap route can return,
 // mapped to what the person at this browser can do about it. Codes the
 // route cannot return fall through to the neutral retry message.
-export const bootstrapFailureMessage = (code: string | null): string => {
+export const bootstrapFailureMessage = (
+  code: string | null,
+  retryAfterSeconds?: number,
+): string => {
   switch (code) {
     case "authentication_required":
       return "Sign in before setting up this browser.";
@@ -111,7 +115,9 @@ export const bootstrapFailureMessage = (code: string | null): string => {
     case "service_unavailable":
       return "The server couldn't finish setting up this browser right now. Try again in a moment.";
     case "rate_limited":
-      return "The server is limiting requests from this browser right now. Wait a moment, then try again.";
+      return retryAfterSeconds === undefined || retryAfterSeconds === 0
+        ? "The server is limiting requests from this browser right now. Wait a moment, then try again."
+        : `The server is limiting requests from this browser right now. Try again in ${retryAfterSeconds} ${retryAfterSeconds === 1 ? "second" : "seconds"}.`;
     case "device_not_active":
       return "This browser's device is no longer active on the server. It may have been revoked; check the Devices list, then try again.";
     case "unsupported_api_version":
@@ -218,7 +224,12 @@ export const provisionBrowserDevice = async (
       } | null;
       const code = typeof body?.code === "string" ? body.code : null;
       if (code !== "state_conflict")
-        throw new ProvisioningMessage(bootstrapFailureMessage(code));
+        throw new ProvisioningMessage(
+          bootstrapFailureMessage(
+            code,
+            retryAfterSecondsFrom(body, response.headers),
+          ),
+        );
       // Bootstrap creates the User's first Device only. When the User
       // already has an active Device, this browser joins through an
       // enrollment: its own keys start a self-signed request that one of
@@ -504,7 +515,12 @@ const beginBrowserDeviceEnrollment = async (
       readonly code?: unknown;
     } | null;
     const code = typeof body?.code === "string" ? body.code : null;
-    throw new ProvisioningMessage(bootstrapFailureMessage(code));
+    throw new ProvisioningMessage(
+      bootstrapFailureMessage(
+        code,
+        retryAfterSecondsFrom(body, response.headers),
+      ),
+    );
   }
 };
 

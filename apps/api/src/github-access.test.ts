@@ -63,3 +63,27 @@ test("expired GitHub App grants refresh and persist encrypted tokens before use"
   expect(await delegatedGitHubAccessToken(auth, user.id)).toBe("ghu_fresh");
   expect(refreshes).toBe(1);
 });
+
+test("records the GitHub login from every sign-in profile without blocking it", async () => {
+  const seen: unknown[] = [];
+  const auth = createInMemoryAuth(
+    loadServerProfileConfig({
+      GITHUB_CLIENT_ID: "Iv1.test",
+      GITHUB_CLIENT_SECRET: "test-secret",
+    }),
+    {
+      onGitHubProfile: async (profile) => {
+        seen.push(profile);
+        throw new Error("storage unavailable");
+      },
+    },
+  );
+  const provider = (await auth.$context).socialProviders.find(
+    (candidate) => candidate.id === "github",
+  );
+  const mapProfileToUser = provider?.options?.mapProfileToUser as
+    ((profile: Record<string, unknown>) => Promise<unknown>) | undefined;
+  if (!mapProfileToUser) throw new Error("GitHub profile hook missing");
+  expect(await mapProfileToUser({ id: 583231, login: "Octo-Cat" })).toEqual({});
+  expect(seen).toEqual([{ githubSubject: "583231", login: "Octo-Cat" }]);
+});

@@ -143,8 +143,8 @@ starts with a letter and has up to 63 letters, digits, dots, dashes, or undersco
 change the selection: follow it with `env use <label>`, or publish into it with
 `push --environment <label>`. A label that matches no Environment fails with the labels that do
 exist and the `env create` command to run. `init <label>` on a Project that the same run creates
-uses the label for the first Environment, and archives the empty `default` Environment the service
-created with the Project.
+sends the label with the Project (`environmentLabel` on `POST /api/v1/projects`), so the first
+Environment gets it instead of `default`.
 
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. The Server Profile resolves the owner and name again with the User's Delegated
@@ -226,7 +226,9 @@ when the Server Profile permits cancellation.
 
 Every Revision carries a signed authored-at time. The CLI never stamps one earlier than this
 Device's activation, your current Membership's activation, or the head Revision it builds on; a
-slow local clock is raised to that floor. The Server Profile also refuses a time more than 10
+slow local clock is raised to that floor. `project rotate` builds on every active Environment's
+head, so it raises the floor to the latest head in the Project, using the head times that
+`GET /api/v1/projects/:projectId/environments` lists. The Server Profile also refuses a time more than 10
 minutes ahead of its own clock. Either refusal fails with `authored_at_out_of_range` (exit 4):
 check the machine's system clock and time zone, then run the command again.
 
@@ -271,10 +273,14 @@ accepted later: an owner or admin has to invite you again. The CLI cannot send o
 invitations; owners and admins do that in the web app.
 
 A new Member cannot read anything until a Team owner or admin shares the Project keys with them.
-`pull` only shares keys among the puller's own Devices, so a teammate's pull never helps. The owner
+`pull` only shares keys among the puller's own Devices (any active Member's pull does this), so a
+teammate's pull never helps. The owner
 or admin chooses **Share project keys** for the Member in the web app's Members view, or runs
 `dotrelay team share-keys <github-login-or-user-id>` from a Device that can read every Project in
-the Team. The command reads the service's provisioning plan for that Membership, opens each
+the Team. A login is matched case-insensitively against the login each Member last signed in
+with, as the membership list reports it; when none or several match, the service resolves the
+login to a GitHub user id instead. The match only picks the Member: keys go to that Member's User
+id and signed roster. The command reads the service's provisioning plan for that Membership, opens each
 Project's current key, seals it only to Devices in the Member's signed Device roster, and posts
 the signed activation; `--no-input` requires `--force`. The question names the Member's account
 fingerprint, and sharing confirms it. A Member without a signed Device roster cannot receive keys

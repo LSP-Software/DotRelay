@@ -2,7 +2,7 @@ import { decideLaneDisclosure } from "../administration";
 import type { MutationKind } from "../generated/prisma/client";
 import { AdministrationDisclosureRepository } from "./disclosure";
 import {
-  MembershipNotActiveError,
+  inactiveMembershipError,
   type PersistenceClient,
 } from "./repository-core";
 import { copyBytes } from "./validation";
@@ -110,7 +110,12 @@ export class SyncRepository {
       },
       select: { role: true, lifecycle: true },
     });
-    if (!membership) throw new MembershipNotActiveError();
+    if (!membership)
+      throw await inactiveMembershipError(
+        database,
+        environment.project.teamId,
+        input.actorUserId,
+      );
     const isEnvironmentGenesis =
       input.trustedRevisionId === input.environmentId &&
       sameBytes(input.trustedRevisionHash, new Uint8Array(48));

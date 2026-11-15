@@ -2537,9 +2537,18 @@ const execute = async (
         const output = runtime.terminal?.output ?? process.stderr;
         output.write(message);
       };
+      const explicitEnvironmentReference =
+        parsed.environment ??
+        (parsed.command === "init" ? parsed.positionals[0] : undefined);
       const initializedProject =
         existingProject ??
         (await linkProject(admin, {
+          // init names the new Project's first Environment directly.
+          ...(parsed.command === "init" &&
+          explicitEnvironmentReference !== undefined &&
+          !uuidPattern.test(explicitEnvironmentReference)
+            ? { environmentLabel: explicitEnvironmentReference }
+            : {}),
           teamId: (
             await resolveTeamForProject(admin, {
               ...(explicitTeamId ? { teamId: explicitTeamId } : {}),
@@ -2572,9 +2581,6 @@ const execute = async (
       // steer the change automatically. Otherwise resolution continues so an
       // eligible active Environment can be chosen or created. The check is
       // skipped entirely when an explicit Environment was supplied.
-      const explicitEnvironmentReference =
-        parsed.environment ??
-        (parsed.command === "init" ? parsed.positionals[0] : undefined);
       // An explicit reference may be the operator-visible label; resolve it
       // against the Project now so only the stable id reaches the service and
       // the worktree context. A miss fails before any workflow work, leaving
@@ -2593,7 +2599,9 @@ const execute = async (
               },
             ).catch((error: unknown) =>
               // init on a Project this run created: the named label becomes
-              // its first Environment instead of failing as not found.
+              // its first Environment instead of failing as not found (the
+              // Project was created with it, so this only runs when the
+              // link returned a Project that already existed).
               existingProject === null &&
               parsed.command === "init" &&
               !uuidPattern.test(explicitEnvironmentReference) &&

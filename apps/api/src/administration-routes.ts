@@ -381,6 +381,7 @@ export const registerAdministrationRoutes = (
         "repositoryOwner",
         "repositoryName",
         "githubRepositoryId",
+        "environmentLabel",
       ]);
       if (
         body.repositoryHost !== "github.com" ||
@@ -392,6 +393,12 @@ export const registerAdministrationRoutes = (
         return responseProblem(context, "invalid_request");
       const teamId = parseUuid(body.teamId, "teamId");
       const githubRepositoryId = requireRepositoryId(body.githubRepositoryId);
+      // The first Environment's label, checked like POST
+      // /projects/:projectId/environments; absent means `default`.
+      const environmentLabel =
+        body.environmentLabel === undefined
+          ? undefined
+          : normalizeEnvironmentLabel(body.environmentLabel);
       const operationId = parseIdempotencyKey(
         context.req.header("Idempotency-Key"),
       );
@@ -433,12 +440,14 @@ export const registerAdministrationRoutes = (
           repositoryOwner: body.repositoryOwner,
           repositoryName: body.repositoryName,
           githubRepositoryId: githubRepositoryId.toString(),
+          ...(environmentLabel === undefined ? {} : { environmentLabel }),
           operationId,
         }),
       );
       const result = await projects.create(database, {
         teamId,
         githubRepositoryId,
+        ...(environmentLabel === undefined ? {} : { environmentLabel }),
         operation: {
           id: operationId,
           actorUserId: actor.userId,
@@ -494,13 +503,26 @@ export const registerAdministrationRoutes = (
           lifecycle: true,
           currentHeadId: true,
           currentHead: {
-            select: { protocolObject: { select: { digest: true } } },
+            select: {
+              authoredAtMs: true,
+              protocolObject: { select: { digest: true } },
+            },
           },
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
       return context.json(
-        { environments: environments.map(environmentResponse) },
+        {
+          // The head's authored-at instant lets a Project rotation floor its
+          // signing time across every Environment, not only the synced one.
+          environments: environments.map((environment) => ({
+            ...environmentResponse(environment),
+            currentHeadAuthoredAtMs:
+              environment.currentHead === null
+                ? null
+                : Number(environment.currentHead.authoredAtMs),
+          })),
+        },
         200,
         { "Cache-Control": "no-store" },
       );

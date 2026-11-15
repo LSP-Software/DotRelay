@@ -7,9 +7,21 @@ import { configuredValkeyUrl } from "./protocol/rate-limit";
 
 export const AUTH_CLIENT_ID = "dotrelay-cli";
 
+export type AuthHooks = Readonly<{
+  // Called with every verified GitHub profile at sign-in. A failure must
+  // never block the sign-in, so it is caught here.
+  readonly onGitHubProfile?: (
+    profile: Readonly<{
+      readonly githubSubject: string;
+      readonly login: string;
+    }>,
+  ) => Promise<unknown>;
+}>;
+
 const createAuthWithAdapter = (
   database: DBAdapterInstance | undefined,
   profile: ServerProfileConfig,
+  hooks: AuthHooks = {},
 ) => {
   const cookieDomain = sharedCookieDomain(profile);
   // Shared across API instances through Valkey; development and tests
@@ -71,6 +83,18 @@ const createAuthWithAdapter = (
               // classic OAuth scopes. Never request broad OAuth repository access.
               disableDefaultScope: true,
               scope: [],
+              // Runs on every GitHub sign-in with the profile GitHub returned
+              // for this token. Only the login is kept (github_logins); the
+              // user fields stay Better Auth's defaults.
+              mapProfileToUser: async (github) => {
+                await hooks
+                  .onGitHubProfile?.({
+                    githubSubject: String(github.id),
+                    login: github.login,
+                  })
+                  .catch(() => undefined);
+                return {};
+              },
             },
           }
         : {},
@@ -123,10 +147,13 @@ const createAuthWithAdapter = (
 export const createAuth = (
   database: BetterAuthDatabaseAdapter,
   profile: ServerProfileConfig,
-) => createAuthWithAdapter(database, profile);
+  hooks: AuthHooks = {},
+) => createAuthWithAdapter(database, profile, hooks);
 
-export const createInMemoryAuth = (profile: ServerProfileConfig) =>
-  createAuthWithAdapter(undefined, profile);
+export const createInMemoryAuth = (
+  profile: ServerProfileConfig,
+  hooks: AuthHooks = {},
+) => createAuthWithAdapter(undefined, profile, hooks);
 
 export type DotRelayAuth = ReturnType<typeof createAuth>;
 

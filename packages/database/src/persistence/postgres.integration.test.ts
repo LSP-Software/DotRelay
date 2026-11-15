@@ -629,6 +629,36 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     }
   }, INTEGRATION_HOOK_TIMEOUT_MS);
 
+  test("labels a new Project's first Environment and rejects an invalid label", async () => {
+    const { device, teamId, user } = await createProjectFixture("labelled");
+    const create = async (environmentLabel: string, repository: bigint) =>
+      new ProjectRepository().create(database, {
+        teamId,
+        githubRepositoryId: repository,
+        environmentLabel,
+        operation: {
+          ...(await createOperationInput(
+            user.id,
+            `labelled-${environmentLabel}-${repository}`,
+          )),
+          actorDeviceId: device.id,
+        },
+      });
+    const repository = BigInt(Date.now()) + 7n;
+    const created = await create("production", repository);
+    expect("environment" in created && created.environment.label).toBe(
+      "production",
+    );
+    // An existing Project keeps its Environments.
+    const again = await create("staging", repository);
+    expect("environment" in again && again.environment.label).toBe(
+      "production",
+    );
+    await expect(create("not a label", repository + 1n)).rejects.toThrow(
+      "Environment label is invalid",
+    );
+  });
+
   test("handles concurrent operation retries and rejects conflicting bytes", async () => {
     const { device, user } = await createAuthorizedDeviceFixture();
     const repository = new OperationRepository();

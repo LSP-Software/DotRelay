@@ -346,6 +346,11 @@ describe("API foundation", () => {
     expect(response.headers.get("access-control-expose-headers")).toContain(
       "X-Correlation-ID",
     );
+    expect(
+      (response.headers.get("access-control-expose-headers") ?? "")
+        .split(",")
+        .map((name) => name.trim().toLowerCase()),
+    ).toContain("retry-after");
     expect(device).toMatchObject({
       verification_uri: `${profile.origin}/device`,
       interval: expect.any(Number),
@@ -392,6 +397,14 @@ describe("API foundation", () => {
     expect(response.headers.get("access-control-expose-headers")).toContain(
       "X-Correlation-ID",
     );
+    // The browser reads the rate limiter's retry window from either header.
+    const exposed = (
+      response.headers.get("access-control-expose-headers") ?? ""
+    )
+      .split(",")
+      .map((name) => name.trim().toLowerCase());
+    expect(exposed).toContain("retry-after");
+    expect(exposed).toContain("x-retry-after");
     expect(response.headers.get("x-correlation-id")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -1003,6 +1016,7 @@ describe("API foundation", () => {
             lifecycle: "ACTIVE",
             currentHeadId: "00000000-0000-4000-8000-0000000000aa",
             currentHead: {
+              authoredAtMs: 1_700_000_000_123n,
               protocolObject: { digest: new Uint8Array(48).fill(0xab) },
             },
           },
@@ -1040,6 +1054,7 @@ describe("API foundation", () => {
           lifecycle: "active",
           currentHeadId: "00000000-0000-4000-8000-0000000000aa",
           currentHeadHash: "ab".repeat(48),
+          currentHeadAuthoredAtMs: 1_700_000_000_123,
         },
         {
           id: "00000000-0000-4000-8000-000000000004",
@@ -1048,9 +1063,65 @@ describe("API foundation", () => {
           lifecycle: "active",
           currentHeadId: null,
           currentHeadHash: null,
+          currentHeadAuthoredAtMs: null,
         },
       ],
     });
+  });
+
+  test("rejects an invalid initial Environment label before creating a Project", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({
+          session: { id: "session-token" },
+          user: { id: "auth-user", name: "Ari" },
+        }),
+      },
+    } as never;
+    let transactions = 0;
+    const database = {
+      authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
+      device: { findFirst: async () => ({ id: PROVEN_DEVICE }) },
+      $transaction: async () => {
+        transactions += 1;
+        throw new Error("unexpected transaction");
+      },
+    } as never;
+    const testApp = createApi({ database, profile, auth });
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/projects`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.origin,
+          Authorization: "Bearer session-token",
+          "X-DotRelay-Device-Id": PROVEN_DEVICE,
+          "X-DotRelay-Device-Proof": USER_ID_PROOF,
+          "Content-Type": "application/json",
+          "Idempotency-Key": "00000000-0000-4000-8000-0000000000f1",
+        },
+        body: JSON.stringify({
+          teamId: "00000000-0000-4000-8000-000000000001",
+          repositoryHost: "github.com",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+          githubRepositoryId: "1311418611",
+          environmentLabel: "not a label",
+        }),
+      },
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      "invalid_request",
+    );
+    expect(transactions).toBe(0);
   });
 
   test("lists Team names and rejects an empty Team create body", async () => {

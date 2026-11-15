@@ -29,6 +29,7 @@ import {
   OperationConflictError,
   OperationRepository,
   ProjectRotationObligationRepository,
+  recordGitHubLogin,
   requireTeamAction,
   resolveDotRelayUser,
   StagedObjectRepository,
@@ -597,7 +598,9 @@ const protocolCors = (profile: ServerProfileConfig) =>
       "X-DotRelay-Expires-At",
     ],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
+    // The protocol rate limiter sends Retry-After; the auth rate limiter's
+    // 429 carries X-Retry-After.
+    exposeHeaders: ["X-Correlation-ID", "Retry-After", "X-Retry-After"],
     maxAge: 600,
   });
 
@@ -731,7 +734,7 @@ const createApi = ({
       allowMethods: ["GET", "POST", "OPTIONS"],
       // Set-Auth-Token is deliberately not exposed: browser script must never
       // read the bearer session token. Non-browser clients are unaffected.
-      exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
+      exposeHeaders: ["X-Correlation-ID", "Retry-After", "X-Retry-After"],
       maxAge: 600,
     }),
   );
@@ -1020,13 +1023,15 @@ const createApi = ({
       if (project.lifecycle !== "ACTIVE")
         throw new Error("Project is archived");
       // Cheap authorization pre-check before anything is staged; the
-      // repository repeats it inside the creating transaction.
+      // repository repeats it inside the creating transaction. This endpoint
+      // only seals the key to the actor's own Devices, which any active
+      // Member may do: they already hold the key (grantCreationAction).
       await requireTeamAction(
         database,
         actor.userId,
         actor.deviceId,
         request.teamId,
-        "ADMINISTER_PROJECT",
+        "VIEW",
       );
       const sender = await database.device.findUnique({
         where: { id: actor.deviceId },
@@ -1041,11 +1046,7 @@ const createApi = ({
         recipientDeviceId === actor.deviceId
           ? sender
           : await database.device.findFirst({
-              where: {
-                id: recipientDeviceId,
-                userId: sender.userId,
-                lifecycle: "ACTIVE",
-              },
+              where: { id: recipientDeviceId, lifecycle: "ACTIVE" },
               select: {
                 x25519PublicKey: true,
                 ed25519PublicKey: true,
@@ -1054,6 +1055,10 @@ const createApi = ({
             });
       if (!recipient)
         throw new DeviceNotActiveError("grant recipient device is not active");
+      // Another User's Devices receive keys only through Membership
+      // provisioning, never through this endpoint.
+      if (recipient.userId !== sender.userId)
+        throw new Error("actor is not authorized to grant to another User");
       if (
         !equalBytes(
           requiredBytes(39, 32),
@@ -1703,6 +1708,9 @@ const runtimeObservability = createApiObservability(database, {
 export const auth = createAuth(
   createBetterAuthDatabaseAdapter(database),
   profile,
+  {
+    onGitHubProfile: (github) => recordGitHubLogin(database, github),
+  },
 );
 export const app = createApi({
   database,

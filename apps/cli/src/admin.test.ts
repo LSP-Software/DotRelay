@@ -16,6 +16,7 @@ import {
   declineInvitation,
   findProjectByRepository,
   linkProject,
+  listEnvironments,
   listTeams,
   type ProjectSummary,
   resolveEnvironmentReference,
@@ -364,6 +365,32 @@ describe("strict administration client", () => {
     expect(JSON.stringify(calls)).not.toContain("value");
   });
 
+  test("names a new Project's first Environment when given a label", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = {
+      post: async (_path: string, body: Record<string, unknown>) => {
+        bodies.push(body);
+        return {
+          id: "00000000-0000-4000-8000-000000000002",
+          teamId: "00000000-0000-4000-8000-000000000001",
+          githubRepositoryId: "1311418611",
+          lifecycle: "active",
+        };
+      },
+    };
+    await linkProject(client, {
+      teamId: "00000000-0000-4000-8000-000000000001",
+      repository: {
+        host: "github.com",
+        owner: "LSP-Software",
+        name: "DotRelay",
+        githubRepositoryId: "1311418611",
+      },
+      environmentLabel: "production",
+    });
+    expect(bodies[0]?.environmentLabel).toBe("production");
+  });
+
   test("resolves a unique Environment label to its stable id", async () => {
     const client = {
       get: async () => ({
@@ -399,6 +426,32 @@ describe("strict administration client", () => {
       currentHeadId: null,
       currentHeadHash: null,
     });
+  });
+
+  test("keeps a listed head's authored-at instant and rejects a bad one", async () => {
+    const listed = (currentHeadAuthoredAtMs: unknown) => ({
+      get: async () => ({
+        environments: [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            projectId: "project-id",
+            label: "development",
+            lifecycle: "active",
+            currentHeadId: "00000000-0000-4000-8000-0000000000aa",
+            currentHeadHash: "ab".repeat(48),
+            currentHeadAuthoredAtMs,
+          },
+        ],
+      }),
+    });
+    const [environment] = await listEnvironments(
+      listed(1_700_000_000_123),
+      "project-id",
+    );
+    expect(environment?.currentHeadAuthoredAtMs).toBe(1_700_000_000_123);
+    await expect(
+      listEnvironments(listed("soon"), "project-id"),
+    ).rejects.toMatchObject({ code: "response_invalid" });
   });
 
   test("prefers an opaque id over a same-named label", async () => {
