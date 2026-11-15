@@ -74,6 +74,10 @@ const createAuthWithAdapter = (
       bearer(),
       deviceAuthorization({
         verificationUri: `${profile.origin}/device`,
+        // A device code is phishable: whoever approves it hands the
+        // requesting CLI a full session. Ten minutes covers a real sign-in
+        // and narrows the window for a code someone else sends.
+        expiresIn: "10m",
         validateClient: (clientId) => clientId === AUTH_CLIENT_ID,
         ...(database
           ? { schema: { deviceCode: { modelName: "authDeviceCode" } } }
@@ -99,7 +103,7 @@ const createAuthWithAdapter = (
         "/device/token": { window: 60, max: 120 },
         // The plugin caps verification checks at 5 per code lifetime. Each
         // GitHub round-trip reloads the approval page, so that cap turns a
-        // retry into a half-hour outage.
+        // retry into an outage for the rest of the code's lifetime.
         "/device": { window: 60, max: 60 },
         "/device/approve": { window: 60, max: 30 },
         "/device/deny": { window: 60, max: 30 },

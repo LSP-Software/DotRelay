@@ -67,7 +67,7 @@ noninteractive CLI setup of an existing account, it exits with a specific locked
 these steps because it is required to fetch encrypted wrappers; it never grants decryption by itself.
 
 Better Auth permits ten requests to one authentication route in a 60-second window. Device codes
-expire after 30 minutes and the CLI must wait at least five seconds between token polls; an early
+expire after 10 minutes and the CLI must wait at least five seconds between token polls; an early
 poll returns `slow_down`. With `VALKEY_URL` set, the limiter's counters live in Valkey and every
 API replica shares them; if Valkey is unreachable it falls back to per-process memory. Development
 without Valkey uses per-process memory. In production, requests without a trusted client address

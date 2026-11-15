@@ -122,6 +122,12 @@ test("allowing a pre-filled code needs an explicit confirmation", async ({
   }));
   await openDevicePage(page);
 
+  // The page names what approving grants and the signs of a phished code.
+  const warning = page.getByTestId("device-approval-warning");
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText("full access");
+  await expect(warning).toContainText("someone sent you");
+  await expect(warning).toContainText("10 minutes");
   await expect(page.getByTestId("device-approval-allow")).toBeDisabled();
   await page.getByTestId("device-approval-confirm").check();
   await expect(page.getByTestId("device-approval-allow")).toBeEnabled();

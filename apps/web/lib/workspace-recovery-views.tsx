@@ -729,7 +729,8 @@ export const RecoveryArea = ({
                 once and expires after a few minutes.
               </CardDescription>
             </CardHeader>
-            {sentTransfer && /^[0-9a-f]{32,128}$/.test(sentTransfer.transferId) ? (
+            {sentTransfer &&
+            /^[0-9a-f]{32,128}$/.test(sentTransfer.transferId) ? (
               <CardContent className="space-y-3">
                 <div
                   className="rounded-lg border border-primary/25 bg-primary/5 p-3"
