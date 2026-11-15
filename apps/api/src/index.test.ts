@@ -1073,14 +1073,22 @@ describe("API foundation", () => {
     const profile = loadServerProfileConfig({});
     const auth = {
       api: {
-        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+        getSession: async () => ({
+          session: { id: "session-token" },
+          user: { id: "auth-user", name: "Ari" },
+        }),
       },
     } as never;
     let transactions = 0;
     const database = {
       authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
-      user: { upsert: async () => ({ id: "user-id" }) },
-      device: { findFirst: async () => ({ id: "device-id" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
+      device: { findFirst: async () => ({ id: PROVEN_DEVICE }) },
       $transaction: async () => {
         transactions += 1;
         throw new Error("unexpected transaction");
@@ -1094,7 +1102,8 @@ describe("API foundation", () => {
         headers: {
           Origin: profile.origin,
           Authorization: "Bearer session-token",
-          "X-DotRelay-Device-Id": "device-id",
+          "X-DotRelay-Device-Id": PROVEN_DEVICE,
+          "X-DotRelay-Device-Proof": USER_ID_PROOF,
           "Content-Type": "application/json",
           "Idempotency-Key": "00000000-0000-4000-8000-0000000000f1",
         },
