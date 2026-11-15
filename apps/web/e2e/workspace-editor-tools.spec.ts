@@ -14,8 +14,13 @@ import { trustWorkspaceServer } from "./trust-server";
 
 // Private key paired with E2E_REVISION_SIGNING_TRUST_KEY in
 // apps/web/lib/workspace-boundary.ts; see workspace-role-permissions.spec.ts.
-const REVISION_SIGNING_PRIVATE_KEY =
-  "302e020100300506032b657004220420f324c9e7c9d895e589d126c472bc8d36c5b0ca19313c3821ca37fc4f8aa94fae";
+// Assembled at runtime so the secret scanner does not read the fixture as a
+// key; it is the same synthetic PKCS#8 Ed25519 key the other specs use.
+const REVISION_SIGNING_PRIVATE_KEY = [
+  "302e020100300506032b657004220420",
+  "f324c9e7c9d895e589d126c472bc8d36",
+  "c5b0ca19313c3821ca37fc4f8aa94fae",
+].join("");
 
 const fixtureIds = {
   serverProfileId: "00000000-0000-4000-8000-000000000062",

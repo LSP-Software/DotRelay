@@ -16,9 +16,9 @@ import {
   constants,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1121,8 +1121,17 @@ try {
     throw new Error(
       `pull did not guard the output against Git tracking: ${JSON.stringify(pulled)}`,
     );
-  const output = await readFile(outputPath, "utf8");
-  const outputMode = (await stat(outputPath)).mode & 0o777;
+  // One open file handle gives the mode and the bytes of the same file.
+  const outputHandle = await open(outputPath, "r");
+  let outputBytes: Buffer;
+  let outputMode: number;
+  try {
+    outputMode = (await outputHandle.stat()).mode & 0o777;
+    outputBytes = await outputHandle.readFile();
+  } finally {
+    await outputHandle.close();
+  }
+  const output = outputBytes.toString("utf8");
   if (
     output !== "SHARED_VALUE='two'\nUSER_VALUE='secret'\nEMPTY=''\n" ||
     (process.platform !== "win32" && outputMode !== 0o600)
@@ -1201,7 +1210,7 @@ try {
     throw new Error(
       `device 2 pull failed with exit code ${device2Pull.exitCode}: ${device2Pull.stderr.trim()}`,
     );
-  const device1Bytes = await readFile(outputPath);
+  const device1Bytes = outputBytes;
   const device2Bytes = await readFile(device2OutputPath);
   if (Buffer.compare(device1Bytes, device2Bytes) !== 0)
     throw new Error(
