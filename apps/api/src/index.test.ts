@@ -1056,6 +1056,52 @@ describe("API foundation", () => {
     });
   });
 
+  test("rejects an invalid initial Environment label before creating a Project", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+      },
+    } as never;
+    let transactions = 0;
+    const database = {
+      authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
+      user: { upsert: async () => ({ id: "user-id" }) },
+      device: { findFirst: async () => ({ id: "device-id" }) },
+      $transaction: async () => {
+        transactions += 1;
+        throw new Error("unexpected transaction");
+      },
+    } as never;
+    const testApp = createApi({ database, profile, auth });
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/projects`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.origin,
+          Authorization: "Bearer session-token",
+          "X-DotRelay-Device-Id": "device-id",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "00000000-0000-4000-8000-0000000000f1",
+        },
+        body: JSON.stringify({
+          teamId: "00000000-0000-4000-8000-000000000001",
+          repositoryHost: "github.com",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+          githubRepositoryId: "1311418611",
+          environmentLabel: "not a label",
+        }),
+      },
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      "invalid_request",
+    );
+    expect(transactions).toBe(0);
+  });
+
   test("lists Team names and rejects an empty Team create body", async () => {
     const profile = loadServerProfileConfig({});
     const auth = {

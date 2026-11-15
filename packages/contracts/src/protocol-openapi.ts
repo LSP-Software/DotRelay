@@ -228,6 +228,28 @@ const environmentSummarySchema = Object.freeze({
   }),
 });
 
+const projectWithEnvironmentSchema = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "id",
+    "teamId",
+    "githubRepositoryId",
+    "lifecycle",
+    "environment",
+  ]),
+  properties: Object.freeze({
+    id: Object.freeze({ type: "string", format: "uuid" }),
+    teamId: Object.freeze({ type: "string", format: "uuid" }),
+    githubRepositoryId: Object.freeze({ type: "string" }),
+    lifecycle: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["active", "archived"]),
+    }),
+    environment: environmentSummarySchema,
+  }),
+});
+
 export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
   // Device proof of possession (ADR 0020): a session obtains a challenge,
   // the Device signs it, and the signature buys a short-lived proof that
@@ -553,6 +575,65 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
             }),
           }),
         ),
+      }),
+    ),
+  }),
+  "/api/v1/projects": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "linkProject",
+        description:
+          "An owner or admin links a GitHub Repository to a new Project in the Team, with its first Environment. environmentLabel names that Environment (same rules as creating one; default `default`). A Repository that already has an active Project returns it with its first active Environment and ignores the label.",
+        parameters: Object.freeze([
+          protocolParameters.DeviceIdHeader,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        requestBody: Object.freeze({
+          required: true,
+          content: Object.freeze({
+            "application/json": Object.freeze({
+              schema: Object.freeze({
+                type: "object",
+                additionalProperties: false,
+                required: Object.freeze([
+                  "teamId",
+                  "repositoryHost",
+                  "repositoryOwner",
+                  "repositoryName",
+                  "githubRepositoryId",
+                ]),
+                properties: Object.freeze({
+                  teamId: Object.freeze({ type: "string", format: "uuid" }),
+                  repositoryHost: Object.freeze({
+                    type: "string",
+                    const: "github.com",
+                  }),
+                  repositoryOwner: Object.freeze({
+                    type: "string",
+                    minLength: 1,
+                  }),
+                  repositoryName: Object.freeze({
+                    type: "string",
+                    minLength: 1,
+                  }),
+                  githubRepositoryId: Object.freeze({
+                    type: "string",
+                    pattern: "^[1-9][0-9]{0,18}$",
+                  }),
+                  environmentLabel: Object.freeze({
+                    type: "string",
+                    pattern: "^[A-Za-z][A-Za-z0-9._-]{0,62}$",
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+        responses: Object.freeze({
+          "200": noStoreJson("Existing Project", projectWithEnvironmentSchema),
+          "201": noStoreJson("Linked Project", projectWithEnvironmentSchema),
+          ...problemResponses,
+        }),
       }),
     ),
   }),

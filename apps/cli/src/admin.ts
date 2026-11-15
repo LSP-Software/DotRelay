@@ -132,6 +132,9 @@ export type ProjectLinkInput = Readonly<{
     readonly name: string;
     readonly githubRepositoryId: string;
   }>;
+  // Label of a new Project's first Environment; the server defaults to
+  // `default` and ignores it for a Project that already exists.
+  readonly environmentLabel?: string;
 }>;
 
 export type ProjectSummary = Readonly<{
@@ -264,6 +267,9 @@ export const linkProject = async (
       repositoryOwner: input.repository.owner,
       repositoryName: input.repository.name,
       githubRepositoryId: input.repository.githubRepositoryId,
+      ...(input.environmentLabel === undefined
+        ? {}
+        : { environmentLabel: input.environmentLabel }),
     },
     ["id", "teamId", "githubRepositoryId", "lifecycle", "environment"],
     { idempotencyKey: crypto.randomUUID() },

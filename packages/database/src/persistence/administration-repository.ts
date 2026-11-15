@@ -5,10 +5,10 @@ import {
 } from "./objects";
 import { archiveMembershipPeriod } from "./membership-periods";
 import {
-  DEFAULT_ENVIRONMENT_LABEL,
   EnvironmentNotActiveError,
   InvitationNotPendingError,
   managedRoleAction,
+  normalizeEnvironmentLabel,
   PendingInvitationLimitError,
   ProjectNotActiveError,
   requireActiveDevice,
@@ -814,6 +814,11 @@ export type ProjectCreationInput = Readonly<{
   readonly teamId: string;
   readonly projectId?: string;
   readonly githubRepositoryId: bigint;
+  /**
+   * Label of the Project's first Environment (default `default`). A Project
+   * that already exists keeps its Environments.
+   */
+  readonly environmentLabel?: string;
   readonly now?: Date;
 }>;
 
@@ -838,6 +843,9 @@ export class ProjectRepository {
       if (team?.lifecycle !== "ACTIVE") throw new Error("Team is archived");
       if (input.githubRepositoryId <= 0n)
         throw new Error("GitHub Repository id must be positive");
+      const environmentLabel = normalizeEnvironmentLabel(
+        input.environmentLabel,
+      );
       const existingProject = await transaction.project.findFirst({
         where: {
           teamId: input.teamId,
@@ -859,7 +867,7 @@ export class ProjectRepository {
               id: crypto.randomUUID(),
               projectId: existingProject.id,
               createdByUserId: input.operation.actorUserId,
-              label: DEFAULT_ENVIRONMENT_LABEL,
+              label: environmentLabel,
               createdAt: input.now ?? new Date(),
             },
           }));
@@ -889,7 +897,7 @@ export class ProjectRepository {
           id: crypto.randomUUID(),
           projectId: project.id,
           createdByUserId: input.operation.actorUserId,
-          label: DEFAULT_ENVIRONMENT_LABEL,
+          label: environmentLabel,
           createdAt: now,
         },
       });

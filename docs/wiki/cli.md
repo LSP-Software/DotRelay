@@ -143,8 +143,8 @@ starts with a letter and has up to 63 letters, digits, dots, dashes, or undersco
 change the selection: follow it with `env use <label>`, or publish into it with
 `push --environment <label>`. A label that matches no Environment fails with the labels that do
 exist and the `env create` command to run. `init <label>` on a Project that the same run creates
-uses the label for the first Environment, and archives the empty `default` Environment the service
-created with the Project.
+sends the label with the Project (`environmentLabel` on `POST /api/v1/projects`), so the first
+Environment gets it instead of `default`.
 
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
 Server Profile. The Server Profile resolves the owner and name again with the User's Delegated

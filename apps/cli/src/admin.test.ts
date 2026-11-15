@@ -365,6 +365,32 @@ describe("strict administration client", () => {
     expect(JSON.stringify(calls)).not.toContain("value");
   });
 
+  test("names a new Project's first Environment when given a label", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = {
+      post: async (_path: string, body: Record<string, unknown>) => {
+        bodies.push(body);
+        return {
+          id: "00000000-0000-4000-8000-000000000002",
+          teamId: "00000000-0000-4000-8000-000000000001",
+          githubRepositoryId: "1311418611",
+          lifecycle: "active",
+        };
+      },
+    };
+    await linkProject(client, {
+      teamId: "00000000-0000-4000-8000-000000000001",
+      repository: {
+        host: "github.com",
+        owner: "LSP-Software",
+        name: "DotRelay",
+        githubRepositoryId: "1311418611",
+      },
+      environmentLabel: "production",
+    });
+    expect(bodies[0]?.environmentLabel).toBe("production");
+  });
+
   test("resolves a unique Environment label to its stable id", async () => {
     const client = {
       get: async () => ({

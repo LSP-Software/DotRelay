@@ -2057,6 +2057,355 @@
         ]
       }
     },
+    "/api/v1/projects": {
+      "post": {
+        "operationId": "linkProject",
+        "description": "An owner or admin links a GitHub Repository to a new Project in the Team, with its first Environment. environmentLabel names that Environment (same rules as creating one; default `default`). A Repository that already has an active Project returns it with its first active Environment and ignores the label.",
+        "parameters": [
+          {
+            "name": "X-DotRelay-Device-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "teamId",
+                  "repositoryHost",
+                  "repositoryOwner",
+                  "repositoryName",
+                  "githubRepositoryId"
+                ],
+                "properties": {
+                  "teamId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "repositoryHost": {
+                    "type": "string",
+                    "const": "github.com"
+                  },
+                  "repositoryOwner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "repositoryName": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "githubRepositoryId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,18}$"
+                  },
+                  "environmentLabel": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,62}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing Project",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "teamId",
+                    "githubRepositoryId",
+                    "lifecycle",
+                    "environment"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "githubRepositoryId": {
+                      "type": "string"
+                    },
+                    "lifecycle": {
+                      "type": "string",
+                      "enum": ["active", "archived"]
+                    },
+                    "environment": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "projectId",
+                        "label",
+                        "lifecycle",
+                        "currentHeadId",
+                        "currentHeadHash"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "lifecycle": {
+                          "type": "string",
+                          "enum": ["active", "archived"]
+                        },
+                        "currentHeadId": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "currentHeadHash": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{96}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Linked Project",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "teamId",
+                    "githubRepositoryId",
+                    "lifecycle",
+                    "environment"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "githubRepositoryId": {
+                      "type": "string"
+                    },
+                    "lifecycle": {
+                      "type": "string",
+                      "enum": ["active", "archived"]
+                    },
+                    "environment": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "projectId",
+                        "label",
+                        "lifecycle",
+                        "currentHeadId",
+                        "currentHeadHash"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "lifecycle": {
+                          "type": "string",
+                          "enum": ["active", "archived"]
+                        },
+                        "currentHeadId": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "currentHeadHash": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{96}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/projects/{projectId}/environments": {
       "get": {
         "operationId": "listProjectEnvironments",
