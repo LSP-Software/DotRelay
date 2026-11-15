@@ -7,7 +7,15 @@ import {
   stat,
   unlink,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { CliError } from "./errors";
 
 export type GitTrackingState = "tracked" | "untracked" | "ignored" | "outside";
@@ -85,6 +93,19 @@ const nearestExistingDirectory = async (path: string): Promise<string> => {
 // make a file inside the repository compare as outside of it.
 const realProbeContext = async (path: string) => {
   const target = resolve(path);
+  // An existing path is resolved completely, a final symlink included: a
+  // write through a link lands on the file it names, so that file's own
+  // repository and index decide whether it is tracked.
+  try {
+    const realTarget = await realpath(target);
+    return {
+      realTarget,
+      realProbeDirectory: dirname(realTarget),
+      pathspec: basename(realTarget),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const probeDirectory = await nearestExistingDirectory(target);
   const realProbeDirectory = await realpath(probeDirectory);
   return {

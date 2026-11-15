@@ -2821,6 +2821,60 @@ describe("protected CLI workflows", () => {
     expect(JSON.parse(again.stdout)).not.toHaveProperty("warnings");
   });
 
+  test("pull through a symlinked output names the file it writes", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    const target = `${import.meta.dir}/.tmp-workflow-link-target-${crypto.randomUUID()}`;
+    const link = `${import.meta.dir}/.tmp-workflow-link-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+      const initialized = await run(
+        [
+          "init",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--from",
+          input,
+          "--classify",
+          "DATABASE_URL=shared",
+          "--no-input",
+          "--json",
+        ],
+        runtime,
+      );
+      expect(initialized.exitCode).toBe(0);
+      const { symlink, realpath } = await import("node:fs/promises");
+      await Bun.write(target, "OLD=1\n");
+      await symlink(target, link);
+      const pulled = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--output",
+          link,
+          "--no-input",
+          "--force",
+          "--discard-local",
+          "--json",
+        ],
+        { ...runtime, gitTrackingProbe: gitOutside },
+      );
+      expect(pulled.exitCode).toBe(0);
+      const body = JSON.parse(pulled.stdout) as Record<string, unknown>;
+      expect(body.target).toBe(await realpath(target));
+      expect(String(body.message)).toContain("a symlink to");
+      expect(await Bun.file(target).text()).toContain("DATABASE_URL=");
+    } finally {
+      await rm(link, { force: true });
+      await rm(target, { force: true });
+    }
+  });
+
   test("interactive pull replacement retains a recoverable prior file", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;

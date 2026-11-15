@@ -296,7 +296,9 @@ changes separately as "will be lost", and under `--no-input --force` the pull is
 comments, blank lines, and the order of entries are not kept. Each replacement keeps up to three
 earlier copies (`<path>.previous`, `<path>.previous.1`, `<path>.previous.2`), all mode `0600` and
 excluded from Git. A copy identical to the new file or to the newest backup is not kept twice.
-When the output is a symlink, the file it points at is replaced and the link stays.
+When the output is a symlink, the file it points at is replaced and the link stays. The Git
+check runs on that file in its own repository, so a link to a tracked file is refused like the
+tracked file itself, and the review and the report name the file the link points at.
 
 Values are written so an expander sees the same text the source gave it. A `${HOME}` reference
 read from an unquoted or double-quoted line is written in double quotes with `$` unescaped, and

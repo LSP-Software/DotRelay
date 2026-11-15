@@ -35,7 +35,11 @@ import {
   diffDotenvEntries,
   parseDotenv,
 } from "./dotenv";
-import { previousFilePaths, protectedTemporaryPath } from "./output";
+import {
+  previousFilePaths,
+  protectedTemporaryPath,
+  resolveOutputTarget,
+} from "./output";
 import {
   CliError,
   CliInvocationError,
@@ -1052,8 +1056,11 @@ export const guardPullOutputAgainstGit = async (
         includeTemporaryFiles: true,
       });
       const verified = await probe(resolve(paths[index] ?? outputPath));
+      // The write's temporary file sits beside the file a symlink names.
       const temporary = await probe(
-        protectedTemporaryPath(resolve(paths[index] ?? outputPath)),
+        protectedTemporaryPath(
+          await resolveOutputTarget(resolve(paths[index] ?? outputPath)),
+        ),
       );
       if (verified.state !== "ignored" || temporary.state !== "ignored")
         throw new CliError(

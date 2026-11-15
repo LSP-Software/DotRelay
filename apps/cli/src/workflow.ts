@@ -1,11 +1,21 @@
 import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { ParsedArguments } from "./args";
 import { writePublicationBaseline } from "./baseline-store";
 import { kv, note, reviewFrame } from "./components";
 import { diffDotenvEntries, parseDotenv, serializeDotenv } from "./dotenv";
 import { processControlPullWarning } from "./env-safety";
-import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
-import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
+import {
+  CliError,
+  CliInvocationError,
+  sanitizeCliLine,
+  sanitizeCliText,
+} from "./errors";
+import {
+  assertSafeStdout,
+  atomicWriteProtectedFile,
+  resolveOutputTarget,
+} from "./output";
 import { classifyPullValues, pullVariableNames } from "./pull-values";
 import { pad, visibleWidth } from "./theme";
 import { isUnreadableTerminalError, paint, readTerminalSecret } from "./ui";
@@ -170,6 +180,20 @@ export const runProtectedWorkflow = async (
     let gitExclusion: "established" | "present" | undefined;
     if (outputPath)
       gitExclusion = await guardPullOutputAgainstGit(options, outputPath);
+    // A symlinked output is written through to the file it names; the
+    // review and the report name that file so the write is never a surprise.
+    const linkedTarget = outputPath
+      ? await resolveOutputTarget(outputPath)
+          .then((target) =>
+            target === outputPath || target === resolve(outputPath)
+              ? undefined
+              : target,
+          )
+          .catch(() => undefined)
+      : undefined;
+    const linkNote = linkedTarget
+      ? ` (a symlink to ${sanitizeCliLine(linkedTarget)})`
+      : "";
     const synced = await syncWorkflow(options, parsed);
     const groups = classifyPullValues(
       synced.variables,
@@ -357,6 +381,14 @@ export const runProtectedWorkflow = async (
             danger: true,
             body: reviewBody(changes, destination, parsed.reveal, [
               ...pullReplacementNotes(outputPath, unpushed),
+              ...(linkedTarget
+                ? [
+                    `  ${paint(
+                      `${sanitizeCliLine(outputPath)} is a symlink; the write replaces ${sanitizeCliLine(linkedTarget)}`,
+                      "warn",
+                    )}`,
+                  ]
+                : []),
               `  ${paint(
                 `The current file is retained at ${outputPath}.previous`,
                 "faint",
@@ -397,11 +429,12 @@ export const runProtectedWorkflow = async (
           ...(parsed.json ? warningsField : {}),
           ...(gitExclusion ? { gitExclusion } : {}),
           ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
+          ...(linkedTarget ? { target: linkedTarget } : {}),
           ...pendingActionsField(synced.workflow.pendingActions),
           ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
           message: replaceExisting
-            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
-            : `Wrote ${entries.length} values to ${outputPath}${exclusionNote}${omissionNote}`,
+            ? `Wrote ${entries.length} values to ${outputPath}${linkNote}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
+            : `Wrote ${entries.length} values to ${outputPath}${linkNote}${exclusionNote}${omissionNote}`,
         };
   }
   if (parsed.command === "init" || parsed.command === "push") {

@@ -50,7 +50,7 @@ const syncDirectory = async (directory: string): Promise<void> => {
 // A dotenv path is often a symlink into a shared checkout. Renaming over
 // the link would replace it with a regular file, so the write lands on the
 // file the link points at instead.
-const writeTarget = async (path: string): Promise<string> => {
+export const resolveOutputTarget = async (path: string): Promise<string> => {
   try {
     if ((await lstat(path)).isSymbolicLink()) return await realpath(path);
   } catch (error) {
@@ -67,7 +67,7 @@ const writeProtected = async (
 ) => {
   let temporary: string | undefined;
   try {
-    const target = followSymlink ? await writeTarget(path) : path;
+    const target = followSymlink ? await resolveOutputTarget(path) : path;
     temporary = protectedTemporaryPath(target);
     const handle = await open(temporary, "wx", 0o600);
     try {
