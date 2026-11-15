@@ -29,10 +29,11 @@ image, publish and production deploy jobs check after the environment gate that 
 equals the tagged commit and that the report hash is well formed, and refuse to continue otherwise.
 The publish job binds both values into the release evidence.
 
-Prereleases publish versioned images and `latest-alpha`, never `latest-stable`; automatic production
-deployment runs only for stable tags. Alpha installation deployment is an explicit operation using
-the versioned alpha images. Release workflows serialize across all release tags.
-
-Prerelease web builds require `ALPHA_WEB_ORIGIN` and `ALPHA_API_ORIGIN` in the release environment
-or repository variables. They are exact HTTPS origins baked into the client bundle. The release
-concurrency group uses `queue: max` so pending releases are retained rather than replaced.
+Alpha, beta and rc tags are versions of the production service at `dotrelay.dev`: every approved
+`v*` tag builds for the production origins and deploys production. Prereleases publish versioned
+images and `latest-alpha`, never `latest-stable`, and skip only the independent-review check, so
+production admission stays limited to the alpha allow-list until a reviewed stable release. On npm,
+alpha, beta and rc builds move `latest` until the first stable version exists; after that they use
+their own tag. Dev builds from `main` only ever use `dev`. Release workflows serialize across all
+release tags; the concurrency group uses `queue: max` so pending releases are retained rather than
+replaced.

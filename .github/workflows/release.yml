@@ -103,36 +103,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - name: Require independent approval of this exact commit
+      - name: Require independent approval of this exact commit (stable)
         env:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
         run: |
+          # Prereleases (alpha, beta, rc) still need an approver in the
+          # security-review environment, but not the independent review:
+          # testers must not store real secrets in them. Stable releases
+          # require the review of this exact commit.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "::notice::$GITHUB_REF_NAME is a prerelease without independent security review. Keep production admission restricted to the alpha allow-list."
+            exit 0
+          fi
           test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+      # Alphas are versions of the production service, so every release
+      # builds for the production origins.
       - name: resolve release origins
         id: origins
-        env:
-          PRERELEASE: ${{ contains(github.ref_name, '-') }}
-          ALPHA_WEB_ORIGIN: ${{ vars.ALPHA_WEB_ORIGIN }}
-          ALPHA_API_ORIGIN: ${{ vars.ALPHA_API_ORIGIN }}
         run: |
-          node <<'JS'
-          const { appendFileSync } = require('node:fs');
-          const alpha = process.env.PRERELEASE === 'true';
-          const origins = {
-            'web-origin': alpha ? process.env.ALPHA_WEB_ORIGIN : 'https://dotrelay.dev',
-            'api-origin': alpha ? process.env.ALPHA_API_ORIGIN : 'https://api.dotrelay.dev',
-          };
-          for (const [name, value] of Object.entries(origins)) {
-            if (!value) throw new Error(`Configure ALPHA_WEB_ORIGIN and ALPHA_API_ORIGIN before publishing a prerelease (${name} is missing)`);
-            const url = new URL(value);
-            if (url.protocol !== 'https:' || url.origin !== value) {
-              throw new Error(`${name} must be an exact HTTPS origin; configure ALPHA_WEB_ORIGIN and ALPHA_API_ORIGIN for prereleases`);
-            }
-            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
-          }
-          JS
+          echo "web-origin=https://dotrelay.dev" >> "$GITHUB_OUTPUT"
+          echo "api-origin=https://api.dotrelay.dev" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -196,6 +188,45 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun run package:cli:version -- "$RELEASE_TAG"
       - run: bun run --cwd apps/cli build
+      # Signing runs only once its credentials exist; until then releases
+      # ship unsigned binaries (npm and curl installs are not quarantined).
+      - name: detect signing credentials
+        id: signing
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          macos=false; windows=false
+          [[ "$RUNNER_OS" == macOS && -n "$APPLE_DEVELOPER_ID_P12_BASE64" ]] && macos=true
+          [[ "$RUNNER_OS" == Windows && -n "$AZURE_CLIENT_ID" ]] && windows=true
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
+      - name: sign and notarize the macOS binary
+        if: steps.signing.outputs.macos == 'true'
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: scripts/sign-macos.sh apps/cli/dist/dotrelay
+      - name: sign the Windows binary (Azure Artifact Signing)
+        if: steps.signing.outputs.windows == 'true'
+        uses: azure/artifact-signing-action@208f8af4bf26cf2af8597424e3cb5582801523ba # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\apps\cli\dist\dotrelay.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: DotRelay CLI
+          description-url: https://github.com/LSP-Software/DotRelay
       - run: bun run package:cli
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -218,6 +249,14 @@ jobs:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
         run: |
+          # Prereleases (alpha, beta, rc) still need an approver in the
+          # security-review environment, but not the independent review:
+          # testers must not store real secrets in them. Stable releases
+          # require the review of this exact commit.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "::notice::$GITHUB_REF_NAME is a prerelease without independent security review. Keep production admission restricted to the alpha allow-list."
+            exit 0
+          fi
           test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -275,9 +314,10 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+  # Every approved v* tag deploys production; alpha, beta and rc are versions
+  # of dotrelay.dev, admitted by the API's alpha allow-list.
   deploy-prod:
     name: deploy prod (Coolify)
-    if: ${{ !contains(github.ref_name, '-') }}
     needs: [build-cli, build-images, publish]
     environment: security-review
     runs-on: ubuntu-latest
@@ -287,6 +327,14 @@ jobs:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
         run: |
+          # Prereleases (alpha, beta, rc) still need an approver in the
+          # security-review environment, but not the independent review:
+          # testers must not store real secrets in them. Stable releases
+          # require the review of this exact commit.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "::notice::$GITHUB_REF_NAME is a prerelease without independent security review. Keep production admission restricted to the alpha allow-list."
+            exit 0
+          fi
           test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

@@ -69,3 +69,51 @@ test("release evidence binds all exact artifacts and rejects tampering", async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("prereleases may ship unreviewed, stable releases may not", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dotrelay-release-"));
+  try {
+    for (const platform of ["linux-x64", "darwin-arm64", "win32-x64"]) {
+      await mkdir(join(root, platform));
+      await writeFile(
+        join(
+          root,
+          platform,
+          platform.startsWith("win32") ? "dotrelay.exe" : "dotrelay",
+        ),
+        `synthetic-${platform}`,
+      );
+    }
+    const archive = Bun.spawn(
+      [
+        "python3",
+        "-c",
+        "import importlib.util; s=importlib.util.spec_from_file_location('p','scripts/package-release.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.package(__import__('sys').argv[1], 'v1.2.3-alpha.1')",
+        root,
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    expect(await archive.exited).toBe(0);
+    const unreviewed = {
+      ...settings,
+      approvedCommit: "",
+      reviewReportSha256: "",
+    };
+    const manifest = await writeReleaseEvidence(root, unreviewed);
+    expect(manifest.independentReview).toBe("none (prerelease)");
+    await expect(
+      writeReleaseEvidence(root, { ...unreviewed, tag: "v1.2.3" }),
+    ).rejects.toThrow("independent-review");
+    await expect(
+      writeReleaseEvidence(root, {
+        ...unreviewed,
+        approvedCommit: "e".repeat(40),
+      }),
+    ).rejects.toThrow("independent-review");
+    expect((await writeReleaseEvidence(root, settings)).independentReview).toBe(
+      "approved",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

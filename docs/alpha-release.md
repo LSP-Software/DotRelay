@@ -116,19 +116,43 @@ before changing it.
 
 ## Alpha release channels
 
-Prerelease tags publish versioned Docker images and `latest-alpha`, plus an npm prerelease tag and
-a GitHub prerelease. They never move `latest-stable` and never run automatic production deployment.
-Deploy the selected versioned alpha image deliberately to the alpha installation. Stable tags
-retain the production deployment path. Release runs serialize across tags so mutable image aliases
-cannot be advanced by overlapping workflows. Configure the admission list on the target service
-before deploying; source changes do not modify hosting configuration.
+An alpha is a version of the production service, not a separate installation. Every approved `v*`
+tag builds for `https://dotrelay.dev` and `https://api.dotrelay.dev`, publishes versioned images
+(prereleases also move `latest-alpha`, never `latest-stable`), publishes the CLI, creates a GitHub
+release, and deploys production. Keep `ALPHA_ADMISSION_REQUIRED=true` with testers in
+`ALPHA_GITHUB_IDS` on the production API while releases are unreviewed. Until the first stable
+version exists, alpha, beta and rc CLI builds also move npm `latest`, so `npm install -g
+@dotrelay/cli` installs the current alpha. Release runs serialize across tags so mutable image
+aliases cannot be advanced by overlapping workflows.
 
 Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
 
-Before cutting a prerelease, configure the `security-review` environment/repository variables
-`ALPHA_WEB_ORIGIN` and `ALPHA_API_ORIGIN` to the exact HTTPS origins of the alpha installation.
-The web image is built for those origins and refuses missing/invalid values; stable builds keep
-the production origins. The release concurrency queue retains up to 100 pending tags.
+The release concurrency queue retains up to 100 pending tags.
+
+## Release gate
+
+Image builds, CLI publication and production deploys run in the `security-review` GitHub
+environment, which requires an approver and accepts only `v*` tags. Stable tags also require
+`SECURITY_REVIEW_APPROVED_SHA` to equal the tagged commit and `SECURITY_REVIEW_REPORT_SHA256` to
+hold the independent review report's hash. Prerelease tags (`-alpha`, `-beta`, `-rc`) skip that
+check, and their release manifest records `"independentReview": "none (prerelease)"`. Admit
+testers to a prerelease only with values they can afford to disclose.
+
+## Code signing
+
+`release.yml` signs the CLI binaries once their credentials exist; until then releases ship
+unsigned binaries, which npm and `curl` installs run without a Gatekeeper prompt.
+
+- **macOS** (`scripts/sign-macos.sh`, entitlements in `ops/macos-entitlements.plist`): a Developer
+  ID Application certificate from an Apple Developer Program organisation membership, and an App
+  Store Connect API key for notarization. Repository secrets: `APPLE_DEVELOPER_ID_P12_BASE64`,
+  `APPLE_DEVELOPER_ID_P12_PASSWORD`, `APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID`,
+  `APPLE_NOTARY_ISSUER_ID`. The binary is signed with the hardened runtime and Bun's JIT
+  entitlements, then notarized; a bare binary cannot be stapled, so Gatekeeper checks online.
+- **Windows** (Azure Artifact Signing): secrets `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+  `AZURE_CLIENT_SECRET` for an app registration holding the Artifact Signing Certificate Profile
+  Signer role, and variables `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`,
+  `AZURE_SIGNING_PROFILE`.
 
 ## Remaining deployment and security gates
 

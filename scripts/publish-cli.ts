@@ -2,19 +2,52 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-export const publicationTag = (version: string): string => {
+// Each publish names its dist-tag: stable releases move "latest", and a
+// prerelease uses its first identifier (alpha, beta, rc, dev). Until the first
+// stable release exists, alpha/beta/rc builds are the product, so they also
+// move "latest" and `npm install -g @dotrelay/cli` installs them. Dev builds
+// from main never do.
+export const publicationTag = (
+  version: string,
+  stableReleaseExists: boolean,
+): string => {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
     throw new Error("The CLI package version is invalid");
-  const prerelease = version.split("-")[1];
-  const tag = prerelease ? (prerelease.split(".")[0] ?? "next") : "latest";
-  // A prerelease must never replace the stable npm selector, whether its
-  // first identifier is literally "latest" (v1.2.3-latest.1) or the version
-  // is an empty-prerelease edge case (1.2.3--x).
-  if (version.includes("-") && tag === "latest")
+  const separator = version.indexOf("-");
+  if (separator === -1) return "latest";
+  const identifier = version.slice(separator + 1).split(".")[0] ?? "";
+  // A prerelease identifier that is literally "latest" (v1.2.3-latest.1), or
+  // empty (1.2.3--x), is refused rather than guessed.
+  if (!/^[0-9A-Za-z]+$/.test(identifier) || identifier === "latest")
     throw new Error(
-      "Prerelease versions cannot publish to the latest npm tag; use an identifier such as alpha, beta, rc, or dev",
+      "Prerelease versions need an identifier such as alpha, beta, rc, or dev",
     );
-  return tag;
+  if (identifier === "dev") return "dev";
+  return stableReleaseExists ? identifier : "latest";
+};
+
+const isStableVersion = (version: string): boolean =>
+  /^\d+\.\d+\.\d+$/.test(version);
+
+// Reads the published versions; a package that has never been published has
+// no stable release. Any other registry failure stops the publish.
+export const stableReleaseExists = async (
+  packageName: string,
+  fetchRegistry: typeof fetch = fetch,
+): Promise<boolean> => {
+  const response = await fetchRegistry(
+    `https://registry.npmjs.org/${packageName.replaceAll("/", "%2f")}`,
+    { headers: { accept: "application/vnd.npm.install-v1+json" } },
+  );
+  if (response.status === 404) return false;
+  if (!response.ok)
+    throw new Error(
+      `Could not read ${packageName} from the npm registry (HTTP ${response.status}); the release has not been published.`,
+    );
+  const body = (await response.json()) as {
+    readonly versions?: Record<string, unknown>;
+  };
+  return Object.keys(body.versions ?? {}).some(isStableVersion);
 };
 
 // --provenance signs the tarball with the job's OIDC token (id-token: write).
@@ -46,7 +79,10 @@ const publish = async () => {
   ) as { name: string; version: string };
   if (metadata.name !== "dotrelay")
     throw new Error("Unexpected CLI package name");
-  const tag = publicationTag(metadata.version);
+  const tag = publicationTag(
+    metadata.version,
+    await stableReleaseExists(metadata.name),
+  );
   const directory = await mkdtemp(join(tmpdir(), "dotrelay-npm-"));
   const config = join(directory, "npmrc");
   try {
