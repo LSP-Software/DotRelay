@@ -135,9 +135,9 @@ test("the dismissal key is scoped to the user", () => {
 
 test("each package manager maps to its global install command", () => {
   expect(cliInstallCommand("npm")).toBe("npm install -g @dotrelay/cli@latest");
-  expect(cliInstallCommand("yarn")).toBe("yarn global add dotrelay");
-  expect(cliInstallCommand("pnpm")).toBe("pnpm add -g dotrelay");
-  expect(cliInstallCommand("bun")).toBe("bun add -g dotrelay");
+  expect(cliInstallCommand("yarn")).toBe("yarn global add @dotrelay/cli");
+  expect(cliInstallCommand("pnpm")).toBe("pnpm add -g @dotrelay/cli");
+  expect(cliInstallCommand("bun")).toBe("bun add -g @dotrelay/cli");
 });
 
 test("the package manager key is not user-scoped", () => {

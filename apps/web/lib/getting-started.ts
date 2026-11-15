@@ -10,9 +10,9 @@ export type CliPackageManager = (typeof CLI_PACKAGE_MANAGERS)[number];
 
 const CLI_INSTALL_COMMANDS: Record<CliPackageManager, string> = {
   npm: "npm install -g @dotrelay/cli@latest",
-  yarn: "yarn global add dotrelay",
-  pnpm: "pnpm add -g dotrelay",
-  bun: "bun add -g dotrelay",
+  yarn: "yarn global add @dotrelay/cli",
+  pnpm: "pnpm add -g @dotrelay/cli",
+  bun: "bun add -g @dotrelay/cli",
 };
 
 export const cliInstallCommand = (manager: CliPackageManager): string =>

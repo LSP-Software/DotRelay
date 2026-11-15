@@ -112,7 +112,7 @@ test("the CLI install step offers package managers and keeps the choice", async 
 
   const bunChoice = guide.getByRole("button", { name: "bun" });
   await bunChoice.click();
-  await expect(install).toContainText("bun add -g dotrelay");
+  await expect(install).toContainText("bun add -g @dotrelay/cli");
   await expect(bunChoice).toHaveAttribute("aria-pressed", "true");
 
   await page.reload();
@@ -128,7 +128,7 @@ test("the CLI install step offers package managers and keeps the choice", async 
     page
       .getByTestId("getting-started")
       .getByTestId("getting-started-install-command"),
-  ).toContainText("bun add -g dotrelay");
+  ).toContainText("bun add -g @dotrelay/cli");
 });
 
 test("highlighting part of a command stays on that part", async ({ page }) => {
