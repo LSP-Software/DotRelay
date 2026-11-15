@@ -1366,6 +1366,94 @@ integrationDescribe("trust workflow integration", () => {
     expect(activated.membership.lifecycle).toBe("ACTIVE");
   });
 
+  test("lets an active Member grant the Project key to their own Devices only", async () => {
+    const owner = await createUserFixture();
+    const ownerDevice = await createActiveDevice(owner.id);
+    const serverProfileId = owner.serverProfileId;
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId,
+      ownerUserId: owner.id,
+      name: "own-grant-team",
+      operation: {
+        ...(await createOperationInput(owner.id, "own-grant-team")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now()),
+      operation: {
+        ...(await createOperationInput(owner.id, "own-grant-project")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    const member = await createUserFixture(serverProfileId);
+    const memberDevice = await createActiveDevice(member.id);
+    const memberLaptop = await createActiveDevice(member.id);
+    const membership = await database.membership.create({
+      data: {
+        teamId,
+        userId: member.id,
+        role: "MEMBER",
+        lifecycle: "ACTIVE",
+        activatedAt: new Date(),
+      },
+    });
+    const grants = new GrantRepository();
+    const grantTo = async (recipientDeviceId: string, label: string) => {
+      const protocolObject = await createProtocolObjectInput(7);
+      const operation = {
+        ...(await createOperationInput(member.id, label)),
+        actorDeviceId: memberDevice.id,
+      };
+      await stageObject({
+        operation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+      return grants.create(database, {
+        operation,
+        grant: {
+          protocolObject,
+          projectId,
+          teamId,
+          senderDeviceId: memberDevice.id,
+          recipientDeviceId,
+          keyKind: "PROJECT_EPOCH",
+          grantKind: "CURRENT_PROJECT_EPOCH",
+          projectEpoch: 1n,
+          plaintextLength: 32,
+          ciphertextLength: 48,
+          ciphertextHash: new Uint8Array(48),
+          recipientDeviceIds: [recipientDeviceId],
+        },
+      });
+    };
+    const own = await grantTo(memberLaptop.id, "own-grant-laptop");
+    expect("grant" in own && own.grant.recipientDeviceId).toBe(memberLaptop.id);
+    await expect(grantTo(ownerDevice.id, "own-grant-foreign")).rejects.toThrow(
+      "not authorized for the Team: insufficient_role",
+    );
+    for (const data of [
+      { lifecycle: "PENDING_KEY_GRANT", activatedAt: null, removedAt: null },
+      { lifecycle: "REMOVED", removedAt: new Date() },
+    ] as const) {
+      const { lifecycle } = data;
+      await database.membership.update({
+        where: { id: membership.id },
+        data,
+      });
+      await expect(
+        grantTo(memberLaptop.id, `own-grant-${lifecycle}`),
+      ).rejects.toThrow("not authorized for the Team: membership_not_active");
+    }
+  });
+
   // Acceptance and membership activation must take row locks in the same
   // Team-then-User order. This test pins the previously deadlocking
   // interleaving: the acceptance transaction has performed its operation

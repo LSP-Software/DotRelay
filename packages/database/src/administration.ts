@@ -98,3 +98,22 @@ export const decideLaneDisclosure = (
     return denied("user_value_owned_by_another_user");
   return allowed;
 };
+
+/**
+ * The Team action a Project epoch grant needs. A Member already holds the
+ * Project key, so sealing it to another of their own Devices discloses
+ * nothing new and needs only an active Membership. Grants to anyone else's
+ * Device, and every Membership-scoped grant, stay with owners and admins.
+ */
+export const grantCreationAction = (
+  input: Readonly<{
+    readonly actorUserId: string;
+    readonly recipientUserIds: ReadonlyArray<string>;
+    readonly membershipScoped: boolean;
+  }>,
+): TeamAction =>
+  !input.membershipScoped &&
+  input.recipientUserIds.length > 0 &&
+  input.recipientUserIds.every((userId) => userId === input.actorUserId)
+    ? "VIEW"
+    : "ADMINISTER_PROJECT";

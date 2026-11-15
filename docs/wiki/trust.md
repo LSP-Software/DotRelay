@@ -74,9 +74,17 @@ Invitations create Memberships in `PENDING_KEY_GRANT`. **`GrantRepository.create
 grant protocol objects with exact recipient-set validation: every listed recipient Device must be
 active, and Membership-scoped grants require a pending Membership on the same Team.
 
-The same User's CLI and browser Devices share the current Project epoch key through grant bootstrap.
-The first Device creates the key. Later Devices receive a wrap of that key, then Shared Values can
-be sealed to it instead of to a single Device.
+The same User's CLI and browser Devices share the current Project epoch key through grant bootstrap
+(`POST /api/v1/grants/bootstrap`). The first Device creates the key. Later Devices receive a wrap of
+that key, then Shared Values can be sealed to it instead of to a single Device.
+
+Who may create a grant depends on its recipients. Any active Member with an active Device may seal
+the Project key to another of their own active Devices: they already hold the key, so the grant
+discloses nothing new. Clients pick those Devices from the User's verified roster (ADR 0015). A grant
+to another User's Device, and every Membership-scoped grant, needs owner or admin authority, as for
+Project administration. Grant bootstrap only ever targets the actor's own Devices and answers
+`forbidden` for anyone else's; other Users receive keys through Membership provisioning. Pending and
+removed Members cannot create grants.
 
 A grant carries key material on its signer's word alone, so a client accepts one only when an
 active Device of its own verified roster, or of a teammate the user confirmed, signed it
@@ -84,10 +92,7 @@ active Device of its own verified roster, or of a teammate the user confirmed, s
 prefers its own Account Key Envelope to any grant.
 
 **`MembershipRepository.activate`** commits a membership activation object only after the required
-
-**`MembershipRepository.activate`** commits a membership activation object only after the required
-grant count is present. Owner and admin authority for grant creation follows the same Team action
-rules as Project administration.
+grant count is present.
 
 ## Recovery
 

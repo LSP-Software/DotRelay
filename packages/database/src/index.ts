@@ -5,7 +5,11 @@ export type {
   PolicyDenial,
   TeamAction,
 } from "./administration";
-export { decideLaneDisclosure, decideTeamAction } from "./administration";
+export {
+  decideLaneDisclosure,
+  decideTeamAction,
+  grantCreationAction,
+} from "./administration";
 export type { BetterAuthDatabaseAdapter } from "./better-auth";
 export { createBetterAuthDatabaseAdapter } from "./better-auth";
 export type {

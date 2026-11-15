@@ -271,7 +271,8 @@ accepted later: an owner or admin has to invite you again. The CLI cannot send o
 invitations; owners and admins do that in the web app.
 
 A new Member cannot read anything until a Team owner or admin shares the Project keys with them.
-`pull` only shares keys among the puller's own Devices, so a teammate's pull never helps. The owner
+`pull` only shares keys among the puller's own Devices (any active Member's pull does this), so a
+teammate's pull never helps. The owner
 or admin chooses **Share project keys** for the Member in the web app's Members view, or runs
 `dotrelay team share-keys <github-login-or-user-id>` from a Device that can read every Project in
 the Team. The command reads the service's provisioning plan for that Membership, opens each

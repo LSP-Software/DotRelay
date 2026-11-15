@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   decideLaneDisclosure,
   decideTeamAction,
+  grantCreationAction,
   type MembershipAccess,
 } from "./administration";
 
@@ -124,6 +125,30 @@ describe("administration policy", () => {
         },
         "actor-user",
       ),
+    ).toEqual({ allowed: false, reason: "membership_not_active" });
+  });
+
+  test("lets any active Member grant to their own Devices only", () => {
+    const own = {
+      actorUserId: "actor-user",
+      recipientUserIds: ["actor-user", "actor-user"],
+      membershipScoped: false,
+    };
+    expect(grantCreationAction(own)).toBe("VIEW");
+    expect(
+      grantCreationAction({
+        ...own,
+        recipientUserIds: ["actor-user", "other-user"],
+      }),
+    ).toBe("ADMINISTER_PROJECT");
+    expect(grantCreationAction({ ...own, recipientUserIds: [] })).toBe(
+      "ADMINISTER_PROJECT",
+    );
+    expect(grantCreationAction({ ...own, membershipScoped: true })).toBe(
+      "ADMINISTER_PROJECT",
+    );
+    expect(
+      decideTeamAction(membership("MEMBER", "PENDING_KEY_GRANT"), "VIEW"),
     ).toEqual({ allowed: false, reason: "membership_not_active" });
   });
 });

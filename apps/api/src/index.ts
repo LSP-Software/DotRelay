@@ -1020,13 +1020,15 @@ const createApi = ({
       if (project.lifecycle !== "ACTIVE")
         throw new Error("Project is archived");
       // Cheap authorization pre-check before anything is staged; the
-      // repository repeats it inside the creating transaction.
+      // repository repeats it inside the creating transaction. This endpoint
+      // only seals the key to the actor's own Devices, which any active
+      // Member may do: they already hold the key (grantCreationAction).
       await requireTeamAction(
         database,
         actor.userId,
         actor.deviceId,
         request.teamId,
-        "ADMINISTER_PROJECT",
+        "VIEW",
       );
       const sender = await database.device.findUnique({
         where: { id: actor.deviceId },
@@ -1041,11 +1043,7 @@ const createApi = ({
         recipientDeviceId === actor.deviceId
           ? sender
           : await database.device.findFirst({
-              where: {
-                id: recipientDeviceId,
-                userId: sender.userId,
-                lifecycle: "ACTIVE",
-              },
+              where: { id: recipientDeviceId, lifecycle: "ACTIVE" },
               select: {
                 x25519PublicKey: true,
                 ed25519PublicKey: true,
@@ -1054,6 +1052,10 @@ const createApi = ({
             });
       if (!recipient)
         throw new DeviceNotActiveError("grant recipient device is not active");
+      // Another User's Devices receive keys only through Membership
+      // provisioning, never through this endpoint.
+      if (recipient.userId !== sender.userId)
+        throw new Error("actor is not authorized to grant to another User");
       if (
         !equalBytes(
           requiredBytes(39, 32),
