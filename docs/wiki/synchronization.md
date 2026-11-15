@@ -55,7 +55,17 @@ before objects are returned. Sync integrity failures surface as `state_conflict`
 
 Lanes keep the Project epoch they were sealed under. Clients rebuild earlier
 epoch keys from the Project's `epochKeyLinks` on the workspace boundary and
-open each lane with its own epoch's key. A missing link is backfilled through
+open each lane with its own epoch's key.
+
+Clients verify each page against a hostile service
+([ADR 0022](../adr/0022-client-trust-anchors-and-key-adoption.md)). A Revision's
+Project epoch never drops below its parent's, and a publication never seals
+under an older epoch than the verified head's. A Revision carries only its own
+Revision object, the one Manifest descriptor its Manifest hash names, and the
+lanes that descriptor commits to, each once; the decoder reads that
+descriptor. Every Value lane names the Revision's author as its owner
+(User-defined Value) or provider (Shared Value), and a client never opens
+another User's User-defined Value lane with its own User Value Key. A missing link is backfilled through
 `POST /api/v1/projects/:projectId/epoch-key-links` by a client that holds both
 keys.
 

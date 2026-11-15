@@ -38,12 +38,15 @@ active Device and the signed protocol checks implemented in this package.
   a retry replays the same Device instead of creating a duplicate.
 
 Account trust pins (ADR 0015) are wrapped by the same origin-bound key and stored in a record slot
-derived from the Device id.
+derived from the Device id. They also hold the per-Project epoch pins of
+[ADR 0022](../adr/0022-client-trust-anchors-and-key-adoption.md): the highest epoch this browser
+accepted and a one-way commitment to each Project Epoch Key it adopted.
 
 ### CLI
 
 - Account trust pins live in `account-trust-<server-profile-id>.json` in the CLI state directory,
-  written with the protected-file helper (0600, atomic).
+  written with the protected-file helper (0600, atomic), together with the per-Project epoch pins
+  (ADR 0022).
 - The encrypted Device bundle record and the wrapping secret are stored separately.
 - Wrapping secrets belong in the **local credential store** through the
   `CredentialStore` adapter; the CLI implements that adapter as AES-256-GCM
@@ -68,10 +71,15 @@ Before trusting synchronized protocol bytes, clients should:
 3. Load and unwrap the local Device bundle.
 4. Derive the account identity from the AMK, verify the Account Device rosters against it and
    the pinned teammate identities, and narrow every service-reported Device key list to the
-   roster-verified keys (ADR 0015).
-5. Verify signed protocol objects, parent Revision links, grant recipient bindings, Project epoch,
-   and Manifest descriptor ceilings.
-6. Advance or reconcile the trusted head; refuse implicit continuity loss.
+   roster-verified keys (ADR 0015). Resolve every User a key list names; a User with no
+   verifiable roster contributes no key (ADR 0022).
+5. Take the Project Epoch Key from the account's own envelope before any grant, accept a grant
+   only from a verified, confirmed signer, and check the key against the per-Project pins
+   (ADR 0022).
+6. Verify signed protocol objects, parent Revision links, the Project epoch never decreasing, the
+   one committed Manifest descriptor, lane attribution to the Revision author, grant recipient
+   bindings, and Manifest descriptor ceilings.
+7. Advance or reconcile the trusted head; refuse implicit continuity loss.
 
 Malformed objects, signature failures, and parent-link breaks fail closed with generic client errors
 that do not reveal which cryptographic component failed.
