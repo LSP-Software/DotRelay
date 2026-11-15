@@ -33,7 +33,10 @@ Valkey endpoint; non-production skips enforcement when neither URL is set.
 5. **Cancel** — `DELETE /api/v1/operations/:operationId` cancels an uncommitted
    staged operation.
 
-Publication and Rollback share the finalize route. The service verifies the
+Publication and Rollback share the finalize route. The service checks the
+actor's Membership in the Environment's Team before anything about the
+Environment's state: a User outside the Team, including a removed Member, gets
+`404 resource_not_found` and learns nothing of its head. It then verifies the
 Revision signature with the actor Device's Ed25519 public key before committing.
 `stale_head` problems include `headId` and `headHash` for client reconciliation.
 `stale_epoch` problems surface when an epoch transition no longer matches the
