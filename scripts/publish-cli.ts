@@ -36,7 +36,7 @@ export const stableReleaseExists = async (
   fetchRegistry: typeof fetch = fetch,
 ): Promise<boolean> => {
   const response = await fetchRegistry(
-    `https://registry.npmjs.org/${packageName.replace("/", "%2f")}`,
+    `https://registry.npmjs.org/${packageName.replaceAll("/", "%2f")}`,
     { headers: { accept: "application/vnd.npm.install-v1+json" } },
   );
   if (response.status === 404) return false;
