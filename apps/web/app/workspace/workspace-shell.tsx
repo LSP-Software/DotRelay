@@ -110,6 +110,12 @@ import {
   repairStaleEpoch as repairStaleEpochFlow,
 } from "@/lib/device-provisioning";
 import {
+  browserDeviceProof,
+  fetchWithDeviceProof,
+  forgetDeviceProofs,
+  knownDeviceProof,
+} from "@/lib/device-proof";
+import {
   type EnvironmentContextIdentity,
   environmentContextIdentity,
   environmentContextKey,
@@ -1170,6 +1176,23 @@ export const WorkspaceShell = ({
     apiOrigin && boundary.device.active && boundary.device.id
       ? { origin: apiOrigin, deviceId: boundary.device.id }
       : null;
+  // Device-scoped requests from this page prove the active Device (ADR
+  // 0018). Registering its proof session here lets every helper that knows
+  // only the API origin and Device id find it.
+  // Only in the browser: a server render never proves a Device.
+  if (
+    typeof window !== "undefined" &&
+    recoveryActor &&
+    boundary.profile.serverProfileId
+  )
+    browserDeviceProof({
+      apiOrigin: recoveryActor.origin,
+      pin: {
+        origin: boundary.profile.origin,
+        serverProfileId: boundary.profile.serverProfileId,
+      },
+      deviceId: recoveryActor.deviceId,
+    });
   const recoveryActorKey =
     recoveryActor?.deviceId ??
     (boundary.session.active ? "session-recovery" : null);
@@ -1182,7 +1205,15 @@ export const WorkspaceShell = ({
   const recoveryInputs = {
     actor: recoveryActor,
     onRecoveredDevice: async (deviceId: string, key: Uint8Array) => {
-      const next = await fetchWorkspaceBoundary(profileId, { deviceId });
+      const serverProfileId = boundary.profile.serverProfileId;
+      if (!serverProfileId) throw new Error("Recovered Device is not active");
+      const next = await fetchWorkspaceBoundary(profileId, {
+        device: browserDeviceProof({
+          apiOrigin: apiOrigin ?? boundary.profile.origin,
+          pin: { origin: boundary.profile.origin, serverProfileId },
+          deviceId,
+        }),
+      });
       if (!next.device.active || next.device.id !== deviceId)
         throw new Error("Recovered Device is not active");
       accountMasterKeyRef.current = key;
@@ -1375,6 +1406,8 @@ export const WorkspaceShell = ({
       // The API is unreachable or rejected the request; the page that
       // follows offers sign-in either way.
     } finally {
+      // Device proofs are bound to the session that just ended.
+      forgetDeviceProofs();
       if (forget) {
         accountMasterKeyRef.current?.fill(0);
         accountMasterKeyRef.current = null;
@@ -1571,7 +1604,8 @@ export const WorkspaceShell = ({
       );
       let binary = "";
       for (const byte of signature) binary += String.fromCharCode(byte);
-      const response = await fetch(
+      const response = await fetchWithDeviceProof(
+        knownDeviceProof(apiOrigin, browserDeviceId),
         `${apiOrigin}/api/v1/devices/${deviceId}/revoke`,
         {
           method: "POST",
@@ -2372,15 +2406,19 @@ export const WorkspaceShell = ({
     setDeviceRenameBusy(true);
     setDeviceRenameError(null);
     try {
-      const response = await fetch(`${apiOrigin}/api/v1/devices/self`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-DotRelay-Device-Id": browserDeviceId,
+      const response = await fetchWithDeviceProof(
+        knownDeviceProof(apiOrigin, browserDeviceId),
+        `${apiOrigin}/api/v1/devices/self`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-DotRelay-Device-Id": browserDeviceId,
+          },
+          body: JSON.stringify({ displayName: name }),
         },
-        body: JSON.stringify({ displayName: name }),
-      });
+      );
       if (!response.ok) {
         setDeviceRenameError("Could not rename this Device");
         return;

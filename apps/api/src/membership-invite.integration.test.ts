@@ -11,6 +11,7 @@ import {
   sha384Digest,
 } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -81,11 +82,14 @@ const createAuthStub = (): DotRelayAuth =>
         headers,
       }: {
         headers: Headers;
-      }): Promise<null | { user: { id: string } }> => {
+      }): Promise<null | {
+        session: { id: string };
+        user: { id: string };
+      }> => {
         const authorization = headers.get("Authorization");
         if (!authorization?.startsWith("Bearer ")) return null;
         return authorization.slice("Bearer ".length) === OWNER_TOKEN
-          ? { user: { id: authSubject } }
+          ? { session: { id: OWNER_TOKEN }, user: { id: authSubject } }
           : null;
       },
     },
@@ -96,14 +100,24 @@ const createAuthStub = (): DotRelayAuth =>
     }),
   }) as unknown as DotRelayAuth;
 
-const inviteRequest = (idempotencyKey: string, providerSubject: string) =>
+// The owner Device's proof (ADR 0018) for the owner's session.
+const ownerProof = async () => ({
+  "X-DotRelay-Device-Id": deviceId,
+  "X-DotRelay-Device-Proof": await testDeviceProof(profile, {
+    sessionId: OWNER_TOKEN,
+    userId: ownerUserId,
+    deviceId,
+  }),
+});
+
+const inviteRequest = async (idempotencyKey: string, providerSubject: string) =>
   testApp.request(`${profile.origin}/api/v1/teams/${teamId}/invitations`, {
     method: "POST",
     headers: {
       Origin: profile.origin,
       "Cache-Control": "no-store",
       Authorization: `Bearer ${OWNER_TOKEN}`,
-      "X-DotRelay-Device-Id": deviceId,
+      ...(await ownerProof()),
       "Idempotency-Key": idempotencyKey,
       "Content-Type": "application/json",
     },
@@ -370,7 +384,7 @@ integrationDescribe(
           headers: {
             Origin: profile.origin,
             Authorization: `Bearer ${OWNER_TOKEN}`,
-            "X-DotRelay-Device-Id": deviceId,
+            ...(await ownerProof()),
           },
         },
       );
@@ -414,7 +428,7 @@ integrationDescribe(
           headers: {
             Origin: profile.origin,
             Authorization: `Bearer ${OWNER_TOKEN}`,
-            "X-DotRelay-Device-Id": deviceId,
+            ...(await ownerProof()),
             "Idempotency-Key": "f0000000-0000-4000-8000-0000000000b2",
             "Content-Type": "application/json",
           },

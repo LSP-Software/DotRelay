@@ -3,6 +3,7 @@ import {
   createEpochRotationArtifacts,
   createProtocolTransport,
 } from "@dotrelay/client";
+import { testDeviceProof } from "./device-proof-testing";
 import { COMMAND_STAGE_OBJECT_ID } from "./protocol/constants";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
@@ -93,7 +94,12 @@ test("a committed epoch rotation replay is idempotent, not a missing-stage 409",
     authAccount: {
       findFirst: async () => ({ accountId: "github-user" }),
     },
-    user: { upsert: async () => ({ id: userId }) },
+    user: {
+      upsert: async (input: { create: { githubSubject: string } }) => ({
+        id: userId,
+        githubSubject: input.create.githubSubject,
+      }),
+    },
     device: {
       findFirst: async ({
         where,
@@ -172,7 +178,10 @@ test("a committed epoch rotation replay is idempotent, not a missing-stage 409",
     database,
     auth: {
       api: {
-        getSession: async () => ({ user: { id: "auth-user" } }),
+        getSession: async () => ({
+          session: { id: "current-session" },
+          user: { id: "auth-user" },
+        }),
       },
     } as never,
   });
@@ -180,9 +189,22 @@ test("a committed epoch rotation replay is idempotent, not a missing-stage 409",
   // Drive the real client transport so the exact wire serialization (hex hashes,
   // staged object ids) reaches the route; the fetch is routed at the mock app.
   let observedStatus: number | undefined;
+  const proof = await testDeviceProof(profile, {
+    sessionId: "current-session",
+    userId,
+    deviceId: actorDeviceId,
+  });
   const transport = createProtocolTransport({
     origin: profile.origin,
     authorization: "Bearer current-token",
+    deviceProof: {
+      deviceId: actorDeviceId,
+      headers: async () => ({
+        "X-DotRelay-Device-Id": actorDeviceId,
+        "X-DotRelay-Device-Proof": proof,
+      }),
+      invalidate: () => undefined,
+    },
     fetch: (url, init) =>
       Promise.resolve(app.fetch(new Request(url, init as RequestInit))).then(
         (response) => {

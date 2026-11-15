@@ -87,6 +87,7 @@ export {
   type BeginOperationRequest,
   bytesToUuid,
   DEVICE_ID_HEADER,
+  DEVICE_PROOF_HEADER,
   decodeSyncPage,
   type EpochRotationRequest,
   encodeSyncPage,
@@ -132,3 +133,14 @@ export {
 } from "./server-profile";
 
 export { deviceRecoveryMessage } from "./account-key-ack";
+export {
+  DEVICE_PROOF_CHALLENGE_BYTES,
+  DEVICE_PROOF_TOKEN_BYTES,
+  type DeviceProof,
+  type DeviceProofChallenge,
+  decodeDeviceProofValue,
+  deviceProofMessage,
+  encodeDeviceProofValue,
+  parseDeviceProof,
+  parseDeviceProofChallenge,
+} from "./device-proof";

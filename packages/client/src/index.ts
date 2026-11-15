@@ -70,6 +70,15 @@ export {
   type DeviceBootstrap,
 } from "./device/bootstrap";
 export {
+  createDeviceProofSession,
+  type DeviceProofExchange,
+  DeviceProofError,
+  type DeviceProofSession,
+  type DeviceProofSigner,
+  deviceProofSignerFromBundle,
+  sendWithDeviceProof,
+} from "./device/proof";
+export {
   createDevicePrivateBundle,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,

@@ -137,7 +137,7 @@ version exists, alpha, beta and rc CLI builds also move npm `latest`, so `npm in
 @dotrelay/cli` installs the current alpha. Release runs serialize across tags so mutable image
 aliases cannot be advanced by overlapping workflows.
 
-Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
+Password and passkey wrappers require a proven active Device (a Device proof, ADR 0018); session-only recovery never discloses them.
 
 The release concurrency queue retains up to 100 pending tags.
 

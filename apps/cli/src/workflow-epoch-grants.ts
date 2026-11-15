@@ -1,6 +1,7 @@
 import {
   createProjectEpochGrantBootstrap,
   type DeviceKeyMaterial,
+  sendWithDeviceProof,
 } from "@dotrelay/client";
 import { sha384 } from "@dotrelay/contracts";
 import { CliError } from "./errors";
@@ -12,6 +13,7 @@ import {
 } from "./network";
 import {
   type Boundary,
+  createDeviceAdmin,
   hexToBytes,
   rawPublicKey,
   responseJson,
@@ -120,10 +122,19 @@ const submitEpochGrant = async (
   grant: Awaited<ReturnType<typeof createProjectEpochGrantBootstrap>>,
 ): Promise<void> => {
   let response: Response;
-  try {
-    // Deadline only: this mutation carries a fresh operation id, so it must
-    // never be repeated automatically.
-    response = await fetchWithDeadline(
+  const body = JSON.stringify({
+    operationId: crypto.randomUUID(),
+    teamId: boundary.environment.teamId,
+    projectId: boundary.environment.projectId,
+    objectId: grant.objectId,
+    digest: Buffer.from(await sha384(grant.canonicalBytes)).toString("base64"),
+    grant: Buffer.from(grant.canonicalBytes).toString("base64"),
+  });
+  // Deadline only: this mutation carries a fresh operation id, so it must
+  // never be repeated automatically. A refused Device proof is the one
+  // exception: the service rejected the request before reading it.
+  const send = (proofHeaders: Readonly<Record<string, string>>) =>
+    fetchWithDeadline(
       options.fetch ?? fetch,
       `${options.profile.origin}/api/v1/grants/bootstrap`,
       {
@@ -134,20 +145,17 @@ const submitEpochGrant = async (
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
           "X-DotRelay-Device-Id": deviceId,
+          ...proofHeaders,
         },
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          teamId: boundary.environment.teamId,
-          projectId: boundary.environment.projectId,
-          objectId: grant.objectId,
-          digest: Buffer.from(await sha384(grant.canonicalBytes)).toString(
-            "base64",
-          ),
-          grant: Buffer.from(grant.canonicalBytes).toString("base64"),
-        }),
+        body,
       },
       options.networkPolicy ?? defaultNetworkPolicy,
     );
+  const deviceProof = createDeviceAdmin(options, deviceId).deviceProof;
+  try {
+    response = deviceProof
+      ? await sendWithDeviceProof(deviceProof, send)
+      : await send({});
   } catch (error) {
     if (error instanceof NetworkAttemptError)
       throw networkFailureCliError(

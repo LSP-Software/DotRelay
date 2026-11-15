@@ -17,6 +17,7 @@ import {
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
 import type { CredentialStore } from "./credentials";
+import { answerDeviceProofRoute } from "./device-proof-testing";
 import { serializeDotenv } from "./dotenv";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { type CliRuntime, run } from "./index";
@@ -125,6 +126,8 @@ const startServer = (
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
+      const proof = await answerDeviceProofRoute(request);
+      if (proof) return proof;
       const url = new URL(request.url);
       const body = request.method === "GET" ? "" : await request.clone().text();
       requests.push({

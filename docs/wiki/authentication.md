@@ -53,7 +53,29 @@ bearer token and a cookie is rejected.
 
 Authentication establishes only the server-local DotRelay User. It does not grant Membership,
 Device authority, decryption ability, or mutation permission. Encrypted operations still require an
-active Device and the application-level signed protocol checks. Session expiry, logout, and remote
+active Device and the application-level signed protocol checks.
+
+## Device proof of possession
+
+A session alone never acts as a Device ([ADR 0018](../adr/0018-device-proof-of-possession.md)).
+Every Device-scoped request carries a Device proof in `X-DotRelay-Device-Proof`: a short-lived
+token the Device gets by signing a service challenge with its Ed25519 key.
+
+1. `POST /api/v1/devices/proofs/challenges` (session only) returns a challenge bound to the
+   session. It is valid for 120 seconds.
+2. The Device signs `dotrelay-device-proof-v1`, a NUL byte, the Server Profile, User and Device
+   ids (16 bytes each) and the challenge bytes.
+3. `POST /api/v1/devices/proofs` with `{ deviceId, challenge, signature }` returns
+   `{ token, deviceId, expiresIn }`. The proof expires 300 seconds after its challenge was issued
+   and works only with the session that asked for the challenge.
+
+`X-DotRelay-Device-Id` is only the claimed Device; when present it must match the proven one. A
+missing, expired or foreign proof is `401 device_proof_required`, and clients then get a new proof
+and send the same request once more. A Device that is not active is `403 device_not_active`, on
+the exchange and on every later request. Without a proof, `GET /api/v1/workspace/boundary`
+returns the session view: no Device, Device ids, keys, rosters, key links, grants or Account Key
+Envelopes. The CLI and the browser get a proof when they first need one and refresh it before it
+expires. Session expiry, logout, and remote
 revocation are database-backed and take effect on the next request. Sessions slide: each day of use
 extends them to 30 days. Independently, any session, browser cookie or CLI bearer, ends 90 days
 after it was created; the API deletes an older session before any route reads it, and the
@@ -94,6 +116,17 @@ requests do not need a browser Origin. The API rejects a request that combines e
 Auth's cookie cache is disabled, so logout, expiry, and remote session deletion take effect on the
 next request instead of waiting for a signed-cookie cache to expire.
 
+Only service-signed bearer tokens are accepted: the session token followed by its HMAC-SHA-256
+under `BETTER_AUTH_SECRET`, the form the session cookie carries. The device token endpoint returns
+the CLI's token in that form. `get-session` and `list-sessions` answer without session tokens, so
+page script on the web origin never reads a token it could replay. CLI sessions created before
+signed tokens must log in again.
+
+Each User keeps the GitHub account that created them. Better Auth account linking is off, so a
+GitHub sign-in whose verified email matches an existing User is refused rather than linked, and
+`link-social` and `unlink-account` are blocked. The service also refuses a session whose GitHub
+account differs from the User's recorded GitHub identity.
+
 The integration tests cover the exact GitHub callback, OAuth state rejection, secure cookie
 attributes, cross-subdomain cookie scoping, exact-origin CORS and CSRF failures, mixed credentials,
 device polling and expiry, endpoint limiting, logout, remote revocation, session expiry,
@@ -104,4 +137,5 @@ start disaster recovery. A replacement Device requires the Recovery Code proof d
 [ADR 0013](../adr/0013-recovery-code-device-authorization.md); this does not relax active-Device
 checks on account-key mutations or protected content.
 
-Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
+Password and passkey wrappers require a proven active Device (a Device proof, ADR 0018);
+session-only recovery never discloses them.

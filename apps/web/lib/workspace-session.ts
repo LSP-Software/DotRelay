@@ -39,6 +39,12 @@ import {
 } from "@/lib/environment-protocol-session";
 import { resolveUserValueKey } from "@/lib/user-value-key";
 import {
+  browserDeviceProof,
+  fetchDeviceBoundary,
+  fetchWithDeviceProof,
+  knownDeviceProof,
+} from "@/lib/device-proof";
+import {
   BROWSER_DEVICE_ID_HEADER,
   fetchWorkspaceBoundary,
   type WorkspaceBoundary,
@@ -54,22 +60,28 @@ const refreshDeviceDisplay = async (
 ): Promise<void> => {
   try {
     const info = describeThisBrowser();
-    await fetch(`${apiOrigin}/api/v1/devices/self`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        [BROWSER_DEVICE_ID_HEADER]: deviceId,
-      },
-      body: JSON.stringify({
-        client: {
-          displayName: info.displayName,
-          clientKind: info.clientKind,
-          ...(info.osName ? { osName: info.osName } : {}),
-          ...(info.clientSummary ? { clientSummary: info.clientSummary } : {}),
+    await fetchWithDeviceProof(
+      knownDeviceProof(apiOrigin, deviceId),
+      `${apiOrigin}/api/v1/devices/self`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          [BROWSER_DEVICE_ID_HEADER]: deviceId,
         },
-      }),
-    });
+        body: JSON.stringify({
+          client: {
+            displayName: info.displayName,
+            clientKind: info.clientKind,
+            ...(info.osName ? { osName: info.osName } : {}),
+            ...(info.clientSummary
+              ? { clientSummary: info.clientSummary }
+              : {}),
+          },
+        }),
+      },
+    );
   } catch {
     // display metadata is cosmetic; ignore network and parse failures
   }
@@ -306,12 +318,20 @@ export const createWorkspaceRefreshLoop = (
       const storedId = serverProfileId
         ? readStoredBrowserDeviceId(fetched.profile.origin, serverProfileId)
         : null;
+      // The Device's view needs a proof that this browser holds the stored
+      // Device's key (ADR 0018). A Device the service refuses, or whose key
+      // this browser lost, leaves the session view, which reports no Device.
       const resolved =
-        storedId && storedId !== fetched.device.id
-          ? await fetchWorkspaceBoundary(profileId, {
-              deviceId: storedId,
-              ...(environmentId ? { environmentId } : {}),
-            })
+        storedId && serverProfileId && apiOrigin
+          ? await fetchDeviceBoundary(
+              profileId,
+              {
+                apiOrigin,
+                pin: { origin: fetched.profile.origin, serverProfileId },
+                deviceId: storedId,
+              },
+              environmentId,
+            )
           : fetched;
       if (stale(run)) return false;
       if (resolved.connection !== "online") {
@@ -643,6 +663,11 @@ export const loadWorkspaceSession = (
       const publicationKeyPrefix = `dotrelay-publication:${encodeURIComponent(profile.origin)}:${profile.serverProfileId ?? profile.id}:${environment.id}:${device.id}:`;
       const transport = createProtocolTransport({
         origin: profile.origin,
+        deviceProof: browserDeviceProof({
+          apiOrigin: profile.origin,
+          pin,
+          deviceId: device.id,
+        }),
         pendingPublication: {
           read: async () => {
             const prefix = publicationKeyPrefix;

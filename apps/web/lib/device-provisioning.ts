@@ -19,6 +19,11 @@ import {
 } from "@/lib/browser-storage";
 import { describeThisBrowser } from "@/lib/device-describe";
 import {
+  browserDeviceProof,
+  fetchDeviceBoundary,
+  fetchWithDeviceProof,
+} from "@/lib/device-proof";
+import {
   fetchWorkspaceBoundary,
   type WorkspaceBoundary,
   type WorkspaceProfileId,
@@ -301,7 +306,16 @@ export const provisionBrowserDevice = async (
             bootstrap.keyMaterial.encryptionPublicKey,
           signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
         });
-        const grantResponse = await fetch(
+        const grantResponse = await fetchWithDeviceProof(
+          browserDeviceProof({
+            apiOrigin,
+            pin,
+            deviceId: bootstrap.deviceId,
+            signing: {
+              userId: boundary.session.userId,
+              signingKey: bootstrap.keyMaterial.signingPrivateKey,
+            },
+          }),
           `${apiOrigin}/api/v1/grants/bootstrap`,
           {
             method: "POST",
@@ -326,14 +340,21 @@ export const provisionBrowserDevice = async (
           );
       }
     }
-    const nextBoundary = await fetchWorkspaceBoundary(profileId, {
-      deviceId: bootstrap.deviceId,
-      ...(ctx.selectedEnvironmentId
-        ? { environmentId: ctx.selectedEnvironmentId }
-        : ctx.environmentId
-          ? { environmentId: ctx.environmentId }
-          : {}),
-    });
+    // A Device still waiting for enrollment approval cannot prove itself
+    // yet, so its boundary is the session view until an approval lands.
+    const nextBoundary = await fetchDeviceBoundary(
+      profileId,
+      {
+        apiOrigin,
+        pin,
+        deviceId: bootstrap.deviceId,
+        signing: {
+          userId: boundary.session.userId,
+          signingKey: bootstrap.keyMaterial.signingPrivateKey,
+        },
+      },
+      ctx.selectedEnvironmentId ?? ctx.environmentId,
+    );
     if (nextBoundary.connection === "online") {
       onCommit(nextBoundary);
     } else {
@@ -527,14 +548,17 @@ export const repairStaleEpoch = async (
   onMessage(null);
   try {
     const storedId = readStoredBrowserDeviceId(pin.origin, pin.serverProfileId);
-    const nextBoundary = await fetchWorkspaceBoundary(profileId, {
-      ...(storedId ? { deviceId: storedId } : {}),
-      ...(ctx.selectedEnvironmentId
-        ? { environmentId: ctx.selectedEnvironmentId }
-        : ctx.environmentId
-          ? { environmentId: ctx.environmentId }
-          : {}),
-    });
+    const environmentScope = ctx.selectedEnvironmentId ?? ctx.environmentId;
+    const nextBoundary = storedId
+      ? await fetchDeviceBoundary(
+          profileId,
+          { apiOrigin: ctx.apiOrigin, pin, deviceId: storedId },
+          environmentScope,
+        )
+      : await fetchWorkspaceBoundary(
+          profileId,
+          environmentScope ? { environmentId: environmentScope } : {},
+        );
     if (nextBoundary.connection !== "online") {
       onOffline();
       onMessage(

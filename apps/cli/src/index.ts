@@ -68,6 +68,7 @@ import {
   writeWorktreeContext,
 } from "./context";
 import { type CredentialStore, createFileCredentialStore } from "./credentials";
+import { cliDevice } from "./device-proof";
 import {
   createFileDeviceRecordStore,
   deviceMetadataPath,
@@ -738,7 +739,15 @@ const createAdminClient = async (
       (await readDeviceId(deviceMetadataPath(stateDirectory, profile.pin))),
   );
   return createStrictJsonClient(profile.pin, credentials, {
-    deviceId,
+    device: cliDevice({
+      pin: profile.pin,
+      credentials,
+      stateDirectory,
+      deviceId,
+      ...(runtime.deviceStorage
+        ? { deviceStorage: runtime.deviceStorage }
+        : {}),
+    }),
     ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
     ...(runtime.networkPolicy ? { networkPolicy: runtime.networkPolicy } : {}),
   });
@@ -1132,7 +1141,19 @@ const verifyStatus = async (
         ...(runtime.networkPolicy
           ? { networkPolicy: runtime.networkPolicy }
           : { networkPolicy: probeNetworkPolicy }),
-        ...(storedDeviceId ? { deviceId: storedDeviceId } : {}),
+        ...(storedDeviceId
+          ? {
+              device: cliDevice({
+                pin,
+                credentials,
+                stateDirectory,
+                deviceId: storedDeviceId,
+                ...(runtime.deviceStorage
+                  ? { deviceStorage: runtime.deviceStorage }
+                  : {}),
+              }),
+            }
+          : {}),
       });
     try {
       await admin.get("/api/v1/session", ["authenticated", "user"]);
@@ -1236,10 +1257,26 @@ const verifyStatus = async (
         if (isAuthenticationRequired(error)) {
           sessionState = "expired";
           service = "rejected";
+          deviceState = deviceKeysUsable ? "unverified" : "unusable";
+        } else if (
+          error instanceof CliError &&
+          error.code === "device_not_active"
+        ) {
+          // The service refused this Device a proof: it is not active.
+          deviceState = "not-active";
+          service = "rejected";
+        } else if (
+          error instanceof CliError &&
+          (error.code === "device_bundle_invalid" ||
+            error.code === "device_bundle_missing")
+        ) {
+          // The service accepted the session but not this bundle's key.
+          deviceState = "unusable";
+          service = "verified";
         } else {
           service = isServiceUnreachable(error) ? "offline" : "unavailable";
+          deviceState = deviceKeysUsable ? "unverified" : "unusable";
         }
-        deviceState = deviceKeysUsable ? "unverified" : "unusable";
       }
     }
     if (
@@ -2303,7 +2340,19 @@ const execute = async (
       const admin =
         runtime.admin ??
         createStrictJsonClient(profile.pin, credentials, {
-          ...(deviceId ? { deviceId } : {}),
+          ...(deviceId
+            ? {
+                device: cliDevice({
+                  pin: profile.pin,
+                  credentials,
+                  stateDirectory,
+                  deviceId,
+                  ...(runtime.deviceStorage
+                    ? { deviceStorage: runtime.deviceStorage }
+                    : {}),
+                }),
+              }
+            : {}),
           ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
           ...(runtime.networkPolicy
             ? { networkPolicy: runtime.networkPolicy }

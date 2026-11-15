@@ -28,6 +28,30 @@ describe("DotRelay identity persistence", () => {
     });
   });
 
+  // A-3: the GitHub account that created a User is that User's identity, and
+  // the recorded GitHub subject never changes.
+  test("refuses a sign-in whose GitHub account is not the User's recorded one", async () => {
+    let update: unknown;
+    const database = {
+      authAccount: {
+        findFirst: async () => ({ accountId: "other-github" }),
+      },
+      user: {
+        upsert: async (input: { update: unknown }) => {
+          update = input.update;
+          return { id: "user-id", githubSubject: "original-github" };
+        },
+      },
+    } as never;
+
+    const user = await resolveDotRelayUser(database, {
+      serverProfileId: "00000000-0000-4000-8000-000000000042",
+      authSubject: "auth-subject",
+    });
+    expect(user).toBeNull();
+    expect(update).toEqual({});
+  });
+
   test("restores the Server Profile after an in-process development database reset", async () => {
     let profileExists = false;
     let attempts = 0;
@@ -46,7 +70,7 @@ describe("DotRelay identity persistence", () => {
         upsert: async () => {
           attempts += 1;
           if (!profileExists) throw { code: "P2003" };
-          return { id: "user-id" };
+          return { id: "user-id", githubSubject: "github-account" };
         },
       },
     } as never;

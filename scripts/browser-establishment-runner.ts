@@ -3,7 +3,10 @@ import {
   authenticatedCreatorKeys,
   createAccountKeyWrapper,
   createDeviceBootstrap,
+  createDeviceProofSession,
   type DeviceBootstrap,
+  type DeviceProofSession,
+  sendWithDeviceProof,
   decodeRecoveryCode,
   encodeRecoveryCode,
   generateAccountMasterKey,
@@ -47,6 +50,7 @@ type RaceResult =
   | Readonly<{ readonly outcome: "lost" }>;
 
 let prepared: PreparedDevice | null = null;
+let deviceProof: DeviceProofSession | null = null;
 
 const toBase64 = (bytes: Uint8Array): string => {
   let binary = "";
@@ -89,14 +93,49 @@ const problemCode = async (response: Response): Promise<string> => {
   return "service_unavailable";
 };
 
-const deviceHeaders = (
-  deviceId: string,
-  operationId?: string,
-): Record<string, string> => ({
-  "Content-Type": "application/json",
-  "X-DotRelay-Device-Id": deviceId,
-  ...(operationId ? { "Idempotency-Key": operationId } : {}),
-});
+// Every Device-scoped request proves the prepared Device (ADR 0018) with
+// the key this page generated for it.
+const deviceFetch = (
+  current: PreparedDevice,
+  path: string,
+  init: Readonly<{
+    readonly method?: string;
+    readonly headers?: Readonly<Record<string, string>>;
+    readonly body?: string;
+  }> = {},
+): Promise<Response> => {
+  const { config, bootstrap } = current;
+  deviceProof ??= createDeviceProofSession({
+    deviceId: bootstrap.deviceId,
+    exchange: async (proofPath, body) => {
+      const response = await fetch(`${config.origin}${proofPath}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok)
+        throw new Error(
+          `browser device proof failed: ${await problemCode(response)}`,
+        );
+      return response.json();
+    },
+    signer: async () => ({
+      serverProfileId: config.serverProfileId,
+      userId: config.userId,
+      deviceId: bootstrap.deviceId,
+      signingKey: bootstrap.keyMaterial.signingPrivateKey,
+    }),
+  });
+  return sendWithDeviceProof(deviceProof, (proofHeaders) =>
+    fetch(`${config.origin}${path}`, {
+      ...init,
+      credentials: "include",
+      cache: "no-store",
+      headers: { ...(init.headers ?? {}), ...proofHeaders },
+    }),
+  );
+};
 
 const prepareBrowserDevice = async (
   config: EstablishConfig,
@@ -167,11 +206,7 @@ const establishFromBrowser = async (): Promise<RaceResult> => {
   const current = prepared;
   if (!current) throw new Error("browser device was not prepared");
   const { config, bootstrap } = current;
-  const listed = await fetch(`${config.origin}/api/v1/account-keys/wrappers`, {
-    credentials: "include",
-    headers: { "X-DotRelay-Device-Id": bootstrap.deviceId },
-    cache: "no-store",
-  });
+  const listed = await deviceFetch(current, "/api/v1/account-keys/wrappers");
   if (!listed.ok)
     throw new Error(
       `browser wrapper list failed: ${await problemCode(listed)}`,
@@ -200,12 +235,15 @@ const establishFromBrowser = async (): Promise<RaceResult> => {
       kind: { type: "recoveryCode", recoveryCode },
     });
     const operationId = crypto.randomUUID();
-    const response = await fetch(
-      `${config.origin}/api/v1/account-keys/wrappers`,
+    const response = await deviceFetch(
+      current,
+      "/api/v1/account-keys/wrappers",
       {
         method: "POST",
-        credentials: "include",
-        headers: deviceHeaders(bootstrap.deviceId, operationId),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": operationId,
+        },
         body: JSON.stringify({
           operationId,
           objectId: crypto.randomUUID(),
@@ -240,10 +278,9 @@ const unlockWinningRecoveryCode = async (
   const current = prepared;
   if (!current) throw new Error("browser device was not prepared");
   const { config, bootstrap } = current;
-  const headers = { "X-DotRelay-Device-Id": bootstrap.deviceId };
-  const boundaryResponse = await fetch(
-    `${config.origin}/api/v1/workspace/boundary`,
-    { credentials: "include", headers, cache: "no-store" },
+  const boundaryResponse = await deviceFetch(
+    current,
+    "/api/v1/workspace/boundary",
   );
   if (!boundaryResponse.ok)
     throw new Error(
@@ -251,9 +288,9 @@ const unlockWinningRecoveryCode = async (
     );
   const boundary: unknown = await boundaryResponse.json();
   const history = trustHistory(boundary);
-  const wrappersResponse = await fetch(
-    `${config.origin}/api/v1/account-keys/wrappers`,
-    { credentials: "include", headers, cache: "no-store" },
+  const wrappersResponse = await deviceFetch(
+    current,
+    "/api/v1/account-keys/wrappers",
   );
   if (!wrappersResponse.ok)
     throw new Error(

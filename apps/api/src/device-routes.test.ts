@@ -9,6 +9,7 @@ import {
   protocolObjectFromFields,
 } from "@dotrelay/contracts";
 import { createInMemoryAuth } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { parseProtocolPayload } from "./device-routes";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
@@ -188,9 +189,11 @@ describe("Account Key Wrapper ingest wire gates", () => {
 });
 
 describe("Account Key Wrapper disclosure", () => {
-  test("only an active Device can download password and passkey wrappers", async () => {
+  test("only a proven active Device can download password and passkey wrappers", async () => {
     for (const deviceState of [
       "absent",
+      // A session that names the Device without proving it (A-1).
+      "claimed",
       "active",
       "revoked",
       "other-user",
@@ -215,7 +218,12 @@ describe("Account Key Wrapper disclosure", () => {
         profile,
         database: {
           authAccount: { findFirst: async () => ({ accountId: "1001" }) },
-          user: { upsert: async () => ({ id: userId }) },
+          user: {
+            upsert: async (input: { create: { githubSubject: string } }) => ({
+              id: userId,
+              githubSubject: input.create.githubSubject,
+            }),
+          },
           device: {
             findFirst: async ({
               where,
@@ -247,8 +255,18 @@ describe("Account Key Wrapper disclosure", () => {
           },
         } as never,
         auth: {
-          api: { getSession: async () => ({ user: { id: "auth-subject" } }) },
+          api: {
+            getSession: async () => ({
+              session: { id: "session" },
+              user: { id: "auth-subject" },
+            }),
+          },
         } as never,
+      });
+      const proof = await testDeviceProof(profile, {
+        sessionId: "session",
+        userId,
+        deviceId,
       });
       const response = await api.request(
         `${profile.origin}/api/v1/account-keys/wrappers`,
@@ -258,6 +276,9 @@ describe("Account Key Wrapper disclosure", () => {
             ...(deviceState === "absent"
               ? {}
               : { "X-DotRelay-Device-Id": deviceId }),
+            ...(deviceState === "absent" || deviceState === "claimed"
+              ? {}
+              : { "X-DotRelay-Device-Proof": proof }),
           },
         },
       );

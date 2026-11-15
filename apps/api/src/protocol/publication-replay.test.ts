@@ -1,6 +1,7 @@
 import { digestFinalizationRequest } from "./staging";
 import { parseFinalizePublicationRequest } from "@dotrelay/contracts";
 import { expect, test } from "bun:test";
+import { testDeviceProof } from "../device-proof-testing";
 import { createApi, loadServerProfileConfig } from "../index";
 
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -32,11 +33,21 @@ const create = (kind = "REVISION_PUBLICATION", owner = userId) => {
   return createApi({
     profile,
     auth: {
-      api: { getSession: async () => ({ user: { id: "auth" } }) },
+      api: {
+        getSession: async () => ({
+          session: { id: "session" },
+          user: { id: "auth" },
+        }),
+      },
     } as never,
     database: {
       authAccount: { findFirst: async () => ({ accountId: "1001" }) },
-      user: { upsert: async () => ({ id: userId }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: userId,
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: { findFirst: async () => ({ id: deviceId }) },
       operation: {
         findUnique: async () => ({
@@ -74,6 +85,10 @@ const create = (kind = "REVISION_PUBLICATION", owner = userId) => {
 const headers = {
   "Content-Type": "application/json",
   "X-DotRelay-Device-Id": deviceId,
+  "X-DotRelay-Device-Proof": await testDeviceProof(
+    loadServerProfileConfig({}),
+    { sessionId: "session", userId, deviceId },
+  ),
 };
 
 test("committed finalize returns its original receipt without staging, even after cleanup", async () => {

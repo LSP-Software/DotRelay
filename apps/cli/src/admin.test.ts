@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { CBOR_LIMITS, type ServerProfilePin } from "@dotrelay/contracts";
+import {
+  CBOR_LIMITS,
+  createProblem,
+  DEVICE_PROOF_CHALLENGE_BYTES,
+  DEVICE_PROOF_TOKEN_BYTES,
+  decodeDeviceProofValue,
+  deviceProofMessage,
+  encodeDeviceProofValue,
+  type ServerProfilePin,
+} from "@dotrelay/contracts";
 import {
   createEnvironment,
   createStrictJsonClient,
@@ -156,6 +165,156 @@ describe("strict administration client", () => {
       "invalid administration response",
     );
     expect(authorization).toBe("Bearer session-token");
+  });
+
+  test("a Device-bound client proves its Device with the Device key (A-1)", async () => {
+    const credentials = {
+      get: async () => new TextEncoder().encode("session-token"),
+      set: async () => undefined,
+      delete: async () => undefined,
+    };
+    const deviceId = "00000000-0000-4000-8000-0000000000d1";
+    const userId = "00000000-0000-4000-8000-0000000000a1";
+    const keys = (await crypto.subtle.generateKey("Ed25519", false, [
+      "sign",
+      "verify",
+    ])) as CryptoKeyPair;
+    const seen: Array<
+      Readonly<{ path: string; proof: string | null; claim: string | null }>
+    > = [];
+    let issued = 0;
+    let refuseNext = true;
+    const client = createStrictJsonClient(profile, credentials, {
+      device: {
+        id: deviceId,
+        signer: async () => ({
+          serverProfileId: profile.serverProfileId,
+          userId,
+          deviceId,
+          signingKey: keys.privateKey,
+        }),
+      },
+      fetch: async (input, init) => {
+        const request = new Request(input as never, init);
+        const path = new URL(request.url).pathname;
+        seen.push({
+          path,
+          proof: request.headers.get("X-DotRelay-Device-Proof"),
+          claim: request.headers.get("X-DotRelay-Device-Id"),
+        });
+        if (path === "/api/v1/devices/proofs/challenges")
+          return Response.json(
+            {
+              challenge: encodeDeviceProofValue(
+                new Uint8Array(DEVICE_PROOF_CHALLENGE_BYTES).fill(3),
+              ),
+              expiresIn: 120,
+            },
+            { status: 201 },
+          );
+        if (path === "/api/v1/devices/proofs") {
+          const body = (await request.json()) as Record<string, string>;
+          const signature = Uint8Array.from(
+            atob(body.signature ?? ""),
+            (character) => character.charCodeAt(0),
+          );
+          const verified = await crypto.subtle.verify(
+            "Ed25519",
+            keys.publicKey,
+            signature,
+            deviceProofMessage({
+              serverProfileId: profile.serverProfileId,
+              userId,
+              deviceId,
+              challenge: decodeDeviceProofValue(
+                body.challenge,
+                DEVICE_PROOF_CHALLENGE_BYTES,
+              ),
+            }),
+          );
+          if (!verified) throw new Error("the proof signature did not verify");
+          issued += 1;
+          return Response.json(
+            {
+              token: encodeDeviceProofValue(
+                new Uint8Array(DEVICE_PROOF_TOKEN_BYTES).fill(issued),
+              ),
+              deviceId,
+              expiresIn: 300,
+            },
+            { status: 201 },
+          );
+        }
+        if (path === "/api/v1/teams" && refuseNext) {
+          // The first proof has expired by the time the request arrives.
+          refuseNext = false;
+          const problem = createProblem("device_proof_required");
+          return Response.json(problem, { status: problem.status });
+        }
+        return Response.json({ teams: [] });
+      },
+    });
+    expect(client.deviceProof?.deviceId).toBe(deviceId);
+    await client.get("/api/v1/session", ["teams"]);
+    await client.get("/api/v1/teams", ["teams"]);
+    const first = encodeDeviceProofValue(
+      new Uint8Array(DEVICE_PROOF_TOKEN_BYTES).fill(1),
+    );
+    const second = encodeDeviceProofValue(
+      new Uint8Array(DEVICE_PROOF_TOKEN_BYTES).fill(2),
+    );
+    expect(seen).toEqual([
+      // The session check never needs the Device.
+      { path: "/api/v1/session", proof: null, claim: null },
+      { path: "/api/v1/devices/proofs/challenges", proof: null, claim: null },
+      { path: "/api/v1/devices/proofs", proof: null, claim: null },
+      { path: "/api/v1/teams", proof: first, claim: deviceId },
+      // A refused proof is replaced and the request sent once more.
+      { path: "/api/v1/devices/proofs/challenges", proof: null, claim: null },
+      { path: "/api/v1/devices/proofs", proof: null, claim: null },
+      { path: "/api/v1/teams", proof: second, claim: deviceId },
+    ]);
+  });
+
+  test("a stale Device bundle is reported when the service refuses its proof signature", async () => {
+    const credentials = {
+      get: async () => new TextEncoder().encode("session-token"),
+      set: async () => undefined,
+      delete: async () => undefined,
+    };
+    const deviceId = "00000000-0000-4000-8000-0000000000d1";
+    const keys = (await crypto.subtle.generateKey("Ed25519", false, [
+      "sign",
+    ])) as CryptoKeyPair;
+    const client = createStrictJsonClient(profile, credentials, {
+      device: {
+        id: deviceId,
+        signer: async () => ({
+          serverProfileId: profile.serverProfileId,
+          userId: "00000000-0000-4000-8000-0000000000a1",
+          deviceId,
+          signingKey: keys.privateKey,
+        }),
+      },
+      fetch: async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/api/v1/devices/proofs/challenges")
+          return Response.json(
+            {
+              challenge: encodeDeviceProofValue(
+                new Uint8Array(DEVICE_PROOF_CHALLENGE_BYTES),
+              ),
+              expiresIn: 120,
+            },
+            { status: 201 },
+          );
+        const problem = createProblem("invalid_crypto_object");
+        return Response.json(problem, { status: problem.status });
+      },
+    });
+    await expect(client.get("/api/v1/teams", ["teams"])).rejects.toMatchObject({
+      code: "device_bundle_invalid",
+    });
   });
 
   test("links a detected GitHub Repository without sending protected content", async () => {

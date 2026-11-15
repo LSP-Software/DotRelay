@@ -1,4 +1,10 @@
 import {
+  createDeviceProofSession,
+  type DeviceProofSession,
+  type DeviceProofSigner,
+  sendWithDeviceProof,
+} from "@dotrelay/client";
+import {
   CBOR_LIMITS,
   parseJsonObject,
   parseProblem,
@@ -37,7 +43,27 @@ export type StrictJsonClient = Readonly<{
     fields: readonly string[],
     options?: Readonly<{ readonly idempotencyKey?: string }>,
   ) => Promise<Record<string, unknown>>;
+  /**
+   * Proves this client's Device (ADR 0018). Requests sent outside the
+   * client, such as the protocol transport's, use it to prove the same
+   * Device. Absent for a client that acts without a Device.
+   */
+  readonly deviceProof?: DeviceProofSession;
 }>;
+
+/** The Device a client acts as, and how to load its signing key. */
+export type StrictJsonClientDevice = Readonly<{
+  readonly id: string;
+  readonly signer: () => Promise<DeviceProofSigner>;
+}>;
+
+// Routes a Device-bound client still calls with its session alone: the
+// identity check, and the two routes that hand out Device proofs.
+const SESSION_ONLY_PATHS = new Set([
+  "/api/v1/session",
+  "/api/v1/devices/proofs/challenges",
+  "/api/v1/devices/proofs",
+]);
 
 export type RepositoryIdentityResolution = Readonly<{
   readonly host: "github.com";
@@ -817,7 +843,8 @@ export const createStrictJsonClient = (
   credentials: CredentialStore,
   options: Readonly<{
     readonly fetch?: FetchFunction;
-    readonly deviceId?: string;
+    /** The Device this client acts as; omit to act with the session alone. */
+    readonly device?: StrictJsonClientDevice;
     readonly authorization?: string;
     readonly networkPolicy?: NetworkPolicy;
   }> = {},
@@ -825,6 +852,7 @@ export const createStrictJsonClient = (
   const fetcher = options.fetch ?? fetch;
   const policy = options.networkPolicy ?? defaultNetworkPolicy;
   const sessions = createSessionStore(credentials);
+  let deviceProof: DeviceProofSession | undefined;
   const request = async (
     path: string,
     init: RequestInit,
@@ -839,47 +867,53 @@ export const createStrictJsonClient = (
         {},
         "authentication_required",
       );
-    // The request is assembled once; every retry reuses the same headers and
-    // body, so a repeated mutation keeps its operation id instead of starting
-    // a new one.
-    const fetchInit: RequestInit = {
-      ...init,
-      redirect: "error",
-      headers: {
-        Accept: "application/json",
-        Authorization: options.authorization ?? `Bearer ${token}`,
-        ...(options.deviceId
-          ? { "X-DotRelay-Device-Id": options.deviceId }
-          : {}),
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
-        ...init.headers,
-        ...extraHeaders,
-      },
-    };
-    let response: Response;
-    try {
-      response = (
-        await fetchWithinBudget(
-          fetcher,
-          `${profile.origin}${path}`,
-          fetchInit,
-          {
-            policy,
-            retry: {
-              verdict: (candidate) =>
-                transientResponseVerdict(candidate, policy.now),
+    // The request is assembled once per proof; every retry reuses the same
+    // headers and body, so a repeated mutation keeps its operation id
+    // instead of starting a new one.
+    const send = async (
+      proofHeaders: Readonly<Record<string, string>>,
+    ): Promise<Response> => {
+      const fetchInit: RequestInit = {
+        ...init,
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          Authorization: options.authorization ?? `Bearer ${token}`,
+          ...proofHeaders,
+          ...(init.body ? { "Content-Type": "application/json" } : {}),
+          ...init.headers,
+          ...extraHeaders,
+        },
+      };
+      try {
+        return (
+          await fetchWithinBudget(
+            fetcher,
+            `${profile.origin}${path}`,
+            fetchInit,
+            {
+              policy,
+              retry: {
+                verdict: (candidate) =>
+                  transientResponseVerdict(candidate, policy.now),
+              },
             },
-          },
-        )
-      ).response;
-    } catch (error) {
-      if (!(error instanceof NetworkAttemptError)) throw error;
-      throw networkFailureCliError(
-        error,
-        "the Server Profile",
-        "service_unavailable",
-      );
-    }
+          )
+        ).response;
+      } catch (error) {
+        if (!(error instanceof NetworkAttemptError)) throw error;
+        throw networkFailureCliError(
+          error,
+          "the Server Profile",
+          "service_unavailable",
+        );
+      }
+    };
+    const pathname = path.split("?", 1)[0] ?? path;
+    const response =
+      deviceProof && !SESSION_ONLY_PATHS.has(pathname)
+        ? await sendWithDeviceProof(deviceProof, send)
+        : await send({});
     const body = await readResponse(response);
     if (!response.ok) {
       try {
@@ -932,19 +966,56 @@ export const createStrictJsonClient = (
       );
     }
   };
+  const post = (
+    path: string,
+    body: Record<string, unknown>,
+    fields: readonly string[],
+    postOptions?: Readonly<{ readonly idempotencyKey?: string }>,
+  ) =>
+    request(
+      path,
+      {
+        method: "POST",
+        body: JSON.stringify(parseJsonObject(body, Object.keys(body))),
+      },
+      fields,
+      postOptions?.idempotencyKey
+        ? { "Idempotency-Key": postOptions.idempotencyKey }
+        : {},
+    );
+  if (options.device)
+    deviceProof = createDeviceProofSession({
+      deviceId: options.device.id,
+      signer: options.device.signer,
+      exchange: async (path, body) => {
+        try {
+          return await post(
+            path,
+            { ...body },
+            path === "/api/v1/devices/proofs"
+              ? ["token", "deviceId", "expiresIn"]
+              : ["challenge", "expiresIn"],
+          );
+        } catch (error) {
+          // The service checks the signature against the key it registered
+          // for this Device; a mismatch means the local bundle is stale.
+          if (
+            error instanceof CliError &&
+            error.code === "invalid_crypto_object"
+          )
+            throw new CliError(
+              "crypto",
+              "the saved Device bundle does not match the keys registered on this Server Profile; run dotrelay device recover",
+              {},
+              "device_bundle_invalid",
+            );
+          throw error;
+        }
+      },
+    });
   return Object.freeze({
     get: (path, fields) => request(path, { method: "GET" }, fields),
-    post: (path, body, fields, postOptions) =>
-      request(
-        path,
-        {
-          method: "POST",
-          body: JSON.stringify(parseJsonObject(body, Object.keys(body))),
-        },
-        fields,
-        postOptions?.idempotencyKey
-          ? { "Idempotency-Key": postOptions.idempotencyKey }
-          : {},
-      ),
+    post,
+    ...(deviceProof ? { deviceProof } : {}),
   });
 };

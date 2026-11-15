@@ -2,7 +2,6 @@ import {
   CBOR_LIMITS,
   ContractError,
   createProblem,
-  DEVICE_ID_HEADER,
   encodeSyncPage,
   formatSyncCursor,
   PROTOCOL_MEDIA_TYPE,
@@ -192,8 +191,6 @@ export const registerProtocolRoutes = (
       });
     },
   });
-
-  void DEVICE_ID_HEADER;
 
   app.post(
     "/api/v1/operations/:operationId/begin",

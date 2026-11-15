@@ -20,6 +20,7 @@ import { createStrictJsonClient, type StrictJsonClient } from "./admin";
 import type { ParsedArguments } from "./args";
 import type { CredentialStore } from "./credentials";
 import { describeCliClient } from "./device-describe";
+import { cliDevice } from "./device-proof";
 import {
   createFileDeviceRecordStore,
   deviceMetadataPath,
@@ -819,16 +820,49 @@ export const fromBase64 = (value: unknown, label: string): Uint8Array => {
 export const rawPublicKey = async (key: CryptoKey): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.exportKey("raw", key));
 
+/** The protocol transport option that proves `admin`'s Device, if it has one. */
+export const deviceProofOption = (admin: StrictJsonClient) =>
+  admin.deviceProof ? { deviceProof: admin.deviceProof } : {};
+
+// One Device-bound client per invocation and Device, so every request of a
+// run shares one Device proof instead of exchanging a new one per call site.
+const deviceAdmins = new WeakMap<
+  WorkflowOptions,
+  Map<string, StrictJsonClient>
+>();
+
 export const createDeviceAdmin = (
   options: WorkflowOptions,
   deviceId?: string,
-): StrictJsonClient =>
-  options.admin ??
-  createStrictJsonClient(options.profile.pin, options.credentials, {
-    ...(options.fetch ? { fetch: options.fetch } : {}),
-    ...(options.networkPolicy ? { networkPolicy: options.networkPolicy } : {}),
-    ...(deviceId ? { deviceId } : {}),
-  });
+): StrictJsonClient => {
+  if (options.admin) return options.admin;
+  if (!deviceId) return adminClient(options);
+  const byDevice = deviceAdmins.get(options) ?? new Map();
+  deviceAdmins.set(options, byDevice);
+  const existing = byDevice.get(deviceId);
+  if (existing) return existing;
+  const client = createStrictJsonClient(
+    options.profile.pin,
+    options.credentials,
+    {
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.networkPolicy
+        ? { networkPolicy: options.networkPolicy }
+        : {}),
+      device: cliDevice({
+        pin: options.profile.pin,
+        credentials: options.credentials,
+        stateDirectory: options.stateDirectory,
+        deviceId,
+        ...(options.deviceStorage
+          ? { deviceStorage: options.deviceStorage }
+          : {}),
+      }),
+    },
+  );
+  byDevice.set(deviceId, client);
+  return client;
+};
 
 // Confirms that the boundary names this Device, loads the matching local
 // bundle, and checks the bundle's keys against the keys the Server Profile

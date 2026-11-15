@@ -10,7 +10,14 @@ import { contractError } from "./errors";
 export const PROTOCOL_MEDIA_TYPE =
   "application/vnd.dotrelay.e2ee-v3+cbor" as const;
 
+/**
+ * The Device a request claims to act as. It authorizes nothing by itself:
+ * the claim must match the Device that DEVICE_PROOF_HEADER proves.
+ */
 export const DEVICE_ID_HEADER = "X-DotRelay-Device-Id" as const;
+
+/** The Device proof (ADR 0018) for a Device-scoped request. */
+export const DEVICE_PROOF_HEADER = "X-DotRelay-Device-Proof" as const;
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

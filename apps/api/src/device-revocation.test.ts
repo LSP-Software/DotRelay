@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { testDeviceProof } from "./device-proof-testing";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -54,7 +55,10 @@ const fixture = async () => {
   const transaction = {
     $executeRaw: async () => 0,
     user: {
-      upsert: async () => ({ id: actor }),
+      upsert: async (input: { create: { githubSubject: string } }) => ({
+        id: actor,
+        githubSubject: input.create.githubSubject,
+      }),
       findUniqueOrThrow: async () => ({ authSubject: "auth-user" }),
     },
     authAccount: { findFirst: async () => ({ accountId: "1001" }) },
@@ -137,12 +141,13 @@ const fixture = async () => {
     database: database as never,
     auth: {
       api: {
-        getSession: async ({ headers }: { headers: Headers }) =>
-          sessions.has(
-            headers.get("Authorization")?.replace("Bearer ", "") ?? "",
-          )
-            ? { user: { id: "auth-user" } }
-            : null,
+        getSession: async ({ headers }: { headers: Headers }) => {
+          const token =
+            headers.get("Authorization")?.replace("Bearer ", "") ?? "";
+          return sessions.has(token)
+            ? { session: { id: token }, user: { id: "auth-user" } }
+            : null;
+        },
       },
     } as never,
   });
@@ -151,12 +156,17 @@ const fixture = async () => {
     signingKey: CryptoKey = keyPair.privateKey,
     token = "current-token",
   ) =>
-    signCommand(signingKey, target.id, operationId).then((signature) =>
+    signCommand(signingKey, target.id, operationId).then(async (signature) =>
       app.request(`${profile.origin}/api/v1/devices/${target.id}/revoke`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "X-DotRelay-Device-Id": actorDevice,
+          "X-DotRelay-Device-Proof": await testDeviceProof(profile, {
+            sessionId: token,
+            userId: actor,
+            deviceId: actorDevice,
+          }),
           "Idempotency-Key": operationId,
           "Content-Type": "application/json",
         },

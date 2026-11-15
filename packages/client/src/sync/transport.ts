@@ -1,3 +1,4 @@
+import { type DeviceProofSession, sendWithDeviceProof } from "../device/proof";
 import { ProtocolVerificationError } from "../trust/verify";
 import { ProtocolTransportError } from "./transport-error";
 import {
@@ -226,6 +227,11 @@ export const createProtocolTransport = (
     readonly origin: string;
     readonly fetch?: FetchLike;
     readonly authorization?: string;
+    /**
+     * Proves the acting Device on every request (ADR 0018). Every protocol
+     * route is Device-scoped, so a live client always passes one.
+     */
+    readonly deviceProof?: DeviceProofSession;
     readonly pendingPublication?: Readonly<{
       read(): Promise<string | null>;
       write(value: string | null, operationId: string): Promise<void>;
@@ -236,14 +242,26 @@ export const createProtocolTransport = (
     input.fetch ??
     ((url, init) =>
       fetch(url, init as never) as unknown as Promise<ResponseLike>);
-  const fetcher: FetchLike = (url, init) =>
+  const send = (
+    url: string,
+    init: RequestInitLike | undefined,
+    proofHeaders: Readonly<Record<string, string>>,
+  ) =>
     baseFetcher(url, {
       ...init,
       headers: {
         ...(init?.headers ?? {}),
+        ...proofHeaders,
         ...(input.authorization ? { Authorization: input.authorization } : {}),
       },
     });
+  const deviceProof = input.deviceProof;
+  const fetcher: FetchLike = (url, init) =>
+    deviceProof
+      ? sendWithDeviceProof(deviceProof, (proofHeaders) =>
+          send(url, init, proofHeaders),
+        )
+      : send(url, init, {});
   const endpoint = (path: string): string =>
     `${input.origin.replace(/\/$/, "")}${path}`;
 

@@ -9,7 +9,15 @@ integration suite.
 
 A browser or CLI session identifies the server-local User. It does not authorize decryption,
 Manifest publication, or grant creation. Protected operations require an **active Device** bound to
-that User. Device lifecycle states are `PENDING` (enrollment in progress), `ACTIVE`, and `REVOKED`.
+that User, and the client must prove it holds that Device's signing key with a Device proof
+([ADR 0018](../adr/0018-device-proof-of-possession.md)); naming a Device id in a header proves
+nothing. Device lifecycle states are `PENDING` (enrollment in progress), `ACTIVE`, and `REVOKED`.
+
+`REVOKED` is terminal ([ADR 0019](../adr/0019-device-revocation-is-terminal.md)). Enrollment
+reuses an existing Device row only while it is `PENDING` and only with the same keys, and a
+database trigger refuses any write that moves a Device out of `REVOKED`, back to `PENDING`, or
+changes its activation time, revocation time, owner or keys. Clients judge every Revision a
+Device signed by those times, so they never change.
 
 Revocation and Membership removal are logical lifecycle changes. DotRelay never claims to erase keys
 or plaintext that were already downloaded to a client.
