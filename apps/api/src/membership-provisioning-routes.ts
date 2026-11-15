@@ -25,6 +25,10 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DotRelayAuth } from "./auth";
+import {
+  disabledEmailNotifier,
+  type EmailNotifier,
+} from "./email-notifications";
 import { parseProtocolPayload } from "./device-routes";
 import type { ServerProfileConfig } from "./profile";
 import { type ProtocolActor, requireProtocolActor } from "./protocol/context";
@@ -138,10 +142,12 @@ export const registerMembershipProvisioningRoutes = (
     database,
     profile,
     auth,
+    notifications = disabledEmailNotifier,
   }: Readonly<{
     database: DatabaseClient;
     profile: ServerProfileConfig;
     auth: DotRelayAuth;
+    notifications?: EmailNotifier;
   }>,
 ) => {
   const path = "/api/v1/teams/:teamId/memberships/:membershipId/provision";
@@ -264,14 +270,15 @@ export const registerMembershipProvisioningRoutes = (
           commandBytes: activation.canonicalBytes,
           commandDigest: activation.digest,
         };
-        await database.$transaction(
+        // The shared Project ids, or null when this replays a committed operation.
+        const sharedProjectIds = await database.$transaction(
           async (transaction) => {
             await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${teamId} FOR UPDATE`;
             const begun = await new OperationRepository().begin(
               transaction,
               operation,
             );
-            if (begun.idempotent) return;
+            if (begun.idempotent) return null;
             // Project initialization and epoch rotation lock these rows, so the
             // signed grant set cannot go stale between validation and activation.
             await transaction.$queryRaw`SELECT "id" FROM "projects" WHERE "teamId" = ${teamId} ORDER BY "id" FOR UPDATE`;
@@ -414,9 +421,19 @@ export const registerMembershipProvisioningRoutes = (
               grantObjectIds: grants.map((grant) => grant.id),
               activationObject: activation,
             });
+            return plan.projects.map((project) => project.id);
           },
           { maxWait: 5000, timeout: 10000 },
         );
+        if (sharedProjectIds)
+          notifications.notify({
+            kind: "keys_shared",
+            operationId,
+            teamId,
+            membershipId,
+            projectIds: sharedProjectIds,
+            actorUserId: actor.userId,
+          });
         return context.json({ membershipId, lifecycle: "ACTIVE" }, 200, {
           "Cache-Control": "no-store",
         });

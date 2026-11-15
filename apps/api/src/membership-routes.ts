@@ -17,6 +17,10 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DotRelayAuth } from "./auth";
+import {
+  disabledEmailNotifier,
+  type EmailNotifier,
+} from "./email-notifications";
 import { isValidGitHubLogin, resolveGitHubUserIdentity } from "./github-user";
 import type { ServerProfileConfig } from "./profile";
 import { requireProtocolActor, requireWebActor } from "./protocol/context";
@@ -27,6 +31,7 @@ type MembershipRouteDependencies = Readonly<{
   readonly profile: ServerProfileConfig;
   readonly auth: DotRelayAuth;
   readonly githubFetch?: typeof fetch;
+  readonly notifications?: EmailNotifier;
 }>;
 
 const responseProblem = (context: Context, code: ProblemCode) => {
@@ -342,7 +347,13 @@ const loadTeamMembershipState = async (
 
 export const registerMembershipRoutes = (
   app: Hono,
-  { database, profile, auth, githubFetch }: MembershipRouteDependencies,
+  {
+    database,
+    profile,
+    auth,
+    githubFetch,
+    notifications = disabledEmailNotifier,
+  }: MembershipRouteDependencies,
 ) => {
   const memberships = new MembershipAdministrationRepository();
 
@@ -450,6 +461,11 @@ export const registerMembershipRoutes = (
       });
       if ("invitation" in result) {
         const invitation = result.invitation;
+        notifications.notify({
+          kind: "invitation",
+          invitationId: invitation.id,
+          inviterUserId: actor.userId,
+        });
         return context.json(
           {
             invitationId: invitation.id,
@@ -913,6 +929,10 @@ export const registerMembershipRoutes = (
       });
       if ("membership" in result) {
         const membership = result.membership;
+        notifications.notify({
+          kind: "invitation_accepted",
+          membershipId: membership.id,
+        });
         return context.json(
           {
             membershipId: membership.id,
