@@ -307,24 +307,34 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.3
-      - name: publish a bootstrap placeholder of @dotrelay/cli
+      # One placeholder per package validates the ci.yml trusted publisher on
+      # each; release.yml's publisher is validated by the next release tag.
+      - name: publish a bootstrap placeholder of every @dotrelay/cli package
         env:
           VERSION: 0.0.0-bootstrap.${{ github.run_number }}.${{ github.run_attempt }}
         run: |
-          directory="$RUNNER_TEMP/dotrelay-cli-bootstrap"
-          mkdir -p "$directory"
-          cat > "$directory/package.json" <<JSON
+          for name in @dotrelay/cli-linux-x64 @dotrelay/cli-linux-arm64 \
+            @dotrelay/cli-darwin-x64 @dotrelay/cli-darwin-arm64 \
+            @dotrelay/cli-win32-x64 @dotrelay/cli; do
+            directory="$RUNNER_TEMP/bootstrap/${name#@dotrelay/}"
+            mkdir -p "$directory"
+            cat > "$directory/package.json" <<JSON
           {
-            "name": "@dotrelay/cli",
+            "name": "$name",
             "version": "$VERSION",
-            "description": "Placeholder that validates trusted publishing. Install @dotrelay/cli@alpha or @dotrelay/cli@latest instead.",
+            "description": "Placeholder that validates trusted publishing. Install @dotrelay/cli@latest instead.",
             "repository": {
               "type": "git",
               "url": "git+https://github.com/LSP-Software/DotRelay.git"
             }
           }
           JSON
-          npm publish "$directory" --access public --tag bootstrap
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "$name@$VERSION already published"
+            else
+              npm publish "$directory" --access public --tag bootstrap
+            fi
+          done
 
   build-cli-dev:
     name: build dev CLI (${{ matrix.os }})

@@ -103,10 +103,10 @@ dist-tag). For the five `@dotrelay/cli-<platform>-<arch>` packages:
    tokens**.
 
 4. Validate the publishers. npm drops a new trusted publisher that does not publish within two
-   days, which is why `npm-trust-bootstrap` exists. That job publishes only `@dotrelay/cli`; extend
-   it in a separate change to publish the same placeholder under the `bootstrap` tag for each
-   platform package, then run it from the Actions tab. The next push to `main` (the `ci.yml`
-   publisher) and the next release tag (the `release.yml` publisher) also validate them.
+   days, which is why `npm-trust-bootstrap` exists. Run it from the Actions tab (CI → Run
+   workflow): it publishes a `0.0.0-bootstrap.<run>.<attempt>` placeholder of all six packages
+   under the `bootstrap` dist-tag, which validates each `ci.yml` publisher. The next release tag
+   validates the `release.yml` publishers.
 
 Until every platform package has a trusted publisher for the workflow, `scripts/publish-cli.ts`
 stops at the first package npm rejects. Platform packages published before it stay published; the
