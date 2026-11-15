@@ -27,6 +27,13 @@ export type ServerProfileConfig = Readonly<{
   readonly trustedProxies: readonly TrustedProxy[];
   /** Explicit `COOKIE_DOMAIN`; see `sharedCookieDomain`. */
   readonly cookieDomain?: string;
+  /**
+   * `COOKIE_PREFIX` for the session cookies (Better Auth's default is
+   * `better-auth`). Two deployments sharing a cookie domain, such as dev and
+   * production on dotrelay.dev, need different prefixes or each overwrites
+   * the other's session.
+   */
+  readonly cookiePrefix?: string;
   readonly allowRebind: boolean;
   readonly allowedGitHubIds?: readonly string[];
 }>;
@@ -172,6 +179,18 @@ const parseCookieDomain = (
   return domain;
 };
 
+const cookiePrefixPattern = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
+
+const parseCookiePrefix = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (!cookiePrefixPattern.test(trimmed))
+    throw new Error(
+      "COOKIE_PREFIX must be 1-32 lowercase letters, digits or inner hyphens",
+    );
+  return trimmed;
+};
+
 export const loadServerProfileConfig = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerProfileConfig => {
@@ -252,6 +271,7 @@ export const loadServerProfileConfig = (
     origin,
     webOrigin,
   );
+  const cookiePrefix = parseCookiePrefix(environment.COOKIE_PREFIX);
   const allowRebind = environment.SERVER_PROFILE_REBIND === "true";
   if (
     environment.ALPHA_ADMISSION_REQUIRED === "true" &&
@@ -347,6 +367,7 @@ export const loadServerProfileConfig = (
     trustProxy,
     trustedProxies,
     ...(cookieDomain ? { cookieDomain } : {}),
+    ...(cookiePrefix ? { cookiePrefix } : {}),
     allowRebind,
     ...(allowedGitHubIds === undefined
       ? {}
