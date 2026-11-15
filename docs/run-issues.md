@@ -89,6 +89,10 @@ Project CI must appear and reach a stable successful or skipped state. The
 runner pins the PR head while polling and at merge. It checks base, branch,
 draft status, cross-repository status, and the exact `Closes #N` line. Conflicting
 or outdated branches enter repair. Human changes-requested reviews block merging.
+By default (`REQUIRE_HUMAN_APPROVAL=1`) a PR also needs an approval of its exact head commit
+from an OWNER, MEMBER, or COLLABORATOR other than the runner account; until then the controller
+stops with exit 78 and leaves the PR open. The agent reads only comments from those trusted
+authors and treats any other comment as untrusted data.
 CodeRabbit remains advisory, with a repair opportunity for a request on the
 current commit. Failed workflow reruns and no-change repairs remain bounded.
 
@@ -111,6 +115,7 @@ All durations below are seconds.
 | `BASE_BRANCH`             | `main`           | PR target                                     |
 | `MERGE_METHOD`            | `squash`         | `squash`, `merge`, or `rebase`                |
 | `MERGE_ADMIN`             | `0`              | Explicit branch-protection bypass             |
+| `REQUIRE_HUMAN_APPROVAL`  | `1`              | Maintainer approval of the head before merge  |
 | `OPENCODE_MODEL`          | OpenCode default | Provider/model selection                      |
 | `OPENCODE_AGENT`          | OpenCode default | Agent selection                               |
 | `MAX_SESSION_ATTEMPTS`    | `3`              | Fresh sessions before deferring an issue      |
