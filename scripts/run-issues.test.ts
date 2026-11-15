@@ -159,7 +159,9 @@ if (args[0] === 'repo') { emit('LSP-Software/DotRelay'); process.exit(0); }
 if (args[0] === 'api') {
   const endpoint = args.find(arg => arg.startsWith('repos/'));
   if (args.includes('user')) emit('runner');
-  else if (endpoint.includes('/reviews')) emit(data.mode === 'human-review' ? [{user:{login:'reviewer'},state:'CHANGES_REQUESTED',submitted_at:'2026-09-11',commit_id:issue.head}] : []);
+  else if (endpoint.includes('/reviews')) emit(data.mode === 'human-review' ? [{user:{login:'reviewer'},author_association:'MEMBER',state:'CHANGES_REQUESTED',submitted_at:'2026-09-11',commit_id:issue.head}]
+    : data.mode === 'approved' ? [{user:{login:'reviewer'},author_association:'MEMBER',state:'APPROVED',submitted_at:'2026-09-11',commit_id:issue.head}]
+    : data.mode === 'outsider-approved' ? [{user:{login:'drive-by'},author_association:'NONE',state:'APPROVED',submitted_at:'2026-09-11',commit_id:issue.head}] : []);
   else if (endpoint.includes('?')) emit(args.includes('--slurp') ? [data.issues.filter(item => item.state === 'open')] : data.issues.filter(item => item.state === 'open'));
   else emit(data.issues.find(item => item.number === Number(endpoint.split('/').at(-1))));
   process.exit(0);
@@ -231,7 +233,7 @@ const fixture = async (mode: string, count = 2) => {
     await writeFile(join(bin, name), mock);
     await chmod(join(bin, name), 0o755);
   }
-  const start = (args: string[] = []) =>
+  const start = (args: string[] = [], extraEnv: Record<string, string> = {}) =>
     runProcess(
       ["bash", resolve(import.meta.dir, "..", "run-issues.sh"), ...args],
       {
@@ -258,6 +260,8 @@ const fixture = async (mode: string, count = 2) => {
           OUTAGE_RETRY_CAP: "1",
           ISSUE_RETRY_DELAY: "1",
           MERGE_ADMIN: "0",
+          REQUIRE_HUMAN_APPROVAL: "0",
+          ...extraEnv,
         },
       },
     );
@@ -401,3 +405,22 @@ test("stderr warnings do not corrupt captured JSON or truncate large responses",
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout)).toBe(text);
 });
+
+test("a maintainer must approve the exact head before the runner merges", async () => {
+  for (const [mode, merged] of [
+    ["approved", true],
+    ["outsider-approved", false],
+    ["checks-only", false],
+  ] as const) {
+    const item = await fixture(mode, 1);
+    const result = await item.start([], { REQUIRE_HUMAN_APPROVAL: "1" });
+    const state = await item.read();
+    if (merged) {
+      expect(result.code).toBe(0);
+      expect(state.merges).toEqual([85]);
+    } else {
+      expect(result.output).toContain("waiting for a maintainer to approve");
+      expect(state.merges).toEqual([]);
+    }
+  }
+}, 120_000);
