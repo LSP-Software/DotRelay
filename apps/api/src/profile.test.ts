@@ -254,6 +254,26 @@ describe("Server Profile configuration", () => {
     ).toBeUndefined();
   });
 
+  test("accepts a COOKIE_PREFIX made of lowercase letters, digits and inner hyphens", () => {
+    const base = {
+      SERVER_PROFILE_ORIGIN: "https://dev-api.dotrelay.dev",
+      WEB_ORIGIN: "https://dev.dotrelay.dev",
+      BETTER_AUTH_SECRET: "x".repeat(32),
+    };
+    expect(loadServerProfileConfig(base).cookiePrefix).toBeUndefined();
+    expect(
+      loadServerProfileConfig({ ...base, COOKIE_PREFIX: "" }).cookiePrefix,
+    ).toBeUndefined();
+    expect(
+      loadServerProfileConfig({ ...base, COOKIE_PREFIX: " dotrelay-dev " })
+        .cookiePrefix,
+    ).toBe("dotrelay-dev");
+    for (const invalid of ["__Host", "Dev", "dev_", "-dev", "dev-", "a.b", "x".repeat(33)])
+      expect(() =>
+        loadServerProfileConfig({ ...base, COOKIE_PREFIX: invalid }),
+      ).toThrow("COOKIE_PREFIX");
+  });
+
   test("detects a request that attempts to combine cookie and bearer credentials", () => {
     expect(
       hasMixedCredentials(
