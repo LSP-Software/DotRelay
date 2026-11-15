@@ -47,8 +47,9 @@ public direct access to the API container. Use a trusted proxy that overwrites
 forwarding headers. Better Auth's sign-in limiter keys its buckets by client IP, which the API can
 only learn from a trusted proxy: without `SERVER_PROFILE_TRUST_PROXY=true` and accurate
 `SERVER_PROFILE_TRUSTED_PROXIES`, every client shares one bucket per auth route and a single
-abusive client can lock everyone out of sign-in. When the web app and the API use sibling hosts, set `COOKIE_DOMAIN` to
-their shared registrable domain (see [authentication](authentication.md)). Expose only the TLS proxy, keep PostgreSQL/Valkey private,
+abusive client can lock everyone out of sign-in. When the web app and the API use sibling hosts, set
+`COOKIE_DOMAIN` to their shared registrable domain (see [authentication](authentication.md)); give
+each deployment on that domain its own `COOKIE_PREFIX`. Expose only the TLS proxy, keep PostgreSQL/Valkey private,
 run API/web non-root with read-only roots, drop capabilities, set no-new-privileges,
 apply memory/CPU/PID limits and provide bounded private `/tmp` tmpfs volumes.
 The root `compose.yaml` is **development services only**, not a production bundle.

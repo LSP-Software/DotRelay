@@ -61,6 +61,7 @@ const createAuthWithAdapter = (
     },
     advanced: {
       useSecureCookies: profile.isProduction,
+      ...(profile.cookiePrefix ? { cookiePrefix: profile.cookiePrefix } : {}),
       ...(cookieDomain
         ? { crossSubDomainCookies: { enabled: true, domain: cookieDomain } }
         : {}),

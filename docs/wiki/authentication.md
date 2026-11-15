@@ -46,7 +46,10 @@ startup fails otherwise. Without it, cookies are shared only when one host is th
 other (web `example.com`, API `api.example.com`), and otherwise stay host-only. DotRelay has no
 public-suffix list, so it never derives a domain from a common suffix: on a shared platform domain
 (`*.example-platform.app`) that would send session cookies to other tenants. Never set
-`COOKIE_DOMAIN` to such a domain. CLI sessions
+`COOKIE_DOMAIN` to such a domain. Two deployments that share a cookie domain (hosted dev and
+production both use `dotrelay.dev`) must set different `COOKIE_PREFIX` values (default
+`better-auth`), or signing in to one replaces the other's session cookie and sends it to the wrong
+API. CLI sessions
 use a Better Auth bearer token returned by device authorization and should be stored in the CLI's
 local credential store (encrypted files in the CLI state directory). A request containing both a
 bearer token and a cookie is rejected.
