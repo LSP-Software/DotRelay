@@ -8,6 +8,8 @@ import {
   encodeProtocolObject,
   type FinalizePublicationRequest,
   InvalidCiphertextError,
+  LANE_FORMAT_CONTEXT_BOUND,
+  laneAssociatedData,
   open,
   openWithSharedSecret,
   type ProtocolObject,
@@ -105,6 +107,12 @@ export type PublicationContext = Readonly<{
   readonly actorUserId: string;
   readonly actorDeviceId: string;
   readonly projectEpoch: number;
+  /**
+   * The Project epoch of the verified parent Revision. A publication never
+   * seals Values under an epoch older than the head it builds on: after a
+   * rotation that would hand them to whoever still holds the old key.
+   */
+  readonly parentProjectEpoch?: number;
   readonly expectedHeadId: string | null;
   readonly expectedHeadHash: Uint8Array | null;
   readonly valueRecipientPublicKey: CryptoKey;
@@ -186,6 +194,11 @@ export type SyncPageVerificationOptions = SyncDisclosureOptions &
      * Device knows it; the first Revision of the page must not predate it.
      */
     readonly trustedRevisionAuthoredAtMs?: bigint;
+    /**
+     * The Project epoch of the trusted starting Revision, when this Device
+     * knows it; no Revision of the page may name an older epoch.
+     */
+    readonly trustedRevisionProjectEpoch?: bigint;
     /** This Device's clock; defaults to Date.now(). */
     readonly nowMs?: number;
   }>;
@@ -377,19 +390,6 @@ const mutationFields = (input: {
     ...input.rollbackFields,
   ]);
 
-const associatedData = (
-  variableId: string,
-  revisionId: string,
-  scope: number,
-): Uint8Array =>
-  canonicalEncode(
-    new Map<number, CborValue>([
-      [15, uuidToBytes(variableId)],
-      [16, uuidToBytes(revisionId)],
-      [36, scope],
-    ]),
-  );
-
 const definitionPlaintext = (variable: PublicationVariable): Uint8Array =>
   new TextEncoder().encode(
     JSON.stringify({
@@ -458,17 +458,33 @@ const makeLane = async (
 > => {
   const { context, variable } = input;
   const laneId = uuid();
+  // The lane's identity is final before sealing, so its associated data
+  // (lane format 2, ADR 0022) binds the ciphertext to this exact context.
+  const identity = new Map<number, CborValue>([
+    [8, uuidToBytes(context.serverProfileId)],
+    [11, uuidToBytes(context.teamId)],
+    [13, uuidToBytes(context.projectId)],
+    [14, uuidToBytes(context.environmentId)],
+    [15, uuidToBytes(variable.id)],
+    [16, uuidToBytes(input.revisionId)],
+    ...(input.ownerUserId
+      ? [[26, uuidToBytes(input.ownerUserId)] as const]
+      : []),
+    ...(input.originalProviderUserId
+      ? [[27, uuidToBytes(input.originalProviderUserId)] as const]
+      : []),
+    [30, context.projectEpoch],
+    [36, input.scope],
+    [50, LANE_FORMAT_CONTEXT_BOUND],
+  ]);
+  const associated = laneAssociatedData(identity);
   const envelopeBytes = input.sharedSecret
     ? await sealWithSharedSecret(
         input.plaintext,
         input.sharedSecret,
-        associatedData(variable.id, input.revisionId, input.scope),
+        associated,
       )
-    : await seal(
-        input.plaintext,
-        input.recipientPublicKey,
-        associatedData(variable.id, input.revisionId, input.scope),
-      );
+    : await seal(input.plaintext, input.recipientPublicKey, associated);
   const envelope = decodeCiphertextEnvelope(envelopeBytes);
   const ciphertext = envelope.get(47);
   const ciphertextHash = envelope.get(48);
@@ -494,26 +510,12 @@ const makeLane = async (
   const laneObject = await signedObject(
     13,
     new Map<number, CborValue>([
-      [8, uuidToBytes(context.serverProfileId)],
-      [11, uuidToBytes(context.teamId)],
-      [13, uuidToBytes(context.projectId)],
-      [14, uuidToBytes(context.environmentId)],
-      [15, uuidToBytes(variable.id)],
-      [16, uuidToBytes(input.revisionId)],
+      ...identity,
       [17, uuidToBytes(uuid())],
       [18, uuidToBytes(laneId)],
-      ...(input.ownerUserId
-        ? [[26, uuidToBytes(input.ownerUserId)] as const]
-        : []),
-      ...(input.originalProviderUserId
-        ? [[27, uuidToBytes(input.originalProviderUserId)] as const]
-        : []),
-      [30, context.projectEpoch],
-      [36, input.scope],
       [46, iv],
       [47, ciphertext],
       [48, ciphertextHash],
-      [50, 1],
       [
         69,
         new Map<number, CborValue>([
@@ -568,6 +570,13 @@ export const createPublicationArtifacts = async (
   if (changed.length === 0) throw new Error("publication has no changed lanes");
   if (context.projectEpoch < 1)
     throw new Error("project epoch must be positive");
+  if (
+    context.parentProjectEpoch !== undefined &&
+    context.projectEpoch < context.parentProjectEpoch
+  )
+    throw new Error(
+      "publication would seal Values under an older Project epoch than the verified head",
+    );
   if (context.mutation === "ROLLBACK" && !context.rollbackTargetId)
     throw new Error("rollback target revision is required");
   if (
@@ -852,6 +861,27 @@ const decodedVariables = (
     ),
   );
 
+// The Manifest descriptor a Revision commits to through its Manifest hash
+// (field 52). Any other kind-15 object in the Revision is ignored here and
+// rejected by verifySyncPage.
+const committedDescriptor = (
+  revision: SyncRevisionWire,
+): SyncRevisionWire["objects"][number] | undefined => {
+  const revisionObject = revision.objects.find((object) =>
+    bytesEqual(object.digest, revision.digest),
+  );
+  if (!revisionObject) return undefined;
+  const manifestHash = parseProtocolObject(revisionObject.canonicalBytes).get(
+    52,
+  );
+  if (!(manifestHash instanceof Uint8Array)) return undefined;
+  return revision.objects.find(
+    (object) =>
+      bytesEqual(object.digest, manifestHash) &&
+      parseProtocolObject(object.canonicalBytes).get(1) === 15,
+  );
+};
+
 /**
  * Decodes the Variables a verified sync page proves, folding each Revision
  * over `existingVariables`, and records the Manifest at every Revision.
@@ -1000,6 +1030,24 @@ export const decodeSyncManifest = async (
           existing.originalProviderUserId = null;
         }
         disclosedValueLaneVariableIds.add(id);
+        // Another User's User-defined Value is never opened with this
+        // User's key, whatever ciphertext the lane carries: a lane the
+        // service filled with this User's ciphertext would otherwise show
+        // their Value as someone else's.
+        if (
+          scope === 4 &&
+          actorUserId !== undefined &&
+          existing.ownerUserId !== null &&
+          existing.ownerUserId !== actorUserId
+        ) {
+          existing.value = null;
+          valueStates.set(id, {
+            state: "OTHER_UNREADABLE",
+            scope: 4,
+            ownerUserId: existing.ownerUserId,
+          });
+          continue;
+        }
         const plaintext = await openReadableLane(
           object.canonicalBytes,
           resolvePrivateKey(
@@ -1045,10 +1093,7 @@ export const decodeSyncManifest = async (
     // commitments name the omitted lane but not its Variable, so the
     // Variable is only attributable when the Revision changed exactly the
     // Variables that lack a disclosed Value lane.
-    const descriptorObject = revision.objects.find((object) => {
-      const object_ = parseProtocolObject(object.canonicalBytes);
-      return object_.get(1) === 15;
-    });
+    const descriptorObject = committedDescriptor(revision);
     const hiddenOtherUserValueLaneOwners: string[] = [];
     if (descriptorObject) {
       const commitments = parseProtocolObject(
@@ -1417,6 +1462,9 @@ export const verifySyncPage = async (
     );
   const nowMs = Math.floor(options.nowMs ?? Date.now());
   let previousAuthoredAtMs = options.trustedRevisionAuthoredAtMs;
+  // A Project epoch only moves forward along an Environment's history: a
+  // Revision under an older epoch than its parent would undo a rotation.
+  let previousProjectEpoch = options.trustedRevisionProjectEpoch;
   const trustEntries = normalizeSigningTrust(signingTrust);
   const trustKeys = trustEntries.map((entry) => entry.publicKey);
   const scopedTrust = trustEntries.some((entry) => entry.constrained);
@@ -1484,6 +1532,14 @@ export const verifySyncPage = async (
         "sync revision authored-at instant is outside its allowed range",
       );
     previousAuthoredAtMs = revision.authoredAtMs;
+    if (
+      previousProjectEpoch !== undefined &&
+      revision.projectEpoch < previousProjectEpoch
+    )
+      throw new ProtocolVerificationError(
+        "sync revision Project epoch is older than its parent's",
+      );
+    previousProjectEpoch = revision.projectEpoch;
     let revisionTrustKeys = trustKeys;
     if (scopedTrust) {
       revisionTrustKeys = await authorizeRevisionSignature(
@@ -1585,12 +1641,46 @@ export const verifySyncPage = async (
       (commitment): commitment is Map<number, CborValue> =>
         commitment instanceof Map,
     );
+    // Value lanes speak for the Revision's author only: a User-defined Value
+    // lane names them as owner, a Shared Value lane as provider.
+    const authorUserId = parsedRevision.get(22);
+    const attributedToAuthor = (
+      fields: ReadonlyMap<number, CborValue>,
+      scope: unknown,
+    ): boolean => {
+      const owner = fields.get(26);
+      const provider = fields.get(27);
+      const isAuthor = (value: CborValue | undefined): boolean =>
+        value instanceof Uint8Array &&
+        authorUserId instanceof Uint8Array &&
+        bytesEqual(value, authorUserId);
+      if (scope === 4) return isAuthor(owner) && provider === undefined;
+      if (scope === 3) return isAuthor(provider) && owner === undefined;
+      return owner === undefined && provider === undefined;
+    };
+    for (const commitment of commitments)
+      if (!attributedToAuthor(commitment, commitment.get(36)))
+        throw new ProtocolVerificationError(
+          "sync lane commitment is not attributed to the revision author",
+        );
     const disclosedLaneIds = new Set<string>();
     for (const object of revision.objects) {
       const digest = await sha384(object.canonicalBytes);
       if (!bytesEqual(digest, object.digest))
         throw new ProtocolVerificationError("sync object digest mismatch");
       const parsed = parseProtocolObject(object.canonicalBytes);
+      // A Revision carries exactly its own signed Revision object, the one
+      // descriptor its Manifest hash names, and committed lanes. Anything
+      // else is service-supplied and would otherwise reach the decoder.
+      const objectKind = parsed.get(1);
+      if (
+        !(objectKind === 16 && object === revisionObject) &&
+        !(objectKind === 15 && object === descriptorObject) &&
+        objectKind !== 13
+      )
+        throw new ProtocolVerificationError(
+          "sync revision carries an object its Manifest does not commit to",
+        );
       if ([13, 15, 16].includes(parsed.get(1) as number))
         await verifySignedProtocolObjectWithKeys(
           object.canonicalBytes,
@@ -1629,6 +1719,12 @@ export const verifySyncPage = async (
         )
           throw new ProtocolVerificationError(
             "sync lane is not covered by a manifest commitment",
+          );
+        if (disclosedLaneIds.has(bytesToUuid(laneId)))
+          throw new ProtocolVerificationError("sync lane is disclosed twice");
+        if (!attributedToAuthor(parsed, laneScope))
+          throw new ProtocolVerificationError(
+            "sync lane is not attributed to the revision author",
           );
         disclosedLaneIds.add(bytesToUuid(laneId));
         const ciphertext = parsed.get(47);
@@ -1746,6 +1842,9 @@ export const openLane = async (
     typeof scope !== "number"
   )
     throw new TypeError("ciphertext lane identity is missing");
+  // Field 50 names how much of the lane's context the ciphertext is bound
+  // to (ADR 0022); the lane's signature covers it.
+  const associated = laneAssociatedData(lane);
   const envelope = new Map<number, CborValue>([
     [0, SUITE_VALUE],
     [44, salt],
@@ -1756,13 +1855,6 @@ export const openLane = async (
     [71, plaintextLength],
     [72, ciphertextLength],
   ]);
-  const associated = canonicalEncode(
-    new Map<number, CborValue>([
-      [15, variableId],
-      [16, revisionId],
-      [36, scope],
-    ]),
-  );
   const encoded = canonicalEncode(envelope);
   try {
     return await open(encoded, recipientPrivateKey, associated);
