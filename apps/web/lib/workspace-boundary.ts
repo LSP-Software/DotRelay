@@ -117,6 +117,21 @@ export type WorkspaceBoundary = Readonly<{
   readonly rotationRequired: boolean;
   readonly signingTrustKeys?: readonly string[];
   readonly signingTrustDevices?: readonly WorkspaceSigningTrustDevice[];
+  /**
+   * Set only on a boundary narrowed by account trust (ADR 0015, ADR 0022):
+   * the Ed25519 keys (hex) a verified roster vouches for, by what they may
+   * sign. A boundary without it trusts only this browser's own key.
+   */
+  readonly verifiedSigners?: Readonly<{
+    /** This account's roster Devices, active or revoked. */
+    readonly account: readonly string[];
+    /** Keys the service reports for this account's Devices: AMK-sealed objects only. */
+    readonly reportedAccount: readonly string[];
+    /** Active Devices of this account and of confirmed teammates: grants. */
+    readonly grant: readonly string[];
+    /** Every roster-verified Device: Revisions and key chain links. */
+    readonly history: readonly string[];
+  }>;
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;
   readonly userValueKeyEnvelope?: string;

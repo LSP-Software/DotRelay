@@ -3,20 +3,19 @@ import {
   createProjectEpochKeyLinkBackfill,
   createProtocolTransport,
   loadDeviceKeyMaterial,
-  openProjectEpochGrant,
   openProjectEpochKeyChain,
+  ProjectEpochTrustError,
   uuidToBytes,
 } from "@dotrelay/client";
 import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
-  accountKeyTrustedKeys,
   createAccountKeyEnvelope,
   fetchAccountKeyEnvelopes,
   fromBase64,
   hexToBytes,
+  historySigningKeys,
   openProjectEpochEnvelope,
-  projectGrantVerification,
   publishAccountKeyEnvelope,
   publishProjectEpochKeyLink,
 } from "@/lib/account-keys";
@@ -25,7 +24,17 @@ import {
   loadDeviceSigningKey,
 } from "@/lib/account-recovery";
 import { readStoredBrowserDeviceId } from "@/lib/browser-storage";
-import { establishBrowserAccountTrust } from "@/lib/account-trust";
+import {
+  AccountRosterUntrustedError,
+  establishBrowserAccountTrust,
+  loadBrowserAccountTrustPins,
+  saveBrowserAccountTrustPins,
+} from "@/lib/account-trust";
+import {
+  adoptProjectEpochKey,
+  pinProjectEpochRing,
+  projectEpochKeyPinned,
+} from "@/lib/project-key-adoption";
 import { describeThisBrowser } from "@/lib/device-describe";
 import {
   environmentContextIdentity,
@@ -144,10 +153,7 @@ const projectEpochKeyRing = async (input: {
     teamId: input.teamId,
     projectId: input.projectId,
   };
-  const trustedSigningKeys = accountKeyTrustedKeys(
-    boundary,
-    hexToBytes(localKey),
-  ).keys;
+  const trustedSigningKeys = historySigningKeys(boundary, hexToBytes(localKey));
   const walk = (candidates: readonly Uint8Array[]) =>
     openProjectEpochKeyChain({
       ...binding,
@@ -498,7 +504,22 @@ type WorkspaceSessionContext = Readonly<{
     ) => Map<string, EnvironmentProtocolSession>,
   ) => void;
   readonly setContextStale: (stale: boolean) => void;
+  /**
+   * Reports why the Server Profile's account or Project keys were refused
+   * (ADR 0015, ADR 0022), or null once a session loads.
+   */
+  readonly setTrustProblem?: (message: string | null) => void;
 }>;
+
+// What the person is told when this browser refuses the service's keys.
+export const trustProblemMessage = (error: unknown): string | null =>
+  error instanceof AccountRosterUntrustedError
+    ? error.message
+    : error instanceof ProjectEpochTrustError
+      ? error.code === "epoch-rollback"
+        ? "The server reports an older project key than this browser already used. Don't publish from this browser until you've checked the server."
+        : "The server sent a project key that differs from the one this browser already verified. Don't trust this server until you've checked it."
+      : null;
 
 export const loadWorkspaceSession = (
   ctx: WorkspaceSessionContext,
@@ -519,6 +540,7 @@ export const loadWorkspaceSession = (
     removeSessionByKey,
     setSessionsByKey,
     setContextStale,
+    setTrustProblem,
   } = ctx;
   const targetKey = environmentContextKey(
     environmentContextIdentity({
@@ -695,18 +717,21 @@ export const loadWorkspaceSession = (
       const scopedSigningTrustDevices = revisionSigningTrustEntries(
         boundary.signingTrustDevices ?? [],
       );
-      let sharedValueSecret: Uint8Array | undefined;
-      if (boundary.epochGrant) {
-        try {
-          sharedValueSecret = await openProjectEpochGrant(
-            fromBase64(boundary.epochGrant),
-            keyMaterial.encryptionPrivateKey,
-            projectGrantVerification(boundary),
-          );
-        } catch {
-          sharedValueSecret = undefined;
-        }
-      }
+      // ADR 0022: the account's own envelope wins over a grant, a grant
+      // counts only from a verified signer, and every key must match what
+      // this browser pinned for the Project and epoch.
+      const pinStore = {
+        load: () => loadBrowserAccountTrustPins(pin, device.id ?? ""),
+        save: (pins: Parameters<typeof saveBrowserAccountTrustPins>[2]) =>
+          saveBrowserAccountTrustPins(pin, device.id ?? "", pins),
+      };
+      let sharedValueSecret = await adoptProjectEpochKey({
+        boundary,
+        accountMasterKey: accountMasterKey.get(),
+        encryptionPrivateKey: keyMaterial.encryptionPrivateKey,
+        wrappers: recoveryWrappers,
+        pinStore,
+      });
       if (cancelled()) return;
       // A direct grant can predate recovery setup. Once the account key is
       // unlocked, seal that exact Project key for future devices; never mint
@@ -750,36 +775,6 @@ export const loadWorkspaceSession = (
         }
       }
       if (cancelled()) return;
-      // A session that unlocked the Account Master Key in this browser
-      // (setup or unlock in the Recovery area) reads the project's
-      // current epoch key from the boundary's Account Key Envelope, so a
-      // Device without a direct grant still decrypts pre-existing
-      // content. A mismatch or verification failure leaves the secret
-      // unset: the session then degrades exactly like a Device that
-      // simply lacks the key, and the setup action names the fix.
-      const envelopeKeyMaster = accountMasterKey.get();
-      if (
-        sharedValueSecret === undefined &&
-        boundary.accountKeyEnvelope &&
-        envelopeKeyMaster &&
-        boundary.device.signingPublicKey
-      ) {
-        const verification = accountKeyVerification(boundary, recoveryWrappers);
-        if (verification) {
-          const projectEpoch = Number(environment.projectEpoch ?? 1);
-          const envelopeKey = await openProjectEpochEnvelope(
-            boundary.accountKeyEnvelope,
-            envelopeKeyMaster,
-            {
-              trustedKeys: verification.trustedKeys,
-              context: verification.context,
-              projectId: environment.projectId,
-              projectEpoch,
-            },
-          );
-          if (envelopeKey) sharedValueSecret = envelopeKey;
-        }
-      }
       if (cancelled()) return;
       // The last-resort self-mint, mirroring the CLI: only when the
       // account key is unlocked, no Device holds this epoch's key, and
@@ -790,7 +785,13 @@ export const loadWorkspaceSession = (
         sharedValueSecret === undefined &&
         selfMintKey &&
         !boundary.grantsReady &&
-        !(boundary.peerDevices ?? []).some((peer) => peer.hasEpochGrant)
+        !(boundary.peerDevices ?? []).some((peer) => peer.hasEpochGrant) &&
+        // An epoch this browser already holds a key for never gets a new one.
+        !projectEpochKeyPinned(
+          await pinStore.load(),
+          environment.projectId,
+          Number(environment.projectEpoch ?? 1),
+        )
       ) {
         const actor = recoveryActor;
         const signingPrivateKey = await loadDeviceSigningKey(boundary);
@@ -833,6 +834,12 @@ export const loadWorkspaceSession = (
               projectEpoch,
             },
           );
+          await pinProjectEpochRing(pinStore, {
+            serverProfileId: profile.serverProfileId,
+            projectId: environment.projectId,
+            currentEpoch: projectEpoch,
+            ring: new Map([[projectEpoch, epochKey]]),
+          });
           sharedValueSecret = epochKey;
         }
       }
@@ -860,6 +867,14 @@ export const loadWorkspaceSession = (
                   : null,
             })
           : undefined;
+      if (cancelled()) return;
+      if (sharedValueKeyRing && sharedValueKeyRing.size > 0)
+        await pinProjectEpochRing(pinStore, {
+          serverProfileId: profile.serverProfileId,
+          projectId: environment.projectId,
+          currentEpoch: Number(environment.projectEpoch ?? 1),
+          ring: sharedValueKeyRing,
+        });
       if (cancelled()) return;
       const session = createEnvironmentProtocolSession({
         context: sharedValueSecret
@@ -892,8 +907,11 @@ export const loadWorkspaceSession = (
       if (durable)
         durableBrowserDevice.add(`${pin.origin}\u0000${pin.serverProfileId}`);
       setSessionsByKey((prev) => new Map(prev).set(targetKey, session));
+      if (!cancelled()) setTrustProblem?.(null);
       settleContext();
-    } catch {
+    } catch (error) {
+      const problem = trustProblemMessage(error);
+      if (problem && !cancelled()) setTrustProblem?.(problem);
       clearSelectedSession();
       if (boundaryMatchesSelection) settleContext();
     }

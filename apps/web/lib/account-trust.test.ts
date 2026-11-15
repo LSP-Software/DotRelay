@@ -196,7 +196,7 @@ describe("browser account trust (ADR 0015)", () => {
     ).rejects.toBeInstanceOf(AccountRosterUntrustedError);
   });
 
-  test("unverified Users keep today's behaviour", async () => {
+  test("a User without a verifiable roster contributes no Device", async () => {
     const own = device(ownDeviceId);
     const teammate = device(teammateDeviceId);
     const boundary = boundaryWith(own, [], teammate, {});
@@ -207,13 +207,15 @@ describe("browser account trust (ADR 0015)", () => {
       ownIdentity: null,
       rosters: new Map([[teammateId, null]]),
     });
+    // Only this browser's own entry, which carries its own key, remains
+    // (ADR 0022): no Device is trusted from absent data.
     expect(
       applyBrowserAccountTrust(
         boundary,
         resolution,
         ownUserId,
       ).signingTrustDevices?.map((entry) => entry.deviceId),
-    ).toEqual([ownDeviceId, teammateDeviceId]);
+    ).toEqual([ownDeviceId]);
   });
 });
 

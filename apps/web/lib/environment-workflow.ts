@@ -3,6 +3,7 @@ import {
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   type PublicationMutationKind,
+  type SyncPageWire,
   type SyncRevisionWire,
   seal,
   sha384,
@@ -732,6 +733,34 @@ const signedRevisionDetails = (
   } catch {
     return { authorUserId: null, changedVariableIds: null };
   }
+};
+
+// Whether a verified page fits the Project epoch this session holds a key
+// for (ADR 0022): the service must not report an older epoch than its own
+// signed history, and a rotation that landed meanwhile needs a reload.
+export const verifiedPageEpochState = (
+  page: Pick<SyncPageWire, "projectEpoch" | "revisions">,
+  sessionEpoch: number,
+): "current" | "rolled-back" | "rotated" => {
+  const verified = page.revisions.reduce(
+    (highest, revision) =>
+      revision.projectEpoch > highest ? revision.projectEpoch : highest,
+    0n,
+  );
+  if (page.projectEpoch < BigInt(sessionEpoch) || verified > page.projectEpoch)
+    return "rolled-back";
+  return page.projectEpoch > BigInt(sessionEpoch) ? "rotated" : "current";
+};
+
+// The Project epoch of the verified Revision a publication builds on.
+export const verifiedParentEpoch = (
+  history: readonly VerifiedRevision[],
+  headId: string | null,
+): Readonly<{ parentProjectEpoch?: number }> => {
+  const epoch = history.find(
+    (revision) => revision.id === headId,
+  )?.projectEpoch;
+  return typeof epoch === "number" ? { parentProjectEpoch: epoch } : {};
 };
 
 export const verifiedRevisionFromWire = (

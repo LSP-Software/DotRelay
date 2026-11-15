@@ -122,6 +122,8 @@ import {
   type VerifiedRevision,
   validateVariableDraft,
   variableHasDraftChange,
+  verifiedPageEpochState,
+  verifiedParentEpoch,
 } from "@/lib/environment-workflow";
 import { publishFailureMessage } from "@/lib/publish-errors";
 import type { MembershipRole } from "@/lib/workspace-boundary";
@@ -325,6 +327,16 @@ export const EnvironmentEditor = ({
           expectedTrustedRevisionHash: context.trustedRevisionHash,
         });
         if (cancelled) return;
+        const epochState = verifiedPageEpochState(page, context.projectEpoch);
+        if (epochState !== "current") {
+          setPublishMessage(
+            epochState === "rotated"
+              ? "This project's keys were rotated while it was open. Reload to read it with the new key."
+              : "The server reports an older project key than this environment's own history. No values were shown or changed. Don't publish from this browser until you've checked the server.",
+          );
+          setLoadPhase("failed");
+          return;
+        }
         stage = "decrypt";
         const decoded = session.decodeVariables
           ? await session.decodeVariables(page, [])
@@ -747,6 +759,8 @@ export const EnvironmentEditor = ({
           ...context,
           expectedHeadId,
           expectedHeadHash,
+          // Never seal under an older epoch than the verified head's.
+          ...verifiedParentEpoch(verifiedHistory, expectedHeadId),
           mutation,
           ...(authoredAtNotBeforeMs === undefined
             ? {}
