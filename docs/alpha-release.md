@@ -130,6 +130,31 @@ Before cutting a prerelease, configure the `security-review` environment/reposit
 The web image is built for those origins and refuses missing/invalid values; stable builds keep
 the production origins. The release concurrency queue retains up to 100 pending tags.
 
+## Release gate
+
+Image builds, CLI publication and production deploys run in the `security-review` GitHub
+environment, which requires an approver and accepts only `v*` tags. Stable tags also require
+`SECURITY_REVIEW_APPROVED_SHA` to equal the tagged commit and `SECURITY_REVIEW_REPORT_SHA256` to
+hold the independent review report's hash. Prerelease tags (`-alpha`, `-beta`, `-rc`) skip that
+check, and their release manifest records `"independentReview": "none (prerelease)"`. Admit
+testers to a prerelease only with values they can afford to disclose.
+
+## Code signing
+
+`release.yml` signs the CLI binaries once their credentials exist; until then releases ship
+unsigned binaries, which npm and `curl` installs run without a Gatekeeper prompt.
+
+- **macOS** (`scripts/sign-macos.sh`, entitlements in `ops/macos-entitlements.plist`): a Developer
+  ID Application certificate from an Apple Developer Program organisation membership, and an App
+  Store Connect API key for notarization. Repository secrets: `APPLE_DEVELOPER_ID_P12_BASE64`,
+  `APPLE_DEVELOPER_ID_P12_PASSWORD`, `APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID`,
+  `APPLE_NOTARY_ISSUER_ID`. The binary is signed with the hardened runtime and Bun's JIT
+  entitlements, then notarized; a bare binary cannot be stapled, so Gatekeeper checks online.
+- **Windows** (Azure Artifact Signing): secrets `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+  `AZURE_CLIENT_SECRET` for an app registration holding the Artifact Signing Certificate Profile
+  Signer role, and variables `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`,
+  `AZURE_SIGNING_PROFILE`.
+
 ## Remaining deployment and security gates
 
 See [the versioned operations runbook](wiki/operations.md) for GitHub App permissions,

@@ -31,14 +31,24 @@ export const writeReleaseEvidence = async (
     tag: string;
   }>,
 ) => {
-  if (
-    !/^[a-f0-9]{40}$/.test(settings.sourceCommit) ||
-    settings.sourceCommit !== settings.approvedCommit ||
-    !/^[a-f0-9]{64}$/.test(settings.reviewReportSha256)
-  )
-    throw new Error("Exact-source independent-review metadata is required");
   if (!/^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(settings.tag))
     throw new Error("A release version tag is required");
+  if (!/^[a-f0-9]{40}$/.test(settings.sourceCommit))
+    throw new Error("The exact source commit is required");
+  // Prereleases may ship before the independent review; the manifest then
+  // records that nothing was reviewed. Review metadata that is supplied must
+  // still match exactly, and stable releases always require it.
+  const prerelease = settings.tag.includes("-");
+  const unreviewed =
+    prerelease &&
+    settings.approvedCommit === "" &&
+    settings.reviewReportSha256 === "";
+  if (
+    !unreviewed &&
+    (settings.sourceCommit !== settings.approvedCommit ||
+      !/^[a-f0-9]{64}$/.test(settings.reviewReportSha256))
+  )
+    throw new Error("Exact-source independent-review metadata is required");
   const files: Record<string, string> = {};
   const binaries: Record<string, string> = {};
   const collect = async (folder: string): Promise<void> => {
@@ -67,6 +77,7 @@ export const writeReleaseEvidence = async (
   const manifest = {
     version: 2,
     ...settings,
+    independentReview: unreviewed ? "none (prerelease)" : "approved",
     // Hosted deploys build this exact commit from Git with railpack
     // (railpack.json); there is no hosted image digest to record.
     hostedDeployCommit: settings.sourceCommit,

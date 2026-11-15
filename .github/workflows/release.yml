@@ -103,11 +103,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - name: Require independent approval of this exact commit
+      - name: Require independent approval of this exact commit (stable)
         env:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
         run: |
+          # Prereleases (alpha, beta, rc) still need an approver in the
+          # security-review environment, but not the independent review:
+          # testers must not store real secrets in them. Stable releases
+          # require the review of this exact commit.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "::notice::$GITHUB_REF_NAME is a prerelease without independent security review. Admit testers with no real secrets."
+            exit 0
+          fi
           test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - name: resolve release origins
@@ -196,6 +204,45 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun run package:cli:version -- "$RELEASE_TAG"
       - run: bun run --cwd apps/cli build
+      # Signing runs only once its credentials exist; until then releases
+      # ship unsigned binaries (npm and curl installs are not quarantined).
+      - name: detect signing credentials
+        id: signing
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          macos=false; windows=false
+          [[ "$RUNNER_OS" == macOS && -n "$APPLE_DEVELOPER_ID_P12_BASE64" ]] && macos=true
+          [[ "$RUNNER_OS" == Windows && -n "$AZURE_CLIENT_ID" ]] && windows=true
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
+      - name: sign and notarize the macOS binary
+        if: steps.signing.outputs.macos == 'true'
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: scripts/sign-macos.sh apps/cli/dist/dotrelay
+      - name: sign the Windows binary (Azure Artifact Signing)
+        if: steps.signing.outputs.windows == 'true'
+        uses: azure/artifact-signing-action@208f8af4bf26cf2af8597424e3cb5582801523ba # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\apps\cli\dist\dotrelay.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: DotRelay CLI
+          description-url: https://github.com/LSP-Software/DotRelay
       - run: bun run package:cli
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -218,6 +265,14 @@ jobs:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
         run: |
+          # Prereleases (alpha, beta, rc) still need an approver in the
+          # security-review environment, but not the independent review:
+          # testers must not store real secrets in them. Stable releases
+          # require the review of this exact commit.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "::notice::$GITHUB_REF_NAME is a prerelease without independent security review. Admit testers with no real secrets."
+            exit 0
+          fi
           test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -287,6 +342,14 @@ jobs:
           SECURITY_REVIEW_APPROVED_SHA: ${{ vars.SECURITY_REVIEW_APPROVED_SHA }}
           SECURITY_REVIEW_REPORT_SHA256: ${{ vars.SECURITY_REVIEW_REPORT_SHA256 }}
         run: |
+          # Prereleases (alpha, beta, rc) still need an approver in the
+          # security-review environment, but not the independent review:
+          # testers must not store real secrets in them. Stable releases
+          # require the review of this exact commit.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "::notice::$GITHUB_REF_NAME is a prerelease without independent security review. Admit testers with no real secrets."
+            exit 0
+          fi
           test "$SECURITY_REVIEW_APPROVED_SHA" = "$GITHUB_SHA"
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
