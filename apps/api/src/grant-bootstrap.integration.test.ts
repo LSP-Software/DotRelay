@@ -15,6 +15,7 @@ import {
   sha384Digest,
 } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -49,7 +50,10 @@ const authStub = (): DotRelayAuth =>
     api: {
       getSession: async ({ headers }: { headers: Headers }) => {
         const subject = tokens.get(headers.get("Authorization") ?? "");
-        return subject ? { user: { id: subject, name: subject } } : null;
+        const token = headers.get("Authorization") ?? "";
+        return subject
+          ? { session: { id: token }, user: { id: subject, name: subject } }
+          : null;
       },
     },
     $context: Promise.resolve({
@@ -178,7 +182,13 @@ const postGrant = async (
     headers: {
       Origin: profile.origin,
       Authorization: actor.authorization,
+      // The sender proves its Device (ADR 0020).
       "X-DotRelay-Device-Id": sender.id,
+      "X-DotRelay-Device-Proof": await testDeviceProof(profile, {
+        sessionId: actor.authorization,
+        userId: actor.id,
+        deviceId: sender.id,
+      }),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
