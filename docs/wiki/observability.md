@@ -11,7 +11,10 @@ The fixed schema is version `1`. Its Diagnostic Field Allowlist is:
 
 - `eventName`, one of the bounded operational tokens `api.request.completed`,
   `api.security_request_log.write_failed`, `api.security_request_log.expiry_failed`,
-  `api.staging.expiry_failed`, `api.retention.expiry_failed`, `api.email.sent`,
+  `api.staging.expiry_failed`, `api.retention.expiry_failed`,
+  `api.retention.cleanup_completed`, `api.readiness.checked`, `api.rate_limit.user_refused`,
+  `api.rate_limit.github_refused`, `api.rate_limit.creation_refused`,
+  `api.rate_limit.auth_refused`, `api.rate_limit.unavailable`, `api.email.sent`,
   `api.email.failed`, or `api.email.skipped`;
 - `correlationId`, a fresh opaque UUID used only to link one request or bounded execution;
 - `durationMs`, a non-negative bounded integer;
@@ -34,9 +37,40 @@ for at most seven days. Crash reports are sanitized and can be created only by a
 they contain a Correlation ID and stable problem code, never the original Error object, message, or
 stack.
 
-Metrics may use only `eventName`, `outcome`, `problemCode`, `emailKind` and `emailReason` dimensions. They must not include
-domain identifiers, IPs, request values, or cryptographic material. Diagnostic and security-log
-loss is non-blocking and cannot change domain behavior.
+Metrics may use only `eventName`, `outcome`, `problemCode`, `emailKind` and `emailReason`
+dimensions, plus the HTTP status class (`1xx` to `5xx`) on the request counter. They must not include domain identifiers, IPs,
+request values, or cryptographic material. Diagnostic and security-log loss is non-blocking and
+cannot change domain behavior.
+
+## Metrics
+
+The API keeps bounded counters in process memory and sends them nowhere. They are served only
+when an operator enables the private metrics listener (see
+[operations](operations.md#metrics-and-alerting)). Every sanitized diagnostic event is counted,
+including successful requests that sampling drops from the log. The families are:
+
+- `dotrelay_events_total{event_name, outcome, problem_code}`, one series per event name, outcome
+  and problem code;
+- `dotrelay_http_requests_total{status_class}` and the unlabelled histogram
+  `dotrelay_http_request_duration_seconds`, for API requests other than `/health` and `/ready`;
+  and
+- `dotrelay_ready`, the readiness result computed at each scrape.
+
+Label values come from fixed allowlists: the event names above, `success`/`failure`, the stable
+problem codes, and the five status classes. Absent values are `none`; anything else is `other`,
+and each family holds at most 512 series. The status class is allowed because it is derived from
+the response status alone and has five values; route templates are not used.
+
+Events added for alerting:
+
+- `api.retention.cleanup_completed` (`success` or `failure`, with `durationMs`) closes each
+  10-minute retention run;
+- `api.readiness.checked` records each `/ready` request and metrics scrape; only failures are
+  logged;
+- `api.rate_limit.user_refused`, `github_refused`, `creation_refused` and `auth_refused` name the
+  limiter that answered `rate_limited` (the per-User general and protocol budgets count as
+  `user`; `auth` is Better Auth's per-IP sign-in limiter); and
+- `api.rate_limit.unavailable` marks a `rate_limit_unavailable` answer.
 
 ## Audit Facts and Security Request Logs
 
@@ -69,7 +103,8 @@ operations and staged rows, then expired Security Request Logs, then short-lived
 and invitation rows (see [persistence](persistence.md#migration-and-retention-policy)), each in
 bounded batches of short transactions with a per-run time budget. Failures emit
 `api.staging.expiry_failed`, `api.security_request_log.expiry_failed`, or
-`api.retention.expiry_failed`; operators must alert on them. Both deployment modes use
+`api.retention.expiry_failed`, and the run ends with `api.retention.cleanup_completed`;
+operators must alert on the failures. Both deployment modes use
 the same 30-day maximum and allowlist.
 
 Diagnostic access is limited to the operations role. Security Request Logs are limited to the
