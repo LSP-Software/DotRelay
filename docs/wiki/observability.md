@@ -11,12 +11,16 @@ The fixed schema is version `1`. Its Diagnostic Field Allowlist is:
 
 - `eventName`, one of the bounded operational tokens `api.request.completed`,
   `api.security_request_log.write_failed`, `api.security_request_log.expiry_failed`,
-  `api.staging.expiry_failed`, or `api.retention.expiry_failed`;
+  `api.staging.expiry_failed`, `api.retention.expiry_failed`, `api.email.sent`,
+  `api.email.failed`, or `api.email.skipped`;
 - `correlationId`, a fresh opaque UUID used only to link one request or bounded execution;
 - `durationMs`, a non-negative bounded integer;
 - `outcome`, a bounded operational token;
-- `problemCode`, a bounded stable problem code; and
-- `retryAfterSeconds`, a bounded non-negative integer.
+- `problemCode`, a bounded stable problem code;
+- `retryAfterSeconds`, a bounded non-negative integer;
+- `emailKind`, one of `invitation`, `keys_shared` or `invitation_accepted`; and
+- `emailReason`, one of `timeout`, `network`, `rejected`, `rate_limited`, `server_error`,
+  `lookup_failed`, `queue_full`, `no_recipient` or `no_address`.
 
 Unknown fields, nested context, messages, stack traces, headers, query values, bodies, credentials,
 keys, ciphertext, plaintext, domain identifiers, and IP addresses are rejected by event creation
@@ -30,7 +34,7 @@ for at most seven days. Crash reports are sanitized and can be created only by a
 they contain a Correlation ID and stable problem code, never the original Error object, message, or
 stack.
 
-Metrics may use only `eventName`, `outcome`, and `problemCode` dimensions. They must not include
+Metrics may use only `eventName`, `outcome`, `problemCode`, `emailKind` and `emailReason` dimensions. They must not include
 domain identifiers, IPs, request values, or cryptographic material. Diagnostic and security-log
 loss is non-blocking and cannot change domain behavior.
 
