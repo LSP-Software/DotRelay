@@ -29,9 +29,11 @@ const TermsPage = () => (
 
     <h2>Price</h2>
     <p>
-      The hosted service is free during early access. If we introduce paid
-      plans, we will tell you at least 30 days in advance, and nothing will be
-      charged without your agreement.
+      The hosted service is free during early access. We plan to charge for it
+      later. Before any paid plan applies to you, we will tell you the price and
+      terms at least 30 days in advance, and we will not charge you without your
+      agreement. If you do not want to pay, you can export your data and stop
+      using the service.
     </p>
 
     <h2>Your account</h2>
@@ -103,19 +105,25 @@ const TermsPage = () => (
 
     <h2>Liability</h2>
     <p>
-      We provide the service with reasonable care and skill, but otherwise
-      &ldquo;as is&rdquo;, without guarantees that it will be uninterrupted or
-      error-free. To the extent the law allows, we are not liable for indirect
-      or consequential loss, loss of profits, or loss of data you could have
-      avoided by keeping your own copy, and our total liability to you is
-      limited to £100 or the amount you paid us in the last 12 months, whichever
-      is greater.
+      The service is provided free of charge during early access, &ldquo;as
+      is&rdquo; and &ldquo;as available&rdquo;. We do not promise that it will
+      be uninterrupted, error-free or suitable for any particular purpose, and
+      you use it at your own risk.
     </p>
     <p>
-      Nothing in these terms limits liability for death or personal injury
-      caused by negligence, for fraud, or for anything else the law does not
-      allow us to limit. If you are a consumer, these terms do not affect your
-      statutory rights.
+      To the fullest extent the law allows, we exclude all liability to you,
+      whether in contract, negligence or otherwise, for any loss or damage
+      arising from your use of, or inability to use, the service. That includes
+      loss of data, secrets or credentials, loss of profits or business, and any
+      indirect or consequential loss. If we are liable to you despite this, our
+      total liability is limited to the greater of the amount you paid us in the
+      12 months before the claim and £50.
+    </p>
+    <p>
+      Nothing in these terms excludes or limits liability for death or personal
+      injury caused by negligence, for fraud or fraudulent misrepresentation, or
+      for anything else the law does not allow us to exclude or limit. If you
+      are a consumer, these terms do not affect your statutory rights.
     </p>
 
     <h2>Changes to these terms</h2>

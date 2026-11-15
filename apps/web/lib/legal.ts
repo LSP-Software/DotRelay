@@ -3,11 +3,12 @@
 // stay consistent.
 export const legal = {
   company: "LSP SOFTWARE LTD",
-  companyNumber: "TODO-COMPANY-NUMBER",
-  registeredOffice: "TODO-REGISTERED-OFFICE",
+  companyNumber: "14566565",
+  registeredOffice:
+    "Unit 82a James Carter Road, Mildenhall, Bury St. Edmunds, England, IP28 7DE",
   jurisdiction: "England and Wales",
-  contactEmail: "TODO-CONTACT-EMAIL",
-  effectiveDate: "TODO-EFFECTIVE-DATE",
+  contactEmail: "support@dotrelay.dev",
+  effectiveDate: "15 November 2026",
   service: "the hosted DotRelay service at dotrelay.dev",
 } as const;
 
@@ -25,9 +26,9 @@ export const subprocessors: readonly Readonly<{
     location: "United States",
   },
   {
-    name: "TODO-HOSTING-PROVIDER",
+    name: "Hetzner Online GmbH",
     purpose: "Servers that run DotRelay and hold its database",
-    location: "TODO-HOSTING-LOCATION",
+    location: "Finland",
   },
   {
     name: "Cloudflare, Inc.",
@@ -35,8 +36,8 @@ export const subprocessors: readonly Readonly<{
     location: "Global network",
   },
   {
-    name: "TODO-BACKUP-PROVIDER",
-    purpose: "Encrypted database backups",
-    location: "TODO-BACKUP-LOCATION",
+    name: "Backblaze, Inc.",
+    purpose: "Database backups",
+    location: "United States (US East)",
   },
 ];
