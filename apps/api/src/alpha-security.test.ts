@@ -83,6 +83,89 @@ test("a session outside the alpha list can still sign out and read capabilities"
   expect(capabilities.status).not.toBe(403);
 });
 
+test("a device code opened outside the alpha list is declined and its CLI told why", async () => {
+  const profile = loadServerProfileConfig({ ALPHA_GITHUB_IDS: "1001" });
+  const declines: unknown[] = [];
+  const deletes: unknown[] = [];
+  let handled = 0;
+  let signedIn = true;
+  let row: { id: string; status: string; userId: string | null } | null = {
+    id: "code-row",
+    status: "denied",
+    userId: "outsider",
+  };
+  const app = createApi({
+    profile,
+    database: {
+      authAccount: {
+        findFirst: async ({ where }: { where: { userId: string } }) => ({
+          accountId: where.userId === "insider" ? "1001" : "2002",
+        }),
+      },
+      authDeviceCode: {
+        updateMany: async (input: unknown) => {
+          declines.push(input);
+          return { count: 1 };
+        },
+        findUnique: async () => row,
+        deleteMany: async (input: unknown) => {
+          deletes.push(input);
+          return { count: 1 };
+        },
+      },
+    } as never,
+    auth: {
+      api: {
+        getSession: async () =>
+          signedIn ? { user: { id: "outsider" } } : null,
+      },
+      handler: async () => {
+        handled++;
+        return Response.json({ error: "access_denied" }, { status: 400 });
+      },
+    } as never,
+  });
+
+  const opened = await app.request(
+    `${profile.origin}/api/auth/device?user_code=abcd-efgh`,
+    { headers: { Cookie: "session=outsider", Origin: profile.origin } },
+  );
+  expect(opened.status).toBe(403);
+  expect(declines).toHaveLength(1);
+  expect(declines[0]).toMatchObject({
+    where: {
+      userCode: { in: ["abcd-efgh", "ABCDEFGH"] },
+      status: "pending",
+      OR: [{ userId: null }, { userId: "outsider" }],
+    },
+    data: { status: "denied", userId: "outsider" },
+  });
+
+  signedIn = false;
+  const poll = () =>
+    app.request(`${profile.origin}/api/auth/device/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: "dotrelay-cli",
+        device_code: "device-code",
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      }),
+    });
+  const answered = await poll();
+  expect(answered.status).toBe(403);
+  expect(((await answered.json()) as { code: string }).code).toBe(
+    "alpha_admission_required",
+  );
+  expect(deletes).toEqual([{ where: { id: "code-row" } }]);
+  expect(handled).toBe(0);
+
+  // A code an admitted account denied keeps Better Auth's own answer.
+  row = { id: "code-row", status: "denied", userId: "insider" };
+  expect((await poll()).status).toBe(400);
+  expect(handled).toBe(1);
+});
+
 test("alpha gate accepts listed identities and an empty list denies everyone", async () => {
   for (const ids of ["1001, 2002", ""]) {
     const profile = loadServerProfileConfig({ ALPHA_GITHUB_IDS: ids });
