@@ -620,6 +620,15 @@ export const recoverAccountKey = async (
         "the transfer code is the value the sending Device printed: 32 hex digits, a dot, and the 40-digit account fingerprint",
       );
     }
+    // Without a prompt only the code can carry the fingerprint, so a bare
+    // transfer id is refused before the transfer is fetched.
+    if (code.accountFingerprint === null && options.noInput)
+      throw new CliError(
+        "invocation",
+        "with --no-input, pass the whole transfer code the sending Device printed: it ends with the account fingerprint this Device checks",
+        {},
+        "account_fingerprint_required",
+      );
     const transferId = code.transferId;
     let result: Record<string, unknown>;
     try {
@@ -711,16 +720,7 @@ export const recoverAccountKey = async (
             "account_fingerprint_mismatch",
           ),
         );
-    } else if (options.noInput)
-      refuse(
-        new CliError(
-          "invocation",
-          "with --no-input, pass the whole transfer code the sending Device printed: it ends with the account fingerprint this Device checks",
-          {},
-          "account_fingerprint_required",
-        ),
-      );
-    else if (
+    } else if (
       !(await confirmPrompt(
         options,
         `The transfer carries the account key with fingerprint ${fingerprint}. Does it match the account fingerprint the sending Device shows?`,

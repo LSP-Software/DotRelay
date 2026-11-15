@@ -197,6 +197,7 @@ const accountKeyService = (
   const publishedWrappers: string[] = [];
   const wrapperIntents: unknown[] = [];
   const acknowledgedTransfers: string[] = [];
+  const acceptedTransfers: string[] = [];
   let established = false;
   const publishedEnvelopes: string[] = [];
   const postedTransfers: Array<
@@ -277,6 +278,7 @@ const accountKeyService = (
       const match =
         /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(path);
       if (match) {
+        acceptedTransfers.push(match[1] ?? "");
         const transfer = seed.transfer;
         if (
           !transfer ||
@@ -299,6 +301,7 @@ const accountKeyService = (
     publishedWrappers: () => publishedWrappers,
     wrapperIntents: () => wrapperIntents,
     acknowledgedTransfers: () => acknowledgedTransfers,
+    acceptedTransfers: () => acceptedTransfers,
     publishedEnvelopes: () => publishedEnvelopes,
     postedTransfers: () => postedTransfers,
     revokedWrappers: () => revokedWrappers,
@@ -4806,12 +4809,14 @@ describe("protected CLI workflows", () => {
       );
       return { result, service };
     };
-    // A bare transfer id carries no fingerprint, so --no-input refuses it.
+    // A bare transfer id carries no fingerprint, so --no-input refuses it
+    // before the transfer is fetched.
     const bare = await recoverWith(transferIdHex);
     expect(bare.result.exitCode).toBe(2);
     expect(JSON.parse(bare.result.stderr)).toMatchObject({
       code: "account_fingerprint_required",
     });
+    expect(bare.service.acceptedTransfers()).toHaveLength(0);
     // A code naming another account's fingerprint is refused.
     const wrong = await recoverWith(
       formatAccountKeyTransferCode(transferIdHex, "00".repeat(20)),
@@ -4959,7 +4964,10 @@ describe("protected CLI workflows", () => {
         "--profile",
         "relay",
         "--transfer",
-        "deadbeefdeadbeefdeadbeefdeadbeef",
+        formatAccountKeyTransferCode(
+          "deadbeefdeadbeefdeadbeefdeadbeef",
+          "00".repeat(20),
+        ),
         "--no-input",
         "--json",
       ],
