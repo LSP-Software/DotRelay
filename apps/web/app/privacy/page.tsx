@@ -116,6 +116,7 @@ const PrivacyPage = () => (
       on our instructions.
     </p>
     <table>
+      <caption className="sr-only">Hosted service providers</caption>
       <thead>
         <tr>
           <th>Provider</th>
