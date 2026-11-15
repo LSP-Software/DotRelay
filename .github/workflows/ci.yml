@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Manual runs only validate npm trusted publishing (npm-trust-bootstrap).
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -291,6 +293,41 @@ jobs:
           SMOKE_WEB_ORIGIN: https://dev.dotrelay.dev
           SMOKE_SERVER_PROFILE_ID: ${{ vars.DEV_SERVER_PROFILE_ID }}
         run: python3 scripts/smoke-deployment.py
+
+  # npm validates a new trusted publisher only after a publish from the
+  # configured workflow file. This manual job publishes a placeholder
+  # @dotrelay/cli under the "bootstrap" dist-tag (never "latest") so the
+  # ci.yml publisher can be validated before the dev deployment can publish.
+  npm-trust-bootstrap:
+    name: validate npm trusted publishing (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
+      - name: publish a bootstrap placeholder of @dotrelay/cli
+        env:
+          VERSION: 0.0.0-bootstrap.${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          directory="$RUNNER_TEMP/dotrelay-cli-bootstrap"
+          mkdir -p "$directory"
+          cat > "$directory/package.json" <<JSON
+          {
+            "name": "@dotrelay/cli",
+            "version": "$VERSION",
+            "description": "Placeholder that validates trusted publishing. Install @dotrelay/cli@alpha or @dotrelay/cli@latest instead.",
+            "repository": {
+              "type": "git",
+              "url": "git+https://github.com/LSP-Software/DotRelay.git"
+            }
+          }
+          JSON
+          npm publish "$directory" --access public --tag bootstrap
 
   build-cli-dev:
     name: build dev CLI (${{ matrix.os }})
