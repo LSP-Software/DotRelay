@@ -1222,94 +1222,99 @@ integrationDescribe("account key persistence invariants", () => {
   test("a delivered transfer can be retried, then fails closed on expiry, revocation, and invalid acknowledgement order", async () => {
     const { user } = await createUserFixture();
     const sender = await createActiveDevice(user.id);
-    const recipient = await createActiveDevice(user.id);
     const accountKeys = new AccountKeyRepository();
-    const transferId = crypto.getRandomValues(new Uint8Array(16));
-    const protocolObject = await createProtocolObjectInput(22);
-    const operation = {
-      ...(await createOperationInput(user.id, "retry-transfer")),
-      actorDeviceId: sender.id,
-    };
-    await stageObject({
-      operation,
-      objectId: protocolObject.id,
-      canonicalBytes: protocolObject.canonicalBytes,
-      digest: protocolObject.digest,
-    });
     const now = new Date("2026-09-23T12:00:00.000Z");
-    await accountKeys.createTransfer(database, {
-      operation,
-      transfer: {
-        protocolObject,
-        identityGeneration: 1n,
-        recipientDeviceId: recipient.id,
-        transferId,
-        expiresAt: new Date(now.getTime() + 60_000),
-      },
-      now,
-    });
-    const [first, second] = await Promise.all([
-      accountKeys.acceptTransfer(database, {
-        userId: user.id,
-        deviceId: recipient.id,
-        transferId,
+    // Revocation is terminal (ADR 0019), so the revocation and expiry cases
+    // each get their own recipient and transfer.
+    const deliveredTransfer = async (label: string) => {
+      const recipient = await createActiveDevice(user.id);
+      const transferId = crypto.getRandomValues(new Uint8Array(16));
+      const protocolObject = await createProtocolObjectInput(22);
+      const operation = {
+        ...(await createOperationInput(user.id, label)),
+        actorDeviceId: sender.id,
+      };
+      await stageObject({
+        operation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+      await accountKeys.createTransfer(database, {
+        operation,
+        transfer: {
+          protocolObject,
+          identityGeneration: 1n,
+          recipientDeviceId: recipient.id,
+          transferId,
+          expiresAt: new Date(now.getTime() + 60_000),
+        },
         now,
-      }),
-      accountKeys.acceptTransfer(database, {
-        userId: user.id,
-        deviceId: recipient.id,
-        transferId,
-        now,
-      }),
-    ]);
-    expect(first.canonicalBytes).toEqual(second.canonicalBytes);
+      });
+      const [first, second] = await Promise.all([
+        accountKeys.acceptTransfer(database, {
+          userId: user.id,
+          deviceId: recipient.id,
+          transferId,
+          now,
+        }),
+        accountKeys.acceptTransfer(database, {
+          userId: user.id,
+          deviceId: recipient.id,
+          transferId,
+          now,
+        }),
+      ]);
+      expect(first.canonicalBytes).toEqual(second.canonicalBytes);
+      return { recipient, transferId, protocolObject };
+    };
+
+    const revoked = await deliveredTransfer("retry-transfer");
     await expect(
       accountKeys.acknowledgeTransfer(database, {
         userId: user.id,
         deviceId: sender.id,
-        transferId,
+        transferId: revoked.transferId,
         now,
       }),
     ).rejects.toThrow(/not pending/);
     await database.device.update({
-      where: { id: recipient.id },
+      where: { id: revoked.recipient.id },
       data: { lifecycle: "REVOKED", revokedAt: now },
     });
     await expect(
       accountKeys.acceptTransfer(database, {
         userId: user.id,
-        deviceId: recipient.id,
-        transferId,
+        deviceId: revoked.recipient.id,
+        transferId: revoked.transferId,
         now,
       }),
     ).rejects.toThrow(/revoked/);
     await expect(
       accountKeys.acknowledgeTransfer(database, {
         userId: user.id,
-        deviceId: recipient.id,
-        transferId,
+        deviceId: revoked.recipient.id,
+        transferId: revoked.transferId,
         now,
       }),
     ).rejects.toThrow(/revoked/);
     const stillDelivered =
       await database.accountKeyTransferObject.findUniqueOrThrow({
-        where: { protocolObjectId: protocolObject.id },
+        where: { protocolObjectId: revoked.protocolObject.id },
       });
     expect(stillDelivered.status).toBe("DELIVERED");
-    await database.device.update({
-      where: { id: recipient.id },
-      data: { lifecycle: "ACTIVE", revokedAt: null },
-    });
+
+    const expiring = await deliveredTransfer("expiring-transfer");
     await expect(
       accountKeys.acceptTransfer(database, {
         userId: user.id,
-        deviceId: recipient.id,
-        transferId,
+        deviceId: expiring.recipient.id,
+        transferId: expiring.transferId,
         now: new Date(now.getTime() + 120_000),
       }),
     ).rejects.toThrow("account key transfer expired");
     const expired = await database.accountKeyTransferObject.findUniqueOrThrow({
-      where: { protocolObjectId: protocolObject.id },
+      where: { protocolObjectId: expiring.protocolObject.id },
     });
     expect(expired.status).toBe("EXPIRED");
   });

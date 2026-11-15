@@ -1014,6 +1014,73 @@ integrationDescribe("trust workflow integration", () => {
     ).rejects.toThrow("use initial trust bootstrap");
   });
 
+  // ADR 0019: revocation is terminal. Enrollment never moves a revoked Device
+  // back to PENDING or clears the times its Revisions are judged by.
+  test("a revoked Device never re-enters enrollment", async () => {
+    const user = await createUserFixture();
+    const devices = new DeviceRepository();
+    await createActiveDevice(user.id);
+    const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
+    const ed25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
+    const keyId = new Uint8Array(await sha384Digest(x25519PublicKey));
+    const activatedAt = new Date(Date.now() - 60_000);
+    const revokedAt = new Date(Date.now() - 30_000);
+    const revoked = await database.device.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        lifecycle: "REVOKED",
+        identityGeneration: 1n,
+        keyId,
+        x25519PublicKey,
+        ed25519PublicKey,
+        activatedAt,
+        revokedAt,
+      },
+    });
+    for (const keys of [
+      { x25519PublicKey, ed25519PublicKey },
+      // The same X25519 key with a different Ed25519 key.
+      {
+        x25519PublicKey,
+        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      },
+    ])
+      await expect(
+        devices.beginEnrollment(database, {
+          operation: {
+            ...(await createOperationInput(
+              user.id,
+              `re-enroll-${crypto.randomUUID()}`,
+              "DEVICE_ENROLLMENT",
+            )),
+            actorDeviceId: revoked.id,
+          },
+          enrollmentId: crypto.randomUUID(),
+          userId: user.id,
+          initiatorDeviceId: revoked.id,
+          transcriptHash: new Uint8Array(48),
+          challengeHash: new Uint8Array(48),
+          expiresAt: new Date(Date.now() + 60_000),
+          device: { id: revoked.id, identityGeneration: 1n, keyId, ...keys },
+        }),
+      ).rejects.toThrow("conflicts with the stored device");
+    const after = await database.device.findUniqueOrThrow({
+      where: { id: revoked.id },
+    });
+    expect(after.lifecycle).toBe("REVOKED");
+    expect(after.activatedAt?.getTime()).toBe(activatedAt.getTime());
+    expect(after.revokedAt?.getTime()).toBe(revokedAt.getTime());
+    // The database refuses the same change from any other writer.
+    await expect(
+      (async () =>
+        database.device.update({
+          where: { id: revoked.id },
+          data: { lifecycle: "PENDING", activatedAt: null, revokedAt: null },
+        }))(),
+    ).rejects.toThrow("revoked Device");
+  });
+
   // ADR 0010: a Device created by initial trust bootstrap is fully ACTIVE.
   // It may approve an enrollment on its own behalf — here the prospective
   // Device's self-started request, which activates it. The lifecycle gate
