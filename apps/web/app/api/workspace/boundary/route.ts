@@ -22,8 +22,10 @@ const fetchGitHubAppInstallUrl = async (
   apiOrigin: string,
 ): Promise<string | undefined> => {
   try {
+    // A stalled lookup must not hold up the workspace; it only adds a link.
     const response = await fetch(`${apiOrigin}/api/v1/github-app`, {
       cache: "no-store",
+      signal: AbortSignal.timeout(2_000),
     });
     if (!response.ok) return undefined;
     return parseGitHubAppDocument(await response.json()).installUrl;

@@ -281,7 +281,14 @@ describe("API foundation", () => {
   });
 
   test("answers 404 for the GitHub App when the server has no slug", async () => {
-    const response = await app.request("http://localhost/api/v1/github-app");
+    const testApp = createApi({
+      database: {} as never,
+      profile: loadServerProfileConfig({}),
+      auth: { api: { getSession: async () => null } } as never,
+    });
+    const response = await testApp.request(
+      "http://localhost/api/v1/github-app",
+    );
 
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({

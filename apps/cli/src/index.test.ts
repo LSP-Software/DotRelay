@@ -4586,6 +4586,39 @@ describe("actionable error categories at the process boundary", () => {
     }
   });
 
+  test("a stalled install-link body still reports the access denial", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const runtime = {
+        ...runtimeForProtocolState(state),
+        networkPolicy: { ...instantNetworkPolicy, requestDeadlineMs: 50 },
+        fetch: (async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/github-app"))
+            // Headers arrive; the body never does.
+            return new Response(new ReadableStream({ start: () => {} }), {
+              headers: { "Content-Type": "application/json" },
+            });
+          if (url.includes("/api/v1/github-repositories/resolve"))
+            return jsonResponse(createProblem("repository_access_denied"), 403);
+          throw new Error(`unexpected fetch: ${url}`);
+        }) satisfies FetchFunction,
+      };
+      const result = await run(
+        ["init", "--profile", "relay", "--no-input", "--json"],
+        runtime,
+      );
+      expect(result.exitCode).toBe(6);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic.code).toBe("repository_access_denied");
+      expect(diagnostic.detail).toContain(
+        "Ask the server operator for the install link",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("repository access denial gives init recovery steps in both output modes", async () => {
     const { state, cleanup } = await seededState();
     try {

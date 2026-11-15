@@ -22,7 +22,18 @@ export const fetchGitHubAppInstallUrl = async (
     readonly networkPolicy?: NetworkPolicy;
   }> = {},
 ): Promise<string | undefined> => {
-  try {
+  const policy = options.networkPolicy ?? probeNetworkPolicy;
+  // fetchWithDeadline stops timing once headers arrive. This deadline also
+  // covers the body, so a stalled body cannot delay the original error.
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(undefined);
+    }, policy.requestDeadlineMs);
+  });
+  const lookup = (async () => {
     const response = await fetchWithDeadline(
       options.fetch ?? fetch,
       `${origin}/api/v1/github-app`,
@@ -30,13 +41,17 @@ export const fetchGitHubAppInstallUrl = async (
         method: "GET",
         redirect: "error",
         headers: { Accept: "application/json" },
+        signal: controller.signal,
       },
-      options.networkPolicy ?? probeNetworkPolicy,
+      policy,
     );
     if (!response.ok) return undefined;
     return parseGitHubAppDocument(await response.json()).installUrl;
-  } catch {
-    return undefined;
+  })().catch(() => undefined);
+  try {
+    return await Promise.race([lookup, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 };
 
