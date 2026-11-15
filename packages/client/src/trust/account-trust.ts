@@ -5,19 +5,39 @@ import {
   verifyAccountDeviceRoster,
 } from "../account/roster";
 
-// Local pins for account identities (ADR 0015). The client's own identity is
-// pinned after it derives it from the AMK; a teammate's on first sight.
+// Local pins for account identities (ADR 0015, ADR 0022). The client's own
+// identity is pinned after it derives it from the AMK. A teammate's is pinned
+// on first sight for verifying history only; the user confirms it before any
+// key is taken from or given to that teammate on its say-so.
 export type AccountTrustPin = Readonly<{
   /** Hex of the 32-byte account identity. */
   readonly identity: string;
   /** Highest roster version verified under this identity. */
   readonly rosterVersion: number;
+  /**
+   * Teammates only: the user confirmed this identity (compared its
+   * fingerprint) instead of it being pinned on first sight.
+   */
+  readonly confirmed?: boolean;
+}>;
+
+/**
+ * What this installation has accepted for one Project (ADR 0022): the
+ * highest Project epoch, and a commitment to the Project Epoch Key it adopted
+ * for each epoch, so neither can be rolled back or swapped later.
+ */
+export type ProjectEpochPin = Readonly<{
+  readonly highestEpoch: number;
+  /** Project epoch (decimal) -> hex commitment to that epoch's key. */
+  readonly keys: Readonly<Record<string, string>>;
 }>;
 
 export type AccountTrustPins = Readonly<{
   readonly version: 1;
   readonly own: (AccountTrustPin & { readonly userId: string }) | null;
   readonly teammates: Readonly<Record<string, AccountTrustPin>>;
+  /** Project id -> epoch and key pins. Absent in files written before it. */
+  readonly projects?: Readonly<Record<string, ProjectEpochPin>>;
 }>;
 
 export const emptyAccountTrustPins = (): AccountTrustPins =>
@@ -37,7 +57,26 @@ const isPin = (value: unknown): value is AccountTrustPin =>
   typeof (value as AccountTrustPin).identity === "string" &&
   /^[0-9a-f]{64}$/.test((value as AccountTrustPin).identity) &&
   Number.isSafeInteger((value as AccountTrustPin).rosterVersion) &&
-  (value as AccountTrustPin).rosterVersion >= 0;
+  (value as AccountTrustPin).rosterVersion >= 0 &&
+  ((value as AccountTrustPin).confirmed === undefined ||
+    typeof (value as AccountTrustPin).confirmed === "boolean");
+
+const isProjectPin = (value: unknown): value is ProjectEpochPin => {
+  if (value === null || typeof value !== "object") return false;
+  const pin = value as ProjectEpochPin;
+  return (
+    Number.isSafeInteger(pin.highestEpoch) &&
+    pin.highestEpoch >= 1 &&
+    pin.keys !== null &&
+    typeof pin.keys === "object" &&
+    Object.entries(pin.keys).every(
+      ([epoch, commitment]) =>
+        /^[1-9][0-9]{0,15}$/.test(epoch) &&
+        typeof commitment === "string" &&
+        /^[0-9a-f]{96}$/.test(commitment),
+    )
+  );
+};
 
 // Parses stored pins. Anything malformed is an error, not an empty store:
 // silently forgetting pins would turn every teammate back into first sight.
@@ -45,6 +84,7 @@ export const parseAccountTrustPins = (text: string): AccountTrustPins => {
   const value = JSON.parse(text) as Record<string, unknown>;
   const own = value.own as Record<string, unknown> | null;
   const teammates = value.teammates as Record<string, unknown>;
+  const projects = value.projects as Record<string, unknown> | undefined;
   if (
     value.version !== 1 ||
     (own !== null &&
@@ -52,7 +92,11 @@ export const parseAccountTrustPins = (text: string): AccountTrustPins => {
         typeof (own as { userId?: unknown }).userId !== "string")) ||
     teammates === null ||
     typeof teammates !== "object" ||
-    !Object.values(teammates).every(isPin)
+    !Object.values(teammates).every(isPin) ||
+    (projects !== undefined &&
+      (projects === null ||
+        typeof projects !== "object" ||
+        !Object.values(projects).every(isProjectPin)))
   )
     throw new Error("account trust pins are malformed");
   return Object.freeze({
@@ -61,6 +105,13 @@ export const parseAccountTrustPins = (text: string): AccountTrustPins => {
     teammates: Object.freeze({
       ...(teammates as Record<string, AccountTrustPin>),
     }),
+    ...(projects === undefined
+      ? {}
+      : {
+          projects: Object.freeze({
+            ...(projects as Record<string, ProjectEpochPin>),
+          }),
+        }),
   });
 };
 
@@ -70,7 +121,11 @@ export const serializeAccountTrustPins = (pins: AccountTrustPins): string =>
 export type AccountTrustStatus =
   /** Devices come from a roster signed by the pinned or derived identity. */
   | "verified"
-  /** No roster exists and none was ever pinned: today's behaviour, flagged. */
+  /**
+   * No roster this client can verify: none was ever pinned and none was
+   * served, or (own account) this client holds neither the AMK nor a pin.
+   * No Device of this User is trusted (ADR 0022).
+   */
   | "unverified"
   /** The roster names a different identity than the pinned one. Blocking. */
   | "identity-changed"
@@ -89,6 +144,11 @@ export type UserAccountTrust = Readonly<{
   readonly roster: AccountDeviceRoster | null;
   /** True when this resolution pinned the identity for the first time. */
   readonly newlyPinned: boolean;
+  /**
+   * The own account, or a teammate whose identity the user confirmed.
+   * Only confirmed Users' Devices may deliver or receive keys (ADR 0022).
+   */
+  readonly confirmed: boolean;
 }>;
 
 export type AccountTrustResolution = Readonly<{
@@ -102,9 +162,12 @@ export const isBlockingStatus = (status: AccountTrustStatus): boolean =>
   status === "rollback" ||
   status === "invalid";
 
-// Resolves trust for the own User and every teammate whose roster (or
-// absence of one) the service reported. `ownIdentity` is derived from the
-// AMK when this client holds it; without it the pinned own identity is used.
+// Resolves trust for the own User, every User whose roster (or absence of
+// one) the service reported, and every User a key list names. Nothing is
+// trusted from absent data: a User without a verifiable roster contributes
+// no Device, and a pinned User whose roster is missing is a rollback.
+// `ownIdentity` is derived from the AMK when this client holds it; without it
+// the pinned own identity is used.
 export const resolveAccountTrust = async (
   input: Readonly<{
     readonly pins: AccountTrustPins;
@@ -113,6 +176,12 @@ export const resolveAccountTrust = async (
     readonly ownIdentity: Uint8Array | null;
     /** userId -> latest roster bytes; every User the boundary covers. */
     readonly rosters: ReadonlyMap<string, Uint8Array | null>;
+    /**
+     * Every User any service-reported key list names (signing trust
+     * Devices, provisioning plans). Each is resolved even when the service
+     * left it out of `rosters`.
+     */
+    readonly mentionedUserIds?: Iterable<string>;
   }>,
 ): Promise<AccountTrustResolution> => {
   const teammates: Record<string, AccountTrustPin> = {
@@ -121,7 +190,11 @@ export const resolveAccountTrust = async (
   let own = input.pins.own?.userId === input.ownUserId ? input.pins.own : null;
   let changed = false;
   const users = new Map<string, UserAccountTrust>();
-  const userIds = new Set([input.ownUserId, ...input.rosters.keys()]);
+  const userIds = new Set([
+    input.ownUserId,
+    ...input.rosters.keys(),
+    ...(input.mentionedUserIds ?? []),
+  ]);
   for (const userId of userIds) {
     const isOwn = userId === input.ownUserId;
     const pin = isOwn ? own : (teammates[userId] ?? null);
@@ -144,12 +217,14 @@ export const resolveAccountTrust = async (
           presentedIdentity: null,
           roster: null,
           newlyPinned: false,
+          confirmed: isOwn || pin?.confirmed === true,
           ...fields,
         }),
       );
     if (!bytes) {
-      // A roster that existed for a pinned User cannot simply disappear.
-      result(pin && pin.rosterVersion > 0 ? "rollback" : "unverified");
+      // A roster that existed for a pinned User cannot simply disappear,
+      // whether the service sends null or leaves the User out.
+      result(pin ? "rollback" : "unverified");
       continue;
     }
     // The own identity is never taken on first use: it comes from the AMK
@@ -189,8 +264,14 @@ export const resolveAccountTrust = async (
       result("rollback", { identity });
       continue;
     }
-    const next = { identity: hex(identity), rosterVersion: roster.version };
-    const newlyPinned = !pin || pin.identity !== next.identity;
+    const newlyPinned = !pin || pin.identity !== hex(identity);
+    // A first-sight pin verifies history only; confirmation is explicit.
+    const confirmed = isOwn || (!newlyPinned && pin?.confirmed === true);
+    const next = {
+      identity: hex(identity),
+      rosterVersion: roster.version,
+      ...(isOwn ? {} : { confirmed }),
+    };
     if (!pin || pin.rosterVersion !== next.rosterVersion || newlyPinned) {
       changed = true;
       if (isOwn) own = { ...next, userId };
@@ -200,10 +281,12 @@ export const resolveAccountTrust = async (
       identity,
       roster,
       newlyPinned: newlyPinned && !isOwn,
+      confirmed,
     });
   }
   return Object.freeze({
     pins: Object.freeze({
+      ...input.pins,
       version: 1,
       own,
       teammates: Object.freeze(teammates),
@@ -213,20 +296,54 @@ export const resolveAccountTrust = async (
   });
 };
 
-// Explicit re-trust of a teammate whose identity changed, after the user
-// compared fingerprints out of band. The roster version restarts.
-export const retrustTeammate = (
+/**
+ * The user confirmed a teammate's account identity after comparing its
+ * fingerprint out of band: a first-sight identity, or a changed one. The
+ * roster the service presents must verify under that identity, and the pin
+ * keeps its version (never lower than one already verified for the same
+ * identity), so the next missing or older roster is still a rollback.
+ */
+export const confirmTeammateIdentity = async (
   pins: AccountTrustPins,
-  userId: string,
-  identity: Uint8Array,
-): AccountTrustPins =>
-  Object.freeze({
-    ...pins,
-    teammates: Object.freeze({
-      ...pins.teammates,
-      [userId]: { identity: hex(identity), rosterVersion: 0 },
-    }),
+  input: Readonly<{
+    readonly serverProfileId: string;
+    readonly userId: string;
+    readonly roster: Uint8Array;
+  }>,
+): Promise<
+  Readonly<{
+    readonly pins: AccountTrustPins;
+    readonly identity: Uint8Array;
+    readonly rosterVersion: number;
+  }>
+> => {
+  const claimed = readAccountDeviceRoster(input.roster);
+  const roster = await verifyAccountDeviceRoster(input.roster, {
+    serverProfileId: input.serverProfileId,
+    userId: input.userId,
+    identity: claimed.identity,
   });
+  const previous = pins.teammates[input.userId];
+  const rosterVersion =
+    previous && previous.identity === hex(roster.identity)
+      ? Math.max(previous.rosterVersion, roster.version)
+      : roster.version;
+  return Object.freeze({
+    pins: Object.freeze({
+      ...pins,
+      teammates: Object.freeze({
+        ...pins.teammates,
+        [input.userId]: {
+          identity: hex(roster.identity),
+          rosterVersion,
+          confirmed: true,
+        },
+      }),
+    }),
+    identity: roster.identity,
+    rosterVersion,
+  });
+};
 
 const activeAt = (device: RosterDevice): boolean =>
   device.revokedAtMs === undefined;
@@ -244,22 +361,39 @@ export type DeviceKeyClaim = Readonly<{
 
 export type DeviceTrustDecision =
   | Readonly<{ trusted: true; verified: true; revokedAtMs?: number }>
-  | Readonly<{ trusted: true; verified: false }>
-  | Readonly<{ trusted: false; reason: AccountTrustStatus | "not-in-roster" }>;
+  | Readonly<{
+      trusted: false;
+      reason:
+        AccountTrustStatus | "not-in-roster" | "unresolved" | "unconfirmed";
+    }>;
 
-// Decides whether one service-reported Device key may be trusted. A
-// verified User's Device must be in the roster with the same keys; an
-// unverified User keeps today's behaviour; a blocking status trusts nothing.
+/**
+ * What a Device key is trusted for. `history` verifies Revisions and other
+ * signed history. `keys` covers key material: accepting a Project Epoch Key
+ * or Account Master Key signed by the Device, or sealing keys to it. A
+ * teammate pinned on first sight counts for history only, until the user
+ * confirms the identity (ADR 0022).
+ */
+export type DeviceTrustPurpose = "history" | "keys";
+
+// Decides whether one service-reported Device key may be trusted. The
+// Device's User must be resolved and verified, and the roster must list the
+// Device with the same keys. A User with no verifiable roster, a User the
+// resolution never saw, and a blocking status all trust nothing.
 export const decideDeviceTrust = (
   resolution: AccountTrustResolution,
   claim: DeviceKeyClaim,
-  options: Readonly<{ requireActive?: boolean }> = {},
+  options: Readonly<{
+    requireActive?: boolean;
+    purpose?: DeviceTrustPurpose;
+  }> = {},
 ): DeviceTrustDecision => {
   const user = resolution.users.get(claim.userId);
-  if (!user || user.status === "unverified")
-    return { trusted: true, verified: false };
+  if (!user) return { trusted: false, reason: "unresolved" };
   if (user.status !== "verified" || !user.roster)
     return { trusted: false, reason: user.status };
+  if (options.purpose === "keys" && !user.confirmed)
+    return { trusted: false, reason: "unconfirmed" };
   const device = user.roster.devices.find(
     (candidate) => candidate.deviceId === claim.deviceId,
   );
@@ -286,25 +420,39 @@ export type OwnDeviceReport = Readonly<{
   readonly revokedAtMs?: number;
 }>;
 
+const entryFor = (device: OwnDeviceReport): RosterDevice => ({
+  deviceId: device.deviceId,
+  encryptionPublicKey: device.encryptionPublicKey,
+  signingPublicKey: device.signingPublicKey,
+  addedAtMs: device.addedAtMs,
+});
+
 // The roster this client should publish next, or null when the latest
-// verified roster already matches. Rules (ADR 0015):
-// - with no roster yet, list every Device the service reports (TOFU at
-//   upgrade), active and revoked, plus this Device;
-// - otherwise never add a Device other than this one, add or refresh this
-//   Device, and mark revoked any listed Device the service reports revoked.
-//   A Device the service merely omits stays listed: silence is not a
-//   revocation, and the service must not be able to shrink the roster.
+// verified roster already matches. Rules (ADR 0015, ADR 0022):
+// - a Device enters the roster only as the publishing Device itself, or as
+//   a Device the user approved here (`approved`: an enrollment this Device
+//   approved, or the target of an Account Key Transfer the user confirmed).
+//   The service's report never adds a Device, not even to a first roster;
+// - add or refresh this Device, and mark revoked any listed Device the
+//   service reports revoked. A Device the service merely omits stays listed:
+//   silence is not a revocation, and the service must not be able to shrink
+//   the roster. A revoked entry stays revoked.
 export const planOwnRoster = (
   input: Readonly<{
     readonly current: AccountDeviceRoster | null;
     readonly self: OwnDeviceReport;
     readonly reported: readonly OwnDeviceReport[];
+    readonly approved?: readonly OwnDeviceReport[];
   }>,
 ): Readonly<{ version: number; devices: RosterDevice[] }> | null => {
+  const approved = input.approved ?? [];
   if (!input.current) {
-    const devices = new Map<string, RosterDevice>();
-    for (const device of [...input.reported, input.self])
-      devices.set(device.deviceId, { ...device });
+    const devices = new Map<string, RosterDevice>([
+      [input.self.deviceId, entryFor(input.self)],
+    ]);
+    for (const device of approved)
+      if (!devices.has(device.deviceId))
+        devices.set(device.deviceId, entryFor(device));
     return { version: 1, devices: [...devices.values()] };
   }
   let changed = false;
@@ -343,6 +491,11 @@ export const planOwnRoster = (
     };
     if (selfIndex >= 0) devices[selfIndex] = entry;
     else devices.push(entry);
+    changed = true;
+  }
+  for (const device of approved) {
+    if (devices.some((listed) => listed.deviceId === device.deviceId)) continue;
+    devices.push(entryFor(device));
     changed = true;
   }
   return changed ? { version: input.current.version + 1, devices } : null;

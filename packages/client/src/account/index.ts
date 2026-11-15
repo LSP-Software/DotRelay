@@ -19,8 +19,12 @@ import {
   signProtocolObject,
 } from "@dotrelay/contracts";
 import { argon2id } from "@noble/hashes/argon2.js";
+import { isSignedByTrustedKey } from "../trust/verify";
+import { deriveAccountSigningKey } from "./account-identity";
+import { type AccountDeviceRoster, verifyAccountDeviceRoster } from "./roster";
 import {
   type AccountKeyVerificationContext,
+  AccountKeyVerificationError,
   verifyAccountKeyEnvelope,
   verifyAccountKeyTransfer,
   verifyAccountKeyWrapper,
@@ -959,6 +963,153 @@ export const openAccountKeyTransfer = async (
   );
   requireLength(accountMasterKey, 32, "account master key");
   return accountMasterKey;
+};
+
+const sameKeyBytes = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.length === right.length &&
+  left.every((byte, index) => byte === right[index]);
+
+const bytesToUuidText = (value: Uint8Array): string => {
+  const hex = Array.from(value, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
+/**
+ * Opens an Account Key Transfer only when the account's own signed Device
+ * roster vouches for it (ADR 0022). The transfer is sealed to this Device's
+ * public key, so its signature is the only evidence of who sent it, and the
+ * service lists whatever signing keys it likes. Instead of any service list:
+ *
+ * - the Account Master Key it carries derives the account identity, which
+ *   must equal `expectedIdentity` when this installation pinned one, and
+ *   must have signed the roster the service serves for this User;
+ * - that roster must list the sending Device as active, and the transfer's
+ *   signature must verify with the sender's rostered key;
+ * - the roster must also list this Device with its own keys: the sending
+ *   Device adds its target before sealing, so a roster older than the
+ *   handoff, or a withheld one, is refused.
+ *
+ * The caller still compares the returned identity with the sender's account
+ * fingerprint (the transfer code carries it). Every failure is the same
+ * AccountKeyVerificationError, and a candidate key is zeroed before it.
+ */
+export const openAccountKeyTransferWithRoster = async (
+  transfer: AccountKeyTransfer,
+  recipientX25519PrivateKey: CryptoKey,
+  input: Readonly<{
+    readonly serverProfileId: string;
+    readonly userId: string;
+    readonly device: Readonly<{
+      readonly deviceId: string;
+      readonly encryptionPublicKey: Uint8Array;
+      readonly signingPublicKey: Uint8Array;
+    }>;
+    readonly nowMs: number;
+    /** The service's latest Account Device roster for this User. */
+    readonly roster: Uint8Array | null;
+    /** The own account identity this installation pinned, if any. */
+    readonly expectedIdentity: Uint8Array | null;
+  }>,
+): Promise<
+  Readonly<{
+    readonly accountMasterKey: Uint8Array;
+    readonly identity: Uint8Array;
+    readonly roster: AccountDeviceRoster;
+  }>
+> => {
+  const refuse = (): never => {
+    throw new AccountKeyVerificationError(
+      "the Account Key Transfer is not vouched for by this account's Device roster",
+    );
+  };
+  const object = transfer.object;
+  if (object.get(1) !== ACCOUNT_KEY_TRANSFER_KIND || input.roster === null)
+    return refuse();
+  const field = (key: number): Uint8Array => {
+    const value = object.get(key);
+    return value instanceof Uint8Array ? value : refuse();
+  };
+  const expiresAt = object.get(33);
+  if (
+    !sameKeyBytes(field(8), uuidToBytes(input.serverProfileId)) ||
+    !sameKeyBytes(field(9), uuidToBytes(input.userId)) ||
+    !sameKeyBytes(field(25), uuidToBytes(input.device.deviceId)) ||
+    field(10).length !== 16 ||
+    (typeof expiresAt !== "number" && typeof expiresAt !== "bigint") ||
+    Number(expiresAt) <= input.nowMs ||
+    !sameKeyBytes(await sha384(field(47)), field(48))
+  )
+    return refuse();
+  const requiredField = (key: number): CborValue => {
+    const value = object.get(key);
+    return value === undefined ? refuse() : value;
+  };
+  let accountMasterKey: Uint8Array;
+  try {
+    accountMasterKey = await open(
+      canonicalEncode(
+        new Map<number, CborValue>(
+          [0, 44, 45, 46, 47, 48, 71, 72].map((key) => [
+            key,
+            requiredField(key),
+          ]),
+        ),
+      ),
+      recipientX25519PrivateKey,
+      associatedDataFor(object, ACCOUNT_KEY_TRANSFER_KIND),
+    );
+  } catch {
+    return refuse();
+  }
+  try {
+    if (accountMasterKey.length !== 32) return refuse();
+    const { identity } = await deriveAccountSigningKey(accountMasterKey, {
+      serverProfileId: input.serverProfileId,
+      userId: input.userId,
+    });
+    if (
+      input.expectedIdentity !== null &&
+      !sameKeyBytes(identity, input.expectedIdentity)
+    )
+      return refuse();
+    let roster: AccountDeviceRoster;
+    try {
+      roster = await verifyAccountDeviceRoster(input.roster, {
+        serverProfileId: input.serverProfileId,
+        userId: input.userId,
+        identity,
+      });
+    } catch {
+      return refuse();
+    }
+    const senderId = bytesToUuidText(field(10));
+    const sender = roster.devices.find(
+      (device) =>
+        device.deviceId === senderId && device.revokedAtMs === undefined,
+    );
+    const self = roster.devices.find(
+      (device) =>
+        device.deviceId === input.device.deviceId.toLowerCase() &&
+        device.revokedAtMs === undefined,
+    );
+    if (
+      !sender ||
+      !(await isSignedByTrustedKey(object, [sender.signingPublicKey])) ||
+      !self ||
+      !sameKeyBytes(
+        self.encryptionPublicKey,
+        input.device.encryptionPublicKey,
+      ) ||
+      !sameKeyBytes(self.signingPublicKey, input.device.signingPublicKey)
+    )
+      return refuse();
+    return Object.freeze({ accountMasterKey, identity, roster });
+  } catch (error) {
+    accountMasterKey.fill(0);
+    throw error;
+  }
 };
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
