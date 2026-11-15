@@ -40,4 +40,10 @@ export const subprocessors: readonly Readonly<{
     purpose: "Database backups",
     location: "United States (US East)",
   },
+  {
+    name: "Resend, Inc.",
+    purpose:
+      "Transactional email delivery (invitations and key-sharing notices)",
+    location: "United States",
+  },
 ];
