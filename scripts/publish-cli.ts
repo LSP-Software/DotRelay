@@ -69,6 +69,7 @@ export const publishCommand = (
   "--tag",
   tag,
   "--provenance",
+  "--ignore-scripts",
   "--registry=https://registry.npmjs.org/",
 ];
 

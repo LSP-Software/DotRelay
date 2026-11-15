@@ -42,5 +42,5 @@ The repository uses Bun's built-in `bun fmt` and `bun lint` as its formatter and
 Prettier are not part of the toolchain. Bun's canary channel is pinned because the built-in linter
 is not enabled in stable releases yet; `bun check` and `bun fmt` work on both.
 
-The required security gate is `bun run security:audit`; CI runs it with network access to the Bun
-advisory service. Dependency updates are never auto-merged.
+The required security gate is `bun run security:audit`; CI and the release workflow's verify job
+run it with network access to the Bun advisory service. Dependency updates are never auto-merged.

@@ -29,6 +29,11 @@ image, publish and production deploy jobs check after the environment gate that 
 equals the tagged commit and that the report hash is well formed, and refuse to continue otherwise.
 The publish job binds both values into the release evidence.
 
+The release's verify job runs `bun run security:audit` on the tagged commit. The packaged CLI
+binaries are executed only by the `smoke-cli-package` job, which has read-only permissions, no
+environment and no secrets; the publish job, which holds write, OIDC and attestation permissions,
+never runs them, and `npm pack` and `npm publish` there run with `--ignore-scripts`.
+
 Alpha, beta and rc tags are versions of the production service at `dotrelay.dev`: every approved
 `v*` tag builds for the production origins and deploys production. Prereleases publish versioned
 images and `latest-alpha`, never `latest-stable`, and skip only the independent-review check, so
