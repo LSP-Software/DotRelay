@@ -369,20 +369,21 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Unlock this Device by recovering the account's Account Master Key, either from a Recovery Code entered on this machine or from an Account Key Transfer created by a trusted Device or browser.",
     notes: [
       "The Recovery Code is entered at a hidden prompt (or piped on stdin, or read from --recovery-code-file <path>); it is never placed on the command line and never sent to the Server Profile.",
-      "--no-input never prompts: pass --recovery-code-file or --transfer explicitly.",
+      "--no-input never prompts: pass --recovery-code-file or --transfer explicitly. With --no-input, --transfer needs the whole transfer code, not a bare transfer id.",
       "Passkey and encryption password unlock in a browser, which then hands the key to this machine as a transfer.",
     ],
     options: {
       recoveryCodeFile:
         "path to a 0600 file holding the Recovery Code (13 groups of 4 characters); automation channel",
-      transfer: "Account Key Transfer id to accept",
+      transfer:
+        "the transfer code the sending Device printed: the transfer id, a dot, and the account fingerprint this Device checks",
       profile: "Server Profile to recover onto (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
     examples: [
       "dotrelay device recover",
       "dotrelay device recover --recovery-code-file <path-to-code>",
-      "dotrelay device recover --transfer <transfer-id>",
+      "dotrelay device recover --transfer <transfer-code>",
     ],
   },
   "device setup": {
@@ -400,12 +401,13 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   "device transfer": {
     about:
-      "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <id>. The key stays on this Device; transfers are an addition, not a move.",
+      "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <transfer-code>. The key stays on this Device; transfers are an addition, not a move.",
     notes: [
       "Without --to, the command lists this account's other Devices and you choose one. --no-input requires --to.",
       "The receiving Device id comes from that list, from dotrelay status, or from the service, and must be an active Device for the same account.",
+      "The key is sealed only to a Device your signed Device list includes. A Device that is not listed yet shows the key fingerprint the service reports: compare it with dotrelay device list on that Device, and confirming adds it to the list. --no-input refuses an unlisted Device.",
       "The transfer stays retryable until the receiving Device acknowledges it or it expires. A lost response can be accepted again; after acknowledgement, or once it expires, it must be created again.",
-      "The command prints the full transfer ID. Paste it into Recovery on the receiving device, or pass it to dotrelay device recover --transfer on that device.",
+      "The command prints the transfer code: the transfer id, a dot, and this account's fingerprint. Paste it into Recovery on the receiving device, or pass it to dotrelay device recover --transfer on that device, which checks the fingerprint.",
     ],
     options: {
       to: "receiving Device id to seal the transfer for (required with --no-input)",
@@ -590,7 +592,8 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
   from: "input file",
   recoveryCodeFile:
     "path to a file holding the Recovery Code that unlocks the account",
-  transfer: "Account Key Transfer id to accept",
+  transfer:
+    "the transfer code the sending Device printed: the transfer id, a dot, and the account fingerprint this Device checks",
   to: "receiving Device id to seal an account-key transfer for",
   wrapperId: "account-key wrapper id to revoke",
   team: "Team id used to resolve the Project",
@@ -619,7 +622,7 @@ const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   output: " <file>",
   from: " <file>",
   recoveryCodeFile: " <path>",
-  transfer: " <transfer-id>",
+  transfer: " <transfer-code>",
   to: " <peer-device-id>",
   wrapperId: " <wrapper-id>",
   team: " <team-id>",

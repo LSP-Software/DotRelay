@@ -439,7 +439,7 @@ export const recoverAccountKey = async (
   const hasTransfer = input.transferId !== undefined;
   if (hasCodeFile && hasTransfer)
     throw new CliInvocationError(
-      "device recover accepts either --recovery-code-file <path> or --transfer <transfer-id>, not both",
+      "device recover accepts either --recovery-code-file <path> or --transfer <transfer-code>, not both",
     );
   try {
     await enrollFirstDevice(options);

@@ -116,8 +116,15 @@ Epoch Key, and every way a key reaches a client is gated below.
   `device transfer --no-input` refuses a target the roster does not list.
 - The pin file format stays version 1 with an optional `projects` map and an optional `confirmed`
   flag per teammate. An older client that rewrites the file drops both, which loses protection but
-  never trust.
-- Ship the API, web and CLI together: the protocol accepts lane format 2.
+  never trust. Teammates pinned before this change start unconfirmed, so a grant from one of them
+  waits until the user confirms their fingerprint.
+- A roster published before this change may list every Device the service reported at the time.
+  Nothing removes those entries; a Device that should not be there is revoked like any other, which
+  marks it revoked in the next roster version.
+- A client from before this change opens every lane with the format-1 associated data, so it
+  reports a Value that an updated client wrote as unreadable. Update the web app and the CLI
+  together. An API from before this change already stores format-2 lanes; one with this change also
+  refuses an unknown format.
 - Residual risks are unchanged: a Recovery Code restore trusts the roster the service serves at
   that moment, Membership windows come from the service, and a new Member must trust what the
   service says about the Team until they confirm fingerprints.
