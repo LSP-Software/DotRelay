@@ -2337,7 +2337,8 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
@@ -2695,7 +2696,8 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
