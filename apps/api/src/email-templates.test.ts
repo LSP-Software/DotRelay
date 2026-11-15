@@ -83,3 +83,23 @@ test("names are folded onto one bounded line", () => {
   expect(clean("a".repeat(150))).toHaveLength(100);
   expect(escapeHtml(`<&>"'`)).toBe("&lt;&amp;&gt;&quot;&#39;");
 });
+
+test("the share-keys hint names the Member's login only when it is well-formed", () => {
+  const accepted = (memberLogin: string | null) =>
+    renderInvitationAcceptedEmail({
+      teamName: "Ops",
+      memberName: "Ada",
+      memberUserId: "66666666-6666-4666-8666-666666666666",
+      memberLogin,
+      teamId: "11111111-1111-4111-8111-111111111111",
+      membersUrl: "https://dotrelay.dev/workspace",
+      supportAddress: support,
+    }).text;
+  expect(accepted("ada-lovelace")).toContain(
+    "dotrelay team share-keys ada-lovelace --team 11111111-1111-4111-8111-111111111111",
+  );
+  for (const login of [null, "ada; rm -rf ~", "-ada", "a".repeat(40)])
+    expect(accepted(login)).toContain(
+      "dotrelay team share-keys 66666666-6666-4666-8666-666666666666 --team",
+    );
+});

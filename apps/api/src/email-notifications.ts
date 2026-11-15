@@ -276,9 +276,17 @@ export const createEmailNotifier = ({
         userId: true,
         teamId: true,
         team: { select: { name: true } },
+        user: { select: { githubSubject: true } },
       },
     });
     if (!membership) return { deliveries: [], skipped: ["no_recipient"] };
+    const memberLogin = await database.gitHubLogin
+      .findUnique({
+        where: { githubSubject: membership.user.githubSubject },
+        select: { login: true },
+      })
+      .then((row) => row?.login ?? null)
+      .catch(() => null);
     const administrators = await database.membership.findMany({
       where: {
         teamId: membership.teamId,
@@ -298,6 +306,7 @@ export const createEmailNotifier = ({
       teamName: membership.team.name,
       memberName: await displayNameFor(membership.userId),
       memberUserId: membership.userId,
+      memberLogin,
       teamId: membership.teamId,
       membersUrl: webUrl("/workspace", {
         team: membership.teamId,

@@ -142,11 +142,15 @@ export const renderKeysSharedEmail = (
   });
 };
 
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
 export const renderInvitationAcceptedEmail = (
   input: Readonly<{
     readonly teamName: string;
     readonly memberName: string | null;
     readonly memberUserId: string;
+    // The cached GitHub login (github_logins), when one is recorded.
+    readonly memberLogin?: string | null;
     readonly teamId: string;
     readonly membersUrl: string;
     readonly supportAddress: string;
@@ -154,6 +158,12 @@ export const renderInvitationAcceptedEmail = (
 ): RenderedEmail => {
   const teamName = clean(input.teamName);
   const member = input.memberName ? clean(input.memberName) : "A new Member";
+  // A login is friendlier than a User id, but only a well-formed one goes
+  // into a command line.
+  const shareKeysTarget =
+    input.memberLogin && GITHUB_LOGIN.test(input.memberLogin)
+      ? input.memberLogin
+      : input.memberUserId;
   return render({
     subject: `${member} joined ${teamName} and is waiting for Project keys`,
     heading: `${member} joined ${teamName}`,
@@ -161,7 +171,7 @@ export const renderInvitationAcceptedEmail = (
       `${member} accepted the invitation to the Team ${teamName}. They can't pull until an owner or admin shares the Project keys with them.`,
       "Use Share project keys in the Members view, or run:",
       {
-        code: `dotrelay team share-keys ${input.memberUserId} --team ${input.teamId}`,
+        code: `dotrelay team share-keys ${shareKeysTarget} --team ${input.teamId}`,
       },
     ],
     action: { label: "Open the Members view", url: input.membersUrl },

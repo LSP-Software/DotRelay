@@ -140,7 +140,10 @@ const database = {
   membership: {
     findUnique: async ({ where }: { where: { id: string } }) => {
       const membership = memberships.find((entry) => entry.id === where.id);
-      return membership ? { ...membership, team } : null;
+      const user = users.find((entry) => entry.id === membership?.userId);
+      return membership
+        ? { ...membership, team, user: { githubSubject: user?.githubSubject } }
+        : null;
     },
     findMany: async ({
       where,
@@ -161,6 +164,10 @@ const database = {
   },
   project: {
     findMany: async () => [{ githubRepositoryId: 4242n }],
+  },
+  gitHubLogin: {
+    findUnique: async ({ where }: { where: { githubSubject: string } }) =>
+      where.githubSubject === "4" ? { login: "ivy-invitee" } : null,
   },
 };
 
@@ -257,7 +264,7 @@ test("an acceptance emails each active owner and admin, separately, but not the 
     expect(message.html).toContain("&lt;b&gt;Ivy&lt;/b&gt; joined");
     expect(message.html).not.toContain("<b>Ivy</b>");
     expect(message.text).toContain(
-      `dotrelay team share-keys ${INVITEE} --team ${TEAM}`,
+      `dotrelay team share-keys ivy-invitee --team ${TEAM}`,
     );
     expect(message.text).toContain(
       `https://dotrelay.dev/workspace?team=${TEAM}&view=team`,
