@@ -9,6 +9,7 @@ import {
   protocolObjectFromFields,
   signProtocolObject,
 } from "@dotrelay/contracts";
+import { testDeviceProof } from "./device-proof-testing";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -52,7 +53,12 @@ const fixture = async () => {
     $executeRaw: async () => 0,
     $queryRaw: async (parts: TemplateStringsArray) =>
       parts.join("").includes("COUNT(*)") ? [{ count: 0n, bytes: 0n }] : [],
-    user: { upsert: async () => ({ id: owner }) },
+    user: {
+      upsert: async (input: { create: { githubSubject: string } }) => ({
+        id: owner,
+        githubSubject: input.create.githubSubject,
+      }),
+    },
     authAccount: { findFirst: async () => ({ accountId: "1001" }) },
     team: {
       findFirst: async () => ({ id: member.teamId, lifecycle: "ACTIVE" }),
@@ -199,7 +205,12 @@ const fixture = async () => {
     profile,
     database: database as never,
     auth: {
-      api: { getSession: async () => ({ user: { id: "auth-owner" } }) },
+      api: {
+        getSession: async () => ({
+          session: { id: "owner-session" },
+          user: { id: "auth-owner" },
+        }),
+      },
     } as never,
   });
   const key = crypto.getRandomValues(new Uint8Array(32));
@@ -210,6 +221,11 @@ const fixture = async () => {
     plan,
     projectKeys: new Map([[plan.projects[0]?.id ?? "", key]]),
   });
+  const proof = await testDeviceProof(profile, {
+    sessionId: "owner-session",
+    userId: owner,
+    deviceId,
+  });
   const send = (body: unknown = request) =>
     app.request(
       `${profile.origin}/api/v1/teams/${member.teamId}/memberships/${member.id}/provision`,
@@ -218,6 +234,7 @@ const fixture = async () => {
         headers: {
           "Content-Type": "application/json",
           "X-DotRelay-Device-Id": deviceId,
+          "X-DotRelay-Device-Proof": proof,
           "Idempotency-Key": request.operationId,
         },
         body: JSON.stringify(body),

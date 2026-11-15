@@ -68,8 +68,9 @@ const DEMO_GITHUB = {
   name: "demo-service",
   id: 99001122,
   token: "ghu_demo-github-token",
-  accountId: "demo-github-account",
-  subject: "demo-github-100001",
+  // The GitHub user id: sign-in records it as both the account id and the
+  // User's GitHub subject, which never changes afterwards.
+  accountId: "100001",
 } as const;
 
 // The whole run must finish in bounded time, even if a CLI process hangs
@@ -565,7 +566,7 @@ try {
       id: demoUserId,
       serverProfileId: profile.id,
       authSubject: authUserId,
-      githubSubject: DEMO_GITHUB.subject,
+      githubSubject: DEMO_GITHUB.accountId,
     },
   });
 

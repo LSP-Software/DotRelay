@@ -21,7 +21,10 @@ GitHub App authorization has no classic OAuth `scope=repo`. Classic OAuth/PAT
 credentials are refused by delegated access resolvers. Revoke old broad OAuth
 grants in GitHub settings, remove their stored account grants and sign in with
 the App again; changing the configuration alone does not revoke GitHub tokens.
-Existing Repository Linkages retain their stable identities. Never export tokens
+Existing Repository Linkages retain their stable identities. Linking a new Project resolves the
+repository with the acting User's own Delegated GitHub Access, and the repository names shown in
+the workspace catalog are cached per viewer, so one User's access never reveals a private
+repository's name to another. Never export tokens
 to the CLI or browser. App registration/installation permissions and token expiry
 must be checked by the operator with an actual test installation before launch.
 

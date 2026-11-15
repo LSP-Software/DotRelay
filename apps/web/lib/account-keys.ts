@@ -18,11 +18,17 @@ import {
   sha384,
   uuidToBytes,
 } from "@dotrelay/contracts";
+import {
+  DeviceProofRequestError,
+  fetchWithDeviceProof,
+  knownDeviceProof,
+} from "./device-proof";
 import type { WorkspaceBoundary } from "./workspace-boundary";
 
 // Browser-side client for the account-key protocol routes
-// (/api/v1/account-keys/*). The routes authenticate a session PLUS an active
-// browser Device (X-DotRelay-Device-Id), and every mutation needs an
+// (/api/v1/account-keys/*). The routes authenticate a session PLUS a proven
+// active browser Device (X-DotRelay-Device-Proof, ADR 0020); an actor with
+// no Device id acts with the session alone. Every mutation needs an
 // Idempotency-Key that equals body.operationId. Callers keep the
 // operationId stable across retries of the same logical attempt so a failed
 // commit replays instead of double-publishing.
@@ -92,18 +98,44 @@ const readProblemCode = async (response: Response): Promise<string | null> => {
   }
 };
 
+// The actor's Device proof session, when the actor acts as a Device.
+const actorProof = (actor: AccountKeyActor) =>
+  actor.deviceId ? knownDeviceProof(actor.origin, actor.deviceId) : undefined;
+
+// A refused Device proof surfaces as the service's own problem code.
+const proven = async (
+  actor: AccountKeyActor,
+  path: string,
+  init: RequestInit,
+): Promise<Response> => {
+  try {
+    return await fetchWithDeviceProof(
+      actorProof(actor),
+      `${actor.origin}${path}`,
+      init,
+    );
+  } catch (error) {
+    if (error instanceof DeviceProofRequestError)
+      throw new AccountKeyRequestError(
+        error.code,
+        "The server rejected the request.",
+      );
+    throw error;
+  }
+};
+
 const jsonPost = async (
   actor: AccountKeyActor,
   path: string,
   operationId: string,
   body: Readonly<Record<string, unknown>>,
 ): Promise<Record<string, unknown>> => {
-  const response = await fetch(`${actor.origin}${path}`, {
+  const response = await proven(actor, path, {
     method: "POST",
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      "X-DotRelay-Device-Id": actor.deviceId,
+      ...(actor.deviceId ? { "X-DotRelay-Device-Id": actor.deviceId } : {}),
       "Idempotency-Key": operationId,
     },
     body: JSON.stringify({ ...body, operationId }),
@@ -120,9 +152,9 @@ const fetchJson = async (
   actor: AccountKeyActor,
   path: string,
 ): Promise<Record<string, unknown>> => {
-  const response = await fetch(`${actor.origin}${path}`, {
+  const response = await proven(actor, path, {
     credentials: "include",
-    headers: { "X-DotRelay-Device-Id": actor.deviceId },
+    headers: actor.deviceId ? { "X-DotRelay-Device-Id": actor.deviceId } : {},
     cache: "no-store",
   });
   if (!response.ok)

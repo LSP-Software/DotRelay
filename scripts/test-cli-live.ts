@@ -19,6 +19,11 @@ import {
   bytesToUuid,
   createCapabilitiesDocument,
   createProblem,
+  DEVICE_PROOF_CHALLENGE_BYTES,
+  DEVICE_PROOF_TOKEN_BYTES,
+  decodeDeviceProofValue,
+  deviceProofMessage,
+  encodeDeviceProofValue,
   encodeSyncPage,
   parseProtocolObject,
   type ServerProfilePin,
@@ -199,9 +204,82 @@ const boundary = () => ({
   catalog: { teams: [], projects: [] },
 });
 
+// Device proofs (ADR 0020): the fixture signs nothing, but it issues proofs
+// only for a signature by the active Device's registered key, and accepts a
+// Device-scoped request only with a proof it issued for that Device.
+const issuedChallenges = new Set<string>();
+const issuedProofs = new Map<string, string>();
+
+const provenDevice = (request: Request): string | null => {
+  const proof = request.headers.get("X-DotRelay-Device-Proof");
+  const deviceId = proof ? issuedProofs.get(proof) : undefined;
+  return deviceId !== undefined &&
+    request.headers.get("X-DotRelay-Device-Id") === deviceId
+    ? deviceId
+    : null;
+};
+
+const answerDeviceProof = async (
+  request: Request,
+  pathname: string,
+): Promise<Response | null> => {
+  if (request.method !== "POST") return null;
+  if (pathname === "/api/v1/devices/proofs/challenges") {
+    const challenge = encodeDeviceProofValue(
+      crypto.getRandomValues(new Uint8Array(DEVICE_PROOF_CHALLENGE_BYTES)),
+    );
+    issuedChallenges.add(challenge);
+    return jsonResponse({ challenge, expiresIn: 120 }, 201);
+  }
+  if (pathname !== "/api/v1/devices/proofs") return null;
+  const body = await readJson(request);
+  if (
+    !uuid(body.deviceId) ||
+    typeof body.challenge !== "string" ||
+    !issuedChallenges.has(body.challenge) ||
+    typeof body.signature !== "string"
+  )
+    return problemResponse("invalid_request");
+  if (
+    !state.active ||
+    body.deviceId !== state.deviceId ||
+    !state.signingPublicKey
+  )
+    return problemResponse("device_not_active");
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(Buffer.from(state.signingPublicKey, "hex")),
+    { name: "Ed25519" },
+    false,
+    ["verify"],
+  );
+  const verified = await crypto.subtle.verify(
+    "Ed25519",
+    key,
+    new Uint8Array(Buffer.from(body.signature, "base64")),
+    deviceProofMessage({
+      serverProfileId,
+      userId,
+      deviceId: body.deviceId,
+      challenge: decodeDeviceProofValue(
+        body.challenge,
+        DEVICE_PROOF_CHALLENGE_BYTES,
+      ),
+    }),
+  );
+  if (!verified) return problemResponse("invalid_crypto_object");
+  const proof = encodeDeviceProofValue(
+    crypto.getRandomValues(new Uint8Array(DEVICE_PROOF_TOKEN_BYTES)),
+  );
+  issuedProofs.set(proof, body.deviceId);
+  return jsonResponse(
+    { token: proof, deviceId: body.deviceId, expiresIn: 300 },
+    201,
+  );
+};
+
 const activeDevice = (request: Request): boolean =>
-  state.active &&
-  request.headers.get("X-DotRelay-Device-Id") === state.deviceId;
+  state.active && provenDevice(request) === state.deviceId;
 
 const syncPage = (trustedRevisionId: string): SyncPageWire => {
   const previous = state.revisions.at(-1);
@@ -288,6 +366,8 @@ const handle = async (request: Request): Promise<Response> => {
     );
   if (!authenticated(request))
     return problemResponse("authentication_required");
+  const proofAnswer = await answerDeviceProof(request, url.pathname);
+  if (proofAnswer) return proofAnswer;
   if (url.pathname === "/api/v1/session" && request.method === "GET")
     return jsonResponse({
       authenticated: true,
@@ -471,7 +551,7 @@ const handle = async (request: Request): Promise<Response> => {
     request.method === "POST"
   ) {
     const body = await readJson(request);
-    if (request.headers.get("X-DotRelay-Device-Id") !== state.deviceId)
+    if (provenDevice(request) !== state.deviceId)
       return problemResponse("forbidden");
     if (
       typeof body.object !== "string" ||
@@ -528,7 +608,7 @@ const handle = async (request: Request): Promise<Response> => {
     request.method === "POST"
   ) {
     const body = await readJson(request);
-    if (request.headers.get("X-DotRelay-Device-Id") !== state.deviceId)
+    if (provenDevice(request) !== state.deviceId)
       return problemResponse("forbidden");
     if (
       typeof body.object !== "string" ||
@@ -583,7 +663,7 @@ const handle = async (request: Request): Promise<Response> => {
   ) {
     const body = await readJson(request);
     if (
-      request.headers.get("X-DotRelay-Device-Id") !== state.deviceId ||
+      provenDevice(request) !== state.deviceId ||
       typeof body.object !== "string" ||
       typeof body.certificateObject !== "string" ||
       !uuid(body.enrolledDeviceId) ||
@@ -609,7 +689,7 @@ const handle = async (request: Request): Promise<Response> => {
   ) {
     const body = await readJson(request);
     if (
-      request.headers.get("X-DotRelay-Device-Id") !== state.deviceId ||
+      provenDevice(request) !== state.deviceId ||
       !state.enrollmentApproved ||
       typeof body.enrollmentObject !== "string" ||
       enrollmentMatch[1] !== state.enrollmentId

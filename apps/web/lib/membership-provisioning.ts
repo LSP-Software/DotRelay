@@ -17,6 +17,7 @@ import {
   assertProvisioningRecipients,
   resolveProvisioningTrust,
 } from "./account-trust";
+import { browserDeviceProof, fetchWithDeviceProof } from "./device-proof";
 import {
   BROWSER_DEVICE_ID_HEADER,
   fetchWorkspaceBoundary,
@@ -42,11 +43,17 @@ export const provisionTeamMember = async (
     throw new Error("Unlock this browser before sharing project keys.");
   const path = `/api/v1/teams/${input.teamId}/memberships/${input.membershipId}/provision`;
   const headers = { [BROWSER_DEVICE_ID_HEADER]: deviceId };
-  const response = await fetch(`${input.apiOrigin}${path}`, {
-    headers,
-    credentials: "include",
-    cache: "no-store",
+  // Every request below acts as this browser's Device (ADR 0020).
+  const deviceProof = browserDeviceProof({
+    apiOrigin: input.apiOrigin,
+    pin: { origin: boundary.profile.origin, serverProfileId },
+    deviceId,
   });
+  const response = await fetchWithDeviceProof(
+    deviceProof,
+    `${input.apiOrigin}${path}`,
+    { headers, credentials: "include", cache: "no-store" },
+  );
   if (!response.ok) {
     const problem = await response.json().catch(() => null);
     throw new Error(
@@ -92,7 +99,7 @@ export const provisionTeamMember = async (
   try {
     for (const project of plan.projects) {
       const scoped = await fetchWorkspaceBoundary(input.profileId, {
-        deviceId,
+        device: deviceProof,
         environmentId: project.environmentId,
       });
       if (
@@ -135,16 +142,20 @@ export const provisionTeamMember = async (
       plan,
       projectKeys,
     });
-    const committed = await fetch(`${input.apiOrigin}${path}`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        ...headers,
-        "Content-Type": "application/json",
-        "Idempotency-Key": request.operationId,
+    const committed = await fetchWithDeviceProof(
+      deviceProof,
+      `${input.apiOrigin}${path}`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+          "Idempotency-Key": request.operationId,
+        },
+        body: JSON.stringify(request),
       },
-      body: JSON.stringify(request),
-    });
+    );
     if (!committed.ok)
       throw new Error(
         "Access couldn't be activated. Refresh the member list before trying again.",

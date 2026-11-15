@@ -395,6 +395,36 @@ export const registerAdministrationRoutes = (
       const operationId = parseIdempotencyKey(
         context.req.header("Idempotency-Key"),
       );
+      if (
+        !repositoryOwnerPattern.test(body.repositoryOwner) ||
+        !repositoryNamePattern.test(body.repositoryName)
+      )
+        return responseProblem(context, "invalid_request");
+      // The Repository Linkage needs the acting User's own access to the
+      // repository (ADR 0003): the identity must be the one their Delegated
+      // GitHub Access resolves owner/name to. Otherwise anyone could link
+      // another User's private repository id and see its name.
+      const resolved = await resolveGitHubRepositoryIdentity(
+        auth,
+        actor.authSubject,
+        { owner: body.repositoryOwner, name: body.repositoryName },
+        githubFetch ? { fetch: githubFetch } : {},
+      );
+      if (resolved.code !== "resolved") {
+        const problem = createProblem(
+          resolved.code,
+          resolved.code === "github_rate_limited" &&
+            resolved.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: resolved.retryAfterSeconds }
+            : undefined,
+        );
+        return context.json(problem, problem.status as ContentfulStatusCode, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      if (resolved.githubRepositoryId !== githubRepositoryId.toString())
+        return responseProblem(context, "repository_access_denied");
       const commandBytes = new TextEncoder().encode(
         JSON.stringify({
           action: "project.link",

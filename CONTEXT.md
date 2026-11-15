@@ -29,6 +29,12 @@ Master Key derives the same way. It never changes for a User on one Server Profi
 identity for a known teammate is never routine.
 _Avoid_: User key, account fingerprint (the fingerprint is only its short display form)
 
+**Device Proof**:
+A short-lived token, bound to one session and one active Device, that the Device obtains by signing
+a service challenge with its Ed25519 key. Every Device-scoped request carries it; a session without
+one acts as no Device, whatever Device id it names.
+_Avoid_: Device header, device token, Device session
+
 **Account Device Roster**:
 The versioned list of a User's Devices and their public keys, active or revoked, signed by the
 User's account signing key. Clients trust a Device only when the roster of its User lists it.

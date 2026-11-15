@@ -21,6 +21,7 @@ import {
   type DatabaseClient,
 } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -66,12 +67,17 @@ const createAuthStub = (): DotRelayAuth =>
         headers,
       }: {
         headers: Headers;
-      }): Promise<null | { user: { id: string } }> => {
+      }): Promise<null | {
+        session: { id: string };
+        user: { id: string };
+      }> => {
         const authorization = headers.get("Authorization");
         if (!authorization?.startsWith("Bearer ")) return null;
         const token = authorization.slice("Bearer ".length);
-        if (token === USER1_TOKEN) return { user: { id: authSubject1 } };
-        if (token === USER2_TOKEN) return { user: { id: authSubject2 } };
+        if (token === USER1_TOKEN)
+          return { session: { id: token }, user: { id: authSubject1 } };
+        if (token === USER2_TOKEN)
+          return { session: { id: token }, user: { id: authSubject2 } };
         return null;
       },
     },
@@ -264,7 +270,15 @@ const beginEnrollmentRequest = (
     }),
   });
 
-const approveEnrollmentRequest = (
+// A Device proof (ADR 0020) for the token's session and the named Device.
+const proofFor = (token: string, deviceId: string) =>
+  testDeviceProof(profile, {
+    sessionId: token,
+    userId: token === USER1_TOKEN ? user1.id : user2.id,
+    deviceId,
+  });
+
+const approveEnrollmentRequest = async (
   token: string,
   params: Readonly<{
     readonly operationId: string;
@@ -286,6 +300,10 @@ const approveEnrollmentRequest = (
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
         "X-DotRelay-Device-Id": params.approverDeviceId,
+        "X-DotRelay-Device-Proof": await proofFor(
+          token,
+          params.approverDeviceId,
+        ),
         "Idempotency-Key": params.operationId,
       },
       body: JSON.stringify({
@@ -299,7 +317,7 @@ const approveEnrollmentRequest = (
     },
   );
 
-const completeEnrollmentRequest = (
+const completeEnrollmentRequest = async (
   token: string,
   params: Readonly<{
     readonly operationId: string;
@@ -318,6 +336,10 @@ const completeEnrollmentRequest = (
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
         "X-DotRelay-Device-Id": params.initiatorDeviceId,
+        "X-DotRelay-Device-Proof": await proofFor(
+          token,
+          params.initiatorDeviceId,
+        ),
         "Idempotency-Key": params.operationId,
       },
       body: JSON.stringify({

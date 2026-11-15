@@ -51,6 +51,7 @@ import {
   bytesToHex,
   collectSigningTrust,
   createDeviceAdmin,
+  deviceProofOption,
   fromBase64,
   opaqueEnvironmentId,
   parseBoundary,
@@ -346,6 +347,7 @@ export const loadWorkflowSession = async (
       createProtocolTransport({
         origin: options.profile.origin,
         authorization: `Bearer ${token}`,
+        ...deviceProofOption(createDeviceAdmin(options, deviceId)),
         ...(options.fetch ? { fetch: options.fetch as never } : {}),
       })
         .cancel({ operationId, deviceId })
@@ -608,6 +610,7 @@ export const loadWorkflowSession = async (
     },
     origin: options.profile.origin,
     authorization: `Bearer ${token}`,
+    ...deviceProofOption(createDeviceAdmin(options, deviceId)),
     ...(options.fetch ? { fetch: options.fetch as never } : {}),
   });
   const signingPublicKey = await exportSigningPublicKey(deviceSigningPublicKey);

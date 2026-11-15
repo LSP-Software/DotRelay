@@ -2,7 +2,6 @@ import {
   CBOR_LIMITS,
   ContractError,
   createProblem,
-  DEVICE_ID_HEADER,
   encodeSyncPage,
   formatSyncCursor,
   PROTOCOL_MEDIA_TYPE,
@@ -192,8 +191,6 @@ export const registerProtocolRoutes = (
       });
     },
   });
-
-  void DEVICE_ID_HEADER;
 
   app.post(
     "/api/v1/operations/:operationId/begin",
@@ -559,8 +556,27 @@ export const registerProtocolRoutes = (
         where: { id: finalizeRequest.environmentId },
         include: { project: true },
       });
-      if (!environment) {
+      // Membership comes before anything about the Environment's state: a
+      // User outside the Team, including a removed Member, learns nothing,
+      // not even that the Environment exists.
+      const membership = environment
+        ? await database.membership.findFirst({
+            where: {
+              teamId: environment.project.teamId,
+              userId: actor.userId,
+            },
+            select: { lifecycle: true },
+          })
+        : null;
+      if (!environment || !membership || membership.lifecycle === "REMOVED") {
         const problem = respondProblem("resource_not_found");
+        return context.json(problem.body, problem.status, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      if (membership.lifecycle !== "ACTIVE") {
+        const problem = respondProblem("membership_not_active");
         return context.json(problem.body, problem.status, {
           "Cache-Control": "no-store",
           "Content-Type": "application/problem+json",

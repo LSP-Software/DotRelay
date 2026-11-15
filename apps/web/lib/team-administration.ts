@@ -1,3 +1,8 @@
+import {
+  DeviceProofRequestError,
+  fetchWithDeviceProof,
+  knownDeviceProof,
+} from "./device-proof";
 import { rateLimitedMessage, retryAfterSecondsFrom } from "./rate-limit";
 import {
   BROWSER_DEVICE_ID_HEADER,
@@ -95,6 +100,8 @@ const problemMessage = (
       return "Sign in again to manage this team.";
     case "device_not_active":
       return "Set up this browser before managing team members.";
+    case "device_proof_required":
+      return "This browser couldn't prove its device to the server. Reload the page and try again.";
     case "invalid_request":
       return "That value didn't look right. Check it and try again.";
     case "resource_not_found":
@@ -142,12 +149,18 @@ const call = async (
   init?: RequestInit,
 ): Promise<FetchOutcome> => {
   let response: Response;
+  // A request that names this browser's Device must also prove it
+  // (ADR 0020); session-only requests go out as they are.
+  const deviceId = new Headers(init?.headers).get(BROWSER_DEVICE_ID_HEADER);
   try {
-    response = await fetch(`${apiOrigin}${path}`, {
-      credentials: "include",
-      ...init,
-    });
-  } catch {
+    response = await fetchWithDeviceProof(
+      deviceId ? knownDeviceProof(apiOrigin, deviceId) : undefined,
+      `${apiOrigin}${path}`,
+      { credentials: "include", ...init },
+    );
+  } catch (error) {
+    if (error instanceof DeviceProofRequestError)
+      return { ok: false, message: problemMessage(error.code) };
     return {
       ok: false,
       message:
@@ -642,7 +655,8 @@ export const createProjectEnvironment = async (
   if (invalid) return failure(invalid);
   let response: Response;
   try {
-    response = await fetch(
+    response = await fetchWithDeviceProof(
+      deviceId ? knownDeviceProof(apiOrigin, deviceId) : undefined,
       `${apiOrigin}/api/v1/projects/${projectId}/environments`,
       {
         method: "POST",
@@ -655,7 +669,9 @@ export const createProjectEnvironment = async (
         body: JSON.stringify({ label: label.trim() }),
       },
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof DeviceProofRequestError)
+      return failure(problemMessage(error.code));
     return failure(
       "We couldn't reach the server. Check your connection and try again.",
     );

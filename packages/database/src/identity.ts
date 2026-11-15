@@ -18,8 +18,12 @@ export const resolveDotRelayUser = async (
     select: { accountId: true },
   });
   if (!account) return null;
-  const persist = () =>
-    database.user.upsert({
+  // The GitHub account that created the User is its identity: the recorded
+  // subject never changes, and a sign-in whose GitHub account differs from
+  // it (another account attached to the same login) is refused rather than
+  // taking the User over.
+  const persist = async () => {
+    const user = await database.user.upsert({
       where: {
         serverProfileId_authSubject: {
           serverProfileId: input.serverProfileId,
@@ -31,9 +35,11 @@ export const resolveDotRelayUser = async (
         authSubject: input.authSubject,
         githubSubject: account.accountId,
       },
-      update: { githubSubject: account.accountId },
-      select: { id: true },
+      update: {},
+      select: { id: true, githubSubject: true },
     });
+    return user.githubSubject === account.accountId ? { id: user.id } : null;
+  };
   try {
     return await persist();
   } catch (error) {

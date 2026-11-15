@@ -6,8 +6,10 @@ import {
   createEpochRotationArtifacts,
   deriveAccountSigningKey,
   createProjectEpochKeyLink,
+  createDeviceProofSession,
   createProtocolTransport,
   createPublicationArtifacts,
+  type DeviceProofSession,
   createVerifiedEnvironmentSession,
   openProjectEpochKeyChain,
   type ProtocolTransport,
@@ -65,7 +67,10 @@ const authStub = (): DotRelayAuth =>
     api: {
       getSession: async ({ headers }: { headers: Headers }) =>
         headers.get("Authorization") === `Bearer ${TOKEN}`
-          ? { user: { id: authSubject, name: "Chain Owner" } }
+          ? {
+              session: { id: "chain-owner-session" },
+              user: { id: authSubject, name: "Chain Owner" },
+            }
           : null,
     },
     $context: Promise.resolve({
@@ -110,6 +115,8 @@ let teamId = "";
 let projectId = "";
 let environmentId = "";
 let signing: CryptoKeyPair;
+// The Device proves itself through the real challenge and exchange routes.
+let deviceProof: DeviceProofSession;
 
 const boundary = async (): Promise<Record<string, unknown>> => {
   const response = await app.request(
@@ -118,7 +125,7 @@ const boundary = async (): Promise<Record<string, unknown>> => {
       headers: {
         Origin: profile.origin,
         Authorization: `Bearer ${TOKEN}`,
-        "X-DotRelay-Device-Id": deviceId,
+        ...(await deviceProof.headers()),
       },
     },
   );
@@ -126,7 +133,11 @@ const boundary = async (): Promise<Record<string, unknown>> => {
   return (await response.json()) as Record<string, unknown>;
 };
 
-const postLink = (operationId: string, objectId: string, bytes: Uint8Array) =>
+const postLink = async (
+  operationId: string,
+  objectId: string,
+  bytes: Uint8Array,
+) =>
   app.request(
     `${profile.origin}/api/v1/projects/${projectId}/epoch-key-links`,
     {
@@ -134,7 +145,7 @@ const postLink = (operationId: string, objectId: string, bytes: Uint8Array) =>
       headers: {
         Origin: profile.origin,
         Authorization: `Bearer ${TOKEN}`,
-        "X-DotRelay-Device-Id": deviceId,
+        ...(await deviceProof.headers()),
         "Idempotency-Key": operationId,
         "Content-Type": "application/json",
       },
@@ -242,9 +253,33 @@ integrationDescribe(
         throw new Error("project creation did not provision an environment");
       environmentId = created.environment.id;
       app = createApi({ database, profile, auth: authStub() });
+      deviceProof = createDeviceProofSession({
+        deviceId,
+        exchange: async (path, body) => {
+          const response = await app.request(`${profile.origin}${path}`, {
+            method: "POST",
+            headers: {
+              Origin: profile.origin,
+              Authorization: `Bearer ${TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+          });
+          if (!response.ok)
+            throw new Error(`Device proof exchange failed: ${response.status}`);
+          return response.json();
+        },
+        signer: async () => ({
+          serverProfileId: profile.id,
+          userId,
+          deviceId,
+          signingKey: signing.privateKey,
+        }),
+      });
       transport = createProtocolTransport({
         origin: profile.origin,
         authorization: `Bearer ${TOKEN}`,
+        deviceProof,
         fetch: (url, init) =>
           Promise.resolve(app.fetch(new Request(url, init as RequestInit))),
       });
@@ -565,7 +600,7 @@ integrationDescribe(
                 headers: {
                   Origin: profile.origin,
                   Authorization: `Bearer ${TOKEN}`,
-                  "X-DotRelay-Device-Id": deviceId,
+                  ...(await deviceProof.headers()),
                   "Idempotency-Key": operationId,
                   "Content-Type": "application/json",
                 },

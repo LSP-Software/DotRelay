@@ -250,6 +250,25 @@ export class PublicationRepository {
       include: { project: true },
     });
     if (!environment) throw new Error("Environment not found");
+    // Authorization comes before any check that reports the Environment's
+    // state (head, genesis, lifecycle, epoch), so a non-member learns none
+    // of it.
+    const device = await transaction.device.findFirst({
+      where: {
+        id: input.operation.actorDeviceId,
+        userId: input.operation.actorUserId,
+        lifecycle: "ACTIVE",
+      },
+    });
+    if (!device) throw new DeviceNotActiveError();
+    const membership = await transaction.membership.findFirst({
+      where: {
+        teamId: environment.project.teamId,
+        userId: input.operation.actorUserId,
+        lifecycle: "ACTIVE",
+      },
+    });
+    if (!membership) throw new MembershipNotActiveError();
     if (
       input.revision.mutation === "GENESIS" &&
       environment.currentHeadId !== null
@@ -288,22 +307,6 @@ export class PublicationRepository {
       throw new Error("genesis cannot carry a parent hash");
     }
 
-    const device = await transaction.device.findFirst({
-      where: {
-        id: input.operation.actorDeviceId,
-        userId: input.operation.actorUserId,
-        lifecycle: "ACTIVE",
-      },
-    });
-    if (!device) throw new DeviceNotActiveError();
-    const membership = await transaction.membership.findFirst({
-      where: {
-        teamId: environment.project.teamId,
-        userId: input.operation.actorUserId,
-        lifecycle: "ACTIVE",
-      },
-    });
-    if (!membership) throw new MembershipNotActiveError();
     // Every client judges the signing Device's and the author's Membership
     // windows, and the parent order, at the signed authored-at instant. A
     // Revision outside them would be committed yet refused by every reader,

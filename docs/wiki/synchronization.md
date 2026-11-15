@@ -12,7 +12,9 @@ Valkey endpoint; non-production skips enforcement when neither URL is set.
 
 1. **Begin** — `POST /api/v1/operations/:operationId/begin` with a CBOR command
    body, `Idempotency-Key` equal to the operation id,
-   `X-DotRelay-Operation-Kind`, and `X-DotRelay-Device-Id`.
+   `X-DotRelay-Operation-Kind`, `X-DotRelay-Device-Id`, and the Device proof in
+   `X-DotRelay-Device-Proof`. Every protocol route needs the proof
+   ([ADR 0020](../adr/0020-device-proof-of-possession.md)).
 2. **Stage** — `PUT /api/v1/operations/:operationId/staging/:objectId` uploads
    immutable lane and Revision objects for the operation.
 3. **Finalize** — `POST /api/v1/operations/:operationId/finalize` submits the
@@ -31,7 +33,10 @@ Valkey endpoint; non-production skips enforcement when neither URL is set.
 5. **Cancel** — `DELETE /api/v1/operations/:operationId` cancels an uncommitted
    staged operation.
 
-Publication and Rollback share the finalize route. The service verifies the
+Publication and Rollback share the finalize route. The service checks the
+actor's Membership in the Environment's Team before anything about the
+Environment's state: a User outside the Team, including a removed Member, gets
+`404 resource_not_found` and learns nothing of its head. It then verifies the
 Revision signature with the actor Device's Ed25519 public key before committing.
 `stale_head` problems include `headId` and `headHash` for client reconciliation.
 `stale_epoch` problems surface when an epoch transition no longer matches the

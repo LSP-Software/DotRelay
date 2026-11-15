@@ -52,7 +52,10 @@ current-head constraints, foreign keys, and append-only triggers that Prisma can
 
 Durable Users, Devices, Memberships, Membership periods, Projects, Environments, protocol objects,
 Revisions, grants, commitments, Operations, and Audit Facts are not physically deleted. Archival,
-Membership removal, and Device revocation are logical lifecycle changes. A removed Membership that
+Membership removal, and Device revocation are logical lifecycle changes. Device revocation is
+terminal: the `devices_lifecycle_guard` trigger refuses any update that moves a Device out of
+`REVOKED`, back to `PENDING`, or rewrites its activation time, revocation time, owner or keys
+([ADR 0021](../adr/0021-device-revocation-is-terminal.md)). A removed Membership that
 is invited back keeps its row; its finished period is first archived in the append-only
 `membership_periods` table so signing windows for earlier Revisions survive
 ([ADR 0017](../adr/0017-membership-periods-survive-reinvitation.md)). Removing an active Member or

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { MAX_PENDING_INVITATIONS_PER_TEAM } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -313,11 +314,17 @@ const createAuthStub = (): DotRelayAuth =>
         headers,
       }: {
         headers: Headers;
-      }): Promise<null | { user: { id: string } }> => {
+      }): Promise<null | {
+        session: { id: string };
+        user: { id: string };
+      }> => {
         const authorization = headers.get("Authorization");
         if (!authorization?.startsWith("Bearer ")) return null;
-        const userId = sessions.get(authorization.slice("Bearer ".length));
-        return userId === undefined ? null : { user: { id: userId } };
+        const token = authorization.slice("Bearer ".length);
+        const userId = sessions.get(token);
+        return userId === undefined
+          ? null
+          : { session: { id: token }, user: { id: userId } };
       },
     },
     $context: Promise.resolve({
@@ -793,13 +800,25 @@ const createTestApp = (options: { githubFetch?: typeof fetch } = {}) => {
   };
 };
 
-const request = (
+// A Device proof (ADR 0020) for the session's User and the named Device,
+// as the Device itself would obtain one.
+const proofFor = async (token: string, deviceId: string) => {
+  const authSubject = sessions.get(token);
+  const userId = users.find((user) => user.authSubject === authSubject)?.id;
+  return userId === undefined
+    ? "unknown-session"
+    : testDeviceProof(profile, { sessionId: token, userId, deviceId });
+};
+
+const request = async (
   testApp: ReturnType<typeof createTestApp>["testApp"],
   path: string,
   options: {
     method?: string;
     token?: string;
     deviceId?: string;
+    /** Names the Device without proving it. */
+    claimOnly?: boolean;
     body?: unknown;
     idempotencyKey?: string;
   } = {},
@@ -811,6 +830,14 @@ const request = (
       "Cache-Control": "no-store",
       ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
       ...(options.deviceId ? { "X-DotRelay-Device-Id": options.deviceId } : {}),
+      ...(options.deviceId && options.token && !options.claimOnly
+        ? {
+            "X-DotRelay-Device-Proof": await proofFor(
+              options.token,
+              options.deviceId,
+            ),
+          }
+        : {}),
       ...(options.idempotencyKey
         ? { "Idempotency-Key": options.idempotencyKey }
         : {}),
@@ -1135,8 +1162,8 @@ describe("Team membership and invitation routes", () => {
     expect(await response.json()).toMatchObject({ code: "forbidden" });
   });
 
-  test("invitation creation requires the browser Device, not just the session", async () => {
-    const { testApp } = createTestApp();
+  test("invitation creation requires a proven Device, not just the session", async () => {
+    const { testApp, createdInvitations } = createTestApp();
     const response = await request(
       testApp,
       `/api/v1/teams/${TEAM_A}/invitations`,
@@ -1147,9 +1174,29 @@ describe("Team membership and invitation routes", () => {
         body: { providerSubject: "583231" },
       },
     );
+    // A Device id claim without a Device proof is refused (A-1).
+    const claimed = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/invitations`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        claimOnly: true,
+        idempotencyKey: "f0000000-0000-4000-8000-000000000013",
+        body: { providerSubject: "583231" },
+      },
+    );
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ code: "invalid_request" });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      code: "device_proof_required",
+    });
+    expect(claimed.status).toBe(401);
+    expect(await claimed.json()).toMatchObject({
+      code: "device_proof_required",
+    });
+    expect(createdInvitations).toHaveLength(0);
   });
 
   test("an invitation must address a stable GitHub provider subject", async () => {
@@ -1649,7 +1696,7 @@ describe("Team membership role and removal routes", () => {
         body: {},
       },
     );
-    expect(noDevice.status).toBe(400);
+    expect(noDevice.status).toBe(401);
   });
 
   test("the invitee declines an invitation; nobody else can", async () => {
@@ -2000,7 +2047,7 @@ describe("Team membership role and removal routes", () => {
       [],
     );
   });
-  test("membership mutations require the browser Device, not just the session", async () => {
+  test("membership mutations require a proven Device, not just the session", async () => {
     const { testApp } = createTestApp();
     const reRole = await request(
       testApp,
@@ -2023,10 +2070,28 @@ describe("Team membership role and removal routes", () => {
       },
     );
 
-    expect(reRole.status).toBe(400);
-    expect(await reRole.json()).toMatchObject({ code: "invalid_request" });
-    expect(removal.status).toBe(400);
-    expect(await removal.json()).toMatchObject({ code: "invalid_request" });
+    const claimedRemoval = await request(
+      testApp,
+      `/api/v1/teams/${TEAM_A}/memberships/${MEMBER_M2}/remove`,
+      {
+        method: "POST",
+        token: "owner-token",
+        deviceId: DEVICE_OWNER,
+        claimOnly: true,
+        idempotencyKey: "f0000000-0000-4000-8000-000000000014",
+        body: {},
+      },
+    );
+
+    expect(reRole.status).toBe(401);
+    expect(await reRole.json()).toMatchObject({
+      code: "device_proof_required",
+    });
+    expect(removal.status).toBe(401);
+    expect(await removal.json()).toMatchObject({
+      code: "device_proof_required",
+    });
+    expect(claimedRemoval.status).toBe(401);
   });
 
   test("role changes validate the requested role and removals need a JSON body", async () => {

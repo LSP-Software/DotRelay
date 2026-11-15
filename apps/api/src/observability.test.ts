@@ -109,6 +109,61 @@ describe("API observability boundary", () => {
     expect(writes).toHaveLength(0);
   });
 
+  // A-7: anonymous requests write a bounded number of Security Request Log
+  // rows, per address and overall; requests from signed-in sessions are all
+  // recorded.
+  test("bounds anonymous Security Request Log writes per address and overall", async () => {
+    let time = Date.parse("2026-01-01T00:00:00.000Z");
+    const writes: unknown[][] = [];
+    const observability = createApiObservability(
+      {
+        $executeRaw: async (
+          _strings: TemplateStringsArray,
+          ...values: unknown[]
+        ) => {
+          writes.push(values);
+          return 1;
+        },
+      } as never,
+      {
+        diagnostics: createInMemoryDiagnosticSink(() => time),
+        now: () => new Date(time),
+        resolveClientIp: (request) =>
+          request.headers.get("X-Forwarded-For") ?? null,
+        anonymousLogBudget: { perAddress: 5, total: 12, windowMs: 60_000 },
+      },
+    );
+    const record = (address: string, authenticated: boolean) =>
+      observability.recordRequest({
+        request: new Request("https://relay.example/api/auth/get-session", {
+          headers: { "X-Forwarded-For": address },
+        }),
+        path: "/api/auth/get-session",
+        status: 401,
+        correlationId: createServerCorrelationId(),
+        durationMs: 1,
+        authenticated,
+      });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    for (let index = 0; index < 100; index += 1) record("192.0.2.10", false);
+    await settle();
+    expect(writes).toHaveLength(5);
+    // Signed-in requests are budgeted by the per-User limiter instead.
+    for (let index = 0; index < 20; index += 1) record("192.0.2.10", true);
+    await settle();
+    expect(writes).toHaveLength(25);
+    // Many addresses together stop at the overall cap.
+    for (let address = 1; address <= 50; address += 1)
+      record(`198.51.100.${address}`, false);
+    await settle();
+    expect(writes).toHaveLength(32);
+    // A new window starts a new budget.
+    time += 60_001;
+    for (let index = 0; index < 10; index += 1) record("192.0.2.10", false);
+    await settle();
+    expect(writes).toHaveLength(37);
+  });
+
   test("retention cleanup expires staging and logs, reporting failures", async () => {
     const diagnostics = createInMemoryDiagnosticSink(() => 0);
     const calls: string[] = [];

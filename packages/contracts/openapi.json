@@ -16,6 +16,7 @@
       "invalid_request": 400,
       "invalid_crypto_object": 400,
       "authentication_required": 401,
+      "device_proof_required": 401,
       "forbidden": 403,
       "device_not_active": 403,
       "membership_not_active": 403,
@@ -78,6 +79,284 @@
         }
       }
     },
+    "/api/v1/devices/proofs/challenges": {
+      "post": {
+        "operationId": "createDeviceProofChallenge",
+        "responses": {
+          "201": {
+            "description": "A challenge for this session to sign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["challenge", "expiresIn"],
+                  "properties": {
+                    "challenge": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{76}$"
+                    },
+                    "expiresIn": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/devices/proofs": {
+      "post": {
+        "operationId": "createDeviceProof",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["deviceId", "challenge", "signature"],
+                "properties": {
+                  "deviceId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "challenge": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{76}$"
+                  },
+                  "signature": {
+                    "type": "string",
+                    "contentEncoding": "base64"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A Device proof bound to this session and Device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["token", "deviceId", "expiresIn"],
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{98}$"
+                    },
+                    "deviceId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "expiresIn": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/operations/{operationId}/begin": {
       "post": {
         "operationId": "beginOperation",
@@ -94,10 +373,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           },
           {
@@ -265,10 +555,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -415,10 +716,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -553,10 +865,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -686,10 +1009,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -836,10 +1170,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -987,10 +1332,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           },
           {
@@ -1132,10 +1488,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           },
           {
@@ -1295,10 +1662,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           },
           {
@@ -1695,10 +2073,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -1855,6 +2244,7 @@
               "invalid_request",
               "invalid_crypto_object",
               "authentication_required",
+              "device_proof_required",
               "forbidden",
               "device_not_active",
               "membership_not_active",
@@ -2061,13 +2451,13 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Better Auth session token. Protocol routes also require the active device header."
+        "description": "Better Auth session token. Device-scoped routes also require a Device proof."
       },
-      "deviceId": {
+      "deviceProof": {
         "type": "apiKey",
         "in": "header",
-        "name": "X-DotRelay-Device-Id",
-        "description": "Active enrolled device id for protocol authorization."
+        "name": "X-DotRelay-Device-Proof",
+        "description": "Short-lived proof that the caller holds an active Device's signing key, bound to the session (ADR 0020)."
       }
     }
   }

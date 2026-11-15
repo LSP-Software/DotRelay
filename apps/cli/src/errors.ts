@@ -94,6 +94,7 @@ const safeDiagnosticCodes = new Set([
   "device_enrollment_unavailable",
   "device_mismatch",
   "device_not_active",
+  "device_proof_required",
   "enrollment_binding_mismatch",
   "enrollment_certificate_invalid",
   "environment_ambiguous",
@@ -211,6 +212,7 @@ export const categoryForProblem = (
   if (
     code === "authentication_required" ||
     code === "device_not_active" ||
+    code === "device_proof_required" ||
     code === "forbidden" ||
     code === "repository_access_denied"
   )
@@ -272,6 +274,8 @@ export const detailForProblem = (
     return "login is required for this Server Profile; run dotrelay login";
   if (code === "device_not_active")
     return "this Device is not active; run dotrelay device enroll to re-authorize it";
+  if (code === "device_proof_required")
+    return "the Server Profile did not accept this Device's proof of its key; run the command again, and run dotrelay login if it keeps failing";
   if (code === "membership_not_active")
     // The problem does not say whether the Membership is waiting for keys
     // (PENDING_KEY_GRANT) or was removed, so both repairs are named.
@@ -334,6 +338,7 @@ export type ErrorPresentation = Readonly<{
 const errorTitles: Record<string, string> = {
   authentication_required: "Login required",
   device_not_active: "Device not active",
+  device_proof_required: "Device not proven",
   membership_not_active: "Membership not active",
   device_bundle_missing: "No Device enrolled",
   device_enrollment_failed: "Device enrollment failed",

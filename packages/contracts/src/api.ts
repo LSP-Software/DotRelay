@@ -5,7 +5,7 @@ import {
   type Problem,
   type ProblemCode,
 } from "./errors";
-import { DEVICE_ID_HEADER } from "./protocol-api";
+import { DEVICE_PROOF_HEADER } from "./protocol-api";
 import { PROTOCOL_OPENAPI_PATHS } from "./protocol-openapi";
 import { API_VERSION, SUITE_NAME, SUITE_VALUE } from "./registry";
 import { utf8Encode } from "./runtime";
@@ -496,13 +496,14 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         type: "http",
         scheme: "bearer",
         description:
-          "Better Auth session token. Protocol routes also require the active device header.",
+          "Better Auth session token. Device-scoped routes also require a Device proof.",
       }),
-      deviceId: Object.freeze({
+      deviceProof: Object.freeze({
         type: "apiKey",
         in: "header",
-        name: DEVICE_ID_HEADER,
-        description: "Active enrolled device id for protocol authorization.",
+        name: DEVICE_PROOF_HEADER,
+        description:
+          "Short-lived proof that the caller holds an active Device's signing key, bound to the session (ADR 0020).",
       }),
     }),
   }),

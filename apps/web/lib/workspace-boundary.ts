@@ -1,3 +1,5 @@
+import type { DeviceProofSession } from "@dotrelay/client";
+
 export type WorkspaceProfileId = "hosted" | "self-hosted";
 export type MembershipRole = "OWNER" | "ADMIN" | "MEMBER";
 export type ResourceLifecycle = "ACTIVE" | "ARCHIVED";
@@ -619,6 +621,7 @@ export const e2eWorkspaceBoundary = (
 };
 
 export const BROWSER_DEVICE_ID_HEADER = "X-DotRelay-Device-Id";
+export const BROWSER_DEVICE_PROOF_HEADER = "X-DotRelay-Device-Proof";
 
 const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -672,21 +675,28 @@ const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
   );
 };
 
+// The Device's view of the boundary needs a Device proof (ADR 0020); without
+// one the service answers with the session view.
 export const fetchWorkspaceBoundary = async (
   profileId: WorkspaceProfileId,
   options?: Readonly<{
-    readonly deviceId?: string;
+    readonly device?: DeviceProofSession;
     readonly environmentId?: string;
   }>,
 ): Promise<WorkspaceBoundary> => {
   const params = new URLSearchParams({ profile: profileId });
   if (options?.environmentId) params.set("environment", options.environmentId);
-  const response = await fetch(`/api/workspace/boundary?${params}`, {
-    cache: "no-store",
-    ...(options?.deviceId
-      ? { headers: { [BROWSER_DEVICE_ID_HEADER]: options.deviceId } }
-      : {}),
-  });
+  const device = options?.device;
+  const send = (headers: Readonly<Record<string, string>>) =>
+    fetch(`/api/workspace/boundary?${params}`, { cache: "no-store", headers });
+  const proofHeaders = device ? await device.headers() : {};
+  let response = await send(proofHeaders);
+  // An expired or refused proof is replaced once; the relay passes the
+  // service's 401 through rather than answering with the session view.
+  if (device && response.status === 401) {
+    device.invalidate(proofHeaders);
+    response = await send(await device.headers());
+  }
   if (!response.ok) throw new Error("workspace boundary request failed");
   let body: unknown;
   try {

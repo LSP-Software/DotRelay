@@ -1,4 +1,8 @@
-import { DEVICE_ID_HEADER, PROTOCOL_MEDIA_TYPE } from "./protocol-api";
+import {
+  DEVICE_ID_HEADER,
+  DEVICE_PROOF_HEADER,
+  PROTOCOL_MEDIA_TYPE,
+} from "./protocol-api";
 
 const problemContent = Object.freeze({
   "application/problem+json": Object.freeze({
@@ -92,8 +96,21 @@ const protocolParameters = Object.freeze({
   DeviceIdHeader: Object.freeze({
     name: DEVICE_ID_HEADER,
     in: "header",
-    required: true,
+    required: false,
+    description:
+      "The Device the request claims to act as; it must match the Device the proof names.",
     schema: Object.freeze({ type: "string", format: "uuid" }),
+  }),
+  DeviceProofHeader: Object.freeze({
+    name: DEVICE_PROOF_HEADER,
+    in: "header",
+    required: true,
+    description:
+      "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+    schema: Object.freeze({
+      type: "string",
+      pattern: "^[A-Za-z0-9_-]{98}$",
+    }),
   }),
   OperationKindHeader: Object.freeze({
     name: "X-DotRelay-Operation-Kind",
@@ -169,6 +186,91 @@ const invitationOutcomeResponses = (
 };
 
 export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
+  // Device proof of possession (ADR 0020): a session obtains a challenge,
+  // the Device signs it, and the signature buys a short-lived proof that
+  // every Device-scoped route requires in DEVICE_PROOF_HEADER.
+  "/api/v1/devices/proofs/challenges": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "createDeviceProofChallenge",
+        responses: Object.freeze({
+          "201": Object.freeze({
+            description: "A challenge for this session to sign",
+            content: Object.freeze({
+              "application/json": Object.freeze({
+                schema: Object.freeze({
+                  type: "object",
+                  additionalProperties: false,
+                  required: Object.freeze(["challenge", "expiresIn"]),
+                  properties: Object.freeze({
+                    challenge: Object.freeze({
+                      type: "string",
+                      pattern: "^[A-Za-z0-9_-]{76}$",
+                    }),
+                    expiresIn: Object.freeze({ type: "integer", minimum: 1 }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+          ...problemResponses,
+        }),
+      }),
+    ),
+  }),
+  "/api/v1/devices/proofs": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "createDeviceProof",
+        requestBody: Object.freeze({
+          required: true,
+          content: Object.freeze({
+            "application/json": Object.freeze({
+              schema: Object.freeze({
+                type: "object",
+                additionalProperties: false,
+                required: Object.freeze(["deviceId", "challenge", "signature"]),
+                properties: Object.freeze({
+                  deviceId: Object.freeze({ type: "string", format: "uuid" }),
+                  challenge: Object.freeze({
+                    type: "string",
+                    pattern: "^[A-Za-z0-9_-]{76}$",
+                  }),
+                  signature: Object.freeze({
+                    type: "string",
+                    contentEncoding: "base64",
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+        responses: Object.freeze({
+          "201": Object.freeze({
+            description: "A Device proof bound to this session and Device",
+            content: Object.freeze({
+              "application/json": Object.freeze({
+                schema: Object.freeze({
+                  type: "object",
+                  additionalProperties: false,
+                  required: Object.freeze(["token", "deviceId", "expiresIn"]),
+                  properties: Object.freeze({
+                    token: Object.freeze({
+                      type: "string",
+                      pattern: "^[A-Za-z0-9_-]{98}$",
+                    }),
+                    deviceId: Object.freeze({ type: "string", format: "uuid" }),
+                    expiresIn: Object.freeze({ type: "integer", minimum: 1 }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+          ...problemResponses,
+        }),
+      }),
+    ),
+  }),
   "/api/v1/operations/{operationId}/begin": Object.freeze({
     post: authenticatedOperation(
       Object.freeze({
@@ -176,6 +278,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.OperationId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
           protocolParameters.OperationKindHeader,
           Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
         ]),
@@ -201,6 +304,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
           protocolParameters.OperationId,
           protocolParameters.ObjectId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
         ]),
         requestBody: Object.freeze({
           required: true,
@@ -223,6 +327,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.OperationId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
         ]),
         responses: noStoreJsonResponse,
       }),
@@ -233,6 +338,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.OperationId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
         ]),
         responses: Object.freeze({
           "204": Object.freeze({
@@ -255,6 +361,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.OperationId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
         ]),
         requestBody: Object.freeze({
           required: true,
@@ -277,6 +384,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.OperationId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
         ]),
         requestBody: Object.freeze({
           required: true,
@@ -301,6 +409,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.ProjectId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
           Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
         ]),
         requestBody: Object.freeze({
@@ -325,6 +434,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
           "Publishes the next Account Device roster version (ADR 0015), signed by the account signing key.",
         parameters: Object.freeze([
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
           Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
         ]),
         requestBody: Object.freeze({
@@ -351,6 +461,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
           invitationParameters.TeamId,
           invitationParameters.InvitationId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
           Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
         ]),
         requestBody: Object.freeze({
@@ -409,6 +520,7 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
         parameters: Object.freeze([
           protocolParameters.EnvironmentId,
           protocolParameters.DeviceIdHeader,
+          protocolParameters.DeviceProofHeader,
         ]),
         requestBody: Object.freeze({
           required: true,

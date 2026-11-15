@@ -26,7 +26,7 @@ test("alpha gate checks stable GitHub identity for browser, CLI and old sessions
           user: {
             upsert: async () => {
               upserts++;
-              return { id: "user" };
+              return { id: "user", githubSubject: "2002" };
             },
           },
         } as never,
@@ -51,7 +51,12 @@ test("alpha gate accepts listed identities and an empty list denies everyone", a
       profile,
       database: {
         authAccount: { findFirst: async () => ({ accountId: "1001" }) },
-        user: { upsert: async () => ({ id: "user" }) },
+        user: {
+          upsert: async (input: { create: { githubSubject: string } }) => ({
+            id: "user",
+            githubSubject: input.create.githubSubject,
+          }),
+        },
       } as never,
       auth: {
         api: {

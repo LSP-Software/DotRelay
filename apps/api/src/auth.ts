@@ -26,13 +26,17 @@ const createAuthWithAdapter = (
     ...(database
       ? {
           user: { modelName: "authUser" },
-          account: {
-            modelName: "authAccount",
-            encryptOAuthTokens: true,
-          },
           verification: { modelName: "authVerification" },
         }
       : {}),
+    account: {
+      ...(database
+        ? { modelName: "authAccount", encryptOAuthTokens: true }
+        : {}),
+      // A User has the one GitHub account that created them; a sign-in is
+      // never linked to an existing User by email.
+      accountLinking: { enabled: false },
+    },
     // Sessions slide: each day of use extends them by 30 days. The absolute
     // limit (SESSION_MAX_AGE_MS in session.ts) ends any session 90 days
     // after creation, browser or CLI bearer alike.
@@ -71,7 +75,9 @@ const createAuthWithAdapter = (
           }
         : {},
     plugins: [
-      bearer(),
+      // Only service-signed tokens (the form the session cookie and the
+      // device token response carry) are bearer credentials.
+      bearer({ requireSignature: true }),
       deviceAuthorization({
         verificationUri: `${profile.origin}/device`,
         // A device code is phishable: whoever approves it hands the
@@ -123,3 +129,25 @@ export const createInMemoryAuth = (profile: ServerProfileConfig) =>
   createAuthWithAdapter(undefined, profile);
 
 export type DotRelayAuth = ReturnType<typeof createAuth>;
+
+/**
+ * A bearer token in the form Better Auth's bearer plugin verifies: the
+ * session token and its HMAC-SHA-256 under the auth secret, as the session
+ * cookie carries it. Only these signed tokens are bearer credentials.
+ */
+export const signBearerToken = async (
+  secret: string,
+  token: string,
+): Promise<string> => {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(token)),
+  );
+  return `${token}.${Buffer.from(signature).toString("base64")}`;
+};

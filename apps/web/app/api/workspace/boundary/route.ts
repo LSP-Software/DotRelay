@@ -1,5 +1,6 @@
 import {
   BROWSER_DEVICE_ID_HEADER,
+  BROWSER_DEVICE_PROOF_HEADER,
   e2eWorkspaceBoundary,
   emptyWorkspaceBoundary,
   parsePeerDevices,
@@ -17,18 +18,24 @@ import {
 const isProfileId = (value: string | null): value is WorkspaceProfileId =>
   value === "hosted" || value === "self-hosted";
 
+// The service refused the Device proof the browser sent (ADR 0020). The
+// browser must get a new proof, so this never turns into a session view.
+const DEVICE_PROOF_REFUSED = "device_proof_required";
+
 const fetchLiveBoundary = async (
   profileId: WorkspaceProfileId,
   request: Request,
   apiOrigin: string | undefined,
-): Promise<WorkspaceBoundary> => {
+): Promise<WorkspaceBoundary | typeof DEVICE_PROOF_REFUSED> => {
   if (!apiOrigin) return emptyWorkspaceBoundary(profileId);
   const profile = workspaceProfileCatalog[profileId];
   const cookie = request.headers.get("cookie");
   const deviceId = request.headers.get(BROWSER_DEVICE_ID_HEADER);
+  const deviceProof = request.headers.get(BROWSER_DEVICE_PROOF_HEADER);
   const apiHeaders = {
     ...(cookie ? { cookie } : {}),
     ...(deviceId ? { [BROWSER_DEVICE_ID_HEADER]: deviceId } : {}),
+    ...(deviceProof ? { [BROWSER_DEVICE_PROOF_HEADER]: deviceProof } : {}),
   };
   const sessionResponse = await fetch(`${apiOrigin}/api/v1/session`, {
     headers: apiHeaders,
@@ -82,6 +89,13 @@ const fetchLiveBoundary = async (
     headers: apiHeaders,
     cache: "no-store",
   }).catch(() => undefined);
+  if (deviceProof && workspaceResponse?.status === 401) {
+    const problem = (await workspaceResponse
+      .clone()
+      .json()
+      .catch(() => undefined)) as { code?: unknown } | undefined;
+    if (problem?.code === DEVICE_PROOF_REFUSED) return DEVICE_PROOF_REFUSED;
+  }
   const workspaceBody = workspaceResponse?.ok
     ? ((await workspaceResponse.json().catch(() => undefined)) as
         | {
@@ -260,6 +274,11 @@ export const GET = async (request: Request) => {
         ...(deviceId ? { deviceId } : {}),
       })
     : await fetchLiveBoundary(profileId, request, apiOrigin);
+  if (boundary === DEVICE_PROOF_REFUSED)
+    return Response.json(
+      { code: DEVICE_PROOF_REFUSED },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
   const localBoundary =
     boundary.source === "fixture" && apiOrigin
       ? {
