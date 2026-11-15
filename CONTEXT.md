@@ -109,6 +109,29 @@ The relationship between one User and one Team, carrying an owner, admin, or mem
 access lifecycle.
 _Avoid_: Seat, access grant
 
+**Leaving a Team**:
+A Member ending their own Membership. It behaves like removal by an owner or admin: the Membership
+becomes removed and each of the Team's Projects owes a key rotation. The last active owner cannot
+leave while other Members remain.
+_Avoid_: Unsubscribe, quit
+
+**Team Deletion**:
+An owner's irreversible deletion of a Team. The Team becomes inaccessible at once and every
+Membership ends; its encrypted data is purged by retention after a fixed window.
+_Avoid_: Archive (Projects and Environments are archived, not deleted)
+
+**Account Deletion**:
+A User's deletion of their own DotRelay identity on one Server Profile. Credentials, key material,
+and personal data are deleted; the public keys, Membership periods, and opaque ids that teammates
+need to verify the User's past Revisions are kept, and the User is shown as a deleted user. The
+same GitHub identity signing in later becomes a new User.
+_Avoid_: Deactivation, closing the account
+
+**Account Data Export**:
+A JSON document of the account metadata the service holds about the signed-in User. It contains
+no ciphertext, wrapped keys, or Values; decrypted Values come only from a Device.
+_Avoid_: Backup, Values export
+
 **Membership Invitation**:
 A single-use, expiring invitation addressed to a stable GitHub identity. Acceptance by the matching
 User creates a Membership that remains pending until its required key grants are provisioned.
