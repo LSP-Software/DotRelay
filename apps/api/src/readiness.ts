@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { PrismaClient } from "@dotrelay/database";
+import { valkeyReady } from "./protocol/rate-limit";
 
 const directory = resolve(
   import.meta.dir,
@@ -77,3 +78,12 @@ export const databaseReady = async (
     if (timer) clearTimeout(timer);
   }
 };
+
+/**
+ * The API readiness decision shared by `/ready` and the metrics scrape:
+ * not in maintenance mode, migrations exactly applied, and Valkey reachable
+ * when configured.
+ */
+export const apiReady = async (database: PrismaClient): Promise<boolean> =>
+  process.env.MAINTENANCE_MODE !== "true" &&
+  (await Promise.all([databaseReady(database), valkeyReady()])).every(Boolean);

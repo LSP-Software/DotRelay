@@ -167,6 +167,9 @@ export const actorRateLimitKey = async (
   bucket = PROTOCOL_BUCKET.name,
 ): Promise<string> => `dotrelay:${bucket}:user:${await subjectDigest(userId)}`;
 
+/** The Hono context key naming the bucket that refused a request. */
+export const RATE_LIMIT_BUCKET_CONTEXT_KEY = "rateLimitBucket";
+
 const problemResponse = (
   context: Context,
   code: "rate_limited" | "rate_limit_unavailable",
@@ -221,12 +224,15 @@ export const createUserRateLimit = (
           bucket.limit,
           bucket.windowSeconds,
         );
-        if (!outcome.allowed)
+        if (!outcome.allowed) {
+          // Read by the request metrics; the bucket name is a fixed token.
+          context.set(RATE_LIMIT_BUCKET_CONTEXT_KEY as never, bucket.name);
           return problemResponse(
             context,
             "rate_limited",
             outcome.retryAfterSeconds,
           );
+        }
       }
     } catch {
       return problemResponse(context, "rate_limit_unavailable");
