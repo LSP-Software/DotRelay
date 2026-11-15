@@ -24,6 +24,8 @@ export type TeamMember = Readonly<{
   readonly image: string | null;
   readonly githubSubject: string;
   readonly lifecycle: MembershipLifecycle;
+  /** The User deleted their account (ADR 0018); the row is history only. */
+  readonly deleted?: boolean;
   /** Latest Account Device roster, base64; null before the Member has one. */
   readonly accountRoster?: string | null;
   // Present only for Owners and Admins: the service withholds roles and the
@@ -122,6 +124,8 @@ const problemMessage = (
       return "Something changed while you were working. Refresh and try again.";
     case "last_owner_protection":
       return "This team needs at least one active owner. Promote another owner first.";
+    case "owner_transfer_required":
+      return "You're this team's only owner. Make another active member an owner, or delete the team, first.";
     case "state_conflict":
       return "Something changed while you were working. Refresh and try again.";
     case "payload_too_large":
@@ -211,6 +215,7 @@ export const parseTeamMembershipState = (
         image: asString(entry.image) ?? null,
         githubSubject,
         lifecycle,
+        ...(entry.deleted === true ? { deleted: true } : {}),
         ...(typeof entry.accountRoster === "string" ||
         entry.accountRoster === null
           ? { accountRoster: entry.accountRoster }
