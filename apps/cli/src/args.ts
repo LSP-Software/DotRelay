@@ -23,6 +23,7 @@ export const COMMANDS = [
   "run",
   "export",
   "list",
+  "account",
 ] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
@@ -281,6 +282,9 @@ export const USAGE: Record<string, string> = {
   "team trust": "dotrelay team trust <user-id>",
   "team share-keys": "dotrelay team share-keys <github-login-or-user-id>",
   "team decline": "dotrelay team decline <invitation-id-or-team>",
+  "team leave": "dotrelay team leave <team-id-or-name>",
+  "account export": "dotrelay account export | --output <file>",
+  "account delete": "dotrelay account delete",
   "env list": "dotrelay env list",
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
@@ -415,6 +419,9 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "team trust": ["profile", "team", "noInput", "force", "json"],
   "team share-keys": ["profile", "team", "noInput", "force", "json"],
   "team decline": ["profile", "noInput", "force", "json"],
+  "team leave": ["profile", "noInput", "force", "json"],
+  "account export": ["profile", "output", "json"],
+  "account delete": ["profile", "noInput", "force", "json"],
   "env list": ["profile", "json"],
   "env use": ["profile", "environment", "json"],
   "env create": ["profile", "json"],
@@ -440,8 +447,9 @@ export const SUBCOMMANDS: Readonly<
     "list",
   ],
   project: ["link", "rotate"],
-  team: ["list", "members", "trust", "share-keys", "decline"],
+  team: ["list", "members", "trust", "share-keys", "decline", "leave"],
   env: ["list", "use", "create"],
+  account: ["export", "delete"],
 };
 
 // The usage line for a complete "command [subcommand]" label; the help
@@ -576,9 +584,11 @@ const validateCommand = (parsed: MutableArguments) => {
     team:
       parsed.subcommand === "trust" ||
       parsed.subcommand === "share-keys" ||
-      parsed.subcommand === "decline"
+      parsed.subcommand === "decline" ||
+      parsed.subcommand === "leave"
         ? 1
         : 0,
+    account: 0,
     env:
       parsed.subcommand === "list"
         ? 0
@@ -778,6 +788,7 @@ export const parseArguments = (
         parsed.command === "device" ||
         parsed.command === "project" ||
         parsed.command === "team" ||
+        parsed.command === "account" ||
         parsed.command === "env" ||
         parsed.command === "context") &&
       !parsed.subcommand

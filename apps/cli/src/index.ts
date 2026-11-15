@@ -150,6 +150,7 @@ import {
 } from "./workflow-core";
 import { rotateProjectEpoch } from "./workflow-epoch-rotation";
 import { shareProjectKeys } from "./workflow-share-keys";
+import { deleteAccount, exportAccount, leaveTeam } from "./workflow-account";
 import { declineTeamInvitation } from "./workflow-invitations";
 import { listTeamMembers, trustTeamMember } from "./workflow-team";
 import {
@@ -1922,6 +1923,33 @@ const execute = async (
       },
     };
   }
+  if (parsed.command === "account") {
+    if (parsed.noInput && !parsed.profile)
+      throw new CliInvocationError(
+        `--no-input requires explicit --profile for account ${parsed.subcommand}`,
+      );
+    const profile = await resolveServerProfile(
+      store,
+      parsed.profile,
+      profileOptions(runtime),
+    );
+    const options = deviceWorkflowOptions(
+      parsed,
+      runtime,
+      profile,
+      localCredentials(runtime),
+    );
+    if (parsed.subcommand === "delete")
+      return { value: await deleteAccount(options) };
+    const exported = await exportAccount(options, parsed);
+    // Without --output the export itself is the output.
+    return {
+      value:
+        parsed.output || parsed.json
+          ? exported
+          : { stdout: `${JSON.stringify(exported, null, 2)}\n` },
+    };
+  }
   if (parsed.command === "team") {
     if (parsed.noInput && !parsed.profile)
       throw new CliInvocationError(
@@ -1965,7 +1993,9 @@ const execute = async (
             ? await shareProjectKeys(options, parsed)
             : parsed.subcommand === "decline"
               ? await declineTeamInvitation(options, parsed)
-              : await listTeamMembers(options, parsed),
+              : parsed.subcommand === "leave"
+                ? await leaveTeam(options, parsed)
+                : await listTeamMembers(options, parsed),
     };
   }
   if (parsed.command === "project" && parsed.subcommand === "link") {
