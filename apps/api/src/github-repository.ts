@@ -45,10 +45,10 @@ type DisplayCacheEntry = Readonly<{
   readonly expiresAt: number;
 }>;
 
-// Process-global, bounded and time-limited. A resolved name is shared by
-// every viewer (each sees the Project in their own catalog); a miss is
-// remembered per lookup scope, because a private repository that one User's
-// delegated access cannot see may still be visible to another's.
+// Process-global, bounded and time-limited, and scoped to the viewer for
+// hits and misses alike. A private repository's name resolved with one
+// User's delegated access must never appear in another User's catalog, and
+// a repository one User cannot see may still be visible to another.
 const displayCache = new Map<string, DisplayCacheEntry>();
 
 const rememberDisplay = (key: string, entry: DisplayCacheEntry) => {
@@ -79,7 +79,7 @@ export type GitHubRepositoryDisplayOptions = Readonly<{
    * miss. Without it (or when it resolves to null) the lookup is anonymous.
    */
   readonly accessToken?: () => Promise<string | null>;
-  /** Separates cached misses between viewers; defaults to anonymous. */
+  /** Separates cached names and misses between viewers; defaults to anonymous. */
   readonly cacheScope?: string;
   readonly timeoutMs?: number;
   readonly now?: () => number;
@@ -129,8 +129,9 @@ export const lookupGitHubRepositoryDisplay = async (
 ): Promise<GitHubRepositoryDisplay | undefined> => {
   if (!/^[1-9][0-9]{0,18}$/.test(githubRepositoryId)) return undefined;
   const now = options.now ?? Date.now;
-  const positiveKey = `display:${githubRepositoryId}`;
-  const negativeKey = `miss:${options.cacheScope ?? "anonymous"}:${githubRepositoryId}`;
+  const scope = options.cacheScope ?? "anonymous";
+  const positiveKey = `display:${scope}:${githubRepositoryId}`;
+  const negativeKey = `miss:${scope}:${githubRepositoryId}`;
   const positive = freshEntry(positiveKey, now());
   if (positive) return positive.display;
   if (freshEntry(negativeKey, now())) return undefined;

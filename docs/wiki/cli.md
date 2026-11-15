@@ -147,10 +147,18 @@ uses the label for the first Environment, and archives the empty `default` Envir
 created with the Project.
 
 `project link --team <team-id>` sends the resolved numeric Repository id to the authenticated
-Server Profile. The Server Profile creates a default Environment in the same transaction when the
-Project is new, and returns the existing Project and Environment on retry. It requires an
+Server Profile. The Server Profile resolves the owner and name again with the User's Delegated
+GitHub Access and links the Project only when GitHub reports the same Repository id
+(`repository_access_denied` otherwise). It creates a default Environment in the same transaction
+when the Project is new, and returns the existing Project and Environment on retry. It requires an
 authenticated session and an active enrolled Device; a session from `login` alone is insufficient
-until this machine has a Device. `env use <environment-id-or-label>` resolves the reference within
+until this machine has a Device.
+
+Every command that acts as this machine's Device proves it holds the Device key
+([ADR 0018](../adr/0018-device-proof-of-possession.md)): the first such request of a run signs a
+service challenge with the Device's Ed25519 key and sends the resulting Device proof with every
+later request. A Device the service no longer considers active cannot get a proof, so `status`
+reports it as not active and other commands fail with `device_not_active`. `env use <environment-id-or-label>` resolves the reference within
 the worktree's Project and reads opaque Environment metadata and the operator-visible label.
 
 ## Encrypted workflows
