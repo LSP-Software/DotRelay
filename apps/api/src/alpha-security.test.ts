@@ -16,6 +16,7 @@ test("alpha gate checks stable GitHub identity for browser, CLI and old sessions
       "/api/v1/session",
       "/api/v1/devices/bootstrap",
       "/api/auth/device/approve",
+      "/api/auth/get-session",
     ]) {
       let upserts = 0;
       const profile = loadServerProfileConfig({ ALPHA_GITHUB_IDS: "1001" });
@@ -39,9 +40,47 @@ test("alpha gate checks stable GitHub identity for browser, CLI and old sessions
         headers: { ...credential, Origin: profile.origin },
       });
       expect(response.status).toBe(403);
+      const body = await response.text();
+      expect(JSON.parse(body)).toMatchObject({
+        code: "alpha_admission_required",
+      });
+      // The answer names neither the allow list nor the caller's account.
+      expect(body).not.toContain("1001");
+      expect(body).not.toContain("2002");
+      expect(body).not.toContain("auth-user");
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
       expect(upserts).toBe(0);
     }
   }
+});
+
+test("a session outside the alpha list can still sign out and read capabilities", async () => {
+  const profile = loadServerProfileConfig({ ALPHA_GITHUB_IDS: "1001" });
+  let signOuts = 0;
+  const app = createApi({
+    profile,
+    database: {
+      authAccount: { findFirst: async () => ({ accountId: "2002" }) },
+    } as never,
+    auth: {
+      api: { getSession: async () => ({ user: { id: "auth-user" } }) },
+      handler: async () => {
+        signOuts++;
+        return Response.json({ success: true });
+      },
+    } as never,
+  });
+  const signOut = await app.request(`${profile.origin}/api/auth/sign-out`, {
+    method: "POST",
+    headers: { Cookie: "session=old", Origin: profile.origin },
+  });
+  expect(signOut.status).toBe(200);
+  expect(signOuts).toBe(1);
+  const capabilities = await app.request(
+    `${profile.origin}/api/v1/capabilities`,
+    { headers: { Cookie: "session=old" } },
+  );
+  expect(capabilities.status).not.toBe(403);
 });
 
 test("alpha gate accepts listed identities and an empty list denies everyone", async () => {
@@ -64,9 +103,12 @@ test("alpha gate accepts listed identities and an empty list denies everyone", a
         },
       } as never,
     });
-    expect((await app.request(`${profile.origin}/api/v1/session`)).status).toBe(
-      ids ? 200 : 403,
-    );
+    const response = await app.request(`${profile.origin}/api/v1/session`);
+    expect(response.status).toBe(ids ? 200 : 403);
+    if (!ids)
+      expect(((await response.json()) as { code: string }).code).toBe(
+        "alpha_admission_required",
+      );
   }
   expect(() =>
     loadServerProfileConfig({ ALPHA_GITHUB_IDS: "mutable-login" }),

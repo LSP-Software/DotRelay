@@ -777,9 +777,11 @@ const createApi = ({
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: { accountId: true },
       });
+      // The distinct code lets clients show "not on the list" instead of a
+      // generic error; the body names neither the list nor the account.
       if (!account || !allowed.includes(account.accountId)) {
         context.header("Cache-Control", "no-store");
-        return jsonProblem(context, "forbidden");
+        return jsonProblem(context, "alpha_admission_required");
       }
     } else if (context.req.path.startsWith("/api/v1/")) {
       return jsonProblem(context, "authentication_required");
