@@ -4602,7 +4602,12 @@ describe("actionable error categories at the process boundary", () => {
       const runtime = {
         ...runtimeForProtocolState(state),
         networkPolicy: instantNetworkPolicy,
-        fetch: (async (input) => {
+        fetch: (async (input, init) => {
+          // init gets a Device proof first (ADR 0020).
+          const proof = await answerDeviceProofRoute(
+            new Request(String(input), init),
+          );
+          if (proof) return proof;
           const url = String(input);
           requested.push(url);
           if (url.endsWith("/api/v1/github-app"))
@@ -4639,7 +4644,12 @@ describe("actionable error categories at the process boundary", () => {
       const runtime = {
         ...runtimeForProtocolState(state),
         networkPolicy: { ...instantNetworkPolicy, requestDeadlineMs: 50 },
-        fetch: (async (input) => {
+        fetch: (async (input, init) => {
+          // init gets a Device proof first (ADR 0020).
+          const proof = await answerDeviceProofRoute(
+            new Request(String(input), init),
+          );
+          if (proof) return proof;
           const url = String(input);
           if (url.endsWith("/api/v1/github-app"))
             // Headers arrive; the body never does.

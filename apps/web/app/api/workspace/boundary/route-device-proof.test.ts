@@ -37,6 +37,9 @@ const stubApi = (boundary: () => Response) => {
       return Response.json({ authenticated: true, user: { id: "user" } });
     if (url.pathname === "/api/v1/capabilities")
       return Response.json({ serverProfileId: crypto.randomUUID() });
+    // A server without GITHUB_APP_SLUG has no install link.
+    if (url.pathname === "/api/v1/github-app")
+      return Response.json({ code: "resource_not_found" }, { status: 404 });
     forwarded.push({
       device: headers.get("X-DotRelay-Device-Id"),
       proof: headers.get("X-DotRelay-Device-Proof"),
