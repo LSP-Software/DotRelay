@@ -22,7 +22,9 @@ const fixtureIds = {
   teamId: "00000000-0000-4000-8000-000000000011",
   projectId: "00000000-0000-4000-8000-000000000021",
   environmentId: "00000000-0000-4000-8000-000000000031",
-  actorUserId: "00000000-0000-4000-8000-000000000061",
+  // A teammate authors the synthetic history: the browser verifies it
+  // against the teammate's signed roster the fixture serves (ADR 0022).
+  actorUserId: "00000000-0000-4000-8000-000000000071",
   actorDeviceId: "00000000-0000-4000-8000-000000000040",
 };
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000071";

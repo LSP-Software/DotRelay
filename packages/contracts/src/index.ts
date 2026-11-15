@@ -72,6 +72,12 @@ export {
   type ProblemCode,
 } from "./errors";
 export {
+  LANE_FORMAT_CONTEXT_BOUND,
+  LANE_FORMAT_LEGACY,
+  LANE_FORMATS,
+  laneAssociatedData,
+} from "./lane";
+export {
   ARGON2ID_POLICY,
   encodeProtocolObject,
   isSignedField,

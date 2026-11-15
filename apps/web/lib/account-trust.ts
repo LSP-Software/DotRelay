@@ -2,6 +2,7 @@ import {
   type AccountTrustPins,
   type AccountTrustResolution,
   accountFingerprint,
+  confirmTeammateIdentity,
   createAccountDeviceRoster,
   createBrowserDeviceStorage,
   decideDeviceTrust,
@@ -12,7 +13,6 @@ import {
   parseAccountTrustPins,
   planOwnRoster,
   resolveAccountTrust,
-  retrustTeammate,
   serializeAccountTrustPins,
   uuidToBytes,
 } from "@dotrelay/client";
@@ -21,6 +21,7 @@ import {
   fromBase64,
   hexToBytes,
   publishAccountDeviceRoster,
+  reportedAccountSigningKeys,
 } from "./account-keys";
 import type {
   WorkspaceBoundary,
@@ -71,6 +72,8 @@ export const rosterBytesFrom = (
     }),
   );
 
+// The Devices the service reports revoked for this User. A roster version
+// records them as revoked; nothing the service reports ever adds a Device.
 const reportedOwnDevices = (
   boundary: WorkspaceBoundary,
   userId: string,
@@ -97,37 +100,60 @@ const reportedOwnDevices = (
       // A malformed key is not reported.
     }
   }
-  for (const peer of boundary.peerDevices ?? []) {
-    if (reported.has(peer.id)) continue;
-    try {
-      reported.set(peer.id, {
-        deviceId: peer.id,
-        encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
-        signingPublicKey: hexToBytes(peer.signingPublicKey),
-        addedAtMs: 0,
-      });
-    } catch {
-      // A malformed key is not reported.
-    }
-  }
   return [...reported.values()];
 };
 
-// Narrows the boundary to roster-verified keys: Users without a roster keep
-// today's behaviour; blocked Users contribute no key at all.
+// The keys verified rosters vouch for, by what each may sign.
+const verifiedSignersFor = (
+  boundary: WorkspaceBoundary,
+  resolution: AccountTrustResolution,
+  ownUserId: string,
+): NonNullable<WorkspaceBoundary["verifiedSigners"]> => {
+  const account: string[] = [];
+  const grant: string[] = [];
+  const history: string[] = [];
+  for (const user of resolution.users.values()) {
+    if (user.status !== "verified" || !user.roster) continue;
+    for (const device of user.roster.devices) {
+      const key = bytesToHex(device.signingPublicKey);
+      history.push(key);
+      if (user.userId === ownUserId) account.push(key);
+      if (user.confirmed && device.revokedAtMs === undefined) grant.push(key);
+    }
+  }
+  return Object.freeze({
+    account: Object.freeze(account),
+    reportedAccount: Object.freeze([...reportedAccountSigningKeys(boundary)]),
+    grant: Object.freeze(grant),
+    history: Object.freeze(history),
+  });
+};
+
+// Narrows the boundary to keys a verified roster vouches for (ADR 0015,
+// ADR 0022): a User without a verifiable roster, a User the rosters leave
+// out, and a blocked User contribute nothing. Mirrors applyAccountTrust in
+// the CLI.
 export const applyBrowserAccountTrust = (
   boundary: WorkspaceBoundary,
   resolution: AccountTrustResolution,
   ownUserId: string,
 ): WorkspaceBoundary => {
+  const local = boundary.device;
   const signingTrustDevices: WorkspaceSigningTrustDevice[] = [];
   for (const device of boundary.signingTrustDevices ?? []) {
-    if (!device.userId || !device.deviceId) {
-      // Unattributed entries can only be trusted while nobody is verified.
-      const anyVerified = [...resolution.users.values()].some(
-        (user) => user.status === "verified",
-      );
-      if (!anyVerified) signingTrustDevices.push(device);
+    // An entry the service did not attribute to a User and Device can
+    // never be checked against a roster.
+    if (!device.userId || !device.deviceId) continue;
+    // This browser's own entry carries its own key, which needs no roster;
+    // its windows also set the authored-at floor.
+    if (
+      device.userId === ownUserId &&
+      device.deviceId === local.id &&
+      local.signingPublicKey &&
+      device.signingPublicKey.toLowerCase() ===
+        local.signingPublicKey.toLowerCase()
+    ) {
+      signingTrustDevices.push(device);
       continue;
     }
     let signingPublicKey: Uint8Array;
@@ -142,10 +168,7 @@ export const applyBrowserAccountTrust = (
       signingPublicKey,
     });
     if (!decision.trusted) continue;
-    const revokedAtMs =
-      decision.verified && "revokedAtMs" in decision
-        ? decision.revokedAtMs
-        : undefined;
+    const revokedAtMs = decision.revokedAtMs;
     signingTrustDevices.push(
       revokedAtMs === undefined
         ? device
@@ -158,41 +181,24 @@ export const applyBrowserAccountTrust = (
           },
     );
   }
-  const own = resolution.users.get(ownUserId);
-  const ownRosterKeys =
-    own?.status === "verified" && own.roster
-      ? new Set(
-          own.roster.devices.map((device) =>
-            bytesToHex(device.signingPublicKey),
-          ),
-        )
-      : null;
-  const keptKeys = new Set(
-    signingTrustDevices.map((device) => device.signingPublicKey.toLowerCase()),
-  );
-  const hadDevices = (boundary.signingTrustDevices ?? []).length > 0;
+  const verifiedSigners = verifiedSignersFor(boundary, resolution, ownUserId);
+  const vouched = new Set(verifiedSigners.history);
   const signingTrustKeys = (boundary.signingTrustKeys ?? []).filter((key) =>
-    hadDevices
-      ? keptKeys.has(key.toLowerCase())
-      : ownRosterKeys === null
-        ? own === undefined || !isBlockingStatus(own.status)
-        : ownRosterKeys.has(key.toLowerCase()),
+    vouched.has(key.toLowerCase()),
   );
+  // Peers receive keys, so each must be an active Device of this account's
+  // verified roster with both of its rostered keys.
   const peerDevices = (boundary.peerDevices ?? []).filter((peer) => {
     try {
-      if (own?.status === "verified" && peer.signingPublicKey.length !== 64)
-        return false;
       return decideDeviceTrust(
         resolution,
         {
           userId: ownUserId,
           deviceId: peer.id,
-          ...(peer.signingPublicKey.length > 0
-            ? { signingPublicKey: hexToBytes(peer.signingPublicKey) }
-            : {}),
+          signingPublicKey: hexToBytes(peer.signingPublicKey),
           encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
         },
-        { requireActive: true },
+        { requireActive: true, purpose: "keys" },
       ).trusted;
     } catch {
       return false;
@@ -202,6 +208,7 @@ export const applyBrowserAccountTrust = (
     ...boundary,
     signingTrustDevices,
     signingTrustKeys,
+    verifiedSigners,
     peerDevices,
   });
 };
@@ -230,6 +237,11 @@ export const establishBrowserAccountTrust = async (
       save: (pins: AccountTrustPins) => Promise<void>;
     }>;
     readonly publish?: typeof publishAccountDeviceRoster;
+    /**
+     * Devices the user approved in this browser (the target of an Account
+     * Key Transfer whose fingerprint they confirmed); they join the roster.
+     */
+    readonly approved?: readonly OwnDeviceReport[];
   }>,
 ): Promise<
   Readonly<{
@@ -265,6 +277,9 @@ export const establishBrowserAccountTrust = async (
       ownUserId: userId,
       ownIdentity: signingKey?.identity ?? null,
       rosters,
+      mentionedUserIds: (boundary.signingTrustDevices ?? []).flatMap(
+        (device) => (device.userId ? [device.userId] : []),
+      ),
     });
   let resolution = await resolve();
   const own = resolution.users.get(userId);
@@ -280,6 +295,7 @@ export const establishBrowserAccountTrust = async (
         addedAtMs: Date.now(),
       },
       reported: reportedOwnDevices(boundary, userId),
+      ...(input.approved ? { approved: input.approved } : {}),
     });
     if (plan) {
       const roster = await createAccountDeviceRoster({
@@ -327,6 +343,8 @@ export const resolveMemberTrust = async (
       status: string;
       fingerprint: string | null;
       presentedIdentity: Uint8Array | null;
+      /** Confirmed by the user, not only pinned on first sight. */
+      confirmed: boolean;
     }>
   >
 > => {
@@ -365,6 +383,7 @@ export const resolveMemberTrust = async (
       status: string;
       fingerprint: string | null;
       presentedIdentity: Uint8Array | null;
+      confirmed: boolean;
     }>
   >();
   for (const [userId, user] of resolution.users) {
@@ -373,6 +392,7 @@ export const resolveMemberTrust = async (
       status: user.status,
       fingerprint: shown ? await accountFingerprint(shown) : null,
       presentedIdentity: user.presentedIdentity,
+      confirmed: user.confirmed,
     });
   }
   return result;
@@ -398,6 +418,12 @@ export const assertProvisioningRecipients = (
     throw new ProvisioningRecipientError(
       "This member's account key changed. Compare their fingerprint in Members and trust it before sharing project keys.",
     );
+  // Keys go only to Devices a roster signed by the member's account key
+  // lists; without one there is nothing to seal to (ADR 0022).
+  if (!member || member.status !== "verified")
+    throw new ProvisioningRecipientError(
+      "This member has no signed Device list yet. Ask them to unlock DotRelay on one of their Devices, then share the keys again.",
+    );
   for (const device of devices) {
     let encryptionPublicKey: Uint8Array;
     try {
@@ -415,7 +441,7 @@ export const assertProvisioningRecipients = (
         "The server listed a Device that isn't in this member's signed Device list. No keys were shared.",
       );
   }
-  return member?.status === "verified" ? "verified" : "unverified";
+  return "verified";
 };
 
 // Resolves one member's roster against this browser's pins (pinning a
@@ -452,16 +478,20 @@ export const resolveProvisioningTrust = async (
   return resolution;
 };
 
-export const retrustMember = async (
+// The user confirmed a Member's account fingerprint in Members (a first-sight
+// identity or a changed one). The roster the service presents must verify
+// under it; the pin keeps that roster's version (ADR 0022).
+export const confirmMember = async (
   pin: Pin,
   deviceId: string,
   userId: string,
-  identity: Uint8Array,
+  accountRoster: string,
 ): Promise<void> => {
   const pins = await loadBrowserAccountTrustPins(pin, deviceId);
-  await saveBrowserAccountTrustPins(
-    pin,
-    deviceId,
-    retrustTeammate(pins, userId, identity),
-  );
+  const confirmed = await confirmTeammateIdentity(pins, {
+    serverProfileId: pin.serverProfileId,
+    userId,
+    roster: fromBase64(accountRoster),
+  });
+  await saveBrowserAccountTrustPins(pin, deviceId, confirmed.pins);
 };

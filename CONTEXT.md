@@ -81,6 +81,18 @@ to a new Device's X25519 key, relayed by the service. It underpins CLI login and
 approval; the service relays ciphertext and never sees the AMK.
 _Avoid_: Session handoff, key sync
 
+**Transfer Code**:
+The text a person carries from the sending Device to the receiving one to redeem an Account Key
+Transfer: the transfer's id and the sending account's fingerprint, which the receiving Device checks
+against the key it opens.
+_Avoid_: Transfer ID (alone), handoff token
+
+**Confirmed Identity**:
+A teammate's Account Identity that the user compared out of band and accepted on one installation.
+An identity pinned on first sight verifies the teammate's history, but only a confirmed one lets
+their Devices hand this installation keys.
+_Avoid_: Trusted user, verified member
+
 **Project Epoch Key Link**:
 A service-stored, Device-signed encryption of one Project Epoch Key under the next epoch's key,
 published with each rotation. Walking the links back from the current key recovers every earlier

@@ -1,8 +1,12 @@
 "use client";
 
 import {
+  createBrowserDeviceStorage,
   createBrowserProfilePinStore,
+  deviceKeyFingerprint,
+  loadDeviceKeyMaterial,
   passkeyPrfSupported,
+  uuidToBytes,
 } from "@dotrelay/client";
 import {
   Archive,
@@ -79,6 +83,7 @@ import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
   fetchAccountKeyWrappers,
+  hexToBytes,
 } from "@/lib/account-keys";
 import {
   addEncryptionPassword,
@@ -95,7 +100,7 @@ import {
   unlockAccount,
   unlockMethods,
 } from "@/lib/account-recovery";
-import { resolveMemberTrust, retrustMember } from "@/lib/account-trust";
+import { confirmMember, resolveMemberTrust } from "@/lib/account-trust";
 import {
   restoreBrowserAccountKey,
   saveBrowserAccountKey,
@@ -265,15 +270,26 @@ const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
     "Members can view this team's projects, read shared values, and manage their own values.",
 };
 
-// A Member's account identity state (ADR 0015) and fingerprint.
+// A Member's account identity state (ADR 0015, ADR 0022) and fingerprint.
 const MemberAccountTrust = ({
   trust,
+  self,
   onTrust,
 }: Readonly<{
-  trust: Readonly<{ status: string; fingerprint: string | null }> | undefined;
+  trust:
+    | Readonly<{
+        status: string;
+        fingerprint: string | null;
+        confirmed: boolean;
+      }>
+    | undefined;
+  self: boolean;
   onTrust: () => void;
 }>) => {
   if (!trust) return null;
+  // Pinned on first sight in this browser: their history verifies, but no
+  // project key is taken from them until the fingerprint is confirmed.
+  const unconfirmed = trust.status === "verified" && !self && !trust.confirmed;
   const blocked =
     trust.status === "identity-changed" ||
     trust.status === "rollback" ||
@@ -284,10 +300,12 @@ const MemberAccountTrust = ({
       data-testid="member-account-trust"
     >
       <div className="flex items-center gap-2">
-        {trust.status === "verified" ? (
+        {unconfirmed ? (
+          <Badge variant="secondary">Not confirmed</Badge>
+        ) : trust.status === "verified" ? (
           <Badge variant="outline">Verified account</Badge>
         ) : trust.status === "unverified" ? (
-          <Badge variant="secondary">Unverified account</Badge>
+          <Badge variant="secondary">No signed device list</Badge>
         ) : (
           <Badge variant="destructive">
             {trust.status === "identity-changed"
@@ -301,12 +319,22 @@ const MemberAccountTrust = ({
           <Button size="sm" variant="outline" onClick={onTrust}>
             Trust new key
           </Button>
+        ) : unconfirmed ? (
+          <Button size="sm" variant="outline" onClick={onTrust}>
+            Confirm fingerprint
+          </Button>
         ) : null}
       </div>
       {trust.fingerprint ? (
         <code className="text-xs text-muted-foreground">
           {trust.fingerprint}
         </code>
+      ) : null}
+      {unconfirmed ? (
+        <p className="text-xs text-muted-foreground">
+          Compare this fingerprint with the member before you confirm it. Until
+          then, this browser takes no project key from them.
+        </p>
       ) : null}
       {blocked ? (
         <p className="text-xs text-destructive">
@@ -804,9 +832,23 @@ export const WorkspaceShell = ({
   // the receiver needs before the transfer lapses.
   const [sentTransfer, setSentTransfer] = useState<Readonly<{
     readonly transferId: string;
+    readonly transferCode: string;
     readonly expiresAt: string;
     readonly recipientDeviceId: string;
   }> | null>(null);
+  // ADR 0022: the receiving Device's key fingerprint as the server reports
+  // it, which the person compares with the one that Device shows, and
+  // whether they confirmed it matches.
+  const [transferTargetFingerprint, setTransferTargetFingerprint] = useState<
+    string | null
+  >(null);
+  const [transferFingerprintConfirmed, setTransferFingerprintConfirmed] =
+    useState(false);
+  // This browser's own key fingerprint, from its local keys, for another
+  // Device to compare before it sends the account key here.
+  const [deviceFingerprint, setDeviceFingerprint] = useState<string | null>(
+    null,
+  );
   // Detected after mount. The server render has no WebAuthn surface, so
   // reading it during the first render would disagree with the browser and
   // hydrate the Add passkey control as permanently unavailable.
@@ -1073,10 +1115,14 @@ export const WorkspaceShell = ({
         status: string;
         fingerprint: string | null;
         presentedIdentity: Uint8Array | null;
+        confirmed: boolean;
       }>
     >
   >(new Map());
   const [memberTrustTick, setMemberTrustTick] = useState(0);
+  // Why this browser refused the server's account or project keys
+  // (ADR 0022); shown until a session loads again.
+  const [trustProblem, setTrustProblem] = useState<string | null>(null);
   // accountUnlocked and memberTrustTick are refresh triggers: the AMK lives in a ref
   useEffect(() => {
     const serverProfileId = displayBoundary.profile.serverProfileId;
@@ -1120,21 +1166,27 @@ export const WorkspaceShell = ({
   const trustMemberKey = async (userId: string, membershipId: string) => {
     const serverProfileId = displayBoundary.profile.serverProfileId;
     const trust = memberTrust.get(userId);
-    if (!serverProfileId || !browserDeviceId || !trust?.presentedIdentity)
+    const accountRoster = membershipState?.memberships.find(
+      (member) => member.userId === userId,
+    )?.accountRoster;
+    if (!serverProfileId || !browserDeviceId || !trust || !accountRoster)
       return;
+    const changed = trust.status === "identity-changed";
     if (
       !window.confirm(
-        `Trust this member's new account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`,
+        changed
+          ? `Trust this member's new account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`
+          : `Confirm this member's account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`,
       )
     )
       return;
     setMemberMutationError(null);
     try {
-      await retrustMember(
+      await confirmMember(
         { serverProfileId, origin: displayBoundary.profile.origin },
         browserDeviceId,
         userId,
-        trust.presentedIdentity,
+        accountRoster,
       );
     } catch {
       setMemberMutationError({
@@ -1789,7 +1841,72 @@ export const WorkspaceShell = ({
         setSentTransfer(staged);
         setTransferTarget(null);
       },
+      transferFingerprintConfirmed ? transferTargetFingerprint : null,
     );
+
+  useEffect(() => {
+    setTransferFingerprintConfirmed(false);
+    const peer = boundary.peerDevices?.find(
+      (candidate) => candidate.id === transferTarget,
+    );
+    if (!peer) {
+      setTransferTargetFingerprint(null);
+      return;
+    }
+    let cancelled = false;
+    void deviceKeyFingerprint({
+      encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
+      signingPublicKey: hexToBytes(peer.signingPublicKey),
+    })
+      .then((fingerprint) => {
+        if (!cancelled) setTransferTargetFingerprint(fingerprint);
+      })
+      .catch(() => {
+        if (!cancelled) setTransferTargetFingerprint(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transferTarget, boundary.peerDevices]);
+
+  useEffect(() => {
+    const serverProfileId = boundary.profile.serverProfileId;
+    const localDeviceId = boundary.device.id;
+    if (!serverProfileId || !localDeviceId) {
+      setDeviceFingerprint(null);
+      return;
+    }
+    let cancelled = false;
+    const pin = { serverProfileId, origin: boundary.profile.origin };
+    void (async () => {
+      try {
+        const keys = await loadDeviceKeyMaterial(
+          await createBrowserDeviceStorage(pin).load({
+            pin,
+            deviceId: uuidToBytes(localDeviceId),
+          }),
+        );
+        if (!keys.encryptionPublicKey || !keys.signingPublicKey)
+          throw new Error("device public keys are missing");
+        const raw = async (key: CryptoKey) =>
+          new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", key));
+        const fingerprint = await deviceKeyFingerprint({
+          encryptionPublicKey: await raw(keys.encryptionPublicKey),
+          signingPublicKey: await raw(keys.signingPublicKey),
+        });
+        if (!cancelled) setDeviceFingerprint(fingerprint);
+      } catch {
+        if (!cancelled) setDeviceFingerprint(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    boundary.profile.serverProfileId,
+    boundary.profile.origin,
+    boundary.device.id,
+  ]);
 
   // The unlock methods, in display order.
   const unlockMethodOffers = unlockMethods(recoveryWrappers, passkeyAvailable);
@@ -2541,6 +2658,7 @@ export const WorkspaceShell = ({
         removeSessionByKey,
         setSessionsByKey,
         setContextStale,
+        setTrustProblem,
       },
       cancellation,
     );
@@ -2685,6 +2803,10 @@ export const WorkspaceShell = ({
       recoveryWrappers={recoveryWrappers}
       sentTransfer={sentTransfer}
       deviceId={boundary.device.id}
+      deviceFingerprint={deviceFingerprint}
+      transferTargetFingerprint={transferTargetFingerprint}
+      transferFingerprintConfirmed={transferFingerprintConfirmed}
+      onTransferFingerprintConfirmed={setTransferFingerprintConfirmed}
       sessionActive={sessionActive}
       transferIdInput={transferIdInput}
       transferTarget={transferTarget}
@@ -3286,6 +3408,17 @@ export const WorkspaceShell = ({
                   </Button>
                 </div>
               ) : null}
+              {trustProblem && sessionActive ? (
+                <Alert
+                  className="mb-4 border-destructive/40"
+                  data-testid="workspace-trust-problem"
+                >
+                  <AlertTitle>
+                    This browser refused the server's keys
+                  </AlertTitle>
+                  <AlertDescription>{trustProblem}</AlertDescription>
+                </Alert>
+              ) : null}
               {missingResource && sessionActive ? (
                 <Alert
                   className="mb-4 border-amber-300/30 bg-amber-300/5"
@@ -3767,6 +3900,7 @@ export const WorkspaceShell = ({
                                       <div className="font-medium">{label}</div>
                                       <MemberAccountTrust
                                         trust={memberTrust.get(member.userId)}
+                                        self={isSelf}
                                         onTrust={() =>
                                           void trustMemberKey(
                                             member.userId,

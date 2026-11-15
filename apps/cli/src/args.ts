@@ -269,7 +269,7 @@ export const USAGE: Record<string, string> = {
   "device complete": "dotrelay device complete --from <file>",
   "device backup": "dotrelay device backup",
   "device recover":
-    "dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
+    "dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
   "device setup": "dotrelay device setup",
   "device transfer": "dotrelay device transfer | --to <peer-device-id>",
   "device revoke-wrapper": "dotrelay device revoke-wrapper | --wrapper-id <id>",
@@ -640,7 +640,7 @@ const validateCommand = (parsed: MutableArguments) => {
     const hasTransfer = parsed.transfer !== undefined;
     if (hasCodeFile && hasTransfer)
       throw new CliInvocationError(
-        `the device recover command accepts either --recovery-code-file <path> or --transfer <transfer-id>, not both; usage: ${usage}`,
+        `the device recover command accepts either --recovery-code-file <path> or --transfer <transfer-code>, not both; usage: ${usage}`,
       );
   }
   if (

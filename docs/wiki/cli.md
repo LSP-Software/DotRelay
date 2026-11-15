@@ -250,12 +250,17 @@ in `pendingActions`, and `status --json` reports `rotationOwed` with the counts.
 only: nothing is blocked while the rotation is owed.
 
 `team members` lists the linked Team's Members with the state of their account identity:
-verified, unverified (no signed Device roster yet), or blocked because the account key changed or
-the roster rolled back. `--fingerprints` adds each Member's account fingerprint for comparison out
-of band. The first time this installation sees a Member, it pins their identity. `team trust
-<user-id>` re-trusts a Member whose identity changed, after confirmation. Until then the CLI does
-not accept that Member's Devices. Every protected command also verifies this account's own
-roster and publishes a new one when this Device holds the AMK and is not listed yet.
+verified, not confirmed, unverified (no signed Device roster yet, so none of their Devices are
+trusted), or blocked because the account key changed or the roster rolled back. `--fingerprints`
+adds each Member's account fingerprint for comparison out of band. The first time this
+installation sees a Member, it pins their identity: their Revisions verify, but no Project key is
+taken from them until you confirm the fingerprint. `team trust <user-id>` confirms a Member seen
+for the first time, or re-trusts one whose identity changed, after you compare fingerprints;
+`--no-input` requires `--force`. Until a changed identity is re-trusted, the CLI does not accept
+that Member's Devices. Every protected command also verifies this account's own roster and
+publishes a new one when this Device holds the AMK and is not listed yet; a first roster lists only
+this Device. Each installation also pins the highest epoch and the key it accepted for each
+Project, and refuses an older epoch or a different key for the same epoch.
 
 `team list` lists the Teams you belong to with the ids `--team` takes. It also lists Teams you
 joined that are still waiting for their Project keys, and invitations you have not accepted yet,
@@ -271,12 +276,16 @@ or admin chooses **Share project keys** for the Member in the web app's Members 
 `dotrelay team share-keys <github-login-or-user-id>` from a Device that can read every Project in
 the Team. The command reads the service's provisioning plan for that Membership, opens each
 Project's current key, seals it only to Devices in the Member's signed Device roster, and posts
-the signed activation; `--no-input` requires `--force`. The Member then runs `dotrelay pull`.
+the signed activation; `--no-input` requires `--force`. The question names the Member's account
+fingerprint, and sharing confirms it. A Member without a signed Device roster cannot receive keys
+yet. The Member then runs `dotrelay pull`.
 While a Membership is waiting for keys, protected commands in that Repository say so and name
 this step, instead of reporting the Repository as unlinked or creating a second Team and Project
 for it.
 
-`device list` lists this account's active Devices and marks this one.
+`device list` lists this account's active Devices and marks this one, with this Device's key
+fingerprint computed from its own keys. Another Device compares it before sending this one the
+account key.
 
 `pull` writes decrypted Values to `.env` by default. Before any Value is decrypted or moved, `pull`
 checks the output path's Git tracking state in the repository it resolves against (including linked
@@ -438,7 +447,15 @@ request artifact to an existing authorized installation and run `device approve 
 <request>`, which activates the new Device. Return the request artifact to the new
 installation and run `device complete --from <request>`.
 The request contains public protocol objects only; the pending private bundle stays in encrypted
-local Device storage.
+local Device storage. When the approving Device holds the Account Master Key, `device approve` also
+adds the new Device to the account's signed Device roster with the keys from the request.
+
+`device transfer` seals the Account Master Key to another Device of this account. It uses the
+keys the account's signed roster lists for that Device. A Device not listed yet is shown with the
+key fingerprint the Server Profile reports; compare it with `device list` on that Device, and
+answering yes adds it to the roster before the key is sealed. `--no-input` refuses a Device the
+roster does not list. The command prints a transfer code: the transfer id, a dot, and this
+account's fingerprint.
 
 Create a Recovery Code with `device backup`. The 13x4 code is printed once and is the only
 output; it unlocks the account's Account Master Key and is the only recovery path that works on
@@ -448,7 +465,10 @@ Recovery Code is entered at a hidden prompt, piped on stdin, or read from `--rec
 <path>` (a regular 0600 file, never a symlink); it is never placed on the command line and never sent to the Server
 Profile. Recovery uses the Server Profile's account-key routes and never falls back to initial
 bootstrap. `--no-input` requires an explicit profile and a `--recovery-code-file` or `--transfer`
-channel, and never answers a prompt on the user's behalf.
+channel, and never answers a prompt on the user's behalf. `device recover --transfer <code>` takes
+the whole transfer code the sending Device printed. It accepts the key only when the account's
+signed roster lists the sending Device and this one, and only when the key's account fingerprint
+matches the code. A bare transfer id shows the fingerprint and asks; `--no-input` refuses it.
 
 ## Using DotRelay in CI and deploys
 

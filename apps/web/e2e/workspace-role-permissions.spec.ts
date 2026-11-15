@@ -1,14 +1,24 @@
 import {
+  createAccountKeyWrapper,
   createPublicationArtifacts,
+  encodeRecoveryCode,
+  generateAccountMasterKey,
+  generateRecoveryCode,
   type PublicationVariable,
 } from "@dotrelay/client";
 import {
+  canonicalEncode,
   encodeSyncPage,
   importSigningPrivateKey,
   parseProtocolObject,
   sha384,
 } from "@dotrelay/contracts";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import {
+  type BrowserDeviceKeys,
+  createOwnAccountRoster,
+  E2E_HISTORY_DEVICE_ID,
+} from "./account-roster";
 import { trustWorkspaceServer } from "./trust-server";
 
 // Private key paired with E2E_REVISION_SIGNING_TRUST_KEY in
@@ -189,20 +199,90 @@ const buildVerifiedFixturePage = async (devicePublicKey: Uint8Array) => {
   });
 };
 
+// The signed-in Member's own Revisions come from the account's other Device.
+// A browser trusts that Device only once it holds the account's key and the
+// signed roster lists it (ADR 0022), so each spec unlocks with a Recovery
+// Code before reading, as every live session must.
 const installRoutes = async (page: Page) => {
   let devicePublicKey: Uint8Array | null = null;
+  let deviceKeys: BrowserDeviceKeys | null = null;
   let syncPage: Uint8Array | null = null;
+  const accountMasterKey = generateAccountMasterKey();
+  const recoveryCode = generateRecoveryCode();
+  const ownRoster = createOwnAccountRoster({
+    accountMasterKey: () => accountMasterKey,
+    deviceKeys: () => deviceKeys,
+  });
+  await ownRoster.install(page);
   await page.route("**/api/v1/devices/bootstrap**", (route) => {
     if (route.request().method() === "POST") {
       const body = route.request().postData();
       if (body) {
-        const { x25519PublicKey } = JSON.parse(body) as {
+        const { deviceId, x25519PublicKey, ed25519PublicKey } = JSON.parse(
+          body,
+        ) as {
+          readonly deviceId?: string;
           readonly x25519PublicKey?: string;
+          readonly ed25519PublicKey?: string;
         };
         if (x25519PublicKey) devicePublicKey = hexToBytes(x25519PublicKey);
+        if (deviceId && x25519PublicKey && ed25519PublicKey)
+          deviceKeys = {
+            id: deviceId,
+            encryptionPublicKey: x25519PublicKey,
+            signingPublicKey: ed25519PublicKey,
+          };
       }
     }
     return route.fulfill({ json: {} });
+  });
+  // The service reports the keys this browser enrolled with, and the
+  // account's roster once the browser can verify it.
+  await page.route("**/api/workspace/boundary**", async (route) => {
+    let body: Record<string, unknown>;
+    try {
+      body = (await (await route.fetch()).json()) as Record<string, unknown>;
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const device = body.device as Record<string, unknown> | undefined;
+    if (device?.active === true && deviceKeys) {
+      device.encryptionPublicKey = deviceKeys.encryptionPublicKey;
+      device.signingPublicKey = deviceKeys.signingPublicKey;
+    }
+    await ownRoster.inject(body);
+    await route.fulfill({ json: body });
+  });
+  await page.route("**/api/v1/account-keys/wrappers**", async (route) => {
+    if (route.request().method() !== "GET")
+      return route.fulfill({ json: { wrapperId: "", idempotent: false } });
+    const wrapper = await createAccountKeyWrapper({
+      serverProfileId: fixtureIds.serverProfileId,
+      userId: hexToBytes(fixtureIds.actorUserId.replaceAll("-", "")),
+      deviceId: hexToBytes(E2E_HISTORY_DEVICE_ID.replaceAll("-", "")),
+      userIdentityGeneration: 1,
+      createdAtMs: Date.now(),
+      accountMasterKey,
+      signingPrivateKey: await importSigningPrivateKey(
+        hexToBytes(REVISION_SIGNING_PRIVATE_KEY),
+      ),
+      kind: { type: "recoveryCode", recoveryCode },
+    });
+    return route.fulfill({
+      json: {
+        wrappers: [
+          {
+            wrapperId: Buffer.from(wrapper.wrapperId).toString("hex"),
+            type: "recovery-code",
+            object: Buffer.from(canonicalEncode(wrapper.object)).toString(
+              "base64",
+            ),
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      },
+    });
   });
   await page.route(/\/api\/v1\/environments\/.*\/sync/, async (route) => {
     if (!devicePublicKey) {
@@ -212,6 +292,27 @@ const installRoutes = async (page: Page) => {
     if (!syncPage) syncPage = await buildVerifiedFixturePage(devicePublicKey);
     await route.fulfill({ body: Buffer.from(syncPage), status: 200 });
   });
+  return { recoveryCode: encodeRecoveryCode(recoveryCode) };
+};
+
+// Unlocks this browser's account key with the Recovery Code, then returns
+// to the Project.
+const unlockAccount = async (page: Page, recoveryCode: string) => {
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Recovery" })
+    .click();
+  const unlock = page.getByTestId("recovery-unlock");
+  await expect(unlock).toBeVisible();
+  await unlock.getByTestId("recovery-code-input").fill(recoveryCode);
+  await unlock.getByRole("button", { name: "Unlock" }).click();
+  await expect(page.getByTestId("recovery-status")).toBeVisible({
+    timeout: 30_000,
+  });
+  await page
+    .locator("aside")
+    .getByRole("button", { name: "LSP-Software / DotRelay" })
+    .click();
 };
 
 const openFirstProject = async (page: Page) => {
@@ -250,7 +351,7 @@ test("a Member reads every Value but edits only the Values they provided or own"
   page,
 }) => {
   test.setTimeout(90_000);
-  await installRoutes(page);
+  const { recoveryCode } = await installRoutes(page);
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
   // Setting the preview role switches the main view to the Team page, which
@@ -262,6 +363,7 @@ test("a Member reads every Value but edits only the Values they provided or own"
     .getByRole("button", { name: "LSP-Software / DotRelay" })
     .click();
   await enrollBrowserAndReturn(page);
+  await unlockAccount(page, recoveryCode);
   const editor = await editorReady(page);
 
   await expect(editor.getByTestId("member-permissions-note")).toBeVisible();
@@ -340,11 +442,12 @@ test("demoting to Member mid-draft removes the Values the new role cannot publis
   page,
 }) => {
   test.setTimeout(90_000);
-  await installRoutes(page);
+  const { recoveryCode } = await installRoutes(page);
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
   await openFirstProject(page);
   await enrollBrowserAndReturn(page);
+  await unlockAccount(page, recoveryCode);
   const editor = await editorReady(page);
 
   await expect(editor.getByTestId("member-permissions-note")).toBeHidden();
@@ -398,11 +501,12 @@ test("an Owner edits every Value, adds Variables, and may roll back any Value", 
   page,
 }) => {
   test.setTimeout(90_000);
-  await installRoutes(page);
+  const { recoveryCode } = await installRoutes(page);
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
   await openFirstProject(page);
   await enrollBrowserAndReturn(page);
+  await unlockAccount(page, recoveryCode);
   const editor = await editorReady(page);
 
   await expect(editor.getByTestId("member-permissions-note")).toBeHidden();
@@ -429,7 +533,7 @@ test("history names each revision's author from the Team's members", async ({
   page,
 }) => {
   test.setTimeout(90_000);
-  await installRoutes(page);
+  const { recoveryCode } = await installRoutes(page);
   await page.route("**/api/v1/teams/*/memberships", (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return route.fulfill({
@@ -462,6 +566,7 @@ test("history names each revision's author from the Team's members", async ({
   await trustWorkspaceServer(page);
   await openFirstProject(page);
   await enrollBrowserAndReturn(page);
+  await unlockAccount(page, recoveryCode);
   const editor = await editorReady(page);
 
   const rows = editor.getByTestId(/history-revision-/);

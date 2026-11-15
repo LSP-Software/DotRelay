@@ -92,6 +92,12 @@ export type RecoveryAreaProps = Readonly<{
   readonly transferIdInput: string;
   readonly onTransferIdInput: (value: string) => void;
   readonly deviceId: string | undefined;
+  /** This browser's key fingerprint, from its local keys (ADR 0022). */
+  readonly deviceFingerprint?: string | null;
+  /** The chosen receiving Device's key fingerprint, as the server reports it. */
+  readonly transferTargetFingerprint?: string | null;
+  readonly transferFingerprintConfirmed?: boolean;
+  readonly onTransferFingerprintConfirmed?: (confirmed: boolean) => void;
   readonly peerDevices:
     | readonly Readonly<{
         readonly id: string;
@@ -101,6 +107,7 @@ export type RecoveryAreaProps = Readonly<{
     | undefined;
   readonly sentTransfer: Readonly<{
     readonly transferId: string;
+    readonly transferCode: string;
     readonly expiresAt: string;
     readonly recipientDeviceId: string;
   }> | null;
@@ -145,6 +152,10 @@ export const RecoveryArea = ({
   transferIdInput,
   onTransferIdInput,
   deviceId,
+  deviceFingerprint = null,
+  transferTargetFingerprint = null,
+  transferFingerprintConfirmed = false,
+  onTransferFingerprintConfirmed,
   peerDevices,
   sentTransfer,
   transferTarget,
@@ -393,7 +404,7 @@ export const RecoveryArea = ({
               {unlockMethod === "transfer" ? (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="transfer-id-input">Transfer ID</Label>
+                    <Label htmlFor="transfer-id-input">Transfer code</Label>
                     <Input
                       autoComplete="off"
                       data-testid="transfer-id-input"
@@ -402,16 +413,27 @@ export const RecoveryArea = ({
                       onChange={(event) =>
                         onTransferIdInput(event.target.value)
                       }
-                      placeholder="0123456789abcdef0123456789abcdef"
+                      placeholder="0123456789abcdef0123456789abcdef.fingerprint"
                       value={transferIdInput}
                     />
                   </div>
                   <div className="space-y-4 text-sm text-muted-foreground">
                     <p>
-                      A transfer ID is created by a device that already has this
-                      account unlocked. It works once, and only for a few
-                      minutes.
+                      A transfer code is created by a device that already has
+                      this account unlocked. It works once, and only for a few
+                      minutes. It ends with that account's fingerprint, which
+                      this browser checks before it accepts the key.
                     </p>
+                    {deviceFingerprint ? (
+                      <p data-testid="device-fingerprint">
+                        If the sending device asks you to compare fingerprints,
+                        this browser's is{" "}
+                        <code className="text-foreground">
+                          {deviceFingerprint}
+                        </code>
+                        .
+                      </p>
+                    ) : null}
                     <div className="space-y-2">
                       <p className="font-medium text-foreground">
                         From the CLI
@@ -420,8 +442,8 @@ export const RecoveryArea = ({
                         On that device, run{" "}
                         <InlineCommand value="dotrelay device transfer" /> and
                         choose this browser from the list. It prints a transfer
-                        ID. Paste that ID in the field above. Or run this
-                        command, which already names this browser:
+                        code. Paste the whole code in the field above. Or run
+                        this command, which already names this browser:
                       </p>
                       <CopyableCommand
                         data-testid="transfer-cli-command"
@@ -461,7 +483,7 @@ export const RecoveryArea = ({
                           )}
                         </li>
                         <li>
-                          Copy the transfer ID it shows and paste it in the
+                          Copy the transfer code it shows and paste it in the
                           field above.
                         </li>
                       </ol>
@@ -725,7 +747,7 @@ export const RecoveryArea = ({
               </CardTitle>
               <CardDescription>
                 Hand this account's key to another of your devices. Creating a
-                transfer shows a transfer ID sealed to that device. It works
+                transfer shows a transfer code sealed to that device. It works
                 once and expires after a few minutes.
               </CardDescription>
             </CardHeader>
@@ -736,18 +758,19 @@ export const RecoveryArea = ({
                   className="rounded-lg border border-primary/25 bg-primary/5 p-3"
                   role="status"
                 >
-                  <p className="text-sm font-medium">Transfer ID</p>
+                  <p className="text-sm font-medium">Transfer code</p>
                   <p className="mt-1">
-                    <InlineCommand value={sentTransfer.transferId} />
+                    <InlineCommand value={sentTransfer.transferCode} />
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Sealed for {sentTransfer.recipientDeviceId}. Redeemable
                     until {new Date(sentTransfer.expiresAt).toLocaleString()}.
-                    On the receiving device, paste this transfer ID into
-                    Recovery and choose From another device. On that device's
-                    CLI, run{" "}
+                    The code ends with this account's fingerprint, which the
+                    receiving device checks. On the receiving device, paste the
+                    whole code into Recovery and choose From another device. On
+                    that device's CLI, run{" "}
                     <InlineCommand
-                      value={`dotrelay device recover --transfer ${sentTransfer.transferId}`}
+                      value={`dotrelay device recover --transfer ${sentTransfer.transferCode}`}
                     />
                     .
                   </p>
@@ -777,6 +800,32 @@ export const RecoveryArea = ({
                     </option>
                   ))}
                 </select>
+                {transferTargetFingerprint ? (
+                  <div
+                    className="space-y-1 text-xs"
+                    data-testid="transfer-target-fingerprint"
+                  >
+                    <p className="text-muted-foreground">
+                      The server reports this device's key fingerprint as{" "}
+                      <code>{transferTargetFingerprint}</code>. That device
+                      shows its own under Recovery, or with{" "}
+                      <code>dotrelay device list</code>. If it isn't in your
+                      signed device list yet, it is added once you confirm.
+                    </p>
+                    <label className="flex items-center gap-2">
+                      <input
+                        checked={transferFingerprintConfirmed}
+                        data-testid="transfer-fingerprint-confirmed"
+                        disabled={recoveryBusy}
+                        onChange={(event) =>
+                          onTransferFingerprintConfirmed?.(event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      The fingerprints match
+                    </label>
+                  </div>
+                ) : null}
                 <Button
                   data-testid="send-transfer-confirm"
                   disabled={recoveryBusy || transferTarget === null}

@@ -24,7 +24,9 @@ const fixtureIds = {
   teamId: "00000000-0000-4000-8000-000000000011",
   projectId: "00000000-0000-4000-8000-000000000021",
   environmentId: "00000000-0000-4000-8000-000000000031",
-  actorUserId: "00000000-0000-4000-8000-000000000061",
+  // A teammate authors the synthetic history: the browser verifies it
+  // against the teammate's signed roster the fixture serves (ADR 0022).
+  actorUserId: "00000000-0000-4000-8000-000000000071",
   actorDeviceId: "00000000-0000-4000-8000-000000000040",
 };
 
@@ -224,8 +226,11 @@ for (const lostResponse of [false, true])
     await expect(editor.getByLabel("OPTIONAL_FLAG Value")).toBeEnabled();
 
     // The verified history identifies the synced Revision by its change kind
-    // and names its author from the signed Revision: here, the acting User.
-    await expect(editor.getByText("You", { exact: true })).toBeVisible();
+    // and names its author from the signed Revision: here, the teammate who
+    // authored the fixture's history, whose name this page has not loaded.
+    await expect(
+      editor.getByText("Unknown member", { exact: true }),
+    ).toBeVisible();
     await expect(
       editor.getByText("Changed OPTIONAL_FLAG, FEATURE_GATE", { exact: true }),
     ).toBeVisible();

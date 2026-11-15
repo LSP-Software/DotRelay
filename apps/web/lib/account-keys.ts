@@ -4,11 +4,9 @@ import {
   type AccountKeyWrapper,
   decodeRecoveryCode,
   openAccountKeyEnvelope,
-  openAccountKeyTransfer,
   type ProjectEpochGrantVerification,
   type ProtocolObject,
   parseAccountKeyEnvelope,
-  parseAccountKeyTransfer,
   parseAccountKeyWrapper,
   unwrapAccountKeyWrapper,
 } from "@dotrelay/client";
@@ -504,45 +502,82 @@ export const acknowledgeAccountKeyTransfer = async (
 
 export { accountKeyTransferAcknowledgementMessage };
 
-// The trust set an account-key object's signature is checked against: the
-// local Device's signing key, the boundary's Team trust keys and Devices,
-// the boundary's own Device key, and every peer Device key. API responses
-// may name a creator Device only after that key has been authenticated
-// against Device trust history. A key that merely arrived with the object
-// is not a trust anchor. Mirrors accountKeyTrustedKeys in the CLI.
+const signerKeys = (
+  localSigningPublicKey: Uint8Array,
+  vouched: readonly string[],
+): Uint8Array[] => {
+  const keys: Uint8Array[] = [localSigningPublicKey];
+  const seen = new Set<string>([bytesToHex(localSigningPublicKey)]);
+  for (const value of vouched) {
+    try {
+      const bytes = hexToBytes(value);
+      const hex = bytesToHex(bytes);
+      if (seen.has(hex)) continue;
+      seen.add(hex);
+      keys.push(bytes);
+    } catch {
+      // A malformed key vouches for nothing.
+    }
+  }
+  return keys;
+};
+
+// The signing keys the service reports for this account's own Devices.
+export const reportedAccountSigningKeys = (
+  boundary: WorkspaceBoundary,
+): readonly string[] => [
+  ...(boundary.device.signingPublicKey
+    ? [boundary.device.signingPublicKey]
+    : []),
+  ...(boundary.peerDevices ?? [])
+    .map((peer) => peer.signingPublicKey)
+    .filter((key) => key.length > 0),
+  ...(boundary.signingTrustDevices ?? [])
+    .filter((device) => device.userId === boundary.session.userId)
+    .map((device) => device.signingPublicKey),
+];
+
+// The keys accepted on an Account Key Envelope or Wrapper: this browser's
+// key, this account's roster Devices, and the keys the service reports for
+// this account's Devices. Those objects are sealed under the Account Master
+// Key or a User-held secret, so the seal authenticates them and the
+// signature only attributes them (ADR 0022). An Account Key Transfer is
+// sealed to a public key and is never checked this way. A creator key that
+// arrived with an object counts only when it is already one of these.
+// Mirrors accountKeyTrustedKeys in the CLI.
 export const accountKeyTrustedKeys = (
   boundary: WorkspaceBoundary,
   localSigningPublicKey: Uint8Array,
   extraKeys: readonly string[] = [],
 ): AccountKeyTrustedKeys => {
-  const keys: Uint8Array[] = [localSigningPublicKey];
-  const seen = new Set<string>([bytesToHex(localSigningPublicKey)]);
-  const addHex = (value: string): void => {
-    try {
-      const bytes = hexToBytes(value);
-      const hex = bytesToHex(bytes);
-      if (seen.has(hex)) return;
-      seen.add(hex);
-      keys.push(bytes);
-    } catch {
-      // ignore malformed keys
-    }
-  };
-  for (const device of boundary.signingTrustDevices ?? [])
-    addHex(device.signingPublicKey);
-  for (const key of boundary.signingTrustKeys ?? []) addHex(key);
-  if (boundary.device.signingPublicKey)
-    addHex(boundary.device.signingPublicKey);
-  for (const peer of boundary.peerDevices ?? [])
-    if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
-  for (const key of extraKeys) addHex(key);
-  return Object.freeze({ keys });
+  const known = [
+    ...(boundary.verifiedSigners?.account ?? []),
+    ...(boundary.verifiedSigners?.reportedAccount ??
+      reportedAccountSigningKeys(boundary)),
+  ];
+  const vouched = new Set(known.map((key) => key.toLowerCase()));
+  return Object.freeze({
+    keys: signerKeys(localSigningPublicKey, [
+      ...known,
+      ...extraKeys.filter((key) => vouched.has(key.toLowerCase())),
+    ]),
+  });
 };
 
+// The keys trusted to have signed a Project Epoch Key Link: every Device a
+// verified roster lists. The AES-GCM tag under the newer key authenticates
+// the sealed key; the signature attributes it.
+export const historySigningKeys = (
+  boundary: WorkspaceBoundary,
+  localSigningPublicKey: Uint8Array,
+): Uint8Array[] =>
+  signerKeys(localSigningPublicKey, boundary.verifiedSigners?.history ?? []);
+
 // What a Project grant on this boundary must prove before it is opened: a
-// signature by a Device in this browser's signing trust history, addressed to
-// this Device, for the boundary's Project and epoch on this Server Profile and
-// Team. A grant the server forged or redirected fails before decryption.
+// signature by an active Device of this account or of a teammate the user
+// confirmed (ADR 0022), addressed to this Device, for the boundary's Project
+// and epoch on this Server Profile and Team. A grant the server forged or
+// redirected fails before decryption.
 export const projectGrantVerification = (
   boundary: WorkspaceBoundary,
 ): ProjectEpochGrantVerification => {
@@ -559,10 +594,10 @@ export const projectGrantVerification = (
         : {}),
       ...(environment.teamId ? { teamId: environment.teamId } : {}),
     }),
-    trustedSigningKeys: accountKeyTrustedKeys(
-      boundary,
+    trustedSigningKeys: signerKeys(
       hexToBytes(device.signingPublicKey),
-    ).keys,
+      boundary.verifiedSigners?.grant ?? [],
+    ),
   });
 };
 
@@ -673,43 +708,9 @@ export const unlockWithPasskeyPrf = async (
   }
 };
 
-// Transfer path: the caller redeemed the transfer via accept; this opens the
-// X25519 envelope sealed to the actor's Device key after binding the
-// transfer to that Device and its expiry window.
-export const openAccountKeyTransferForDevice = async (
-  transferObjectB64: string,
-  recipientX25519PrivateKey: CryptoKey,
-  verification: Readonly<{
-    readonly trustedKeys: AccountKeyTrustedKeys;
-    readonly context: AccountKeyVerificationContext;
-    readonly ownDeviceId: Uint8Array;
-    readonly nowMs: number;
-  }>,
-): Promise<Readonly<{ readonly accountMasterKey: Uint8Array }>> => {
-  let transfer: ReturnType<typeof parseAccountKeyTransfer>;
-  try {
-    transfer = parseAccountKeyTransfer(fromBase64(transferObjectB64));
-  } catch {
-    throw unwrapError();
-  }
-  try {
-    const accountMasterKey = await openAccountKeyTransfer(
-      transfer,
-      recipientX25519PrivateKey,
-      {
-        trustedKeys: verification.trustedKeys,
-        context: {
-          ...verification.context,
-          ownDeviceId: verification.ownDeviceId,
-          nowMs: verification.nowMs,
-        },
-      },
-    );
-    return Object.freeze({ accountMasterKey });
-  } catch {
-    throw unwrapError();
-  }
-};
+// A transfer is opened with openAccountKeyTransferWithRoster in
+// account-recovery.ts: it is sealed to a public key, so only the account's
+// own signed roster may vouch for its sender (ADR 0022).
 
 // The boundary's Account Key Envelope for the open Project Epoch, when it
 // matches this Project and epoch: the content key is the shared Value

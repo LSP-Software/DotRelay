@@ -143,7 +143,7 @@ describe("command help contract", () => {
     expect(rollback.stdout).not.toBe(`${everyday}\n`);
     const recover = await run(["device", "recover", "--help"]);
     expect(recover.stdout).toContain(
-      "Usage: dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
+      "Usage: dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
     );
     const begin = await run(["device", "begin", "--help"]);
     expect(begin.stdout).toContain(
@@ -170,7 +170,7 @@ describe("command help contract", () => {
     expect(one.stdout).toContain("--variable");
     const nested = await run(["help", "device", "recover"]);
     expect(nested.stdout).toContain(
-      "Usage: dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
+      "Usage: dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
     );
     const group = await run(["help", "profile"]);
     expect(group.stdout).toContain("Subcommands:");

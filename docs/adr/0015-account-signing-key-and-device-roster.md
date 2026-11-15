@@ -1,6 +1,10 @@
 # Account signing key, signed Device roster, and pinned teammates
 
-Status: accepted
+Status: accepted; amended by
+[ADR 0022](0022-client-trust-anchors-and-key-adoption.md), which removes the upgrade window (a
+User without a roster is not trusted), takes the first roster from the publishing Device only,
+pins a teammate on first sight for history and confirms it for keys, and anchors Device handoffs in
+the roster.
 
 Clients used to take Device signing and encryption keys from the service's boundary JSON
 (`signingTrustDevices`, `peerDevices`, provisioning plans) and trust them. A service that is

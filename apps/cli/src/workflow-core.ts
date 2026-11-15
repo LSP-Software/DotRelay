@@ -104,6 +104,12 @@ export type Boundary = Readonly<{
   readonly accountRosters: ReadonlyMap<string, string | null>;
   readonly signingTrustKeys: readonly string[];
   readonly signingTrustDevices: readonly SigningTrustDevice[];
+  /**
+   * Set only on a boundary narrowed by account trust (ADR 0015, ADR 0022):
+   * the Ed25519 keys (hex) a verified roster vouches for, by what they may
+   * sign. A boundary without it trusts only this Device's own key.
+   */
+  readonly verifiedSigners?: VerifiedSigners;
   readonly peerDevices: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
@@ -114,6 +120,25 @@ export type Boundary = Readonly<{
     readonly osName?: string;
     readonly clientSummary?: string;
   }>[];
+}>;
+
+export type VerifiedSigners = Readonly<{
+  /** This account's roster Devices, active or revoked. */
+  readonly account: readonly string[];
+  /**
+   * The keys the service reports for this account's Devices, before any
+   * narrowing. They attribute Account Key Envelopes and Wrappers only: those
+   * are sealed under the Account Master Key or a User-held secret, and that
+   * seal, not the signature, is what the service cannot forge.
+   */
+  readonly reportedAccount: readonly string[];
+  /**
+   * Active Devices of this account and of confirmed teammates: Project key
+   * grants, which carry key material on the signer's word alone.
+   */
+  readonly grant: readonly string[];
+  /** Every roster-verified Device: Revisions and key chain links. */
+  readonly history: readonly string[];
 }>;
 
 export type RotationOwed = Readonly<{
@@ -550,44 +575,82 @@ export const rotationOwedNotice = (owed: RotationOwed): string => {
   return `${what} since ${since}. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.`;
 };
 
-// Assemble the set of Ed25519 signing public keys (raw 32-byte) that are
-// trusted to have signed an account-key object on this Server Profile: the
-// local Device's key, the boundary's signing-trust devices, and peer Devices.
-// A creatorPublicKey from an API response is not added unless
-// authenticatedCreatorKeys has already found that key in this history.
+const signerKeys = (
+  localSigningPublicKey: Uint8Array,
+  vouched: readonly string[],
+): Uint8Array[] => {
+  const keys: Uint8Array[] = [localSigningPublicKey];
+  const seen = new Set<string>([bytesToHex(localSigningPublicKey)]);
+  for (const value of vouched) {
+    try {
+      const bytes = hexToBytes(value);
+      const hex = bytesToHex(bytes);
+      if (seen.has(hex)) continue;
+      seen.add(hex);
+      keys.push(bytes);
+    } catch {
+      // A malformed key vouches for nothing.
+    }
+  }
+  return keys;
+};
+
+// The signing keys the service reports for this account's own Devices.
+export const reportedAccountSigningKeys = (
+  boundary: Boundary,
+): readonly string[] => [
+  ...(boundary.device.signingPublicKey
+    ? [boundary.device.signingPublicKey]
+    : []),
+  ...boundary.peerDevices
+    .map((peer) => peer.signingPublicKey)
+    .filter((key) => key.length > 0),
+  ...boundary.signingTrustDevices
+    .filter((device) => device.userId === boundary.session.userId)
+    .map((device) => device.signingPublicKey),
+];
+
+// The Ed25519 keys (raw 32-byte) accepted on an Account Key Envelope or
+// Wrapper on this Server Profile: this Device's key, this account's roster
+// Devices, and the keys the service reports for this account's Devices.
+// These objects are sealed under the Account Master Key or a User-held
+// secret, so the seal authenticates them and the signature only attributes
+// them (ADR 0022). An Account Key Transfer is sealed to a public key and is
+// never checked this way: see openAccountKeyTransferWithRoster. A creator key
+// that arrived with an object counts only when it is already one of these.
 export const accountKeyTrustedKeys = (
   boundary: Boundary,
   localSigningPublicKey: Uint8Array,
   extraKeys: readonly string[] = [],
 ): AccountKeyTrustedKeys => {
-  const keys: Uint8Array[] = [localSigningPublicKey];
-  const seen = new Set<string>([bytesToHex(localSigningPublicKey)]);
-  const addHex = (value: string): void => {
-    try {
-      const bytes = hexToBytes(value);
-      const hex = bytesToHex(bytes);
-      if (seen.has(hex)) return;
-      seen.add(hex);
-      keys.push(bytes);
-    } catch {
-      // ignore malformed keys
-    }
-  };
-  for (const device of boundary.signingTrustDevices)
-    addHex(device.signingPublicKey);
-  for (const key of boundary.signingTrustKeys) addHex(key);
-  if (boundary.device.signingPublicKey)
-    addHex(boundary.device.signingPublicKey);
-  for (const peer of boundary.peerDevices)
-    if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
-  for (const key of extraKeys) addHex(key);
-  return Object.freeze({ keys });
+  const known = [
+    ...(boundary.verifiedSigners?.account ?? []),
+    ...(boundary.verifiedSigners?.reportedAccount ??
+      reportedAccountSigningKeys(boundary)),
+  ];
+  const vouched = new Set(known.map((key) => key.toLowerCase()));
+  return Object.freeze({
+    keys: signerKeys(localSigningPublicKey, [
+      ...known,
+      ...extraKeys.filter((key) => vouched.has(key.toLowerCase())),
+    ]),
+  });
 };
 
+// The keys trusted to have signed a Project Epoch Key Link: every Device a
+// verified roster lists. The link's AES-GCM tag under the newer key is what
+// authenticates the sealed key; the signature attributes it.
+export const historySigningKeys = (
+  boundary: Boundary,
+  localSigningPublicKey: Uint8Array,
+): Uint8Array[] =>
+  signerKeys(localSigningPublicKey, boundary.verifiedSigners?.history ?? []);
+
 // What a Project grant on this boundary must prove before it is opened: a
-// signature by a Device in the signing trust history, addressed to this
-// Device, for the boundary's Project and epoch on this Server Profile and
-// Team. A grant the server forged or redirected fails before decryption.
+// signature by an active Device of this account or of a teammate the user
+// confirmed (ADR 0022), addressed to this Device, for the boundary's Project
+// and epoch on this Server Profile and Team. A grant the server forged or
+// redirected fails before decryption.
 export const projectGrantVerification = (
   boundary: Boundary,
   deviceId: string,
@@ -612,8 +675,10 @@ export const projectGrantVerification = (
         ? { teamId: boundary.environment.teamId }
         : {}),
     }),
-    trustedSigningKeys: accountKeyTrustedKeys(boundary, localSigningPublicKey)
-      .keys,
+    trustedSigningKeys: signerKeys(
+      localSigningPublicKey,
+      boundary.verifiedSigners?.grant ?? [],
+    ),
   });
 };
 
@@ -741,6 +806,22 @@ export const terminalConfirm = async (
     if (error instanceof CliInvocationError) throw error;
     throw new CliInvocationError(UNREADABLE_TERMINAL_MESSAGE);
   }
+};
+
+// A yes/no question shown in full here, such as a fingerprint comparison:
+// unlike confirmSilent, nothing printed it before.
+export const confirmPrompt = async (
+  options: WorkflowOptions,
+  question: string,
+): Promise<boolean> => {
+  if (options.confirm) return options.confirm(question);
+  if (options.noInput)
+    throw new CliInvocationError(
+      "this command requires interactive input; remove --no-input to answer the prompt",
+    );
+  if (options.prompt)
+    return parseConfirmAnswer(await options.prompt(`${question} [y/N]`));
+  return terminalConfirm(options, question, false);
 };
 
 // The review frame has already printed the question, so the terminal read

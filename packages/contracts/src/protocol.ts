@@ -336,6 +336,17 @@ const validateConditionalValues = (
         contractError("invalid_crypto_object");
     }
   }
+  if (kind === 13) {
+    // Field 50 names the lane's associated-data layout (ADR 0022). Format 2
+    // binds the Environment, Variable and Revision, so it must carry them.
+    const laneFormat = numberValue(mapValue(object, 50));
+    validateEnumSet(laneFormat, [1, 2]);
+    if (
+      laneFormat === 2 &&
+      (!fields.has(14) || !fields.has(15) || !fields.has(16))
+    )
+      contractError("invalid_crypto_object");
+  }
   if (kind === 23) {
     const fromEpoch = bigintValue(mapValue(object, 62));
     const toEpoch = bigintValue(mapValue(object, 63));

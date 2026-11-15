@@ -1604,6 +1604,16 @@ try {
     );
   const transferResult = parseJsonLines(transfer.stdout).at(-1) ?? {};
   const transferId = requireString(transferResult.transferId, "transfer id");
+  // The receiving Device takes the whole transfer code: the transfer id and
+  // the account fingerprint it checks the sealed key against (ADR 0022).
+  const transferCode = requireString(
+    transferResult.transferCode,
+    "transfer code",
+  );
+  if (!transferCode.startsWith(`${transferId}.`))
+    throw new Error(
+      `the transfer code does not name the transfer: ${JSON.stringify(transferResult)}`,
+    );
   if (transferResult.recipientDeviceId !== device3.deviceId)
     throw new Error(
       `transfer targeted the wrong Device: ${JSON.stringify(transferResult)}`,
@@ -1624,7 +1634,7 @@ try {
       "recover",
       ...profileFlag,
       "--transfer",
-      transferId,
+      transferCode,
       "--no-input",
       "--json",
     ],
@@ -1666,7 +1676,7 @@ try {
       "recover",
       ...profileFlag,
       "--transfer",
-      transferId,
+      transferCode,
       "--no-input",
       "--json",
     ],

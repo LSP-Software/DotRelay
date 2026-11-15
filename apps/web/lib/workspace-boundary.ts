@@ -117,6 +117,21 @@ export type WorkspaceBoundary = Readonly<{
   readonly rotationRequired: boolean;
   readonly signingTrustKeys?: readonly string[];
   readonly signingTrustDevices?: readonly WorkspaceSigningTrustDevice[];
+  /**
+   * Set only on a boundary narrowed by account trust (ADR 0015, ADR 0022):
+   * the Ed25519 keys (hex) a verified roster vouches for, by what they may
+   * sign. A boundary without it trusts only this browser's own key.
+   */
+  readonly verifiedSigners?: Readonly<{
+    /** This account's roster Devices, active or revoked. */
+    readonly account: readonly string[];
+    /** Keys the service reports for this account's Devices: AMK-sealed objects only. */
+    readonly reportedAccount: readonly string[];
+    /** Active Devices of this account and of confirmed teammates: grants. */
+    readonly grant: readonly string[];
+    /** Every roster-verified Device: Revisions and key chain links. */
+    readonly history: readonly string[];
+  }>;
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;
   readonly userValueKeyEnvelope?: string;
@@ -511,6 +526,19 @@ export const emptyWorkspaceBoundary = (
 // private key signs the synthetic sync pages served by the e2e specs.
 export const E2E_REVISION_SIGNING_TRUST_KEY =
   "302a300506032b65700321003106030b2495aaa5b5cdf8c65c723e8f81717a8eeebd45db288714034c80a978";
+// The same key in the raw form an Account Device roster lists: an Ed25519
+// SubjectPublicKeyInfo ends with the 32-byte raw key.
+export const E2E_REVISION_SIGNING_RAW_KEY =
+  E2E_REVISION_SIGNING_TRUST_KEY.slice(-64);
+// The Device that signs the fixture's history, and the fixture's teammate.
+const E2E_HISTORY_DEVICE_ID = "00000000-0000-4000-8000-000000000040";
+const E2E_TEAMMATE_USER_ID = "00000000-0000-4000-8000-000000000071";
+// The teammate's Account Device roster (ADR 0015), signed by a fixed
+// test-only account key (32 bytes of 0x71). It lists the history Device, so
+// a browser can verify the teammate's Revisions without unlocking anything,
+// as it would for any teammate it sees for the first time (ADR 0022).
+const E2E_TEAMMATE_ROSTER =
+  "qwADARgYAgEDWMKpAAMBGBgCAQhQAAAAAAAAQACAAAAAAAAAYglQAAAAAAAAQACAAAAAAAAAcRggGwAAAYvP5WgAGClYIETirk6GetbFfp4+DZcs8r0AIVVZX7tfrXKoasFvPUMaGGIBGGOBpQpQAAAAAAAAQACAAAAAAAAAQBggABgnWCBmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZhgpWCAxBgMLJJWqpbXN+MZccj6PgXF6ju69RdsohxQDTICpeBhPAgRYQLCtCiW0xr4s9MWEArXurJsjbk3OFgzHdhpjvi1TyktDSjMKHrmQTVmNlbwjVeFxp6oyav4in7aM+q/b9+P6gAIIUAAAAAAAAEAAgAAAAAAAAGIJUAAAAAAAAEAAgAAAAAAAAHEYIBsAAAGLz+VoABgpWCBE4q5OhnrWxX6ePg2XLPK9ACFVWV+7X61yqGrBbz1DGhhiARhjgaUKUAAAAAAAAEAAgAAAAAAAAEAYIAAYJ1ggZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmYYKVggMQYDCySVqqW1zfjGXHI+j4Fxeo7uvUXbKIcUA0yAqXgYTwI=";
 
 export const e2eWorkspaceBoundary = (
   profileId: WorkspaceProfileId,
@@ -598,18 +626,24 @@ export const e2eWorkspaceBoundary = (
     epochCurrent: true,
     rotationRequired: false,
     signingTrustKeys: [E2E_REVISION_SIGNING_TRUST_KEY],
+    // The fixture's synthetic history is signed by one key, attributed to a
+    // teammate and to the signed-in User's other Device. Every entry names
+    // its User and Device, so the browser can check it against that User's
+    // signed roster: the teammate's roster is served below, and the own
+    // account's only once a spec unlocks its Account Master Key.
     signingTrustDevices: [
-      {
-        // The fixture's synthetic history is signed by one key under several
-        // authors, so the entry names no identity: the open window verifies
-        // the specs' pages like a live Team's history would.
-        signingPublicKey: E2E_REVISION_SIGNING_TRUST_KEY,
-        deviceActiveFromMs: 0,
-        deviceActiveUntilMs: null,
-        memberSinceMs: 0,
-        memberUntilMs: null,
-      },
-    ],
+      "00000000-0000-4000-8000-000000000061",
+      E2E_TEAMMATE_USER_ID,
+    ].map((userId) => ({
+      userId,
+      deviceId: E2E_HISTORY_DEVICE_ID,
+      signingPublicKey: E2E_REVISION_SIGNING_RAW_KEY,
+      deviceActiveFromMs: 0,
+      deviceActiveUntilMs: null,
+      memberSinceMs: 0,
+      memberUntilMs: null,
+    })),
+    accountRosters: { [E2E_TEAMMATE_USER_ID]: E2E_TEAMMATE_ROSTER },
     ...(options?.accountKeyEnvelope
       ? { accountKeyEnvelope: options.accountKeyEnvelope }
       : {}),
