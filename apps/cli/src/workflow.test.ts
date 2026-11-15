@@ -617,6 +617,7 @@ afterEach(async () => {
     if (
       file.startsWith(".tmp-workflow-code-") ||
       file.startsWith(".tmp-workflow-git-") ||
+      file.startsWith(".tmp-workflow-link-") ||
       file.startsWith(".tmp-workflow-profile-") ||
       file.startsWith(".tmp-workflow-state-") ||
       file.startsWith("head-") ||
