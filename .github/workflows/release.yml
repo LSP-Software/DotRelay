@@ -355,6 +355,10 @@ jobs:
             ${{ steps.provenance.outputs.bundle-path }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
       # Platform packages publish first and the selector last; a re-run
       # skips versions npm already has.
       - name: publish npm platform packages, then the selector
