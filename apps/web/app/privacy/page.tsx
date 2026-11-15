@@ -95,6 +95,17 @@ const PrivacyPage = () => (
         contract with you).
       </li>
       <li>
+        To email you about your account and your teams, such as invitations,
+        notices that project keys were shared with you, and notices to team
+        owners and admins when someone joins (performance of our contract with
+        you).
+      </li>
+      <li>
+        Where you have agreed, or where the law otherwise allows, to send you
+        news and offers about DotRelay. You can opt out at any time using the
+        link in each email.
+      </li>
+      <li>
         To keep the service secure: rate limits, abuse detection and
         investigating incidents (our legitimate interest in protecting the
         service and its users).
