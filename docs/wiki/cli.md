@@ -13,11 +13,38 @@ syntax, and validation errors carry the relevant usage line.
 
 ## Install
 
-`npm install -g @dotrelay/cli` installs the `dotrelay` command. The selector package is small; npm
-also installs the one `@dotrelay/cli-<platform>-<arch>` package that matches the machine. Release
+The install scripts download a release archive from GitHub, check it against the release's
+`SHA256SUMS`, and abort on a mismatch. They need no root or administrator rights and send nothing
+but the downloads.
+
+```sh
+# Linux (glibc) and macOS; needs curl, tar, and sha256sum or shasum
+curl -fsSL https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.sh | sh
+```
+
+```powershell
+# Windows x64, PowerShell 5.1 or 7
+irm https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.ps1 | iex
+```
+
+| Variable               | Default                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `DOTRELAY_VERSION`     | the latest stable release; set `1.2.3` or `v1.2.3-alpha.1` to pin one |
+| `DOTRELAY_INSTALL_DIR` | `~/.local/bin` (Unix), `%LOCALAPPDATA%\DotRelay\bin` (Windows)        |
+
+With no stable release yet, set `DOTRELAY_VERSION` to the prerelease tag. When the install
+directory is not on `PATH`, the script prints the line to add. Re-running a script replaces the
+installed binary. The scripts are served from `main`, not from a release, so a fix to them applies
+to every version they install.
+
+`npm install -g @dotrelay/cli` installs the same binary. The selector package is small; npm also
+installs the one `@dotrelay/cli-<platform>-<arch>` package that matches the machine. Release
 targets are `linux-x64`, `linux-arm64` (glibc), `darwin-x64`, `darwin-arm64`, and `win32-x64`.
-Each GitHub release also carries the native binaries as `dotrelay-<tag>-<platform>-<arch>.tar.gz`
-(`.zip` on Windows) with a `SHA256SUMS` file.
+
+Each GitHub release carries `dotrelay-<tag>-<platform>-<arch>.tar.gz` (`.zip` on Windows),
+`SHA256SUMS`, and a signed build provenance attestation. To check a manual download against the
+attestation as well, run
+`gh attestation verify dotrelay-<tag>-<platform>-<arch>.tar.gz --repo LSP-Software/DotRelay`.
 
 ## Version and launch diagnostics
 

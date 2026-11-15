@@ -23,6 +23,13 @@ GitHub release, publishes to npm, and only then publishes the GitHub release.
 published selector never pins a missing package. A re-run after a partial failure skips any
 `<package>@<version>` that `npm view` already finds; nothing is ever unpublished.
 
+`scripts/install.sh` and `scripts/install.ps1` are not release assets: users fetch them from
+`main` at `https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/`. They download
+`dotrelay-<tag>-<platform>-<arch>.tar.gz` (`.zip` for Windows) and `SHA256SUMS` from the release,
+so renaming a release archive, or adding a target, needs the scripts changed in the same pull
+request. They install the latest stable release unless `DOTRELAY_VERSION` names one; prereleases
+are never picked by default.
+
 Before a production tag is approved, the release owner must attach the security review approval for
 the observability privacy boundary to the release record. The approval must verify that Application
 Diagnostic Events, Audit Facts, Security Request Logs, hosted cleanup, self-hosted cleanup, and
