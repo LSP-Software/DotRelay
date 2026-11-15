@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   classifyDotenv,
   diffDotenvEntries,
+  literalDotenvNames,
   parseDotenv,
   serializeDotenv,
   summarizeClassification,
@@ -258,6 +259,44 @@ describe("serializeDotenv safety", () => {
     expect(parseDotenv('A="\\$X \\`y\\`"\n')).toEqual([
       { name: "A", value: "\\$X `y`" },
     ]);
+  });
+
+  test("keeps a $ that is not a variable reference literal", () => {
+    // Command substitution and bare dollars are never references an
+    // expander resolves; double quotes would hand `$(id)` to a shell.
+    expect(serializeDotenv([{ name: "T", value: "pa$word$(id)" }])).toBe(
+      "T='pa$word$(id)'\n",
+    );
+    expect(serializeDotenv([{ name: "H", value: "$2b$10$abc" }])).toBe(
+      "H='$2b$10$abc'\n",
+    );
+    expect(serializeDotenv([{ name: "D", value: "costs 5$" }])).toBe(
+      "D='costs 5$'\n",
+    );
+    expect(serializeDotenv([{ name: "M", value: "a\nb $(id)" }])).toBe(
+      "M='a\nb $(id)'\n",
+    );
+    for (const value of ["pa$word$(id)", "$2b$10$abc", "a\nb $(id)"])
+      expect(parseDotenv(serializeDotenv([{ name: "A", value }]))).toEqual([
+        { name: "A", value },
+      ]);
+    // A Value that also holds a single quote cannot be single-quoted.
+    expect(serializeDotenv([{ name: "Q", value: "it's $(id)" }])).toBe(
+      'Q="it\'s $(id)"\n',
+    );
+  });
+
+  test("a Value read from a single-quoted line is written back literally", () => {
+    const source = "P='pa$word'\nR=\"${HOME}/x\"\nU=$HOME\n";
+    const literal = literalDotenvNames(source);
+    expect([...literal]).toEqual(["P"]);
+    const entries = parseDotenv(source);
+    expect(serializeDotenv(entries, { literalNames: literal })).toBe(
+      "P='pa$word'\nR=\"${HOME}/x\"\nU=\"$HOME\"\n",
+    );
+    expect(
+      parseDotenv(serializeDotenv(entries, { literalNames: literal })),
+    ).toEqual(entries);
   });
 
   test("keeps a backslash before $ distinct from an escaped backslash", () => {

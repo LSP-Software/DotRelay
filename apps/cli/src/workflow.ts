@@ -3,7 +3,12 @@ import { resolve } from "node:path";
 import type { ParsedArguments } from "./args";
 import { writePublicationBaseline } from "./baseline-store";
 import { kv, note, reviewFrame } from "./components";
-import { diffDotenvEntries, parseDotenv, serializeDotenv } from "./dotenv";
+import {
+  diffDotenvEntries,
+  literalDotenvNames,
+  parseDotenv,
+  serializeDotenv,
+} from "./dotenv";
 import { processControlPullWarning } from "./env-safety";
 import {
   CliError,
@@ -266,21 +271,22 @@ export const runProtectedWorkflow = async (
         headHash: bytesToHex(hash),
       });
     };
-    const contents = serializeDotenv(entries);
-    // A Variable that controls how programs or shells start is inert in the
-    // file, but not once the file is loaded into a shell: warn when one is
-    // new to the destination so the user can check who published it.
+    // The file being replaced decides two things: a Value it single-quoted
+    // was meant literally and stays single-quoted, and a Variable that
+    // controls how programs or shells start is inert in the file but not
+    // once the file is loaded into a shell, so one new to the destination
+    // is called out for the user to check who published it.
     const previousNames = new Set<string>();
+    let literalNames: ReadonlySet<string> = new Set();
     if (outputPath)
       try {
-        for (const entry of parseDotenv(
-          await readFile(outputPath, "utf8"),
-          outputPath,
-        ))
-          previousNames.add(entry.name);
+        const previous = await readFile(outputPath, "utf8");
+        for (const entry of parseDotenv(previous)) previousNames.add(entry.name);
+        literalNames = literalDotenvNames(previous);
       } catch {
         // No readable previous file: every entry is new.
       }
+    const contents = serializeDotenv(entries, { literalNames });
     const processControlWarning = processControlPullWarning(
       entries
         .map((entry) => entry.name)

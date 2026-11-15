@@ -305,7 +305,11 @@ tracked file itself, and the review and the report name the file the link points
 Values are written so an expander sees the same text the source gave it. A `${HOME}` reference
 read from an unquoted or double-quoted line is written in double quotes with `$` unescaped, and
 a `\$` the source used for a literal dollar sign stays `\$`. Values with no quote, line break,
-`$`, or backtick are single-quoted. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
+`$`, or backtick are single-quoted. A Value is also single-quoted, so every reader takes it
+literally, when the file being replaced single-quoted it, or when it holds a `$` that is not a
+variable reference (`$(command)`, `$2b$10$…`, a trailing `$`), unless it also holds a single
+quote. A pulled file is data for a dotenv loader: do not `source` it in a shell, which would
+expand references in double-quoted Values; use `dotrelay run` to start a command with the Values. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
 `` \` `` are decoded, and any other backslash sequence, such as `"C:\Users"`, is kept as
 written. Parse errors name the file.
 

@@ -2821,6 +2821,53 @@ describe("protected CLI workflows", () => {
     expect(JSON.parse(again.stdout)).not.toHaveProperty("warnings");
   });
 
+  test("pull keeps a Value the file single-quoted literal", async () => {
+    const runtime = await setup();
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "TOKEN='pa$word'\nREF=${HOME}/x\n");
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "TOKEN=shared",
+        "--classify",
+        "REF=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(output, "TOKEN='pa$word'\nOLD=1\n");
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--force",
+        "--discard-local",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
+    const written = await Bun.file(output).text();
+    expect(written).toContain("TOKEN='pa$word'\n");
+    expect(written).toContain('REF="${HOME}/x"\n');
+  });
+
   test("pull through a symlinked output names the file it writes", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;
