@@ -13,9 +13,10 @@ permissions:
   contents: read
 
 env:
-  # Canary channel: the built-in `bun lint` linter is not enabled in stable
-  # releases yet (it is gated behind the canary build flavor).
-  BUN_VERSION: da867c60bf0bcbf9d6d36994f8ca0efa42075115
+  # Stable Bun builds, tests and ships DotRelay (ops/bun-toolchain.json);
+  # the pinned canary that scripts/setup-bun.py installs beside it runs only
+  # the built-in `bun lint`.
+  BUN_VERSION: 38afee6c84fcf48c0edb2466aa4b27d287a59c30
 
 jobs:
   verify:

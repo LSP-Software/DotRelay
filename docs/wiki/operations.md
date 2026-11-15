@@ -204,14 +204,16 @@ in #32; do not infer it from database readiness.
 
 ## Reproducibility and promotion
 
-The Docker bases and PostgreSQL/Valkey service images are digest-pinned. CI Bun is
-pinned to revision `da867c60bf0bcbf9d6d36994f8ca0efa42075115`; Docker verifies its
-reported revision. The matching Linux x64 Bun archive SHA-256 is
-`e8f27b24f74186e87fc0f0f603bdb6b79264dc86a1680da41e2025a3cb3efee0`.
-CI installs the official, immutable dated npm packages
-`@oven/bun-*@1.4.4-canary.20261030.1`, verifies their SHA-512 integrity from
-`ops/bun-toolchain.json` and checks the executable revision before use. It does
-not depend on GitHub's replaceable canary asset IDs. Direct package versions and transitive resolutions are locked; installs must use
+The Docker bases and PostgreSQL/Valkey service images are digest-pinned. The API image,
+the web build, the compiled CLI and CI run the stable Bun release `1.4.4`, revision
+`38afee6c84fcf48c0edb2466aa4b27d287a59c30` (`oven/bun:1.4.4@sha256:1d22548f…`); Docker
+verifies its reported revision. The matching Linux x64 Bun archive SHA-256 is
+`93ca5a2abe45f3bcac6dd55baff8bb06c4ac824b70f89650b54e5c8b80dbef18`. CI installs the
+official, immutable npm packages `@oven/bun-*@1.4.4`, verifies their SHA-512 integrity
+from `ops/bun-toolchain.json` and checks the executable revision before use. A dated
+canary (`@oven/bun-*@1.4.4-canary.20261030.1`, revision
+`da867c60bf0bcbf9d6d36994f8ca0efa42075115`) is pinned the same way, but only runs the
+built-in `bun lint`; it never builds or runs anything that ships. Direct package versions and transitive resolutions are locked; installs must use
 `--frozen-lockfile`. Pin changes require the full runtime/crypto matrix again.
 This is repeatable dependency resolution, not a claim of bit-for-bit reproducible
 Next.js/native binaries across different hosts.

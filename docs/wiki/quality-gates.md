@@ -39,8 +39,10 @@ use public exports, undeclared imports and cycles are rejected, and runtime-neut
 not use browser-only or server-only facilities.
 
 The repository uses Bun's built-in `bun fmt` and `bun lint` as its formatter and linter. ESLint and
-Prettier are not part of the toolchain. Bun's canary channel is pinned because the built-in linter
-is not enabled in stable releases yet; `bun check` and `bun fmt` work on both.
+Prettier are not part of the toolchain. Everything else builds, tests and ships on the pinned
+stable Bun release. The built-in linter is not in stable releases yet, so `scripts/setup-bun.py`
+also installs a pinned canary, and `bun run lint` runs only `bun lint` with it (found through
+`DOTRELAY_LINT_BUN` or beside the stable toolchain).
 
 The required security gate is `bun run security:audit`; CI and the release workflow's verify job
 run it with network access to the Bun advisory service. Dependency updates are never auto-merged.
