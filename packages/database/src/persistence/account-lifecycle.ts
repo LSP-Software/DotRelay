@@ -461,6 +461,10 @@ export class AccountLifecycleRepository {
         WHERE "id" IN (SELECT "id" FROM "purge_protocol_objects")`;
       await transaction.$executeRaw`TRUNCATE "purge_protocol_objects"`;
 
+      // The GitHub login cached for display (share-keys lookup).
+      await transaction.gitHubLogin.deleteMany({
+        where: { githubSubject: user.githubSubject },
+      });
       await transaction.user.update({
         where: { id: userId },
         data: {

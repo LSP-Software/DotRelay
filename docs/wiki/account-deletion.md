@@ -13,6 +13,7 @@ of a Team that has other Members.
 Deleted immediately:
 
 - the sign-in record: name, email address, avatar URL, GitHub account link and its OAuth tokens;
+- the GitHub login cached for finding Members by login;
 - every session, with its IP address and user agent;
 - every Account Key Wrapper (password, passkey, Recovery Code), Account Key Envelope, and Account
   Key Transfer;

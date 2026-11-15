@@ -30,6 +30,7 @@ kept so teammates can still verify history.
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | Better Auth user, sessions, linked GitHub account       | Row deleted; sessions, OAuth tokens and device codes cascade. Signs out every client |
 | GitHub email, name, avatar                              | Held only on the Better Auth user, so deleted with it                                |
+| Cached GitHub login (`github_logins`)                   | Row for the GitHub id deleted                                                        |
 | Account Key Wrappers (password, passkey, Recovery Code) | Projection rows and their protocol objects deleted                                   |
 | Account Key Envelopes (Project Epoch, User Value Keys)  | Projection rows and their protocol objects deleted                                   |
 | Account Key Transfers                                   | Projection rows and their protocol objects deleted                                   |

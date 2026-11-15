@@ -3376,6 +3376,9 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       where: { id: member.user.id },
       data: { authSubject: authUserId, githubSubject: githubAccountId },
     });
+    await database.gitHubLogin.create({
+      data: { githubSubject: githubAccountId, login: "departing-member" },
+    });
     // A password wrapper whose ciphertext must not survive.
     const wrapperBytes = crypto.getRandomValues(new Uint8Array(64));
     const wrapperObject = await database.protocolObject.create({
@@ -3468,6 +3471,11 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     expect(
       await database.authUser.findUnique({ where: { id: authUserId } }),
     ).toBeNull();
+    expect(
+      await database.gitHubLogin.count({
+        where: { githubSubject: githubAccountId },
+      }),
+    ).toBe(0);
     expect(
       await database.authSession.count({ where: { userId: authUserId } }),
     ).toBe(0);
