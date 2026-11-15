@@ -136,6 +136,7 @@ type MembershipRow = Readonly<{
   readonly removedAt: Date | null;
   readonly authSubject: string;
   readonly githubSubject: string;
+  readonly deleted: boolean;
 }>;
 
 const membershipLifecycleOrder: Readonly<
@@ -224,7 +225,9 @@ const loadTeamMembershipState = async (
       createdAt: true,
       activatedAt: true,
       removedAt: true,
-      user: { select: { authSubject: true, githubSubject: true } },
+      user: {
+        select: { authSubject: true, githubSubject: true, deletedAt: true },
+      },
     },
     // Current Memberships first, then the most recently removed ones.
     orderBy: [
@@ -245,6 +248,7 @@ const loadTeamMembershipState = async (
       removedAt: membership.removedAt,
       authSubject: membership.user.authSubject,
       githubSubject: membership.user.githubSubject,
+      deleted: Boolean(membership.user.deletedAt),
     }))
     .sort(
       (left, right) =>
@@ -307,6 +311,8 @@ const loadTeamMembershipState = async (
     image: display.get(row.authSubject)?.image ?? null,
     githubSubject: row.githubSubject,
     githubLogin: logins.get(row.githubSubject) ?? null,
+    // Account deletion (ADR 0018) keeps the row for history only.
+    ...(row.deleted ? { deleted: true } : {}),
     accountRoster: (() => {
       const roster = rosters.get(row.userId);
       return roster ? Buffer.from(roster).toString("base64") : null;

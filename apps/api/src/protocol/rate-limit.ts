@@ -23,6 +23,8 @@ export const API_RATE_LIMIT_BUCKETS = Object.freeze({
   github: Object.freeze({ name: "github", limit: 120, windowSeconds: 60 }),
   // Teams, Projects, invitations, and Device enrollments are durable rows.
   create: Object.freeze({ name: "create", limit: 60, windowSeconds: 3600 }),
+  // Account exports read every row the service holds about the User.
+  export: Object.freeze({ name: "export", limit: 10, windowSeconds: 3600 }),
 } satisfies Record<string, RateLimitBucket>);
 
 const PROTOCOL_BUCKET: RateLimitBucket = Object.freeze({
@@ -42,6 +44,13 @@ const createRoutes: ReadonlyArray<readonly [string, RegExp]> = [
   ["POST", /^\/api\/v1\/teams\/[^/]+\/invitations$/],
   ["POST", /^\/api\/v1\/projects$/],
   ["POST", /^\/api\/v1\/devices\/enrollments$/],
+  // Destructive lifecycle changes share the durable-row budget.
+  ["POST", /^\/api\/v1\/teams\/[^/]+\/(leave|delete)$/],
+  ["POST", /^\/api\/v1\/account\/delete$/],
+];
+
+const exportRoutes: ReadonlyArray<readonly [string, RegExp]> = [
+  ["GET", /^\/api\/v1\/account\/export$/],
 ];
 
 const matches = (
@@ -64,6 +73,9 @@ export const apiRateLimitBuckets = (
     : []),
   ...(matches(createRoutes, method, path)
     ? [API_RATE_LIMIT_BUCKETS.create]
+    : []),
+  ...(matches(exportRoutes, method, path)
+    ? [API_RATE_LIMIT_BUCKETS.export]
     : []),
 ];
 

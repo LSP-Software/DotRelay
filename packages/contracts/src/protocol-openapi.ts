@@ -250,6 +250,40 @@ const projectWithEnvironmentSchema = Object.freeze({
   }),
 });
 
+const lifecycleJsonBody = Object.freeze({
+  required: true,
+  content: Object.freeze({
+    "application/json": Object.freeze({
+      schema: Object.freeze({
+        $ref: "#/components/schemas/StrictJsonObject",
+      }),
+    }),
+  }),
+});
+
+// 201 for the first commit, 200 for an Idempotency-Key replay.
+const lifecycleOutcomeResponses = (
+  schema: Readonly<Record<string, unknown>>,
+) => {
+  const success = (description: string) =>
+    Object.freeze({
+      description,
+      headers: Object.freeze({
+        "Cache-Control": Object.freeze({
+          schema: Object.freeze({ type: "string", const: "no-store" }),
+        }),
+      }),
+      content: Object.freeze({
+        "application/json": Object.freeze({ schema }),
+      }),
+    });
+  return Object.freeze({
+    "200": success("Replayed outcome"),
+    "201": success("Committed outcome"),
+    ...problemResponses,
+  });
+};
+
 export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
   // Device proof of possession (ADR 0020): a session obtains a challenge,
   // the Device signs it, and the signature buys a short-lived proof that
@@ -787,6 +821,121 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
           ),
           ...problemResponses,
         }),
+      }),
+    ),
+  }),
+  "/api/v1/teams/{teamId}/leave": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "leaveTeam",
+        description:
+          "The signed-in User ends their own Membership (ADR 0019). Needs a session, not a Device. An active Membership owes each Project a rotation. The Team's last active owner, or its only Member, answers 409 owner_transfer_required.",
+        parameters: Object.freeze([
+          invitationParameters.TeamId,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        requestBody: lifecycleJsonBody,
+        responses: lifecycleOutcomeResponses(
+          Object.freeze({
+            type: "object",
+            additionalProperties: false,
+            required: Object.freeze(["teamId", "membershipId", "lifecycle"]),
+            properties: Object.freeze({
+              teamId: Object.freeze({ type: "string", format: "uuid" }),
+              membershipId: Object.freeze({ type: "string", format: "uuid" }),
+              lifecycle: Object.freeze({ type: "string", const: "REMOVED" }),
+            }),
+          }),
+        ),
+      }),
+    ),
+  }),
+  "/api/v1/teams/{teamId}/delete": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "deleteTeam",
+        description:
+          "An active owner deletes the Team (ADR 0019). The body's confirmName must equal the Team name. Every Membership ends at once; retention purges the Team's data after purgeAfter.",
+        parameters: Object.freeze([
+          invitationParameters.TeamId,
+          protocolParameters.DeviceIdHeader,
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        requestBody: lifecycleJsonBody,
+        responses: lifecycleOutcomeResponses(
+          Object.freeze({
+            type: "object",
+            additionalProperties: false,
+            required: Object.freeze([
+              "teamId",
+              "status",
+              "deletedAt",
+              "purgeAfter",
+            ]),
+            properties: Object.freeze({
+              teamId: Object.freeze({ type: "string", format: "uuid" }),
+              status: Object.freeze({ type: "string", const: "DELETED" }),
+              deletedAt: Object.freeze({ type: "string", format: "date-time" }),
+              purgeAfter: Object.freeze({
+                type: "string",
+                format: "date-time",
+              }),
+            }),
+          }),
+        ),
+      }),
+    ),
+  }),
+  "/api/v1/account/export": Object.freeze({
+    get: authenticatedOperation(
+      Object.freeze({
+        operationId: "exportAccount",
+        description:
+          "The account metadata the service holds about the signed-in User, as a JSON attachment. No ciphertext, wrapped keys, public keys, or tokens.",
+        responses: noStoreJsonResponse,
+      }),
+    ),
+  }),
+  "/api/v1/account/deletion": Object.freeze({
+    get: authenticatedOperation(
+      Object.freeze({
+        operationId: "getAccountDeletionPlan",
+        description:
+          "What deleting the signed-in User's account would do: blockingTeams (last active owner with other Members), teamsDeleted (only Member), and teamsLeft.",
+        responses: noStoreJsonResponse,
+      }),
+    ),
+  }),
+  "/api/v1/account/delete": Object.freeze({
+    post: authenticatedOperation(
+      Object.freeze({
+        operationId: "deleteAccount",
+        description:
+          "Deletes the signed-in User's account (ADR 0018). Needs a session, not a Device; confirmUserId must equal the User id. Ends every session of the User.",
+        parameters: Object.freeze([
+          Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
+        ]),
+        requestBody: lifecycleJsonBody,
+        responses: lifecycleOutcomeResponses(
+          Object.freeze({
+            type: "object",
+            additionalProperties: false,
+            required: Object.freeze([
+              "userId",
+              "status",
+              "deletedAt",
+              "teamsDeleted",
+              "teamsLeft",
+            ]),
+            properties: Object.freeze({
+              userId: Object.freeze({ type: "string", format: "uuid" }),
+              status: Object.freeze({ type: "string", const: "DELETED" }),
+              deletedAt: Object.freeze({ type: "string", format: "date-time" }),
+              teamsDeleted: Object.freeze({ type: "array" }),
+              teamsLeft: Object.freeze({ type: "array" }),
+            }),
+          }),
+        ),
       }),
     ),
   }),

@@ -189,6 +189,12 @@ describe("API observability boundary", () => {
       {
         $transaction: async (callback: (value: unknown) => unknown) =>
           callback(transaction),
+        team: {
+          findMany: async () => {
+            calls.push("deleted-teams");
+            return [];
+          },
+        },
       } as never,
       { diagnostics },
     );
@@ -196,11 +202,13 @@ describe("API observability boundary", () => {
     await expect(observability.runRetentionCleanup()).rejects.toThrow(
       "staging unavailable",
     );
-    // Sessions, device codes, verifications, enrollments, invitations.
+    // Sessions, device codes, verifications, enrollments, invitations, then
+    // Teams deleted long enough ago to purge.
     expect(calls).toEqual([
       "operations",
       "security-logs",
       ...Array.from({ length: 5 }, () => "short-lived"),
+      "deleted-teams",
     ]);
     expect(diagnostics.records()).toEqual([
       expect.objectContaining({

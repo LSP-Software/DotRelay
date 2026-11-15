@@ -893,11 +893,12 @@ export const endMembership = async (
   }>,
 ) => {
   const { membership, now } = input;
+  const priorLifecycle = membership.lifecycle;
   const removed = await transaction.membership.update({
     where: { id: membership.id },
     data: { lifecycle: "REMOVED", removedAt: now },
   });
-  if (membership.lifecycle === "ACTIVE" && input.owesRotation !== false)
+  if (priorLifecycle === "ACTIVE" && input.owesRotation !== false)
     await new ProjectRotationObligationRepository().recordMembershipRemoval(
       transaction,
       { teamId: membership.teamId, membershipId: membership.id, now },
@@ -911,7 +912,7 @@ export const endMembership = async (
       : {}),
     entityKind: "MEMBERSHIP",
     entityId: membership.id,
-    priorLifecycle: membership.lifecycle,
+    priorLifecycle,
     newLifecycle: "REMOVED",
   });
   return removed;
