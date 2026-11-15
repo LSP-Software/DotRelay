@@ -255,6 +255,8 @@ describe("metrics fed from observability events", () => {
     const { registry, observability } = setup({
       $transaction: async (callback: (value: unknown) => unknown) =>
         callback(transaction),
+      // Deleted Teams past their purge window (ADR 0019): none here.
+      team: { findMany: async () => [] },
     });
     await observability.runRetentionCleanup();
     failStaging = true;
