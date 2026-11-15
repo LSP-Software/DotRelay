@@ -226,7 +226,9 @@ when the Server Profile permits cancellation.
 
 Every Revision carries a signed authored-at time. The CLI never stamps one earlier than this
 Device's activation, your current Membership's activation, or the head Revision it builds on; a
-slow local clock is raised to that floor. The Server Profile also refuses a time more than 10
+slow local clock is raised to that floor. `project rotate` builds on every active Environment's
+head, so it raises the floor to the latest head in the Project, using the head times that
+`GET /api/v1/projects/:projectId/environments` lists. The Server Profile also refuses a time more than 10
 minutes ahead of its own clock. Either refusal fails with `authored_at_out_of_range` (exit 4):
 check the machine's system clock and time zone, then run the command again.
 

@@ -185,6 +185,49 @@ const invitationOutcomeResponses = (
   });
 };
 
+const noStoreJson = (
+  description: string,
+  schema: Readonly<Record<string, unknown>>,
+) =>
+  Object.freeze({
+    description,
+    headers: Object.freeze({
+      "Cache-Control": Object.freeze({
+        schema: Object.freeze({ type: "string", const: "no-store" }),
+      }),
+    }),
+    content: Object.freeze({
+      "application/json": Object.freeze({ schema }),
+    }),
+  });
+
+const nullable = (schema: Readonly<Record<string, unknown>>) =>
+  Object.freeze({ oneOf: Object.freeze([schema, { type: "null" }]) });
+
+const environmentSummarySchema = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "id",
+    "projectId",
+    "label",
+    "lifecycle",
+    "currentHeadId",
+    "currentHeadHash",
+  ]),
+  properties: Object.freeze({
+    id: Object.freeze({ type: "string", format: "uuid" }),
+    projectId: Object.freeze({ type: "string", format: "uuid" }),
+    label: Object.freeze({ type: "string" }),
+    lifecycle: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["active", "archived"]),
+    }),
+    currentHeadId: nullable({ type: "string", format: "uuid" }),
+    currentHeadHash: nullable({ type: "string", pattern: "^[0-9a-f]{96}$" }),
+  }),
+});
+
 export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
   // Device proof of possession (ADR 0020): a session obtains a challenge,
   // the Device signs it, and the signature buys a short-lived proof that
@@ -510,6 +553,49 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
             }),
           }),
         ),
+      }),
+    ),
+  }),
+  "/api/v1/projects/{projectId}/environments": Object.freeze({
+    get: authenticatedOperation(
+      Object.freeze({
+        operationId: "listProjectEnvironments",
+        description:
+          "Lists the Project's Environments for an active Member, oldest first. currentHeadAuthoredAtMs is the head Revision's authored-at instant (null without a Revision); a Project rotation floors its signing time on the latest one.",
+        parameters: Object.freeze([
+          protocolParameters.ProjectId,
+          protocolParameters.DeviceIdHeader,
+        ]),
+        responses: Object.freeze({
+          "200": noStoreJson(
+            "Environments",
+            Object.freeze({
+              type: "object",
+              additionalProperties: false,
+              required: Object.freeze(["environments"]),
+              properties: Object.freeze({
+                environments: Object.freeze({
+                  type: "array",
+                  items: Object.freeze({
+                    ...environmentSummarySchema,
+                    required: Object.freeze([
+                      ...environmentSummarySchema.required,
+                      "currentHeadAuthoredAtMs",
+                    ]),
+                    properties: Object.freeze({
+                      ...environmentSummarySchema.properties,
+                      currentHeadAuthoredAtMs: nullable({
+                        type: "integer",
+                        minimum: 0,
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          ),
+          ...problemResponses,
+        }),
       }),
     ),
   }),

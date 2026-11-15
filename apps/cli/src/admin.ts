@@ -152,6 +152,9 @@ export type EnvironmentSummary = Readonly<{
   readonly lifecycle: "active" | "archived";
   readonly currentHeadId: string | null;
   readonly currentHeadHash: string | null;
+  // The head Revision's authored-at instant, when the listing reports one
+  // (older servers and create/lifecycle responses do not).
+  readonly currentHeadAuthoredAtMs?: number;
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
@@ -228,7 +231,25 @@ const parseEnvironment = (value: unknown): EnvironmentSummary => {
       value.currentHeadHash == null
         ? null
         : requireEnvironmentHeadHash(value.currentHeadHash),
+    ...(value.currentHeadAuthoredAtMs == null
+      ? {}
+      : {
+          currentHeadAuthoredAtMs: requireAuthoredAtMs(
+            value.currentHeadAuthoredAtMs,
+          ),
+        }),
   });
+};
+
+const requireAuthoredAtMs = (value: unknown): number => {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Environment head time",
+      {},
+      "response_invalid",
+    );
+  return value;
 };
 
 export const linkProject = async (

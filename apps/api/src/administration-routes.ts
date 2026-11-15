@@ -494,13 +494,26 @@ export const registerAdministrationRoutes = (
           lifecycle: true,
           currentHeadId: true,
           currentHead: {
-            select: { protocolObject: { select: { digest: true } } },
+            select: {
+              authoredAtMs: true,
+              protocolObject: { select: { digest: true } },
+            },
           },
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
       return context.json(
-        { environments: environments.map(environmentResponse) },
+        {
+          // The head's authored-at instant lets a Project rotation floor its
+          // signing time across every Environment, not only the synced one.
+          environments: environments.map((environment) => ({
+            ...environmentResponse(environment),
+            currentHeadAuthoredAtMs:
+              environment.currentHead === null
+                ? null
+                : Number(environment.currentHead.authoredAtMs),
+          })),
+        },
         200,
         { "Cache-Control": "no-store" },
       );

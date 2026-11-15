@@ -1003,6 +1003,7 @@ describe("API foundation", () => {
             lifecycle: "ACTIVE",
             currentHeadId: "00000000-0000-4000-8000-0000000000aa",
             currentHead: {
+              authoredAtMs: 1_700_000_000_123n,
               protocolObject: { digest: new Uint8Array(48).fill(0xab) },
             },
           },
@@ -1040,6 +1041,7 @@ describe("API foundation", () => {
           lifecycle: "active",
           currentHeadId: "00000000-0000-4000-8000-0000000000aa",
           currentHeadHash: "ab".repeat(48),
+          currentHeadAuthoredAtMs: 1_700_000_000_123,
         },
         {
           id: "00000000-0000-4000-8000-000000000004",
@@ -1048,6 +1050,7 @@ describe("API foundation", () => {
           lifecycle: "active",
           currentHeadId: null,
           currentHeadHash: null,
+          currentHeadAuthoredAtMs: null,
         },
       ],
     });
