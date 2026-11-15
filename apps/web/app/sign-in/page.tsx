@@ -4,7 +4,8 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { oauthErrorMessage } from "@/lib/oauth-error";
-import { isSessionActive } from "@/lib/server-session";
+import { PRIVATE_ALPHA_PATH } from "@/lib/alpha-admission";
+import { readServerSession } from "@/lib/server-session";
 import {
   resolveLiveApiOrigin,
   resolveOAuthCallbackUrl,
@@ -29,12 +30,16 @@ const SignInPage = async ({
   const liveApiOrigin = resolveLiveApiOrigin();
   const apiOrigin = liveApiOrigin ?? "http://localhost:3001";
   const { error } = await searchParams;
-  // A visitor who is already signed in has nothing to do here.
-  if (
-    error === undefined &&
-    (await isSessionActive({ apiOrigin: liveApiOrigin, cookie }))
-  )
-    redirect("/workspace");
+  // A visitor who is already signed in has nothing to do here; one the
+  // alpha list doesn't admit would only sign in to the same answer.
+  if (error === undefined) {
+    const session = await readServerSession({
+      apiOrigin: liveApiOrigin,
+      cookie,
+    });
+    if (session === "signed-in") redirect("/workspace");
+    if (session === "not-admitted") redirect(PRIVATE_ALPHA_PATH);
+  }
   const callbackUrl = resolveOAuthCallbackUrl();
   const signInError = oauthErrorMessage(error);
 

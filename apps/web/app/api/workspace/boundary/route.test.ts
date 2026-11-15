@@ -7,6 +7,7 @@ type BoundaryBody = {
   catalog?: { readonly teams?: unknown; readonly projects?: unknown };
   session?: {
     readonly active?: unknown;
+    readonly alphaAdmissionRequired?: unknown;
     readonly displayName?: unknown;
     readonly image?: unknown;
     readonly userId?: unknown;
@@ -105,6 +106,35 @@ test("a session service error is unavailable rather than signed out", async () =
     const body = (await response.json()) as BoundaryBody;
     expect(body.connection).toBe("offline");
     expect(body.session).toEqual({ active: false });
+  } finally {
+    restoreFetch();
+    restoreEnv();
+  }
+});
+
+test("a session outside the alpha list is an online answer, not an outage", async () => {
+  const restoreEnv = withoutWorkspaceEnv();
+  const requested: string[] = [];
+  const restoreFetch = stubUpstream((url) => {
+    requested.push(url);
+    return url.includes("/api/v1/session")
+      ? Response.json(
+          { code: "alpha_admission_required", status: 403 },
+          { status: 403 },
+        )
+      : undefined;
+  });
+  try {
+    const response = await GET(boundaryRequest());
+    const body = (await response.json()) as BoundaryBody;
+    expect(body.connection).toBe("online");
+    expect(body.session).toEqual({
+      active: false,
+      alphaAdmissionRequired: true,
+    });
+    expect(body.catalog).toEqual({ teams: [], projects: [] });
+    // Nothing past the session check is asked for.
+    expect(requested).toHaveLength(1);
   } finally {
     restoreFetch();
     restoreEnv();

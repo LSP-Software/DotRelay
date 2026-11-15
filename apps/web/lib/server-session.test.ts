@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isSessionActive } from "./server-session";
+import { isSessionActive, readServerSession } from "./server-session";
 
 const respond = (
   status: number,
@@ -64,4 +64,24 @@ test("no cookie, no origin, or an unreachable API reads as signed out", async ()
       }) as unknown as typeof fetch,
     }),
   ).toBe(false);
+});
+
+test("the alpha admission problem reads as signed in but not admitted", async () => {
+  const fetcher = (async () =>
+    Response.json(
+      { code: "alpha_admission_required", status: 403 },
+      { status: 403 },
+    )) as unknown as typeof fetch;
+  const input = { apiOrigin: "https://api.test", cookie: "s=1", fetcher };
+  expect(await readServerSession(input)).toBe("not-admitted");
+  expect(await isSessionActive(input)).toBe(false);
+  // A plain 403 is not the alpha state, and only a 401 proves signed out.
+  for (const [status, state] of [
+    [403, "unknown"],
+    [500, "unknown"],
+    [401, "signed-out"],
+  ] as const)
+    expect(
+      await readServerSession({ ...input, fetcher: respond(status) }),
+    ).toBe(state);
 });

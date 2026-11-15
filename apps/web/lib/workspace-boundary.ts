@@ -91,6 +91,8 @@ export type WorkspaceBoundary = Readonly<{
   }>;
   readonly session: Readonly<{
     readonly active: boolean;
+    /** Signed in, but the API's alpha list doesn't admit the account. */
+    readonly alphaAdmissionRequired?: true;
     readonly userId?: string;
     readonly displayName?: string;
     readonly image?: string;

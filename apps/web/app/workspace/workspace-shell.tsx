@@ -102,6 +102,7 @@ import {
   unlockMethods,
 } from "@/lib/account-recovery";
 import { confirmMember, resolveMemberTrust } from "@/lib/account-trust";
+import { PRIVATE_ALPHA_PATH } from "@/lib/alpha-admission";
 import {
   restoreBrowserAccountKey,
   saveBrowserAccountKey,
@@ -669,6 +670,12 @@ export const WorkspaceShell = ({
     emptyWorkspaceBoundary(DEPLOYMENT_PROFILE_ID),
   );
   const [connection, setConnection] = useState<ConnectionState>("loading");
+  // An account outside the alpha list stays that way until an operator
+  // adds it, so it leaves the workspace rather than polling it.
+  const alphaAdmissionRequired = boundary.session.alphaAdmissionRequired;
+  useEffect(() => {
+    if (alphaAdmissionRequired) window.location.replace(PRIVATE_ALPHA_PATH);
+  }, [alphaAdmissionRequired]);
   const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
   // While the boundary hasn't been verified, the shell shows a loading state.
   // If that load outlasts a generous threshold - a hung fetch, not a slow one -
