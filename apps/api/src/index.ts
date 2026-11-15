@@ -29,6 +29,7 @@ import {
   OperationConflictError,
   OperationRepository,
   ProjectRotationObligationRepository,
+  recordGitHubLogin,
   requireTeamAction,
   resolveDotRelayUser,
   StagedObjectRepository,
@@ -1707,6 +1708,9 @@ const runtimeObservability = createApiObservability(database, {
 export const auth = createAuth(
   createBetterAuthDatabaseAdapter(database),
   profile,
+  {
+    onGitHubProfile: (github) => recordGitHubLogin(database, github),
+  },
 );
 export const app = createApi({
   database,

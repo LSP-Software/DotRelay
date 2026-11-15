@@ -63,7 +63,7 @@ export type {
 } from "./generated/prisma/browser";
 export type { PrismaClient } from "./generated/prisma/client";
 export type { ResolveDotRelayUserInput } from "./identity";
-export { resolveDotRelayUser } from "./identity";
+export { recordGitHubLogin, resolveDotRelayUser } from "./identity";
 export * from "./persistence";
 export type { EnsureServerProfileInput } from "./server-profile";
 export { ensureServerProfile } from "./server-profile";

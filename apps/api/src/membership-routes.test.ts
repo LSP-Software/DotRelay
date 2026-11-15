@@ -385,6 +385,19 @@ const createDatabaseStub = () => {
       findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
         authUsers.filter((user) => where.id.in.includes(user.id)),
     },
+    gitHubLogin: {
+      findMany: async ({
+        where,
+      }: {
+        where: { githubSubject: { in: string[] } };
+      }) =>
+        [
+          { githubSubject: "1001", login: "owner-login" },
+          { githubSubject: "2002", login: "Member-Login" },
+        ].filter((entry) =>
+          where.githubSubject.in.includes(entry.githubSubject),
+        ),
+    },
     user: {
       upsert: async ({
         where,
@@ -870,6 +883,7 @@ describe("Team membership and invitation routes", () => {
         name: "Owner Person",
         image: null,
         githubSubject: "1001",
+        githubLogin: "owner-login",
         role: "OWNER",
         lifecycle: "ACTIVE",
         createdAt: t(-30).toISOString(),
@@ -883,6 +897,7 @@ describe("Team membership and invitation routes", () => {
         name: "Member Person",
         image: "https://a/1.png",
         githubSubject: "2002",
+        githubLogin: "Member-Login",
         role: "MEMBER",
         lifecycle: "ACTIVE",
         createdAt: t(-20).toISOString(),
@@ -896,6 +911,7 @@ describe("Team membership and invitation routes", () => {
         name: "Admin Person",
         image: null,
         githubSubject: "6006",
+        githubLogin: null,
         role: "ADMIN",
         lifecycle: "ACTIVE",
         createdAt: t(-18).toISOString(),
@@ -909,6 +925,7 @@ describe("Team membership and invitation routes", () => {
         name: "Second Owner",
         image: null,
         githubSubject: "7007",
+        githubLogin: null,
         role: "OWNER",
         lifecycle: "ACTIVE",
         createdAt: t(-12).toISOString(),
@@ -922,6 +939,7 @@ describe("Team membership and invitation routes", () => {
         name: null,
         image: null,
         githubSubject: "3003",
+        githubLogin: null,
         role: "MEMBER",
         lifecycle: "PENDING_KEY_GRANT",
         createdAt: t(-2).toISOString(),
@@ -935,6 +953,7 @@ describe("Team membership and invitation routes", () => {
         name: null,
         image: null,
         githubSubject: "4004",
+        githubLogin: null,
         role: "MEMBER",
         lifecycle: "REMOVED",
         createdAt: t(-40).toISOString(),
@@ -971,6 +990,7 @@ describe("Team membership and invitation routes", () => {
           name: "Owner Person",
           image: null,
           githubSubject: "1001",
+          githubLogin: "owner-login",
           lifecycle: "ACTIVE",
         },
         {
@@ -980,6 +1000,7 @@ describe("Team membership and invitation routes", () => {
           name: "Member Person",
           image: "https://a/1.png",
           githubSubject: "2002",
+          githubLogin: "Member-Login",
           lifecycle: "ACTIVE",
         },
         {
@@ -989,6 +1010,7 @@ describe("Team membership and invitation routes", () => {
           name: "Admin Person",
           image: null,
           githubSubject: "6006",
+          githubLogin: null,
           lifecycle: "ACTIVE",
         },
         {
@@ -998,6 +1020,7 @@ describe("Team membership and invitation routes", () => {
           name: "Second Owner",
           image: null,
           githubSubject: "7007",
+          githubLogin: null,
           lifecycle: "ACTIVE",
         },
       ],

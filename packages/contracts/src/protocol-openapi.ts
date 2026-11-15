@@ -516,6 +516,116 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
       }),
     ),
   }),
+  "/api/v1/teams/{teamId}/memberships": Object.freeze({
+    get: authenticatedOperation(
+      Object.freeze({
+        operationId: "listTeamMemberships",
+        description:
+          "Lists the Team's Memberships for a signed-in Member (no Device needed). Owners and admins also get roles, timestamps, pending and removed Memberships, and pending invitations. githubLogin is the login the Member last signed in with (null until recorded): display data that may be stale, never an identity.",
+        parameters: Object.freeze([invitationParameters.TeamId]),
+        responses: Object.freeze({
+          "200": noStoreJson(
+            "Memberships",
+            Object.freeze({
+              type: "object",
+              additionalProperties: false,
+              required: Object.freeze(["memberships", "invitations"]),
+              properties: Object.freeze({
+                memberships: Object.freeze({
+                  type: "array",
+                  items: Object.freeze({
+                    type: "object",
+                    additionalProperties: false,
+                    required: Object.freeze([
+                      "membershipId",
+                      "userId",
+                      "name",
+                      "image",
+                      "githubSubject",
+                      "githubLogin",
+                      "accountRoster",
+                      "lifecycle",
+                    ]),
+                    properties: Object.freeze({
+                      membershipId: Object.freeze({
+                        type: "string",
+                        format: "uuid",
+                      }),
+                      userId: Object.freeze({ type: "string", format: "uuid" }),
+                      name: nullable({ type: "string" }),
+                      image: nullable({ type: "string" }),
+                      githubSubject: Object.freeze({ type: "string" }),
+                      githubLogin: nullable({
+                        type: "string",
+                        pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$",
+                      }),
+                      accountRoster: nullable({
+                        type: "string",
+                        contentEncoding: "base64",
+                      }),
+                      role: Object.freeze({
+                        type: "string",
+                        enum: Object.freeze(["OWNER", "ADMIN", "MEMBER"]),
+                      }),
+                      lifecycle: Object.freeze({
+                        type: "string",
+                        enum: Object.freeze([
+                          "ACTIVE",
+                          "PENDING_KEY_GRANT",
+                          "REMOVED",
+                        ]),
+                      }),
+                      createdAt: Object.freeze({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                      activatedAt: nullable({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                      removedAt: nullable({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                    }),
+                  }),
+                }),
+                invitations: Object.freeze({
+                  type: "array",
+                  items: Object.freeze({
+                    type: "object",
+                    additionalProperties: false,
+                    required: Object.freeze([
+                      "invitationId",
+                      "providerSubject",
+                      "createdAt",
+                      "expiresAt",
+                    ]),
+                    properties: Object.freeze({
+                      invitationId: Object.freeze({
+                        type: "string",
+                        format: "uuid",
+                      }),
+                      providerSubject: Object.freeze({ type: "string" }),
+                      createdAt: Object.freeze({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                      expiresAt: Object.freeze({
+                        type: "string",
+                        format: "date-time",
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          ),
+          ...problemResponses,
+        }),
+      }),
+    ),
+  }),
   "/api/v1/teams/{teamId}/invitations/{invitationId}/revoke": Object.freeze({
     post: authenticatedOperation(
       Object.freeze({

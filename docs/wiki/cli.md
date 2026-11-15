@@ -277,7 +277,10 @@ A new Member cannot read anything until a Team owner or admin shares the Project
 teammate's pull never helps. The owner
 or admin chooses **Share project keys** for the Member in the web app's Members view, or runs
 `dotrelay team share-keys <github-login-or-user-id>` from a Device that can read every Project in
-the Team. The command reads the service's provisioning plan for that Membership, opens each
+the Team. A login is matched case-insensitively against the login each Member last signed in
+with, as the membership list reports it; when none or several match, the service resolves the
+login to a GitHub user id instead. The match only picks the Member: keys go to that Member's User
+id and signed roster. The command reads the service's provisioning plan for that Membership, opens each
 Project's current key, seals it only to Devices in the Member's signed Device roster, and posts
 the signed activation; `--no-input` requires `--force`. The question names the Member's account
 fingerprint, and sharing confirms it. A Member without a signed Device roster cannot receive keys

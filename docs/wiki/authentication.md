@@ -111,6 +111,11 @@ callback creates or updates Better Auth records; `/api/v1/session` resolves the 
 server-local DotRelay User without granting a Membership or authorizing a Device. Better Auth
 encrypts stored OAuth tokens. The CLI receives only its database-backed session token.
 
+Each GitHub sign-in also records the profile's login for its GitHub user id in `github_logins`, so
+the Team membership list can show it and `dotrelay team share-keys <login>` can find a Member
+without a GitHub lookup. The login is display data: it can be stale after a rename and is never
+used for authorization or key decisions. A failure to record it does not block the sign-in.
+
 Cookie and bearer credentials are separate request modes. Browser state changes need an exact
 configured Origin, and production cookies are Secure, HttpOnly, and SameSite=Lax. CLI bearer
 requests do not need a browser Origin. The API rejects a request that combines either mode. Better

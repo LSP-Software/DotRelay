@@ -46,11 +46,12 @@ type MemberEntry = Readonly<{
   userId: string;
   name: string | null;
   githubSubject: string | null;
+  githubLogin: string | null;
   role: string | null;
   lifecycle: string | null;
 }>;
 
-const parseMembers = (value: unknown): MemberEntry[] =>
+export const parseMembers = (value: unknown): MemberEntry[] =>
   Array.isArray(value)
     ? value.flatMap((entry): MemberEntry[] =>
         isRecord(entry) &&
@@ -64,6 +65,10 @@ const parseMembers = (value: unknown): MemberEntry[] =>
                 githubSubject:
                   typeof entry.githubSubject === "string"
                     ? entry.githubSubject
+                    : null,
+                githubLogin:
+                  typeof entry.githubLogin === "string"
+                    ? entry.githubLogin
                     : null,
                 role: typeof entry.role === "string" ? entry.role : null,
                 lifecycle:
@@ -223,7 +228,7 @@ const resolveTeamId = async (
   );
 };
 
-const findMember = async (
+export const findMember = async (
   admin: ReturnType<typeof createDeviceAdmin>,
   members: readonly MemberEntry[],
   reference: string,
@@ -235,8 +240,17 @@ const findMember = async (
     );
     if (member) return member;
   } else if (GITHUB_LOGIN.test(reference)) {
-    // The membership list carries the stable GitHub user id, not the login,
-    // so the login is resolved through the signed-in User's GitHub access.
+    // The membership list carries the login each Member last signed in
+    // with. It is display data that can be stale, so it only picks the
+    // Member when exactly one matches; the keys still go only to that
+    // Member's User id and signed roster. Otherwise the login is resolved
+    // to a GitHub user id through the service.
+    const login = reference.toLowerCase();
+    const listed = members.filter(
+      (candidate) => candidate.githubLogin?.toLowerCase() === login,
+    );
+    const [only] = listed;
+    if (listed.length === 1 && only) return only;
     const resolved = await admin.post(
       "/api/v1/github-users/resolve",
       { login: reference },

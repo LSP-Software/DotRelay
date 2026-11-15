@@ -160,6 +160,7 @@ type MembershipView =
       readonly name: string | null;
       readonly image: string | null;
       readonly githubSubject: string;
+      readonly githubLogin: string | null;
       readonly accountRoster: string | null;
       readonly role: MembershipRow["role"];
       readonly lifecycle: MembershipRow["lifecycle"];
@@ -173,6 +174,7 @@ type MembershipView =
       readonly name: string | null;
       readonly image: string | null;
       readonly githubSubject: string;
+      readonly githubLogin: string | null;
       readonly accountRoster: string | null;
       readonly lifecycle: "ACTIVE";
     }>;
@@ -261,6 +263,18 @@ const loadTeamMembershipState = async (
   const display = new Map(
     authUsers.map((user) => [user.id, { name: user.name, image: user.image }]),
   );
+  // Logins recorded at sign-in: display data for finding a Member by login,
+  // never an identity (the User id and signed roster are).
+  const githubSubjects = [...new Set(rows.map((row) => row.githubSubject))];
+  const logins = new Map(
+    (githubSubjects.length
+      ? await database.gitHubLogin.findMany({
+          where: { githubSubject: { in: githubSubjects } },
+          select: { githubSubject: true, login: true },
+        })
+      : []
+    ).map((entry) => [entry.githubSubject, entry.login]),
+  );
   const invitations = privileged
     ? await database.membershipInvitation.findMany({
         where: {
@@ -292,6 +306,7 @@ const loadTeamMembershipState = async (
     name: display.get(row.authSubject)?.name ?? null,
     image: display.get(row.authSubject)?.image ?? null,
     githubSubject: row.githubSubject,
+    githubLogin: logins.get(row.githubSubject) ?? null,
     accountRoster: (() => {
       const roster = rosters.get(row.userId);
       return roster ? Buffer.from(roster).toString("base64") : null;
