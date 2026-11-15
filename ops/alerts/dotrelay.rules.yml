@@ -1,0 +1,96 @@
+# Prometheus alerting rules for the DotRelay API's opt-in private metrics
+# endpoint (see docs/wiki/operations.md#metrics-and-alerting).
+#
+# Thresholds marked "DEFAULT" are starting points, not tested SLOs. Tune them
+# to your traffic. Check edits with: promtool check rules ops/alerts/dotrelay.rules.yml
+groups:
+  - name: dotrelay-api
+    rules:
+      - alert: DotRelayRetentionFailed
+        # Any staging, Security Request Log or short-lived record expiry
+        # failure, or a failed cleanup run, in the last hour.
+        expr: |
+          sum(increase(dotrelay_events_total{event_name=~"api\\.(staging|security_request_log|retention)\\.expiry_failed"}[1h])) > 0
+          or
+          sum(increase(dotrelay_events_total{event_name="api.retention.cleanup_completed",outcome="failure"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: DotRelay retention cleanup failed in the last hour
+          description: >-
+            Expired staging, Security Request Logs or short-lived auth rows were
+            not removed. Expired staging still counts against quotas and logs
+            past their retention must be deleted. Check the API log for the
+            matching *.expiry_failed events.
+
+      - alert: DotRelaySecurityRequestLogWriteFailed
+        expr: sum(increase(dotrelay_events_total{event_name="api.security_request_log.write_failed"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: DotRelay could not write Security Request Logs
+          description: Requests are served, but the security record is incomplete.
+
+      - alert: DotRelayRateLimitRefusalsSpike
+        # DEFAULT: more than 1 refusal per second over 10 minutes and at least
+        # 5x the same window's rate one day earlier. Raise the floor for busy
+        # deployments; drop the offset clause if you have under a day of data.
+        expr: |
+          sum(rate(dotrelay_events_total{event_name=~"api\\.rate_limit\\..+_refused"}[10m])) > 1
+          and
+          sum(rate(dotrelay_events_total{event_name=~"api\\.rate_limit\\..+_refused"}[10m]))
+            > 5 * (sum(rate(dotrelay_events_total{event_name=~"api\\.rate_limit\\..+_refused"}[10m] offset 1d)) or vector(0))
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: DotRelay rate-limit refusals are spiking
+          description: >-
+            Split by event_name to see the limiter (user, github, creation,
+            auth). Auth refusals without a trusted proxy usually mean every
+            client shares one bucket.
+
+      - alert: DotRelayRateLimitUnavailable
+        # Valkey is missing or unreachable, so production refuses with 503.
+        expr: sum(increase(dotrelay_events_total{event_name="api.rate_limit.unavailable"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: DotRelay rate limiting is unavailable
+          description: Authenticated API requests fail with rate_limit_unavailable. Check Valkey.
+
+      - alert: DotRelayNotReady
+        # dotrelay_ready is evaluated on every scrape.
+        expr: min(dotrelay_ready) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: DotRelay API readiness has failed for 5 minutes
+          description: >-
+            PostgreSQL, the applied migrations or Valkey are not ready, or the
+            API is in maintenance mode or shutting down.
+
+      - alert: DotRelayMetricsAbsent
+        expr: absent(dotrelay_ready)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The DotRelay metrics endpoint is not being scraped
+          description: The API is down, METRICS_ENABLED is off, or the scrape token or port is wrong.
+
+      - alert: DotRelayHigh5xxRatio
+        # DEFAULT: more than 5% of requests answer 5xx over 10 minutes, with
+        # at least 0.1 requests per second so idle instances stay quiet.
+        expr: |
+          sum(rate(dotrelay_http_requests_total{status_class="5xx"}[10m]))
+            / sum(rate(dotrelay_http_requests_total[10m])) > 0.05
+          and
+          sum(rate(dotrelay_http_requests_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: DotRelay API 5xx ratio is above 5%
+          description: Split dotrelay_events_total{event_name="api.request.completed",outcome="failure"} by problem_code.

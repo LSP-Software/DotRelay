@@ -1,0 +1,69 @@
+# promtool test rules ops/alerts/dotrelay.rules.test.yml
+rule_files:
+  - dotrelay.rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'dotrelay_events_total{event_name="api.staging.expiry_failed",outcome="failure",problem_code="none"}'
+        values: "0 0 1 1 1"
+      - series: 'dotrelay_events_total{event_name="api.rate_limit.unavailable",outcome="failure",problem_code="rate_limit_unavailable"}'
+        values: "0 0 0 0 0"
+      - series: "dotrelay_ready"
+        values: "1 0 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DotRelayRetentionFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: DotRelay retention cleanup failed in the last hour
+              description: >-
+                Expired staging, Security Request Logs or short-lived auth rows were not removed. Expired staging still counts against quotas and logs past their retention must be deleted. Check the API log for the matching *.expiry_failed events.
+      - eval_time: 4m
+        alertname: DotRelayRateLimitUnavailable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DotRelayNotReady
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: DotRelayNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: DotRelay API readiness has failed for 5 minutes
+              description: >-
+                PostgreSQL, the applied migrations or Valkey are not ready, or the API is in maintenance mode or shutting down.
+  - interval: 1m
+    input_series:
+      - series: 'dotrelay_http_requests_total{status_class="2xx"}'
+        values: "0+60x30"
+      - series: 'dotrelay_http_requests_total{status_class="5xx"}'
+        values: "0+10x30"
+      - series: 'dotrelay_events_total{event_name="api.rate_limit.auth_refused",outcome="failure",problem_code="rate_limited"}'
+        values: "0+120x30"
+      - series: "dotrelay_ready"
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DotRelayHigh5xxRatio
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: DotRelay API 5xx ratio is above 5%
+              description: Split dotrelay_events_total{event_name="api.request.completed",outcome="failure"} by problem_code.
+      - eval_time: 25m
+        alertname: DotRelayRateLimitRefusalsSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: DotRelay rate-limit refusals are spiking
+              description: >-
+                Split by event_name to see the limiter (user, github, creation, auth). Auth refusals without a trusted proxy usually mean every client shares one bucket.
+      - eval_time: 25m
+        alertname: DotRelayMetricsAbsent
+        exp_alerts: []
