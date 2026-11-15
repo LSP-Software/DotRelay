@@ -346,6 +346,11 @@ describe("API foundation", () => {
     expect(response.headers.get("access-control-expose-headers")).toContain(
       "X-Correlation-ID",
     );
+    expect(
+      (response.headers.get("access-control-expose-headers") ?? "")
+        .split(",")
+        .map((name) => name.trim().toLowerCase()),
+    ).toContain("retry-after");
     expect(device).toMatchObject({
       verification_uri: `${profile.origin}/device`,
       interval: expect.any(Number),
@@ -392,6 +397,14 @@ describe("API foundation", () => {
     expect(response.headers.get("access-control-expose-headers")).toContain(
       "X-Correlation-ID",
     );
+    // The browser reads the rate limiter's retry window from either header.
+    const exposed = (
+      response.headers.get("access-control-expose-headers") ?? ""
+    )
+      .split(",")
+      .map((name) => name.trim().toLowerCase());
+    expect(exposed).toContain("retry-after");
+    expect(exposed).toContain("x-retry-after");
     expect(response.headers.get("x-correlation-id")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );

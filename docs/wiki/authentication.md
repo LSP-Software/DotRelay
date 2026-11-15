@@ -96,7 +96,8 @@ without Valkey uses per-process memory. In production, requests without a truste
 share one conservative route bucket, so the trusted-proxy settings in
 [operations](operations.md#configuration-and-startup) are required for per-client limits. The
 API reads `X-Forwarded-For` only when trusted proxies are configured, and walks the chain past the
-listed proxy addresses. A `429` response carries `X-Retry-After`, which auth CORS exposes.
+listed proxy addresses. A `429` response carries `X-Retry-After`. Auth and protocol CORS expose both
+`X-Retry-After` and the protocol rate limiter's `Retry-After`, so the web app can show the wait.
 
 The capabilities response is public and may be cached briefly with its ETag. Authenticated
 responses are `no-store`. Errors use the stable `application/problem+json` contract and never

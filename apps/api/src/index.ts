@@ -597,7 +597,9 @@ const protocolCors = (profile: ServerProfileConfig) =>
       "X-DotRelay-Expires-At",
     ],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
+    // The protocol rate limiter sends Retry-After; the auth rate limiter's
+    // 429 carries X-Retry-After.
+    exposeHeaders: ["X-Correlation-ID", "Retry-After", "X-Retry-After"],
     maxAge: 600,
   });
 
@@ -731,7 +733,7 @@ const createApi = ({
       allowMethods: ["GET", "POST", "OPTIONS"],
       // Set-Auth-Token is deliberately not exposed: browser script must never
       // read the bearer session token. Non-browser clients are unaffected.
-      exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
+      exposeHeaders: ["X-Correlation-ID", "Retry-After", "X-Retry-After"],
       maxAge: 600,
     }),
   );

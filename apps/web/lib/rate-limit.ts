@@ -1,7 +1,7 @@
 // The service answers a request over a per-User or per-IP limit with 429
 // rate_limited. Its problem body carries retryAfterSeconds; the Retry-After
-// header says the same but a cross-origin browser can only read it when the
-// API exposes it (it exposes X-Retry-After for auth routes).
+// header (X-Retry-After on auth routes) says the same, and the API exposes
+// both to the web origin.
 
 const asSeconds = (value: unknown): number | undefined => {
   if (typeof value === "number")

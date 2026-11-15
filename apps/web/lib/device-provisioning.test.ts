@@ -25,6 +25,12 @@ test("a rate-limited bootstrap tells the browser to wait", () => {
   );
 });
 
+test("a rate-limited bootstrap names the retry window when the server sends one", () => {
+  expect(bootstrapFailureMessage("rate_limited", 30)).toBe(
+    "The server is limiting requests from this browser right now. Try again in 30 seconds.",
+  );
+});
+
 test("a revoked device points at the Devices list", () => {
   expect(bootstrapFailureMessage("device_not_active")).toBe(
     "This browser's device is no longer active on the server. It may have been revoked; check the Devices list, then try again.",
