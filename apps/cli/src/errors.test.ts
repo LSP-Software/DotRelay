@@ -377,6 +377,43 @@ describe("problem codes added with Membership periods and rate limits", () => {
   });
 });
 
+describe("alpha admission", () => {
+  test("names the hosted support address only for the hosted origin", () => {
+    const hosted = detailForProblem("alpha_admission_required", {
+      origin: "https://api.dotrelay.dev/",
+    });
+    expect(hosted).toContain(
+      "DotRelay is in private alpha and this GitHub account isn't on the list yet. Email support@dotrelay.dev to request access.",
+    );
+    expect(hosted).toContain("dotrelay logout");
+    for (const origin of ["https://dotrelay.example.com", undefined]) {
+      const selfHosted = detailForProblem(
+        "alpha_admission_required",
+        origin === undefined ? {} : { origin },
+      );
+      expect(selfHosted).toContain("Ask this server's operator for access.");
+      expect(selfHosted).not.toContain("support@dotrelay.dev");
+      expect(selfHosted).toContain("dotrelay logout");
+    }
+  });
+
+  test("is an authentication failure with its own title and code", () => {
+    const error = new ProtocolTransportError(
+      createProblem("alpha_admission_required"),
+    );
+    expect(diagnosticForError(error)).toMatchObject({
+      category: "authentication",
+      code: "alpha_admission_required",
+      exitCode: EXIT_CODES.authentication,
+    });
+    const presentation = presentationForError(error);
+    expect(presentation.title).toBe("Private alpha");
+    expect(presentation.fixes).toEqual([
+      "To use another GitHub account, run dotrelay logout, then dotrelay login.",
+    ]);
+  });
+});
+
 describe("CLI text sanitizing", () => {
   test("strips C0, C1, escape sequences and bidi/format characters", () => {
     expect(sanitizeCliText("a\x1b]8;;https://x\x07b\x1b[31mc")).toBe(
