@@ -871,7 +871,10 @@ const createApi = ({
       // The distinct code lets clients show "not on the list" instead of a
       // generic error; the body names neither the list nor the account.
       if (!(await isAlphaAdmitted(allowed, session.user.id))) {
-        await declineDeviceCodeOutsideAlpha(context, session.user.id);
+        // Best effort: the CLI falls back to waiting out the code.
+        await declineDeviceCodeOutsideAlpha(context, session.user.id).catch(
+          () => undefined,
+        );
         context.header("Cache-Control", "no-store");
         return jsonProblem(context, "alpha_admission_required");
       }
