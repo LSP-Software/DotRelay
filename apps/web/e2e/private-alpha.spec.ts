@@ -73,9 +73,16 @@ test("the workspace sends an account outside the alpha list to the private alpha
   await expectNotice(page);
   await expect(page.getByTestId("workspace-connection-error")).toHaveCount(0);
 
-  await page.getByTestId("private-alpha-sign-out").click();
+  // A click before hydration does nothing, so retry until the sign-out
+  // request goes out.
+  await expect(async () => {
+    if (signOuts === 0)
+      await page
+        .getByTestId("private-alpha-sign-out")
+        .click({ timeout: 1_000 });
+    expect(signOuts).toBeGreaterThan(0);
+  }).toPass({ timeout: 15_000 });
   await expect(page).toHaveURL(/\/sign-in$/);
-  expect(signOuts).toBe(1);
 });
 
 test("the device page shows the private alpha state instead of a connection error", async ({
