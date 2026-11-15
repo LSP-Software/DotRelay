@@ -27,8 +27,9 @@ published selector never pins a missing package. A re-run after a partial failur
 `main` at `https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/`. They download
 `dotrelay-<tag>-<platform>-<arch>.tar.gz` (`.zip` for Windows) and `SHA256SUMS` from the release,
 so renaming a release archive, or adding a target, needs the scripts changed in the same pull
-request. They install the latest stable release unless `DOTRELAY_VERSION` names one; prereleases
-are never picked by default.
+request. They install the latest stable release unless `DOTRELAY_VERSION` names one. Until a stable
+release exists they take the newest release the GitHub API lists, prerelease included, matching
+npm's `latest`.
 
 Before a production tag is approved, the release owner must attach the security review approval for
 the observability privacy boundary to the release record. The approval must verify that Application

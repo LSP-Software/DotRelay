@@ -4,7 +4,7 @@
 #
 # Environment:
 #   DOTRELAY_VERSION       release to install, such as 1.2.3 or v1.2.3-alpha.1
-#                          (default: the latest stable release)
+#                          (default: the latest stable release, or the newest prerelease while no stable release exists)
 #   DOTRELAY_INSTALL_DIR   directory for the binary
 #                          (default: %LOCALAPPDATA%\DotRelay\bin)
 #   DOTRELAY_DOWNLOAD_BASE releases URL to download from
@@ -23,6 +23,9 @@ function Install-DotRelay {
   $base = 'https://github.com/LSP-Software/DotRelay/releases'
   if ($env:DOTRELAY_DOWNLOAD_BASE) { $base = $env:DOTRELAY_DOWNLOAD_BASE }
   $base = $base.TrimEnd('/')
+  $api = 'https://api.github.com/repos/LSP-Software/DotRelay'
+  if ($env:DOTRELAY_API_BASE) { $api = $env:DOTRELAY_API_BASE }
+  $api = $api.TrimEnd('/')
   $tagPattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
 
   # Windows PowerShell 5.1 may default to TLS 1.0, which GitHub refuses.
@@ -61,7 +64,20 @@ function Install-DotRelay {
     }
     $tag = ($final.TrimEnd('/') -split '/')[-1]
     if ($tag -notmatch $tagPattern) {
-      throw "dotrelay install: found no stable release at $base/latest. Set DOTRELAY_VERSION to install a prerelease, for example `$env:DOTRELAY_VERSION = 'v0.1.0-alpha.1'"
+      # Until a stable release exists, alphas are the product: take the
+      # newest published release, prereleases included.
+      $tag = $null
+      try {
+        $listed = Invoke-RestMethod -Uri "$api/releases?per_page=10" -Headers @{ Accept = 'application/vnd.github+json' }
+        foreach ($release in @($listed)) {
+          if ($release.tag_name -match $tagPattern) { $tag = $release.tag_name; break }
+        }
+      } catch {
+        $tag = $null
+      }
+      if (-not $tag) {
+        throw "dotrelay install: found no release at $base. Set DOTRELAY_VERSION to the release to install, for example `$env:DOTRELAY_VERSION = 'v0.1.0-alpha.1'"
+      }
     }
   }
 

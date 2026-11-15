@@ -27,6 +27,8 @@ const arch = process.arch === "arm64" ? "arm64" : "x64";
 // Release tag -> asset name -> bytes.
 const releases = new Map<string, Map<string, Uint8Array>>();
 let latest: string | null = "v1.2.3";
+// What the GitHub API lists, newest first.
+let listed: readonly string[] = ["v2.0.0-alpha.1", "v1.2.3"];
 let server: ReturnType<typeof Bun.serve>;
 let work: string;
 
@@ -120,6 +122,10 @@ beforeAll(async () => {
             Location: latest === null ? "/releases" : `/releases/tag/${latest}`,
           },
         });
+      if (pathname === "/api/releases")
+        return Response.json(
+          listed.map((tag) => ({ tag_name: tag, draft: false })),
+        );
       if (pathname === "/releases" || pathname.startsWith("/releases/tag/"))
         return new Response("release page");
       const match = /^\/releases\/download\/([^/]+)\/([^/]+)$/.exec(pathname);
@@ -160,6 +166,7 @@ const install = async (
       HOME: home,
       TMPDIR: temp,
       DOTRELAY_DOWNLOAD_BASE: `http://127.0.0.1:${server.port}/releases`,
+      DOTRELAY_API_BASE: `http://127.0.0.1:${server.port}/api`,
       DOTRELAY_INSTALL_DIR: installDir,
       ...env,
     },
@@ -234,12 +241,24 @@ describe.skipIf(process.platform === "win32")("install.sh", () => {
     expect(await readdir(result.temp)).toEqual([]);
   });
 
-  test("names DOTRELAY_VERSION when there is no stable release", async () => {
+  test("installs the newest prerelease while no stable release exists", async () => {
     latest = null;
+    listed = ["v2.0.0-alpha.1"];
     const result = await install("sh");
     latest = "v1.2.3";
+    listed = ["v2.0.0-alpha.1", "v1.2.3"];
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("installed dotrelay 2.0.0-alpha.1");
+  });
+
+  test("names DOTRELAY_VERSION when there is no release at all", async () => {
+    latest = null;
+    listed = [];
+    const result = await install("sh");
+    latest = "v1.2.3";
+    listed = ["v2.0.0-alpha.1", "v1.2.3"];
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("found no stable release");
+    expect(result.stderr).toContain("found no release");
     expect(result.stderr).toContain("DOTRELAY_VERSION");
   });
 
@@ -285,6 +304,7 @@ describe.skipIf(pwsh === null || python === null)("install.ps1", () => {
           OS: "Windows_NT",
           PROCESSOR_ARCHITECTURE: "AMD64",
           DOTRELAY_DOWNLOAD_BASE: `http://127.0.0.1:${server.port}/releases`,
+          DOTRELAY_API_BASE: `http://127.0.0.1:${server.port}/api`,
           DOTRELAY_INSTALL_DIR: installDir,
           ...env,
         },

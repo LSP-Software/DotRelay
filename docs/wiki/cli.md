@@ -32,7 +32,8 @@ irm https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install
 | `DOTRELAY_VERSION`     | the latest stable release; set `1.2.3` or `v1.2.3-alpha.1` to pin one |
 | `DOTRELAY_INSTALL_DIR` | `~/.local/bin` (Unix), `%LOCALAPPDATA%\DotRelay\bin` (Windows)        |
 
-With no stable release yet, set `DOTRELAY_VERSION` to the prerelease tag. When the install
+With no stable release yet, the scripts install the newest prerelease (alphas are versions of the
+hosted service). When the install
 directory is not on `PATH`, the script prints the line to add. Re-running a script replaces the
 installed binary. The scripts are served from `main`, not from a release, so a fix to them applies
 to every version they install.

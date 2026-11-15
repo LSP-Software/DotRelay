@@ -5,10 +5,13 @@
 #
 # Environment:
 #   DOTRELAY_VERSION       release to install, such as 1.2.3 or v1.2.3-alpha.1
-#                          (default: the latest stable release)
+#                          (default: the latest stable release, or the newest
+#                          prerelease while no stable release exists)
 #   DOTRELAY_INSTALL_DIR   directory for the binary (default: ~/.local/bin)
 #   DOTRELAY_DOWNLOAD_BASE releases URL to download from
 #                          (default: https://github.com/LSP-Software/DotRelay/releases)
+#   DOTRELAY_API_BASE      GitHub API URL of the repository, used to find a
+#                          prerelease (default: https://api.github.com/repos/LSP-Software/DotRelay)
 #
 # The archive is checked against the release's SHA256SUMS before anything is
 # installed. The script never uses root and sends nothing but the downloads.
@@ -20,6 +23,8 @@ set -eu
 main() {
   base="${DOTRELAY_DOWNLOAD_BASE:-https://github.com/LSP-Software/DotRelay/releases}"
   base="${base%/}"
+  api="${DOTRELAY_API_BASE:-https://api.github.com/repos/LSP-Software/DotRelay}"
+  api="${api%/}"
 
   need curl
   need tar
@@ -145,12 +150,26 @@ detect_arch() {
 }
 
 # The latest stable release, from the tag GitHub redirects /releases/latest to.
+# Until a stable release exists, alphas are the product, so fall back to the
+# newest published release, prereleases included.
 latest_tag() {
   url="$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "${base}/latest")" ||
     fail "could not reach ${base}/latest"
   found="${url##*/}"
-  valid_tag "$found" ||
-    fail "found no stable release at ${base}/latest. Set DOTRELAY_VERSION to install a prerelease, for example DOTRELAY_VERSION=v0.1.0-alpha.1"
+  if valid_tag "$found"; then
+    echo "$found"
+    return
+  fi
+  found="$(curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' "${api}/releases?per_page=10" |
+    tr ',' '\n' | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' |
+    while read -r candidate; do
+      if valid_tag "$candidate"; then
+        echo "$candidate"
+        break
+      fi
+    done)" || true
+  valid_tag "${found:-}" ||
+    fail "found no release at ${base}. Set DOTRELAY_VERSION to the release to install, for example DOTRELAY_VERSION=v0.1.0-alpha.1"
   echo "$found"
 }
 
