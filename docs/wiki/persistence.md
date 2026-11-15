@@ -51,7 +51,15 @@ add exact byte lengths, lifecycle and epoch checks, partial uniqueness, deferred
 current-head constraints, foreign keys, and append-only triggers that Prisma cannot express.
 
 Durable Users, Devices, Memberships, Membership periods, Projects, Environments, protocol objects,
-Revisions, grants, commitments, Operations, and Audit Facts are not physically deleted. Archival,
+Revisions, grants, commitments, Operations, and Audit Facts are not physically deleted, with two
+exceptions. Account deletion deletes the User's Account Key Wrappers, Account Key Envelopes,
+Account Key Transfers, and the grants sealed to their Devices, with those protocol objects, and
+the Better Auth user with its sessions and linked accounts; it keeps the tombstoned `users` row
+and the public verification material
+([ADR 0018](../adr/0018-account-deletion-keeps-public-verification-material.md),
+[what deletion keeps](account-deletion.md)). Team purge deletes a deleted Team's Projects and
+everything under them ([ADR 0019](../adr/0019-leaving-and-deleting-a-team.md)). Both set the
+transaction-local `dotrelay.purge` setting, the only way past the append-only triggers. Archival,
 Membership removal, and Device revocation are logical lifecycle changes. Device revocation is
 terminal: the `devices_lifecycle_guard` trigger refuses any update that moves a Device out of
 `REVOKED`, back to `PENDING`, or rewrites its activation time, revocation time, owner or keys
@@ -66,8 +74,9 @@ The retention job deletes, in bounded batches of short `SKIP LOCKED` transaction
 expired staging rows; expired Security Request Logs; Better Auth sessions past their sliding expiry
 or older than the 90-day absolute lifetime; expired device codes and verifications; expired Device
 enrollments that were never approved (approved or completed enrollments are referenced by
-append-only approval and enrollment objects); and expired invitations that were never accepted,
-including revoked and declined ones. It deliberately keeps expired and cancelled Operations, whose
+append-only approval and enrollment objects); expired invitations that were never accepted,
+including revoked and declined ones; and Teams deleted more than 30 days ago
+(`TEAM_PURGE_AFTER_MS`), one Team per transaction, keeping their Operations and Audit Facts. It deliberately keeps expired and cancelled Operations, whose
 ids are idempotency guards referenced by append-only Audit Facts, and PENDING Device rows, which
 their enrollment Operation and Audit Fact reference. Every uncommitted staged row
 counts against the staging quota until cleanup deletes it, whatever its expiry, and a client's

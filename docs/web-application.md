@@ -208,6 +208,18 @@ Environment in a Project from the web ("New environment"); the label follows the
 an existing label is caught before submitting, and the new Environment opens once the refreshed
 catalog lists it.
 
+The Team view ends with **Leave team** for everyone and **Delete team** for owners. Leaving
+names the rotation the team's owners should run; the last active owner is told to promote
+another owner or delete the Team first. Deleting asks for the Team name to be typed and states
+that every Member loses access at once and the encrypted data is erased after 30 days.
+
+The **Account** view offers **Export my data**, which downloads the account data JSON from
+`/api/v1/account/export` and says that Values come from `dotrelay pull` or `dotrelay export`, and
+**Delete account**. Its dialog lists the Teams the account would leave or delete, refuses while
+the User is a Team's last active owner, and enables deletion only after `delete my account` is
+typed. After deletion the browser forgets its Device id and goes to sign-in. A deleted User's
+Members row and Revisions read "Deleted user".
+
 Project and Environment archive/restore actions require confirmation. The Environment confirmation
 states that archiving retains immutable Revision history while preventing Manifest disclosure.
 Project restoration states that a conflicting active stable GitHub Repository linkage fails closed.

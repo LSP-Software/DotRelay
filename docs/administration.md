@@ -25,12 +25,40 @@ Memberships authorize reads or mutations.
 | Create, archive, or restore a Project            | yes   | yes   | no     |
 | Create, archive, or restore an Environment       | yes   | yes   | no     |
 | Rotate a Project's epoch key                     | yes   | yes   | no     |
+| Leave the Team                                   | yes   | yes   | yes    |
+| Delete the Team                                  | yes   | no    | no     |
 
 Publishing and Rollback need an active Membership and an active Device, whatever the role. A
 Revision's authored-at instant must not precede the signing Device's activation, the author's
 Membership activation, or the parent Revision, and must not lie more than ten minutes past the
 service clock; the service refuses anything else with `authored_at_out_of_range` (409) instead of
 committing a head every client would reject.
+
+### Leaving and deleting a Team
+
+Any Member can leave a Team (`POST /api/v1/teams/:teamId/leave`, session only). Leaving is a
+removal with the Member as actor: the Membership becomes `REMOVED`, a `MEMBERSHIP_REMOVED` Audit
+Fact names the leaver, and an active Membership owes each Project a rotation. The Team's last
+active owner, or its only Member, gets `owner_transfer_required` (409): promote another active
+Member to owner, or delete the Team.
+
+An owner can delete a Team (`POST /api/v1/teams/:teamId/delete`, active Device, body
+`{"confirmName": "<team name>"}`). Every Membership ends and pending invitations are revoked at
+once; the Team becomes `ARCHIVED` with `deletedAt` set and no one can read it. Retention purges its
+Projects, Environments, Revisions, grants, and Memberships 30 days later
+([ADR 0019](adr/0019-leaving-and-deleting-a-team.md)).
+
+### Account deletion and export
+
+`GET /api/v1/account/export` returns the account metadata the service holds about the signed-in
+User as a JSON attachment. It holds no ciphertext, wrapped keys, public keys, or tokens.
+`GET /api/v1/account/deletion` lists the Teams that block deletion and those it would delete or
+leave. `POST /api/v1/account/delete` (session only, body `{"confirmUserId": "<user id>"}`) deletes
+the account: see [what account deletion keeps](wiki/account-deletion.md) and
+[ADR 0018](adr/0018-account-deletion-keeps-public-verification-material.md). The last active owner
+of a Team with other Members gets `owner_transfer_required`; Teams where the User is the only
+Member are deleted with the account. Exports count against a 10-per-hour budget; leaving,
+deleting a Team, and deleting an account count against the durable-row budget.
 
 ### Owed rotations
 

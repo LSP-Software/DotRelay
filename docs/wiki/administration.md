@@ -15,6 +15,11 @@ owner. A Membership is `PENDING_KEY_GRANT`, `ACTIVE`, or `REMOVED`; only `ACTIVE
 | Invite/remove Members                | yes   | yes   | no     |
 | Manage admins and owners             | yes   | no    | no     |
 | Administer Projects and Environments | yes   | yes   | no     |
+| Leave the Team                       | yes   | yes   | yes    |
+| Delete the Team                      | yes   | no    | no     |
+
+Any Member can leave; the last active owner must promote another owner or delete the Team first.
+Deleting a Team ends every Membership at once, and retention purges its data after 30 days.
 
 Membership Invitations target a stable GitHub provider subject, expire exactly seven days after
 creation, and are single-use. The matching User accepts the invitation to create a
