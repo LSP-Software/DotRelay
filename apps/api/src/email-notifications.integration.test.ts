@@ -9,6 +9,7 @@ import {
   sha384Digest,
 } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { type EmailMessage, EmailSendError } from "./email";
 import { createEmailNotifier } from "./email-notifications";
 import { createInMemoryDiagnosticSink } from "./observability";
@@ -90,13 +91,17 @@ const createAuthStub = (): DotRelayAuth =>
         headers,
       }: {
         headers: Headers;
-      }): Promise<null | { user: { id: string } }> => {
+      }): Promise<null | {
+        session: { id: string };
+        user: { id: string };
+      }> => {
         const authorization = headers.get("Authorization");
         if (!authorization?.startsWith("Bearer ")) return null;
         const token = authorization.slice("Bearer ".length);
-        if (token === OWNER_TOKEN) return { user: { id: authSubject } };
+        if (token === OWNER_TOKEN)
+          return { session: { id: token }, user: { id: authSubject } };
         if (token === INVITEE_TOKEN)
-          return { user: { id: inviteeAuthSubject } };
+          return { session: { id: token }, user: { id: inviteeAuthSubject } };
         return null;
       },
     },
@@ -107,7 +112,7 @@ const createAuthStub = (): DotRelayAuth =>
     }),
   }) as unknown as DotRelayAuth;
 
-const post = (
+const post = async (
   path: string,
   token: string,
   idempotencyKey: string,
@@ -119,7 +124,18 @@ const post = (
       Origin: profile.origin,
       "Cache-Control": "no-store",
       Authorization: `Bearer ${token}`,
-      "X-DotRelay-Device-Id": deviceId,
+      // The owner's commands are Device-scoped and prove the Device
+      // (ADR 0020); the invitee accepts with the session alone.
+      ...(token === OWNER_TOKEN
+        ? {
+            "X-DotRelay-Device-Id": deviceId,
+            "X-DotRelay-Device-Proof": await testDeviceProof(profile, {
+              sessionId: OWNER_TOKEN,
+              userId: ownerUserId,
+              deviceId,
+            }),
+          }
+        : {}),
       "Idempotency-Key": idempotencyKey,
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
