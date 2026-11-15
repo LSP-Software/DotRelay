@@ -40,11 +40,11 @@ include this Commons Clause condition.
 
 **"Software"** means all components of the software made available
 under this License, including but not limited to the server-side
-(backend) API server, location processing services, encryption
+(backend) API server, synchronization services, encryption
 middleware, database schemas, and any associated server-side tooling or
 configuration, as well as the client-side (frontend) application code,
-UI components, and any associated mobile or web application source
-code distributed as part of the project.
+UI components, the command-line interface, and any associated web
+application source code distributed as part of the project.
 
 **"License"** means the GNU Affero General Public License, Version 3.0
 (AGPL-3.0), as stated below.
