@@ -382,6 +382,38 @@ describe("verified Environment session", () => {
     ).rejects.toThrow("sync revision signature is not authorized");
   });
 
+  // Account deletion (ADR 0018) keeps the author's Device keys and closes
+  // every Device and Membership window at the deletion time.
+  test("verifies a deleted author's earlier Revisions and refuses later ones", async () => {
+    const author = await generateSigningKeyPair();
+    const authorKey = await exportSigningPublicKey(author.publicKey);
+    const day = 24 * 60 * 60 * 1_000;
+    const deletedAtMs = Date.now() - day;
+    const deletedAuthor = {
+      publicKey: authorKey,
+      deviceId: ids.device,
+      userId: ids.user,
+      deviceActiveFromMs: deletedAtMs - 30 * day,
+      deviceActiveUntilMs: deletedAtMs,
+      memberSinceMs: deletedAtMs - 30 * day,
+      memberUntilMs: deletedAtMs,
+      membershipPeriods: [
+        { sinceMs: deletedAtMs - 30 * day, untilMs: deletedAtMs },
+      ],
+    } as const;
+    const synced = await (
+      await scopedSession(author, [deletedAuthor], deletedAtMs - 2 * day)
+    ).syncAndDecode(syncRequest);
+    expect(synced.variables).toEqual([
+      expect.objectContaining({ name: "DATABASE_URL" }),
+    ]);
+    // A Device that kept its private key cannot write in the deleted
+    // author's name afterwards.
+    await expect(
+      (await scopedSession(author, [deletedAuthor])).syncAndDecode(syncRequest),
+    ).rejects.toThrow("sync revision signature is not authorized");
+  });
+
   test("a slow clock signs at the not-before floor instead of before it", async () => {
     const encryption = await generateEncryptionKeyPair();
     const author = await generateSigningKeyPair();
