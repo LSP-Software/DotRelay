@@ -1,10 +1,10 @@
 # DotRelay API (Bun/Hono). Build context = repository root: bun workspaces
 # and the Prisma client generation (postinstall) resolve at the root.
-FROM oven/bun@sha256:14e08ed749dcfb986e6c05b59ac45a991952e3ef846b9e86c4b09a3ac41cf979 AS builder
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS builder
 
 WORKDIR /app
 COPY . .
-RUN test "$(bun --revision)" = "1.4.4-canary.1+da867c60b" && bun install --frozen-lockfile
+RUN test "$(bun --revision)" = "1.4.4+38afee6c8" && bun install --frozen-lockfile
 # Build only the API: bun bundles the workspace dependencies from source, so
 # turbo and the Next.js web build are not needed for this image.
 RUN bun run --cwd apps/api build
@@ -12,7 +12,7 @@ RUN bun run --cwd apps/api build
 # Runtime. The full builder tree (node_modules, built API, @dotrelay/database
 # with its migrations and generated Prisma client) is copied over so that
 # `bun x prisma` resolves from the root node_modules at deploy time.
-FROM oven/bun@sha256:14e08ed749dcfb986e6c05b59ac45a991952e3ef846b9e86c4b09a3ac41cf979
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
 
 # Unprivileged runtime user. The API only reads /app (code, migrations, the
 # generated Prisma client) and reaches the database over the network, so it

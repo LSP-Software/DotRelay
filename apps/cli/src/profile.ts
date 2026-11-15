@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   establishServerProfileTrust,
   type ServerProfilePin,
@@ -155,20 +155,38 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
   });
 };
 
+// The state directory holds Device keys and sessions, so it is never
+// derived from the working directory: without an absolute home (or an
+// explicit DOTRELAY_CONFIG_DIR) the keys could land inside a project tree,
+// an image layer, or a CI artifact. A relative XDG_CONFIG_HOME is ignored,
+// as the XDG Base Directory specification requires.
 export const profileCatalogPath = (
   environment: NodeJS.ProcessEnv = process.env,
 ): string => {
-  const root =
-    environment.DOTRELAY_CONFIG_DIR ??
-    (process.platform === "win32"
-      ? join(environment.APPDATA ?? environment.LOCALAPPDATA ?? ".", "DotRelay")
-      : join(
-          environment.XDG_CONFIG_HOME ??
-            join(environment.HOME ?? ".", ".config"),
-          "dotrelay",
-        ));
-  return join(root, "profiles.json");
+  const explicit = environment.DOTRELAY_CONFIG_DIR;
+  if (explicit) return join(resolve(explicit), "profiles.json");
+  const absolute = (value: string | undefined): string | undefined =>
+    value && isAbsolute(value) ? value : undefined;
+  if (process.platform === "win32") {
+    const base =
+      absolute(environment.APPDATA) ?? absolute(environment.LOCALAPPDATA);
+    if (!base) throw missingHome("APPDATA");
+    return join(base, "DotRelay", "profiles.json");
+  }
+  const xdg = absolute(environment.XDG_CONFIG_HOME);
+  if (xdg) return join(xdg, "dotrelay", "profiles.json");
+  const home = absolute(environment.HOME);
+  if (!home) throw missingHome("HOME");
+  return join(home, ".config", "dotrelay", "profiles.json");
 };
+
+const missingHome = (variable: string): CliError =>
+  new CliError(
+    "local-io",
+    `${variable} is not set to an absolute path, so DotRelay has nowhere safe to keep its keys. Set ${variable}, or set DOTRELAY_CONFIG_DIR to the directory DotRelay should use.`,
+    {},
+    "state_directory_unavailable",
+  );
 
 // A damaged catalog names its path and the two ways out. The file holds
 // only profile names, origins, and server ids, so replacing it never loses

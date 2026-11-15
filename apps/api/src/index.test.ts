@@ -426,7 +426,7 @@ describe("API foundation", () => {
       expires_in: number;
       interval: number;
     };
-    expect(code).toMatchObject({ expires_in: 1800, interval: 5 });
+    expect(code).toMatchObject({ expires_in: 600, interval: 5 });
 
     const pending = await deviceTokenRequest(
       testApp,

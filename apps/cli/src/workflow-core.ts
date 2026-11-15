@@ -25,7 +25,7 @@ import {
   deviceMetadataPath,
   readDeviceId,
 } from "./device-storage";
-import { CliError, CliInvocationError } from "./errors";
+import { CliError, CliInvocationError, sanitizeCliLine } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import type { NetworkPolicy } from "./network";
 import { atomicWriteProtectedFile } from "./output";
@@ -545,7 +545,7 @@ export const rotationOwedNotice = (owed: RotationOwed): string => {
       : []),
   ];
   const what = parts.length > 0 ? parts.join(" and ") : "Access removed";
-  const since = owed.since.slice(0, 10);
+  const since = sanitizeCliLine(owed.since).slice(0, 10);
   return `${what} since ${since}. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.`;
 };
 

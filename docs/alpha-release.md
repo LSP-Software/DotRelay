@@ -120,11 +120,11 @@ create a production release tag.
 
 The alpha changes also refresh the lockfile for the current dependency advisories, including
 Better Auth, Next.js, Hono, the shadcn tooling chain, and the issue panel's HTML sanitizer. The
-`fast-uri` override advances to the patched 3.1.9 release. `deepmerge` is temporarily pinned to
-4.1.2 because the current 4.3.1 release is affected by GHSA-gcqx-w48m-w2h4 and has no patched 4.x
-successor; Bun's audit resolver identifies 4.1.2 as the unaffected fallback. Keep that override
-until a fixed release is available. Run the sanitizer/panel regressions and the dependency audit
-before changing it.
+`fast-uri` override advances to the patched 3.1.9 release. `deepmerge`
+4.3.1 is affected by GHSA-gcqx-w48m-w2h4 (low) and has no patched 4.x successor; it reaches the
+tree only through the shadcn development CLI and never ships, so `security:audit` ignores that one
+advisory by id. Remove the ignore once a fixed release is available. Run the sanitizer/panel
+regressions and the dependency audit before changing it.
 
 ## Alpha release channels
 

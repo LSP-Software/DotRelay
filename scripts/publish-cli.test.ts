@@ -10,6 +10,9 @@ test("npm publication carries signed provenance", () => {
   const command = publishCommand("/tmp/pkg", "alpha");
   expect(command.slice(0, 3)).toEqual(["npm", "publish", "/tmp/pkg"]);
   expect(command).toContain("--provenance");
+  // The publishing job holds OIDC credentials, so npm runs no lifecycle
+  // scripts there.
+  expect(command).toContain("--ignore-scripts");
   expect(command[command.indexOf("--tag") + 1]).toBe("alpha");
 });
 

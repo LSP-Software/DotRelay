@@ -64,7 +64,14 @@ URL manually. When the browser launcher is unavailable, fails to start, or exits
 shows that manual path instead of aborting and keeps polling for the authorization to complete.
 Session material and Device wrapping keys belong in the local credential store — encrypted files
 in the CLI state directory (`DOTRELAY_CONFIG_DIR`) — scoped by Server Profile. The encrypted
-Device bundle itself is a protected local record.
+Device bundle itself is a protected local record. The store's key sits beside the data it wraps,
+so the state directory is only as private as its modes: every command except `help` restricts the
+directory and its `credentials` directory to `0700` and the files the CLI keeps there to `0600`,
+repairing older or copied state, never follows a symlink while doing so, and stops if an entry
+belongs to another user. Without `DOTRELAY_CONFIG_DIR`, the state directory comes from an absolute
+`XDG_CONFIG_HOME` or `HOME` (`APPDATA` on Windows); when none is set the command stops rather than
+keeping keys in the working directory. A new Recovery Code waits in the credential store, not in
+a plaintext file, until a run has shown it.
 
 `logout` signs out: it revokes the session on the Server Profile (Better Auth sign-out with the
 stored bearer session) and deletes the local copy. When the server cannot be reached, the local copy
@@ -271,7 +278,9 @@ or removes tracked content on the operator's behalf) or pull to a different `--o
 `--force` does not override this refusal. An untracked output is added to the repository-local
 exclusion list (`.git/info/exclude`, which is never committed) so a later `git add` cannot pick the
 plaintext file up, and the run reports that it established the exclusion; an already-ignored output
-is left as-is and reported as such.
+is left as-is and reported as such. The CLI runs Git with `core.fsmonitor`, hooks, the untracked
+cache, the pager, and remote protocols turned off, so checking a repository it did not create
+(such as an unpacked archive with its own `.git`) never runs a program that repository names.
 Interactive `pull` confirms before replacing
 an existing file, using the same masked review as `push` but from the current file to the
 Environment, and names the same destination; `--reveal` shows the unified Value diff in that one
@@ -296,12 +305,18 @@ changes separately as "will be lost", and under `--no-input --force` the pull is
 comments, blank lines, and the order of entries are not kept. Each replacement keeps up to three
 earlier copies (`<path>.previous`, `<path>.previous.1`, `<path>.previous.2`), all mode `0600` and
 excluded from Git. A copy identical to the new file or to the newest backup is not kept twice.
-When the output is a symlink, the file it points at is replaced and the link stays.
+When the output is a symlink, the file it points at is replaced and the link stays. The Git
+check runs on that file in its own repository, so a link to a tracked file is refused like the
+tracked file itself, and the review and the report name the file the link points at.
 
 Values are written so an expander sees the same text the source gave it. A `${HOME}` reference
 read from an unquoted or double-quoted line is written in double quotes with `$` unescaped, and
 a `\$` the source used for a literal dollar sign stays `\$`. Values with no quote, line break,
-`$`, or backtick are single-quoted. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
+`$`, or backtick are single-quoted. A Value is also single-quoted, so every reader takes it
+literally, when the file being replaced single-quoted it, or when it holds a `$` that is not a
+variable reference (`$(command)`, `$2b$10$…`, a trailing `$`), unless it also holds a single
+quote. A pulled file is data for a dotenv loader: do not `source` it in a shell, which would
+expand references in double-quoted Values; use `dotrelay run` to start a command with the Values. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
 `` \` `` are decoded, and any other backslash sequence, such as `"C:\Users"`, is kept as
 written. Parse errors name the file.
 
@@ -313,10 +328,23 @@ command, so its flags are never read as DotRelay flags. `run` returns the comman
 on to it. A Value this Device cannot decrypt, or a required Variable with no value, stops the run
 before the command starts.
 
+Any active Member can publish a Variable, and some names control how a program, its loader, its
+interpreter, or a shell starts rather than configuring the application: `PATH`, `HOME`,
+`NODE_OPTIONS`, `NODE_PATH`, `BUN_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `ENV`,
+`PROMPT_COMMAND`, `PS1`, `PS4`, `IFS`, `PYTHON*`, `PERL5*`, `RUBYOPT`, `RUBYLIB`,
+`JAVA_TOOL_OPTIONS`, `GIT_*`, `npm_config_*`, `EDITOR`, `PAGER` and similar. A Member who sets
+one of these could run code as every teammate who starts a command through DotRelay. `run`
+therefore refuses such a Variable (`process_control_variable`, exit 2) and names it; check who
+set it with `history`, and pass it on deliberately with `--allow-env <name>`, once per name
+(`dotrelay run --allow-env NODE_OPTIONS -- node app.js`). Names are matched case-insensitively.
+`pull` writes these Variables like any other, but warns the first time one appears in the output
+file, because loading that file into a shell or a process manager passes it on.
+
 `export --format dotenv|json|shell` prints the decrypted Values to stdout (dotenv by default) and
 writes nothing to disk. Like `pull --stdout`, terminal stdout requires `--reveal`. `--format json`
 is a data format that contains the Values; it is not the `--json` diagnostic mode, which never
-does. `list` prints each Variable's name, ownership, and whether this Device has a Value for it,
+does. `--format shell` prints statements meant to be evaluated, so it refuses the same
+process-control Variables as `run` unless each is named with `--allow-env <name>`. `list` prints each Variable's name, ownership, and whether this Device has a Value for it,
 never the Values.
 
 `diff` compares `.env` with the decrypted Environment and prints added, updated, and removed
@@ -409,7 +437,7 @@ output; it unlocks the account's Account Master Key and is the only recovery pat
 a headless machine. A new code invalidates the previous one, so store it somewhere safe.
 `device recover` unlocks this Device from a Recovery Code or an Account Key Transfer. The
 Recovery Code is entered at a hidden prompt, piped on stdin, or read from `--recovery-code-file
-<path>` (a 0600 file); it is never placed on the command line and never sent to the Server
+<path>` (a regular 0600 file, never a symlink); it is never placed on the command line and never sent to the Server
 Profile. Recovery uses the Server Profile's account-key routes and never falls back to initial
 bootstrap. `--no-input` requires an explicit profile and a `--recovery-code-file` or `--transfer`
 channel, and never answers a prompt on the user's behalf.

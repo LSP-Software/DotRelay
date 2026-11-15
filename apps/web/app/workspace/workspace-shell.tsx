@@ -100,7 +100,10 @@ import {
   restoreBrowserAccountKey,
   saveBrowserAccountKey,
 } from "@/lib/browser-account-key";
-import { readStoredBrowserDeviceId } from "@/lib/browser-storage";
+import {
+  forgetThisBrowser,
+  readStoredBrowserDeviceId,
+} from "@/lib/browser-storage";
 import {
   type PendingEnrollment,
   provisionBrowserDevice as provisionBrowserDeviceFlow,
@@ -1354,11 +1357,13 @@ export const WorkspaceShell = ({
 
   // Sign out the account session. The session cookie is scoped to the API
   // origin (see apps/api/src/auth.ts), so the request goes there with
-  // credentials, mirroring the sign-in button. The workspace's local state
-  // (device keys, trust decisions) is left intact, exactly as it would be
-  // if the tab were closed, so the next sign-in restores the same browser
-  // without re-enrolling.
-  const signOut = async () => {
+  // credentials, mirroring the sign-in button. A plain sign-out leaves the
+  // workspace's local state (device keys, the sealed account key, trust
+  // decisions) intact, exactly as it would be if the tab were closed, so the
+  // next sign-in restores the same browser without re-enrolling. "Sign out
+  // and forget this browser" also clears that state, for a shared computer
+  // where the next person could sign in to the same GitHub account.
+  const signOut = async (forget = false) => {
     const origin = resolveApiOrigin() ?? displayBoundary.profile.origin;
     try {
       const response = await fetch(`${origin}/api/auth/sign-out`, {
@@ -1370,6 +1375,11 @@ export const WorkspaceShell = ({
       // The API is unreachable or rejected the request; the page that
       // follows offers sign-in either way.
     } finally {
+      if (forget) {
+        accountMasterKeyRef.current?.fill(0);
+        accountMasterKeyRef.current = null;
+        await forgetThisBrowser();
+      }
       window.location.assign("/sign-in");
     }
   };
@@ -2954,6 +2964,13 @@ export const WorkspaceShell = ({
                   <LogOut aria-hidden="true" />
                   Sign out
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-testid="account-sign-out-forget"
+                  onClick={() => void signOut(true)}
+                >
+                  <LogOut aria-hidden="true" />
+                  Sign out and forget this browser
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
@@ -3047,6 +3064,15 @@ export const WorkspaceShell = ({
                     >
                       <LogOut aria-hidden="true" />
                       Sign out
+                    </Button>
+                    <Button
+                      data-testid="mobile-sign-out-forget"
+                      onClick={() => void signOut(true)}
+                      className="w-full justify-start gap-2"
+                      variant="ghost"
+                    >
+                      <LogOut aria-hidden="true" />
+                      Sign out and forget this browser
                     </Button>
                   </div>
                 ) : null}

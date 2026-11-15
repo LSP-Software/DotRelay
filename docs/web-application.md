@@ -87,7 +87,9 @@ page instead of discarding it.
 
 Once all protected gates pass, the Environment editor displays the verified head, current Project
 epoch, Variables, descriptions, and the ownership of each Value lane. Values use password inputs and
-remain masked until the active Device explicitly reveals one. A Value the actor cannot change is a
+remain masked until the active Device explicitly reveals one. The Value is assigned to the input
+element rather than rendered into the page, so it is never in the document's markup, where saved
+pages, page-capturing extensions, or CSS attribute selectors could read it. A Value the actor cannot change is a
 read-only input rather than a disabled one, so it stays focusable and selectable once revealed; the
 reason it is read-only is shown under the Variable and linked to the field. Every readable Value
 has a Copy control that writes it to the clipboard without rendering it and confirms briefly. A

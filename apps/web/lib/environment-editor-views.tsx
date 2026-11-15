@@ -16,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { SecretValueInput } from "@/components/secret-value-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -636,7 +637,7 @@ export const VariableRow = ({
             <Label className="sr-only" htmlFor={`value-${variable.id}`}>
               {variable.name} value
             </Label>
-            <Input
+            <SecretValueInput
               aria-describedby={
                 readOnlyDisclosure ? `read-only-${variable.id}` : undefined
               }
@@ -813,7 +814,7 @@ export const AddVariableDialog = ({
           <div className="grid gap-2">
             <Label htmlFor="new-variable-value">Initial value</Label>
             <div className="flex items-center gap-2">
-              <Input
+              <SecretValueInput
                 autoCapitalize="off"
                 autoComplete="new-password"
                 autoCorrect="off"

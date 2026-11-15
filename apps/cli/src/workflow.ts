@@ -1,10 +1,26 @@
 import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { ParsedArguments } from "./args";
 import { writePublicationBaseline } from "./baseline-store";
 import { kv, note, reviewFrame } from "./components";
-import { diffDotenvEntries, parseDotenv, serializeDotenv } from "./dotenv";
-import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
-import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
+import {
+  diffDotenvEntries,
+  literalDotenvNames,
+  parseDotenv,
+  serializeDotenv,
+} from "./dotenv";
+import { processControlPullWarning } from "./env-safety";
+import {
+  CliError,
+  CliInvocationError,
+  sanitizeCliLine,
+  sanitizeCliText,
+} from "./errors";
+import {
+  assertSafeStdout,
+  atomicWriteProtectedFile,
+  resolveOutputTarget,
+} from "./output";
 import { classifyPullValues, pullVariableNames } from "./pull-values";
 import { pad, visibleWidth } from "./theme";
 import { isUnreadableTerminalError, paint, readTerminalSecret } from "./ui";
@@ -169,6 +185,20 @@ export const runProtectedWorkflow = async (
     let gitExclusion: "established" | "present" | undefined;
     if (outputPath)
       gitExclusion = await guardPullOutputAgainstGit(options, outputPath);
+    // A symlinked output is written through to the file it names; the
+    // review and the report name that file so the write is never a surprise.
+    const linkedTarget = outputPath
+      ? await resolveOutputTarget(outputPath)
+          .then((target) =>
+            target === outputPath || target === resolve(outputPath)
+              ? undefined
+              : target,
+          )
+          .catch(() => undefined)
+      : undefined;
+    const linkNote = linkedTarget
+      ? ` (a symlink to ${sanitizeCliLine(linkedTarget)})`
+      : "";
     const synced = await syncWorkflow(options, parsed);
     const groups = classifyPullValues(
       synced.variables,
@@ -207,11 +237,14 @@ export const runProtectedWorkflow = async (
       for (const variable of groups.requiredMissing) {
         supplied.set(
           variable.name,
-          await readTerminalSecret(`Value for ${variable.name}`, {
-            ...(options.terminal ? { terminal: options.terminal } : {}),
-            ...(options.prompt ? { prompt: options.prompt } : {}),
-            noInput: options.noInput,
-          }),
+          await readTerminalSecret(
+            `Value for ${sanitizeCliLine(variable.name)}`,
+            {
+              ...(options.terminal ? { terminal: options.terminal } : {}),
+              ...(options.prompt ? { prompt: options.prompt } : {}),
+              noInput: options.noInput,
+            },
+          ),
         );
       }
     }
@@ -241,7 +274,35 @@ export const runProtectedWorkflow = async (
         headHash: bytesToHex(hash),
       });
     };
-    const contents = serializeDotenv(entries);
+    // The file being replaced decides two things: a Value it single-quoted
+    // was meant literally and stays single-quoted, and a Variable that
+    // controls how programs or shells start is inert in the file but not
+    // once the file is loaded into a shell, so one new to the destination
+    // is called out for the user to check who published it.
+    const previousNames = new Set<string>();
+    let literalNames: ReadonlySet<string> = new Set();
+    if (outputPath)
+      try {
+        const previous = await readFile(outputPath, "utf8");
+        for (const entry of parseDotenv(previous))
+          previousNames.add(entry.name);
+        literalNames = literalDotenvNames(previous);
+      } catch {
+        // No readable previous file: every entry is new.
+      }
+    const contents = serializeDotenv(entries, { literalNames });
+    const processControlWarning = processControlPullWarning(
+      entries
+        .map((entry) => entry.name)
+        .filter((name) => !previousNames.has(name)),
+    );
+    if (processControlWarning && !parsed.json)
+      (options.terminal?.output ?? process.stderr).write(
+        `${note(processControlWarning, "warn")}\n`,
+      );
+    const warningsField = processControlWarning
+      ? { warnings: [processControlWarning] }
+      : {};
     if (parsed.stdout && parsed.reveal && !options.noInput) {
       const destination = await destinationFor(
         options,
@@ -283,6 +344,7 @@ export const runProtectedWorkflow = async (
           return {
             output: outputPath,
             unchanged: true,
+            ...(parsed.json ? warningsField : {}),
             ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
             ...(gitExclusion ? { gitExclusion } : {}),
             ...pendingActionsField(synced.workflow.pendingActions),
@@ -329,6 +391,14 @@ export const runProtectedWorkflow = async (
             danger: true,
             body: reviewBody(changes, destination, parsed.reveal, [
               ...pullReplacementNotes(outputPath, unpushed),
+              ...(linkedTarget
+                ? [
+                    `  ${paint(
+                      `${sanitizeCliLine(outputPath)} is a symlink; the write replaces ${sanitizeCliLine(linkedTarget)}`,
+                      "warn",
+                    )}`,
+                  ]
+                : []),
               `  ${paint(
                 `The current file is retained at ${outputPath}.previous`,
                 "faint",
@@ -366,13 +436,15 @@ export const runProtectedWorkflow = async (
         }
       : {
           output: outputPath ?? "",
+          ...(parsed.json ? warningsField : {}),
           ...(gitExclusion ? { gitExclusion } : {}),
           ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
+          ...(linkedTarget ? { target: linkedTarget } : {}),
           ...pendingActionsField(synced.workflow.pendingActions),
           ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
           message: replaceExisting
-            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
-            : `Wrote ${entries.length} values to ${outputPath}${exclusionNote}${omissionNote}`,
+            ? `Wrote ${entries.length} values to ${outputPath}${linkNote}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
+            : `Wrote ${entries.length} values to ${outputPath}${linkNote}${exclusionNote}${omissionNote}`,
         };
   }
   if (parsed.command === "init" || parsed.command === "push") {

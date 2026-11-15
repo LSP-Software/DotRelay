@@ -71,7 +71,13 @@ active Project holds the same stable GitHub Repository linkage.
 
 The editor is available only after Server Profile trust, WebCrypto, an active Device, required
 grants, an active Project and Environment, and a current Project epoch. Values stay masked until
-you reveal them on this Device.
+you reveal them on this Device, and a masked Value is never written into the page's markup.
+
+**Sign out** ends the session but keeps this browser's Device and its sealed copy of your account
+key, so signing in again restores it. On a shared computer, choose **Sign out and forget this
+browser**: it also deletes the sealed account key, the Device keys, and the trust pins, so the next
+person to sign in to the same GitHub account gets nothing. Signing in again then enrolls a new
+Device that needs a Recovery Code, a transfer, or a passkey to unlock.
 
 New Variables require explicit ownership. Shared Values are Team-readable. A User-defined Value is
 readable only by that User's authorized Devices. Live Variable names remain unique. Deletion stages

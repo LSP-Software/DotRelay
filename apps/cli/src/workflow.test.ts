@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  rm,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
   createAccountKeyEnvelope,
@@ -54,7 +47,10 @@ import { CliError } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
-import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
+import {
+  consumeDisplayedRecoveryCode,
+  PENDING_RECOVERY_CODE_SERVICE,
+} from "./workflow-account-key";
 import { missingProjectKeyNotice } from "./workflow-session";
 
 const profile = {
@@ -621,6 +617,7 @@ afterEach(async () => {
     if (
       file.startsWith(".tmp-workflow-code-") ||
       file.startsWith(".tmp-workflow-git-") ||
+      file.startsWith(".tmp-workflow-link-") ||
       file.startsWith(".tmp-workflow-profile-") ||
       file.startsWith(".tmp-workflow-state-") ||
       file.startsWith("head-") ||
@@ -2765,6 +2762,163 @@ describe("protected CLI workflows", () => {
     expect(await Bun.file(output).text()).toBe(written);
   });
 
+  test("pull warns when a process-control Variable first appears in the file", async () => {
+    const runtime = await setup();
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(
+      input,
+      "DATABASE_URL=postgres://secret\nNODE_OPTIONS=--require=./x.js\n",
+    );
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "NODE_OPTIONS=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    const pullArgs = [
+      "pull",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--output",
+      output,
+      "--no-input",
+      "--json",
+    ];
+    const fresh = await run(pullArgs, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(fresh.exitCode).toBe(0);
+    const body = JSON.parse(fresh.stdout) as { warnings?: string[] };
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings?.[0]).toContain("NODE_OPTIONS");
+    expect(body.warnings?.[0]).not.toContain("DATABASE_URL");
+    // Once the file holds the Variable, a later pull does not repeat it.
+    const again = await run(pullArgs, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(again.exitCode).toBe(0);
+    expect(JSON.parse(again.stdout)).not.toHaveProperty("warnings");
+  });
+
+  test("pull keeps a Value the file single-quoted literal", async () => {
+    const runtime = await setup();
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "TOKEN='pa$word'\nREF=${HOME}/x\n");
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "TOKEN=shared",
+        "--classify",
+        "REF=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(output, "TOKEN='pa$word'\nOLD=1\n");
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--force",
+        "--discard-local",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
+    const written = await Bun.file(output).text();
+    expect(written).toContain("TOKEN='pa$word'\n");
+    expect(written).toContain('REF="${HOME}/x"\n');
+  });
+
+  test("pull through a symlinked output names the file it writes", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    const target = `${import.meta.dir}/.tmp-workflow-link-target-${crypto.randomUUID()}`;
+    const link = `${import.meta.dir}/.tmp-workflow-link-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+      const initialized = await run(
+        [
+          "init",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--from",
+          input,
+          "--classify",
+          "DATABASE_URL=shared",
+          "--no-input",
+          "--json",
+        ],
+        runtime,
+      );
+      expect(initialized.exitCode).toBe(0);
+      const { symlink, realpath } = await import("node:fs/promises");
+      await Bun.write(target, "OLD=1\n");
+      await symlink(target, link);
+      const pulled = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--output",
+          link,
+          "--no-input",
+          "--force",
+          "--discard-local",
+          "--json",
+        ],
+        { ...runtime, gitTrackingProbe: gitOutside },
+      );
+      expect(pulled.exitCode).toBe(0);
+      const body = JSON.parse(pulled.stdout) as Record<string, unknown>;
+      expect(body.target).toBe(await realpath(target));
+      expect(String(body.message)).toContain("a symlink to");
+      expect(await Bun.file(target).text()).toContain("DATABASE_URL=");
+    } finally {
+      await rm(link, { force: true });
+      await rm(target, { force: true });
+    }
+  });
+
   test("interactive pull replacement retains a recoverable prior file", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;
@@ -4721,13 +4875,30 @@ describe("protected CLI workflows", () => {
     expect(service.publishedWrappers()).toEqual([wrapperId]);
     const recoveryCode = report.recoveryCode;
     if (typeof recoveryCode !== "string") throw new Error("code missing");
-    const pendingPath = consumeDisplayedRecoveryCodePath();
-    if (!pendingPath) throw new Error("pending path missing");
-    const pending = JSON.parse(await readFile(pendingPath, "utf8")) as {
+    const clearDisplayed = consumeDisplayedRecoveryCode();
+    if (!clearDisplayed) throw new Error("pending code missing");
+    // The pending code is kept in the encrypted credential store, never as
+    // a plaintext file in the state directory.
+    const { readdir } = await import("node:fs/promises");
+    expect(
+      (await readdir(runtime.stateDirectory)).filter((name) =>
+        name.includes("recovery-code"),
+      ),
+    ).toEqual([]);
+    const deviceId = String(report.deviceId ?? "");
+    const stored = await runtime.credentials.get(
+      PENDING_RECOVERY_CODE_SERVICE,
+      deviceId,
+    );
+    if (!stored) throw new Error("pending code not stored");
+    const pending = JSON.parse(new TextDecoder().decode(stored)) as {
       recoveryCode?: string;
     };
     expect(pending.recoveryCode).toBe(recoveryCode);
-    await unlink(pendingPath);
+    await clearDisplayed();
+    expect(
+      await runtime.credentials.get(PENDING_RECOVERY_CODE_SERVICE, deviceId),
+    ).toBeNull();
   });
 
   test("device setup does not publish when the local key cannot be saved", async () => {

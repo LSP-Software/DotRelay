@@ -115,8 +115,8 @@ who wants an encrypted backup taken immediately before a migration) use
    On the maintenance host provision PostgreSQL **17** clients, Python 3.11+ and
    `age` 1.x through your reviewed package source. Check `pg_dump --version`,
    `pg_restore --version` and `age --version`. Never dump with an older major client.
-3. Supply `DATABASE_URL`, `BACKUP_AGE_RECIPIENT`, `BACKUP_IDENTITY_FILE` and a unique
-   `BACKUP_ARCHIVE` in a private 0700 backup directory.
+3. Supply `DATABASE_URL`, `BACKUP_AGE_RECIPIENT`, `BACKUP_IDENTITY_FILE`,
+   `BACKUP_MAC_KEY_FILE` and a unique `BACKUP_ARCHIVE` in a private 0700 backup directory.
    The backup URL accepts only `sslmode`, `sslrootcert`, `sslcert` and `sslkey`
    query options. Remove Prisma-only options such as `schema` and
    `connection_limit` from this maintenance connection; configure supported TLS
@@ -153,8 +153,17 @@ python3 ops/postgres.py backup /private-backups/unique-name.age
 python3 ops/postgres.py verify /private-backups/unique-name.age
 ```
 
-Backups are age-encrypted PostgreSQL custom archives with a `.json` checksum
-sidecar. Both must be retained. The pipeline checks both `pg_dump` and encryption
+Backups are age-encrypted PostgreSQL custom archives with a `.json` manifest
+sidecar. Both must be retained. Encryption to a public age recipient does not say who
+made an archive, so the manifest records the archive's SHA-256 and size under an
+HMAC-SHA256 keyed by `BACKUP_MAC_KEY_FILE`: a private (`0600`) file holding at least
+32 random bytes, for example `openssl rand -hex 32`. Keep that key with the age identity
+and never on backup storage; whoever can write backup storage can replace an archive and
+its checksum, but not forge the MAC. `verify` and `restore` refuse an archive whose
+manifest does not authenticate before anything is decrypted. Archives made before
+manifests were authenticated (manifest version 1) are refused unless the operator sets
+`DOTRELAY_ALLOW_UNAUTHENTICATED_BACKUP=true` for that run after confirming the storage
+was not writable by anyone else. The pipeline checks both `pg_dump` and encryption
 exit codes; any failed output is unusable. Names are exclusive: a backup never
 overwrites another backup. Store copies outside the database host, encrypt disks,
 restrict access, monitor failures and capacity, and set retention/RPO/RTO appropriate
@@ -171,8 +180,10 @@ network using a newly created empty database and the matching release. Set
 DOTRELAY_WRITERS_STOPPED=true python3 ops/postgres.py restore /private-backups/unique-name.age
 ```
 
-Restore first authenticates the complete encrypted archive and refuses checksum
-mismatch or a nonempty target. It uses `pg_restore --single-transaction` and
+Restore first authenticates the manifest and the complete encrypted archive and refuses
+an unauthenticated manifest, a checksum mismatch or a nonempty target. Restore as a role
+that owns the new target database but is not a superuser, so the archive's SQL runs with
+no more privilege than the application needs. It uses `pg_restore --single-transaction` and
 `--exit-on-error`, without `--clean`, without dropping or overwriting the original
 DB. Preserve ownership/privileges by provisioning the dedicated role separately;
 archives intentionally omit role/ACL recreation. Verification uses an unlinked private
@@ -193,14 +204,16 @@ in #32; do not infer it from database readiness.
 
 ## Reproducibility and promotion
 
-The Docker bases and PostgreSQL/Valkey service images are digest-pinned. CI Bun is
-pinned to revision `da867c60bf0bcbf9d6d36994f8ca0efa42075115`; Docker verifies its
-reported revision. The matching Linux x64 Bun archive SHA-256 is
-`e8f27b24f74186e87fc0f0f603bdb6b79264dc86a1680da41e2025a3cb3efee0`.
-CI installs the official, immutable dated npm packages
-`@oven/bun-*@1.4.4-canary.20261030.1`, verifies their SHA-512 integrity from
-`ops/bun-toolchain.json` and checks the executable revision before use. It does
-not depend on GitHub's replaceable canary asset IDs. Direct package versions and transitive resolutions are locked; installs must use
+The Docker bases and PostgreSQL/Valkey service images are digest-pinned. The API image,
+the web build, the compiled CLI and CI run the stable Bun release `1.4.4`, revision
+`38afee6c84fcf48c0edb2466aa4b27d287a59c30` (`oven/bun:1.4.4@sha256:1d22548f…`); Docker
+verifies its reported revision. The matching Linux x64 Bun archive SHA-256 is
+`93ca5a2abe45f3bcac6dd55baff8bb06c4ac824b70f89650b54e5c8b80dbef18`. CI installs the
+official, immutable npm packages `@oven/bun-*@1.4.4`, verifies their SHA-512 integrity
+from `ops/bun-toolchain.json` and checks the executable revision before use. A dated
+canary (`@oven/bun-*@1.4.4-canary.20261030.1`, revision
+`da867c60bf0bcbf9d6d36994f8ca0efa42075115`) is pinned the same way, but only runs the
+built-in `bun lint`; it never builds or runs anything that ships. Direct package versions and transitive resolutions are locked; installs must use
 `--frozen-lockfile`. Pin changes require the full runtime/crypto matrix again.
 This is repeatable dependency resolution, not a claim of bit-for-bit reproducible
 Next.js/native binaries across different hosts.

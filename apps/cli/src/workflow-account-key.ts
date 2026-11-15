@@ -1,4 +1,5 @@
-import { readFile, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   prepareDeviceRecovery,
@@ -26,7 +27,6 @@ import {
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
-import { atomicWriteProtectedFile } from "./output";
 import { readTerminalSecret, selectOption } from "./ui";
 import {
   accountKeyTrustedKeys,
@@ -110,56 +110,54 @@ type PendingRecoveryCode = {
   readonly intent: "establish" | "rotate";
 };
 
-const pendingRecoveryPath = (
+// Until a run has shown it, the newest Recovery Code waits in the encrypted
+// credential store, beside the session and Device keys, so a crash between
+// publishing its wrapper and printing it can be retried without minting a
+// second code. Earlier versions kept it as a plaintext JSON file in the
+// state directory; such a file is moved into the store on first read.
+export const PENDING_RECOVERY_CODE_SERVICE = "dotrelay.recovery-code-pending";
+
+const legacyPendingRecoveryPath = (
   options: WorkflowOptions,
   deviceId: string,
 ): string =>
   join(options.stateDirectory, `recovery-code-pending-${deviceId}.json`);
 
 // Set only after the wrapper publish has succeeded, so the process can
-// delete the local copy once it has written the code to stdout. A failure
-// leaves this unset and the file in place for the retry.
-let displayedRecoveryCodePath: string | null = null;
+// delete the stored copy once it has written the code to stdout. A failure
+// leaves this unset and the code stored for the retry.
+let displayedRecoveryCode: (() => Promise<void>) | null = null;
 
 const markRecoveryCodeReadyToDisplay = (
   options: WorkflowOptions,
   deviceId: string,
 ): void => {
-  displayedRecoveryCodePath = pendingRecoveryPath(options, deviceId);
+  displayedRecoveryCode = () => clearPresentedRecoveryCode(options, deviceId);
 };
 
-export const consumeDisplayedRecoveryCodePath = (): string | null => {
-  const path = displayedRecoveryCodePath;
-  displayedRecoveryCodePath = null;
-  return path;
+export const consumeDisplayedRecoveryCode = ():
+  (() => Promise<void>) | null => {
+  const clear = displayedRecoveryCode;
+  displayedRecoveryCode = null;
+  return clear;
 };
 
-const readPendingRecoveryCode = async (
-  options: WorkflowOptions,
-  deviceId: string,
-): Promise<PendingRecoveryCode | null> => {
-  try {
-    const parsed = JSON.parse(
-      await readFile(pendingRecoveryPath(options, deviceId), "utf8"),
-    ) as Partial<PendingRecoveryCode>;
-    if (
-      (parsed.purpose !== "setup" && parsed.purpose !== "rotation") ||
-      typeof parsed.recoveryCode !== "string" ||
-      typeof parsed.wrapperId !== "string" ||
-      typeof parsed.operationId !== "string" ||
-      typeof parsed.objectId !== "string" ||
-      typeof parsed.object !== "string" ||
-      typeof parsed.identityGeneration !== "string" ||
-      typeof parsed.ciphertextHash !== "string" ||
-      typeof parsed.ciphertextLength !== "number" ||
-      (parsed.intent !== "establish" && parsed.intent !== "rotate")
-    )
-      return null;
-    return parsed as PendingRecoveryCode;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
+const parsePendingRecoveryCode = (text: string): PendingRecoveryCode | null => {
+  const parsed = JSON.parse(text) as Partial<PendingRecoveryCode>;
+  if (
+    (parsed.purpose !== "setup" && parsed.purpose !== "rotation") ||
+    typeof parsed.recoveryCode !== "string" ||
+    typeof parsed.wrapperId !== "string" ||
+    typeof parsed.operationId !== "string" ||
+    typeof parsed.objectId !== "string" ||
+    typeof parsed.object !== "string" ||
+    typeof parsed.identityGeneration !== "string" ||
+    typeof parsed.ciphertextHash !== "string" ||
+    typeof parsed.ciphertextLength !== "number" ||
+    (parsed.intent !== "establish" && parsed.intent !== "rotate")
+  )
+    return null;
+  return parsed as PendingRecoveryCode;
 };
 
 const writePendingRecoveryCode = async (
@@ -167,17 +165,47 @@ const writePendingRecoveryCode = async (
   deviceId: string,
   pending: PendingRecoveryCode,
 ): Promise<void> => {
-  await atomicWriteProtectedFile(
-    pendingRecoveryPath(options, deviceId),
-    JSON.stringify(pending),
+  await options.credentials.set(
+    PENDING_RECOVERY_CODE_SERVICE,
+    deviceId,
+    new TextEncoder().encode(JSON.stringify(pending)),
   );
+};
+
+const readPendingRecoveryCode = async (
+  options: WorkflowOptions,
+  deviceId: string,
+): Promise<PendingRecoveryCode | null> => {
+  const stored = await options.credentials.get(
+    PENDING_RECOVERY_CODE_SERVICE,
+    deviceId,
+  );
+  if (stored) {
+    try {
+      return parsePendingRecoveryCode(new TextDecoder().decode(stored));
+    } finally {
+      stored.fill(0);
+    }
+  }
+  const legacyPath = legacyPendingRecoveryPath(options, deviceId);
+  let legacy: PendingRecoveryCode | null;
+  try {
+    legacy = parsePendingRecoveryCode(await readFile(legacyPath, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  if (legacy) await writePendingRecoveryCode(options, deviceId, legacy);
+  await unlink(legacyPath).catch(() => undefined);
+  return legacy;
 };
 
 export const clearPresentedRecoveryCode = async (
   options: WorkflowOptions,
   deviceId: string,
 ): Promise<void> => {
-  await unlink(pendingRecoveryPath(options, deviceId)).catch(
+  await options.credentials.delete(PENDING_RECOVERY_CODE_SERVICE, deviceId);
+  await unlink(legacyPendingRecoveryPath(options, deviceId)).catch(
     (error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     },
@@ -327,13 +355,24 @@ export const readRecoveryCode = async (
   if (path !== undefined) {
     let file = "";
     try {
-      const info = await stat(path);
-      // A symlink or non-regular file never qualifies as a 0600 secret.
-      if (!info.isFile() || info.isSymbolicLink())
-        throw new Error("not a regular file");
-      if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600)
-        throw new Error("wrong mode");
-      file = await readFile(path, "utf8");
+      // Open first (O_NOFOLLOW refuses a symlink), then check the opened
+      // file itself, so nothing can be swapped in between the check and the
+      // read. A symlink or non-regular file never qualifies as a 0600 secret.
+      const handle = await open(
+        path,
+        process.platform === "win32"
+          ? constants.O_RDONLY
+          : constants.O_RDONLY | constants.O_NOFOLLOW,
+      );
+      try {
+        const info = await handle.stat();
+        if (!info.isFile()) throw new Error("not a regular file");
+        if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600)
+          throw new Error("wrong mode");
+        file = await handle.readFile("utf8");
+      } finally {
+        await handle.close();
+      }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT")

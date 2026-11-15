@@ -526,6 +526,32 @@ describe("CLI argument contract", () => {
     expect(ownArguments(["run", "-p", "--", "--help"])).toEqual(["run", "-p"]);
   });
 
+  test("--allow-env names process-control Variables for run and export only", () => {
+    const parsed = parseArguments([
+      "run",
+      "--allow-env",
+      "NODE_OPTIONS",
+      "--allow-env=PATH",
+      "--",
+      "node",
+      "app.js",
+    ]);
+    expect(parsed.allowedEnvironmentNames).toEqual(["NODE_OPTIONS", "PATH"]);
+    expect(
+      parseArguments(["export", "--format", "shell", "--allow-env", "PATH"])
+        .allowedEnvironmentNames,
+    ).toEqual(["PATH"]);
+    expect(parseArguments(["run", "--", "x"]).allowedEnvironmentNames).toEqual(
+      [],
+    );
+    expect(() =>
+      parseArguments(["run", "--allow-env", "NOT-A-NAME", "--", "x"]),
+    ).toThrow("--allow-env requires a Variable name");
+    expect(() => parseArguments(["pull", "--allow-env", "PATH"])).toThrow(
+      "--allow-env is not supported by pull",
+    );
+  });
+
   test("export validates --format", () => {
     expect(parseArguments(["export"]).format).toBeUndefined();
     expect(parseArguments(["export", "--format", "shell"]).format).toBe(

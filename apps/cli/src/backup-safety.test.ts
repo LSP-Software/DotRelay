@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteProtectedFile, protectedTemporaryPath } from "./output";
@@ -109,6 +116,65 @@ test("every rotated pull backup stays out of git add", async () => {
     expect(await readFile(`${output}.previous.2`, "utf8")).toBe("SECRET=1\n");
     await git("add", ".");
     expect(await git("ls-files")).toBe("");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked output that points at a tracked file is refused", async () => {
+  const { directory, git } = await fixture();
+  try {
+    await mkdir(join(directory, "config"));
+    await mkdir(join(directory, "apps", "x"), { recursive: true });
+    await writeFile(join(directory, "config", "dev.env"), "SHARED=1\n");
+    await git("add", "config/dev.env");
+    const output = join(directory, "apps", "x", ".env");
+    await symlink("../../config/dev.env", output);
+    await expect(
+      guardPullOutputAgainstGit({} as WorkflowOptions, output),
+    ).rejects.toMatchObject({ code: "output_tracked" });
+    expect(await readFile(join(directory, "config", "dev.env"), "utf8")).toBe(
+      "SHARED=1\n",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a symlink outside any repository into a tracked file is refused", async () => {
+  const { directory, git } = await fixture();
+  const elsewhere = await mkdtemp(join(tmpdir(), "dotrelay-link-outside-"));
+  try {
+    await writeFile(join(directory, "shared.env"), "SHARED=1\n");
+    await git("add", "shared.env");
+    const output = join(elsewhere, ".env");
+    await symlink(join(directory, "shared.env"), output);
+    await expect(
+      guardPullOutputAgainstGit({} as WorkflowOptions, output),
+    ).rejects.toMatchObject({ code: "output_tracked" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    await rm(elsewhere, { recursive: true, force: true });
+  }
+});
+
+test("an untracked symlink target is excluded in its own repository", async () => {
+  const { directory, git } = await fixture();
+  try {
+    await mkdir(join(directory, "config"));
+    await mkdir(join(directory, "apps", "x"), { recursive: true });
+    await writeFile(join(directory, "config", "dev.env"), "SHARED=1\n");
+    const output = join(directory, "apps", "x", ".env");
+    await symlink("../../config/dev.env", output);
+    await guardPullOutputAgainstGit({} as WorkflowOptions, output);
+    await atomicWriteProtectedFile(output, "SECRET=new\n", {
+      followSymlink: true,
+    });
+    expect(await readFile(join(directory, "config", "dev.env"), "utf8")).toBe(
+      "SECRET=new\n",
+    );
+    await git("add", "config");
+    expect(await git("ls-files", "config")).toBe("");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

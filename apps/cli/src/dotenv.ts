@@ -84,13 +84,20 @@ const parseUnquotedValue = (text: string): string => {
   return text.slice(0, valueEnd).trim();
 };
 
-const parseEntries = (source: string): readonly DotenvEntry[] => {
+type ParsedEntries = Readonly<{
+  readonly entries: readonly DotenvEntry[];
+  /** Names whose Value was single-quoted, which every reader takes literally. */
+  readonly literal: ReadonlySet<string>;
+}>;
+
+const parseEntries = (source: string): ParsedEntries => {
   const rawLines = source.split("\n");
   const crlf = rawLines.map(
     (raw, i) => i < rawLines.length - 1 && raw.endsWith("\r"),
   );
   const lines = rawLines.map((raw, i) => (crlf[i] ? raw.slice(0, -1) : raw));
   const entries: DotenvEntry[] = [];
+  const literal = new Set<string>();
   const seen = new Set<string>();
   let index = 0;
   while (index < lines.length) {
@@ -154,6 +161,7 @@ const parseEntries = (source: string): readonly DotenvEntry[] => {
         );
       }
       value = parsed.value;
+      if (firstChar === "'") literal.add(name);
       index = parsed.line + 1;
     } else {
       value = parseUnquotedValue(original.slice(valueStart));
@@ -161,7 +169,17 @@ const parseEntries = (source: string): readonly DotenvEntry[] => {
     }
     entries.push(Object.freeze({ name, value }));
   }
-  return Object.freeze(entries);
+  return Object.freeze({ entries: Object.freeze(entries), literal });
+};
+
+const withSourcePath = <T>(parse: () => T, sourcePath?: string): T => {
+  try {
+    return parse();
+  } catch (error) {
+    if (sourcePath !== undefined && error instanceof CliInvocationError)
+      throw new CliInvocationError(`${sourcePath}: ${error.message}`);
+    throw error;
+  }
 };
 
 /**
@@ -171,15 +189,18 @@ const parseEntries = (source: string): readonly DotenvEntry[] => {
 export const parseDotenv = (
   source: string,
   sourcePath?: string,
-): readonly DotenvEntry[] => {
-  try {
-    return parseEntries(source);
-  } catch (error) {
-    if (sourcePath !== undefined && error instanceof CliInvocationError)
-      throw new CliInvocationError(`${sourcePath}: ${error.message}`);
-    throw error;
-  }
-};
+): readonly DotenvEntry[] =>
+  withSourcePath(() => parseEntries(source).entries, sourcePath);
+
+/**
+ * The names a dotenv file single-quotes. Their Values were meant literally,
+ * so a pull that rewrites the file keeps them literal.
+ */
+export const literalDotenvNames = (
+  source: string,
+  sourcePath?: string,
+): ReadonlySet<string> =>
+  withSourcePath(() => parseEntries(source).literal, sourcePath);
 
 export const classifyDotenv = (
   entries: readonly DotenvEntry[],
@@ -273,14 +294,35 @@ export const diffDotenvEntries = (
   return Object.freeze(changes);
 };
 
-// A Value is written so the parser above reads it back unchanged and an
-// expander (dotenv-expand, Next.js, Bun, sh) sees the same text it saw in
-// an unquoted or double-quoted source. `$` is therefore never escaped: a
-// `${HOME}` reference stays expandable and a `\$` the source used for a
-// literal dollar stays `\$`. Values with no quote, line break, `$` or
-// backtick use single quotes, which every reader takes literally.
-const serializeValue = (value: string): string => {
+// Whether every `$` in the Value is a reference an expander resolves
+// (`$NAME`, `${NAME}`, `${NAME:-default}`) or one the source escaped as
+// `\$`. Anything else, such as `$(command)`, `$2b$` or a trailing `$`, is
+// not something an expander should see.
+const REFERENCE_AT =
+  /^\$(?:[A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?][^}]*)?\})/;
+const onlyReferences = (value: string): boolean => {
+  for (let index = value.indexOf("$"); index >= 0;) {
+    if (value[index - 1] !== "\\" && !REFERENCE_AT.test(value.slice(index)))
+      return false;
+    index = value.indexOf("$", index + 1);
+  }
+  return true;
+};
+
+// A Value is written so the parser above reads it back unchanged. Values
+// with no quote, line break, `$` or backtick use single quotes, which every
+// reader takes literally. So does a Value read from a single-quoted line,
+// and one whose `$` is not a variable reference: double quotes would let
+// an expander rewrite it and a shell run `$(…)`. Otherwise the Value is
+// double-quoted so an expander (dotenv-expand, Next.js, Bun) sees the same
+// text it saw in an unquoted or double-quoted source: `$` is never
+// escaped, so a `${HOME}` reference stays expandable and a `\$` the source
+// used for a literal dollar stays `\$`.
+const serializeValue = (value: string, literal: boolean): string => {
   if (!/['\n\r$`]/.test(value)) return `'${value}'`;
+  const singleQuotable = !/['\r]/.test(value);
+  if (singleQuotable && (literal || !onlyReferences(value)))
+    return `'${value}'`;
   let escaped = "";
   for (let index = 0; index < value.length; index += 1) {
     const ch = value.charAt(index);
@@ -295,7 +337,10 @@ const serializeValue = (value: string): string => {
   return `"${escaped}"`;
 };
 
-export const serializeDotenv = (entries: readonly DotenvEntry[]): string => {
+export const serializeDotenv = (
+  entries: readonly DotenvEntry[],
+  options: Readonly<{ readonly literalNames?: ReadonlySet<string> }> = {},
+): string => {
   const seen = new Set<string>();
   for (const { name } of entries) {
     if (!variableName.test(name))
@@ -309,6 +354,9 @@ export const serializeDotenv = (entries: readonly DotenvEntry[]): string => {
     seen.add(name);
   }
   return `${entries
-    .map(({ name, value }) => `${name}=${serializeValue(value)}`)
+    .map(
+      ({ name, value }) =>
+        `${name}=${serializeValue(value, options.literalNames?.has(name) ?? false)}`,
+    )
     .join("\n")}\n`;
 };

@@ -1,4 +1,4 @@
-import { readFile, unlink } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   type CliDeviceStorage,
@@ -82,7 +82,12 @@ import {
   sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
-import { createGitTrackingProbe, type GitTrackingProbe } from "./git-tracking";
+import {
+  createGitTrackingProbe,
+  type GitTrackingProbe,
+  gitCommand,
+  gitEnvironment,
+} from "./git-tracking";
 import {
   helpLabelFor,
   helpTopicFor,
@@ -91,6 +96,7 @@ import {
   renderPowerHelp,
 } from "./help";
 import { setupHint } from "./hosted-origin";
+import { hardenLocalState } from "./local-state";
 import {
   defaultNetworkPolicy,
   type NetworkPolicy,
@@ -131,7 +137,7 @@ import {
   transferAccountKey,
   workspaceBoundaryFields,
 } from "./workflow";
-import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
+import { consumeDisplayedRecoveryCode } from "./workflow-account-key";
 import { SHARE_PROJECT_KEYS_STEP } from "./workflow-session";
 import {
   parseBoundary,
@@ -202,8 +208,8 @@ const localCredentials = (runtime: CliRuntime): CredentialStore =>
 const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
   try {
     const child = Bun.spawn(
-      ["git", "config", "--get-regexp", "^remote\\..*\\.url$"],
-      { stdout: "pipe", stderr: "pipe" },
+      gitCommand(["config", "--get-regexp", "^remote\\..*\\.url$"]),
+      { env: gitEnvironment(), stdout: "pipe", stderr: "pipe" },
     );
     const [stdout, exitCode] = await Promise.all([
       new Response(child.stdout).text(),
@@ -235,7 +241,8 @@ const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
 
 const defaultWorktreeConfigPath = async (): Promise<string> => {
   try {
-    const child = Bun.spawn(["git", "rev-parse", "--git-dir"], {
+    const child = Bun.spawn(gitCommand(["rev-parse", "--git-dir"]), {
+      env: gitEnvironment(),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1413,9 +1420,6 @@ const execute = async (
       )}\n\n`,
     );
   }
-  const store = createFileProfileCatalog(
-    runtime.profilePath ?? profileCatalogPath(),
-  );
   if (parsed.command === "help") {
     if (parsed.positionals.length === 0)
       return { value: { stdout: `${renderPowerHelp()}\n` } };
@@ -1427,6 +1431,11 @@ const execute = async (
       );
     return { value: { stdout: `${renderCommandHelp(label)}\n` } };
   }
+  const catalogPath = runtime.profilePath ?? profileCatalogPath();
+  // Keys and sessions live beside the catalog: restrict the directory and
+  // the files the CLI keeps there before any of them is read or written.
+  await hardenLocalState(runtime.stateDirectory ?? dirname(catalogPath));
+  const store = createFileProfileCatalog(catalogPath);
   if (parsed.command === "setup") {
     const rawOrigin = parsed.positionals[0];
     if (!rawOrigin) throw new CliInvocationError("setup requires an origin");
@@ -2673,8 +2682,8 @@ if (import.meta.main) {
   );
   if (result.stdout) await writeFully(process.stdout, result.stdout);
   if (result.exitCode === 0) {
-    const displayed = consumeDisplayedRecoveryCodePath();
-    if (displayed) await unlink(displayed).catch(() => {});
+    const clearDisplayed = consumeDisplayedRecoveryCode();
+    if (clearDisplayed) await clearDisplayed().catch(() => {});
   }
   if (result.stderr) await writeFully(process.stderr, result.stderr);
   if (typeof process.stdin.setRawMode === "function")

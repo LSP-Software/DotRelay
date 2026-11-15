@@ -1,4 +1,5 @@
 import type { DecodedVariable } from "@dotrelay/client";
+import { sanitizeCliLine } from "./errors";
 
 export type PullValueGroups = Readonly<{
   readonly present: readonly DecodedVariable[];
@@ -42,4 +43,5 @@ export const classifyPullValues = (
 
 export const pullVariableNames = (
   variables: readonly DecodedVariable[],
-): string => variables.map((variable) => variable.name).join(", ");
+): string =>
+  variables.map((variable) => sanitizeCliLine(variable.name)).join(", ");
