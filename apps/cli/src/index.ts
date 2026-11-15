@@ -82,7 +82,12 @@ import {
   sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
-import { createGitTrackingProbe, type GitTrackingProbe } from "./git-tracking";
+import {
+  createGitTrackingProbe,
+  type GitTrackingProbe,
+  gitCommand,
+  gitEnvironment,
+} from "./git-tracking";
 import {
   helpLabelFor,
   helpTopicFor,
@@ -202,8 +207,8 @@ const localCredentials = (runtime: CliRuntime): CredentialStore =>
 const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
   try {
     const child = Bun.spawn(
-      ["git", "config", "--get-regexp", "^remote\\..*\\.url$"],
-      { stdout: "pipe", stderr: "pipe" },
+      gitCommand(["config", "--get-regexp", "^remote\\..*\\.url$"]),
+      { env: gitEnvironment(), stdout: "pipe", stderr: "pipe" },
     );
     const [stdout, exitCode] = await Promise.all([
       new Response(child.stdout).text(),
@@ -235,7 +240,8 @@ const readGitRemotes = async (): Promise<readonly GitRemote[]> => {
 
 const defaultWorktreeConfigPath = async (): Promise<string> => {
   try {
-    const child = Bun.spawn(["git", "rev-parse", "--git-dir"], {
+    const child = Bun.spawn(gitCommand(["rev-parse", "--git-dir"]), {
+      env: gitEnvironment(),
       stdout: "pipe",
       stderr: "pipe",
     });

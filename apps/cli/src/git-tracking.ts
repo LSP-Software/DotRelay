@@ -43,9 +43,46 @@ export type GitCommandRunner = (
   args: readonly string[],
 ) => Promise<GitCommandResult>;
 
+// A repository can name programs for Git to run (core.fsmonitor, hooks, a
+// pager). The CLI reads a repository it did not create, such as an
+// unpacked archive with its own .git, so every Git command it runs turns
+// those off: asking whether a file is tracked must never execute code.
+const HARDENED_GIT_OPTIONS: readonly string[] = [
+  "--no-pager",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.untrackedCache=false",
+  "-c",
+  "protocol.allow=never",
+];
+
+export const gitCommand = (args: readonly string[]): string[] => [
+  "git",
+  ...HARDENED_GIT_OPTIONS,
+  ...args,
+];
+
+export const gitEnvironment = (
+  base: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> => {
+  const environment: Record<string, string> = {};
+  for (const [name, value] of Object.entries(base))
+    if (value !== undefined) environment[name] = value;
+  return {
+    ...environment,
+    GIT_PAGER: "cat",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+  };
+};
+
 const runGit: GitCommandRunner = async (directory, args) => {
-  const child = Bun.spawn(["git", ...args], {
+  const child = Bun.spawn(gitCommand(args), {
     cwd: directory,
+    env: gitEnvironment(),
     stdout: "pipe",
     stderr: "pipe",
   });

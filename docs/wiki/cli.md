@@ -271,7 +271,9 @@ or removes tracked content on the operator's behalf) or pull to a different `--o
 `--force` does not override this refusal. An untracked output is added to the repository-local
 exclusion list (`.git/info/exclude`, which is never committed) so a later `git add` cannot pick the
 plaintext file up, and the run reports that it established the exclusion; an already-ignored output
-is left as-is and reported as such.
+is left as-is and reported as such. The CLI runs Git with `core.fsmonitor`, hooks, the untracked
+cache, the pager, and remote protocols turned off, so checking a repository it did not create
+(such as an unpacked archive with its own `.git`) never runs a program that repository names.
 Interactive `pull` confirms before replacing
 an existing file, using the same masked review as `push` but from the current file to the
 Environment, and names the same destination; `--reveal` shows the unified Value diff in that one
