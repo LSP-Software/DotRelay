@@ -1224,7 +1224,7 @@ integrationDescribe("account key persistence invariants", () => {
     const sender = await createActiveDevice(user.id);
     const accountKeys = new AccountKeyRepository();
     const now = new Date("2026-09-23T12:00:00.000Z");
-    // Revocation is terminal (ADR 0019), so the revocation and expiry cases
+    // Revocation is terminal (ADR 0021), so the revocation and expiry cases
     // each get their own recipient and transfer.
     const deliveredTransfer = async (label: string) => {
       const recipient = await createActiveDevice(user.id);

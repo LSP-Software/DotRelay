@@ -57,7 +57,7 @@ active Device and the application-level signed protocol checks.
 
 ## Device proof of possession
 
-A session alone never acts as a Device ([ADR 0018](../adr/0018-device-proof-of-possession.md)).
+A session alone never acts as a Device ([ADR 0020](../adr/0020-device-proof-of-possession.md)).
 Every Device-scoped request carries a Device proof in `X-DotRelay-Device-Proof`: a short-lived
 token the Device gets by signing a service challenge with its Ed25519 key.
 
@@ -137,5 +137,5 @@ start disaster recovery. A replacement Device requires the Recovery Code proof d
 [ADR 0013](../adr/0013-recovery-code-device-authorization.md); this does not relax active-Device
 checks on account-key mutations or protected content.
 
-Password and passkey wrappers require a proven active Device (a Device proof, ADR 0018);
+Password and passkey wrappers require a proven active Device (a Device proof, ADR 0020);
 session-only recovery never discloses them.

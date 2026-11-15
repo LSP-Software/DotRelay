@@ -1,4 +1,4 @@
--- Device revocation is terminal (ADR 0019). Clients judge every Revision a
+-- Device revocation is terminal (ADR 0021). Clients judge every Revision a
 -- Device signed by its activation and revocation times, so those are written
 -- once, a revoked Device never changes lifecycle again, and a Device's owner
 -- and keys never change. Display metadata (ADR 0012) stays writable.

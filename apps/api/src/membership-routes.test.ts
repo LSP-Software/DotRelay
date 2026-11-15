@@ -800,7 +800,7 @@ const createTestApp = (options: { githubFetch?: typeof fetch } = {}) => {
   };
 };
 
-// A Device proof (ADR 0018) for the session's User and the named Device,
+// A Device proof (ADR 0020) for the session's User and the named Device,
 // as the Device itself would obtain one.
 const proofFor = async (token: string, deviceId: string) => {
   const authSubject = sessions.get(token);

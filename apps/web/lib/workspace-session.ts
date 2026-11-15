@@ -319,7 +319,7 @@ export const createWorkspaceRefreshLoop = (
         ? readStoredBrowserDeviceId(fetched.profile.origin, serverProfileId)
         : null;
       // The Device's view needs a proof that this browser holds the stored
-      // Device's key (ADR 0018). A Device the service refuses, or whose key
+      // Device's key (ADR 0020). A Device the service refuses, or whose key
       // this browser lost, leaves the session view, which reports no Device.
       const resolved =
         storedId && serverProfileId && apiOrigin

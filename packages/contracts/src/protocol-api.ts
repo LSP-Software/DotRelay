@@ -16,7 +16,7 @@ export const PROTOCOL_MEDIA_TYPE =
  */
 export const DEVICE_ID_HEADER = "X-DotRelay-Device-Id" as const;
 
-/** The Device proof (ADR 0018) for a Device-scoped request. */
+/** The Device proof (ADR 0020) for a Device-scoped request. */
 export const DEVICE_PROOF_HEADER = "X-DotRelay-Device-Proof" as const;
 
 const uuidPattern =

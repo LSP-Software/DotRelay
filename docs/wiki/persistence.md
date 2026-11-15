@@ -55,7 +55,7 @@ Revisions, grants, commitments, Operations, and Audit Facts are not physically d
 Membership removal, and Device revocation are logical lifecycle changes. Device revocation is
 terminal: the `devices_lifecycle_guard` trigger refuses any update that moves a Device out of
 `REVOKED`, back to `PENDING`, or rewrites its activation time, revocation time, owner or keys
-([ADR 0019](../adr/0019-device-revocation-is-terminal.md)). A removed Membership that
+([ADR 0021](../adr/0021-device-revocation-is-terminal.md)). A removed Membership that
 is invited back keeps its row; its finished period is first archived in the append-only
 `membership_periods` table so signing windows for earlier Revisions survive
 ([ADR 0017](../adr/0017-membership-periods-survive-reinvitation.md)). Removing an active Member or

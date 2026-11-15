@@ -1156,7 +1156,7 @@ export const registerDeviceRoutes = (
   app.get("/api/v1/account-keys/wrappers", async (context) => {
     // Only the high-entropy Recovery Code wrapper is disclosed to a session
     // alone (ADR 0013). Password and passkey wrappers need a Device proof
-    // (ADR 0018): naming a Device in a header proves nothing.
+    // (ADR 0020): naming a Device in a header proves nothing.
     const actor = await requireWebActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
     const deviceActor = await optionalProtocolActor(

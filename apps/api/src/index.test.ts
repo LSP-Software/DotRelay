@@ -5,7 +5,7 @@ import { testDeviceProof } from "./device-proof-testing";
 import { app, createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
-// Device proofs (ADR 0018) for the stubbed sessions below. Every stub names
+// Device proofs (ADR 0020) for the stubbed sessions below. Every stub names
 // the session "session-token"; a proof binds that session, the User the
 // stubbed database resolves, and the Device.
 const PROVEN_DEVICE = "00000000-0000-4000-8000-0000000000d1";

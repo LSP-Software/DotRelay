@@ -769,7 +769,7 @@ const seedCommandState = async (
       fixture.pin,
       deviceId,
     );
-    // The Device key signs the Device proof (ADR 0018), so the command
+    // The Device key signs the Device proof (ADR 0020), so the command
     // needs the bundle as well as the recorded id.
     const bootstrap = await createDeviceBootstrap({
       pin: fixture.pin,
@@ -1013,7 +1013,7 @@ describe("command-to-HTTP administration", () => {
         exitCode: 6,
       });
       expect(String(diagnostic.detail)).toContain("device enroll");
-      // The service refuses a revoked Device its proof (ADR 0018), so the
+      // The service refuses a revoked Device its proof (ADR 0020), so the
       // administration request is never sent.
       expect(fixture.requests).toHaveLength(0);
     } finally {
@@ -4196,7 +4196,7 @@ describe("status verifies the session and this Device", () => {
         device: "not-active",
         nextAction: "run dotrelay device enroll",
       });
-      // The service refuses an inactive Device its proof (ADR 0018), so the
+      // The service refuses an inactive Device its proof (ADR 0020), so the
       // probe stops before the boundary request.
       const boundaryProbe = fixture.requests.find((request) =>
         request.path.startsWith("/api/v1/workspace/boundary"),

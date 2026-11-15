@@ -12,7 +12,7 @@ import {
   type WorkspaceProfileId,
 } from "./workspace-boundary";
 
-// Device proof of possession for the browser (ADR 0018). Every Device-scoped
+// Device proof of possession for the browser (ADR 0020). Every Device-scoped
 // API request proves this browser's Device: the Device signs a challenge
 // from the service with its Ed25519 key (loaded from the browser Device
 // store), and the signature buys a short-lived proof bound to the session

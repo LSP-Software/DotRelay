@@ -8,7 +8,7 @@ import {
 } from "@dotrelay/contracts";
 
 /**
- * Test support: answers the Device proof routes (ADR 0018) the way a Server
+ * Test support: answers the Device proof routes (ADR 0020) the way a Server
  * Profile does, for fake servers in CLI tests. Returns null for any other
  * request. The token names the Device; the fake does not check signatures.
  */

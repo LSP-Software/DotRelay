@@ -105,7 +105,7 @@ test("repair of an initialized project never publishes a fresh random epoch key"
   const fixtureSetting = process.env.DOTRELAY_WORKSPACE_FIXTURE;
   process.env.DOTRELAY_WORKSPACE_FIXTURE = "1";
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
-    // Getting a Device proof (ADR 0018) changes nothing on the service.
+    // Getting a Device proof (ADR 0020) changes nothing on the service.
     if (String(url).endsWith("/api/v1/devices/proofs/challenges"))
       return fixtureDeviceProofChallenge();
     if (String(url).endsWith("/api/v1/devices/proofs"))

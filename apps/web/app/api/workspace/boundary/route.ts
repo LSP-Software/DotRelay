@@ -18,7 +18,7 @@ import {
 const isProfileId = (value: string | null): value is WorkspaceProfileId =>
   value === "hosted" || value === "self-hosted";
 
-// The service refused the Device proof the browser sent (ADR 0018). The
+// The service refused the Device proof the browser sent (ADR 0020). The
 // browser must get a new proof, so this never turns into a session view.
 const DEVICE_PROOF_REFUSED = "device_proof_required";
 

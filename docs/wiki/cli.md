@@ -155,7 +155,7 @@ authenticated session and an active enrolled Device; a session from `login` alon
 until this machine has a Device.
 
 Every command that acts as this machine's Device proves it holds the Device key
-([ADR 0018](../adr/0018-device-proof-of-possession.md)): the first such request of a run signs a
+([ADR 0020](../adr/0020-device-proof-of-possession.md)): the first such request of a run signs a
 service challenge with the Device's Ed25519 key and sends the resulting Device proof with every
 later request. A Device the service no longer considers active cannot get a proof, so `status`
 reports it as not active and other commands fail with `device_not_active`. `env use <environment-id-or-label>` resolves the reference within

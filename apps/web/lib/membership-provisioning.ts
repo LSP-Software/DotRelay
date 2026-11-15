@@ -43,7 +43,7 @@ export const provisionTeamMember = async (
     throw new Error("Unlock this browser before sharing project keys.");
   const path = `/api/v1/teams/${input.teamId}/memberships/${input.membershipId}/provision`;
   const headers = { [BROWSER_DEVICE_ID_HEADER]: deviceId };
-  // Every request below acts as this browser's Device (ADR 0018).
+  // Every request below acts as this browser's Device (ADR 0020).
   const deviceProof = browserDeviceProof({
     apiOrigin: input.apiOrigin,
     pin: { origin: boundary.profile.origin, serverProfileId },

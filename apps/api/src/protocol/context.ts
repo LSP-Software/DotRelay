@@ -47,7 +47,7 @@ export const sessionIdOf = (session: unknown): string | null => {
 
 /**
  * The User and Device a request acts as. The session names the User; the
- * Device must be proven with a Device proof (ADR 0018) issued to this same
+ * Device must be proven with a Device proof (ADR 0020) issued to this same
  * session. `X-DotRelay-Device-Id` is only a claim: when present it must name
  * the proven Device. Every check runs on every request, so signing out,
  * session expiry and Device revocation take effect on the next request.

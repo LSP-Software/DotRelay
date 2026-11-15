@@ -100,7 +100,7 @@ const createAuthStub = (): DotRelayAuth =>
     }),
   }) as unknown as DotRelayAuth;
 
-// The owner Device's proof (ADR 0018) for the owner's session.
+// The owner Device's proof (ADR 0020) for the owner's session.
 const ownerProof = async () => ({
   "X-DotRelay-Device-Id": deviceId,
   "X-DotRelay-Device-Proof": await testDeviceProof(profile, {

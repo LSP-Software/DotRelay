@@ -675,7 +675,7 @@ const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
   );
 };
 
-// The Device's view of the boundary needs a Device proof (ADR 0018); without
+// The Device's view of the boundary needs a Device proof (ADR 0020); without
 // one the service answers with the session view.
 export const fetchWorkspaceBoundary = async (
   profileId: WorkspaceProfileId,

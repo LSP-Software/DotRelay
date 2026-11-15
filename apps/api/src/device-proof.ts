@@ -7,7 +7,7 @@ import {
   uuidToBytes,
 } from "@dotrelay/contracts";
 
-// Challenges and tokens for Device proof of possession (ADR 0018). Both are
+// Challenges and tokens for Device proof of possession (ADR 0020). Both are
 // stateless: an HMAC-SHA-256 tag under a key derived from the Server
 // Profile's auth secret binds them to the session that asked, so every API
 // replica can check them and nothing is stored per proof.

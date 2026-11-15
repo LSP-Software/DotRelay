@@ -126,7 +126,7 @@ export class DeviceRepository {
         );
       if (existing) {
         // A retry may reuse the row only with the same keys. The row itself
-        // is never rewritten here: revocation is terminal (ADR 0019), and
+        // is never rewritten here: revocation is terminal (ADR 0021), and
         // clients judge the Revisions a Device signed by its activation and
         // revocation times.
         const keyId = databaseBytes(

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { GET } from "./route";
 
-// The relay forwards the browser's Device proof (ADR 0018) to the API, and a
+// The relay forwards the browser's Device proof (ADR 0020) to the API, and a
 // refused proof reaches the browser as a 401 so it gets a new one. Answering
 // with the session view instead would read as "this browser has no Device".
 

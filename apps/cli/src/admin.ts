@@ -44,7 +44,7 @@ export type StrictJsonClient = Readonly<{
     options?: Readonly<{ readonly idempotencyKey?: string }>,
   ) => Promise<Record<string, unknown>>;
   /**
-   * Proves this client's Device (ADR 0018). Requests sent outside the
+   * Proves this client's Device (ADR 0020). Requests sent outside the
    * client, such as the protocol transport's, use it to prove the same
    * Device. Absent for a client that acts without a Device.
    */

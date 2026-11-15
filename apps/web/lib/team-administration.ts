@@ -150,7 +150,7 @@ const call = async (
 ): Promise<FetchOutcome> => {
   let response: Response;
   // A request that names this browser's Device must also prove it
-  // (ADR 0018); session-only requests go out as they are.
+  // (ADR 0020); session-only requests go out as they are.
   const deviceId = new Headers(init?.headers).get(BROWSER_DEVICE_ID_HEADER);
   try {
     response = await fetchWithDeviceProof(

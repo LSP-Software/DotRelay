@@ -503,7 +503,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         in: "header",
         name: DEVICE_PROOF_HEADER,
         description:
-          "Short-lived proof that the caller holds an active Device's signing key, bound to the session (ADR 0018).",
+          "Short-lived proof that the caller holds an active Device's signing key, bound to the session (ADR 0020).",
       }),
     }),
   }),

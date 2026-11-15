@@ -106,7 +106,7 @@ const protocolParameters = Object.freeze({
     in: "header",
     required: true,
     description:
-      "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+      "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
     schema: Object.freeze({
       type: "string",
       pattern: "^[A-Za-z0-9_-]{98}$",
@@ -186,7 +186,7 @@ const invitationOutcomeResponses = (
 };
 
 export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
-  // Device proof of possession (ADR 0018): a session obtains a challenge,
+  // Device proof of possession (ADR 0020): a session obtains a challenge,
   // the Device signs it, and the signature buys a short-lived proof that
   // every Device-scoped route requires in DEVICE_PROOF_HEADER.
   "/api/v1/devices/proofs/challenges": Object.freeze({

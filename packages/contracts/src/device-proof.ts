@@ -4,7 +4,7 @@ import { parseUuid, uuidToBytes } from "./protocol-api";
 
 export { DEVICE_PROOF_HEADER } from "./protocol-api";
 
-// Device proof of possession (ADR 0018). A Device signs a challenge from the
+// Device proof of possession (ADR 0020). A Device signs a challenge from the
 // service with its Ed25519 key and exchanges the signature for a short-lived
 // token bound to one session and one Device. Every Device-scoped request
 // carries the token in DEVICE_PROOF_HEADER.

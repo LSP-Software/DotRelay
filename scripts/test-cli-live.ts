@@ -204,7 +204,7 @@ const boundary = () => ({
   catalog: { teams: [], projects: [] },
 });
 
-// Device proofs (ADR 0018): the fixture signs nothing, but it issues proofs
+// Device proofs (ADR 0020): the fixture signs nothing, but it issues proofs
 // only for a signature by the active Device's registered key, and accepts a
 // Device-scoped request only with a proof it issued for that Device.
 const issuedChallenges = new Set<string>();

@@ -55,7 +55,7 @@ const decodeSignature = (value: unknown): Uint8Array => {
 };
 
 /**
- * Device proof of possession (ADR 0018). A session asks for a challenge,
+ * Device proof of possession (ADR 0020). A session asks for a challenge,
  * its Device signs it, and the signature buys a short-lived proof bound to
  * that session and Device. Neither route accepts a proof: they are how a
  * client gets one.

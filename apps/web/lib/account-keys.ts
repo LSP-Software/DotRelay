@@ -27,7 +27,7 @@ import type { WorkspaceBoundary } from "./workspace-boundary";
 
 // Browser-side client for the account-key protocol routes
 // (/api/v1/account-keys/*). The routes authenticate a session PLUS a proven
-// active browser Device (X-DotRelay-Device-Proof, ADR 0018); an actor with
+// active browser Device (X-DotRelay-Device-Proof, ADR 0020); an actor with
 // no Device id acts with the session alone. Every mutation needs an
 // Idempotency-Key that equals body.operationId. Callers keep the
 // operationId stable across retries of the same logical attempt so a failed

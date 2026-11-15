@@ -11,7 +11,7 @@ import {
 import type { DevicePrivateBundle } from "./bundle";
 import { loadDeviceKeyMaterial } from "./bundle";
 
-// Device proof of possession (ADR 0018). A Device-scoped request carries a
+// Device proof of possession (ADR 0020). A Device-scoped request carries a
 // short-lived proof that the Device obtains by signing a challenge from the
 // service. One DeviceProofSession per Device and session caches the proof,
 // refreshes it before it expires, and replaces it after the service refuses

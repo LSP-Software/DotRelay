@@ -270,7 +270,7 @@ const beginEnrollmentRequest = (
     }),
   });
 
-// A Device proof (ADR 0018) for the token's session and the named Device.
+// A Device proof (ADR 0020) for the token's session and the named Device.
 const proofFor = (token: string, deviceId: string) =>
   testDeviceProof(profile, {
     sessionId: token,

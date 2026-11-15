@@ -384,7 +384,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -566,7 +566,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -727,7 +727,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -876,7 +876,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -1020,7 +1020,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -1181,7 +1181,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -1343,7 +1343,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -1499,7 +1499,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -1673,7 +1673,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -2084,7 +2084,7 @@
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
             "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0018).",
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -2457,7 +2457,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-DotRelay-Device-Proof",
-        "description": "Short-lived proof that the caller holds an active Device's signing key, bound to the session (ADR 0018)."
+        "description": "Short-lived proof that the caller holds an active Device's signing key, bound to the session (ADR 0020)."
       }
     }
   }

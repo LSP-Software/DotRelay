@@ -14,7 +14,7 @@ Valkey endpoint; non-production skips enforcement when neither URL is set.
    body, `Idempotency-Key` equal to the operation id,
    `X-DotRelay-Operation-Kind`, `X-DotRelay-Device-Id`, and the Device proof in
    `X-DotRelay-Device-Proof`. Every protocol route needs the proof
-   ([ADR 0018](../adr/0018-device-proof-of-possession.md)).
+   ([ADR 0020](../adr/0020-device-proof-of-possession.md)).
 2. **Stage** — `PUT /api/v1/operations/:operationId/staging/:objectId` uploads
    immutable lane and Revision objects for the operation.
 3. **Finalize** — `POST /api/v1/operations/:operationId/finalize` submits the

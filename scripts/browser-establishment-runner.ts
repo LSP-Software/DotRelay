@@ -93,7 +93,7 @@ const problemCode = async (response: Response): Promise<string> => {
   return "service_unavailable";
 };
 
-// Every Device-scoped request proves the prepared Device (ADR 0018) with
+// Every Device-scoped request proves the prepared Device (ADR 0020) with
 // the key this page generated for it.
 const deviceFetch = (
   current: PreparedDevice,

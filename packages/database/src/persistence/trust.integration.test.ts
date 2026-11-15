@@ -1014,7 +1014,7 @@ integrationDescribe("trust workflow integration", () => {
     ).rejects.toThrow("use initial trust bootstrap");
   });
 
-  // ADR 0019: revocation is terminal. Enrollment never moves a revoked Device
+  // ADR 0021: revocation is terminal. Enrollment never moves a revoked Device
   // back to PENDING or clears the times its Revisions are judged by.
   test("a revoked Device never re-enters enrollment", async () => {
     const user = await createUserFixture();

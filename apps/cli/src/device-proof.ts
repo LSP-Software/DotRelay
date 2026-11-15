@@ -10,7 +10,7 @@ import { createFileDeviceRecordStore } from "./device-storage";
 import { CliError } from "./errors";
 
 /**
- * The Device a CLI client acts as (ADR 0018). Its signing key is read from
+ * The Device a CLI client acts as (ADR 0020). Its signing key is read from
  * the local bundle only when a request first needs a Device proof.
  */
 export const cliDevice = (

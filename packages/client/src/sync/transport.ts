@@ -228,7 +228,7 @@ export const createProtocolTransport = (
     readonly fetch?: FetchLike;
     readonly authorization?: string;
     /**
-     * Proves the acting Device on every request (ADR 0018). Every protocol
+     * Proves the acting Device on every request (ADR 0020). Every protocol
      * route is Device-scoped, so a live client always passes one.
      */
     readonly deviceProof?: DeviceProofSession;

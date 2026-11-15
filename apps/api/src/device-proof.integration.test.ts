@@ -177,7 +177,7 @@ const signedCertificate = async (
 };
 
 // The message a Device signs to exchange a challenge for a Device proof,
-// built here from ADR 0018 rather than from the implementation, so the test
+// built here from ADR 0020 rather than from the implementation, so the test
 // also pins the wire layout.
 const proofMessage = (
   userId: string,

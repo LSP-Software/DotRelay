@@ -1184,7 +1184,7 @@ const createApi = ({
       allowRebind: profile.allowRebind,
     });
     if (!user) return jsonProblem(context, "service_unavailable");
-    // Device-scoped fields need a Device proof (ADR 0018). Without one the
+    // Device-scoped fields need a Device proof (ADR 0020). Without one the
     // caller gets the session view: no Device ids, keys, rosters, links,
     // grants or envelopes. A proof for a Device revoked since it was issued
     // reads as no Device, as a revoked Device always has.
