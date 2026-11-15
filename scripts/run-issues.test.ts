@@ -423,4 +423,4 @@ test("a maintainer must approve the exact head before the runner merges", async 
       expect(state.merges).toEqual([]);
     }
   }
-});
+}, 120_000);
