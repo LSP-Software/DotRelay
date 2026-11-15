@@ -116,19 +116,18 @@ before changing it.
 
 ## Alpha release channels
 
-Prerelease tags publish versioned Docker images and `latest-alpha`, plus an npm prerelease tag and
-a GitHub prerelease. They never move `latest-stable` and never run automatic production deployment.
-Deploy the selected versioned alpha image deliberately to the alpha installation. Stable tags
-retain the production deployment path. Release runs serialize across tags so mutable image aliases
-cannot be advanced by overlapping workflows. Configure the admission list on the target service
-before deploying; source changes do not modify hosting configuration.
+An alpha is a version of the production service, not a separate installation. Every approved `v*`
+tag builds for `https://dotrelay.dev` and `https://api.dotrelay.dev`, publishes versioned images
+(prereleases also move `latest-alpha`, never `latest-stable`), publishes the CLI, creates a GitHub
+release, and deploys production. Keep `ALPHA_ADMISSION_REQUIRED=true` with testers in
+`ALPHA_GITHUB_IDS` on the production API while releases are unreviewed. Until the first stable
+version exists, alpha, beta and rc CLI builds also move npm `latest`, so `npm install -g
+@dotrelay/cli` installs the current alpha. Release runs serialize across tags so mutable image
+aliases cannot be advanced by overlapping workflows.
 
 Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
 
-Before cutting a prerelease, configure the `security-review` environment/repository variables
-`ALPHA_WEB_ORIGIN` and `ALPHA_API_ORIGIN` to the exact HTTPS origins of the alpha installation.
-The web image is built for those origins and refuses missing/invalid values; stable builds keep
-the production origins. The release concurrency queue retains up to 100 pending tags.
+The release concurrency queue retains up to 100 pending tags.
 
 ## Release gate
 
