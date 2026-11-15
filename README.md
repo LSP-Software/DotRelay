@@ -6,6 +6,25 @@ the strict API v1 boundary and the closed `dotrelay-e2ee-v3-classical-webcrypto`
 registry. v3 uses X25519, Ed25519, HKDF-SHA-384, AES-256-GCM, and SHA-384 through native Web Crypto.
 It is classical cryptography only and provides no post-quantum resistance.
 
+## Install the CLI
+
+```sh
+# Linux and macOS
+curl -fsSL https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.ps1 | iex
+```
+
+Or with npm: `npm install -g @dotrelay/cli`. The scripts install the latest stable GitHub release
+after checking its SHA-256, without root. Set `DOTRELAY_VERSION` to pin a release and
+`DOTRELAY_INSTALL_DIR` to choose the directory. Details are in the
+[CLI guide](docs/wiki/cli.md#install).
+
+## Development
+
 Run `bun install --frozen-lockfile`, then `bun run check` for the fast read-only gate or
 `bun run verify` for the full pull-request-equivalent suite. Repository commands, dependency and
 boundary rules, CI checks, release policy, and the canonical Wiki source are documented in

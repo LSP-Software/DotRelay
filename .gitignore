@@ -16,5 +16,3 @@ apps/web/CLAUDE.md
 __pycache__/
 # UX tooling: per-machine launcher binary (re-downloaded on first run elsewhere)
 .agents/skills/impeccable/scripts/bin/
-# Staged from the repository root at publish time.
-packages/dotrelay/LICENSE.md

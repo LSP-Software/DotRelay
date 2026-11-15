@@ -11,21 +11,59 @@ arguments, options, defaults, noninteractive requirements, and safe examples for
 help is generated from the same command registry the parser uses, so it cannot drift from the accepted
 syntax, and validation errors carry the relevant usage line.
 
+## Install
+
+The install scripts download a release archive from GitHub, check it against the release's
+`SHA256SUMS`, and abort on a mismatch. They need no root or administrator rights and send nothing
+but the downloads.
+
+```sh
+# Linux (glibc) and macOS; needs curl, tar, and sha256sum or shasum
+curl -fsSL https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.sh | sh
+```
+
+```powershell
+# Windows x64, PowerShell 5.1 or 7
+irm https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.ps1 | iex
+```
+
+| Variable               | Default                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `DOTRELAY_VERSION`     | the latest stable release; set `1.2.3` or `v1.2.3-alpha.1` to pin one |
+| `DOTRELAY_INSTALL_DIR` | `~/.local/bin` (Unix), `%LOCALAPPDATA%\DotRelay\bin` (Windows)        |
+
+With no stable release yet, the scripts install the newest prerelease (alphas are versions of the
+hosted service). When the install
+directory is not on `PATH`, the script prints the line to add. Re-running a script replaces the
+installed binary. The scripts are served from `main`, not from a release, so a fix to them applies
+to every version they install.
+
+`npm install -g @dotrelay/cli` installs the same binary. The selector package is small; npm also
+installs the one `@dotrelay/cli-<platform>-<arch>` package that matches the machine. Release
+targets are `linux-x64`, `linux-arm64` (glibc), `darwin-x64`, `darwin-arm64`, and `win32-x64`.
+
+Each GitHub release carries `dotrelay-<tag>-<platform>-<arch>.tar.gz` (`.zip` on Windows),
+`SHA256SUMS`, and a signed build provenance attestation. To check a manual download against the
+attestation as well, run
+`gh attestation verify dotrelay-<tag>-<platform>-<arch>.tar.gz --repo LSP-Software/DotRelay`.
+
 ## Version and launch diagnostics
 
 `dotrelay --version` reports the release version the release build stamped into the compiled
 binary, so it agrees with the tagged/npm release the operator installed; source builds report
 the `0.0.0-foundation` identifier, and the npm selector reports the same version as the binary
-it launches. When the selector cannot launch the native binary — it is missing for this
-machine's `<platform>-<arch>`, present but not executable, or unlaunchable (for example built
-for another architecture) — it exits with code 1 and reports the release it is running, the
-`<platform>-<arch>` the machine needs, the platforms the package ships, and the supported
-repair: reinstall this release or the latest from npm (`npm install -g @dotrelay/cli@<version>`,
-`npm install -g @dotrelay/cli@latest`) or run the matching native binary from a DotRelay GitHub
-release. A `DOTRELAY_BINARY` override that points at a missing or unlaunchable binary is named
-in the same report; the override must be an absolute path. The selector never launches a binary
-from outside its own package otherwise. It forwards `SIGINT`, `SIGTERM`, and `SIGHUP` to the
-binary and re-raises the signal that ended it.
+it launches. The selector finds the binary in the `@dotrelay/cli-<platform>-<arch>` package that
+npm installed beside it as an optional dependency. When it cannot launch the binary — the
+platform package is missing (installed with `--omit=optional`, or from a lockfile made on another
+platform), the platform is unsupported (including musl Linux), the package is from another
+version, or the binary is not executable or not launchable here — it exits with code 1 and
+reports the release it is running, the `<platform>-<arch>` the machine needs, the platforms the
+release publishes, and the repair: `npm install -g @dotrelay/cli@<version>`, the install script,
+or a binary from the DotRelay GitHub releases (see [Install](#install)). A `DOTRELAY_BINARY`
+override that points at a missing or unlaunchable binary is named in the same report; the
+override must be an absolute path. The selector never launches a binary from elsewhere in the
+surrounding project. It forwards `SIGINT`, `SIGTERM`, and `SIGHUP` to the binary and re-raises
+the signal that ended it.
 
 ## Release channels
 

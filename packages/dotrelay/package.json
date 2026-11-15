@@ -24,7 +24,6 @@
   },
   "files": [
     "bin",
-    "dist",
     "LICENSE.md"
   ],
   "engines": {

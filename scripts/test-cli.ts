@@ -1,9 +1,9 @@
-import { access, constants, mkdtemp, rm } from "node:fs/promises";
+import { access, constants, cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCli, resolveCliReleaseVersion } from "./build-cli";
 import { runCliPackageProbes } from "./cli-package-probes";
-import { stageCliPackage } from "./stage-cli-package";
+import { stageCliPackage, stageNpmPackages } from "./stage-cli-package";
 
 const root = join(import.meta.dir, "..");
 const binary = join(
@@ -88,34 +88,53 @@ try {
 }
 
 await stageCliPackage();
-const packageDirectory = join(root, "packages", "dotrelay");
-const distDirectory = join(packageDirectory, "dist");
+const staged = await stageNpmPackages({ requireAllTargets: false });
 const manifest = (await Bun.file(
-  join(packageDirectory, "package.json"),
+  join(root, "packages", "dotrelay", "package.json"),
 ).json()) as { readonly files?: readonly string[] };
-if (!manifest.files?.includes("dist"))
-  throw new Error("npm selector package must publish its dist directory");
-const selector = join(packageDirectory, "bin", "dotrelay.mjs");
-const selectorProcess = Bun.spawn([process.execPath, selector, "--version"], {
-  env: Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => key !== "DOTRELAY_BINARY"),
-  ),
-  stdout: "pipe",
-  stderr: "pipe",
-});
-const [selectorOutput, selectorError, selectorExitCode] = await Promise.all([
-  new Response(selectorProcess.stdout).text(),
-  new Response(selectorProcess.stderr).text(),
-  selectorProcess.exited,
-]);
-if (selectorExitCode !== 0 || selectorOutput.trim() !== version)
-  throw new Error(`npm selector contract failed: ${selectorError}`);
-const expectedBinary =
-  process.platform === "win32" ? "dotrelay.exe" : "dotrelay";
-const currentPlatformDirectory = `${process.platform}-${process.arch}`;
-await access(join(distDirectory, currentPlatformDirectory, expectedBinary));
+if (manifest.files?.includes("dist"))
+  throw new Error(
+    "the npm selector must not ship native binaries; they publish as platform packages",
+  );
+const currentTarget = [...staged.platforms.keys()].find(
+  (target) =>
+    target.platform === process.platform && target.arch === process.arch,
+);
+if (currentTarget === undefined)
+  throw new Error(
+    `no npm platform package was staged for ${process.platform}-${process.arch}`,
+  );
+// Lay the staged packages out as npm installs them, so the selector resolves
+// its platform package the way it does after `npm install`.
+const installDirectory = await mkdtemp(join(tmpdir(), "dotrelay-selector-"));
+try {
+  const scope = join(installDirectory, "node_modules", "@dotrelay");
+  await cp(staged.selector, join(scope, "cli"), { recursive: true });
+  await cp(
+    staged.platforms.get(currentTarget) ?? "",
+    join(scope, `cli-${process.platform}-${process.arch}`),
+    { recursive: true },
+  );
+  const selector = join(scope, "cli", "bin", "dotrelay.mjs");
+  const selectorProcess = Bun.spawn([process.execPath, selector, "--version"], {
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key !== "DOTRELAY_BINARY"),
+    ),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [selectorOutput, selectorError, selectorExitCode] = await Promise.all([
+    new Response(selectorProcess.stdout).text(),
+    new Response(selectorProcess.stderr).text(),
+    selectorProcess.exited,
+  ]);
+  if (selectorExitCode !== 0 || selectorOutput.trim() !== version)
+    throw new Error(`npm selector contract failed: ${selectorError}`);
+} finally {
+  await rm(installDirectory, { recursive: true, force: true });
+}
 await runCliPackageProbes();
-console.log("✓ npm selector and current-platform artifact checks passed");
+console.log("✓ npm selector and current-platform package checks passed");
 
 // A release-shaped build must report the stamped release version, not the
 // source-build identifier: this pins the compile-time version wiring end to

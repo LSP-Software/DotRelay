@@ -7,48 +7,76 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { isLaunchableExecutable } from "../packages/dotrelay/bin/is-launchable-executable.mjs";
+import {
+  CLI_TARGETS,
+  cliPlatformPackageName,
+  cliTargetKey,
+  SELECTOR_PACKAGE,
+} from "./cli-targets";
 
 const root = join(import.meta.dir, "..");
 const packageDirectory = join(root, "packages", "dotrelay");
 
-// Synthetic probes copy the published selector code and manifest around a
-// dist tree the probe controls, so the packaged artifact's version and
-// launch-failure contract is tested, not the source CLI.
+// Synthetic probes install the published selector code and manifest beside
+// platform packages the probe controls, in the node_modules layout npm
+// creates, so the packaged artifact's version and launch-failure contract is
+// tested, not the source CLI.
 const probeVersion = "9.9.9";
 type ProbeBinary = Readonly<{
-  readonly directory: string;
+  readonly target: string;
   readonly file: string;
   readonly content: string;
   readonly mode?: number;
+  readonly version?: string;
 }>;
+
+const selectorPath = (directory: string): string =>
+  join(directory, "node_modules", "@dotrelay", "cli", "bin", "dotrelay.mjs");
 
 const createProbePackage = async (
   probeBinaries: readonly ProbeBinary[],
 ): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), "dotrelay-selector-probe-"));
-  await mkdir(join(directory, "bin"), { recursive: true });
+  const scope = join(directory, "node_modules", "@dotrelay");
+  await mkdir(join(scope, "cli", "bin"), { recursive: true });
   // The selector and its launch check ship as a pair; the probe package
   // must mirror the published bin directory or the selector cannot load.
   for (const binFile of ["dotrelay.mjs", "is-launchable-executable.mjs"]) {
     await writeFile(
-      join(directory, "bin", binFile),
+      join(scope, "cli", "bin", binFile),
       await readFile(join(packageDirectory, "bin", binFile), "utf8"),
     );
   }
   await writeFile(
-    join(directory, "package.json"),
-    `${JSON.stringify({ name: "@dotrelay/cli", version: probeVersion }, null, 2)}\n`,
+    join(scope, "cli", "package.json"),
+    `${JSON.stringify(
+      {
+        name: SELECTOR_PACKAGE,
+        version: probeVersion,
+        optionalDependencies: Object.fromEntries(
+          CLI_TARGETS.map((target) => [
+            cliPlatformPackageName(target),
+            probeVersion,
+          ]),
+        ),
+      },
+      null,
+      2,
+    )}\n`,
   );
   for (const probeBinary of probeBinaries) {
-    const target = join(
-      directory,
-      "dist",
-      probeBinary.directory,
-      probeBinary.file,
+    const platformPackage = join(scope, `cli-${probeBinary.target}`);
+    await mkdir(join(platformPackage, "bin"), { recursive: true });
+    await writeFile(
+      join(platformPackage, "package.json"),
+      `${JSON.stringify({
+        name: `${SELECTOR_PACKAGE}-${probeBinary.target}`,
+        version: probeBinary.version ?? probeVersion,
+      })}\n`,
     );
-    await mkdir(dirname(target), { recursive: true });
+    const target = join(platformPackage, "bin", probeBinary.file);
     await writeFile(target, probeBinary.content);
     if (process.platform !== "win32" && probeBinary.mode !== undefined)
       await chmod(target, probeBinary.mode);
@@ -264,7 +292,7 @@ const runProbe = async (
   environment: NodeJS.ProcessEnv,
 ): Promise<Readonly<{ stdout: string; stderr: string; exitCode: number }>> => {
   const probe = Bun.spawn(
-    [process.execPath, join(directory, "bin", "dotrelay.mjs"), "--version"],
+    [process.execPath, selectorPath(directory), "--version"],
     { env: environment, stdout: "pipe", stderr: "pipe" },
   );
   const [probeStdout, probeStderr, probeExitCode] = await Promise.all([
@@ -304,9 +332,21 @@ export const runCliPackageProbes = async (): Promise<void> => {
     await rm(formatDirectory, { recursive: true, force: true });
   }
 
+  const supported = CLI_TARGETS.some(
+    (target) => cliTargetKey(target) === platformDirectory,
+  );
+  const missingReport = supported
+    ? `the @dotrelay/cli-${platformDirectory} package is missing`
+    : `DotRelay does not publish a native binary for ${platformDirectory}`;
+  const repairs = [
+    `npm install -g @dotrelay/cli@${probeVersion}`,
+    process.platform === "win32" ? "install.ps1" : "install.sh",
+    "https://github.com/LSP-Software/DotRelay/releases",
+  ];
+
   const missingProbe = await createProbePackage([
     {
-      directory: `${otherPlatform}-x64`,
+      target: `${otherPlatform}-x64`,
       file: "dotrelay",
       content: "other-platform artifact\n",
     },
@@ -315,9 +355,9 @@ export const runCliPackageProbes = async (): Promise<void> => {
     const result = await runProbe(missingProbe, probeEnvironment);
     expectFailure(result, "missing-platform selector probe", [
       `dotrelay ${probeVersion}`,
-      `no native binary is packaged for ${platformDirectory}`,
+      missingReport,
       `${otherPlatform}-x64`,
-      "npm install -g @dotrelay/cli@",
+      ...repairs,
     ]);
   } finally {
     await rm(missingProbe, { recursive: true, force: true });
@@ -334,18 +374,42 @@ export const runCliPackageProbes = async (): Promise<void> => {
       `dotrelay ${probeVersion}`,
       "DOTRELAY_BINARY points at",
       missingBinary,
-      `no native binary is packaged for ${platformDirectory}`,
-      "npm install -g @dotrelay/cli@",
+      missingReport,
+      ...repairs,
     ]);
   } finally {
     await rm(overrideProbe, { recursive: true, force: true });
+  }
+
+  // A platform package left over from another release must not run under
+  // this selector's version.
+  const mismatchProbe = await createProbePackage([
+    {
+      target: platformDirectory,
+      file: platformBinary,
+      content: "#!/bin/sh\necho stale-binary-ran\n",
+      mode: 0o755,
+      version: "9.9.8",
+    },
+  ]);
+  try {
+    const result = await runProbe(mismatchProbe, probeEnvironment);
+    expectFailure(result, "mismatched platform package probe", [
+      `dotrelay ${probeVersion}`,
+      `@dotrelay/cli-${platformDirectory} is version 9.9.8, not ${probeVersion}`,
+      `npm install -g @dotrelay/cli@${probeVersion}`,
+    ]);
+    if (result.stdout.includes("stale-binary-ran"))
+      throw new Error("mismatched platform package probe ran the binary");
+  } finally {
+    await rm(mismatchProbe, { recursive: true, force: true });
   }
 
   if (process.platform === "win32") return;
 
   const notExecutableProbe = await createProbePackage([
     {
-      directory: platformDirectory,
+      target: platformDirectory,
       file: platformBinary,
       content: "placeholder native binary\n",
       mode: 0o644,
@@ -357,7 +421,7 @@ export const runCliPackageProbes = async (): Promise<void> => {
       `dotrelay ${probeVersion}`,
       "is not executable",
       "chmod +x",
-      "npm install -g @dotrelay/cli@",
+      `npm install -g @dotrelay/cli@${probeVersion}`,
     ]);
   } finally {
     await rm(notExecutableProbe, { recursive: true, force: true });
@@ -368,7 +432,7 @@ export const runCliPackageProbes = async (): Promise<void> => {
   // case, and the report must name the repair, not only the platform.
   const unlaunchableProbe = await createProbePackage([
     {
-      directory: platformDirectory,
+      target: platformDirectory,
       file: platformBinary,
       content: "not a native binary for this machine\n",
       mode: 0o755,
@@ -379,7 +443,7 @@ export const runCliPackageProbes = async (): Promise<void> => {
     expectFailure(result, "unlaunchable selector probe", [
       `dotrelay ${probeVersion}`,
       `could not start the native binary for ${platformDirectory}`,
-      "npm install -g @dotrelay/cli@",
+      `npm install -g @dotrelay/cli@${probeVersion}`,
     ]);
   } finally {
     await rm(unlaunchableProbe, { recursive: true, force: true });
