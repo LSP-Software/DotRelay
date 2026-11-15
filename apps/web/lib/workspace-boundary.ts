@@ -102,6 +102,8 @@ export type WorkspaceBoundary = Readonly<{
     readonly name: string;
     readonly origin: string;
     readonly serverProfileId?: string;
+    /** Where to install the server's GitHub App, when it publishes one. */
+    readonly githubAppInstallUrl?: string;
   }>;
   readonly device: Readonly<{
     readonly active: boolean;

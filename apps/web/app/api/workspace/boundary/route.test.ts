@@ -16,6 +16,7 @@ type BoundaryBody = {
     readonly id?: unknown;
     readonly origin?: unknown;
     readonly serverProfileId?: unknown;
+    readonly githubAppInstallUrl?: unknown;
   };
   device?: { readonly active?: unknown };
 };
@@ -208,6 +209,44 @@ test.each([
         typeof image === "string" && image ? image : undefined,
       );
       expect(body.session?.active).toBe(true);
+    } finally {
+      restoreFetch();
+      restoreEnv();
+    }
+  },
+);
+
+test.each([
+  [
+    Response.json({
+      installUrl: "https://github.com/apps/dotrelay-dev/installations/new",
+    }),
+    "https://github.com/apps/dotrelay-dev/installations/new",
+  ],
+  [Response.json({ code: "resource_not_found" }, { status: 404 }), undefined],
+  [
+    Response.json({ installUrl: "https://evil.example/installations/new" }),
+    undefined,
+  ],
+  [undefined, undefined],
+])(
+  "passes through only a valid GitHub App install link %#",
+  async (githubApp, expected) => {
+    const restoreEnv = withoutWorkspaceEnv();
+    const restoreFetch = stubUpstream((url) => {
+      if (url.includes("/api/v1/session"))
+        return Response.json({ user: { id: "user-1", name: "Ari" } });
+      if (url.includes("/api/v1/capabilities"))
+        return Response.json({ serverProfileId: "profile-1" });
+      if (url.includes("/api/v1/github-app")) return githubApp;
+      if (url.includes("/api/v1/workspace/boundary")) return Response.json({});
+      return undefined;
+    });
+    try {
+      const response = await GET(boundaryRequest());
+      const body = (await response.json()) as BoundaryBody;
+      expect(body.profile?.githubAppInstallUrl).toBe(expected);
+      expect(body.profile?.serverProfileId).toBe("profile-1");
     } finally {
       restoreFetch();
       restoreEnv();

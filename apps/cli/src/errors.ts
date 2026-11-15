@@ -269,6 +269,18 @@ export const categoryForProblem = (
   return "transient";
 };
 
+// GitHub shows DotRelay only the repositories its GitHub App is installed on.
+// The Server Profile publishes the install link when it knows its app.
+export const repositoryAccessDeniedDetail = (installUrl?: string): string =>
+  [
+    "DotRelay could not access this GitHub repository.",
+    "1. Check the repository name and that your GitHub account can open it.",
+    installUrl
+      ? `2. Install the DotRelay GitHub App and choose this repository: ${installUrl}`
+      : "2. Install this server's DotRelay GitHub App and choose this repository. Ask the server operator for the install link. Installed already? Add the repository at https://github.com/settings/installations.",
+    "3. If an organization owns the repository, an organization owner may need to approve the app, and SSO may need authorizing. Then retry your command.",
+  ].join("\n");
+
 // A wait the operator can act on: "30 seconds", "4 minutes", "2 hours".
 export const describeWait = (seconds: number): string => {
   const unit = (value: number, name: string): string =>
@@ -340,12 +352,7 @@ export const detailForProblem = (
   if (code === "genesis_exists")
     return "this Environment already has a genesis Revision";
   if (code === "repository_access_denied")
-    return [
-      "DotRelay could not access this GitHub repository.",
-      "1. Check the repository name and your GitHub access.",
-      "2. Open https://github.com/settings/applications and check the DotRelay GitHub app. For a GitHub App, include the repository in its installation; for an OAuth App, grant organization access. Ask an organization owner to approve access if needed; check SSO too.",
-      "3. If access expired, sign out of the DotRelay web app and sign in with GitHub again. Then retry your command.",
-    ].join("\n");
+    return repositoryAccessDeniedDetail();
   if (code === "github_rate_limited")
     return "GitHub rate-limited the Server Profile's repository lookup; wait for the stated retry window and retry";
   if (code === "github_unavailable")
@@ -538,7 +545,7 @@ const retryAfterDiagnostic = (
     : {};
 };
 
-const problemCodeFor = (error: unknown): string | null => {
+export const problemCodeFor = (error: unknown): string | null => {
   if (error instanceof ContractError) return error.code;
   if (error instanceof ProtocolTransportError) return error.problem.code;
   return null;

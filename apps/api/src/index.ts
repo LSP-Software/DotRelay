@@ -7,7 +7,9 @@ import {
   DEVICE_PROOF_HEADER,
   type DeviceClientInfo,
   type ProblemCode,
+  gitHubAppInstallUrl,
   parseCapabilitiesDocument,
+  parseGitHubAppDocument,
   parseDeviceClientInfo,
   parseJsonObject,
   parseProtocolObject,
@@ -869,6 +871,7 @@ const createApi = ({
       context.req.method === "OPTIONS" ||
       ["/health", "/ready"].includes(context.req.path) ||
       context.req.path === "/api/v1/capabilities" ||
+      context.req.path === "/api/v1/github-app" ||
       context.req.path === "/api/auth/sign-out"
     ) {
       await next();
@@ -958,6 +961,20 @@ const createApi = ({
       "Cache-Control": "public, max-age=60, must-revalidate",
       Vary: "Origin",
     });
+  });
+
+  // Public server configuration, like capabilities. Clients read it without
+  // a session, so the alpha gate above lets it through too.
+  app.get("/api/v1/github-app", (context) => {
+    if (!profile.githubAppSlug)
+      return jsonProblem(context, "resource_not_found");
+    return context.json(
+      parseGitHubAppDocument({
+        installUrl: gitHubAppInstallUrl(profile.githubAppSlug),
+      }),
+      200,
+      { "Cache-Control": "public, max-age=300", Vary: "Origin" },
+    );
   });
 
   app.get("/device", (context) => {

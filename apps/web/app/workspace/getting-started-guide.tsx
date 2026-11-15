@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
+import { GitHubAppAccessHint } from "@/components/github-app-access-hint";
 import { InlineCommand } from "@/components/inline-command";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +41,7 @@ const StepBody = ({
   packageManager,
   invited,
   offerCli,
+  githubAppInstallUrl,
   deviceSetupInProgress,
   deviceSetupMessage,
   onEnroll,
@@ -52,6 +54,7 @@ const StepBody = ({
   packageManager: CliPackageManager;
   invited: boolean;
   offerCli: boolean;
+  githubAppInstallUrl: string | undefined;
   deviceSetupInProgress: boolean;
   deviceSetupMessage: string | null;
   onEnroll: () => void;
@@ -143,6 +146,7 @@ const StepBody = ({
             : null}
         </p>
         <CopyableCommand className="mt-3" value={CLI_INIT_COMMAND} />
+        <GitHubAppAccessHint installUrl={githubAppInstallUrl} />
       </>
     );
   }
@@ -186,6 +190,7 @@ export const GettingStartedGuide = ({
   setupCommand,
   invited,
   standalone,
+  githubAppInstallUrl,
   deviceSetupInProgress,
   deviceSetupMessage,
   onEnroll,
@@ -196,6 +201,7 @@ export const GettingStartedGuide = ({
   setupCommand: string;
   invited: boolean;
   standalone: boolean;
+  githubAppInstallUrl?: string | undefined;
   deviceSetupInProgress: boolean;
   deviceSetupMessage: string | null;
   onEnroll: () => void;
@@ -268,6 +274,7 @@ export const GettingStartedGuide = ({
                   <StepBody
                     deviceSetupInProgress={deviceSetupInProgress}
                     deviceSetupMessage={deviceSetupMessage}
+                    githubAppInstallUrl={githubAppInstallUrl}
                     installCommand={cliInstallCommand(packageManager)}
                     invited={invited}
                     offerCli={offerCli}

@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
+import { GitHubAppAccessHint } from "@/components/github-app-access-hint";
 import { CommandText, InlineCommand } from "@/components/inline-command";
 import {
   Alert,
@@ -2773,6 +2774,7 @@ export const WorkspaceShell = ({
     <GettingStartedGuide
       deviceSetupInProgress={deviceSetupInProgress}
       deviceSetupMessage={deviceSetupMessage}
+      githubAppInstallUrl={boundary.profile.githubAppInstallUrl}
       invited={(myInvitations?.invitations.length ?? 0) > 0}
       model={gettingStarted}
       onContinue={
@@ -2884,6 +2886,7 @@ export const WorkspaceShell = ({
         Run this in a GitHub repository to create your first Team, Project, and
         Environment: <InlineCommand value="dotrelay init" />.
       </p>
+      <GitHubAppAccessHint installUrl={boundary.profile.githubAppInstallUrl} />
     </div>
   );
 

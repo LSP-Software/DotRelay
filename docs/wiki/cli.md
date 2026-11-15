@@ -108,9 +108,13 @@ that now names a different Repository than the one recorded for this worktree is
 not a relink: re-point the remote, or re-record the choice with `dotrelay context --remote
 <remote-name>`. When GitHub renames or transfers a Repository, the same identity resolves to
 its current `owner/repo` name and the recorded choice follows it. If the User's Delegated
-GitHub Access cannot see the Repository, resolution fails with `repository_access_denied`:
-sign in again to authorize the access and check that the account can access the Repository —
-the endpoint is not an existence oracle, so denial and absence answer identically. GitHub rate
+GitHub Access cannot see the Repository, resolution fails with `repository_access_denied`.
+GitHub shows DotRelay only the repositories its GitHub App is installed on, and signing in
+installs nothing: install the App on the Repository's owner and choose the Repository. The CLI
+asks the Server Profile for the install link (`GET /api/v1/github-app`) and prints it; a server
+without `GITHUB_APP_SLUG` gets a hint to ask its operator. Also check that the account can
+access the Repository — the endpoint is not an existence oracle, so denial and absence answer
+identically. GitHub rate
 limits surface as `github_rate_limited` with the retry window to wait, and an unreachable
 GitHub as `github_unavailable`; established sync through the Server Profile is unaffected by
 either. When no session or active Device is available, `context` reports the descriptive

@@ -17,6 +17,17 @@ and installation access. An organization owner may need to approve installation.
 Set the App's `Iv…` client ID and client secret on the API. No App private key or
 installation-wide service token is used by DotRelay.
 
+Signing in installs nothing. GitHub shows the App only the repositories it is
+installed on, so each user (or their organization owner) installs the App on
+their own account and picks repositories. Make the App public ("Any account")
+so they can. Set `GITHUB_APP_SLUG` on the API to the App's URL name (the `<slug>`
+in `https://github.com/apps/<slug>`). The API then answers
+`GET /api/v1/github-app` with
+`{ "installUrl": "https://github.com/apps/<slug>/installations/new" }`; without
+it the endpoint answers 404. The web app's first-run guide links there, and the
+CLI adds the link to `repository_access_denied`. Without the slug they tell users
+to ask you for the link.
+
 GitHub App authorization has no classic OAuth `scope=repo`. Classic OAuth/PAT
 credentials are refused by delegated access resolvers. Revoke old broad OAuth
 grants in GitHub settings, remove their stored account grants and sign in with
