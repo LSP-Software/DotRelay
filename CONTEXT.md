@@ -253,6 +253,11 @@ the Server Profile behind it and never lets a visitor choose another; only the C
 Server Profiles.
 _Avoid_: Instance, endpoint
 
+**Alpha Admission**:
+A Server Profile's list of stable GitHub user ids allowed to use it during the private alpha. A
+signed-in GitHub account outside the list can only sign out; signing in is not admission.
+_Avoid_: Waitlist, beta access, invitation
+
 **History Trust Reset**:
 An explicit acknowledgement that discards one Environment's locally trusted Revision continuity
 after a known service restore without recovering its missing history.

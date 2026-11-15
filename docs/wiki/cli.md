@@ -62,6 +62,11 @@ code. `--no-open` suppresses opening the browser, and `--no-input` never attempt
 example over SSH); in both cases the same URL, code, and expiry are shown so the User can open the
 URL manually. When the browser launcher is unavailable, fails to start, or exits nonzero, the CLI
 shows that manual path instead of aborting and keeps polling for the authorization to complete.
+If the server admits only listed GitHub accounts (the private alpha) and the browser is signed in
+with one that isn't listed, login and setup stop with a "Private alpha" error (exit 6,
+`alpha_admission_required`). Against the hosted origin it says to email support@dotrelay.dev;
+against any other server, to ask its operator. A command run with an older session that is no
+longer admitted gets the same error. `dotrelay logout`, then `dotrelay login`, switches accounts.
 Session material and Device wrapping keys belong in the local credential store — encrypted files
 in the CLI state directory (`DOTRELAY_CONFIG_DIR`) — scoped by Server Profile. The encrypted
 Device bundle itself is a protected local record. The store's key sits beside the data it wraps,

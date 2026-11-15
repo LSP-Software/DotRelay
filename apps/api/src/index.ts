@@ -106,6 +106,37 @@ export type ApiDependencies = Readonly<{
   readonly notifications?: EmailNotifier;
 }>;
 
+// Reads at most maxBytes of a body; a larger or unreadable one is null.
+const readCappedText = async (
+  request: Readonly<{
+    readonly headers: { get(name: string): string | null };
+    readonly body: ReadableStream<Uint8Array> | null;
+  }>,
+  maxBytes: number,
+): Promise<string | null> => {
+  if (Number(request.headers.get("Content-Length") ?? 0) > maxBytes)
+    return null;
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+};
+
 const jsonProblem = (context: Context, code: ProblemCode) => {
   const correlationId = context.get("correlationId" as never) as
     string | undefined;
@@ -758,6 +789,71 @@ const createApi = ({
     return sessionLifetimeGate(context, next);
   });
 
+  const isAlphaAdmitted = async (
+    allowed: readonly string[],
+    userId: string,
+  ): Promise<boolean> => {
+    const account = await database.authAccount.findFirst({
+      where: { userId, providerId: "github" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { accountId: true },
+    });
+    return account !== null && allowed.includes(account.accountId);
+  };
+
+  // A device code opened by a browser outside the alpha list can never be
+  // allowed, so it is declined on the spot and the waiting CLI learns why
+  // at sign-in instead of polling until the code expires. Only a pending,
+  // unexpired code that nobody else has claimed is touched.
+  const declineDeviceCodeOutsideAlpha = async (
+    context: Context,
+    userId: string,
+  ) => {
+    if (context.req.method !== "GET" || context.req.path !== "/api/auth/device")
+      return;
+    const userCode = context.req.query("user_code");
+    if (!userCode || userCode.length > 64) return;
+    const normalized = userCode.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+    await database.authDeviceCode.updateMany({
+      where: {
+        userCode: { in: [...new Set([userCode, normalized])] },
+        status: "pending",
+        expiresAt: { gt: new Date() },
+        OR: [{ userId: null }, { userId }],
+      },
+      data: { status: "denied", userId },
+    });
+  };
+
+  const readDeviceCodeFromTokenRequest = async (
+    context: Context,
+  ): Promise<string | null> => {
+    if (
+      context.req.method !== "POST" ||
+      context.req.path !== "/api/auth/device/token"
+    )
+      return null;
+    const text = await readCappedText(context.req.raw.clone(), 4096);
+    if (text === null) return null;
+    const contentType = context.req.header("Content-Type") ?? "";
+    let deviceCode: unknown;
+    if (contentType.startsWith("application/x-www-form-urlencoded"))
+      deviceCode = new URLSearchParams(text).get("device_code");
+    else {
+      try {
+        deviceCode = (JSON.parse(text) as { device_code?: unknown })
+          ?.device_code;
+      } catch {
+        return null;
+      }
+    }
+    return typeof deviceCode === "string" &&
+      deviceCode.length > 0 &&
+      deviceCode.length <= 255
+      ? deviceCode
+      : null;
+  };
+
   app.use("*", async (context, next) => {
     const allowed = profile.allowedGitHubIds;
     if (
@@ -772,17 +868,38 @@ const createApi = ({
     }
     const session = await requestSession(context, auth);
     if (session) {
-      const account = await database.authAccount.findFirst({
-        where: { userId: session.user.id, providerId: "github" },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: { accountId: true },
-      });
-      if (!account || !allowed.includes(account.accountId)) {
+      // The distinct code lets clients show "not on the list" instead of a
+      // generic error; the body names neither the list nor the account.
+      if (!(await isAlphaAdmitted(allowed, session.user.id))) {
+        // Best effort: the CLI falls back to waiting out the code.
+        await declineDeviceCodeOutsideAlpha(context, session.user.id).catch(
+          () => undefined,
+        );
         context.header("Cache-Control", "no-store");
-        return jsonProblem(context, "forbidden");
+        return jsonProblem(context, "alpha_admission_required");
       }
     } else if (context.req.path.startsWith("/api/v1/")) {
       return jsonProblem(context, "authentication_required");
+    } else {
+      const deviceCode = await readDeviceCodeFromTokenRequest(context);
+      if (deviceCode) {
+        const declined = await database.authDeviceCode.findUnique({
+          where: { deviceCode },
+          select: { id: true, status: true, userId: true },
+        });
+        if (
+          declined?.status === "denied" &&
+          declined.userId &&
+          !(await isAlphaAdmitted(allowed, declined.userId))
+        ) {
+          // Consumed like Better Auth consumes any denied code.
+          await database.authDeviceCode.deleteMany({
+            where: { id: declined.id },
+          });
+          context.header("Cache-Control", "no-store");
+          return jsonProblem(context, "alpha_admission_required");
+        }
+      }
     }
     await next();
   });

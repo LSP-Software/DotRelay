@@ -4,6 +4,7 @@ import { Ban, Hourglass, ShieldOff, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GitHubSignInButton } from "@/app/sign-in/github-sign-in-button";
 import { CommandText } from "@/components/inline-command";
+import { PrivateAlphaNotice } from "@/components/private-alpha-notice";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +20,7 @@ import {
 import {
   resolveLiveApiOrigin,
   resolveWebOrigin,
+  resolveWorkspaceProfileId,
 } from "@/lib/workspace-boundary";
 
 type DeviceApproveCardProps = Readonly<{
@@ -228,6 +230,16 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
             the code it shows.
           </AlertDescription>
         </Alert>
+      );
+    case "alpha-admission":
+      return (
+        <div className="space-y-3" data-testid="device-approval-alpha">
+          <p className="font-heading text-lg font-semibold">Private alpha</p>
+          <PrivateAlphaNotice
+            apiOrigin={apiOrigin}
+            hosted={resolveWorkspaceProfileId() === "hosted"}
+          />
+        </div>
       );
     case "connection":
       return (

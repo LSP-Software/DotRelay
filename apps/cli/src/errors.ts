@@ -1,5 +1,6 @@
 import { ProtocolTransportError } from "@dotrelay/client";
 import { ContractError } from "@dotrelay/contracts";
+import { HOSTED_ORIGIN } from "./hosted-origin";
 
 export const EXIT_CODES = Object.freeze({
   success: 0,
@@ -58,6 +59,7 @@ const safeDiagnosticCodes = new Set([
   "account_key_not_unlocked",
   "account_key_transfer_invalid",
   "account_key_unlock_failed",
+  "alpha_admission_required",
   "account_roster_untrusted",
   "account_trust_pins_invalid",
   "archived_resource",
@@ -219,6 +221,7 @@ export const categoryForProblem = (
 ): "invocation" | "conflict" | "crypto" | "authentication" | "transient" => {
   if (
     code === "authentication_required" ||
+    code === "alpha_admission_required" ||
     code === "device_not_active" ||
     code === "device_proof_required" ||
     code === "forbidden" ||
@@ -275,10 +278,38 @@ export const describeWait = (seconds: number): string => {
   return unit(Math.ceil(seconds / 3600), "hour");
 };
 
+const isHostedOrigin = (origin: string | undefined): boolean => {
+  if (origin === undefined) return false;
+  try {
+    return new URL(origin).origin === new URL(HOSTED_ORIGIN).origin;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The answer for a GitHub account outside a server's alpha list. Only
+ * DotRelay's hosted service takes access requests by email; anywhere else,
+ * including when the origin is unknown, the server's operator decides.
+ */
+export const alphaAdmissionDetail = (origin?: string): string =>
+  [
+    isHostedOrigin(origin)
+      ? "DotRelay is in private alpha and this GitHub account isn't on the list yet. Email support@dotrelay.dev to request access."
+      : "This DotRelay server is in private alpha and this GitHub account isn't on its list yet. Ask this server's operator for access.",
+    "To use another GitHub account, run dotrelay logout, then dotrelay login.",
+  ].join("\n");
+
 export const detailForProblem = (
   code: string,
-  context: Readonly<{ readonly retryAfterSeconds?: number }> = {},
+  context: Readonly<{
+    readonly retryAfterSeconds?: number;
+    /** The Server Profile origin that answered, when the caller knows it. */
+    readonly origin?: string;
+  }> = {},
 ): string => {
+  if (code === "alpha_admission_required")
+    return alphaAdmissionDetail(context.origin);
   if (code === "authentication_required")
     return "login is required for this Server Profile; run dotrelay login";
   if (code === "device_not_active")
@@ -354,6 +385,7 @@ export type ErrorPresentation = Readonly<{
 
 const errorTitles: Record<string, string> = {
   authentication_required: "Login required",
+  alpha_admission_required: "Private alpha",
   device_not_active: "Device not active",
   device_proof_required: "Device not proven",
   membership_not_active: "Membership not active",

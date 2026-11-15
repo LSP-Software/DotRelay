@@ -51,6 +51,11 @@ use a Better Auth bearer token returned by device authorization and should be st
 local credential store (encrypted files in the CLI state directory). A request containing both a
 bearer token and a cookie is rejected.
 
+When a Server Profile requires Alpha Admission, a session whose GitHub account is not on the list
+gets `403 alpha_admission_required` from every route except sign-out, capabilities, health, and
+readiness. Clients show it as its own state, not a generic error; see
+[alpha release operations](../alpha-release.md#admission).
+
 Authentication establishes only the server-local DotRelay User. It does not grant Membership,
 Device authority, decryption ability, or mutation permission. Encrypted operations still require an
 active Device and the application-level signed protocol checks.

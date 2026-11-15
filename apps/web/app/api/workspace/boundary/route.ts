@@ -1,3 +1,4 @@
+import { isAlphaAdmissionResponse } from "@/lib/alpha-admission";
 import {
   BROWSER_DEVICE_ID_HEADER,
   BROWSER_DEVICE_PROOF_HEADER,
@@ -43,6 +44,14 @@ const fetchLiveBoundary = async (
   }).catch(() => undefined);
   if (!sessionResponse)
     return emptyWorkspaceBoundary(profileId, { origin: apiOrigin });
+  // Signed in, but outside the alpha list: an answer, not an outage, so the
+  // shell moves to the private alpha page instead of retrying.
+  if (await isAlphaAdmissionResponse(sessionResponse))
+    return emptyWorkspaceBoundary(profileId, {
+      origin: apiOrigin,
+      connection: "online",
+      session: { active: false, alphaAdmissionRequired: true },
+    });
   // A 5xx from identity lookup is an unavailable service, not proof that
   // the browser signed out. Keep the retry state instead of a sign-in loop.
   if (!sessionResponse.ok && sessionResponse.status !== 401)

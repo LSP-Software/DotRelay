@@ -1,6 +1,6 @@
 import type { ServerProfilePin } from "@dotrelay/contracts";
 import type { CredentialStore } from "./credentials";
-import { CliError } from "./errors";
+import { alphaAdmissionDetail, CliError } from "./errors";
 import {
   defaultNetworkPolicy,
   fetchWithDeadline,
@@ -469,6 +469,15 @@ export const loginWithDeviceAuthorization = async (
         "device authorization was denied",
         {},
         "device_authorization_denied",
+      );
+    // The browser that opened the code is signed in with a GitHub account
+    // outside the server's alpha list, so the code can never be allowed.
+    if (body.code === "alpha_admission_required")
+      throw new CliError(
+        "authentication",
+        alphaAdmissionDetail(profile.origin),
+        {},
+        "alpha_admission_required",
       );
     if (typeof body.code === "string" && body.code === "rate_limited") {
       await waitTransientResponse((intervalSeconds + 5) * 1000);

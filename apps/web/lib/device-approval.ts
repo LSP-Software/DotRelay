@@ -1,14 +1,23 @@
+import { isAlphaAdmissionProblem } from "@/lib/alpha-admission";
+
+// A session the alpha list doesn't admit gets alpha_admission_required from
+// every device route, so each check carries that answer through to its own
+// view instead of reading it as a connection problem.
+type AlphaAdmission = { readonly kind: "alpha-admission" };
+
 export type DeviceCodeStatus = "pending" | "approved" | "denied";
 
 export type DeviceStatusCheck =
   | { readonly kind: "code"; readonly status: DeviceCodeStatus }
   | { readonly kind: "expired" }
   | { readonly kind: "invalid" }
+  | AlphaAdmission
   | { readonly kind: "unavailable" };
 
 export type SessionCheck =
   | { readonly kind: "signed-in" }
   | { readonly kind: "signed-out" }
+  | AlphaAdmission
   | { readonly kind: "unavailable" };
 
 export type DeviceApprovalAttempt =
@@ -17,6 +26,7 @@ export type DeviceApprovalAttempt =
   | { readonly kind: "forbidden" }
   | { readonly kind: "stale" }
   | { readonly kind: "signed-out" }
+  | AlphaAdmission
   | { readonly kind: "unavailable" };
 
 export type DeviceApprovalView =
@@ -27,6 +37,7 @@ export type DeviceApprovalView =
   | { readonly kind: "expired" }
   | { readonly kind: "invalid" }
   | { readonly kind: "forbidden" }
+  | AlphaAdmission
   | { readonly kind: "connection" };
 
 type HttpResponse = Readonly<{
@@ -59,6 +70,8 @@ export const parseDeviceStatusResponse = (
     if (status === undefined) return { kind: "unavailable" };
     return { kind: "code", status };
   }
+  if (isAlphaAdmissionProblem(response.status, body))
+    return { kind: "alpha-admission" };
   const error = readError(body);
   if (response.status === 400 && error === "expired_token")
     return { kind: "expired" };
@@ -71,6 +84,8 @@ export const parseSessionResponse = (
   response: HttpResponse,
   body: unknown,
 ): SessionCheck => {
+  if (isAlphaAdmissionProblem(response.status, body))
+    return { kind: "alpha-admission" };
   if (!response.ok) return { kind: "unavailable" };
   if (body === null || body === undefined) return { kind: "signed-out" };
   if (body !== null && typeof body === "object") {
@@ -86,6 +101,8 @@ export const parseDeviceApprovalAttempt = (
   body: unknown,
 ): DeviceApprovalAttempt => {
   if (response.ok) return { kind: "approved" };
+  if (isAlphaAdmissionProblem(response.status, body))
+    return { kind: "alpha-admission" };
   const error = readError(body);
   if (response.status === 400 && error === "expired_token")
     return { kind: "expired" };
@@ -105,6 +122,8 @@ export const deviceApprovalView = (
   status: DeviceStatusCheck,
   session: SessionCheck,
 ): DeviceApprovalView => {
+  if (status.kind === "alpha-admission" || session.kind === "alpha-admission")
+    return { kind: "alpha-admission" };
   if (status.kind === "code") {
     if (status.status === "approved") return { kind: "approved" };
     if (status.status === "denied") return { kind: "declined" };
@@ -130,6 +149,8 @@ export const deviceApprovalAttemptView = (
       return { kind: "expired" };
     case "forbidden":
       return { kind: "forbidden" };
+    case "alpha-admission":
+      return { kind: "alpha-admission" };
     case "unavailable":
       return { kind: "connection" };
     case "stale":

@@ -955,10 +955,10 @@ export const createStrictJsonClient = (
             : Math.ceil(headerRetryMs / 1000));
         throw new CliError(
           categoryForProblem(problem.code),
-          detailForProblem(
-            problem.code,
-            retryAfterSeconds === undefined ? {} : { retryAfterSeconds },
-          ),
+          detailForProblem(problem.code, {
+            origin: profile.origin,
+            ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+          }),
           {
             requestPath: path,
             ...(response.headers.get("X-Correlation-ID")
