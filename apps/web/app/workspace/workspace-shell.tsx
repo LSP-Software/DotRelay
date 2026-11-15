@@ -4467,6 +4467,7 @@ export const WorkspaceShell = ({
                       // The deleted account's keys and Device are useless
                       // now; a later sign-in is a new account with a new
                       // Device, so clear everything this browser kept.
+                      forgetDeviceProofs();
                       void forgetThisBrowser().finally(() =>
                         window.location.assign("/sign-in"),
                       );

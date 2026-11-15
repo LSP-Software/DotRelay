@@ -1,3 +1,8 @@
+import {
+  DeviceProofRequestError,
+  fetchWithDeviceProof,
+  knownDeviceProof,
+} from "./device-proof";
 import { rateLimitedMessage, retryAfterSecondsFrom } from "./rate-limit";
 import { BROWSER_DEVICE_ID_HEADER } from "./workspace-boundary";
 
@@ -32,6 +37,8 @@ export const lifecycleProblemMessage = (
       return "Sign in again to continue.";
     case "device_not_active":
       return "Set up this browser before deleting a team.";
+    case "device_proof_required":
+      return "This browser couldn't prove its Device. Reload the page and try again.";
     case "forbidden":
       return "Only a team owner can delete the team.";
     case "invalid_request":
@@ -58,12 +65,18 @@ const call = async (
   init?: RequestInit,
 ): Promise<LifecycleResult<unknown>> => {
   let response: Response;
+  // A request that names this browser's Device must also prove it
+  // (ADR 0020); session-only requests go out as they are.
+  const deviceId = new Headers(init?.headers).get(BROWSER_DEVICE_ID_HEADER);
   try {
-    response = await fetch(`${apiOrigin}${path}`, {
-      credentials: "include",
-      ...init,
-    });
-  } catch {
+    response = await fetchWithDeviceProof(
+      deviceId ? knownDeviceProof(apiOrigin, deviceId) : undefined,
+      `${apiOrigin}${path}`,
+      { credentials: "include", ...init },
+    );
+  } catch (error) {
+    if (error instanceof DeviceProofRequestError)
+      return { ok: false, message: lifecycleProblemMessage(error.code) };
     return {
       ok: false,
       message:
