@@ -9,6 +9,7 @@ import {
   encodeProtocolObject,
   FIXED_LENGTHS,
   isSignedField,
+  laneAssociatedData,
   OBJECT_REGISTRY,
   parseProtocolObject,
   unsignedBodyBytes,
@@ -202,7 +203,7 @@ describe("immutable dotrelay-e2ee-v3 classical vectors", () => {
     });
     expect(positive.objects).toHaveLength(20);
     expect(objects.vectors).toHaveLength(20);
-    expect(conditional.vectors).toHaveLength(30);
+    expect(conditional.vectors).toHaveLength(32);
     expect(objects.vectors.map((vector: { id: string }) => vector.id)).toEqual(
       positive.objects.map((vector: { id: string }) => vector.id),
     );
@@ -287,6 +288,40 @@ describe("immutable dotrelay-e2ee-v3 classical vectors", () => {
       ).map(Number);
       expect(values).toEqual(expect.arrayContaining(registryValues));
     }
+  });
+
+  test("pins the lane associated data of every lane format (ADR 0022)", async () => {
+    const conditional = await Bun.file(
+      "test-vectors/e2ee/v3/conditional.json",
+    ).json();
+    const lanes = (
+      conditional.vectors as Array<{
+        id: string;
+        canonicalHex: string;
+        associatedDataHex?: string;
+      }>
+    ).filter((vector) => vector.id.startsWith("lane-format-"));
+    expect(lanes.map((vector) => vector.id)).toEqual([
+      "lane-format-1",
+      "lane-format-2",
+    ]);
+    for (const vector of lanes) {
+      const lane = parseProtocolObject(bytesFromHex(vector.canonicalHex));
+      expect(vector.associatedDataHex).toBeDefined();
+      expect(laneAssociatedData(lane)).toEqual(
+        bytesFromHex(vector.associatedDataHex ?? ""),
+      );
+    }
+    // Format 1 binds only the Variable, Revision and scope; format 2 adds
+    // the Server Profile, Team, Project, Environment, owner, epoch and the
+    // format itself.
+    const [legacy, bound] = lanes.map((vector) =>
+      canonicalDecode(bytesFromHex(vector.associatedDataHex ?? "")),
+    );
+    expect([...(legacy as Map<number, unknown>).keys()]).toEqual([15, 16, 36]);
+    expect([...(bound as Map<number, unknown>).keys()]).toEqual([
+      8, 11, 13, 14, 15, 16, 26, 30, 36, 50,
+    ]);
   });
 
   test("covers every closed object kind, enum registry, and canonical round trip", async () => {

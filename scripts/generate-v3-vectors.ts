@@ -3,6 +3,7 @@ import {
   canonicalEncode,
   ENUM_REGISTRIES,
   FIXED_LENGTHS,
+  laneAssociatedData,
   SUITE_NAME,
   SUITE_VALUE,
 } from "@dotrelay/contracts";
@@ -80,6 +81,10 @@ const vectors = VECTOR_CASES.map((vector) => ({
       ),
     ),
   ),
+  // The lane-format vectors also pin the lane's AES-GCM associated data.
+  ...(vector.id.startsWith("lane-format-")
+    ? { associatedDataHex: hex(laneAssociatedData(vector.object)) }
+    : {}),
 }));
 
 const objects = vectors.filter((vector) => vector.id.startsWith("object-"));
