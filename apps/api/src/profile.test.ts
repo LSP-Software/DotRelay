@@ -268,7 +268,15 @@ describe("Server Profile configuration", () => {
       loadServerProfileConfig({ ...base, COOKIE_PREFIX: " dotrelay-dev " })
         .cookiePrefix,
     ).toBe("dotrelay-dev");
-    for (const invalid of ["__Host", "Dev", "dev_", "-dev", "dev-", "a.b", "x".repeat(33)])
+    for (const invalid of [
+      "__Host",
+      "Dev",
+      "dev_",
+      "-dev",
+      "dev-",
+      "a.b",
+      "x".repeat(33),
+    ])
       expect(() =>
         loadServerProfileConfig({ ...base, COOKIE_PREFIX: invalid }),
       ).toThrow("COOKIE_PREFIX");
