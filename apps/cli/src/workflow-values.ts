@@ -124,6 +124,28 @@ const stateLabel = {
   optional: "optional, no value",
 } as const;
 
+type ListedVariable = Readonly<{
+  readonly name: string;
+  readonly ownership: "shared" | "user-defined";
+  readonly state: keyof typeof stateLabel;
+}>;
+
+// Names come from the Environment, which any Member can publish to, so
+// control sequences are stripped before they reach the terminal.
+export const renderVariableList = (
+  variables: readonly ListedVariable[],
+): string => {
+  if (variables.length === 0)
+    return "This Environment has no Variables yet. Publish some with dotrelay push.\n";
+  const names = variables.map((variable) => sanitizeCliLine(variable.name));
+  const width = Math.max(4, ...names.map((name) => name.length));
+  const lines = variables.map(
+    (variable, index) =>
+      `  ${(names[index] ?? "").padEnd(width)}  ${variable.ownership.padEnd(12)}  ${stateLabel[variable.state]}`,
+  );
+  return `${lines.join("\n")}\n`;
+};
+
 export const listEnvironmentVariables = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -141,24 +163,13 @@ export const listEnvironmentVariables = async (
       required: variable.required,
       state: valueState(variable, actorUserId),
     }));
-  const width = Math.max(
-    4,
-    ...variables.map((variable) => variable.name.length),
-  );
-  const lines = variables.map(
-    (variable) =>
-      `  ${variable.name.padEnd(width)}  ${variable.ownership.padEnd(12)}  ${stateLabel[variable.state]}`,
-  );
   return {
     environmentId: synced.page.environmentId,
     variables,
     ...(parsed.json
       ? {}
       : {
-          stdout:
-            variables.length === 0
-              ? "This Environment has no Variables yet. Publish some with dotrelay push.\n"
-              : `${lines.join("\n")}\n`,
+          stdout: renderVariableList(variables),
         }),
   };
 };

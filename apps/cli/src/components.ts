@@ -8,7 +8,7 @@ import {
   truncate,
   visibleWidth,
 } from "./theme";
-import { sanitizeCliLine } from "./errors";
+import { sanitizeCliLine, sanitizeCliText } from "./errors";
 
 export type { Tone };
 export { bold, dim, paint, terminalWidth, truncate, visibleWidth };
@@ -186,8 +186,10 @@ export const stepFail = (label: string): string => stepLine(label, "danger");
 export const epilogue = (text: string, tone: Tone = "brand"): string =>
   `  ${paint(text, tone)}`;
 
+// Notes often name Variables or carry server text, so control sequences are
+// stripped before the text reaches the terminal.
 export const note = (text: string, tone: Tone = "faint"): string =>
-  `  ${paint(GLYPHS.item, "ghost")}  ${paint(text, tone)}`;
+  `  ${paint(GLYPHS.item, "ghost")}  ${paint(sanitizeCliText(text), tone)}`;
 
 export type StatusFooter = Readonly<{
   readonly state: GlyphState;

@@ -5,7 +5,7 @@ import {
 } from "@dotrelay/client";
 import type { SyncRevisionWire } from "@dotrelay/contracts";
 import { heading } from "./components";
-import { sanitizeCliText } from "./errors";
+import { sanitizeCliLine, sanitizeCliText } from "./errors";
 import type { Tone } from "./theme";
 import { paint } from "./ui";
 import { classificationFromOwnership } from "./workflow-publication";
@@ -132,7 +132,7 @@ const revisionDate = (authoredAtMs: bigint): string => {
 // Human history: enough readable context to tell the Revisions apart and to
 // pick a Rollback target without decrypting anything, while `--json` keeps
 // the documented revision metadata for automation.
-const renderRevisionHistory = (
+export const renderRevisionHistory = (
   environmentId: string,
   rows: readonly RevisionHistoryRow[],
 ): string => {
@@ -156,7 +156,7 @@ const renderRevisionHistory = (
       const targetOrdinal = ordinalById.get(row.revision.rollbackTargetId);
       label += targetOrdinal
         ? ` of #${targetOrdinal}`
-        : ` of ${row.revision.rollbackTargetId}`;
+        : ` of ${sanitizeCliLine(row.revision.rollbackTargetId)}`;
     }
     const changes = row.changes;
     if (changes.length > 0) {
@@ -187,7 +187,7 @@ const renderRevisionHistory = (
       `  ${paint(`#${row.ordinal}`, "muted")}  ${paint(
         revisionDate(row.revision.authoredAtMs),
         "fg",
-      )}  ${paint(row.revision.id, "faint")}  ${paint(
+      )}  ${paint(sanitizeCliLine(row.revision.id), "faint")}  ${paint(
         summaryFor(row),
         mutationTone(row.revision.mutation),
       )}${marker}`,
@@ -196,15 +196,15 @@ const renderRevisionHistory = (
       const ownership = paint(change.ownership, "muted");
       if (change.kind === "added")
         lines.push(
-          `     ${paint("+", "brand")}  ${paint(change.name, "fg")}  ${ownership}`,
+          `     ${paint("+", "brand")}  ${paint(sanitizeCliLine(change.name), "fg")}  ${ownership}`,
         );
       else if (change.kind === "removed")
         lines.push(
-          `     ${paint("-", "danger")}  ${paint(change.name, "fg")}  ${ownership}`,
+          `     ${paint("-", "danger")}  ${paint(sanitizeCliLine(change.name), "fg")}  ${ownership}`,
         );
       else
         lines.push(
-          `     ${paint("~", "warn")}  ${paint(change.name, "fg")}${
+          `     ${paint("~", "warn")}  ${paint(sanitizeCliLine(change.name), "fg")}${
             change.valueChanged ? `  ${paint("value changed", "faint")}` : ""
           }`,
         );

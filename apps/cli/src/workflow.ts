@@ -237,7 +237,7 @@ export const runProtectedWorkflow = async (
       for (const variable of groups.requiredMissing) {
         supplied.set(
           variable.name,
-          await readTerminalSecret(`Value for ${variable.name}`, {
+          await readTerminalSecret(`Value for ${sanitizeCliLine(variable.name)}`, {
             ...(options.terminal ? { terminal: options.terminal } : {}),
             ...(options.prompt ? { prompt: options.prompt } : {}),
             noInput: options.noInput,

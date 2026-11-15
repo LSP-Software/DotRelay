@@ -44,6 +44,7 @@ import {
   CliError,
   CliInvocationError,
   detailForProblem,
+  sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
 import {
@@ -321,10 +322,10 @@ const maskConflictValue = (
     return "changed on another Device; value not readable on this Device";
   if (value === undefined) return "absent";
   if (value === null) return "not set";
-  return reveal ? value : "••••";
+  return reveal ? sanitizeCliLine(value) : "••••";
 };
 
-const conflictLines = (
+export const conflictLines = (
   conflict: BaselineConflict,
   reveal: boolean,
 ): readonly string[] => {
@@ -332,7 +333,7 @@ const conflictLines = (
     conflict.local?.ownership ?? conflict.remote?.ownership ?? "SHARED_VALUE";
   const label = ownership === "SHARED_VALUE" ? "shared" : "user-defined";
   return [
-    `${conflict.name} (${label}) conflicts: ${conflict.kinds.join(", ")}`,
+    `${sanitizeCliLine(conflict.name)} (${label}) conflicts: ${conflict.kinds.join(", ")}`,
     `  base: ${maskConflictValue(conflict.base?.tombstone ? undefined : conflict.base?.value, reveal, false)}`,
     `  local: ${maskConflictValue(conflict.local?.tombstone ? undefined : conflict.local?.value, reveal, false)}`,
     `  remote: ${maskConflictValue(
@@ -367,7 +368,9 @@ const resolveConflicts = async (
   conflicts: readonly BaselineConflict[],
 ): Promise<ReadonlyMap<string, BaselineResolution>> => {
   if (conflicts.length === 0) return new Map();
-  const names = conflicts.map((conflict) => conflict.name).join(", ");
+  const names = conflicts
+    .map((conflict) => sanitizeCliLine(conflict.name))
+    .join(", ");
   if (options.noInput)
     throw new CliError(
       "conflict",
@@ -384,12 +387,12 @@ const resolveConflicts = async (
     output.write(`${conflictLines(conflict, parsed.reveal).join("\n")}\n`);
     const answer = await ask(
       options,
-      `Choose for ${conflict.name} (${conflict.choices.join(" / ")})`,
+      `Choose for ${sanitizeCliLine(conflict.name)} (${conflict.choices.join(" / ")})`,
     );
     const choice = normalizeResolution(answer, conflict.choices);
     if (!choice)
       throw new CliInvocationError(
-        `choose one of ${conflict.choices.join(", ")} for ${conflict.name}`,
+        `choose one of ${conflict.choices.join(", ")} for ${sanitizeCliLine(conflict.name)}`,
       );
     choices.set(conflict.key, choice);
   }
