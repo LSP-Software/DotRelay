@@ -1,4 +1,4 @@
--- Finished active periods of a Membership (ADR 0016). A removed Membership
+-- Finished active periods of a Membership (ADR 0017). A removed Membership
 -- that is invited back keeps its row; its previous period moves here so
 -- Revisions signed during it stay verifiable.
 CREATE TABLE "membership_periods" (

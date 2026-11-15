@@ -14,7 +14,7 @@ import type { WorkspaceSigningTrustDevice } from "./workspace-boundary";
 
 /**
  * The boundary's signing trust devices as the entries Revision verification
- * judges authors against. Every Membership period is forwarded (ADR 0016):
+ * judges authors against. Every Membership period is forwarded (ADR 0017):
  * without it a Member who was removed and invited back could not verify
  * their own earlier Revisions. Entries with a malformed key are skipped.
  */

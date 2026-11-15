@@ -321,7 +321,7 @@ const loadWorkspaceCatalog = async (
 // a write made after the revocation or removal stays rejected.
 // memberSinceMs/memberUntilMs describe the current Membership period only;
 // membershipPeriods lists every period, so a Member who was removed and
-// invited back keeps their earlier Revisions verifiable (ADR 0016).
+// invited back keeps their earlier Revisions verifiable (ADR 0017).
 const loadTeamSigningTrustDevices = async (
   database: DatabaseClient,
   teamId: string,

@@ -19,7 +19,7 @@ export type TeamMembershipWindows = Readonly<{
 
 /**
  * Archives a removed Membership's finished period before an invitation
- * revives the row (ADR 0016). The row then describes only the new period;
+ * revives the row (ADR 0017). The row then describes only the new period;
  * the archive keeps the old one so Revisions signed in it stay verifiable.
  */
 export const archiveMembershipPeriod = async (

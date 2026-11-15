@@ -179,7 +179,7 @@ can be listed. Once it lists itself, no other Device can join without an AMK hol
 windows still come from the service. Each `signingTrustDevices` entry carries `membershipPeriods`,
 every period in which the author was an active Member; a Member who was removed and invited back
 keeps one period per stint, so their earlier Revisions stay verifiable
-([ADR 0016](../adr/0016-membership-periods-survive-reinvitation.md)).
+([ADR 0017](../adr/0017-membership-periods-survive-reinvitation.md)).
 
 ## Security boundaries
 

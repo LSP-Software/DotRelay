@@ -126,7 +126,7 @@ signs an authored-at instant no earlier than this browser Device's activation, i
 current Membership activation (both from the Device's own signing trust entry on the boundary),
 and the head Revision's authored-at instant, so a slow clock is raised to that floor instead of
 producing a Revision the service refuses. Revision signatures are judged against every
-Membership period the boundary lists for the author (ADR 0016), so a Member who was removed and
+Membership period the boundary lists for the author (ADR 0017), so a Member who was removed and
 invited back still verifies their earlier Revisions. Rollback is lane-scoped and always publishes a new Revision, so the current head
 remains in immutable history. The History card lists the verified Revisions with their authored
 time, change kind (naming the target of a Rollback), author, the Variables the Revision changed,

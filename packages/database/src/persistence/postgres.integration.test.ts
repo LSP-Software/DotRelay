@@ -1238,7 +1238,7 @@ integrationDescribe("PostgreSQL persistence integration", () => {
       activatedAt: null,
       removedAt: null,
     });
-    // The first period survives the revival (ADR 0016), so Revisions the
+    // The first period survives the revival (ADR 0017), so Revisions the
     // invitee signed during it stay verifiable.
     const firstActivatedAt = activated.membership.activatedAt;
     const firstRemovedAt = removed.membership.removedAt;

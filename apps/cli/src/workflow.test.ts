@@ -1171,7 +1171,7 @@ describe("protected CLI workflows", () => {
       runtime,
     );
 
-  test("verifies a Revision authored during the author's earlier Membership period (ADR 0016)", async () => {
+  test("verifies a Revision authored during the author's earlier Membership period (ADR 0017)", async () => {
     const bootstrap = await createDeviceBootstrap({
       pin: profile.pin,
       userId: ids.user,

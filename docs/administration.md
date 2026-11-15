@@ -12,7 +12,7 @@ least one active owner. Memberships move forward from `PENDING_KEY_GRANT` to `AC
 `REMOVED`. A removed Membership is a durable record; accepting a new invitation revives the same
 row as a `MEMBER` in `PENDING_KEY_GRANT`. Before the revival, the finished active period is archived
 in `membership_periods`, so the User's earlier Revisions stay verifiable against the period they
-were signed in ([ADR 0016](adr/0016-membership-periods-survive-reinvitation.md)). Only active
+were signed in ([ADR 0017](adr/0017-membership-periods-survive-reinvitation.md)). Only active
 Memberships authorize reads or mutations.
 
 | Capability                                       | Owner | Admin | Member |

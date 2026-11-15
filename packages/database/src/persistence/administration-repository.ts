@@ -501,7 +501,7 @@ export class MembershipAdministrationRepository {
       });
       if (priorMembership && priorMembership.lifecycle !== "REMOVED")
         throw new Error("User is already a member of the Team");
-      // Reviving a removed Membership reuses its row (ADR 0016); its
+      // Reviving a removed Membership reuses its row (ADR 0017); its
       // finished period is archived first so history stays verifiable.
       if (priorMembership)
         await archiveMembershipPeriod(transaction, priorMembership);

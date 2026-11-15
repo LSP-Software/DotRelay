@@ -2244,7 +2244,7 @@ describe("workspace boundary Device binding", () => {
         deviceActiveUntilMs: peerDeviceRevokedAt.getTime(),
         memberSinceMs: peerMembershipActivatedAt.getTime(),
         memberUntilMs: peerMembershipRemovedAt.getTime(),
-        // An earlier, archived period comes first (ADR 0016).
+        // An earlier, archived period comes first (ADR 0017).
         membershipPeriods: [
           {
             sinceMs: peerEarlierPeriodActivatedAt.getTime(),

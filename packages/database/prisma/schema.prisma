@@ -436,7 +436,7 @@ model Membership {
   @@map("memberships")
 }
 
-// A finished active period of a Membership (ADR 0016). The Membership row
+// A finished active period of a Membership (ADR 0017). The Membership row
 // carries the current period; when a removed Membership is revived by a new
 // invitation, its previous period is archived here first, so Revisions the
 // User signed in that period stay verifiable.

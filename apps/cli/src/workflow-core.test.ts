@@ -44,7 +44,7 @@ const trustEntry = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-describe("boundary Membership periods (ADR 0016)", () => {
+describe("boundary Membership periods (ADR 0017)", () => {
   test("parses membershipPeriods and forwards them into the trust entries", () => {
     const periods = [
       { sinceMs: 100, untilMs: 200 },

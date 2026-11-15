@@ -55,7 +55,7 @@ Revisions, grants, commitments, Operations, and Audit Facts are not physically d
 Membership removal, and Device revocation are logical lifecycle changes. A removed Membership that
 is invited back keeps its row; its finished period is first archived in the append-only
 `membership_periods` table so signing windows for earlier Revisions survive
-([ADR 0016](../adr/0016-membership-periods-survive-reinvitation.md)). Removing an active Member or
+([ADR 0017](../adr/0017-membership-periods-survive-reinvitation.md)). Removing an active Member or
 revoking an active Device records rows in `project_rotation_obligations`; a committed epoch
 rotation marks them cleared rather than deleting them.
 

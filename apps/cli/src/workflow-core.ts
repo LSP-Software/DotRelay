@@ -135,7 +135,7 @@ export type SigningTrustDevice = Readonly<{
   readonly memberUntilMs: number | null;
   /**
    * Every period the author was an active Member, oldest first, current
-   * last (ADR 0016). A re-invited Member's earlier Revisions verify only
+   * last (ADR 0017). A re-invited Member's earlier Revisions verify only
    * against these.
    */
   readonly membershipPeriods?: readonly MembershipPeriod[];
@@ -431,7 +431,7 @@ export const collectSigningTrust = (
     const entries: RevisionSigningTrustEntry[] = [];
     // Keys that already have an entry, so the local fallback is not added
     // twice. Entries themselves are kept even when they share a key: each
-    // carries its own windows (ADR 0016), and the verifier admits a
+    // carries its own windows (ADR 0017), and the verifier admits a
     // Revision through any entry whose windows hold.
     const seen = new Set<string>();
     const seenEntries = new Set<string>();

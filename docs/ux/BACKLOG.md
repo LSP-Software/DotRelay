@@ -1361,7 +1361,7 @@ The browser kept only the current Membership window, so a Revision the Member
 signed in an earlier period was "not authorized" and the editor reported an
 integrity failure.
 Expected:
-Revisions verify against any period the author was a Member (ADR 0016);
+Revisions verify against any period the author was a Member (ADR 0017);
 Revisions authored between periods stay rejected.
 Status:
 FIXED - the boundary route forwards `membershipPeriods` and the session

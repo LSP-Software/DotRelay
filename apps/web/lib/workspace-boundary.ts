@@ -46,7 +46,7 @@ export type WorkspaceSigningTrustDevice = Readonly<{
   readonly memberUntilMs: number | null;
   /**
    * Every period the author was an active Member, oldest first, current
-   * last (ADR 0016). memberSinceMs/memberUntilMs describe only the current
+   * last (ADR 0017). memberSinceMs/memberUntilMs describe only the current
    * period, so a Member who was removed and invited back needs this to keep
    * their earlier Revisions verifiable.
    */
