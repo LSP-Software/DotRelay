@@ -46,6 +46,12 @@ import { createAuth, type DotRelayAuth, signBearerToken } from "./auth";
 import { createClientIpResolver } from "./client-ip";
 import { registerDeviceProofRoutes } from "./device-proof-routes";
 import { registerDeviceRoutes } from "./device-routes";
+import { createResendTransport, loadEmailConfig } from "./email";
+import {
+  createEmailNotifier,
+  disabledEmailNotifier,
+  type EmailNotifier,
+} from "./email-notifications";
 import { delegatedGitHubAccessToken } from "./github-access";
 import {
   type GitHubRepositoryDisplayOptions,
@@ -96,6 +102,8 @@ export type ApiDependencies = Readonly<{
   readonly githubFetch?: typeof fetch;
   readonly observability?: ApiObservability;
   readonly resolveClientIp?: (request: Request) => string | null;
+  /** Post-commit transactional email; disabled when omitted. */
+  readonly notifications?: EmailNotifier;
 }>;
 
 const jsonProblem = (context: Context, code: ProblemCode) => {
@@ -639,6 +647,7 @@ const createApi = ({
   githubFetch,
   observability: suppliedObservability,
   resolveClientIp,
+  notifications = disabledEmailNotifier,
 }: ApiDependencies) => {
   const app = new Hono();
   // Auth, Device bootstrap/self and grant bootstrap bodies are a few KB.
@@ -1679,12 +1688,18 @@ const createApi = ({
     database,
     profile,
     auth,
+    notifications,
     ...(githubFetch ? { githubFetch } : {}),
   });
 
   registerDeviceRoutes(app, { database, profile, auth });
   registerAccountRoutes(app, { database, profile, auth });
-  registerMembershipProvisioningRoutes(app, { database, profile, auth });
+  registerMembershipProvisioningRoutes(app, {
+    database,
+    profile,
+    auth,
+    notifications,
+  });
 
   registerProtocolRoutes(app, { database, profile, auth });
 
@@ -1714,11 +1729,39 @@ export const auth = createAuth(
     onGitHubProfile: (github) => recordGitHubLogin(database, github),
   },
 );
+const emailConfig = loadEmailConfig();
+const runtimeNotifications = createEmailNotifier({
+  database,
+  profile,
+  config: emailConfig,
+  transport: emailConfig.apiKey
+    ? createResendTransport({
+        apiKey: emailConfig.apiKey,
+        from: emailConfig.from,
+      })
+    : null,
+  diagnostics: runtimeObservability.diagnostics,
+  // The same best-effort, cached lookup the workspace catalog uses, on the
+  // acting owner's or admin's Delegated GitHub Access.
+  resolveProjectName: async ({ githubRepositoryId, actorUserId }) => {
+    const actor = await database.user.findUnique({
+      where: { id: actorUserId },
+      select: { authSubject: true },
+    });
+    if (!actor) return undefined;
+    const repository = await lookupGitHubRepositoryDisplay(githubRepositoryId, {
+      accessToken: () => delegatedGitHubAccessToken(auth, actor.authSubject),
+      cacheScope: actor.authSubject,
+    });
+    return repository ? `${repository.owner}/${repository.name}` : undefined;
+  },
+});
 export const app = createApi({
   database,
   profile,
   auth,
   observability: runtimeObservability,
+  notifications: runtimeNotifications,
 });
 export { createApi, loadServerProfileConfig };
 
@@ -1738,6 +1781,8 @@ if (import.meta.main) {
     maxRequestBodySize: maxRequestBodyBytes(profile),
   });
   console.error(`DotRelay API listening on ${profile.origin}`);
+  if (!emailConfig.apiKey)
+    console.error("Transactional email is off: RESEND_API_KEY is not set");
   const cleanupTimer = setInterval(
     () => {
       void runtimeObservability.runRetentionCleanup().catch(() => {
@@ -1763,6 +1808,8 @@ if (import.meta.main) {
           // /ready now fails; give load balancers time to stop routing here.
           await Bun.sleep(shutdownDrainMs(process.env.SHUTDOWN_DRAIN_MS));
           await server?.stop(false);
+          // Let queued emails finish within the remaining stop budget.
+          await Promise.race([runtimeNotifications.drain(), Bun.sleep(2_000)]);
           await database.$disconnect();
           clearTimeout(deadline);
           process.exit(0);

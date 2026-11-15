@@ -76,6 +76,65 @@ If the orchestrator overrides Docker's built-in healthcheck, configure
 `bun /app/scripts/probe-ready.ts` (readiness) instead of an inherited curl/wget command;
 the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 
+## Transactional email
+
+The API sends three emails through [Resend](https://resend.com):
+
+- **Invitation**, to the invitee: Team name, inviter, expiry and a link to `/workspace` on
+  `WEB_ORIGIN`, where the invitation is accepted or declined. Invitations address a GitHub id, so
+  only an invitee who has already signed in to DotRelay has a stored address. Anyone else gets no
+  email; the inviter still shares the invitation themselves.
+- **Project keys shared**, to the Member, once per Share project keys operation (web Members view
+  or `dotrelay team share-keys`), listing the Projects and the `dotrelay pull` hint. Not one email
+  per Device grant.
+- **Invitation accepted**, to each active owner and admin of the Team except the new Member: who
+  joined, and that the Project keys must be shared before they can pull.
+
+Recipients' addresses come from the GitHub primary email Better Auth stored at sign-in (the
+GitHub App's **Email addresses: read** permission). GitHub `users.noreply.github.com` addresses
+are skipped. The API never asks GitHub for an address at send time.
+
+Emails are sent only after the database transaction commits, in the background: a slow or failed
+send never fails or delays the API response. Each attempt times out after 10 seconds. A timeout,
+network error, 429 or 5xx is retried once after two seconds with the same Resend
+`Idempotency-Key`, so a retry never sends twice. Replays of an idempotent request send nothing. The
+in-process queue holds at most 200 events; queued emails get up to two seconds to finish on
+shutdown, then are dropped. Outcomes are the diagnostic events `api.email.sent`,
+`api.email.failed` and `api.email.skipped` (see [observability](observability.md)), with an email
+kind and a bounded reason only; never an address, link, name, key or Resend response.
+
+Templates are short plain text with a minimal inline-styled HTML part. User-controlled strings are
+escaped. There are no images or tracking pixels. Every email says why it was sent and that
+replies are not read, and names the support address. Turn off open and click tracking for the
+domain in Resend.
+
+| Variable                | Default                           | Notes                                                                                                                                                                   |
+| ----------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RESEND_API_KEY`        | unset                             | Unset turns email off (development, self-hosting, tests); the API logs one line at startup. A sending-only key is enough. `RESEND_API_KEY_FILE` accepts a private file. |
+| `EMAIL_FROM`            | `DotRelay <noreply@dotrelay.dev>` | An address or `Name <address>` on a domain verified in Resend.                                                                                                          |
+| `EMAIL_SUPPORT_ADDRESS` | `support@dotrelay.dev`            | Named in every email footer.                                                                                                                                            |
+
+The production config check does not require email, but rejects a malformed value when one is
+set.
+
+### Resend domain and DNS
+
+Add `dotrelay.dev` as a domain in the Resend dashboard (region of choice), then create the records
+the dashboard lists. The exact values, including the DKIM public key and the MX host for the
+region, come from the dashboard after the domain is added; copy them from there. The records are:
+
+| Name                             | Type | Purpose                                                                                                      |
+| -------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------ |
+| `resend._domainkey.dotrelay.dev` | TXT  | DKIM public key (`p=…`) that signs mail from the domain.                                                     |
+| `send.dotrelay.dev`              | MX   | Return-path (bounce) host for Resend's SES region, e.g. `feedback-smtp.<region>.amazonses.com`, priority 10. |
+| `send.dotrelay.dev`              | TXT  | SPF for the return-path subdomain, `v=spf1 include:amazonses.com ~all`.                                      |
+| `_dmarc.dotrelay.dev`            | TXT  | DMARC policy. Not issued by Resend; recommended below.                                                       |
+
+Start DMARC in monitoring mode, `v=DMARC1; p=none; rua=mailto:<reports address>`, and move to
+`p=quarantine` once reports show only aligned mail from Resend and any other senders on the
+domain. Keep the apex SPF record unchanged; Resend's SPF lives on `send`. Wait for Resend to show
+the domain as verified before setting `RESEND_API_KEY` in Coolify.
+
 ## Upgrade and migrations
 
 ### Hosted deploys (Coolify)

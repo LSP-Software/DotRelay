@@ -10,6 +10,7 @@ import {
   signProtocolObject,
 } from "@dotrelay/contracts";
 import { testDeviceProof } from "./device-proof-testing";
+import type { EmailEvent } from "./email-notifications";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -201,7 +202,14 @@ const fixture = async () => {
       }
     },
   };
+  const emailEvents: EmailEvent[] = [];
   const app = createApi({
+    notifications: {
+      notify: (event) => {
+        emailEvents.push(event);
+      },
+      drain: async () => undefined,
+    },
     profile,
     database: database as never,
     auth: {
@@ -242,6 +250,7 @@ const fixture = async () => {
     );
   return {
     app,
+    emailEvents,
     profile,
     request,
     member,
@@ -325,4 +334,27 @@ test("active Members can receive new Project or Device grants without another ac
   expect((await setup.send()).status).toBe(200);
   expect(setup.member.lifecycle).toBe("ACTIVE");
   expect(setup.grants).toHaveLength(1);
+});
+
+test("shared keys notify the Member once per operation, never on replay or rollback", async () => {
+  const setup = await fixture();
+  expect((await setup.send()).status).toBe(200);
+  expect((await setup.send()).status).toBe(200);
+  expect(setup.emailEvents).toEqual([
+    {
+      kind: "keys_shared",
+      operationId: setup.request.operationId,
+      teamId: setup.member.teamId,
+      membershipId: setup.member.id,
+      projectIds: setup.plan.projects.map((project) => project.id),
+      actorUserId: expect.any(String),
+    },
+  ]);
+  const failed = await fixture();
+  const request = structuredClone(failed.request);
+  request.grants = [];
+  expect((await failed.send(request)).status).toBeGreaterThanOrEqual(400);
+  failed.setRole("MEMBER");
+  expect((await failed.send()).status).toBe(403);
+  expect(failed.emailEvents).toHaveLength(0);
 });

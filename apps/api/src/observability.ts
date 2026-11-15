@@ -24,6 +24,9 @@ export const SERVER_DIAGNOSTIC_EVENT_NAMES = Object.freeze([
   "api.security_request_log.expiry_failed",
   "api.staging.expiry_failed",
   "api.retention.expiry_failed",
+  "api.email.sent",
+  "api.email.failed",
+  "api.email.skipped",
 ] as const);
 export type ServerDiagnosticEventName =
   (typeof SERVER_DIAGNOSTIC_EVENT_NAMES)[number];
@@ -45,8 +48,30 @@ export const SERVER_DIAGNOSTIC_FIELDS = Object.freeze([
   "outcome",
   "problemCode",
   "retryAfterSeconds",
+  "emailKind",
+  "emailReason",
 ] as const);
 export type ServerDiagnosticField = (typeof SERVER_DIAGNOSTIC_FIELDS)[number];
+export const SERVER_DIAGNOSTIC_EMAIL_KINDS = Object.freeze([
+  "invitation",
+  "keys_shared",
+  "invitation_accepted",
+] as const);
+export type ServerDiagnosticEmailKind =
+  (typeof SERVER_DIAGNOSTIC_EMAIL_KINDS)[number];
+export const SERVER_DIAGNOSTIC_EMAIL_REASONS = Object.freeze([
+  "timeout",
+  "network",
+  "rejected",
+  "rate_limited",
+  "server_error",
+  "lookup_failed",
+  "queue_full",
+  "no_recipient",
+  "no_address",
+] as const);
+export type ServerDiagnosticEmailReason =
+  (typeof SERVER_DIAGNOSTIC_EMAIL_REASONS)[number];
 
 declare const serverCorrelationIdBrand: unique symbol;
 export type ServerCorrelationId = string & {
@@ -61,6 +86,8 @@ export type ServerDiagnosticEvent = Readonly<{
   readonly outcome?: "success" | "failure";
   readonly problemCode?: ServerDiagnosticProblemCode;
   readonly retryAfterSeconds?: number;
+  readonly emailKind?: ServerDiagnosticEmailKind;
+  readonly emailReason?: ServerDiagnosticEmailReason;
 }>;
 
 export type ServerDiagnosticSink = Readonly<{
@@ -186,6 +213,12 @@ const serverDiagnosticEventNames = new Set<string>(
 );
 const serverDiagnosticFields = new Set<string>(SERVER_DIAGNOSTIC_FIELDS);
 const SERVER_DIAGNOSTIC_OUTCOMES = new Set(["success", "failure"]);
+const serverDiagnosticEmailKinds = new Set<string>(
+  SERVER_DIAGNOSTIC_EMAIL_KINDS,
+);
+const serverDiagnosticEmailReasons = new Set<string>(
+  SERVER_DIAGNOSTIC_EMAIL_REASONS,
+);
 const CORRELATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_ISSUED_CORRELATION_IDS = 100_000;
@@ -378,6 +411,18 @@ const sanitizeServerDiagnosticEvent = (
     toServerDiagnosticRetryAfterSeconds(object.retryAfterSeconds) === undefined
   )
     return null;
+  if (
+    object.emailKind !== undefined &&
+    (typeof object.emailKind !== "string" ||
+      !serverDiagnosticEmailKinds.has(object.emailKind))
+  )
+    return null;
+  if (
+    object.emailReason !== undefined &&
+    (typeof object.emailReason !== "string" ||
+      !serverDiagnosticEmailReasons.has(object.emailReason))
+  )
+    return null;
   return Object.freeze({
     schemaVersion: 1,
     eventName: object.eventName,
@@ -392,6 +437,10 @@ const sanitizeServerDiagnosticEvent = (
     ...(object.retryAfterSeconds === undefined
       ? {}
       : { retryAfterSeconds: object.retryAfterSeconds }),
+    ...(object.emailKind === undefined ? {} : { emailKind: object.emailKind }),
+    ...(object.emailReason === undefined
+      ? {}
+      : { emailReason: object.emailReason }),
   }) as ServerDiagnosticEvent;
 };
 

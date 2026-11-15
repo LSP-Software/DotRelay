@@ -2,6 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { MAX_PENDING_INVITATIONS_PER_TEAM } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
 import { testDeviceProof } from "./device-proof-testing";
+import { EmailSendError } from "./email";
+import {
+  createEmailNotifier,
+  type EmailEvent,
+  type EmailNotifier,
+} from "./email-notifications";
+import { createInMemoryDiagnosticSink } from "./observability";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -786,7 +793,13 @@ const createDatabaseStub = () => {
   };
 };
 
-const createTestApp = (options: { githubFetch?: typeof fetch } = {}) => {
+const createTestApp = (
+  options: {
+    githubFetch?: typeof fetch;
+    notifications?: (database: unknown) => EmailNotifier;
+  } = {},
+) => {
+  const emailEvents: EmailEvent[] = [];
   const {
     database,
     operations,
@@ -800,10 +813,17 @@ const createTestApp = (options: { githubFetch?: typeof fetch } = {}) => {
     database: database as never,
     profile,
     auth: createAuthStub(),
+    notifications: options.notifications?.(database) ?? {
+      notify: (event) => {
+        emailEvents.push(event);
+      },
+      drain: async () => undefined,
+    },
     ...(options.githubFetch ? { githubFetch: options.githubFetch } : {}),
   });
   return {
     testApp,
+    emailEvents,
     operations,
     auditEvents,
     createdMemberships,
@@ -2140,5 +2160,106 @@ describe("Team membership role and removal routes", () => {
     expect(await badRole.json()).toMatchObject({ code: "invalid_request" });
     expect(noBody.status).toBe(400);
     expect(await noBody.json()).toMatchObject({ code: "invalid_request" });
+  });
+});
+
+describe("transactional email notifications", () => {
+  test("a created invitation notifies once; a replay or refusal does not", async () => {
+    const { testApp, emailEvents, createdInvitations } = createTestApp();
+    const invite = (token: string, idempotencyKey: string) =>
+      request(testApp, `/api/v1/teams/${TEAM_A}/invitations`, {
+        method: "POST",
+        token,
+        deviceId: DEVICE_OWNER,
+        idempotencyKey,
+        body: { providerSubject: "583231" },
+      });
+    expect(
+      (await invite("owner-token", "f1000000-0000-4000-8000-000000000001"))
+        .status,
+    ).toBe(201);
+    const created = (await createdInvitations[0]) as StubInvitation;
+    expect(emailEvents).toEqual([
+      {
+        kind: "invitation",
+        invitationId: created.id,
+        inviterUserId: USER_OWNER,
+      },
+    ]);
+    expect(
+      (await invite("owner-token", "f1000000-0000-4000-8000-000000000001"))
+        .status,
+    ).toBe(200);
+    expect(
+      (await invite("member-token", "f1000000-0000-4000-8000-000000000002"))
+        .status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(emailEvents).toHaveLength(1);
+  });
+
+  test("an accepted invitation notifies once; a replay or failed accept does not", async () => {
+    const { testApp, emailEvents, createdMemberships } = createTestApp();
+    const accept = (invitationId: string, idempotencyKey: string) =>
+      request(testApp, `/api/v1/invitations/${invitationId}/accept`, {
+        method: "POST",
+        token: "invitee-token",
+        idempotencyKey,
+      });
+    expect(
+      (await accept(INV_EXPIRED, "a1000000-0000-4000-8000-000000000001"))
+        .status,
+    ).toBe(410);
+    expect(emailEvents).toHaveLength(0);
+    expect(
+      (await accept(INV_ACTIVE, "a1000000-0000-4000-8000-000000000002")).status,
+    ).toBe(201);
+    expect(
+      (await accept(INV_ACTIVE, "a1000000-0000-4000-8000-000000000002")).status,
+    ).toBe(200);
+    expect(emailEvents).toEqual([
+      {
+        kind: "invitation_accepted",
+        membershipId: createdMemberships[0]?.id ?? "",
+      },
+    ]);
+  });
+
+  test("a failing or hanging email send never fails or delays the response", async () => {
+    let notifier: EmailNotifier | undefined;
+    const { testApp } = createTestApp({
+      notifications: (database) => {
+        notifier = createEmailNotifier({
+          database: database as never,
+          profile,
+          config: {
+            apiKey: "re_fixture",
+            from: "DotRelay <noreply@dotrelay.dev>",
+            supportAddress: "support@dotrelay.dev",
+          },
+          transport: {
+            send: () =>
+              new Promise((_resolve, reject) =>
+                setTimeout(() => reject(new EmailSendError("timeout")), 100),
+              ),
+          },
+          diagnostics: createInMemoryDiagnosticSink(),
+          sleep: async () => undefined,
+        });
+        return notifier;
+      },
+    });
+    const startedAt = performance.now();
+    const response = await request(
+      testApp,
+      `/api/v1/invitations/${INV_ACTIVE}/accept`,
+      {
+        method: "POST",
+        token: "invitee-token",
+        idempotencyKey: "a1000000-0000-4000-8000-000000000003",
+      },
+    );
+    expect(response.status).toBe(201);
+    expect(performance.now() - startedAt).toBeLessThan(90);
+    await notifier?.drain();
   });
 });
