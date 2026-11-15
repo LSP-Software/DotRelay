@@ -2,7 +2,6 @@ import {
   createAccountKeyEnvelope,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
-  createProjectEpochGrantBootstrap,
   createPublicationArtifacts,
   encodeRecoveryCode,
   generateAccountMasterKey,
@@ -27,6 +26,12 @@ import {
   unlockWithRecoveryCode,
 } from "../lib/account-keys";
 import { e2eWorkspaceBoundary } from "../lib/workspace-boundary";
+import {
+  createOwnAccountRoster,
+  E2E_HISTORY_DEVICE_ID,
+  E2E_TEAMMATE_USER_ID,
+  ownAccountFingerprint,
+} from "./account-roster";
 import { trustWorkspaceServer } from "./trust-server";
 
 // The fixture's account key objects are signed by the paired private key,
@@ -93,6 +98,12 @@ type WrapperEntry = Readonly<{
 
 type RecoveryScenario = {
   deviceKeys: DeviceKeys | null;
+  /**
+   * The account key the spec minted, when the service should already serve
+   * this account's signed Device roster for it (ADR 0015). Without it the
+   * browser publishes its own first roster, which the stand-in keeps.
+   */
+  accountMasterKey: Uint8Array | null;
   wrappers: WrapperEntry[];
   /** Account Key Envelope the boundary reports; null until one exists. */
   envelopeB64: string | null;
@@ -209,6 +220,9 @@ const buildVerifiedFixturePage = async (
     await importX25519PublicKey(devicePublicKeyHex);
   const artifacts = await createPublicationArtifacts(fixtureVariables, {
     ...fixtureIds,
+    // A teammate authors the history; the browser verifies it against the
+    // teammate's signed roster the fixture serves (ADR 0022).
+    actorUserId: E2E_TEAMMATE_USER_ID,
     projectEpoch: 1,
     expectedHeadId: null,
     expectedHeadHash: null,
@@ -299,6 +313,11 @@ const installRecoveryRoutes = async (
   page: Page,
   scenario: RecoveryScenario,
 ): Promise<void> => {
+  const ownRoster = createOwnAccountRoster({
+    accountMasterKey: () => scenario.accountMasterKey,
+    deviceKeys: () => scenario.deviceKeys,
+  });
+  await ownRoster.install(page);
   await page.route("**/api/v1/devices/bootstrap**", async (route) => {
     if (route.request().method() === "POST") {
       const body = route.request().postData();
@@ -319,25 +338,6 @@ const installRecoveryRoutes = async (
             encryptionPublicKey: parsed.x25519PublicKey,
             signingPublicKey: parsed.ed25519PublicKey,
           };
-          if (scenario.simulateBootstrapGrant) {
-            // The fixture's existing peer has the Project key. Give the new
-            // browser a matching direct grant before recovery setup starts.
-            const grant = await createProjectEpochGrantBootstrap({
-              serverProfileId: fixtureIds.serverProfileId,
-              teamId: fixtureIds.teamId,
-              projectId: fixtureIds.projectId,
-              projectEpoch: 1,
-              senderDeviceId: fixtureIds.actorDeviceId,
-              recipientDeviceId: parsed.deviceId,
-              recipientX25519PublicKey: hexToBytes(parsed.x25519PublicKey),
-              recipientEncryptionPublicKey: await importX25519PublicKey(
-                parsed.x25519PublicKey,
-              ),
-              signingPrivateKey: await importSigningKey(),
-              plaintextKey: EPOCH_KEY,
-            });
-            scenario.epochGrantB64 = bytesToBase64(grant.canonicalBytes);
-          }
         }
       }
     }
@@ -345,6 +345,9 @@ const installRecoveryRoutes = async (
   });
   // The intercepted Device does not exist on the Server Profile, so the
   // grant bootstrap the shell sends after durable enrollment is stubbed too.
+  // A first browser's own grant is the direct grant the setup journey wraps:
+  // the browser trusts its own signature, never a grant from a Device its
+  // account's signed roster does not list (ADR 0022).
   await page.route("**/api/v1/grants/bootstrap**", (route) => {
     if (scenario.simulateBootstrapGrant && !scenario.epochGrantB64) {
       const body = route.request().postDataJSON() as { grant?: string };
@@ -387,6 +390,18 @@ const installRecoveryRoutes = async (
     // fixture's device option would otherwise report as ready.
     body.grantsReady =
       scenario.simulateBootstrapGrant && scenario.epochGrantB64 !== null;
+    if (scenario.simulateBootstrapGrant) {
+      // The first browser mints the Project's key itself when the Project
+      // has an epoch and no peer holds the key yet.
+      body.environment = {
+        ...(body.environment as Record<string, unknown>),
+        projectEpoch: "1",
+      };
+      const peers = body.peerDevices as
+        ReadonlyArray<Record<string, unknown>> | undefined;
+      if (Array.isArray(peers))
+        for (const peer of peers) peer.hasEpochGrant = false;
+    }
     if (scenario.epochGrantB64) body.epochGrant = scenario.epochGrantB64;
     if (scenario.liveBoundary) body.source = "live";
     if (scenario.forceNoPeerEpochGrant) {
@@ -397,6 +412,7 @@ const installRecoveryRoutes = async (
     }
     if (scenario.envelopeB64 !== null)
       body.accountKeyEnvelope = scenario.envelopeB64;
+    await ownRoster.inject(body);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -679,6 +695,7 @@ const scenarioBase = (
   }>,
 ): RecoveryScenario => ({
   deviceKeys: null,
+  accountMasterKey: null,
   wrappers: [],
   envelopeB64: null,
   syncPage: null,
@@ -1222,6 +1239,11 @@ test.describe("workspace recovery", () => {
       code: "state_conflict",
     };
 
+    // The service serves this account's signed roster for both browsers
+    // (ADR 0022): the sender checks its target against it, and the
+    // receiver checks the transfer's sender.
+    sender.accountMasterKey = accountMasterKey;
+    receiver.accountMasterKey = accountMasterKey;
     await installRecoveryRoutes(page, sender);
     await enrollDevice(page);
     const senderDeviceKeys = capturedDeviceKeys(sender);
@@ -1244,14 +1266,32 @@ test.describe("workspace recovery", () => {
     const status = page.getByTestId("recovery-status");
     await expect(status).toBeVisible({ timeout: 30_000 });
 
-    // Stage the transfer toward one of the account's other devices.
+    // Stage the transfer toward one of the account's other devices. It is
+    // not in the signed roster yet, so the sender is refused until the
+    // person confirms the key fingerprint, which adds it to the roster.
     await page.locator("#transfer-target").selectOption({ index: 1 });
+    await expect(page.getByTestId("transfer-target-fingerprint")).toContainText(
+      /([0-9a-f]{8} ){4}[0-9a-f]{8}/,
+    );
+    await status.getByTestId("send-transfer-confirm").click();
+    await expect(
+      page
+        .getByTestId("recovery-area")
+        .getByRole("alert")
+        .filter({ hasText: "isn't in your signed device list yet" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("transfer-fingerprint-confirmed").check();
     await status.getByTestId("send-transfer-confirm").click();
     const transferNotice = page
       .getByRole("status")
       .filter({ hasText: "Redeemable until" });
     await expect(transferNotice).toBeVisible({ timeout: 30_000 });
-    expect(await transferNotice.innerText()).toMatch(/\b[0-9a-f]{32}\b/);
+    const fingerprint = (
+      await ownAccountFingerprint(accountMasterKey)
+    ).replaceAll(" ", "");
+    expect(await transferNotice.innerText()).toMatch(
+      new RegExp(`\\b[0-9a-f]{32}\\.${fingerprint}\\b`),
+    );
 
     // ---- the receiving browser: a fresh device on the same account ----
     const receiverContext = await browser.newContext();
@@ -1308,10 +1348,11 @@ test.describe("workspace recovery", () => {
     const recipientKey = await importX25519PublicKey(
       receiverDeviceKeys.encryptionPublicKey,
     );
+    // Sent by the account's other Device, which the roster lists.
     const transfer = await createAccountKeyTransfer({
       serverProfileId: fixtureIds.serverProfileId,
       userId: hexToBytes(fixtureIds.actorUserId.replaceAll("-", "")),
-      deviceId: hexToBytes(receiverDeviceKeys.id.replaceAll("-", "")),
+      deviceId: hexToBytes(E2E_HISTORY_DEVICE_ID.replaceAll("-", "")),
       createdAtMs: Date.now(),
       expiresAtMs: Date.now() + 5 * 60 * 1000,
       accountMasterKey,
@@ -1355,7 +1396,11 @@ test.describe("workspace recovery", () => {
 
     // An expired or unknown transfer is surfaced as such, not as a generic
     // failure.
-    await unlockWith(receiverPage, "transfer", expiredTransferId);
+    await unlockWith(
+      receiverPage,
+      "transfer",
+      `${expiredTransferId}.${fingerprint}`,
+    );
     await expect(
       receiverPage
         .getByTestId("recovery-area")
@@ -1363,8 +1408,21 @@ test.describe("workspace recovery", () => {
         .filter({ hasText: "expired or was already used" }),
     ).toBeVisible({ timeout: 30_000 });
 
-    // The staged transfer redeems and unlocks the receiving browser.
+    // A bare transfer id names no account, so the browser asks for the
+    // whole code instead of trusting whatever key the service hands over.
     await unlockWith(receiverPage, "transfer", activeTransferId);
+    await expect(
+      receiverPage
+        .getByTestId("recovery-area")
+        .getByRole("alert")
+        .filter({ hasText: "Paste the whole transfer code" }),
+    ).toBeVisible({ timeout: 30_000 });
+    // The staged transfer redeems and unlocks the receiving browser.
+    await unlockWith(
+      receiverPage,
+      "transfer",
+      `${activeTransferId}.${fingerprint}`,
+    );
     await expect(receiverPage.getByTestId("recovery-status")).toBeVisible({
       timeout: 30_000,
     });

@@ -1,4 +1,10 @@
 import {
+  createDeviceProofSession,
+  type DeviceProofSession,
+  type DeviceProofSigner,
+  sendWithDeviceProof,
+} from "@dotrelay/client";
+import {
   CBOR_LIMITS,
   parseJsonObject,
   parseProblem,
@@ -19,6 +25,7 @@ import {
   NetworkAttemptError,
   type NetworkPolicy,
   networkFailureCliError,
+  retryAfterMsFromResponse,
   transientResponseVerdict,
 } from "./network";
 import type { FetchFunction } from "./profile";
@@ -36,7 +43,27 @@ export type StrictJsonClient = Readonly<{
     fields: readonly string[],
     options?: Readonly<{ readonly idempotencyKey?: string }>,
   ) => Promise<Record<string, unknown>>;
+  /**
+   * Proves this client's Device (ADR 0020). Requests sent outside the
+   * client, such as the protocol transport's, use it to prove the same
+   * Device. Absent for a client that acts without a Device.
+   */
+  readonly deviceProof?: DeviceProofSession;
 }>;
+
+/** The Device a client acts as, and how to load its signing key. */
+export type StrictJsonClientDevice = Readonly<{
+  readonly id: string;
+  readonly signer: () => Promise<DeviceProofSigner>;
+}>;
+
+// Routes a Device-bound client still calls with its session alone: the
+// identity check, and the two routes that hand out Device proofs.
+const SESSION_ONLY_PATHS = new Set([
+  "/api/v1/session",
+  "/api/v1/devices/proofs/challenges",
+  "/api/v1/devices/proofs",
+]);
 
 export type RepositoryIdentityResolution = Readonly<{
   readonly host: "github.com";
@@ -105,6 +132,9 @@ export type ProjectLinkInput = Readonly<{
     readonly name: string;
     readonly githubRepositoryId: string;
   }>;
+  // Label of a new Project's first Environment; the server defaults to
+  // `default` and ignores it for a Project that already exists.
+  readonly environmentLabel?: string;
 }>;
 
 export type ProjectSummary = Readonly<{
@@ -125,6 +155,9 @@ export type EnvironmentSummary = Readonly<{
   readonly lifecycle: "active" | "archived";
   readonly currentHeadId: string | null;
   readonly currentHeadHash: string | null;
+  // The head Revision's authored-at instant, when the listing reports one
+  // (older servers and create/lifecycle responses do not).
+  readonly currentHeadAuthoredAtMs?: number;
 }>;
 
 const opaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
@@ -201,7 +234,25 @@ const parseEnvironment = (value: unknown): EnvironmentSummary => {
       value.currentHeadHash == null
         ? null
         : requireEnvironmentHeadHash(value.currentHeadHash),
+    ...(value.currentHeadAuthoredAtMs == null
+      ? {}
+      : {
+          currentHeadAuthoredAtMs: requireAuthoredAtMs(
+            value.currentHeadAuthoredAtMs,
+          ),
+        }),
   });
+};
+
+const requireAuthoredAtMs = (value: unknown): number => {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new CliError(
+      "transient",
+      "the server returned an invalid Environment head time",
+      {},
+      "response_invalid",
+    );
+  return value;
 };
 
 export const linkProject = async (
@@ -216,6 +267,9 @@ export const linkProject = async (
       repositoryOwner: input.repository.owner,
       repositoryName: input.repository.name,
       githubRepositoryId: input.repository.githubRepositoryId,
+      ...(input.environmentLabel === undefined
+        ? {}
+        : { environmentLabel: input.environmentLabel }),
     },
     ["id", "teamId", "githubRepositoryId", "lifecycle", "environment"],
     { idempotencyKey: crypto.randomUUID() },
@@ -457,6 +511,44 @@ export const listEnvironments = async (
   return Object.freeze(response.environments.map(parseEnvironment));
 };
 
+// The Server Profile's own label rule, checked before a request so a typo
+// fails with the rule instead of a generic rejection.
+const ENVIRONMENT_LABEL = /^[A-Za-z][A-Za-z0-9._-]{0,62}$/;
+
+export const requireEnvironmentLabel = (label: string): string => {
+  const trimmed = label.trim();
+  if (!ENVIRONMENT_LABEL.test(trimmed))
+    throw new CliInvocationError(
+      "an Environment label starts with a letter and has up to 63 letters, digits, dots, dashes, or underscores",
+    );
+  return trimmed;
+};
+
+// A miss names what does exist, so the operator can correct a typo or see
+// that the Environment still has to be created.
+export const environmentNotFound = (
+  reference: string,
+  environments: readonly EnvironmentSummary[],
+): CliError => {
+  const active = environments.filter(
+    (candidate) => candidate.lifecycle === "active",
+  );
+  const labels = [...new Set(active.map((candidate) => candidate.label))];
+  const available =
+    labels.length === 0
+      ? "this Project has no active Environment yet"
+      : `available: ${labels.join(", ")}`;
+  const suggestion = ENVIRONMENT_LABEL.test(reference)
+    ? `dotrelay env create ${reference}`
+    : "dotrelay env create <label>";
+  return new CliError(
+    "invocation",
+    `no Environment is labelled ${JSON.stringify(reference.slice(0, 64))} in this Project (${available}).\nPick one of those, or create it with ${suggestion} (Team owners and admins).\nRun dotrelay env list to see every Environment.`,
+    {},
+    "environment_not_found",
+  );
+};
+
 export type EnvironmentReferenceOptions = Readonly<{
   readonly noInput: boolean;
   readonly prompt?: (question: string) => Promise<string>;
@@ -480,13 +572,7 @@ export const resolveEnvironmentReference = async (
     byId.length > 0
       ? byId
       : environments.filter((candidate) => candidate.label === reference);
-  if (matches.length === 0)
-    throw new CliError(
-      "invocation",
-      "the requested Environment was not found",
-      {},
-      "environment_not_found",
-    );
+  if (matches.length === 0) throw environmentNotFound(reference, environments);
   if (matches.length === 1) {
     const selected = matches[0];
     if (!selected)
@@ -537,11 +623,130 @@ export const createEnvironment = async (
 ): Promise<EnvironmentSummary> => {
   const response = await client.post(
     `/api/v1/projects/${encodeURIComponent(requireOpaqueId(projectId, "Project id"))}/environments`,
-    { label },
-    ["id", "projectId", "label", "lifecycle", "currentHeadId"],
+    { label: requireEnvironmentLabel(label) },
+    [
+      "id",
+      "projectId",
+      "label",
+      "lifecycle",
+      "currentHeadId",
+      "currentHeadHash",
+    ],
     { idempotencyKey: crypto.randomUUID() },
   );
   return parseEnvironment(response);
+};
+
+export const archiveEnvironment = async (
+  client: Pick<StrictJsonClient, "post">,
+  environmentId: string,
+): Promise<EnvironmentSummary> =>
+  parseEnvironment(
+    await client.post(
+      `/api/v1/environments/${encodeURIComponent(requireOpaqueId(environmentId, "Environment id"))}/lifecycle`,
+      { action: "archive" },
+      [
+        "id",
+        "projectId",
+        "label",
+        "lifecycle",
+        "currentHeadId",
+        "currentHeadHash",
+      ],
+      { idempotencyKey: crypto.randomUUID() },
+    ),
+  );
+
+export type InvitationSummary = TeamSummary &
+  Readonly<{
+    /** The Membership Invitation id, for dotrelay team decline. */
+    readonly invitationId: string;
+  }>;
+
+export type PendingTeamAccess = Readonly<{
+  /** Teams whose invitation this User accepted, still waiting for keys. */
+  readonly pendingMemberships: readonly TeamSummary[];
+  /** Invitations addressed to this User that are not accepted yet. */
+  readonly invitations: readonly InvitationSummary[];
+}>;
+
+const teamEntries = (value: unknown): TeamSummary[] =>
+  Array.isArray(value)
+    ? value.flatMap((entry): TeamSummary[] =>
+        isRecord(entry) &&
+        typeof entry.teamId === "string" &&
+        opaqueId.test(entry.teamId) &&
+        typeof entry.teamName === "string" &&
+        entry.teamName.trim().length > 0
+          ? [Object.freeze({ id: entry.teamId, name: entry.teamName.trim() })]
+          : [],
+      )
+    : [];
+
+// An invitation without a well-formed id is dropped: it could not be
+// declined by id anyway, and the Team still shows through the others.
+const invitationEntries = (value: unknown): InvitationSummary[] =>
+  Array.isArray(value)
+    ? value.flatMap((entry): InvitationSummary[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.invitationId !== "string" ||
+          !opaqueId.test(entry.invitationId)
+        )
+          return [];
+        const [team] = teamEntries([entry]);
+        return team
+          ? [
+              Object.freeze({
+                ...team,
+                invitationId: entry.invitationId,
+              }),
+            ]
+          : [];
+      })
+    : [];
+
+// The addressed User turns down an invitation; it needs only a session. The
+// service answers resource_not_found for an invitation addressed to someone
+// else and invitation_expired once it is no longer pending.
+export const declineInvitation = async (
+  client: Pick<StrictJsonClient, "post">,
+  invitationId: string,
+): Promise<Readonly<{ invitationId: string; status: string }>> => {
+  const response = await client.post(
+    `/api/v1/invitations/${encodeURIComponent(requireOpaqueId(invitationId, "invitation id"))}/decline`,
+    {},
+    ["invitationId", "status"],
+    { idempotencyKey: crypto.randomUUID() },
+  );
+  if (
+    response.status !== "DECLINED" ||
+    typeof response.invitationId !== "string" ||
+    response.invitationId.toLowerCase() !== invitationId.toLowerCase()
+  )
+    throw new CliError(
+      "transient",
+      "the server returned an invalid invitation status",
+      {},
+      "response_invalid",
+    );
+  return Object.freeze({ invitationId, status: response.status });
+};
+
+// The Teams this User was invited to or joined but cannot use yet. Neither
+// shows up in the Team or Project lists, which only span active Memberships,
+// so this is how the CLI tells "not linked" apart from "waiting for keys".
+export const listPendingTeamAccess = async (
+  client: Pick<StrictJsonClient, "get">,
+): Promise<PendingTeamAccess> => {
+  const response = await client.get("/api/v1/invitations", [
+    "invitations",
+    "pendingMemberships",
+  ]);
+  return Object.freeze({
+    pendingMemberships: Object.freeze(teamEntries(response.pendingMemberships)),
+    invitations: Object.freeze(invitationEntries(response.invitations)),
+  });
 };
 
 export type ResolveEnvironmentOptions = Readonly<
@@ -665,7 +870,8 @@ export const createStrictJsonClient = (
   credentials: CredentialStore,
   options: Readonly<{
     readonly fetch?: FetchFunction;
-    readonly deviceId?: string;
+    /** The Device this client acts as; omit to act with the session alone. */
+    readonly device?: StrictJsonClientDevice;
     readonly authorization?: string;
     readonly networkPolicy?: NetworkPolicy;
   }> = {},
@@ -673,6 +879,7 @@ export const createStrictJsonClient = (
   const fetcher = options.fetch ?? fetch;
   const policy = options.networkPolicy ?? defaultNetworkPolicy;
   const sessions = createSessionStore(credentials);
+  let deviceProof: DeviceProofSession | undefined;
   const request = async (
     path: string,
     init: RequestInit,
@@ -687,54 +894,71 @@ export const createStrictJsonClient = (
         {},
         "authentication_required",
       );
-    // The request is assembled once; every retry reuses the same headers and
-    // body, so a repeated mutation keeps its operation id instead of starting
-    // a new one.
-    const fetchInit: RequestInit = {
-      ...init,
-      redirect: "error",
-      headers: {
-        Accept: "application/json",
-        Authorization: options.authorization ?? `Bearer ${token}`,
-        ...(options.deviceId
-          ? { "X-DotRelay-Device-Id": options.deviceId }
-          : {}),
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
-        ...init.headers,
-        ...extraHeaders,
-      },
-    };
-    let response: Response;
-    try {
-      response = (
-        await fetchWithinBudget(
-          fetcher,
-          `${profile.origin}${path}`,
-          fetchInit,
-          {
-            policy,
-            retry: {
-              verdict: (candidate) =>
-                transientResponseVerdict(candidate, policy.now),
+    // The request is assembled once per proof; every retry reuses the same
+    // headers and body, so a repeated mutation keeps its operation id
+    // instead of starting a new one.
+    const send = async (
+      proofHeaders: Readonly<Record<string, string>>,
+    ): Promise<Response> => {
+      const fetchInit: RequestInit = {
+        ...init,
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          Authorization: options.authorization ?? `Bearer ${token}`,
+          ...proofHeaders,
+          ...(init.body ? { "Content-Type": "application/json" } : {}),
+          ...init.headers,
+          ...extraHeaders,
+        },
+      };
+      try {
+        return (
+          await fetchWithinBudget(
+            fetcher,
+            `${profile.origin}${path}`,
+            fetchInit,
+            {
+              policy,
+              retry: {
+                verdict: (candidate) =>
+                  transientResponseVerdict(candidate, policy.now),
+              },
             },
-          },
-        )
-      ).response;
-    } catch (error) {
-      if (!(error instanceof NetworkAttemptError)) throw error;
-      throw networkFailureCliError(
-        error,
-        "the Server Profile",
-        "service_unavailable",
-      );
-    }
+          )
+        ).response;
+      } catch (error) {
+        if (!(error instanceof NetworkAttemptError)) throw error;
+        throw networkFailureCliError(
+          error,
+          "the Server Profile",
+          "service_unavailable",
+        );
+      }
+    };
+    const pathname = path.split("?", 1)[0] ?? path;
+    const response =
+      deviceProof && !SESSION_ONLY_PATHS.has(pathname)
+        ? await sendWithDeviceProof(deviceProof, send)
+        : await send({});
     const body = await readResponse(response);
     if (!response.ok) {
       try {
         const problem = parseProblem(body);
+        // The problem body states the wait; the Retry-After header is the
+        // fallback for a service that only sends the header.
+        const headerRetryMs = retryAfterMsFromResponse(response, policy.now);
+        const retryAfterSeconds =
+          problem.retryAfterSeconds ??
+          (headerRetryMs === undefined
+            ? undefined
+            : Math.ceil(headerRetryMs / 1000));
         throw new CliError(
           categoryForProblem(problem.code),
-          detailForProblem(problem.code),
+          detailForProblem(problem.code, {
+            origin: profile.origin,
+            ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+          }),
           {
             requestPath: path,
             ...(response.headers.get("X-Correlation-ID")
@@ -744,9 +968,7 @@ export const createStrictJsonClient = (
                   ) as string,
                 }
               : {}),
-            ...(problem.retryAfterSeconds === undefined
-              ? {}
-              : { retryAfterSeconds: problem.retryAfterSeconds }),
+            ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
           },
           problem.code,
         );
@@ -771,19 +993,56 @@ export const createStrictJsonClient = (
       );
     }
   };
+  const post = (
+    path: string,
+    body: Record<string, unknown>,
+    fields: readonly string[],
+    postOptions?: Readonly<{ readonly idempotencyKey?: string }>,
+  ) =>
+    request(
+      path,
+      {
+        method: "POST",
+        body: JSON.stringify(parseJsonObject(body, Object.keys(body))),
+      },
+      fields,
+      postOptions?.idempotencyKey
+        ? { "Idempotency-Key": postOptions.idempotencyKey }
+        : {},
+    );
+  if (options.device)
+    deviceProof = createDeviceProofSession({
+      deviceId: options.device.id,
+      signer: options.device.signer,
+      exchange: async (path, body) => {
+        try {
+          return await post(
+            path,
+            { ...body },
+            path === "/api/v1/devices/proofs"
+              ? ["token", "deviceId", "expiresIn"]
+              : ["challenge", "expiresIn"],
+          );
+        } catch (error) {
+          // The service checks the signature against the key it registered
+          // for this Device; a mismatch means the local bundle is stale.
+          if (
+            error instanceof CliError &&
+            error.code === "invalid_crypto_object"
+          )
+            throw new CliError(
+              "crypto",
+              "the saved Device bundle does not match the keys registered on this Server Profile; run dotrelay device recover",
+              {},
+              "device_bundle_invalid",
+            );
+          throw error;
+        }
+      },
+    });
   return Object.freeze({
     get: (path, fields) => request(path, { method: "GET" }, fields),
-    post: (path, body, fields, postOptions) =>
-      request(
-        path,
-        {
-          method: "POST",
-          body: JSON.stringify(parseJsonObject(body, Object.keys(body))),
-        },
-        fields,
-        postOptions?.idempotencyKey
-          ? { "Idempotency-Key": postOptions.idempotencyKey }
-          : {},
-      ),
+    post,
+    ...(deviceProof ? { deviceProof } : {}),
   });
 };

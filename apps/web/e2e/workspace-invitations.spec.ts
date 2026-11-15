@@ -255,7 +255,205 @@ test("an invitee accepts the invitation addressed to them and goes pending", asy
   // After the service confirms acceptance, the record moves to the pending
   // key-grant state.
   await expect(card.getByText("Waiting for encryption keys")).toBeVisible();
+  // The wait is not a dead end: it names who acts next and what to do once
+  // they have.
+  await expect(card).toContainText("Share project keys for you");
+  await expect(card).toContainText("refresh this page");
+  await expect(card).toContainText("dotrelay pull");
   await expect(
     card.getByRole("button", { name: "Accept invitation" }),
   ).toHaveCount(0);
+});
+
+test("an owner cancels a pending invitation after confirming", async ({
+  page,
+}) => {
+  let invitations = [
+    invitation("00000000-0000-4000-8000-0000000000a1", "583231"),
+  ];
+  await page.route("**/api/v1/teams/*/memberships", (route) =>
+    route.fulfill({
+      json: {
+        memberships: [member("a1", "Ari Stone", "18473192", "OWNER", "ACTIVE")],
+        invitations,
+      },
+    }),
+  );
+  await installMyInvitationRoutes(page, {
+    invitations: [],
+    pendingMemberships: [],
+  });
+  const revokeCalls: {
+    url: string;
+    key: string | null;
+    body: string | null;
+  }[] = [];
+  await page.route("**/api/v1/teams/*/invitations/*/revoke", async (route) => {
+    const request = route.request();
+    revokeCalls.push({
+      url: request.url(),
+      key: await request.headerValue("Idempotency-Key"),
+      body: request.postData(),
+    });
+    invitations = [];
+    return route.fulfill({
+      status: 201,
+      json: {
+        invitationId: "00000000-0000-4000-8000-0000000000a1",
+        teamId: TEAM_A,
+        status: "REVOKED",
+      },
+    });
+  });
+
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  const membersCard = page.getByTestId("members-card");
+  const row = membersCard.getByTestId(
+    "invitation-row-00000000-0000-4000-8000-0000000000a1",
+  );
+  await expect(row).toBeVisible();
+
+  // Backing out of the confirmation changes nothing.
+  await row.getByRole("button", { name: /Cancel invitation/ }).click();
+  const dialog = page.getByTestId("cancel-invitation-dialog");
+  await expect(dialog).toContainText("GitHub 583231");
+  await dialog.getByRole("button", { name: "Keep invitation" }).click();
+  await expect(dialog).toBeHidden();
+  expect(revokeCalls).toHaveLength(0);
+
+  await row.getByRole("button", { name: /Cancel invitation/ }).click();
+  await dialog.getByRole("button", { name: "Cancel invitation" }).click();
+  await expect(row).toHaveCount(0);
+  expect(revokeCalls).toHaveLength(1);
+  expect(revokeCalls[0]?.url).toContain(
+    `/api/v1/teams/${TEAM_A}/invitations/00000000-0000-4000-8000-0000000000a1/revoke`,
+  );
+  expect(revokeCalls[0]?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(revokeCalls[0]?.body).toBe("{}");
+});
+
+test("a refused cancellation stays on the invitation row", async ({ page }) => {
+  await installMembershipRoutes(page, {
+    [TEAM_A]: {
+      memberships: [member("a1", "Ari Stone", "18473192", "OWNER", "ACTIVE")],
+      invitations: [invitation("00000000-0000-4000-8000-0000000000a2", "77")],
+    },
+  });
+  await installMyInvitationRoutes(page, {
+    invitations: [],
+    pendingMemberships: [],
+  });
+  await page.route("**/api/v1/teams/*/invitations/*/revoke", (route) =>
+    route.fulfill({ status: 410, json: { code: "invitation_expired" } }),
+  );
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  const row = page.getByTestId(
+    "invitation-row-00000000-0000-4000-8000-0000000000a2",
+  );
+  await row.getByRole("button", { name: /Cancel invitation/ }).click();
+  await page
+    .getByTestId("cancel-invitation-dialog")
+    .getByRole("button", { name: "Cancel invitation" })
+    .click();
+  await expect(row.getByRole("alert")).toContainText("no longer open");
+});
+
+test("an invitee declines an invitation addressed to them", async ({
+  page,
+}) => {
+  await installMembershipRoutes(page, {});
+  let open = true;
+  await page.route("**/api/v1/invitations", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      json: {
+        invitations: open
+          ? [
+              {
+                invitationId: "00000000-0000-4000-8000-000000000090",
+                teamId: TEAM_B,
+                teamName: "Acme Labs",
+                providerSubject: "583231",
+                createdAt: "2026-01-03T00:00:00.000Z",
+                expiresAt: "2026-01-10T00:00:00.000Z",
+              },
+            ]
+          : [],
+        pendingMemberships: [],
+      },
+    });
+  });
+  const declineCalls: { url: string; key: string | null }[] = [];
+  await page.route("**/api/v1/invitations/*/decline", async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST") return route.continue();
+    declineCalls.push({
+      url: request.url(),
+      key: await request.headerValue("Idempotency-Key"),
+    });
+    open = false;
+    return route.fulfill({
+      status: 201,
+      json: {
+        invitationId: "00000000-0000-4000-8000-000000000090",
+        status: "DECLINED",
+      },
+    });
+  });
+
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  const card = page.getByTestId("my-invitations-card");
+  await expect(card.getByText("Acme Labs", { exact: true })).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: "Accept invitation" }),
+  ).toBeVisible();
+
+  await card
+    .getByRole("button", { name: "Decline invitation to Acme Labs" })
+    .click();
+  const dialog = page.getByTestId("decline-invitation-dialog");
+  await expect(dialog).toContainText("Acme Labs");
+  await dialog.getByRole("button", { name: "Decline" }).click();
+
+  // The service hides a declined invitation, so the card goes away.
+  await expect(card).toHaveCount(0);
+  expect(declineCalls).toHaveLength(1);
+  expect(declineCalls[0]?.url).toContain(
+    "/api/v1/invitations/00000000-0000-4000-8000-000000000090/decline",
+  );
+  expect(declineCalls[0]?.key).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+test("the pending invitation cap is explained when inviting", async ({
+  page,
+}) => {
+  await installMembershipRoutes(page, {});
+  await installMyInvitationRoutes(page, {
+    invitations: [],
+    pendingMemberships: [],
+  });
+  await page.route("**/api/v1/github-users/resolve", (route) =>
+    route.fulfill({ json: { login: "octocat", githubUserId: "583231" } }),
+  );
+  await page.route("**/api/v1/teams/*/invitations", (route) =>
+    route.fulfill({
+      status: 409,
+      json: { code: "pending_invitation_limit" },
+    }),
+  );
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.getByRole("button", { name: "Invite member" }).click();
+  await page.getByLabel("GitHub login").fill("octocat");
+  await page.getByRole("button", { name: "Resolve" }).click();
+  await page.getByRole("button", { name: "Create invitation" }).click();
+  await expect(page.getByTestId("invitation-dialog")).toContainText(
+    "50 pending invitations",
+  );
 });

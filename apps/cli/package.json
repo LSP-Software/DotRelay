@@ -1,5 +1,5 @@
 {
-  "name": "@dotrelay/cli",
+  "name": "@dotrelay/cli-app",
   "private": true,
   "bin": {
     "dotrelay": "dist/dotrelay"

@@ -7,6 +7,42 @@ const deviceId = "22222222-2222-4222-8222-222222222222";
 const digest = new Uint8Array(48).fill(7);
 
 describe("protocol transport", () => {
+  test("proves the Device on every request and replaces a refused proof once", async () => {
+    const proofs: string[] = [];
+    let issued = 0;
+    const deviceProof = {
+      deviceId,
+      headers: async () => ({
+        "X-DotRelay-Device-Id": deviceId,
+        "X-DotRelay-Device-Proof": `proof-${issued}`,
+      }),
+      invalidate: () => {
+        issued += 1;
+      },
+    };
+    const bodies: string[] = [];
+    const transport = createProtocolTransport({
+      origin: "https://relay.example",
+      authorization: "Bearer session",
+      deviceProof,
+      fetch: async (input, init) => {
+        const request = new Request(input, init as RequestInit);
+        proofs.push(request.headers.get("X-DotRelay-Device-Proof") ?? "");
+        bodies.push(await request.text());
+        // The first proof has expired; the second is accepted.
+        return proofs.length === 1
+          ? Response.json(
+              { code: "device_proof_required", status: 401 },
+              { status: 401 },
+            )
+          : Response.json({});
+      },
+    });
+    await transport.cancel({ operationId: uuid, deviceId });
+    expect(proofs).toEqual(["proof-0", "proof-1"]);
+    expect(bodies[0]).toBe(bodies[1] ?? "");
+  });
+
   test("uses CBOR for command and staged objects and JSON only for finalize", async () => {
     const requests: Request[] = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {

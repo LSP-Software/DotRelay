@@ -38,7 +38,7 @@ const installSelector = async (
     );
   await writeFile(
     join(packageDirectory, "package.json"),
-    `${JSON.stringify({ name: "dotrelay", version: "1.2.3" })}\n`,
+    `${JSON.stringify({ name: "@dotrelay/cli", version: "1.2.3" })}\n`,
   );
   if (binary !== undefined) {
     const target = join(

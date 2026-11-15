@@ -13,9 +13,10 @@ permissions:
   contents: read
 
 env:
-  # Canary channel: the built-in `bun lint` linter is not enabled in stable
-  # releases yet (it is gated behind the canary build flavor).
-  BUN_VERSION: da867c60bf0bcbf9d6d36994f8ca0efa42075115
+  # Stable Bun builds, tests and ships DotRelay (ops/bun-toolchain.json);
+  # the pinned canary that scripts/setup-bun.py installs beside it runs only
+  # the built-in `bun lint`.
+  BUN_VERSION: 38afee6c84fcf48c0edb2466aa4b27d287a59c30
 
 jobs:
   verify:
@@ -50,6 +51,9 @@ jobs:
       - run: git fetch origin main --depth=1
       - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - run: bun install --frozen-lockfile
+      # `verify` leaves the advisory audit to CI; a release must pass it on
+      # the tagged commit itself.
+      - run: bun run security:audit
       - run: bunx playwright install --with-deps chromium
       - run: bun run verify
       - run: bash scripts/setup-backup-tools.sh
@@ -234,9 +238,39 @@ jobs:
           path: packages/dotrelay/dist
           if-no-files-found: error
 
+  # The packaged binaries run here, in a job with read-only permissions, no
+  # environment and no secrets, so a compromised build dependency that ends
+  # up in a binary never executes with the publish job's write, OIDC and
+  # attestation permissions.
+  smoke-cli-package:
+    name: smoke-test the packaged CLI (unprivileged)
+    needs: [build-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - name: Install verified pinned Bun toolchain
+        run: python3 scripts/setup-bun.py
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: cli-*
+          path: release-binaries
+          merge-multiple: false
+      - name: stamp CLI version from the release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bun run package:cli:version -- "$RELEASE_TAG"
+      - run: |
+          mkdir -p packages/dotrelay/dist
+          cp -R release-binaries/*/* packages/dotrelay/dist/
+          find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
+      - run: bun scripts/test-cli-package.ts
+
   publish:
     name: publish CLI binaries and npm selector
-    needs: [build-cli, build-images]
+    needs: [build-cli, build-images, smoke-cli-package]
     environment: security-review
     runs-on: ubuntu-latest
     permissions:
@@ -278,12 +312,12 @@ jobs:
       - run: |
           mkdir -p packages/dotrelay/dist
           cp -R release-binaries/*/* packages/dotrelay/dist/
+          cp LICENSE.md packages/dotrelay/LICENSE.md
           # The artifact round-trip drops the executable bit off the staged
           # native binaries; restore it so the npm tarball ships 755
-          # executables and the package smoke test can run them.
+          # executables. This job never runs them: smoke-cli-package did.
           find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
-      - run: bun scripts/test-cli-package.ts
-      - run: npm pack --dry-run ./packages/dotrelay
+      - run: npm pack --dry-run --ignore-scripts ./packages/dotrelay
       - name: Package unique platform release archives
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -299,12 +333,12 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-path: release-binaries/**/*
-      - name: publish npm selector
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bun scripts/publish-cli.ts
+      # The GitHub release is created as a draft first so a failed upload
+      # stops before npm publication, which cannot be undone. It is made
+      # public only after npm accepts the selector.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
+          draft: true
           files: |
             release-binaries/*.tar.gz
             release-binaries/*.zip
@@ -313,6 +347,17 @@ jobs:
             ${{ steps.provenance.outputs.bundle-path }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
+      - name: publish npm selector
+        run: bun scripts/publish-cli.ts
+      - name: publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
   # Every approved v* tag deploys production; alpha, beta and rc are versions
   # of dotrelay.dev, admitted by the API's alpha allow-list.

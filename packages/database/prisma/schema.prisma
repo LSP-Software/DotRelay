@@ -54,6 +54,7 @@ enum OperationKind {
   ROLLBACK
   EPOCH_ROTATION
   EPOCH_KEY_LINK
+  ACCOUNT_DELETION
 }
 
 enum MutationKind {
@@ -150,6 +151,15 @@ enum AuditEventKind {
   DEVICE_ENROLLMENT_APPROVED
   OPERATION_CANCELLED
   OPERATION_EXPIRED
+  INVITATION_REVOKED
+  INVITATION_DECLINED
+  TEAM_DELETED
+  ACCOUNT_DELETED
+}
+
+enum RotationObligationReason {
+  MEMBERSHIP_REMOVED
+  DEVICE_REVOKED
 }
 
 model ServerProfile {
@@ -251,6 +261,18 @@ model AuthDeviceCode {
   @@map("auth_device_codes")
 }
 
+// The GitHub login last seen for a GitHub user id, recorded from the
+// verified GitHub profile on every sign-in. Display data only: it lets the
+// CLI find a Member by login without asking GitHub, and it is never a trust
+// anchor. Logins can change and be reused, so it may be stale.
+model GitHubLogin {
+  githubSubject String   @id @db.VarChar(255)
+  login         String   @db.VarChar(39)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("github_logins")
+}
+
 model User {
   id                 String   @id @default(uuid()) @db.Uuid
   serverProfileId    String   @db.Uuid
@@ -258,6 +280,9 @@ model User {
   githubSubject      String   @db.VarChar(255)
   identityGeneration BigInt   @default(1) @db.BigInt
   createdAt          DateTime @default(now()) @db.Timestamptz(3)
+  // Account deletion (ADR 0018): the row stays for history, the subjects
+  // above become a tombstone.
+  deletedAt          DateTime? @db.Timestamptz(3)
 
   serverProfile               ServerProfile             @relation(fields: [serverProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   identityGenerations         UserIdentityGeneration[]
@@ -331,6 +356,7 @@ model Device {
   grantsReceived       GrantObject[]              @relation("GrantRecipient")
   revisions            Revision[]
   stagedObjects        StagedObject[]
+  rotationObligations  ProjectRotationObligation[]
 
   @@unique([userId, id])
   @@unique([keyId])
@@ -358,6 +384,7 @@ model DeviceEnrollment {
   approvalObjects  EnrollmentApprovalObject[]
 
   @@index([userId, expiresAt])
+  @@index([expiresAt])
   @@map("device_enrollments")
 }
 
@@ -368,6 +395,8 @@ model Team {
   lifecycle       ResourceLifecycle @default(ACTIVE)
   createdAt       DateTime          @default(now()) @db.Timestamptz(3)
   archivedAt      DateTime?         @db.Timestamptz(3)
+  // Team deletion (ADR 0019): ARCHIVED with deletedAt set until purged.
+  deletedAt       DateTime?         @db.Timestamptz(3)
 
   serverProfile ServerProfile          @relation(fields: [serverProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   memberships   Membership[]
@@ -377,6 +406,7 @@ model Team {
   activationObjects MembershipActivationObject[]
 
   @@index([serverProfileId, lifecycle])
+  @@index([deletedAt])
   @@map("teams")
 }
 
@@ -388,6 +418,10 @@ model MembershipInvitation {
   acceptedByUserId String?   @db.Uuid
   acceptedAt       DateTime? @db.Timestamptz(3)
   createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  // An owner or admin withdrew the invitation before it was used.
+  revokedAt        DateTime? @db.Timestamptz(3)
+  // The addressed User turned the invitation down.
+  declinedAt       DateTime? @db.Timestamptz(3)
 
   team           Team        @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   acceptedByUser User?       @relation("InvitationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -395,6 +429,7 @@ model MembershipInvitation {
 
   @@index([teamId, expiresAt])
   @@index([providerSubject, expiresAt])
+  @@index([expiresAt])
   @@map("membership_invitations")
 }
 
@@ -414,10 +449,51 @@ model Membership {
   invitation       MembershipInvitation?       @relation(fields: [invitationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   grants           GrantObject[]
   activationObjects MembershipActivationObject[]
+  periods          MembershipPeriod[]
+  rotationObligations ProjectRotationObligation[]
 
   @@unique([teamId, userId])
   @@index([teamId, lifecycle, role])
   @@map("memberships")
+}
+
+// A finished active period of a Membership (ADR 0017). The Membership row
+// carries the current period; when a removed Membership is revived by a new
+// invitation, its previous period is archived here first, so Revisions the
+// User signed in that period stay verifiable.
+model MembershipPeriod {
+  id           String   @id @default(uuid()) @db.Uuid
+  membershipId String   @db.Uuid
+  activatedAt  DateTime @db.Timestamptz(3)
+  removedAt    DateTime @db.Timestamptz(3)
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([membershipId, activatedAt])
+  @@map("membership_periods")
+}
+
+// A Project Epoch rotation owed because someone who may hold the current
+// Project Epoch Key lost access: a removed active Member or a revoked active
+// Device. Rotation clears every obligation recorded before it; nothing here
+// blocks publication.
+model ProjectRotationObligation {
+  id             String                   @id @default(uuid()) @db.Uuid
+  projectId      String                   @db.Uuid
+  reason         RotationObligationReason
+  membershipId   String?                  @db.Uuid
+  deviceId       String?                  @db.Uuid
+  projectEpoch   BigInt                   @db.BigInt
+  createdAt      DateTime                 @default(now()) @db.Timestamptz(3)
+  clearedAt      DateTime?                @db.Timestamptz(3)
+  clearedByEpoch BigInt?                  @db.BigInt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  membership Membership? @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  device     Device?     @relation(fields: [deviceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([projectId, clearedAt])
+  @@map("project_rotation_obligations")
 }
 
 model Project {
@@ -440,6 +516,7 @@ model Project {
   epochKeyLinks        ProjectEpochKeyLinkObject[]
   accountKeyEnvelopes  AccountKeyEnvelopeObject[]
   manifestDescriptors  ManifestDescriptor[]
+  rotationObligations  ProjectRotationObligation[]
 
   @@index([teamId, lifecycle])
   @@index([githubRepositoryId])

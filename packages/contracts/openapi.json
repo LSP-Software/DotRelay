@@ -16,7 +16,9 @@
       "invalid_request": 400,
       "invalid_crypto_object": 400,
       "authentication_required": 401,
+      "device_proof_required": 401,
       "forbidden": 403,
+      "alpha_admission_required": 403,
       "device_not_active": 403,
       "membership_not_active": 403,
       "resource_not_found": 404,
@@ -31,7 +33,10 @@
       "genesis_exists": 409,
       "state_conflict": 409,
       "last_owner_protection": 409,
+      "owner_transfer_required": 409,
       "staged_object_missing": 409,
+      "authored_at_out_of_range": 409,
+      "pending_invitation_limit": 409,
       "repository_access_denied": 403,
       "invitation_expired": 410,
       "staging_expired": 410,
@@ -104,6 +109,284 @@
         }
       }
     },
+    "/api/v1/devices/proofs/challenges": {
+      "post": {
+        "operationId": "createDeviceProofChallenge",
+        "responses": {
+          "201": {
+            "description": "A challenge for this session to sign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["challenge", "expiresIn"],
+                  "properties": {
+                    "challenge": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{76}$"
+                    },
+                    "expiresIn": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/devices/proofs": {
+      "post": {
+        "operationId": "createDeviceProof",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["deviceId", "challenge", "signature"],
+                "properties": {
+                  "deviceId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "challenge": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{76}$"
+                  },
+                  "signature": {
+                    "type": "string",
+                    "contentEncoding": "base64"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A Device proof bound to this session and Device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["token", "deviceId", "expiresIn"],
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{98}$"
+                    },
+                    "deviceId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "expiresIn": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/operations/{operationId}/begin": {
       "post": {
         "operationId": "beginOperation",
@@ -120,10 +403,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           },
           {
@@ -291,10 +585,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -441,10 +746,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -579,10 +895,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -712,10 +1039,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -862,10 +1200,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -1013,10 +1362,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           },
           {
@@ -1158,10 +1518,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           },
           {
@@ -1295,6 +1666,2121 @@
         ]
       }
     },
+    "/api/v1/teams/{teamId}/memberships": {
+      "get": {
+        "operationId": "listTeamMemberships",
+        "description": "Lists the Team's Memberships for a signed-in Member (no Device needed). Owners and admins also get roles, timestamps, pending and removed Memberships, and pending invitations. githubLogin is the login the Member last signed in with (null until recorded): display data that may be stale, never an identity.",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memberships",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["memberships", "invitations"],
+                  "properties": {
+                    "memberships": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "membershipId",
+                          "userId",
+                          "name",
+                          "image",
+                          "githubSubject",
+                          "githubLogin",
+                          "accountRoster",
+                          "lifecycle"
+                        ],
+                        "properties": {
+                          "membershipId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "userId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "name": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "image": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "githubSubject": {
+                            "type": "string"
+                          },
+                          "githubLogin": {
+                            "oneOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "accountRoster": {
+                            "oneOf": [
+                              {
+                                "type": "string",
+                                "contentEncoding": "base64"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "role": {
+                            "type": "string",
+                            "enum": ["OWNER", "ADMIN", "MEMBER"]
+                          },
+                          "lifecycle": {
+                            "type": "string",
+                            "enum": ["ACTIVE", "PENDING_KEY_GRANT", "REMOVED"]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "activatedAt": {
+                            "oneOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "removedAt": {
+                            "oneOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "invitations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "invitationId",
+                          "providerSubject",
+                          "createdAt",
+                          "expiresAt"
+                        ],
+                        "properties": {
+                          "invitationId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "providerSubject": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/teams/{teamId}/invitations/{invitationId}/revoke": {
+      "post": {
+        "operationId": "revokeMembershipInvitation",
+        "description": "An active owner or admin withdraws a pending Membership Invitation of the Team. A revoked invitation can no longer be accepted.",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invitationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Id",
+            "in": "header",
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrictJsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replayed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["invitationId", "teamId", "status"],
+                  "properties": {
+                    "invitationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "REVOKED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Committed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["invitationId", "teamId", "status"],
+                  "properties": {
+                    "invitationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "REVOKED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Invitation no longer pending",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/invitations/{invitationId}/decline": {
+      "post": {
+        "operationId": "declineMembershipInvitation",
+        "description": "The User a pending Membership Invitation addresses turns it down. Needs a session, not a Device; an invitation addressed to someone else answers 404.",
+        "parameters": [
+          {
+            "name": "invitationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replayed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["invitationId", "status"],
+                  "properties": {
+                    "invitationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "DECLINED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Committed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["invitationId", "status"],
+                  "properties": {
+                    "invitationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "DECLINED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Invitation no longer pending",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects": {
+      "post": {
+        "operationId": "linkProject",
+        "description": "An owner or admin links a GitHub Repository to a new Project in the Team, with its first Environment. environmentLabel names that Environment (same rules as creating one; default `default`). A Repository that already has an active Project returns it with its first active Environment and ignores the label.",
+        "parameters": [
+          {
+            "name": "X-DotRelay-Device-Id",
+            "in": "header",
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "teamId",
+                  "repositoryHost",
+                  "repositoryOwner",
+                  "repositoryName",
+                  "githubRepositoryId"
+                ],
+                "properties": {
+                  "teamId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "repositoryHost": {
+                    "type": "string",
+                    "const": "github.com"
+                  },
+                  "repositoryOwner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "repositoryName": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "githubRepositoryId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,18}$"
+                  },
+                  "environmentLabel": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,62}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing Project",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "teamId",
+                    "githubRepositoryId",
+                    "lifecycle",
+                    "environment"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "githubRepositoryId": {
+                      "type": "string"
+                    },
+                    "lifecycle": {
+                      "type": "string",
+                      "enum": ["active", "archived"]
+                    },
+                    "environment": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "projectId",
+                        "label",
+                        "lifecycle",
+                        "currentHeadId",
+                        "currentHeadHash"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "lifecycle": {
+                          "type": "string",
+                          "enum": ["active", "archived"]
+                        },
+                        "currentHeadId": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "currentHeadHash": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{96}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Linked Project",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "teamId",
+                    "githubRepositoryId",
+                    "lifecycle",
+                    "environment"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "githubRepositoryId": {
+                      "type": "string"
+                    },
+                    "lifecycle": {
+                      "type": "string",
+                      "enum": ["active", "archived"]
+                    },
+                    "environment": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "projectId",
+                        "label",
+                        "lifecycle",
+                        "currentHeadId",
+                        "currentHeadHash"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "projectId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "lifecycle": {
+                          "type": "string",
+                          "enum": ["active", "archived"]
+                        },
+                        "currentHeadId": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "currentHeadHash": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{96}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects/{projectId}/environments": {
+      "get": {
+        "operationId": "listProjectEnvironments",
+        "description": "Lists the Project's Environments for an active Member, oldest first. currentHeadAuthoredAtMs is the head Revision's authored-at instant (null without a Revision); a Project rotation floors its signing time on the latest one.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Id",
+            "in": "header",
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Environments",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["environments"],
+                  "properties": {
+                    "environments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "projectId",
+                          "label",
+                          "lifecycle",
+                          "currentHeadId",
+                          "currentHeadHash",
+                          "currentHeadAuthoredAtMs"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "lifecycle": {
+                            "type": "string",
+                            "enum": ["active", "archived"]
+                          },
+                          "currentHeadId": {
+                            "oneOf": [
+                              {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "currentHeadHash": {
+                            "oneOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{96}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "currentHeadAuthoredAtMs": {
+                            "oneOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/teams/{teamId}/leave": {
+      "post": {
+        "operationId": "leaveTeam",
+        "description": "The signed-in User ends their own Membership (ADR 0019). Needs a session, not a Device. An active Membership owes each Project a rotation. The Team's last active owner, or its only Member, answers 409 owner_transfer_required.",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrictJsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replayed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["teamId", "membershipId", "lifecycle"],
+                  "properties": {
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "membershipId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "lifecycle": {
+                      "type": "string",
+                      "const": "REMOVED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Committed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["teamId", "membershipId", "lifecycle"],
+                  "properties": {
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "membershipId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "lifecycle": {
+                      "type": "string",
+                      "const": "REMOVED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/teams/{teamId}/delete": {
+      "post": {
+        "operationId": "deleteTeam",
+        "description": "An active owner deletes the Team (ADR 0019). The body's confirmName must equal the Team name. Every Membership ends at once; retention purges the Team's data after purgeAfter.",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Id",
+            "in": "header",
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrictJsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replayed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["teamId", "status", "deletedAt", "purgeAfter"],
+                  "properties": {
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "DELETED"
+                    },
+                    "deletedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "purgeAfter": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Committed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["teamId", "status", "deletedAt", "purgeAfter"],
+                  "properties": {
+                    "teamId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "DELETED"
+                    },
+                    "deletedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "purgeAfter": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/account/export": {
+      "get": {
+        "operationId": "exportAccount",
+        "description": "The account metadata the service holds about the signed-in User, as a JSON attachment. No ciphertext, wrapped keys, public keys, or tokens.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrictJsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/account/deletion": {
+      "get": {
+        "operationId": "getAccountDeletionPlan",
+        "description": "What deleting the signed-in User's account would do: blockingTeams (last active owner with other Members), teamsDeleted (only Member), and teamsLeft.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrictJsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/account/delete": {
+      "post": {
+        "operationId": "deleteAccount",
+        "description": "Deletes the signed-in User's account (ADR 0018). Needs a session, not a Device; confirmUserId must equal the User id. Ends every session of the User.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrictJsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replayed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "userId",
+                    "status",
+                    "deletedAt",
+                    "teamsDeleted",
+                    "teamsLeft"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "DELETED"
+                    },
+                    "deletedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "teamsDeleted": {
+                      "type": "array"
+                    },
+                    "teamsLeft": {
+                      "type": "array"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Committed outcome",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "userId",
+                    "status",
+                    "deletedAt",
+                    "teamsDeleted",
+                    "teamsLeft"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "DELETED"
+                    },
+                    "deletedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "teamsDeleted": {
+                      "type": "array"
+                    },
+                    "teamsLeft": {
+                      "type": "array"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/environments/{environmentId}/sync": {
       "post": {
         "operationId": "synchronizeEnvironment",
@@ -1311,10 +3797,21 @@
           {
             "name": "X-DotRelay-Device-Id",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "The Device the request claims to act as; it must match the Device the proof names.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-DotRelay-Device-Proof",
+            "in": "header",
+            "required": true,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{98}$"
             }
           }
         ],
@@ -1471,7 +3968,9 @@
               "invalid_request",
               "invalid_crypto_object",
               "authentication_required",
+              "device_proof_required",
               "forbidden",
+              "alpha_admission_required",
               "device_not_active",
               "membership_not_active",
               "resource_not_found",
@@ -1486,7 +3985,10 @@
               "genesis_exists",
               "state_conflict",
               "last_owner_protection",
+              "owner_transfer_required",
               "staged_object_missing",
+              "authored_at_out_of_range",
+              "pending_invitation_limit",
               "repository_access_denied",
               "invitation_expired",
               "staging_expired",
@@ -1687,13 +4189,13 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Better Auth session token. Protocol routes also require the active device header."
+        "description": "Better Auth session token. Device-scoped routes also require a Device proof."
       },
-      "deviceId": {
+      "deviceProof": {
         "type": "apiKey",
         "in": "header",
-        "name": "X-DotRelay-Device-Id",
-        "description": "Active enrolled device id for protocol authorization."
+        "name": "X-DotRelay-Device-Proof",
+        "description": "Short-lived proof that the caller holds an active Device's signing key, bound to the session (ADR 0020)."
       }
     }
   }

@@ -9,7 +9,15 @@ integration suite.
 
 A browser or CLI session identifies the server-local User. It does not authorize decryption,
 Manifest publication, or grant creation. Protected operations require an **active Device** bound to
-that User. Device lifecycle states are `PENDING` (enrollment in progress), `ACTIVE`, and `REVOKED`.
+that User, and the client must prove it holds that Device's signing key with a Device proof
+([ADR 0020](../adr/0020-device-proof-of-possession.md)); naming a Device id in a header proves
+nothing. Device lifecycle states are `PENDING` (enrollment in progress), `ACTIVE`, and `REVOKED`.
+
+`REVOKED` is terminal ([ADR 0021](../adr/0021-device-revocation-is-terminal.md)). Enrollment
+reuses an existing Device row only while it is `PENDING` and only with the same keys, and a
+database trigger refuses any write that moves a Device out of `REVOKED`, back to `PENDING`, or
+changes its activation time, revocation time, owner or keys. Clients judge every Revision a
+Device signed by those times, so they never change.
 
 Revocation and Membership removal are logical lifecycle changes. DotRelay never claims to erase keys
 or plaintext that were already downloaded to a client.
@@ -66,15 +74,25 @@ Invitations create Memberships in `PENDING_KEY_GRANT`. **`GrantRepository.create
 grant protocol objects with exact recipient-set validation: every listed recipient Device must be
 active, and Membership-scoped grants require a pending Membership on the same Team.
 
-The same User's CLI and browser Devices share the current Project epoch key through grant bootstrap.
-The first Device creates the key. Later Devices receive a wrap of that key, then Shared Values can
-be sealed to it instead of to a single Device.
+The same User's CLI and browser Devices share the current Project epoch key through grant bootstrap
+(`POST /api/v1/grants/bootstrap`). The first Device creates the key. Later Devices receive a wrap of
+that key, then Shared Values can be sealed to it instead of to a single Device.
+
+Who may create a grant depends on its recipients. Any active Member with an active Device may seal
+the Project key to another of their own active Devices: they already hold the key, so the grant
+discloses nothing new. Clients pick those Devices from the User's verified roster (ADR 0015). A grant
+to another User's Device, and every Membership-scoped grant, needs owner or admin authority, as for
+Project administration. Grant bootstrap only ever targets the actor's own Devices and answers
+`forbidden` for anyone else's; other Users receive keys through Membership provisioning. Pending and
+removed Members cannot create grants.
+
+A grant carries key material on its signer's word alone, so a client accepts one only when an
+active Device of its own verified roster, or of a teammate the user confirmed, signed it
+([ADR 0022](../adr/0022-client-trust-anchors-and-key-adoption.md)). A client that holds the AMK
+prefers its own Account Key Envelope to any grant.
 
 **`MembershipRepository.activate`** commits a membership activation object only after the required
-
-**`MembershipRepository.activate`** commits a membership activation object only after the required
-grant count is present. Owner and admin authority for grant creation follows the same Team action
-rules as Project administration.
+grant count is present.
 
 ## Recovery
 
@@ -127,6 +145,12 @@ backfill. The first link for a to-epoch wins; a different link for it is a `stat
 The service cannot forge a link that opens, because it never holds an epoch key. The signing keys
 used to check a link are the roster-verified keys described below.
 
+Each installation pins, per Project, the highest epoch it accepted and a local commitment to the
+Project Epoch Key of each epoch it holds. A client refuses an epoch older than that mark, a
+different key for a pinned epoch, and a Revision whose epoch is lower than its parent's, and it
+never publishes under an older epoch than the verified head's
+([ADR 0022](../adr/0022-client-trust-anchors-and-key-adoption.md)).
+
 **What rotation does and does not do.** Rotation stops a removed Member from reading Values
 published after it. It never revokes Values they already saw, and every current Member can still
 read every older Value through the chain. To cut a removed Member off from a secret, rotate the
@@ -146,37 +170,64 @@ keys from its JSON (ADR 0015).
   identity. The workspace boundary serves `accountRosters` for the User and every User in the
   Team's signing trust set; Membership listings and provisioning plans carry each Member's roster.
 - **Publishing.** A client that holds the AMK publishes a new version when its own Device is
-  missing or its keys changed, and records Devices the service reports revoked. It never adds
-  another Device. A revoked entry stays revoked.
+  missing or its keys changed, and records Devices the service reports revoked. A first roster
+  lists only the publishing Device. Another Device joins only when the user approved it on the
+  publishing Device: an enrollment it approved, or an Account Key Transfer target whose key
+  fingerprint the user confirmed. The service's report never adds a Device. A revoked entry stays
+  revoked.
 - **Own pins.** The client pins its own identity and roster version: the CLI in a protected file
   in its state directory, the browser in the wrapped IndexedDB Device record store. It rejects a
   roster that its AMK-derived key did not sign and any lower version. A client that lost its pins
   trusts nothing for its own account until it restores the AMK.
-- **Teammates.** A teammate's identity is pinned on first sight. Their Devices count only when a
-  roster signed by the pinned identity lists them. A changed identity, a lower version, or a
-  vanished roster blocks that teammate: no grants or provisioning go to them and their Revisions
-  do not verify, until the user compares fingerprints and re-trusts them
-  (`dotrelay team trust <user-id>` or **Trust new key** in Members).
+- **Teammates.** A teammate's identity is pinned on first sight, for verifying their history only.
+  Their Devices count only when a roster signed by the pinned identity lists them. No grant from
+  them is accepted until the user compares fingerprints and confirms the identity
+  (`dotrelay team trust <user-id>`, **Confirm fingerprint** in Members, or the share-keys
+  question). A changed identity, a lower version, or a missing roster, whether the service sends
+  null or leaves the User out, blocks that teammate: no grants or provisioning go to them and their
+  Revisions do not verify, until the user compares fingerprints and re-trusts them
+  (`dotrelay team trust <user-id>` or **Trust new key** in Members). A confirmed or re-trusted pin
+  keeps the roster version the user saw.
 
 Roster-verified keys replace the service's lists for Revision signing trust (a revoked roster
-entry also ends the Device's window), grant and Account Key signature trust, the own peers that
-receive the Project Epoch Key, Membership provisioning recipients, and Project Epoch Key Link
-signatures.
+entry also ends the Device's window), grant signature trust, the own peers that receive the
+Project Epoch Key and the Account Master Key, Membership provisioning recipients, and Project Epoch
+Key Link signatures. Account Key Envelopes and Wrappers are sealed under the AMK or a User-held
+secret; that seal authenticates them, and their signatures may come from any Device the service
+reports for the account.
 
-### Upgrade window
+### Users without a roster
 
-The first client with a User's AMK after the upgrade publishes that User's version-1 roster from
-the Devices the service reports, active and revoked. Until then the User is **unverified**:
-clients keep the old behaviour for their Devices and show them as unverified in
-`dotrelay team members` and the Members view. The window closes per User as soon as any of their
-clients with the AMK runs.
+Nothing is trusted from absent data
+([ADR 0022](../adr/0022-client-trust-anchors-and-key-adoption.md)). A User without a roster this
+client can verify is **unverified**, and none of their Devices count. A client that holds the AMK
+and finds no roster for its own account publishes one that lists only itself; a client without the
+AMK or a pin trusts only its own Device. A Device that never held the AMK, or was revoked before
+the account's first roster, is not listed, so its history does not verify until a Device with the
+AMK approves it again or sends it the key with a confirmed fingerprint.
+
+### Handing a new Device the account key
+
+- **Enrollment approval.** `dotrelay device approve` adds the enrolled Device to the roster with
+  the keys from the request file the user carried over, when the approving Device holds the AMK.
+- **Sending a transfer.** The sender seals the AMK only to a Device its verified roster lists,
+  using the rostered key. For a Device not listed yet, the user compares the key fingerprint the
+  service reports with the one that Device shows (`dotrelay device list`, or Recovery in the
+  browser), and the sender adds it to the roster before sealing.
+- **The transfer code.** The sender shows `<transfer id>.<account fingerprint>`. The person carries
+  that code to the receiving Device.
+- **Receiving a transfer.** The receiver accepts the key only when a roster signed by the identity
+  that key derives lists both the sender and the receiver, the identity matches any own pin, and
+  the fingerprint matches the code. A key the service substituted fails all three.
 
 ### What the roster does not cover
 
-Adding a new Device is still a user decision on what the service shows: the AMK handoff during
-enrollment approval, Account Key Transfer, or Recovery Code restore happens before the new Device
-can be listed. Once it lists itself, no other Device can join without an AMK holder. Membership
-windows still come from the service.
+A Recovery Code restore trusts the roster the service serves at that moment. Membership windows
+also come from the service. Membership
+windows still come from the service. Each `signingTrustDevices` entry carries `membershipPeriods`,
+every period in which the author was an active Member; a Member who was removed and invited back
+keeps one period per stint, so their earlier Revisions stay verifiable
+([ADR 0017](../adr/0017-membership-periods-survive-reinvitation.md)).
 
 ## Security boundaries
 

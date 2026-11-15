@@ -2,12 +2,16 @@ import { PROBLEM_STATUS, type ProblemCode } from "@dotrelay/contracts";
 import type { DatabaseClient } from "@dotrelay/database";
 import {
   OperationRepository,
+  RetentionRepository,
+  TeamLifecycleRepository,
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
   SECURITY_REQUEST_LOG_RETENTION_MS,
   type SecurityRequestEndpointTemplate,
   SecurityRequestLogRepository,
   StagedObjectRepository,
 } from "@dotrelay/database";
+
+import { SESSION_MAX_AGE_MS } from "./session";
 
 export const API_CORRELATION_HEADER = "X-Correlation-ID";
 export const DIAGNOSTIC_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -19,6 +23,17 @@ export const SERVER_DIAGNOSTIC_EVENT_NAMES = Object.freeze([
   "api.security_request_log.write_failed",
   "api.security_request_log.expiry_failed",
   "api.staging.expiry_failed",
+  "api.retention.expiry_failed",
+  "api.email.sent",
+  "api.email.failed",
+  "api.email.skipped",
+  "api.retention.cleanup_completed",
+  "api.readiness.checked",
+  "api.rate_limit.user_refused",
+  "api.rate_limit.github_refused",
+  "api.rate_limit.creation_refused",
+  "api.rate_limit.auth_refused",
+  "api.rate_limit.unavailable",
 ] as const);
 export type ServerDiagnosticEventName =
   (typeof SERVER_DIAGNOSTIC_EVENT_NAMES)[number];
@@ -40,8 +55,30 @@ export const SERVER_DIAGNOSTIC_FIELDS = Object.freeze([
   "outcome",
   "problemCode",
   "retryAfterSeconds",
+  "emailKind",
+  "emailReason",
 ] as const);
 export type ServerDiagnosticField = (typeof SERVER_DIAGNOSTIC_FIELDS)[number];
+export const SERVER_DIAGNOSTIC_EMAIL_KINDS = Object.freeze([
+  "invitation",
+  "keys_shared",
+  "invitation_accepted",
+] as const);
+export type ServerDiagnosticEmailKind =
+  (typeof SERVER_DIAGNOSTIC_EMAIL_KINDS)[number];
+export const SERVER_DIAGNOSTIC_EMAIL_REASONS = Object.freeze([
+  "timeout",
+  "network",
+  "rejected",
+  "rate_limited",
+  "server_error",
+  "lookup_failed",
+  "queue_full",
+  "no_recipient",
+  "no_address",
+] as const);
+export type ServerDiagnosticEmailReason =
+  (typeof SERVER_DIAGNOSTIC_EMAIL_REASONS)[number];
 
 declare const serverCorrelationIdBrand: unique symbol;
 export type ServerCorrelationId = string & {
@@ -56,10 +93,23 @@ export type ServerDiagnosticEvent = Readonly<{
   readonly outcome?: "success" | "failure";
   readonly problemCode?: ServerDiagnosticProblemCode;
   readonly retryAfterSeconds?: number;
+  readonly emailKind?: ServerDiagnosticEmailKind;
+  readonly emailReason?: ServerDiagnosticEmailReason;
 }>;
 
 export type ServerDiagnosticSink = Readonly<{
   readonly emit: (event: ServerDiagnosticEvent) => void;
+}>;
+
+/**
+ * Receives every sanitized event before diagnostic sampling, plus each
+ * request's status and duration. See ./metrics for the bounded registry.
+ */
+export type ServerMetricsObserver = Readonly<{
+  readonly observeEvent: (event: ServerDiagnosticEvent) => void;
+  readonly observeRequest: (
+    input: Readonly<{ readonly status: number; readonly durationMs: number }>,
+  ) => void;
 }>;
 
 export const createConsoleDiagnosticSink = (
@@ -100,11 +150,21 @@ export type ApiObservability = Readonly<{
     Readonly<{ readonly operations: number; readonly stagedObjects: number }>
   >;
   /**
-   * The scheduled retention job: expires staging and Security Request Logs.
-   * Each step runs even if an earlier one failed; the first failure is
-   * rethrown after all steps ran.
+   * Deletes expired short-lived rows: Better Auth sessions (including those
+   * past the absolute session lifetime), device codes and verifications,
+   * unapproved Device enrollments, and unaccepted invitations.
+   */
+  readonly expireShortLivedRecords: (
+    at?: Date,
+  ) => Promise<Readonly<Record<string, number>>>;
+  /**
+   * The scheduled retention job: expires staging, Security Request Logs, and
+   * short-lived records. Each step runs even if an earlier one failed; the
+   * first failure is rethrown after all steps ran.
    */
   readonly runRetentionCleanup: (at?: Date) => Promise<void>;
+  /** Records one readiness check; failures are also diagnostics. */
+  readonly recordReadiness: (ready: boolean) => void;
   readonly recordRequest: (input: {
     readonly request: Request;
     readonly path: string;
@@ -113,8 +173,60 @@ export type ApiObservability = Readonly<{
     readonly durationMs: number;
     readonly problemCode?: ServerDiagnosticProblemCode;
     readonly retryAfterSeconds?: number;
+    /**
+     * Whether a signed-in session made the request. Anonymous requests
+     * write Security Request Log rows only within a budget.
+     */
+    readonly authenticated?: boolean;
+    /** The per-User limiter bucket that refused the request, if any. */
+    readonly rateLimitBucket?: string;
   }) => void;
 }>;
+
+export type AnonymousLogBudget = Readonly<{
+  /** Rows one client address may write per window. */
+  readonly perAddress: number;
+  /** Rows all anonymous clients together may write per window. */
+  readonly total: number;
+  readonly windowMs: number;
+}>;
+
+// An anonymous client can send requests as fast as it likes, so its
+// Security Request Log rows are capped per address and overall. The first
+// requests of a burst are recorded, which is what an investigation needs.
+const DEFAULT_ANONYMOUS_LOG_BUDGET: AnonymousLogBudget = Object.freeze({
+  perAddress: 30,
+  total: 600,
+  windowMs: 60_000,
+});
+const MAX_TRACKED_ANONYMOUS_ADDRESSES = 10_000;
+
+const createAnonymousLogBudget = (budget: AnonymousLogBudget) => {
+  const addresses = new Map<string, { windowStart: number; count: number }>();
+  let total = { windowStart: 0, count: 0 };
+  return (address: string, nowMs: number): boolean => {
+    if (nowMs - total.windowStart >= budget.windowMs)
+      total = { windowStart: nowMs, count: 0 };
+    if (total.count >= budget.total) return false;
+    const current = addresses.get(address);
+    const entry =
+      current && nowMs - current.windowStart < budget.windowMs
+        ? current
+        : { windowStart: nowMs, count: 0 };
+    if (entry.count >= budget.perAddress) return false;
+    entry.count += 1;
+    total.count += 1;
+    // Most recently used last, so the oldest address is evicted first.
+    addresses.delete(address);
+    addresses.set(address, entry);
+    while (addresses.size > MAX_TRACKED_ANONYMOUS_ADDRESSES) {
+      const oldest = addresses.keys().next().value;
+      if (oldest === undefined) break;
+      addresses.delete(oldest);
+    }
+    return true;
+  };
+};
 
 const safeToken = /^[A-Za-z0-9._:-]+$/;
 const forbiddenProblemCodes = new Set<string>(FORBIDDEN_PROBLEM_CODES);
@@ -123,6 +235,12 @@ const serverDiagnosticEventNames = new Set<string>(
 );
 const serverDiagnosticFields = new Set<string>(SERVER_DIAGNOSTIC_FIELDS);
 const SERVER_DIAGNOSTIC_OUTCOMES = new Set(["success", "failure"]);
+const serverDiagnosticEmailKinds = new Set<string>(
+  SERVER_DIAGNOSTIC_EMAIL_KINDS,
+);
+const serverDiagnosticEmailReasons = new Set<string>(
+  SERVER_DIAGNOSTIC_EMAIL_REASONS,
+);
 const CORRELATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_ISSUED_CORRELATION_IDS = 100_000;
@@ -249,6 +367,32 @@ export const endpointTemplateFor = (
 ): SecurityRequestEndpointTemplate | null =>
   ENDPOINT_PATTERNS.find(({ pattern }) => pattern.test(path))?.template ?? null;
 
+// Probe traffic is not request traffic; /ready feeds the readiness counter.
+const PROBE_PATHS = new Set(["/health", "/ready"]);
+const RATE_LIMIT_REFUSAL_EVENTS: Readonly<
+  Record<string, ServerDiagnosticEventName>
+> = Object.freeze({
+  api: "api.rate_limit.user_refused",
+  protocol: "api.rate_limit.user_refused",
+  github: "api.rate_limit.github_refused",
+  create: "api.rate_limit.creation_refused",
+});
+
+const rateLimitEventFor = (
+  path: string,
+  problemCode: ServerDiagnosticProblemCode | undefined,
+  bucket: string | undefined,
+): ServerDiagnosticEventName | undefined => {
+  if (problemCode === "rate_limit_unavailable")
+    return "api.rate_limit.unavailable";
+  if (problemCode !== "rate_limited") return undefined;
+  if (path.startsWith("/api/auth/")) return "api.rate_limit.auth_refused";
+  return (
+    (bucket === undefined ? undefined : RATE_LIMIT_REFUSAL_EVENTS[bucket]) ??
+    "api.rate_limit.user_refused"
+  );
+};
+
 const emitSafely = (
   sink: ServerDiagnosticSink,
   event: ServerDiagnosticEvent,
@@ -315,6 +459,18 @@ const sanitizeServerDiagnosticEvent = (
     toServerDiagnosticRetryAfterSeconds(object.retryAfterSeconds) === undefined
   )
     return null;
+  if (
+    object.emailKind !== undefined &&
+    (typeof object.emailKind !== "string" ||
+      !serverDiagnosticEmailKinds.has(object.emailKind))
+  )
+    return null;
+  if (
+    object.emailReason !== undefined &&
+    (typeof object.emailReason !== "string" ||
+      !serverDiagnosticEmailReasons.has(object.emailReason))
+  )
+    return null;
   return Object.freeze({
     schemaVersion: 1,
     eventName: object.eventName,
@@ -329,6 +485,10 @@ const sanitizeServerDiagnosticEvent = (
     ...(object.retryAfterSeconds === undefined
       ? {}
       : { retryAfterSeconds: object.retryAfterSeconds }),
+    ...(object.emailKind === undefined ? {} : { emailKind: object.emailKind }),
+    ...(object.emailReason === undefined
+      ? {}
+      : { emailReason: object.emailReason }),
   }) as ServerDiagnosticEvent;
 };
 
@@ -336,13 +496,45 @@ export const createApiObservability = (
   database: DatabaseClient,
   options?: Readonly<{
     readonly diagnostics?: ServerDiagnosticSink;
+    readonly metrics?: ServerMetricsObserver;
     readonly now?: () => Date;
     readonly random?: () => number;
     readonly resolveClientIp?: (request: Request) => string | null;
     readonly sampleRate?: number;
+    readonly maxSessionAgeMs?: number;
+    readonly anonymousLogBudget?: AnonymousLogBudget;
   }>,
 ): ApiObservability => {
-  const diagnostics = options?.diagnostics ?? createInMemoryDiagnosticSink();
+  const allowAnonymousLog = createAnonymousLogBudget(
+    options?.anonymousLogBudget ?? DEFAULT_ANONYMOUS_LOG_BUDGET,
+  );
+  const diagnosticSink = options?.diagnostics ?? createInMemoryDiagnosticSink();
+  const metrics = options?.metrics;
+  // Metrics see every event; the diagnostic sink sees only what is logged.
+  const observe = (event: ServerDiagnosticEvent) => {
+    try {
+      const sanitized = sanitizeServerDiagnosticEvent(event);
+      if (sanitized) metrics?.observeEvent(sanitized);
+    } catch {
+      // Losing a metric must never affect the request or domain behavior.
+    }
+  };
+  const diagnostics: ServerDiagnosticSink = Object.freeze({
+    emit: (event: ServerDiagnosticEvent) => {
+      observe(event);
+      diagnosticSink.emit(event);
+    },
+  });
+  const recordReadiness = (ready: boolean) => {
+    const event: ServerDiagnosticEvent = {
+      schemaVersion: 1,
+      eventName: "api.readiness.checked",
+      correlationId: createServerCorrelationId(),
+      outcome: ready ? "success" : "failure",
+    };
+    if (ready) observe(event);
+    else emitSafely(diagnostics, event);
+  };
   const now = options?.now ?? (() => new Date());
   const random = options?.random ?? Math.random;
   const sampleRate = options?.sampleRate ?? DEFAULT_DIAGNOSTIC_SAMPLE_RATE;
@@ -351,6 +543,37 @@ export const createApiObservability = (
   const securityLogs = new SecurityRequestLogRepository();
   const operations = new OperationRepository();
   const stagedObjects = new StagedObjectRepository();
+  const retention = new RetentionRepository();
+  const teamLifecycle = new TeamLifecycleRepository();
+  const expireShortLivedRecords = async (at = now()) => {
+    try {
+      return Object.freeze({
+        authSessions: (
+          await retention.expireAuthSessions(database, at, {
+            maxSessionAgeMs: options?.maxSessionAgeMs ?? SESSION_MAX_AGE_MS,
+          })
+        ).count,
+        authDeviceCodes: (await retention.expireAuthDeviceCodes(database, at))
+          .count,
+        authVerifications: (
+          await retention.expireAuthVerifications(database, at)
+        ).count,
+        deviceEnrollments: (
+          await retention.expireDeviceEnrollments(database, at)
+        ).count,
+        invitations: (await retention.expireInvitations(database, at)).count,
+        deletedTeams: (await teamLifecycle.purgeDeletedTeams(database, at))
+          .count,
+      });
+    } catch (error) {
+      emitDiagnosticFailure(
+        diagnostics,
+        "api.retention.expiry_failed",
+        createServerCorrelationId(),
+      );
+      throw error;
+    }
+  };
   const expireSecurityRequestLogs = async (at = now()) => {
     try {
       return (await securityLogs.expire(database, at)).count;
@@ -381,10 +604,12 @@ export const createApiObservability = (
     }
   };
   return Object.freeze({
-    diagnostics,
+    diagnostics: diagnosticSink,
     expireSecurityRequestLogs,
     expireStaging,
+    expireShortLivedRecords,
     runRetentionCleanup: async (at = now()) => {
+      const startedAt = performance.now();
       const results = [
         await expireStaging(at).then(
           () => null,
@@ -394,36 +619,85 @@ export const createApiObservability = (
           () => null,
           (error: unknown) => ({ error }),
         ),
+        await expireShortLivedRecords(at).then(
+          () => null,
+          (error: unknown) => ({ error }),
+        ),
       ];
       const failure = results.find((result) => result !== null);
+      emitSafely(diagnostics, {
+        schemaVersion: 1,
+        eventName: "api.retention.cleanup_completed",
+        correlationId: createServerCorrelationId(),
+        durationMs: Math.max(
+          0,
+          Math.min(Math.round(performance.now() - startedAt), 86_400_000),
+        ),
+        outcome: failure ? "failure" : "success",
+      });
       if (failure) throw failure.error;
     },
+    recordReadiness,
     recordRequest: (input) => {
       try {
         const status = Number.isInteger(input.status) ? input.status : 500;
         const retryAfterSeconds = toServerDiagnosticRetryAfterSeconds(
           input.retryAfterSeconds,
         );
+        const durationMs = Math.max(
+          0,
+          Math.min(Math.round(input.durationMs), 86_400_000),
+        );
+        const event: ServerDiagnosticEvent = {
+          schemaVersion: 1,
+          eventName: "api.request.completed",
+          correlationId: input.correlationId,
+          durationMs,
+          outcome: status >= 400 ? "failure" : "success",
+          ...(input.problemCode === undefined
+            ? {}
+            : { problemCode: input.problemCode }),
+          ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+        };
+        if (input.path === "/ready") recordReadiness(status === 200);
+        if (!PROBE_PATHS.has(input.path)) {
+          try {
+            metrics?.observeRequest({
+              status,
+              durationMs: input.durationMs,
+            });
+          } catch {
+            // Losing a metric must never affect the request.
+          }
+          observe(event);
+        }
         if (status >= 400 || random() < sampleRate)
+          emitSafely(diagnosticSink, event);
+        const rateLimitEvent = rateLimitEventFor(
+          input.path,
+          input.problemCode,
+          input.rateLimitBucket,
+        );
+        if (rateLimitEvent !== undefined)
           emitSafely(diagnostics, {
             schemaVersion: 1,
-            eventName: "api.request.completed",
+            eventName: rateLimitEvent,
             correlationId: input.correlationId,
-            durationMs: Math.max(
-              0,
-              Math.min(Math.round(input.durationMs), 86_400_000),
-            ),
-            outcome: status >= 400 ? "failure" : "success",
+            outcome: "failure",
             ...(input.problemCode === undefined
               ? {}
               : { problemCode: input.problemCode }),
-            ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
           });
 
         const endpointTemplate = endpointTemplateFor(input.path);
         const ipAddress = options?.resolveClientIp?.(input.request) ?? null;
         if (!endpointTemplate || !ipAddress) return;
         const requestedAt = now();
+        if (
+          input.authenticated !== true &&
+          !allowAnonymousLog(ipAddress, requestedAt.getTime())
+        )
+          return;
         const contentLength = input.request.headers.get("Content-Length");
         const transferBytes =
           contentLength && /^\d+$/.test(contentLength)

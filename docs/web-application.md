@@ -87,7 +87,21 @@ page instead of discarding it.
 
 Once all protected gates pass, the Environment editor displays the verified head, current Project
 epoch, Variables, descriptions, and the ownership of each Value lane. Values use password inputs and
-remain masked until the active Device explicitly reveals one. A new Variable requires a valid name
+remain masked until the active Device explicitly reveals one. The Value is assigned to the input
+element rather than rendered into the page, so it is never in the document's markup, where saved
+pages, page-capturing extensions, or CSS attribute selectors could read it. A Value the actor cannot change is a
+read-only input rather than a disabled one, so it stays focusable and selectable once revealed; the
+reason it is read-only is shown under the Variable and linked to the field. Every readable Value
+has a Copy control that writes it to the clipboard without rendering it and confirms briefly. A
+name filter narrows the list. "Import .env" parses pasted text with the same strict rules as the
+CLI, previews which Variables it would add, update, leave unchanged, or skip (with the reason the
+actor's role or the draft gives), asks who can read any new Variables, and stages the result into
+the draft; nothing is published until the draft is saved, and the pasted text is dropped when the
+dialog closes. "Download .env" warns that the file holds the readable published Values in plain
+text, notes Variables without a Value and unpublished draft changes it leaves out, and writes the
+file from a client-side Blob whose URL is revoked immediately. A Refresh control re-reads the
+verified head on demand and rebases the draft exactly as the background read does, so unpublished
+edits are kept and a teammate's change to a drafted Variable comes back as a conflict. A new Variable requires a valid name
 and explicit Shared Value or User-defined Value classification; its definition and initial Value
 lane enter the local draft together. Empty Values and absent optional Values remain distinct.
 Live Variable names are unique within the Manifest. Deletion creates a tombstone in the draft so
@@ -103,11 +117,26 @@ explicit reveal, labels whether the difference is a Value, a definition (ownersh
 a deletion, and explains the Value and definition consequence of each Keep mine / Use theirs /
 Keep my value choice. A choice can be revisited before publication, and retrying the publish
 re-runs the approved publication against the re-anchored head rather than only re-arming the
-publish gate. Rollback is lane-scoped and always publishes a new Revision, so the current head
+publish gate. When the head moved but no drafted Variable was touched, the teammate's Values are
+merged into view at once so the editor never shows stale Values. Other publish failures are
+reported by cause (offline or unreachable server, ended session, inactive Device, missing
+permission or keys, rotated keys, archived or missing Environment, expired staging, rate limits
+(naming the wait the service asked for), an authored-at instant the service refused (pointing at
+the device clock), server unavailability, or an invalid publication); every message says the
+draft is kept and none advises reloading the page, which would discard it. Every publication
+signs an authored-at instant no earlier than this browser Device's activation, its Member's
+current Membership activation (both from the Device's own signing trust entry on the boundary),
+and the head Revision's authored-at instant, so a slow clock is raised to that floor instead of
+producing a Revision the service refuses. Revision signatures are judged against every
+Membership period the boundary lists for the author (ADR 0017), so a Member who was removed and
+invited back still verifies their earlier Revisions. Rollback is lane-scoped and always publishes a new Revision, so the current head
 remains in immutable history. The History card lists the verified Revisions with their authored
-time, change kind (naming the target of a Rollback), and author where the protocol provides
-them, an honest unavailable label where it does not, and a short id suffix so a Revision can be
-referenced without memorizing its full id. The rollback dialog identifies the target Revision and
+time, change kind (naming the target of a Rollback), author, the Variables the Revision changed,
+and a short id suffix so a Revision can be referenced without memorizing its full id; the publish
+confirmation uses the same short id. The author and changed lanes come from the signed Revision
+object of a verified sync page; the author is shown as "You" or by the name in the selected
+Team's membership record, as "Unknown member" when the record does not list them, and as
+unavailable only when the Revision carries no author. The rollback dialog identifies the target Revision and
 previews the masked consequence of the selected lanes — a new Rollback revision that restores
 only the chosen Variables — before it is staged. Reading a target Revision's Values shows
 progress while the Device resolves them. If the Revision is missing from the Device's verified
@@ -152,7 +181,44 @@ an API authorization boundary.
 
 Invitation creation accepts a stable GitHub provider subject, never an email or mutable login.
 Acceptance is shown as `PENDING_KEY_GRANT` until the complete grant set activates the Membership.
+Owners and Admins can cancel a pending invitation from its row after a confirmation; an invitee
+can decline an invitation addressed to them, also after a confirmation, next to the accept
+action. A Team holds at most 50 pending invitations; inviting past that explains how to make
+room. Any Team or invitation call the service rate-limits says how many seconds to wait.
 GitHub Repository names and stable ids are descriptive and explicitly do not grant authority.
+
+Removing a Member, changing a Member's role, and revoking a Device each require confirmation.
+The removal confirmation names the Member, states that removal is permanent (re-adding needs a
+new invitation and a new key share), and warns that it does not revoke keys or Values the Member
+already downloaded. A completed removal and a completed Device revocation both show the same
+follow-up: rotate each affected Project's key with `dotrelay project rotate` in its repository and
+change sensitive Values. Until a rotation commits, the boundary reports the rotation as owed:
+Owners and Admins see a non-blocking banner on the Project's environment view naming how many
+Members were removed and Devices revoked since when, with the copyable rotate command and a
+reminder to change secrets they could read. Members do not see it, and it never blocks
+publication. The role confirmation states the old and new role and what the new role
+can do. Each row's controls carry the Member's name in their accessible names, and row errors are
+announced.
+
+An invitee whose Membership is in `PENDING_KEY_GRANT` is told that an Owner or Admin must open
+the Team view and share project keys with them, and to refresh or run `dotrelay pull` afterwards.
+Owners and Admins see such a row as "Action needed: share project keys", with a note that their
+browser must be set up and unlocked to do it. Owners and Admins can also create an empty
+Environment in a Project from the web ("New environment"); the label follows the service's rule,
+an existing label is caught before submitting, and the new Environment opens once the refreshed
+catalog lists it.
+
+The Team view ends with **Leave team** for everyone and **Delete team** for owners. Leaving
+names the rotation the team's owners should run; the last active owner is told to promote
+another owner or delete the Team first. Deleting asks for the Team name to be typed and states
+that every Member loses access at once and the encrypted data is erased after 30 days.
+
+The **Account** view offers **Export my data**, which downloads the account data JSON from
+`/api/v1/account/export` and says that Values come from `dotrelay pull` or `dotrelay export`, and
+**Delete account**. Its dialog lists the Teams the account would leave or delete, refuses while
+the User is a Team's last active owner, and enables deletion only after `delete my account` is
+typed. After deletion the browser forgets its Device id and goes to sign-in. A deleted User's
+Members row and Revisions read "Deleted user".
 
 Project and Environment archive/restore actions require confirmation. The Environment confirmation
 states that archiving retains immutable Revision history while preventing Manifest disclosure.
@@ -171,6 +237,17 @@ When a previously verified boundary can no longer be refreshed, the shell keeps 
 metadata visibly stale, offers a retry action, and reconnects automatically with capped
 exponential backoff. A malformed or non-200 boundary response is treated as a failed request:
 it can only degrade to the offline or stale state, never to fixture data.
+
+## Public pages
+
+The landing page links the CLI documentation, shows the install and `dotrelay setup` commands as
+copyable lines, and states the encryption model plainly: Values are encrypted on the device,
+the cryptography is classical (not post-quantum), and each client confirms the server's identity
+on first use. Its footer links `/privacy` and `/terms`, which are marked placeholders until the
+policies are published and make no policy claims. A signed-in visitor who opens `/sign-in` is
+redirected to `/workspace`. Outside development and the explicit fixture, the landing and sign-in
+pages require a configured API origin and fail at request time without one rather than pointing
+sign-in at a local default.
 
 ## Device approval
 
@@ -249,14 +326,25 @@ invitation lifecycle against the service's API: a failed GitHub login resolution
 form on the login field with an actionable explanation and never creates an invitation, a
 rejected creation keeps the resolved identity and the service's error ready to retry, the
 Members table reads the Team's persisted record and survives reloads and Team switching,
-and an invitee who has not joined a Team sees the invitation addressed to them and, after
-the service confirms acceptance, the record moves to the pending key-grant state.
+an invitee who has not joined a Team sees the invitation addressed to them and, after
+the service confirms acceptance, the record moves to the pending key-grant state, an invitee
+declines after confirming and the invitation disappears, an Owner cancels a pending invitation
+after confirming (backing out sends nothing, a refusal stays on the row), and the pending
+invitation cap is explained. `apps/web/e2e/workspace-rotation-owed.spec.ts` covers the owed
+rotation banner for Owners, its wording for removals and revocations, and its absence for
+Members and when nothing is owed.
 `apps/web/e2e/workspace-recovery.spec.ts` covers the in-browser Recovery area: the one-time recovery
 code displays in an `alertdialog`, a returning browser restores its locally sealed key, and a cleared
 browser unlocks and decrypts with the saved code. A wrong secret fails
 with one uniform alert that never names which check rejected it, rotating the recovery code retires
 the previous one so it stops unlocking, an encryption password can be added, used after a reload, and
-removed, a transfer crosses two browsers (the sender stages a transfer ID, the receiver is shown how to get that ID from an unlocked device's CLI with `dotrelay device transfer --to` this browser or from this Recovery page in another unlocked browser, the receiver redeems it as a one-time
-hand-over, and an expired or already-used transfer surfaces its own conflict copy), an offline service
-offers the retry card, and setup plus the one-time display hold at a phone viewport. Tests observe
+removed, a transfer crosses two browsers (the sender is refused until it confirms the receiving device's key fingerprint, which adds that device to the account's signed Device list, then stages a transfer code that ends with the account fingerprint; the receiver is shown how to get that code from an unlocked device's CLI with `dotrelay device transfer --to` this browser or from this Recovery page in another unlocked browser, refuses a bare transfer id, redeems the code as a one-time
+hand-over only when the account's signed roster lists the sender and itself, and an expired or already-used transfer surfaces its own conflict copy), an offline service
+offers the retry card, and setup plus the one-time display hold at a phone viewport. `apps/web/e2e/workspace-editor-tools.spec.ts` covers the editor's name filter, reviewed .env
+import into the draft, the warned .env download and its contents, Refresh keeping a draft while
+loading a teammate's change, cause-specific publish failure messages, and fresh Values after a
+no-conflict stale-head publish. `apps/web/e2e/workspace-new-environment.spec.ts` covers creating
+an Environment as an Owner and its absence for Members, and `workspace-team-management.spec.ts`
+covers the removal and role confirmations, rotation guidance, pending key-grant rows, and
+invitation column alignment. Tests observe
 browser-visible behavior and never reach into component state.

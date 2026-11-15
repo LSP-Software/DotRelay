@@ -9,17 +9,66 @@ DotRelay authority.
 
 Team creation and its first active owner Membership commit atomically. A Team must always retain at
 least one active owner. Memberships move forward from `PENDING_KEY_GRANT` to `ACTIVE` or to
-`REMOVED`; removed Memberships are durable records and are not reactivated. Only active
+`REMOVED`. A removed Membership is a durable record; accepting a new invitation revives the same
+row as a `MEMBER` in `PENDING_KEY_GRANT`. Before the revival, the finished active period is archived
+in `membership_periods`, so the User's earlier Revisions stay verifiable against the period they
+were signed in ([ADR 0017](adr/0017-membership-periods-survive-reinvitation.md)). Only active
 Memberships authorize reads or mutations.
 
 | Capability                                       | Owner | Admin | Member |
 | ------------------------------------------------ | ----- | ----- | ------ |
 | View Team and active Project/Environment content | yes   | yes   | yes    |
-| Invite a Member                                  | yes   | yes   | no     |
+| Publish Revisions and roll back an Environment   | yes   | yes   | yes    |
+| Invite a Member or revoke a pending invitation   | yes   | yes   | no     |
 | Remove a Member                                  | yes   | yes   | no     |
 | Change Member/Admin/owner roles                  | yes   | no    | no     |
 | Create, archive, or restore a Project            | yes   | yes   | no     |
 | Create, archive, or restore an Environment       | yes   | yes   | no     |
+| Rotate a Project's epoch key                     | yes   | yes   | no     |
+| Leave the Team                                   | yes   | yes   | yes    |
+| Delete the Team                                  | yes   | no    | no     |
+
+Publishing and Rollback need an active Membership and an active Device, whatever the role. A
+Revision's authored-at instant must not precede the signing Device's activation, the author's
+Membership activation, or the parent Revision, and must not lie more than ten minutes past the
+service clock; the service refuses anything else with `authored_at_out_of_range` (409) instead of
+committing a head every client would reject.
+
+### Leaving and deleting a Team
+
+Any Member can leave a Team (`POST /api/v1/teams/:teamId/leave`, session only). Leaving is a
+removal with the Member as actor: the Membership becomes `REMOVED`, a `MEMBERSHIP_REMOVED` Audit
+Fact names the leaver, and an active Membership owes each Project a rotation. The Team's last
+active owner, or its only Member, gets `owner_transfer_required` (409): promote another active
+Member to owner, or delete the Team.
+
+An owner can delete a Team (`POST /api/v1/teams/:teamId/delete`, active Device, body
+`{"confirmName": "<team name>"}`). Every Membership ends and pending invitations are revoked at
+once; the Team becomes `ARCHIVED` with `deletedAt` set and no one can read it. Retention purges its
+Projects, Environments, Revisions, grants, and Memberships 30 days later
+([ADR 0019](adr/0019-leaving-and-deleting-a-team.md)).
+
+### Account deletion and export
+
+`GET /api/v1/account/export` returns the account metadata the service holds about the signed-in
+User as a JSON attachment. It holds no ciphertext, wrapped keys, public keys, or tokens.
+`GET /api/v1/account/deletion` lists the Teams that block deletion and those it would delete or
+leave. `POST /api/v1/account/delete` (session only, body `{"confirmUserId": "<user id>"}`) deletes
+the account: see [what account deletion keeps](wiki/account-deletion.md) and
+[ADR 0018](adr/0018-account-deletion-keeps-public-verification-material.md). The last active owner
+of a Team with other Members gets `owner_transfer_required`; Teams where the User is the only
+Member are deleted with the account. Exports count against a 10-per-hour budget; leaving,
+deleting a Team, and deleting an account count against the durable-row budget.
+
+### Owed rotations
+
+Removing an active Member, or revoking an active Device, records a rotation owed by each Project
+the removed party could read: every Project of the Team for a Member, every Project of the User's
+active Teams for a Device. The workspace boundary reports the oldest outstanding one as
+`environment.rotationOwed` (`since`, `sinceEpoch`, `membershipRemovals`, `deviceRevocations`, or
+`null`). Rotating the Project's epoch clears every obligation recorded before the rotation. It is
+advice for owners and admins: it never blocks publication, and the boundary's
+`rotationRequired` publication gate stays `false` for it.
 
 An admin cannot promote itself, manage owners/admins, or bypass last-owner protection. Role does
 not broaden encrypted Value ownership: owners and admins cannot receive another User's User-defined
@@ -31,7 +80,13 @@ mutation/read boundaries.
 A Membership Invitation is addressed to the invitee's stable GitHub provider subject, never a
 mutable login or email address. The service sets expiry to exactly seven days after creation.
 Acceptance must be performed once, before expiry, by the matching server-local User in the same
-Server Profile. It creates a Member Membership in `PENDING_KEY_GRANT`; GitHub admission alone does
+Server Profile. An active owner or admin can revoke a pending invitation
+(`POST /api/v1/teams/:teamId/invitations/:invitationId/revoke`), and the addressed User can
+decline it (`POST /api/v1/invitations/:invitationId/decline`); either ends it, is recorded as an
+`INVITATION_REVOKED` or `INVITATION_DECLINED` Audit Fact, and makes acceptance answer
+`invitation_expired`. A Team holds at most 50 pending invitations (unused, unexpired, not revoked
+or declined); one more answers `pending_invitation_limit` (409). Expired invitations that were
+never accepted are deleted by the retention job. It creates a Member Membership in `PENDING_KEY_GRANT`; GitHub admission alone does
 not create or activate a Membership. Provisioning the complete required grant set and its signed
 activation object moves that Membership to `ACTIVE`.
 

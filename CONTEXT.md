@@ -29,6 +29,12 @@ Master Key derives the same way. It never changes for a User on one Server Profi
 identity for a known teammate is never routine.
 _Avoid_: User key, account fingerprint (the fingerprint is only its short display form)
 
+**Device Proof**:
+A short-lived token, bound to one session and one active Device, that the Device obtains by signing
+a service challenge with its Ed25519 key. Every Device-scoped request carries it; a session without
+one acts as no Device, whatever Device id it names.
+_Avoid_: Device header, device token, Device session
+
 **Account Device Roster**:
 The versioned list of a User's Devices and their public keys, active or revoked, signed by the
 User's account signing key. Clients trust a Device only when the roster of its User lists it.
@@ -75,6 +81,18 @@ to a new Device's X25519 key, relayed by the service. It underpins CLI login and
 approval; the service relays ciphertext and never sees the AMK.
 _Avoid_: Session handoff, key sync
 
+**Transfer Code**:
+The text a person carries from the sending Device to the receiving one to redeem an Account Key
+Transfer: the transfer's id and the sending account's fingerprint, which the receiving Device checks
+against the key it opens.
+_Avoid_: Transfer ID (alone), handoff token
+
+**Confirmed Identity**:
+A teammate's Account Identity that the user compared out of band and accepted on one installation.
+An identity pinned on first sight verifies the teammate's history, but only a confirmed one lets
+their Devices hand this installation keys.
+_Avoid_: Trusted user, verified member
+
 **Project Epoch Key Link**:
 A service-stored, Device-signed encryption of one Project Epoch Key under the next epoch's key,
 published with each rotation. Walking the links back from the current key recovers every earlier
@@ -90,6 +108,29 @@ _Avoid_: Group, organization, workspace
 The relationship between one User and one Team, carrying an owner, admin, or member role and an
 access lifecycle.
 _Avoid_: Seat, access grant
+
+**Leaving a Team**:
+A Member ending their own Membership. It behaves like removal by an owner or admin: the Membership
+becomes removed and each of the Team's Projects owes a key rotation. The last active owner cannot
+leave while other Members remain.
+_Avoid_: Unsubscribe, quit
+
+**Team Deletion**:
+An owner's irreversible deletion of a Team. The Team becomes inaccessible at once and every
+Membership ends; its encrypted data is purged by retention after a fixed window.
+_Avoid_: Archive (Projects and Environments are archived, not deleted)
+
+**Account Deletion**:
+A User's deletion of their own DotRelay identity on one Server Profile. Credentials, key material,
+and personal data are deleted; the public keys, Membership periods, and opaque ids that teammates
+need to verify the User's past Revisions are kept, and the User is shown as a deleted user. The
+same GitHub identity signing in later becomes a new User.
+_Avoid_: Deactivation, closing the account
+
+**Account Data Export**:
+A JSON document of the account metadata the service holds about the signed-in User. It contains
+no ciphertext, wrapped keys, or Values; decrypted Values come only from a Device.
+_Avoid_: Backup, Values export
 
 **Membership Invitation**:
 A single-use, expiring invitation addressed to a stable GitHub identity. Acceptance by the matching
@@ -211,6 +252,11 @@ A named hosted or self-hosted DotRelay service selected by a client. A web deplo
 the Server Profile behind it and never lets a visitor choose another; only the CLI selects among
 Server Profiles.
 _Avoid_: Instance, endpoint
+
+**Alpha Admission**:
+A Server Profile's list of stable GitHub user ids allowed to use it during the private alpha. A
+signed-in GitHub account outside the list can only sign out; signing in is not admission.
+_Avoid_: Waitlist, beta access, invitation
 
 **History Trust Reset**:
 An explicit acknowledgement that discards one Environment's locally trusted Revision continuity

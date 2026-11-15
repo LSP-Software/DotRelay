@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { CliError, diagnosticForError, EXIT_CODES } from "./errors";
-import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
+import {
+  lstat,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  assertSafeStdout,
+  atomicWriteProtectedFile,
+  previousFilePaths,
+} from "./output";
 
 describe("CLI output safety", () => {
   test("requires reveal for terminal stdout", () => {
@@ -98,6 +113,65 @@ describe("CLI output safety", () => {
       )
         .unlink(file)
         .catch(() => undefined);
+    }
+  });
+
+  const scratch = async () => mkdtemp(join(tmpdir(), "dotrelay-output-"));
+
+  test("writes through a symlinked output instead of replacing the link", async () => {
+    const directory = await scratch();
+    try {
+      const target = join(directory, "shared.env");
+      const link = join(directory, ".env");
+      await writeFile(target, "KEY=old\n");
+      await symlink(target, link);
+      await atomicWriteProtectedFile(link, "KEY=new\n", {
+        retainPrevious: true,
+        followSymlink: true,
+      });
+      expect((await lstat(link)).isSymbolicLink()).toBe(true);
+      expect(await readFile(target, "utf8")).toBe("KEY=new\n");
+      expect(await readFile(`${link}.previous`, "utf8")).toBe("KEY=old\n");
+      if (process.platform !== "win32")
+        expect((await stat(target)).mode & 0o777).toBe(0o600);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a rotation of earlier copies and never retains a duplicate", async () => {
+    const directory = await scratch();
+    try {
+      const file = join(directory, ".env");
+      const [newest, older, oldest] = previousFilePaths(file);
+      await writeFile(file, "# my notes\nKEY=1\n");
+      await atomicWriteProtectedFile(file, "KEY='1'\n", {
+        retainPrevious: true,
+      });
+      // Writing the same content again must not push the commented
+      // original out of the newest slot.
+      await atomicWriteProtectedFile(file, "KEY='1'\n", {
+        retainPrevious: true,
+      });
+      expect(await readFile(`${newest}`, "utf8")).toBe("# my notes\nKEY=1\n");
+      await atomicWriteProtectedFile(file, "KEY='2'\n", {
+        retainPrevious: true,
+      });
+      await atomicWriteProtectedFile(file, "KEY='3'\n", {
+        retainPrevious: true,
+      });
+      expect(await readFile(`${newest}`, "utf8")).toBe("KEY='2'\n");
+      expect(await readFile(`${older}`, "utf8")).toBe("KEY='1'\n");
+      expect(await readFile(`${oldest}`, "utf8")).toBe("# my notes\nKEY=1\n");
+      await atomicWriteProtectedFile(file, "KEY='4'\n", {
+        retainPrevious: true,
+      });
+      expect(await readFile(`${oldest}`, "utf8")).toBe("KEY='1'\n");
+      if (process.platform !== "win32")
+        for (const path of [newest, older, oldest])
+          expect((await stat(`${path}`)).mode & 0o777).toBe(0o600);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });

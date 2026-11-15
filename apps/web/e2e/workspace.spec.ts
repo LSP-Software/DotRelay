@@ -148,6 +148,58 @@ test("a reload of an enrolled browser keeps it out of the setup prompt", async (
   await expect(page.getByRole("row", { name: /This browser/ })).toBeVisible();
 });
 
+test("revoking a device confirms first and ends with rotation guidance", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.route("**/api/v1/devices/bootstrap**", (route) =>
+    route.fulfill({ json: {} }),
+  );
+  await page.route("**/api/v1/grants/bootstrap**", (route) =>
+    route.fulfill({ json: {} }),
+  );
+  const revoked: string[] = [];
+  await page.route("**/api/v1/devices/*/revoke", (route) => {
+    revoked.push(route.request().url());
+    return route.fulfill({
+      json: { revoked: true, signedOutEverywhere: true },
+    });
+  });
+  await page.goto("/workspace");
+  await trustWorkspaceServer(page);
+  await page.locator("aside").getByRole("button", { name: "Devices" }).click();
+  await page.getByRole("button", { name: "Set up browser" }).click();
+  await expect(
+    page.locator("#devices").getByText("This browser is set up", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 15_000 });
+
+  // The control names the device, and nothing happens until confirmed.
+  await page.getByRole("button", { name: "Revoke device CatchOS" }).click();
+  const confirm = page.getByTestId("revoke-device-dialog");
+  await expect(confirm).toContainText("Revoke CatchOS?");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toBeHidden();
+  expect(revoked).toHaveLength(0);
+
+  await page.getByRole("button", { name: "Revoke device CatchOS" }).click();
+  await confirm.getByRole("button", { name: "Revoke device" }).click();
+
+  // Success does not jump straight to sign-in: the revoked device keeps what
+  // it downloaded, so the rotation step comes first, with a copyable command.
+  const done = page.getByTestId("device-revoked-dialog");
+  await expect(done).toBeVisible({ timeout: 15_000 });
+  expect(revoked).toHaveLength(1);
+  await expect(done).toContainText("already downloaded");
+  await expect(done).toContainText("dotrelay project rotate");
+  await expect(
+    done.getByRole("button", { name: "Copy command" }),
+  ).toBeVisible();
+  await done.getByRole("button", { name: "Continue to sign in" }).click();
+  await expect(page).toHaveURL(/\/sign-in/);
+});
+
 test("device approval page asks to allow the CLI", async ({ page }) => {
   await page.goto("/device?user_code=ABCD-EFGH");
   await expect(
@@ -173,6 +225,42 @@ test("landing page leads to the GitHub sign-in page", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Continue with GitHub" }),
+  ).toBeVisible();
+});
+
+test("landing page offers install steps, docs, and policies", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("install-command")).toContainText(
+    "npm install -g @dotrelay/cli",
+  );
+  await expect(page.getByTestId("setup-command")).toContainText(
+    "dotrelay setup https://api.dotrelay.dev",
+  );
+  await expect(
+    page
+      .getByRole("navigation", { name: "Primary navigation" })
+      .getByRole("link", { name: "Docs" }),
+  ).toHaveAttribute("href", /docs\/wiki\/cli\.md$/);
+  // The security claim is specific about what the cryptography is.
+  await expect(page.getByText(/classical \(not post-quantum\)/)).toBeVisible();
+  await expect(page.getByText(/confirm the server's identity/)).toBeVisible();
+
+  const footer = page.getByRole("navigation", { name: "Footer" });
+  await footer.getByRole("link", { name: "Privacy" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Privacy policy" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "What we cannot see" }),
+  ).toBeVisible();
+  await page.goto("/terms");
+  await expect(
+    page.getByRole("heading", { name: "Terms of service" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Privacy policy" }).first(),
   ).toBeVisible();
 });
 
@@ -273,7 +361,7 @@ test("role-aware administration reflects the persisted Team record", async ({
   // invitation exactly as the service recorded them.
   await expect(membersCard.getByText("Owner", { exact: true })).toBeVisible();
   await expect(
-    membersCard.getByText("Waiting for encryption keys"),
+    membersCard.getByText("Action needed: share project keys"),
   ).toBeVisible();
   await expect(membersCard.getByText("Invitation pending")).toBeVisible();
 
@@ -579,7 +667,7 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
 
   await page.getByRole("button", { name: "Stage rollback" }).click();
   await expect(
-    page.getByText(/Values from rev_0183 are in your draft/),
+    page.getByText(/Values from revision rev_0183 are in your draft/),
   ).toBeVisible();
 });
 

@@ -8,6 +8,8 @@ import {
   type GitCommandResult,
   type GitCommandRunner,
   type GitTrackingInfo,
+  gitCommand,
+  gitEnvironment,
 } from "./git-tracking";
 
 type Script = (directory: string, args: readonly string[]) => GitCommandResult;
@@ -366,6 +368,37 @@ realRepositoryDescribe("Git tracking probe against a real repository", () => {
     expect((await probe(output)).state).toBe("ignored");
     await runGit(root, ["add", "--force", "--", ":(literal).env[local]"]);
     expect((await probe(output)).state).toBe("tracked");
+  });
+
+  test("never runs a repository's fsmonitor or hooks", async () => {
+    const { root } = await createRepository();
+    const marker = join(root, "fsmonitor-ran");
+    const hook = join(root, "fsmonitor.sh");
+    await Bun.write(hook, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`);
+    await Bun.spawn(["chmod", "+x", hook]).exited;
+    await runGit(root, ["config", "core.fsmonitor", hook]);
+    // Plain git runs the configured fsmonitor for ls-files.
+    await runGit(root, ["ls-files", "--error-unmatch", "tracked.env"]).catch(
+      () => undefined,
+    );
+    const runsForPlainGit = await Bun.file(marker).exists();
+    await rm(marker, { force: true });
+    const probe = createGitTrackingProbe();
+    expect((await probe(join(root, "tracked.env"))).state).toBe("tracked");
+    expect((await probe(join(root, "untracked.env"))).state).toBe("untracked");
+    expect(await Bun.file(marker).exists()).toBe(false);
+    // The fixture is only meaningful where git honours core.fsmonitor.
+    expect(runsForPlainGit).toBe(true);
+  });
+
+  test("hardened git invocations disable repository-controlled programs", () => {
+    const argv = gitCommand(["status"]);
+    expect(argv[0]).toBe("git");
+    expect(argv).toContain("core.fsmonitor=false");
+    expect(argv).toContain("core.hooksPath=/dev/null");
+    expect(argv.at(-1)).toBe("status");
+    expect(gitEnvironment({}).GIT_PAGER).toBe("cat");
+    expect(gitEnvironment({}).GIT_TERMINAL_PROMPT).toBe("0");
   });
 
   test("honors a linked worktree's own index and exclusion list", async () => {

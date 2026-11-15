@@ -39,7 +39,7 @@ const createProbePackage = async (
   }
   await writeFile(
     join(directory, "package.json"),
-    `${JSON.stringify({ name: "dotrelay", version: probeVersion }, null, 2)}\n`,
+    `${JSON.stringify({ name: "@dotrelay/cli", version: probeVersion }, null, 2)}\n`,
   );
   for (const probeBinary of probeBinaries) {
     const target = join(

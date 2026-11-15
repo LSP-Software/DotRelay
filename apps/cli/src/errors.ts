@@ -1,5 +1,6 @@
 import { ProtocolTransportError } from "@dotrelay/client";
 import { ContractError } from "@dotrelay/contracts";
+import { HOSTED_ORIGIN } from "./hosted-origin";
 
 export const EXIT_CODES = Object.freeze({
   success: 0,
@@ -51,11 +52,16 @@ const safeDiagnosticNumericKeys = new Set(safeDiagnosticKeys);
 // never leak through as a stable category, while the category and exit code
 // the command assigned remain actionable.
 const safeDiagnosticCodes = new Set([
+  "account_fingerprint_mismatch",
+  "account_fingerprint_required",
   "account_key_already_exists",
   "account_key_envelope_conflict",
   "account_key_not_unlocked",
   "account_key_transfer_invalid",
   "account_key_unlock_failed",
+  "alpha_admission_required",
+  "account_roster_untrusted",
+  "account_trust_pins_invalid",
   "archived_resource",
   "artifact_invalid",
   "baseline_invalid",
@@ -65,12 +71,14 @@ const safeDiagnosticCodes = new Set([
   "artifact_read_failed",
   "artifact_too_large",
   "auth_response_invalid",
+  "authored_at_out_of_range",
   "authentication",
   "authentication_required",
   "browser_open_failed",
   "capabilities_invalid",
   "capabilities_unavailable",
   "command_unavailable",
+  "command_start_failed",
   "conflict",
   "context_read_failed",
   "context_write_failed",
@@ -92,6 +100,7 @@ const safeDiagnosticCodes = new Set([
   "device_enrollment_unavailable",
   "device_mismatch",
   "device_not_active",
+  "device_proof_required",
   "enrollment_binding_mismatch",
   "enrollment_certificate_invalid",
   "environment_ambiguous",
@@ -115,19 +124,28 @@ const safeDiagnosticCodes = new Set([
   "local-io",
   "membership_not_active",
   "membership_not_key_provisioned",
+  "membership_pending",
   "missing_values",
+  "process_control_variable",
+  "state_directory_unavailable",
+  "state_permissions_invalid",
   "operation_conflict",
   "output_conflict",
   "output_tracked",
   "output_write_failed",
+  "owner_transfer_required",
   "payload_too_large",
   "peer_share_failed",
+  "pending_invitation_limit",
   "profile_catalog_invalid",
   "profile_catalog_read_failed",
   "profile_catalog_write_failed",
   "profile_mismatch",
   "profile_selection_invalid",
   "project_ambiguous",
+  "project_epoch_rollback",
+  "project_key_mismatch",
+  "project_key_unavailable",
   "publication_invalid",
   "rate_limited",
   "rate_limit_unavailable",
@@ -154,6 +172,7 @@ const safeDiagnosticCodes = new Set([
   "stale_head",
   "state_conflict",
   "transfer_recipient_unknown",
+  "transfer_recipient_unverified",
   "transient",
   "trusted_head_conflict",
   "trusted_head_invalid",
@@ -202,7 +221,9 @@ export const categoryForProblem = (
 ): "invocation" | "conflict" | "crypto" | "authentication" | "transient" => {
   if (
     code === "authentication_required" ||
+    code === "alpha_admission_required" ||
     code === "device_not_active" ||
+    code === "device_proof_required" ||
     code === "forbidden" ||
     code === "repository_access_denied"
   )
@@ -222,6 +243,9 @@ export const categoryForProblem = (
       "invitation_expired",
       "staging_expired",
       "genesis_exists",
+      "authored_at_out_of_range",
+      "pending_invitation_limit",
+      "owner_transfer_required",
     ].includes(code)
   )
     return "conflict";
@@ -257,13 +281,68 @@ export const repositoryAccessDeniedDetail = (installUrl?: string): string =>
     "3. If an organization owns the repository, an organization owner may need to approve the app, and SSO may need authorizing. Then retry your command.",
   ].join("\n");
 
-export const detailForProblem = (code: string): string => {
+// A wait the operator can act on: "30 seconds", "4 minutes", "2 hours".
+export const describeWait = (seconds: number): string => {
+  const unit = (value: number, name: string): string =>
+    `${value} ${name}${value === 1 ? "" : "s"}`;
+  if (seconds < 60) return unit(Math.max(1, Math.ceil(seconds)), "second");
+  if (seconds < 3600) return unit(Math.ceil(seconds / 60), "minute");
+  return unit(Math.ceil(seconds / 3600), "hour");
+};
+
+const isHostedOrigin = (origin: string | undefined): boolean => {
+  if (origin === undefined) return false;
+  try {
+    return new URL(origin).origin === new URL(HOSTED_ORIGIN).origin;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The answer for a GitHub account outside a server's alpha list. Only
+ * DotRelay's hosted service takes access requests by email; anywhere else,
+ * including when the origin is unknown, the server's operator decides.
+ */
+export const alphaAdmissionDetail = (origin?: string): string =>
+  [
+    isHostedOrigin(origin)
+      ? "DotRelay is in private alpha and this GitHub account isn't on the list yet. Email support@dotrelay.dev to request access."
+      : "This DotRelay server is in private alpha and this GitHub account isn't on its list yet. Ask this server's operator for access.",
+    "To use another GitHub account, run dotrelay logout, then dotrelay login.",
+  ].join("\n");
+
+export const detailForProblem = (
+  code: string,
+  context: Readonly<{
+    readonly retryAfterSeconds?: number;
+    /** The Server Profile origin that answered, when the caller knows it. */
+    readonly origin?: string;
+  }> = {},
+): string => {
+  if (code === "alpha_admission_required")
+    return alphaAdmissionDetail(context.origin);
   if (code === "authentication_required")
     return "login is required for this Server Profile; run dotrelay login";
   if (code === "device_not_active")
     return "this Device is not active; run dotrelay device enroll to re-authorize it";
+  if (code === "device_proof_required")
+    return "the Server Profile did not accept this Device's proof of its key; run the command again, and run dotrelay login if it keeps failing";
+  if (code === "membership_not_key_provisioned")
+    return [
+      "you joined this Team, but its Project keys have not been shared with you yet.",
+      'A Team owner or admin has to share them: in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
+      "Then run dotrelay pull.",
+    ].join("\n");
   if (code === "membership_not_active")
-    return "your Membership in this Team is not active; ask a Team owner to re-add you, then run dotrelay pull to refresh it";
+    // Servers before membership_not_key_provisioned send this code for a
+    // Membership waiting for keys too, so both repairs are still named.
+    return [
+      "your Membership in this Team is not active yet.",
+      'If you accepted an invitation, a Team owner or admin still has to share the Project keys with you: in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.',
+      "If you were removed from the Team, ask an owner or admin to invite you again.",
+      "Then run dotrelay pull.",
+    ].join("\n");
   if (code === "forbidden") return "the Server Profile denied the request";
   if (code === "resource_not_found")
     return "the requested resource was not found";
@@ -279,9 +358,22 @@ export const detailForProblem = (code: string): string => {
   if (code === "github_unavailable")
     return "GitHub could not be reached through the Server Profile; established sync is unaffected, retry once GitHub is available";
   if (code === "rate_limited")
-    return "the Server Profile rate-limited the request; wait and retry";
+    return context.retryAfterSeconds !== undefined &&
+      Number.isFinite(context.retryAfterSeconds) &&
+      context.retryAfterSeconds >= 0
+      ? `the Server Profile rate-limited the request; wait ${describeWait(context.retryAfterSeconds)} and retry`
+      : "the Server Profile rate-limited the request; wait and retry";
+  if (code === "authored_at_out_of_range")
+    return [
+      "the Server Profile rejected the Revision's timestamp: it is earlier than this Device's activation, your Membership, or the Revision before it, or more than 10 minutes in the future.",
+      "Check that this machine's system clock and time zone are correct (enable automatic time sync), then run the command again.",
+    ].join("\n");
+  if (code === "pending_invitation_limit")
+    return "this Team has reached its limit of pending invitations; revoke invitations that are no longer needed in the DotRelay web app, or wait for them to be accepted, declined, or expire";
   if (code === "rate_limit_unavailable")
     return "the Server Profile's rate limiter is unavailable; retry later";
+  if (code === "owner_transfer_required")
+    return "you are this Team's last active owner; make another active Member an owner in the DotRelay web app, or delete the Team, first";
   if (categoryForProblem(code) === "conflict")
     return "the requested change conflicts with current Server Profile state";
   if (categoryForProblem(code) === "crypto")
@@ -300,8 +392,11 @@ export type ErrorPresentation = Readonly<{
 
 const errorTitles: Record<string, string> = {
   authentication_required: "Login required",
+  alpha_admission_required: "Private alpha",
   device_not_active: "Device not active",
+  device_proof_required: "Device not proven",
   membership_not_active: "Membership not active",
+  membership_not_key_provisioned: "Waiting for Project keys",
   device_bundle_missing: "No Device enrolled",
   device_enrollment_failed: "Device enrollment failed",
   device_enrollment_unavailable: "Device enrollment unavailable",
@@ -331,6 +426,9 @@ const errorTitles: Record<string, string> = {
   staging_expired: "Staged request expired",
   staged_object_missing: "Staged request missing",
   invitation_expired: "Invitation expired",
+  pending_invitation_limit: "Too many pending invitations",
+  owner_transfer_required: "Ownership transfer required",
+  authored_at_out_of_range: "Clock out of range",
   rollback_target_unavailable: "Rollback target unavailable",
   rollback_variable_absent: "Rollback target missing Variables",
   unreadable_manifest: "Unreadable manifest",
@@ -340,6 +438,15 @@ const errorTitles: Record<string, string> = {
   recovery_code_malformed: "Recovery code invalid",
   recovery_wrapper_missing: "No Recovery Code wrapper",
   project_ambiguous: "Multiple Projects match",
+  project_key_unavailable: "Project key unavailable",
+  project_key_mismatch: "Project key does not match",
+  project_epoch_rollback: "Project epoch went backwards",
+  account_roster_untrusted: "Account Device list untrusted",
+  account_fingerprint_mismatch: "Account fingerprint does not match",
+  account_fingerprint_required: "Account fingerprint required",
+  transfer_recipient_unverified: "Device not in your signed list",
+  command_start_failed: "Could not start command",
+  membership_pending: "Waiting for Project keys",
   environment_ambiguous: "Ambiguous Environment",
   environment_not_found: "Environment not found",
   environment_context_missing: "Environment context missing",
@@ -416,6 +523,26 @@ const isCryptoRuntimeError = (error: unknown): boolean => {
     return true;
   const name = (error as { readonly name?: unknown }).name;
   return typeof name === "string" && cryptoRuntimeErrorNames.has(name);
+};
+
+const retryContextFor = (
+  error: unknown,
+): Readonly<{ readonly retryAfterSeconds?: number }> =>
+  error instanceof ProtocolTransportError &&
+  error.problem.retryAfterSeconds !== undefined
+    ? { retryAfterSeconds: error.problem.retryAfterSeconds }
+    : {};
+
+const retryAfterDiagnostic = (
+  error: unknown,
+): Readonly<{ readonly retryAfterSeconds?: number }> => {
+  const seconds = retryContextFor(error).retryAfterSeconds;
+  return seconds !== undefined &&
+    Number.isInteger(seconds) &&
+    seconds >= 0 &&
+    seconds <= 1_000_000_000
+    ? { retryAfterSeconds: seconds }
+    : {};
 };
 
 export const problemCodeFor = (error: unknown): string | null => {
@@ -519,7 +646,8 @@ export const diagnosticForError = (
       code: safeDiagnosticCodes.has(problemCode)
         ? problemCode
         : "unexpected_failure",
-      detail: detailForProblem(problemCode),
+      detail: detailForProblem(problemCode, retryContextFor(error)),
+      ...retryAfterDiagnostic(error),
       exitCode: categoryExitCode[category],
     };
   }
@@ -546,7 +674,8 @@ export const humanDetailForError = (
   options: Readonly<{ readonly debug?: boolean }> = {},
 ): string => {
   const problemCode = problemCodeFor(error);
-  if (problemCode !== null) return detailForProblem(problemCode);
+  if (problemCode !== null)
+    return detailForProblem(problemCode, retryContextFor(error));
   // A raw crypto runtime failure stays as opaque on human stderr as in the
   // JSON document, so both modes name the same severity and next action;
   // --debug opts both into the sanitized operational message.

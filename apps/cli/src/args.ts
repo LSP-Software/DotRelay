@@ -20,9 +20,16 @@ export const COMMANDS = [
   "team",
   "history",
   "rollback",
+  "run",
+  "export",
+  "list",
+  "account",
 ] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
+
+export const EXPORT_FORMATS = ["dotenv", "json", "shell"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 export type ParsedArguments = Readonly<{
   readonly command: CommandName;
@@ -40,12 +47,16 @@ export type ParsedArguments = Readonly<{
   readonly name?: string;
   readonly remote?: string;
   readonly limit?: number;
+  readonly format?: ExportFormat;
   readonly classifications: Readonly<Record<string, "shared" | "user-defined">>;
   /** Variable references: operator-visible names or stable Variable ids. */
   readonly variableReferences: readonly string[];
+  /** Process-control Variable names `run` and the shell export may pass on. */
+  readonly allowedEnvironmentNames: readonly string[];
   readonly noOpen: boolean;
   readonly noInput: boolean;
   readonly force: boolean;
+  readonly discardLocal: boolean;
   readonly json: boolean;
   readonly debug: boolean;
   readonly stdout: boolean;
@@ -69,11 +80,14 @@ type MutableArguments = {
   name?: string;
   remote?: string;
   limit?: string | number;
+  format?: string;
   classifications: Record<string, "shared" | "user-defined">;
   variableReferences: string[];
+  allowedEnvironmentNames: string[];
   noOpen: boolean;
   noInput: boolean;
   force: boolean;
+  discardLocal: boolean;
   json: boolean;
   debug: boolean;
   stdout: boolean;
@@ -96,6 +110,8 @@ const valueFlags = new Set([
   "--limit",
   "--classify",
   "--variable",
+  "--format",
+  "--allow-env",
 ]);
 
 const forbiddenFlags = new Set([
@@ -106,8 +122,16 @@ const forbiddenFlags = new Set([
   "--credentials",
 ]);
 
+// The tokens DotRelay itself reads: everything before a bare --. What
+// follows belongs to the command `dotrelay run` starts, so its flags (even
+// --help or --insecure) are never interpreted here.
+export const ownArguments = (args: readonly string[]): readonly string[] => {
+  const separator = args.indexOf("--");
+  return separator < 0 ? args : args.slice(0, separator);
+};
+
 export const rejectForbiddenFlags = (args: readonly string[]): void => {
-  for (const token of args) {
+  for (const token of ownArguments(args)) {
     const flag = token.includes("=")
       ? token.slice(0, token.indexOf("="))
       : token;
@@ -128,6 +152,7 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
   else if (flag === "--team") parsed.team = value;
   else if (flag === "--name") parsed.name = value;
   else if (flag === "--remote") parsed.remote = value;
+  else if (flag === "--format") parsed.format = value;
   else if (flag === "--limit") {
     parsed.limit = value;
   } else if (flag === "--classify") {
@@ -150,6 +175,14 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     // Variable id; names are resolved against the live Manifest after the
     // Environment sync, where only an id can be validated up front.
     parsed.variableReferences.push(value);
+  } else if (flag === "--allow-env") {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+      const usage = usageFor(parsed.command, parsed.subcommand);
+      throw new CliInvocationError(
+        `--allow-env requires a Variable name${usage ? `; usage: ${usage}` : ""}`,
+      );
+    }
+    parsed.allowedEnvironmentNames.push(value);
   }
 };
 
@@ -168,9 +201,12 @@ export const FLAG_KEYS = [
   "limit",
   "classify",
   "variable",
+  "format",
+  "allowEnv",
   "noOpen",
   "noInput",
   "force",
+  "discardLocal",
   "json",
   "reveal",
   "stdout",
@@ -194,9 +230,12 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
   limit: "--limit",
   classify: "--classify",
   variable: "--variable",
+  format: "--format",
+  allowEnv: "--allow-env",
   noOpen: "--no-open",
   noInput: "--no-input",
   force: "--force",
+  discardLocal: "--discard-local",
   json: "--json",
   reveal: "--reveal",
   stdout: "--stdout",
@@ -218,6 +257,9 @@ export const USAGE: Record<string, string> = {
   rollback:
     "dotrelay rollback <revision-id-or-ordinal> --variable <variable-name-or-id>…",
   help: "dotrelay help",
+  run: "dotrelay run -- <command> [<argument>…]",
+  export: "dotrelay export | --format <dotenv|json|shell>",
+  list: "dotrelay list",
   "profile add": "dotrelay profile add <name> <origin>",
   "profile rebind": "dotrelay profile rebind <name> <origin>",
   "profile use": "dotrelay profile use <name>",
@@ -228,16 +270,25 @@ export const USAGE: Record<string, string> = {
   "device complete": "dotrelay device complete --from <file>",
   "device backup": "dotrelay device backup",
   "device recover":
-    "dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
+    "dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
   "device setup": "dotrelay device setup",
   "device transfer": "dotrelay device transfer | --to <peer-device-id>",
   "device revoke-wrapper": "dotrelay device revoke-wrapper | --wrapper-id <id>",
+  "device list": "dotrelay device list",
   "project link": "dotrelay project link --team <team-id>",
   "project rotate": "dotrelay project rotate",
+  "team list": "dotrelay team list",
   "team members": "dotrelay team members | --fingerprints",
   "team trust": "dotrelay team trust <user-id>",
+  "team share-keys": "dotrelay team share-keys <github-login-or-user-id>",
+  "team decline": "dotrelay team decline <invitation-id-or-team>",
+  "team leave": "dotrelay team leave <team-id-or-name>",
+  "account export": "dotrelay account export | --output <file>",
+  "account delete": "dotrelay account delete",
+  "env list": "dotrelay env list",
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
+  "env create": "dotrelay env create <label>",
 };
 
 // The flags each command consumes; anything parsed but not listed here is
@@ -282,6 +333,7 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "stdout",
     "noInput",
     "force",
+    "discardLocal",
     "json",
     "limit",
     "reveal",
@@ -328,6 +380,18 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "reveal",
   ],
   help: [],
+  run: ["profile", "environment", "team", "remote", "allowEnv", "noInput"],
+  export: [
+    "profile",
+    "environment",
+    "team",
+    "remote",
+    "format",
+    "allowEnv",
+    "noInput",
+    "reveal",
+  ],
+  list: ["profile", "environment", "team", "remote", "noInput", "json"],
   "profile add": ["noInput", "json"],
   "profile rebind": ["noInput", "force", "json"],
   "profile use": ["json"],
@@ -347,11 +411,20 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "device setup": ["profile", "noInput", "json"],
   "device transfer": ["profile", "noInput", "json", "to"],
   "device revoke-wrapper": ["profile", "noInput", "json", "wrapperId"],
+  "device list": ["profile", "json"],
   "project link": ["profile", "team", "remote", "noInput", "json"],
   "project rotate": ["profile", "noInput", "force", "json"],
+  "team list": ["profile", "json"],
   "team members": ["profile", "team", "fingerprints", "noInput", "json"],
   "team trust": ["profile", "team", "noInput", "force", "json"],
+  "team share-keys": ["profile", "team", "noInput", "force", "json"],
+  "team decline": ["profile", "noInput", "force", "json"],
+  "team leave": ["profile", "noInput", "force", "json"],
+  "account export": ["profile", "output", "json"],
+  "account delete": ["profile", "noInput", "force", "json"],
+  "env list": ["profile", "json"],
   "env use": ["profile", "environment", "json"],
+  "env create": ["profile", "json"],
 };
 
 // Subcommands the parser accepts under each grouped command; the help
@@ -371,10 +444,12 @@ export const SUBCOMMANDS: Readonly<
     "setup",
     "transfer",
     "revoke-wrapper",
+    "list",
   ],
   project: ["link", "rotate"],
-  team: ["members", "trust"],
-  env: ["use"],
+  team: ["list", "members", "trust", "share-keys", "decline", "leave"],
+  env: ["list", "use", "create"],
+  account: ["export", "delete"],
 };
 
 // The usage line for a complete "command [subcommand]" label; the help
@@ -393,6 +468,7 @@ const usageFor = (
 const flagPresent = (parsed: MutableArguments, key: FlagKey): boolean => {
   if (key === "classify") return Object.keys(parsed.classifications).length > 0;
   if (key === "variable") return parsed.variableReferences.length > 0;
+  if (key === "allowEnv") return parsed.allowedEnvironmentNames.length > 0;
   return Boolean(parsed[key]);
 };
 
@@ -421,26 +497,20 @@ const validateCommand = (parsed: MutableArguments) => {
   const usage = usageForLabel(label);
   const allowed = SUBCOMMANDS[command];
   const subcommandOptional = command === "context";
-  if (
-    allowed &&
-    !subcommandOptional &&
-    (!parsed.subcommand || !allowed.includes(parsed.subcommand))
-  )
+  // An unknown or missing subcommand has no usage line of its own, so the
+  // error names the group's subcommands and its help instead of inventing
+  // a usage line for a command that does not exist.
+  if (allowed && !subcommandOptional && !parsed.subcommand)
     throw new CliInvocationError(
-      `${command} requires one of: ${allowed.join(", ")}; usage: ${usage}`,
+      `the ${command} command needs a subcommand: ${allowed.join(", ")}; usage: dotrelay ${command} <subcommand>`,
     );
-  if (
-    allowed &&
-    subcommandOptional &&
-    parsed.subcommand &&
-    !allowed.includes(parsed.subcommand)
-  )
+  if (allowed && parsed.subcommand && !allowed.includes(parsed.subcommand))
     throw new CliInvocationError(
-      `${command} does not accept ${parsed.subcommand}; usage: ${usageForLabel(command)}`,
+      `unknown ${command} subcommand: ${parsed.subcommand}; choose one of: ${allowed.join(", ")}; usage: dotrelay ${command} <subcommand>`,
     );
   if (!allowed && parsed.subcommand)
     throw new CliInvocationError(
-      `${command} does not accept a subcommand; usage: ${usage}`,
+      `the ${command} command does not accept a subcommand; usage: ${usage}`,
     );
   if (
     command === "env" &&
@@ -449,7 +519,7 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.positionals.length > 0
   )
     throw new CliInvocationError(
-      `env use accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
+      `the env use command accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
     );
   if (
     command === "init" &&
@@ -457,7 +527,7 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.positionals.length === 1
   )
     throw new CliInvocationError(
-      `init accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
+      `the init command accepts an Environment id or label either as an argument or with --environment, not both; usage: ${usage}`,
     );
   const allowedFlags = FLAG_PERMISSIONS[label] ?? [];
   for (const key of FLAG_KEYS) {
@@ -471,6 +541,13 @@ const validateCommand = (parsed: MutableArguments) => {
         `${FLAG_TOKENS[key]} is not supported by ${label}; usage: ${usage}`,
       );
   }
+  if (
+    parsed.format !== undefined &&
+    !EXPORT_FORMATS.includes(parsed.format as ExportFormat)
+  )
+    throw new CliInvocationError(
+      `--format must be one of: ${EXPORT_FORMATS.join(", ")}; usage: ${usage}`,
+    );
   if (parsed.limit !== undefined) {
     const limit = Number(parsed.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)
@@ -491,7 +568,7 @@ const validateCommand = (parsed: MutableArguments) => {
   }
   if (command === "project" && parsed.subcommand === "link" && !parsed.team)
     throw new CliInvocationError(
-      `project link requires --team <team-id>; usage: ${usage}`,
+      `the project link command requires --team <team-id>; usage: ${usage}`,
     );
   const positionalCounts: Partial<
     Record<CommandName, number | readonly number[]>
@@ -504,8 +581,20 @@ const validateCommand = (parsed: MutableArguments) => {
           : 0,
     device: 0,
     project: 0,
-    team: parsed.subcommand === "trust" ? 1 : 0,
-    env: parsed.subcommand === "use" && parsed.environment ? 0 : 1,
+    team:
+      parsed.subcommand === "trust" ||
+      parsed.subcommand === "share-keys" ||
+      parsed.subcommand === "decline" ||
+      parsed.subcommand === "leave"
+        ? 1
+        : 0,
+    account: 0,
+    env:
+      parsed.subcommand === "list"
+        ? 0
+        : parsed.subcommand === "use" && parsed.environment
+          ? 0
+          : 1,
     init: [0, 1],
     setup: 1,
     login: 0,
@@ -522,6 +611,8 @@ const validateCommand = (parsed: MutableArguments) => {
     // Interactively the target Revision can be chosen from the rendered
     // history instead of named on the command line; automation must name it.
     rollback: parsed.noInput ? 1 : [0, 1],
+    export: 0,
+    list: 0,
   };
   const expected = positionalCounts[command];
   if (expected !== undefined) {
@@ -538,24 +629,28 @@ const validateCommand = (parsed: MutableArguments) => {
         ? `; use --environment ${parsed.positionals[0]} instead`
         : "";
       throw new CliInvocationError(
-        `${label} takes ${describePositionals(expected)} but received ${parsed.positionals.length}${correction}; usage: ${usage}`,
+        `the ${label} command takes ${describePositionals(expected)} but received ${parsed.positionals.length}${correction}; usage: ${usage}`,
       );
     }
   }
+  if (command === "run" && parsed.positionals.length === 0)
+    throw new CliInvocationError(
+      `the run command needs the command to start after --; usage: ${usage}`,
+    );
   if (
     command === "device" &&
     ["approve", "complete"].includes(parsed.subcommand ?? "") &&
     !parsed.from
   )
     throw new CliInvocationError(
-      `device ${parsed.subcommand} requires --from <file>; usage: ${usage}`,
+      `the device ${parsed.subcommand} command requires --from <file>; usage: ${usage}`,
     );
   if (command === "device" && parsed.subcommand === "recover") {
     const hasCodeFile = parsed.recoveryCodeFile !== undefined;
     const hasTransfer = parsed.transfer !== undefined;
     if (hasCodeFile && hasTransfer)
       throw new CliInvocationError(
-        `device recover accepts either --recovery-code-file <path> or --transfer <transfer-id>, not both; usage: ${usage}`,
+        `the device recover command accepts either --recovery-code-file <path> or --transfer <transfer-code>, not both; usage: ${usage}`,
       );
   }
   if (
@@ -565,7 +660,7 @@ const validateCommand = (parsed: MutableArguments) => {
     !parsed.to
   )
     throw new CliInvocationError(
-      `device transfer requires --to <peer-device-id> with --no-input; usage: ${usage}`,
+      `the device transfer command requires --to <peer-device-id> with --no-input; usage: ${usage}`,
     );
   if (
     command === "device" &&
@@ -574,7 +669,7 @@ const validateCommand = (parsed: MutableArguments) => {
     !parsed.wrapperId
   )
     throw new CliInvocationError(
-      `device revoke-wrapper requires --wrapper-id <id> with --no-input; usage: ${usage}`,
+      `the device revoke-wrapper command requires --wrapper-id <id> with --no-input; usage: ${usage}`,
     );
   // Interactively the Variables to roll back are chosen by name from the
   // live Manifest; automation must name at least one.
@@ -584,7 +679,7 @@ const validateCommand = (parsed: MutableArguments) => {
     parsed.variableReferences.length === 0
   )
     throw new CliInvocationError(
-      `rollback --no-input requires at least one --variable <variable-name-or-id>; usage: ${usage}`,
+      `the rollback command requires at least one --variable <variable-name-or-id> with --no-input; usage: ${usage}`,
     );
 };
 
@@ -597,6 +692,7 @@ export const parseArguments = (
     noOpen: false,
     noInput: false,
     force: false,
+    discardLocal: false,
     json: false,
     debug: false,
     stdout: false,
@@ -604,6 +700,7 @@ export const parseArguments = (
     fingerprints: false,
     classifications: {},
     variableReferences: [],
+    allowedEnvironmentNames: [],
   };
   let index = 0;
   while (index < args.length) {
@@ -612,6 +709,30 @@ export const parseArguments = (
     if (token === "--") {
       parsed.positionals.push(...args.slice(index + 1));
       break;
+    }
+    // Short aliases: -h and -v are routed by run() before parsing, and -o is
+    // the conventional spelling of --output.
+    if (token === "-h" || token === "-v") {
+      index += 1;
+      continue;
+    }
+    if (token === "-o") {
+      const value = args[index + 1];
+      if (value === undefined || value.length === 0 || value.startsWith("-")) {
+        const usage = usageFor(parsed.command, parsed.subcommand);
+        throw new CliInvocationError(
+          `-o needs a value${usage ? `; usage: ${usage}` : ""}`,
+        );
+      }
+      assignValue(parsed, "--output", value);
+      index += 2;
+      continue;
+    }
+    if (/^-[A-Za-z]/.test(token)) {
+      const usage = usageFor(parsed.command, parsed.subcommand);
+      throw new CliInvocationError(
+        `unknown option: ${token}; options use two dashes, such as --output${usage ? `; usage: ${usage}` : ""}`,
+      );
     }
     if (token.startsWith("--")) {
       const equals = token.indexOf("=");
@@ -638,6 +759,7 @@ export const parseArguments = (
       } else if (flag === "--no-open") parsed.noOpen = true;
       else if (flag === "--no-input") parsed.noInput = true;
       else if (flag === "--force") parsed.force = true;
+      else if (flag === "--discard-local") parsed.discardLocal = true;
       else if (flag === "--json") parsed.json = true;
       else if (flag === "--debug") parsed.debug = true;
       else if (flag === "--stdout") parsed.stdout = true;
@@ -651,13 +773,22 @@ export const parseArguments = (
       }
     } else if (!parsed.command) {
       if (!COMMANDS.includes(token as CommandName))
-        throw new CliInvocationError(`unknown command: ${token}`);
+        throw new CliInvocationError(
+          `unknown command: ${token}; run dotrelay help to list the commands`,
+        );
       parsed.command = token as CommandName;
+    } else if (parsed.command === "run") {
+      // The child command must follow --, so its own flags can never be
+      // read as DotRelay flags.
+      throw new CliInvocationError(
+        `put the command to run after --; usage: ${usageForLabel("run")}`,
+      );
     } else if (
       (parsed.command === "profile" ||
         parsed.command === "device" ||
         parsed.command === "project" ||
         parsed.command === "team" ||
+        parsed.command === "account" ||
         parsed.command === "env" ||
         parsed.command === "context") &&
       !parsed.subcommand
@@ -677,5 +808,6 @@ export const parseArguments = (
     positionals: Object.freeze(parsed.positionals),
     classifications: Object.freeze({ ...parsed.classifications }),
     variableReferences: Object.freeze([...parsed.variableReferences]),
+    allowedEnvironmentNames: Object.freeze([...parsed.allowedEnvironmentNames]),
   }) as ParsedArguments;
 };

@@ -1,14 +1,19 @@
 import { readFile, readdir, rm } from "node:fs/promises";
 import { atomicWriteProtectedFile } from "./output";
 import {
+  type AccountTrustPins,
+  assertPinnedProjectEpochKeys,
+  assertProjectEpochCurrent,
   authenticatedCreatorKeys,
   createAccountKeyEnvelope,
   createProjectEpochKeyLinkBackfill,
   createProtocolTransport,
   createVerifiedEnvironmentSession,
   type DecodedVariable,
-  deviceHistorySigningKeys,
   exportSigningPublicKey,
+  pinProjectEpochKeys,
+  ProjectEpochTrustError,
+  recordProjectEpoch,
   openAccountKeyEnvelope,
   openOwnedUserValueKey,
   openProjectEpochGrant,
@@ -34,7 +39,11 @@ import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
-import { establishAccountTrust } from "./workflow-account-trust";
+import {
+  establishAccountTrust,
+  loadAccountTrustPins,
+  saveAccountTrustPins,
+} from "./workflow-account-trust";
 import {
   clearPendingRotation,
   grantRecoveredKeyToSelf,
@@ -44,19 +53,23 @@ import {
 } from "./workflow-pending-rotation";
 import {
   accountKeyTrustedKeys,
+  authoredAtFloor,
   type Boundary,
   adminClient,
   base64,
   bytesToHex,
   collectSigningTrust,
   createDeviceAdmin,
+  deviceProofOption,
   fromBase64,
+  historySigningKeys,
   opaqueEnvironmentId,
   parseBoundary,
   projectGrantVerification,
   rawPublicKey,
   readTrustedHead,
   resolveRequestedEnvironmentReference,
+  rotationOwedNotice,
   safeProjectEpoch,
   statePath,
   verifyDeviceBundle,
@@ -70,6 +83,34 @@ import {
   bootstrapProjectGrant,
   wrapEpochKeyToPeers,
 } from "./workflow-epoch-grants";
+
+// What a teammate must do so this User's Devices can read the Project. The
+// service only lists this User's own Devices to a pull, so another person's
+// pull can never share keys with this User: an owner or admin has to choose
+// to share them, in the web app or with dotrelay team share-keys.
+const SHARE_PROJECT_KEYS_HOW =
+  'in the DotRelay web app they open Members and choose "Share project keys" for you, or they run dotrelay team share-keys <your-github-login>.';
+
+export const SHARE_PROJECT_KEYS_STEP = `A Team owner or admin has to share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`;
+
+// Names who can fix a missing Project key: another of this User's own
+// Devices when one holds the key, otherwise an owner or admin.
+export const missingProjectKeyNotice = (
+  input: Readonly<{
+    readonly ownDeviceHoldsKey: boolean;
+    readonly accountKeyUnlocked: boolean;
+  }>,
+): string => {
+  // A locked Device trusts none of the account's other Devices (ADR 0022),
+  // so unlocking comes before any share from them.
+  if (!input.accountKeyUnlocked)
+    return input.ownDeviceHoldsKey
+      ? `This Device is missing the Project epoch grant and is locked. Unlock it with dotrelay device recover, then run dotrelay pull again: it reads the Project key from your account, or another of your Devices shares it after a dotrelay pull there. Otherwise a Team owner or admin can share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`
+      : `This Device is missing the Project epoch grant. ${SHARE_PROJECT_KEYS_STEP} Then run dotrelay pull again.`;
+  return input.ownDeviceHoldsKey
+    ? `This Device is missing the Project epoch grant. Another of your Devices can read this Project: run dotrelay pull on that Device, then run dotrelay pull here again. Otherwise a Team owner or admin can share the Project keys with you: ${SHARE_PROJECT_KEYS_HOW}`
+    : `This Device is missing the Project epoch grant. ${SHARE_PROJECT_KEYS_STEP} Then run dotrelay pull again.`;
+};
 
 // id instead of creating another Environment to publish into. Each CLI process
 // builds a fresh options object per run, so object identity tracks the
@@ -302,6 +343,18 @@ export const loadWorkflowSession = async (
       {},
       "environment_context_missing",
     );
+  // A rotation moves a Project forward for good: the service may not hand
+  // this installation an epoch older than one it already accepted (ADR 0022).
+  let trustPins: AccountTrustPins = accountTrust.resolution.pins;
+  try {
+    assertProjectEpochCurrent(
+      trustPins,
+      boundary.environment.projectId,
+      safeProjectEpoch(boundary.environment.projectEpoch),
+    );
+  } catch (error) {
+    throw projectEpochTrustFailure(error);
+  }
   let epochKey: Uint8Array | undefined;
   let epochEnvelopePublished = false;
   // A rotation from this Device whose commit was uncertain left its new key
@@ -311,14 +364,15 @@ export const loadWorkflowSession = async (
     options,
     boundary,
     encryptionPrivateKey: keys.encryptionPrivateKey,
-    trustedSigningKeys: accountKeyTrustedKeys(
+    trustedSigningKeys: historySigningKeys(
       boundary,
       await exportSigningPublicKey(deviceSigningPublicKey),
-    ).keys,
+    ),
     cancel: (operationId) =>
       createProtocolTransport({
         origin: options.profile.origin,
         authorization: `Bearer ${token}`,
+        ...deviceProofOption(createDeviceAdmin(options, deviceId)),
         ...(options.fetch ? { fetch: options.fetch as never } : {}),
       })
         .cancel({ operationId, deviceId })
@@ -377,6 +431,19 @@ export const loadWorkflowSession = async (
       }
     }
   }
+  // An epoch this installation already holds a key for never gets a new
+  // one, whatever the service reports about grants and peers.
+  const epochKeyPinned = Object.hasOwn(
+    trustPins.projects?.[boundary.environment.projectId.toLowerCase()]?.keys ??
+      {},
+    String(safeProjectEpoch(boundary.environment.projectEpoch)),
+  );
+  const refuseNewEpochKey = (): void => {
+    if (epochKeyPinned)
+      throw projectEpochTrustFailure(
+        new ProjectEpochTrustError("key-mismatch"),
+      );
+  };
   if (
     epochKey === undefined &&
     accountMasterKey !== null &&
@@ -384,6 +451,7 @@ export const loadWorkflowSession = async (
     !peerHoldsEpochKey &&
     boundary.environment.projectId !== null
   ) {
+    refuseNewEpochKey();
     // No Device holds this epoch's key, so this unlocked Device establishes
     // it: a fresh random Project Epoch Key wrapped by the User's AMK.
     const userId = boundary.session.userId;
@@ -454,6 +522,7 @@ export const loadWorkflowSession = async (
     !boundary.grantsReady &&
     !peerHoldsEpochKey
   ) {
+    refuseNewEpochKey();
     epochKey = await bootstrapProjectGrant(
       options,
       token,
@@ -463,9 +532,26 @@ export const loadWorkflowSession = async (
     );
   } else if (epochKey === undefined && !boundary.grantsReady) {
     pendingActions.push(
-      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+      missingProjectKeyNotice({
+        ownDeviceHoldsKey: peerHoldsEpochKey,
+        accountKeyUnlocked: accountMasterKey !== null,
+      }),
     );
   }
+  // Whichever path delivered it, a key for an epoch this installation
+  // already pinned must be the same key (ADR 0022).
+  if (epochKey && boundary.environment.projectId)
+    try {
+      await assertPinnedProjectEpochKeys(trustPins, {
+        serverProfileId: options.profile.pin.serverProfileId,
+        projectId: boundary.environment.projectId,
+        keys: new Map([
+          [safeProjectEpoch(boundary.environment.projectEpoch), epochKey],
+        ]),
+      });
+    } catch (error) {
+      throw projectEpochTrustFailure(error);
+    }
   // Older or independently bootstrapped Devices can hold a valid grant
   // without an Account Key Envelope. Publish the real key before claiming
   // that recovery on another Device will open this Project.
@@ -540,6 +626,13 @@ export const loadWorkflowSession = async (
     ))
       pendingActions.push(action);
   }
+  // The rotation itself is what clears the obligation, so project rotate
+  // does not repeat the advice it is acting on.
+  if (
+    boundary.environment.rotationOwed &&
+    !(parsed.command === "project" && parsed.subcommand === "rotate")
+  )
+    pendingActions.push(rotationOwedNotice(boundary.environment.rotationOwed));
   if (pendingActions.length > 0 && !parsed.json) {
     const output = options.terminal?.output ?? process.stderr;
     for (const action of pendingActions)
@@ -571,6 +664,7 @@ export const loadWorkflowSession = async (
     },
     origin: options.profile.origin,
     authorization: `Bearer ${token}`,
+    ...deviceProofOption(createDeviceAdmin(options, deviceId)),
     ...(options.fetch ? { fetch: options.fetch as never } : {}),
   });
   const signingPublicKey = await exportSigningPublicKey(deviceSigningPublicKey);
@@ -594,7 +688,7 @@ export const loadWorkflowSession = async (
     ): Promise<Uint8Array | null> => {
       const extras = authenticatedCreatorKeys(
         claimedCreatorKey ? [claimedCreatorKey] : [],
-        deviceHistorySigningKeys(boundary),
+        boundary.verifiedSigners?.account ?? [],
       );
       return openOwnedUserValueKey(
         fromBase64(object, "User value key envelope"),
@@ -707,6 +801,28 @@ export const loadWorkflowSession = async (
           signingPrivateKey: keys.signingPrivateKey,
         })
       : undefined;
+  // Every key this session will read or seal with is pinned, and must match
+  // what this installation pinned before for the same epoch.
+  if (epochKey && boundary.environment.projectId) {
+    try {
+      const pinned = await pinProjectEpochKeys(trustPins, {
+        serverProfileId: options.profile.pin.serverProfileId,
+        projectId: boundary.environment.projectId,
+        currentEpoch: safeProjectEpoch(boundary.environment.projectEpoch),
+        keys: new Map([
+          ...(sharedValueKeyRing ?? new Map<number, Uint8Array>()),
+          [safeProjectEpoch(boundary.environment.projectEpoch), epochKey],
+        ]),
+      });
+      trustPins = pinned.pins;
+      if (pinned.changed) await saveAccountTrustPins(options, trustPins);
+    } catch (error) {
+      throw projectEpochTrustFailure(error);
+    }
+  }
+  // Without the parent Revision this is only the Device and Membership
+  // floor; each publication raises it to its head's authored-at instant.
+  const authoredAtNotBeforeMs = authoredAtFloor(boundary, deviceId);
   const publicationContext: PublicationContext = {
     serverProfileId: options.profile.pin.serverProfileId,
     teamId: boundary.environment.teamId,
@@ -723,6 +839,7 @@ export const loadWorkflowSession = async (
     revisionSigningPublicKey: signingPublicKey,
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),
     ...(userValueKey ? { userDefinedValueSecret: userValueKey } : {}),
+    ...(authoredAtNotBeforeMs !== undefined ? { authoredAtNotBeforeMs } : {}),
   };
   const session = createVerifiedEnvironmentSession({
     context: publicationContext,
@@ -745,6 +862,9 @@ export const loadWorkflowSession = async (
     publicationContext,
     session,
     pendingActions,
+    ...(sharedValueKeyRing && sharedValueKeyRing.size > 0
+      ? { sharedValueKeyRing }
+      : {}),
     ...(createdEnvironmentId ? { createdEnvironmentId } : {}),
   };
 };
@@ -783,10 +903,10 @@ const projectEpochKeyRing = async (input: {
     teamId: input.teamId,
     projectId: input.projectId,
   };
-  const trustedSigningKeys = accountKeyTrustedKeys(
+  const trustedSigningKeys = historySigningKeys(
     input.boundary,
     input.localSigningKey,
-  ).keys;
+  );
   const walk = (candidates: readonly Uint8Array[]) =>
     openProjectEpochKeyChain({
       ...binding,
@@ -897,7 +1017,7 @@ const pastProjectEpochKeys = async (input: {
           : [];
       const extras = authenticatedCreatorKeys(
         claimed,
-        deviceHistorySigningKeys(boundary),
+        boundary.verifiedSigners?.account ?? [],
       );
       ring.set(
         epoch,
@@ -923,6 +1043,26 @@ const pastProjectEpochKeys = async (input: {
     }
   }
   return ring;
+};
+
+// A Project epoch or key the service presents that contradicts what this
+// installation already accepted (ADR 0022).
+const projectEpochTrustFailure = (error: unknown): CliError => {
+  if (error instanceof CliError) return error;
+  if (!(error instanceof ProjectEpochTrustError)) throw error;
+  return error.code === "epoch-rollback"
+    ? new CliError(
+        "crypto",
+        "the Server Profile reports an older Project epoch than this installation already verified. Do not publish from this Device until you have checked the Server Profile",
+        {},
+        "project_epoch_rollback",
+      )
+    : new CliError(
+        "crypto",
+        "the Server Profile delivered a Project key that differs from the one this installation already verified for that epoch. Do not trust this Server Profile until you have checked it",
+        {},
+        "project_key_mismatch",
+      );
 };
 
 export const syncWorkflow = async (
@@ -962,7 +1102,7 @@ export const syncWorkflow = async (
     const detail =
       error.laneKind === "USER_DEFINED_VALUE"
         ? "the Environment's User-defined Values cannot be decrypted with this Device's key grant; run dotrelay device enroll or dotrelay device recover, then re-publish the affected Values"
-        : "the Environment's Manifest cannot be decrypted with this Device's Project key grant; run dotrelay pull after an owner or admin re-shares it from their own Device";
+        : `the Environment's Manifest cannot be decrypted with this Device's Project key grant.\n${SHARE_PROJECT_KEYS_STEP}\nThen run dotrelay pull again.`;
     throw new CliError("incomplete-export", detail, {}, "unreadable_manifest");
   }
   const page = synced.page;
@@ -994,6 +1134,38 @@ export const syncWorkflow = async (
       {},
       "response_invalid",
     );
+  // The verified history fixes how far this Project's epoch has moved. A
+  // Server Profile that reports an older epoch than its own signed history
+  // would have this Device seal new Values under a key from before a
+  // rotation (ADR 0022).
+  const verifiedEpoch = page.revisions.reduce(
+    (highest, revision) =>
+      revision.projectEpoch > highest ? revision.projectEpoch : highest,
+    0n,
+  );
+  const sessionEpoch = BigInt(workflow.publicationContext.projectEpoch);
+  if (page.projectEpoch < sessionEpoch || verifiedEpoch > page.projectEpoch)
+    throw projectEpochTrustFailure(
+      new ProjectEpochTrustError("epoch-rollback"),
+    );
+  // A rotation that landed while this command ran: the key this session
+  // holds is no longer the current one.
+  if (page.projectEpoch > sessionEpoch)
+    throw new CliError(
+      "conflict",
+      "the Project epoch changed while this command ran; run it again",
+      {},
+      "stale_epoch",
+    );
+  if (verifiedEpoch > 0n) {
+    const pins = await loadAccountTrustPins(options);
+    const recorded = recordProjectEpoch(
+      pins,
+      workflow.publicationContext.projectId,
+      Number(verifiedEpoch),
+    );
+    if (recorded.changed) await saveAccountTrustPins(options, recorded.pins);
+  }
   if (page.currentHeadId && page.currentHeadHash)
     await writeTrustedHead(
       statePath(options.stateDirectory, environmentId),

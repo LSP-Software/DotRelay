@@ -3,7 +3,7 @@
 # baked in at build time; CI passes them per environment (dev vs prod
 # origins, and the profile DotRelay's own deployments declare), so the web
 # image is environment-specific.
-FROM oven/bun@sha256:14e08ed749dcfb986e6c05b59ac45a991952e3ef846b9e86c4b09a3ac41cf979 AS builder
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS builder
 
 ARG NEXT_PUBLIC_WEB_ORIGIN
 ARG NEXT_PUBLIC_DOTRELAY_API_ORIGIN
@@ -14,7 +14,7 @@ ENV NEXT_PUBLIC_WEB_ORIGIN=${NEXT_PUBLIC_WEB_ORIGIN} \
 
 WORKDIR /app
 COPY . .
-RUN test "$(bun --revision)" = "1.4.4-canary.1+da867c60b" && bun install --frozen-lockfile
+RUN test "$(bun --revision)" = "1.4.4+38afee6c8" && bun install --frozen-lockfile
 RUN bun run --cwd apps/web build
 
 # Runtime: Next.js standalone output is a plain Node process.

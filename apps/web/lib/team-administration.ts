@@ -1,4 +1,10 @@
 import {
+  DeviceProofRequestError,
+  fetchWithDeviceProof,
+  knownDeviceProof,
+} from "./device-proof";
+import { rateLimitedMessage, retryAfterSecondsFrom } from "./rate-limit";
+import {
   BROWSER_DEVICE_ID_HEADER,
   type MembershipRole,
 } from "./workspace-boundary";
@@ -18,6 +24,8 @@ export type TeamMember = Readonly<{
   readonly image: string | null;
   readonly githubSubject: string;
   readonly lifecycle: MembershipLifecycle;
+  /** The User deleted their account (ADR 0018); the row is history only. */
+  readonly deleted?: boolean;
   /** Latest Account Device roster, base64; null before the Member has one. */
   readonly accountRoster?: string | null;
   // Present only for Owners and Admins: the service withholds roles and the
@@ -81,12 +89,21 @@ const failure = <T>(message: string): TeamAdminResult<T> => ({
 
 // Maps the service's stable problem codes to a sentence a person can act on.
 // The raw code and any detail are deliberately not shown.
-const problemMessage = (code: unknown): string => {
+const problemMessage = (
+  code: unknown,
+  retryAfterSeconds?: number | undefined,
+): string => {
   switch (code) {
+    case "rate_limited":
+      return rateLimitedMessage(retryAfterSeconds);
+    case "pending_invitation_limit":
+      return "This team already has 50 pending invitations. Cancel ones that are no longer needed, or wait for them to be accepted or expire, then invite again.";
     case "authentication_required":
       return "Sign in again to manage this team.";
     case "device_not_active":
       return "Set up this browser before managing team members.";
+    case "device_proof_required":
+      return "This browser couldn't prove its device to the server. Reload the page and try again.";
     case "invalid_request":
       return "That value didn't look right. Check it and try again.";
     case "resource_not_found":
@@ -100,13 +117,15 @@ const problemMessage = (code: unknown): string => {
     case "forbidden":
       return "You don't have permission to do that on this team.";
     case "invitation_expired":
-      return "That invitation expired or was already used.";
+      return "That invitation is no longer open: it expired, or was already accepted, declined, or cancelled.";
     case "archived_resource":
       return "This team is archived.";
     case "operation_conflict":
       return "Something changed while you were working. Refresh and try again.";
     case "last_owner_protection":
       return "This team needs at least one active owner. Promote another owner first.";
+    case "owner_transfer_required":
+      return "You're this team's only owner. Make another active member an owner, or delete the team, first.";
     case "state_conflict":
       return "Something changed while you were working. Refresh and try again.";
     case "payload_too_large":
@@ -134,12 +153,18 @@ const call = async (
   init?: RequestInit,
 ): Promise<FetchOutcome> => {
   let response: Response;
+  // A request that names this browser's Device must also prove it
+  // (ADR 0020); session-only requests go out as they are.
+  const deviceId = new Headers(init?.headers).get(BROWSER_DEVICE_ID_HEADER);
   try {
-    response = await fetch(`${apiOrigin}${path}`, {
-      credentials: "include",
-      ...init,
-    });
-  } catch {
+    response = await fetchWithDeviceProof(
+      deviceId ? knownDeviceProof(apiOrigin, deviceId) : undefined,
+      `${apiOrigin}${path}`,
+      { credentials: "include", ...init },
+    );
+  } catch (error) {
+    if (error instanceof DeviceProofRequestError)
+      return { ok: false, message: problemMessage(error.code) };
     return {
       ok: false,
       message:
@@ -156,7 +181,13 @@ const call = async (
   const body = (await response.json().catch(() => null)) as {
     readonly code?: unknown;
   } | null;
-  return { ok: false, message: problemMessage(body?.code) };
+  return {
+    ok: false,
+    message: problemMessage(
+      body?.code,
+      retryAfterSecondsFrom(body, response.headers),
+    ),
+  };
 };
 
 const asArray = (value: unknown): unknown[] =>
@@ -184,6 +215,7 @@ export const parseTeamMembershipState = (
         image: asString(entry.image) ?? null,
         githubSubject,
         lifecycle,
+        ...(entry.deleted === true ? { deleted: true } : {}),
         ...(typeof entry.accountRoster === "string" ||
         entry.accountRoster === null
           ? { accountRoster: entry.accountRoster }
@@ -347,6 +379,76 @@ export const acceptTeamInvitation = async (
   if (!accepted) return failure("The server returned a malformed reply.");
   return { ok: true, data: accepted };
 };
+export type RevokedInvitation = Readonly<{
+  readonly invitationId: string;
+  readonly teamId: string;
+  readonly status: "REVOKED";
+}>;
+
+export type DeclinedInvitation = Readonly<{
+  readonly invitationId: string;
+  readonly status: "DECLINED";
+}>;
+
+// Cancels a pending invitation of the Team. Owners and admins only; a
+// cancelled invitation can no longer be accepted and stops counting against
+// the Team's pending-invitation cap.
+export const revokeTeamInvitation = async (
+  apiOrigin: string,
+  teamId: string,
+  invitationId: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<RevokedInvitation>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/teams/${teamId}/invitations/${invitationId}/revoke`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": globalThis.crypto.randomUUID(),
+        ...deviceHeaders(deviceId),
+      },
+      body: "{}",
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const body = outcome.body;
+  if (
+    !isRecord(body) ||
+    body.invitationId !== invitationId ||
+    body.teamId !== teamId ||
+    body.status !== "REVOKED"
+  )
+    return failure("The server returned a malformed reply.");
+  return { ok: true, data: { invitationId, teamId, status: "REVOKED" } };
+};
+
+// The invitee turns down an invitation addressed to them. Needs only a
+// session, like acceptance.
+export const declineTeamInvitation = async (
+  apiOrigin: string,
+  invitationId: string,
+): Promise<TeamAdminResult<DeclinedInvitation>> => {
+  const outcome = await call(
+    apiOrigin,
+    `/api/v1/invitations/${invitationId}/decline`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": globalThis.crypto.randomUUID() },
+    },
+  );
+  if (!outcome.ok) return failure(outcome.message);
+  const body = outcome.body;
+  if (
+    !isRecord(body) ||
+    body.invitationId !== invitationId ||
+    body.status !== "DECLINED"
+  )
+    return failure("The server returned a malformed reply.");
+  return { ok: true, data: { invitationId, status: "DECLINED" } };
+};
+
 export type MemberRoleChange = Readonly<{
   readonly membershipId: string;
   readonly teamId: string;
@@ -525,4 +627,79 @@ export const changeEnvironmentLifecycle = async (
   const lifecycle = parseResourceLifecycle(outcome.body);
   if (!lifecycle) return failure("The server returned a malformed reply.");
   return { ok: true, data: { environmentId, lifecycle } };
+};
+
+// Environment labels the service accepts: a letter, then up to 62 letters,
+// digits, dots, underscores, or hyphens (mirrors the server's validation).
+export const ENVIRONMENT_LABEL_PATTERN = /^[A-Za-z][A-Za-z0-9._-]{0,62}$/;
+
+export const environmentLabelError = (label: string): string | null => {
+  const trimmed = label.trim();
+  if (trimmed === "") return "Name the environment, for example staging.";
+  if (!ENVIRONMENT_LABEL_PATTERN.test(trimmed))
+    return "Start with a letter, then use up to 62 letters, numbers, dots, underscores, or hyphens.";
+  return null;
+};
+
+export type CreatedEnvironment = Readonly<{
+  readonly environmentId: string;
+  readonly label: string;
+  /** False when an active environment with that label already existed. */
+  readonly created: boolean;
+}>;
+
+// Creates an empty Environment in a Project (Owners and Admins). An active
+// Environment with the same label is returned instead of a duplicate.
+export const createProjectEnvironment = async (
+  apiOrigin: string,
+  projectId: string,
+  label: string,
+  deviceId?: string,
+): Promise<TeamAdminResult<CreatedEnvironment>> => {
+  const invalid = environmentLabelError(label);
+  if (invalid) return failure(invalid);
+  let response: Response;
+  try {
+    response = await fetchWithDeviceProof(
+      deviceId ? knownDeviceProof(apiOrigin, deviceId) : undefined,
+      `${apiOrigin}/api/v1/projects/${projectId}/environments`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": globalThis.crypto.randomUUID(),
+          ...deviceHeaders(deviceId),
+        },
+        body: JSON.stringify({ label: label.trim() }),
+      },
+    );
+  } catch (error) {
+    if (error instanceof DeviceProofRequestError)
+      return failure(problemMessage(error.code));
+    return failure(
+      "We couldn't reach the server. Check your connection and try again.",
+    );
+  }
+  const body = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok)
+    return failure(
+      problemMessage(
+        isRecord(body) ? (body.code as unknown) : undefined,
+        retryAfterSecondsFrom(body, response.headers),
+      ),
+    );
+  if (!isRecord(body)) return failure("The server returned a malformed reply.");
+  const environmentId = asString(body.id);
+  const createdLabel = asString(body.label);
+  if (!environmentId || !createdLabel)
+    return failure("The server returned a malformed reply.");
+  return {
+    ok: true,
+    data: {
+      environmentId,
+      label: createdLabel,
+      created: response.status === 201,
+    },
+  };
 };

@@ -10,11 +10,11 @@
     },
     {
       "path": "conditional.json",
-      "sha384": "ac4a0ee2fc75bd22d832019973588c719c9683b59ce503f8a40831fefca16deb574470cee34782d70708113cc39bd0b6"
+      "sha384": "3ebc222939c3a804035fc0c70e8401b5e1762ee577c36c84b4145b828e4ef3866d9178f93cef3422628d01b801ac55f9"
     },
     {
       "path": "negative.json",
-      "sha384": "1cb373b0aa0f7cccd318d75ff2efd8265143ee2d5ebc68a27d7c71cf3184c7fc5398af79f0ad6e3017090cb47c2e604d"
+      "sha384": "90c542fdba7c0911da6fb97272f1c84cf4d652ed60bf87ff75141adc8b274dac933d41f00665d00a58104ec531e5c08e"
     },
     {
       "path": "objects.json",

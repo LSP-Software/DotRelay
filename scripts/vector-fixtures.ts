@@ -124,7 +124,22 @@ const GENERATED_NEGATIVE_IDS = new Set([
   "roster-revoked-without-time",
   "roster-active-with-revoked-time",
   "roster-unknown-entry-field",
+  "lane-format-unknown",
+  "lane-format-2-without-identity",
 ]);
+
+// A User-defined Value lane that names its Environment, Variable, Revision
+// and owner, so its associated data (ADR 0022) is computable for each lane
+// format.
+const laneIdentity = (format: number): ReadonlyMap<number, CborValue> =>
+  new Map<number, CborValue>([
+    [14, zeros(16, 0x41)],
+    [15, zeros(16, 0x42)],
+    [16, zeros(16, 0x43)],
+    [26, zeros(16, 0x44)],
+    [36, 4],
+    [50, format],
+  ]);
 export const VECTOR_CASES = Object.freeze([
   ...Object.keys(OBJECT_REGISTRY)
     .map(Number)
@@ -228,6 +243,11 @@ export const VECTOR_CASES = Object.freeze([
       ]),
     ),
   },
+  ...[1, 2].map((format) => ({
+    id: `lane-format-${format}`,
+    kind: 13,
+    object: buildVectorObject(13, laneIdentity(format)),
+  })),
   ...Array.from({ length: 3 }, (_, index) => ({
     id: `membership-role-${index + 1}`,
     kind: 6,
@@ -507,6 +527,19 @@ const NEGATIVE_VECTOR_CASES_BASE = [
         ],
       ]),
     ),
+    error: "invalid_crypto_object",
+  },
+  {
+    // A lane names one of the known associated-data formats (ADR 0022).
+    id: "lane-format-unknown",
+    bytes: buildVectorObjectBytes(13, new Map<number, CborValue>([[50, 3]])),
+    error: "invalid_crypto_object",
+  },
+  {
+    // Format 2 binds the Environment, Variable and Revision, so it must
+    // carry them.
+    id: "lane-format-2-without-identity",
+    bytes: buildVectorObjectBytes(13, new Map<number, CborValue>([[50, 2]])),
     error: "invalid_crypto_object",
   },
   {

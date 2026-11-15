@@ -1,16 +1,22 @@
 import {
+  accountFingerprint,
   prepareDeviceRecovery,
   decodeRecoveryCode,
+  deviceKeyFingerprint,
+  formatAccountKeyTransferCode,
+  openAccountKeyTransferWithRoster,
+  parseAccountKeyTransfer,
+  parseAccountKeyTransferCode,
   probeBrowserDeviceStorage,
   authenticatedCreatorKeys,
   createBrowserDeviceStorage,
   createPasskeyWithPrf,
-  deviceHistorySigningKeys,
   loadDeviceKeyMaterial,
   openProjectEpochGrant,
   PasskeyPrfError,
   parseAccountKeyWrapper,
   runPasskeyAssertion,
+  sameFingerprint,
   uuidToBytes,
 } from "@dotrelay/client";
 import {
@@ -34,11 +40,11 @@ import {
   generateAccountMasterKey,
   generateRecoveryCode,
   hexToBytes,
-  openAccountKeyTransferForDevice,
   openProjectEpochEnvelope,
   projectGrantVerification,
   publishAccountKeyEnvelope,
   publishAccountKeyWrapper,
+  reportedAccountSigningKeys,
   revokeAccountKeyWrapper,
   stageAccountKeyTransfer,
   UNLOCK_FAILURE,
@@ -46,6 +52,10 @@ import {
   unlockWithPassword,
   unlockWithRecoveryCode,
 } from "@/lib/account-keys";
+import {
+  establishBrowserAccountTrust,
+  loadBrowserAccountTrustPins,
+} from "./account-trust";
 import {
   probeBrowserLocalStorage,
   writeStoredBrowserDeviceId,
@@ -181,7 +191,8 @@ export const accountKeyVerification = (
           wrappers.flatMap((entry) =>
             entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
           ),
-          deviceHistorySigningKeys(boundary),
+          boundary.verifiedSigners?.reportedAccount ??
+            reportedAccountSigningKeys(boundary),
         ),
       ),
       context: accountKeyVerificationContext(boundary),
@@ -213,6 +224,11 @@ export const loadDeviceSigningKey = async (
     return null;
   }
 };
+
+export const TRANSFER_CODE_INCOMPLETE =
+  "Paste the whole transfer code the sending device shows. It ends with that account's fingerprint, which this browser checks.";
+export const TRANSFER_FINGERPRINT_MISMATCH =
+  "The key in this transfer belongs to a different account than the code names. Nothing was unlocked. Don't trust this server until you've checked it.";
 
 // Unlock the Account Master Key from one of the account's methods. Every
 // failure collapses to the uniform message so the UI never reveals which
@@ -345,34 +361,78 @@ export const unlockAccount = async (
         await unlockWithPasskeyPrf(entry, prfOutput, verification)
       ).accountMasterKey;
     } else {
-      const accepted = await acceptAccountKeyTransfer(actor, secret.trim());
+      // The code carries the sending account's fingerprint (ADR 0022); a
+      // bare transfer id leaves nothing to check the received key against.
+      let code: ReturnType<typeof parseAccountKeyTransferCode>;
+      try {
+        code = parseAccountKeyTransferCode(secret);
+      } catch {
+        throw new Error(TRANSFER_CODE_INCOMPLETE);
+      }
+      const expectedFingerprint = code.accountFingerprint;
+      if (expectedFingerprint === null)
+        throw new Error(TRANSFER_CODE_INCOMPLETE);
+      const accepted = await acceptAccountKeyTransfer(actor, code.transferId);
+      const pin = {
+        serverProfileId: boundary.profile.serverProfileId ?? "",
+        origin: boundary.profile.origin,
+      };
+      const deviceId = boundary.device.id ?? "";
+      const userId = boundary.session.userId ?? "";
       const material = await loadDeviceKeyMaterial(
-        await createBrowserDeviceStorage({
-          serverProfileId: boundary.profile.serverProfileId ?? "",
-          origin: boundary.profile.origin,
-        }).load({
-          pin: {
-            serverProfileId: boundary.profile.serverProfileId ?? "",
-            origin: boundary.profile.origin,
-          },
-          deviceId: uuidToBytes(boundary.device.id ?? ""),
+        await createBrowserDeviceStorage(pin).load({
+          pin,
+          deviceId: uuidToBytes(deviceId),
         }),
       );
-      const opened = await openAccountKeyTransferForDevice(
-        accepted.object,
-        material.encryptionPrivateKey,
-        {
-          trustedKeys: verification.trustedKeys,
-          context: verification.context,
-          ownDeviceId: uuidToBytes(boundary.device.id ?? ""),
-          nowMs: Date.now(),
-        },
-      );
+      if (!material.encryptionPublicKey || !material.signingPublicKey)
+        throw new Error(UNLOCK_FAILURE);
+      const raw = async (key: CryptoKey) =>
+        new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", key));
+      const pins = await loadBrowserAccountTrustPins(pin, deviceId);
+      const servedRoster = boundary.accountRosters?.[userId];
+      // Only a roster signed by the account key the transfer carries, and
+      // listing the sender and this browser, vouches for it.
+      let opened: Awaited<ReturnType<typeof openAccountKeyTransferWithRoster>>;
+      try {
+        opened = await openAccountKeyTransferWithRoster(
+          parseAccountKeyTransfer(akFromBase64(accepted.object)),
+          material.encryptionPrivateKey,
+          {
+            serverProfileId: pin.serverProfileId,
+            userId,
+            device: {
+              deviceId,
+              encryptionPublicKey: await raw(material.encryptionPublicKey),
+              signingPublicKey: await raw(material.signingPublicKey),
+            },
+            nowMs: Date.now(),
+            roster: servedRoster ? akFromBase64(servedRoster) : null,
+            expectedIdentity:
+              pins.own && pins.own.userId === userId
+                ? hexToBytes(pins.own.identity)
+                : null,
+          },
+        );
+      } catch {
+        throw new Error(UNLOCK_FAILURE);
+      }
+      if (
+        !sameFingerprint(
+          expectedFingerprint,
+          await accountFingerprint(opened.identity),
+        )
+      ) {
+        opened.accountMasterKey.fill(0);
+        throw new Error(TRANSFER_FINGERPRINT_MISMATCH);
+      }
       accountMasterKeyBytes = opened.accountMasterKey;
       try {
         const signingPrivateKey = await loadDeviceSigningKey(boundary);
         if (signingPrivateKey) {
-          const transferId = hexToBytes(secret.trim().toLowerCase());
+          const transferId = hexToBytes(
+            parseAccountKeyTransferCode(secret).transferId,
+          );
           const signature = new Uint8Array(
             await globalThis.crypto.subtle.sign(
               { name: "Ed25519" },
@@ -380,7 +440,11 @@ export const unlockAccount = async (
               accountKeyTransferAcknowledgementMessage(transferId),
             ),
           );
-          await acknowledgeAccountKeyTransfer(actor, secret.trim(), signature);
+          await acknowledgeAccountKeyTransfer(
+            actor,
+            parseAccountKeyTransferCode(secret).transferId,
+            signature,
+          );
         }
       } catch {
         // The key is already unwrapped. A failed acknowledgement leaves the
@@ -399,8 +463,11 @@ export const unlockAccount = async (
         ? "That transfer expired or was already used. Ask the sender to create a new one."
         : error instanceof PasskeyPrfError
           ? error.message
-          : error instanceof Error && error.message === UNLOCK_FAILURE
-            ? UNLOCK_FAILURE
+          : error instanceof Error &&
+              (error.message === UNLOCK_FAILURE ||
+                error.message === TRANSFER_CODE_INCOMPLETE ||
+                error.message === TRANSFER_FINGERPRINT_MISMATCH)
+            ? error.message
             : "We couldn't unlock the account. Try again.",
     );
     feedback.clearInputs();
@@ -1035,44 +1102,127 @@ export const sendAccountKeyTransfer = (
   onStaged: (
     staged: Readonly<{
       readonly transferId: string;
+      readonly transferCode: string;
       readonly expiresAt: string;
       readonly recipientDeviceId: string;
     }>,
   ) => void,
+  // The receiving Device's key fingerprint the person compared and
+  // confirmed; needed when that Device is not in the signed roster yet.
+  confirmedFingerprint: string | null = null,
 ): void => {
   const { actor, boundary } = inputs;
-  const target = boundary.peerDevices?.find(
+  const reported = boundary.peerDevices?.find(
     (peer) => peer.id === transferTargetId,
   );
   const accountMasterKey = inputs.accountMasterKey.read();
-  if (!actor || !target || !accountMasterKey) {
+  if (!actor || !reported || !accountMasterKey) {
     feedback.setError(
       "Unlock the account in this browser and choose one of its devices first.",
     );
     return;
   }
   void (async () => {
-    const verification = accountKeyVerification(boundary, inputs.wrappers);
     const signingPrivateKey = await loadDeviceSigningKey(boundary);
-    if (!verification || !signingPrivateKey) {
+    if (!signingPrivateKey || !boundary.device.id || !boundary.session.userId) {
       feedback.setError(
         "This browser's device keys aren't available, so it can't send a transfer.",
       );
       return;
     }
+    const deviceId = boundary.device.id;
+    const userId = boundary.session.userId;
     feedback.setBusy(true);
     feedback.setError(null);
     feedback.setMessage(null);
     try {
+      const pin = {
+        serverProfileId: boundary.profile.serverProfileId ?? "",
+        origin: boundary.profile.origin,
+      };
+      const material = await loadDeviceKeyMaterial(
+        await createBrowserDeviceStorage(pin).load({
+          pin,
+          deviceId: uuidToBytes(deviceId),
+        }),
+      );
+      if (!material.encryptionPublicKey || !material.signingPublicKey)
+        throw new Error("device keys are unavailable");
+      const raw = async (key: CryptoKey) =>
+        new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", key));
+      // The key goes only to a Device in this account's signed roster, with
+      // the keys that roster lists (ADR 0022).
+      const establish = async (
+        approved?: Parameters<
+          typeof establishBrowserAccountTrust
+        >[0]["approved"],
+      ) => {
+        const trust = await establishBrowserAccountTrust({
+          boundary,
+          accountMasterKey,
+          actor,
+          encryptionPublicKey: await raw(
+            material.encryptionPublicKey as CryptoKey,
+          ),
+          signingPublicKey: await raw(material.signingPublicKey as CryptoKey),
+          ...(approved ? { approved } : {}),
+        });
+        const own = trust.resolution.users.get(userId);
+        if (own?.status !== "verified" || !own.roster || !own.identity)
+          throw new TransferRecipientError(
+            "This account's signed device list couldn't be verified, so the key wasn't sent. Refresh and try again.",
+          );
+        return { roster: own.roster, identity: own.identity };
+      };
+      const trusted = await establish();
+      const target = reported.id.toLowerCase();
+      const rostered = (roster: typeof trusted.roster) =>
+        roster.devices.find(
+          (device) =>
+            device.deviceId === target && device.revokedAtMs === undefined,
+        );
+      let listed = rostered(trusted.roster);
+      if (!listed) {
+        let candidate: Readonly<{
+          deviceId: string;
+          encryptionPublicKey: Uint8Array;
+          signingPublicKey: Uint8Array;
+          addedAtMs: number;
+        }>;
+        try {
+          candidate = {
+            deviceId: target,
+            encryptionPublicKey: hexToBytes(reported.encryptionPublicKey),
+            signingPublicKey: hexToBytes(reported.signingPublicKey),
+            addedAtMs: Date.now(),
+          };
+        } catch {
+          throw new TransferRecipientError(
+            "The server returned an invalid key for that device. Nothing was sent.",
+          );
+        }
+        const fingerprint = await deviceKeyFingerprint(candidate);
+        if (
+          confirmedFingerprint === null ||
+          !sameFingerprint(confirmedFingerprint, fingerprint)
+        )
+          throw new TransferRecipientError(
+            "That device isn't in your signed device list yet. Compare its fingerprint with the one it shows, confirm it, and try again.",
+          );
+        listed = rostered((await establish([candidate])).roster);
+        if (!listed)
+          throw new TransferRecipientError(
+            "That device couldn't be added to your signed device list. Nothing was sent. Try again.",
+          );
+      }
       const recipientPublicKey = await globalThis.crypto.subtle.importKey(
         "raw",
-        asArrayBuffer(hexToBytes(target.encryptionPublicKey)),
+        asArrayBuffer(listed.encryptionPublicKey),
         { name: "X25519" },
         false,
         [],
       );
       const profile = boundary.profile;
-      const device = boundary.device;
       const bundle = await loadRecoveryBundle(inputs);
       // Transfers are short-lived by design: the receiver redeems it on
       // its own schedule, and an unclaimed one stops being redeemable
@@ -1081,11 +1231,11 @@ export const sendAccountKeyTransfer = (
       const transfer = await createAccountKeyTransfer({
         serverProfileId: profile.serverProfileId ?? "",
         userId: bundle.userId,
-        deviceId: uuidToBytes(device.id ?? ""),
+        deviceId: uuidToBytes(deviceId),
         createdAtMs: Date.now(),
         expiresAtMs: Date.now() + validityMs,
         accountMasterKey,
-        recipientDeviceId: target.id,
+        recipientDeviceId: listed.deviceId,
         recipientEncryptionPublicKey: recipientPublicKey,
         signingPrivateKey,
       });
@@ -1094,21 +1244,30 @@ export const sendAccountKeyTransfer = (
         globalThis.crypto.randomUUID(),
         transfer,
         {
-          recipientDeviceId: target.id,
+          recipientDeviceId: listed.deviceId,
           expiresAt: new Date(Date.now() + validityMs).toISOString(),
         },
       );
+      // The code comes from the transfer this browser built, never from
+      // the server's response, and ends with this account's fingerprint.
+      const transferId = bytesToHex(transfer.transferId);
       onStaged({
-        transferId: staged.transferId,
+        transferId,
+        transferCode: formatAccountKeyTransferCode(
+          transferId,
+          await accountFingerprint(trusted.identity),
+        ),
         expiresAt: staged.expiresAt,
-        recipientDeviceId: staged.recipientDeviceId,
+        recipientDeviceId: listed.deviceId,
       });
       feedback.setMessage(
-        "The transfer is staged. The receiving device redeems it from its own Recovery area, or on the CLI with `dotrelay device recover --transfer <id>`.",
+        "The transfer is staged. The receiving device redeems it from its own Recovery area, or on the CLI with `dotrelay device recover --transfer <code>`.",
       );
     } catch (error) {
       feedback.setError(
-        recoveryErrorMessage(error, "The transfer wasn't sent. Try again."),
+        error instanceof TransferRecipientError
+          ? error.message
+          : recoveryErrorMessage(error, "The transfer wasn't sent. Try again."),
       );
     } finally {
       feedback.setBusy(false);
@@ -1116,6 +1275,13 @@ export const sendAccountKeyTransfer = (
     }
   })();
 };
+
+class TransferRecipientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransferRecipientError";
+  }
+}
 
 export type UnlockMethodOffer = Readonly<{
   readonly id: AccountRecoveryUnlockMethod;

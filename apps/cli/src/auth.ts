@@ -1,6 +1,6 @@
 import type { ServerProfilePin } from "@dotrelay/contracts";
 import type { CredentialStore } from "./credentials";
-import { CliError } from "./errors";
+import { alphaAdmissionDetail, CliError } from "./errors";
 import {
   defaultNetworkPolicy,
   fetchWithDeadline,
@@ -470,6 +470,15 @@ export const loginWithDeviceAuthorization = async (
         {},
         "device_authorization_denied",
       );
+    // The browser that opened the code is signed in with a GitHub account
+    // outside the server's alpha list, so the code can never be allowed.
+    if (body.code === "alpha_admission_required")
+      throw new CliError(
+        "authentication",
+        alphaAdmissionDetail(profile.origin),
+        {},
+        "alpha_admission_required",
+      );
     if (typeof body.code === "string" && body.code === "rate_limited") {
       await waitTransientResponse((intervalSeconds + 5) * 1000);
       continue;
@@ -543,5 +552,43 @@ export const openVerificationPage = async (
       throw browserOpenFailure(BROWSER_OPEN_FAILED_DETAIL);
   } finally {
     if (grace !== undefined) clearTimeout(grace);
+  }
+};
+
+export type SessionRevocation = "revoked" | "already-ended" | "unreachable";
+
+// Ends the bearer session on the Server Profile (Better Auth sign-out) so a
+// copied token stops working too. Best effort: the caller deletes the local
+// copy whatever this returns, and reports which of the two happened.
+export const revokeServerSession = async (
+  profile: ServerProfilePin,
+  token: string,
+  options: Readonly<{
+    readonly fetch?: FetchFunction;
+    readonly networkPolicy?: NetworkPolicy;
+  }> = {},
+): Promise<SessionRevocation> => {
+  try {
+    const response = await fetchWithDeadline(
+      options.fetch ?? fetch,
+      `${profile.origin}/api/auth/sign-out`,
+      {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      options.networkPolicy ?? defaultNetworkPolicy,
+    );
+    await response.body?.cancel().catch(() => undefined);
+    if (response.ok) return "revoked";
+    // An expired or already revoked session is rejected as unauthenticated:
+    // there is nothing left to end on the server.
+    if (response.status === 401) return "already-ended";
+    return "unreachable";
+  } catch {
+    return "unreachable";
   }
 };

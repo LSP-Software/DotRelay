@@ -19,6 +19,7 @@ import type { WorkflowOptions } from "./workflow-core";
 import {
   planEpochRotation,
   rotateProjectEpoch,
+  rotationAuthoredAtFloor,
   rotationTransportFailure,
 } from "./workflow-epoch-rotation";
 
@@ -211,6 +212,52 @@ describe("planEpochRotation", () => {
         ),
       ),
     ).toBe("environment_empty");
+  });
+});
+
+describe("rotationAuthoredAtFloor", () => {
+  const environment = (
+    lifecycle: "active" | "archived",
+    currentHeadAuthoredAtMs: number | undefined,
+  ) =>
+    Object.freeze({
+      id: crypto.randomUUID(),
+      projectId: "33333333-3333-4333-8333-333333333333",
+      label: "env",
+      lifecycle,
+      currentHeadId: null,
+      currentHeadHash: null,
+      ...(currentHeadAuthoredAtMs === undefined
+        ? {}
+        : { currentHeadAuthoredAtMs }),
+    });
+
+  test("raises the synced floor to the latest active head in the Project", () => {
+    expect(
+      rotationAuthoredAtFloor({ authoredAtNotBeforeMs: 1_000 }, [
+        environment("active", 900),
+        environment("active", 5_000),
+        environment("active", undefined),
+        environment("archived", 9_000),
+      ]),
+    ).toEqual({ authoredAtNotBeforeMs: 5_000 });
+  });
+
+  test("keeps the synced floor when it is the latest", () => {
+    expect(
+      rotationAuthoredAtFloor({ authoredAtNotBeforeMs: 7_000 }, [
+        environment("active", 5_000),
+      ]),
+    ).toEqual({ authoredAtNotBeforeMs: 7_000 });
+  });
+
+  test("falls back to the synced floor for an older server's listing", () => {
+    expect(
+      rotationAuthoredAtFloor({}, [environment("active", undefined)]),
+    ).toEqual({});
+    expect(rotationAuthoredAtFloor({}, [environment("active", 4_000)])).toEqual(
+      { authoredAtNotBeforeMs: 4_000 },
+    );
   });
 });
 

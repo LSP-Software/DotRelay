@@ -1,13 +1,16 @@
 import {
+  changedVariableIdsFromRevision,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   type PublicationMutationKind,
+  type SyncPageWire,
   type SyncRevisionWire,
   seal,
   sha384,
   sign,
   validatePublicationVariables,
 } from "@dotrelay/client";
+import { bytesToUuid, parseProtocolObject } from "@dotrelay/contracts";
 import type { MembershipRole } from "./workspace-boundary";
 
 export { type InlineValueHunk, splitInlineValueDiff } from "@dotrelay/client";
@@ -658,6 +661,8 @@ export type VerifiedRevision = Readonly<{
   readonly authoredAtMs: number | null;
   readonly rollbackTargetId: string | null;
   readonly authorUserId: string | null;
+  /** Variables whose lanes this Revision changed; null when unknown. */
+  readonly changedVariableIds: readonly string[] | null;
 }>;
 
 const REVISION_MUTATION_LABELS: Readonly<Record<number, string>> =
@@ -691,7 +696,72 @@ export const bareVerifiedRevision = (id: string): VerifiedRevision =>
     authoredAtMs: null,
     rollbackTargetId: null,
     authorUserId: null,
+    changedVariableIds: null,
   });
+
+const bytesMatch = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
+
+// The author and changed lanes live in the signed Revision object, not the
+// wire record. Only call this on a page verifySyncPage accepted: the
+// signature covers both fields there, so they are what the signer wrote.
+const signedRevisionDetails = (
+  revision: Partial<Pick<SyncRevisionWire, "digest" | "objects">>,
+): Readonly<{
+  readonly authorUserId: string | null;
+  readonly changedVariableIds: readonly string[] | null;
+}> => {
+  const { digest, objects } = revision;
+  if (!digest || !objects)
+    return { authorUserId: null, changedVariableIds: null };
+  try {
+    const object = objects.find((candidate) =>
+      bytesMatch(candidate.digest, digest),
+    );
+    if (!object) return { authorUserId: null, changedVariableIds: null };
+    const author = parseProtocolObject(object.canonicalBytes).get(22);
+    return {
+      authorUserId:
+        author instanceof Uint8Array && author.length === 16
+          ? bytesToUuid(author)
+          : null,
+      changedVariableIds: [
+        ...changedVariableIdsFromRevision(revision as SyncRevisionWire),
+      ],
+    };
+  } catch {
+    return { authorUserId: null, changedVariableIds: null };
+  }
+};
+
+// Whether a verified page fits the Project epoch this session holds a key
+// for (ADR 0022): the service must not report an older epoch than its own
+// signed history, and a rotation that landed meanwhile needs a reload.
+export const verifiedPageEpochState = (
+  page: Pick<SyncPageWire, "projectEpoch" | "revisions">,
+  sessionEpoch: number,
+): "current" | "rolled-back" | "rotated" => {
+  const verified = page.revisions.reduce(
+    (highest, revision) =>
+      revision.projectEpoch > highest ? revision.projectEpoch : highest,
+    0n,
+  );
+  if (page.projectEpoch < BigInt(sessionEpoch) || verified > page.projectEpoch)
+    return "rolled-back";
+  return page.projectEpoch > BigInt(sessionEpoch) ? "rotated" : "current";
+};
+
+// The Project epoch of the verified Revision a publication builds on.
+export const verifiedParentEpoch = (
+  history: readonly VerifiedRevision[],
+  headId: string | null,
+): Readonly<{ parentProjectEpoch?: number }> => {
+  const epoch = history.find(
+    (revision) => revision.id === headId,
+  )?.projectEpoch;
+  return typeof epoch === "number" ? { parentProjectEpoch: epoch } : {};
+};
 
 export const verifiedRevisionFromWire = (
   revision: Pick<
@@ -702,7 +772,8 @@ export const verifiedRevisionFromWire = (
     | "projectEpoch"
     | "authoredAtMs"
     | "rollbackTargetId"
-  >,
+  > &
+    Partial<Pick<SyncRevisionWire, "digest" | "objects">>,
 ): VerifiedRevision =>
   Object.freeze({
     id: revision.id,
@@ -711,9 +782,9 @@ export const verifiedRevisionFromWire = (
     projectEpoch: Number(revision.projectEpoch),
     authoredAtMs: Number(revision.authoredAtMs),
     rollbackTargetId: revision.rollbackTargetId,
-    // The sync wire record carries no author field, so Revisions received
-    // over sync report an unavailable author rather than guessing one.
-    authorUserId: null,
+    // A bare wire record carries no author; one with its signed objects
+    // reports the author and changed lanes the signed Revision names.
+    ...signedRevisionDetails(revision),
   });
 
 export const locallyPublishedRevision = (input: {
@@ -724,6 +795,7 @@ export const locallyPublishedRevision = (input: {
   readonly authoredAtMs: number;
   readonly rollbackTargetId?: string | null;
   readonly authorUserId: string;
+  readonly changedVariableIds?: readonly string[] | null;
 }): VerifiedRevision =>
   Object.freeze({
     id: input.id,
@@ -733,6 +805,7 @@ export const locallyPublishedRevision = (input: {
     authoredAtMs: input.authoredAtMs,
     rollbackTargetId: input.rollbackTargetId ?? null,
     authorUserId: input.authorUserId,
+    changedVariableIds: input.changedVariableIds ?? null,
   });
 
 export const mergeVerifiedHistory = (
@@ -748,6 +821,29 @@ export const mergeVerifiedHistory = (
     next.push(revision);
   }
   return Object.freeze(next);
+};
+
+/**
+ * The authored-at floor for the next publication: the context's floor (this
+ * Device's and its Membership's activation) raised to the parent head
+ * Revision's authored-at instant when the verified history knows it. The
+ * service refuses (authored_at_out_of_range) a Revision authored before it.
+ */
+export const publicationAuthoredAtNotBeforeMs = (
+  contextNotBeforeMs: number | undefined,
+  headId: string | null,
+  history: readonly VerifiedRevision[],
+): number | undefined => {
+  const headAuthoredAtMs =
+    headId === null
+      ? null
+      : (history.find((revision) => revision.id === headId)?.authoredAtMs ??
+        null);
+  const candidates = [contextNotBeforeMs, headAuthoredAtMs].filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isSafeInteger(value),
+  );
+  return candidates.length === 0 ? undefined : Math.max(...candidates);
 };
 
 export const createRollbackPlan = (

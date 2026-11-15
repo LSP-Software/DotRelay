@@ -176,9 +176,34 @@ export const reconcilePublicationBaseline = (
   const baseline = indexById(input.baseline);
   const draft = indexById(input.draft);
   const remote = indexById(input.remote);
+  const remoteLive = liveByName(input.remote);
   const merged: ReconciledVariable[] = [];
   const conflicts: BaselineConflict[] = [];
   const consumedRemoteIds = new Set<string>();
+
+  const nameConflict = (
+    base: DecodedVariable | null,
+    local: DecodedVariable,
+    current: DecodedVariable,
+  ) => {
+    const ownedByOtherUser = otherUserOwned(current, input.actorUserId);
+    const kinds = kindsBetween(local, current, true);
+    conflicts.push(
+      Object.freeze({
+        key: `name:${local.name}`,
+        name: local.name,
+        kinds,
+        choices: choicesFor(kinds, ownedByOtherUser),
+        otherUserOwned: ownedByOtherUser,
+        remoteUnreadable:
+          current.value === null &&
+          (ownedByOtherUser || input.remoteChangedVariableIds.has(current.id)),
+        base,
+        local,
+        remote: current,
+      }),
+    );
+  };
 
   const consider = (
     id: string,
@@ -210,6 +235,27 @@ export const reconcilePublicationBaseline = (
             current,
           ),
         );
+      return;
+    }
+    // The remote side deleted this Variable, and a teammate may since have
+    // added a new Variable under the same name. A local edit then meets
+    // that replacement, not the tombstone: publishing the edit as-is would
+    // put two live Variables under one name, or revive the old one beside
+    // the teammate's.
+    const replacement =
+      local && !local.tombstone && !outcomeOf(current).present
+        ? remoteLive.get(local.name)
+        : undefined;
+    if (local && replacement && replacement.id !== id) {
+      consumedRemoteIds.add(replacement.id);
+      if (sameOutcome(outcomeOf(local), outcomeOf(replacement))) {
+        if (current) merged.push(withChange(current, current));
+        merged.push(withChange(replacement, replacement));
+        return;
+      }
+      // Keeping the local side revives this id and retires the
+      // replacement, so the tombstone stays out of the merged set.
+      nameConflict(base, local, replacement);
       return;
     }
     if (sameOutcome(outcomeOf(local), outcomeOf(current))) {
@@ -248,7 +294,6 @@ export const reconcilePublicationBaseline = (
     consumedRemoteIds.add(id);
   }
 
-  const remoteLive = liveByName(input.remote);
   const localAdds = input.draft.filter(
     (variable) => !variable.tombstone && !baseline.has(variable.id),
   );
@@ -260,24 +305,7 @@ export const reconcilePublicationBaseline = (
         merged.push(withChange(current, current));
         continue;
       }
-      const ownedByOtherUser = otherUserOwned(current, input.actorUserId);
-      const kinds = kindsBetween(local, current, true);
-      conflicts.push(
-        Object.freeze({
-          key: `name:${local.name}`,
-          name: local.name,
-          kinds,
-          choices: choicesFor(kinds, ownedByOtherUser),
-          otherUserOwned: ownedByOtherUser,
-          remoteUnreadable:
-            current.value === null &&
-            (ownedByOtherUser ||
-              input.remoteChangedVariableIds.has(current.id)),
-          base: null,
-          local,
-          remote: current,
-        }),
-      );
+      nameConflict(null, local, current);
       continue;
     }
     merged.push(withChange(local, remote.get(local.id) ?? null));

@@ -1,9 +1,12 @@
 import { parseGitHubAppDocument } from "@dotrelay/contracts";
+import { isAlphaAdmissionResponse } from "@/lib/alpha-admission";
 import {
   BROWSER_DEVICE_ID_HEADER,
+  BROWSER_DEVICE_PROOF_HEADER,
   e2eWorkspaceBoundary,
   emptyWorkspaceBoundary,
   parsePeerDevices,
+  parseRotationOwed,
   parseSigningTrustDevices,
   parseWorkspaceCatalog,
   isWorkspaceFixtureEnabled,
@@ -16,6 +19,10 @@ import {
 
 const isProfileId = (value: string | null): value is WorkspaceProfileId =>
   value === "hosted" || value === "self-hosted";
+
+// The service refused the Device proof the browser sent (ADR 0020). The
+// browser must get a new proof, so this never turns into a session view.
+const DEVICE_PROOF_REFUSED = "device_proof_required";
 
 // Older servers and servers without GITHUB_APP_SLUG answer 404: no link.
 const fetchGitHubAppInstallUrl = async (
@@ -38,14 +45,16 @@ const fetchLiveBoundary = async (
   profileId: WorkspaceProfileId,
   request: Request,
   apiOrigin: string | undefined,
-): Promise<WorkspaceBoundary> => {
+): Promise<WorkspaceBoundary | typeof DEVICE_PROOF_REFUSED> => {
   if (!apiOrigin) return emptyWorkspaceBoundary(profileId);
   const profile = workspaceProfileCatalog[profileId];
   const cookie = request.headers.get("cookie");
   const deviceId = request.headers.get(BROWSER_DEVICE_ID_HEADER);
+  const deviceProof = request.headers.get(BROWSER_DEVICE_PROOF_HEADER);
   const apiHeaders = {
     ...(cookie ? { cookie } : {}),
     ...(deviceId ? { [BROWSER_DEVICE_ID_HEADER]: deviceId } : {}),
+    ...(deviceProof ? { [BROWSER_DEVICE_PROOF_HEADER]: deviceProof } : {}),
   };
   const sessionResponse = await fetch(`${apiOrigin}/api/v1/session`, {
     headers: apiHeaders,
@@ -53,6 +62,14 @@ const fetchLiveBoundary = async (
   }).catch(() => undefined);
   if (!sessionResponse)
     return emptyWorkspaceBoundary(profileId, { origin: apiOrigin });
+  // Signed in, but outside the alpha list: an answer, not an outage, so the
+  // shell moves to the private alpha page instead of retrying.
+  if (await isAlphaAdmissionResponse(sessionResponse))
+    return emptyWorkspaceBoundary(profileId, {
+      origin: apiOrigin,
+      connection: "online",
+      session: { active: false, alphaAdmissionRequired: true },
+    });
   // A 5xx from identity lookup is an unavailable service, not proof that
   // the browser signed out. Keep the retry state instead of a sign-in loop.
   if (!sessionResponse.ok && sessionResponse.status !== 401)
@@ -103,6 +120,13 @@ const fetchLiveBoundary = async (
     headers: apiHeaders,
     cache: "no-store",
   }).catch(() => undefined);
+  if (deviceProof && workspaceResponse?.status === 401) {
+    const problem = (await workspaceResponse
+      .clone()
+      .json()
+      .catch(() => undefined)) as { code?: unknown } | undefined;
+    if (problem?.code === DEVICE_PROOF_REFUSED) return DEVICE_PROOF_REFUSED;
+  }
   const workspaceBody = workspaceResponse?.ok
     ? ((await workspaceResponse.json().catch(() => undefined)) as
         | {
@@ -114,6 +138,7 @@ const fetchLiveBoundary = async (
               teamId?: unknown;
               headHash?: unknown;
               projectEpoch?: unknown;
+              rotationOwed?: unknown;
             };
             device?: {
               id?: unknown;
@@ -181,6 +206,7 @@ const fetchLiveBoundary = async (
       ...(typeof workspaceBody.environment?.projectEpoch === "string"
         ? { projectEpoch: workspaceBody.environment.projectEpoch }
         : {}),
+      rotationOwed: parseRotationOwed(workspaceBody.environment?.rotationOwed),
     },
     session,
     profile: profileWithServerProfile,
@@ -279,6 +305,11 @@ export const GET = async (request: Request) => {
         ...(deviceId ? { deviceId } : {}),
       })
     : await fetchLiveBoundary(profileId, request, apiOrigin);
+  if (boundary === DEVICE_PROOF_REFUSED)
+    return Response.json(
+      { code: DEVICE_PROOF_REFUSED },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
   const localBoundary =
     boundary.source === "fixture" && apiOrigin
       ? {

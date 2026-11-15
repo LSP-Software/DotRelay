@@ -25,6 +25,12 @@ test("a rate-limited bootstrap tells the browser to wait", () => {
   );
 });
 
+test("a rate-limited bootstrap names the retry window when the server sends one", () => {
+  expect(bootstrapFailureMessage("rate_limited", 30)).toBe(
+    "The server is limiting requests from this browser right now. Try again in 30 seconds.",
+  );
+});
+
 test("a revoked device points at the Devices list", () => {
   expect(bootstrapFailureMessage("device_not_active")).toBe(
     "This browser's device is no longer active on the server. It may have been revoked; check the Devices list, then try again.",
@@ -100,7 +106,16 @@ test("repair of an initialized project never publishes a fresh random epoch key"
   };
   let mutations = 0;
   const messages: unknown[] = [];
-  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+  const { fixtureDeviceProof, fixtureDeviceProofChallenge } =
+    await import("./fixture-device-proof");
+  const fixtureSetting = process.env.DOTRELAY_WORKSPACE_FIXTURE;
+  process.env.DOTRELAY_WORKSPACE_FIXTURE = "1";
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    // Getting a Device proof (ADR 0020) changes nothing on the service.
+    if (String(url).endsWith("/api/v1/devices/proofs/challenges"))
+      return fixtureDeviceProofChallenge();
+    if (String(url).endsWith("/api/v1/devices/proofs"))
+      return fixtureDeviceProof(new Request(String(url), init));
     if (init?.method === "POST") mutations++;
     return Response.json(boundary);
   }) as typeof fetch;
@@ -130,6 +145,9 @@ test("repair of an initialized project never publishes a fresh random epoch key"
     ).toBe(true);
   } finally {
     globalThis.fetch = originalFetch;
+    if (fixtureSetting === undefined)
+      delete process.env.DOTRELAY_WORKSPACE_FIXTURE;
+    else process.env.DOTRELAY_WORKSPACE_FIXTURE = fixtureSetting;
     if (descriptor) Object.defineProperty(globalThis, "window", descriptor);
     else Reflect.deleteProperty(globalThis, "window");
     await storage.remove({ pin, deviceId: uuidToBytes(bootstrap.deviceId) });

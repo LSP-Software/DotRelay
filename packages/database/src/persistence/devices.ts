@@ -16,6 +16,7 @@ import {
   requireActiveDevice,
   sameBytes,
 } from "./repository-core";
+import { ProjectRotationObligationRepository } from "./rotation-obligations";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import {
   validateDigest,
@@ -124,20 +125,23 @@ export class DeviceRepository {
           "a device with this id already belongs to another user",
         );
       if (existing) {
+        // A retry may reuse the row only with the same keys. The row itself
+        // is never rewritten here: revocation is terminal (ADR 0021), and
+        // clients judge the Revisions a Device signed by its activation and
+        // revocation times.
         const keyId = databaseBytes(
           validateDigest(input.device.keyId, "Device key id"),
         );
-        if (!sameBytes(existing.keyId, keyId))
+        if (
+          !sameBytes(existing.keyId, keyId) ||
+          !sameBytes(existing.x25519PublicKey, input.device.x25519PublicKey) ||
+          !sameBytes(
+            existing.ed25519PublicKey,
+            input.device.ed25519PublicKey,
+          ) ||
+          existing.identityGeneration !== input.device.identityGeneration
+        )
           throw new Error("device key id conflicts with the stored device");
-        if (existing.lifecycle === "REVOKED")
-          await transaction.device.update({
-            where: { id: input.device.id },
-            data: {
-              lifecycle: "PENDING",
-              activatedAt: null,
-              revokedAt: null,
-            },
-          });
       } else {
         const now = input.now ?? new Date();
         await transaction.device.create({
@@ -172,6 +176,10 @@ export class DeviceRepository {
       });
       if (existingAfterOperation?.lifecycle === "ACTIVE")
         throw new Error("device is already active");
+      if (existingAfterOperation?.lifecycle === "REVOKED")
+        throw new Error(
+          "device conflicts with the stored device: a revoked Device cannot enroll again",
+        );
       const user = await transaction.user.findUnique({
         where: { id: input.userId },
         select: { identityGeneration: true },
@@ -575,6 +583,13 @@ export class DeviceRepository {
         where: { id: device.id },
         data: { lifecycle: "REVOKED", revokedAt: now },
       });
+      // An active Device could hold its User's Project keys: owe each of
+      // those Projects a rotation. A pending Device never received keys.
+      if (device.lifecycle === "ACTIVE")
+        await new ProjectRotationObligationRepository().recordDeviceRevocation(
+          transaction,
+          { userId: device.userId, deviceId: device.id, now },
+        );
       // Sessions are not bound to Devices. A stolen session could otherwise
       // bootstrap a replacement Device immediately after revocation.
       const user = await transaction.user.findUniqueOrThrow({

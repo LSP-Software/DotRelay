@@ -54,10 +54,40 @@ use a Better Auth bearer token returned by device authorization and should be st
 local credential store (encrypted files in the CLI state directory). A request containing both a
 bearer token and a cookie is rejected.
 
+When a Server Profile requires Alpha Admission, a session whose GitHub account is not on the list
+gets `403 alpha_admission_required` from every route except sign-out, capabilities, health, and
+readiness. Clients show it as its own state, not a generic error; see
+[alpha release operations](../alpha-release.md#admission).
+
 Authentication establishes only the server-local DotRelay User. It does not grant Membership,
 Device authority, decryption ability, or mutation permission. Encrypted operations still require an
-active Device and the application-level signed protocol checks. Session expiry, logout, and remote
-revocation are database-backed and take effect on the next request.
+active Device and the application-level signed protocol checks.
+
+## Device proof of possession
+
+A session alone never acts as a Device ([ADR 0020](../adr/0020-device-proof-of-possession.md)).
+Every Device-scoped request carries a Device proof in `X-DotRelay-Device-Proof`: a short-lived
+token the Device gets by signing a service challenge with its Ed25519 key.
+
+1. `POST /api/v1/devices/proofs/challenges` (session only) returns a challenge bound to the
+   session. It is valid for 120 seconds.
+2. The Device signs `dotrelay-device-proof-v1`, a NUL byte, the Server Profile, User and Device
+   ids (16 bytes each) and the challenge bytes.
+3. `POST /api/v1/devices/proofs` with `{ deviceId, challenge, signature }` returns
+   `{ token, deviceId, expiresIn }`. The proof expires 300 seconds after its challenge was issued
+   and works only with the session that asked for the challenge.
+
+`X-DotRelay-Device-Id` is only the claimed Device; when present it must match the proven one. A
+missing, expired or foreign proof is `401 device_proof_required`, and clients then get a new proof
+and send the same request once more. A Device that is not active is `403 device_not_active`, on
+the exchange and on every later request. Without a proof, `GET /api/v1/workspace/boundary`
+returns the session view: no Device, Device ids, keys, rosters, key links, grants or Account Key
+Envelopes. The CLI and the browser get a proof when they first need one and refresh it before it
+expires. Session expiry, logout, and remote
+revocation are database-backed and take effect on the next request. Sessions slide: each day of use
+extends them to 30 days. Independently, any session, browser cookie or CLI bearer, ends 90 days
+after it was created; the API deletes an older session before any route reads it, and the
+retention job removes the rest.
 
 The user-facing login journey continues after GitHub verification. The browser gates the workspace
 until it has a durable Device key and can open the Account Master Key; returning browsers restore a
@@ -67,12 +97,15 @@ noninteractive CLI setup of an existing account, it exits with a specific locked
 these steps because it is required to fetch encrypted wrappers; it never grants decryption by itself.
 
 Better Auth permits ten requests to one authentication route in a 60-second window. Device codes
-expire after 30 minutes and the CLI must wait at least five seconds between token polls; an early
-poll returns `slow_down`. The limiter uses per-process memory. A single API process is suitable for
-the MVP. A multi-replica deployment must add an edge or shared-store limit before accepting traffic.
-In production, requests without a trusted client address share one conservative route bucket. The
+expire after 10 minutes and the CLI must wait at least five seconds between token polls; an early
+poll returns `slow_down`. With `VALKEY_URL` set, the limiter's counters live in Valkey and every
+API replica shares them; if Valkey is unreachable it falls back to per-process memory. Development
+without Valkey uses per-process memory. In production, requests without a trusted client address
+share one conservative route bucket, so the trusted-proxy settings in
+[operations](operations.md#configuration-and-startup) are required for per-client limits. The
 API reads `X-Forwarded-For` only when trusted proxies are configured, and walks the chain past the
-listed proxy addresses. A `429` response carries `X-Retry-After`, which auth CORS exposes.
+listed proxy addresses. A `429` response carries `X-Retry-After`. Auth and protocol CORS expose both
+`X-Retry-After` and the protocol rate limiter's `Retry-After`, so the web app can show the wait.
 
 The capabilities response is public and may be cached briefly with its ETag. Authenticated
 responses are `no-store`. Errors use the stable `application/problem+json` contract and never
@@ -86,11 +119,27 @@ callback creates or updates Better Auth records; `/api/v1/session` resolves the 
 server-local DotRelay User without granting a Membership or authorizing a Device. Better Auth
 encrypts stored OAuth tokens. The CLI receives only its database-backed session token.
 
+Each GitHub sign-in also records the profile's login for its GitHub user id in `github_logins`, so
+the Team membership list can show it and `dotrelay team share-keys <login>` can find a Member
+without a GitHub lookup. The login is display data: it can be stale after a rename and is never
+used for authorization or key decisions. A failure to record it does not block the sign-in.
+
 Cookie and bearer credentials are separate request modes. Browser state changes need an exact
 configured Origin, and production cookies are Secure, HttpOnly, and SameSite=Lax. CLI bearer
 requests do not need a browser Origin. The API rejects a request that combines either mode. Better
 Auth's cookie cache is disabled, so logout, expiry, and remote session deletion take effect on the
 next request instead of waiting for a signed-cookie cache to expire.
+
+Only service-signed bearer tokens are accepted: the session token followed by its HMAC-SHA-256
+under `BETTER_AUTH_SECRET`, the form the session cookie carries. The device token endpoint returns
+the CLI's token in that form. `get-session` and `list-sessions` answer without session tokens, so
+page script on the web origin never reads a token it could replay. CLI sessions created before
+signed tokens must log in again.
+
+Each User keeps the GitHub account that created them. Better Auth account linking is off, so a
+GitHub sign-in whose verified email matches an existing User is refused rather than linked, and
+`link-social` and `unlink-account` are blocked. The service also refuses a session whose GitHub
+account differs from the User's recorded GitHub identity.
 
 The integration tests cover the exact GitHub callback, OAuth state rejection, secure cookie
 attributes, cross-subdomain cookie scoping, exact-origin CORS and CSRF failures, mixed credentials,
@@ -102,4 +151,5 @@ start disaster recovery. A replacement Device requires the Recovery Code proof d
 [ADR 0013](../adr/0013-recovery-code-device-authorization.md); this does not relax active-Device
 checks on account-key mutations or protected content.
 
-Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
+Password and passkey wrappers require a proven active Device (a Device proof, ADR 0020);
+session-only recovery never discloses them.

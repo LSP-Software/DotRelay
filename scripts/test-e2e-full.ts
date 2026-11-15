@@ -16,9 +16,9 @@ import {
   constants,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -68,8 +68,9 @@ const DEMO_GITHUB = {
   name: "demo-service",
   id: 99001122,
   token: "ghu_demo-github-token",
-  accountId: "demo-github-account",
-  subject: "demo-github-100001",
+  // The GitHub user id: sign-in records it as both the account id and the
+  // User's GitHub subject, which never changes afterwards.
+  accountId: "100001",
 } as const;
 
 // The whole run must finish in bounded time, even if a CLI process hangs
@@ -565,7 +566,7 @@ try {
       id: demoUserId,
       serverProfileId: profile.id,
       authSubject: authUserId,
-      githubSubject: DEMO_GITHUB.subject,
+      githubSubject: DEMO_GITHUB.accountId,
     },
   });
 
@@ -1120,8 +1121,17 @@ try {
     throw new Error(
       `pull did not guard the output against Git tracking: ${JSON.stringify(pulled)}`,
     );
-  const output = await readFile(outputPath, "utf8");
-  const outputMode = (await stat(outputPath)).mode & 0o777;
+  // One open file handle gives the mode and the bytes of the same file.
+  const outputHandle = await open(outputPath, "r");
+  let outputBytes: Buffer;
+  let outputMode: number;
+  try {
+    outputMode = (await outputHandle.stat()).mode & 0o777;
+    outputBytes = await outputHandle.readFile();
+  } finally {
+    await outputHandle.close();
+  }
+  const output = outputBytes.toString("utf8");
   if (
     output !== "SHARED_VALUE='two'\nUSER_VALUE='secret'\nEMPTY=''\n" ||
     (process.platform !== "win32" && outputMode !== 0o600)
@@ -1200,7 +1210,7 @@ try {
     throw new Error(
       `device 2 pull failed with exit code ${device2Pull.exitCode}: ${device2Pull.stderr.trim()}`,
     );
-  const device1Bytes = await readFile(outputPath);
+  const device1Bytes = outputBytes;
   const device2Bytes = await readFile(device2OutputPath);
   if (Buffer.compare(device1Bytes, device2Bytes) !== 0)
     throw new Error(
@@ -1603,6 +1613,16 @@ try {
     );
   const transferResult = parseJsonLines(transfer.stdout).at(-1) ?? {};
   const transferId = requireString(transferResult.transferId, "transfer id");
+  // The receiving Device takes the whole transfer code: the transfer id and
+  // the account fingerprint it checks the sealed key against (ADR 0022).
+  const transferCode = requireString(
+    transferResult.transferCode,
+    "transfer code",
+  );
+  if (!transferCode.startsWith(`${transferId}.`))
+    throw new Error(
+      `the transfer code does not name the transfer: ${JSON.stringify(transferResult)}`,
+    );
   if (transferResult.recipientDeviceId !== device3.deviceId)
     throw new Error(
       `transfer targeted the wrong Device: ${JSON.stringify(transferResult)}`,
@@ -1623,7 +1643,7 @@ try {
       "recover",
       ...profileFlag,
       "--transfer",
-      transferId,
+      transferCode,
       "--no-input",
       "--json",
     ],
@@ -1665,7 +1685,7 @@ try {
       "recover",
       ...profileFlag,
       "--transfer",
-      transferId,
+      transferCode,
       "--no-input",
       "--json",
     ],

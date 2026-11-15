@@ -1,6 +1,7 @@
 import {
   createProjectEpochGrantBootstrap,
   type DeviceKeyMaterial,
+  sendWithDeviceProof,
 } from "@dotrelay/client";
 import { sha384 } from "@dotrelay/contracts";
 import { CliError } from "./errors";
@@ -12,6 +13,7 @@ import {
 } from "./network";
 import {
   type Boundary,
+  createDeviceAdmin,
   hexToBytes,
   rawPublicKey,
   responseJson,
@@ -57,8 +59,8 @@ export const bootstrapProjectGrant = async (
 
 // Peer provisioning is optional: it must never abort a read this Device can
 // already verify, and a peer that holds the current epoch grant is reused
-// rather than re-provisioned. Grants are only written when the service
-// confirms the actor holds the project-administration authority.
+// rather than re-provisioned. The peers come from this User's verified
+// roster, and any active Member may seal the key to their own Devices.
 export const wrapEpochKeyToPeers = async (
   options: WorkflowOptions,
   token: string,
@@ -102,7 +104,10 @@ export const wrapEpochKeyToPeers = async (
       await submitEpochGrant(options, token, boundary, deviceId, grant);
     } catch {
       pending.push(
-        `Device ${peer.id} is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device`,
+        // The peer is another of this User's own Devices (the service lists
+        // no one else's); that Device can still read the key from the
+        // account key once it is unlocked.
+        `Device ${peer.id} is missing the Project epoch grant, and this Device could not share it with that Device of yours. On that Device, run dotrelay device recover if it is locked, then dotrelay pull. If it still cannot read the Project, a Team owner or admin can share the Project keys with you from the Members view of the DotRelay web app ("Share project keys").`,
       );
     }
   }
@@ -117,10 +122,19 @@ const submitEpochGrant = async (
   grant: Awaited<ReturnType<typeof createProjectEpochGrantBootstrap>>,
 ): Promise<void> => {
   let response: Response;
-  try {
-    // Deadline only: this mutation carries a fresh operation id, so it must
-    // never be repeated automatically.
-    response = await fetchWithDeadline(
+  const body = JSON.stringify({
+    operationId: crypto.randomUUID(),
+    teamId: boundary.environment.teamId,
+    projectId: boundary.environment.projectId,
+    objectId: grant.objectId,
+    digest: Buffer.from(await sha384(grant.canonicalBytes)).toString("base64"),
+    grant: Buffer.from(grant.canonicalBytes).toString("base64"),
+  });
+  // Deadline only: this mutation carries a fresh operation id, so it must
+  // never be repeated automatically. A refused Device proof is the one
+  // exception: the service rejected the request before reading it.
+  const send = (proofHeaders: Readonly<Record<string, string>>) =>
+    fetchWithDeadline(
       options.fetch ?? fetch,
       `${options.profile.origin}/api/v1/grants/bootstrap`,
       {
@@ -131,20 +145,17 @@ const submitEpochGrant = async (
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
           "X-DotRelay-Device-Id": deviceId,
+          ...proofHeaders,
         },
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          teamId: boundary.environment.teamId,
-          projectId: boundary.environment.projectId,
-          objectId: grant.objectId,
-          digest: Buffer.from(await sha384(grant.canonicalBytes)).toString(
-            "base64",
-          ),
-          grant: Buffer.from(grant.canonicalBytes).toString("base64"),
-        }),
+        body,
       },
       options.networkPolicy ?? defaultNetworkPolicy,
     );
+  const deviceProof = createDeviceAdmin(options, deviceId).deviceProof;
+  try {
+    response = deviceProof
+      ? await sendWithDeviceProof(deviceProof, send)
+      : await send({});
   } catch (error) {
     if (error instanceof NetworkAttemptError)
       throw networkFailureCliError(

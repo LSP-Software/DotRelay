@@ -76,6 +76,12 @@ export {
   type ProblemCode,
 } from "./errors";
 export {
+  LANE_FORMAT_CONTEXT_BOUND,
+  LANE_FORMAT_LEGACY,
+  LANE_FORMATS,
+  laneAssociatedData,
+} from "./lane";
+export {
   ARGON2ID_POLICY,
   encodeProtocolObject,
   isSignedField,
@@ -91,6 +97,7 @@ export {
   type BeginOperationRequest,
   bytesToUuid,
   DEVICE_ID_HEADER,
+  DEVICE_PROOF_HEADER,
   decodeSyncPage,
   type EpochRotationRequest,
   encodeSyncPage,
@@ -123,6 +130,12 @@ export {
   SUITE_VALUE,
 } from "./registry";
 export {
+  chooseRevisionAuthoredAtMs,
+  checkRevisionAuthoredAt,
+  MAX_REVISION_CLOCK_SKEW_MS,
+  type RevisionAuthoredAtVerdict,
+} from "./revision-time";
+export {
   establishServerProfileTrust,
   type ServerProfilePin,
   ServerProfileTrustError,
@@ -130,3 +143,14 @@ export {
 } from "./server-profile";
 
 export { deviceRecoveryMessage } from "./account-key-ack";
+export {
+  DEVICE_PROOF_CHALLENGE_BYTES,
+  DEVICE_PROOF_TOKEN_BYTES,
+  type DeviceProof,
+  type DeviceProofChallenge,
+  decodeDeviceProofValue,
+  deviceProofMessage,
+  encodeDeviceProofValue,
+  parseDeviceProof,
+  parseDeviceProofChallenge,
+} from "./device-proof";

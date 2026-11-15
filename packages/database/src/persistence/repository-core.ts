@@ -107,11 +107,38 @@ export class DeviceNotActiveError extends Error {
 }
 
 export class MembershipNotActiveError extends Error {
-  constructor() {
-    super("Membership is not active");
+  constructor(message = "Membership is not active") {
+    super(message);
     this.name = "MembershipNotActiveError";
   }
 }
+
+// An accepted Membership still waiting for its Project keys
+// (PENDING_KEY_GRANT). It is a MembershipNotActiveError, so callers that do
+// not tell the two apart keep working.
+export class MembershipAwaitingKeysError extends MembershipNotActiveError {
+  constructor() {
+    super("Membership is waiting for Project keys");
+    this.name = "MembershipAwaitingKeysError";
+  }
+}
+
+// The error for a User without an active Membership in the Team: waiting for
+// keys when the Membership is pending, plain not-active otherwise (removed,
+// or no Membership at all).
+export const inactiveMembershipError = async (
+  database: PersistenceClient,
+  teamId: string,
+  userId: string,
+): Promise<MembershipNotActiveError> => {
+  const pending = await database.membership.findFirst({
+    where: { teamId, userId, lifecycle: "PENDING_KEY_GRANT" },
+    select: { id: true },
+  });
+  return pending
+    ? new MembershipAwaitingKeysError()
+    : new MembershipNotActiveError();
+};
 
 export class ProjectNotActiveError extends Error {
   constructor() {
@@ -189,3 +216,45 @@ export const normalizeEnvironmentLabel = (value: unknown): string => {
 export const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
   left.length === right.length &&
   left.every((value, index) => value === right[index]);
+
+export class RevisionAuthoredAtError extends Error {
+  readonly verdict: "before_not_before" | "after_clock_skew";
+  readonly notBeforeMs: bigint;
+
+  constructor(
+    verdict: "before_not_before" | "after_clock_skew",
+    notBeforeMs: bigint,
+  ) {
+    super(
+      verdict === "before_not_before"
+        ? "the Revision authored-at instant precedes its Device, Membership, or parent Revision"
+        : "the Revision authored-at instant is too far in the future",
+    );
+    this.name = "RevisionAuthoredAtError";
+    this.verdict = verdict;
+    this.notBeforeMs = notBeforeMs;
+  }
+}
+
+export class PendingInvitationLimitError extends Error {
+  constructor() {
+    super("the Team has reached its pending invitation limit");
+    this.name = "PendingInvitationLimitError";
+  }
+}
+
+export class InvitationNotPendingError extends Error {
+  constructor() {
+    super("Membership invitation is expired or already used");
+    this.name = "InvitationNotPendingError";
+  }
+}
+
+// Leaving or deleting the account would leave a Team without an active
+// owner while other Members remain, or a Team with no Member at all.
+export class OwnerTransferRequiredError extends Error {
+  constructor() {
+    super("transfer Team ownership or delete the Team first");
+    this.name = "OwnerTransferRequiredError";
+  }
+}

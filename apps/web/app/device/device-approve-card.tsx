@@ -4,6 +4,7 @@ import { Ban, Hourglass, ShieldOff, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GitHubSignInButton } from "@/app/sign-in/github-sign-in-button";
 import { CommandText } from "@/components/inline-command";
+import { PrivateAlphaNotice } from "@/components/private-alpha-notice";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +20,7 @@ import {
 import {
   resolveLiveApiOrigin,
   resolveWebOrigin,
+  resolveWorkspaceProfileId,
 } from "@/lib/workspace-boundary";
 
 type DeviceApproveCardProps = Readonly<{
@@ -113,6 +115,20 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
     case "allow":
       return (
         <div className="space-y-4">
+          <Alert data-testid="device-approval-warning" variant="destructive">
+            <ShieldOff aria-hidden="true" />
+            <AlertTitle>Only allow a code you requested</AlertTitle>
+            <AlertDescription>
+              <p>
+                Allowing gives the terminal that requested this code full access
+                to your DotRelay account. Deny it if someone sent you this link
+                or code, asked you to approve it, or if you did not run{" "}
+                <CommandText text="`dotrelay login`" /> or{" "}
+                <CommandText text="`dotrelay setup`" /> yourself in the last 10
+                minutes. Codes expire 10 minutes after they are requested.
+              </p>
+            </AlertDescription>
+          </Alert>
           <label className="flex items-start gap-3 text-sm">
             <input
               checked={confirmed}
@@ -214,6 +230,16 @@ export const DeviceApproveCard = ({ userCode }: DeviceApproveCardProps) => {
             the code it shows.
           </AlertDescription>
         </Alert>
+      );
+    case "alpha-admission":
+      return (
+        <div className="space-y-3" data-testid="device-approval-alpha">
+          <p className="font-heading text-lg font-semibold">Private alpha</p>
+          <PrivateAlphaNotice
+            apiOrigin={apiOrigin}
+            hosted={resolveWorkspaceProfileId() === "hosted"}
+          />
+        </div>
       );
     case "connection":
       return (

@@ -1,8 +1,12 @@
 "use client";
 
 import {
+  createBrowserDeviceStorage,
   createBrowserProfilePinStore,
+  deviceKeyFingerprint,
+  loadDeviceKeyMaterial,
   passkeyPrfSupported,
+  uuidToBytes,
 } from "@dotrelay/client";
 import {
   Archive,
@@ -16,6 +20,7 @@ import {
   Menu,
   MonitorSmartphone,
   RotateCcw,
+  UserRound,
   Users,
   WifiOff,
 } from "lucide-react";
@@ -80,6 +85,7 @@ import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
   fetchAccountKeyWrappers,
+  hexToBytes,
 } from "@/lib/account-keys";
 import {
   addEncryptionPassword,
@@ -96,17 +102,27 @@ import {
   unlockAccount,
   unlockMethods,
 } from "@/lib/account-recovery";
-import { resolveMemberTrust, retrustMember } from "@/lib/account-trust";
+import { confirmMember, resolveMemberTrust } from "@/lib/account-trust";
+import { PRIVATE_ALPHA_PATH } from "@/lib/alpha-admission";
 import {
   restoreBrowserAccountKey,
   saveBrowserAccountKey,
 } from "@/lib/browser-account-key";
-import { readStoredBrowserDeviceId } from "@/lib/browser-storage";
+import {
+  forgetThisBrowser,
+  readStoredBrowserDeviceId,
+} from "@/lib/browser-storage";
 import {
   type PendingEnrollment,
   provisionBrowserDevice as provisionBrowserDeviceFlow,
   repairStaleEpoch as repairStaleEpochFlow,
 } from "@/lib/device-provisioning";
+import {
+  browserDeviceProof,
+  fetchWithDeviceProof,
+  forgetDeviceProofs,
+  knownDeviceProof,
+} from "@/lib/device-proof";
 import {
   type EnvironmentContextIdentity,
   environmentContextIdentity,
@@ -132,12 +148,14 @@ import {
   changeProjectLifecycle,
   changeTeamMemberRole,
   createTeamInvitation,
+  declineTeamInvitation,
   fetchMyInvitations,
   fetchTeamMemberships,
   type MyInvitations,
   type ResolvedGitHubUser,
   removeTeamMember,
   resolveGitHubLogin,
+  revokeTeamInvitation,
   type TeamMembershipState,
 } from "@/lib/team-administration";
 import { cn } from "@/lib/utils";
@@ -149,6 +167,7 @@ import {
   type ResourceLifecycle,
   resolveApiOrigin,
   resolveWorkspaceProfileId,
+  rotationOwedCause,
   type WorkspaceBoundary,
   type WorkspaceProfileId,
   type WorkspaceProject,
@@ -176,10 +195,25 @@ import {
   workspaceBoundaryRefreshMs,
 } from "@/lib/workspace-session";
 import { EnvironmentEditor } from "./environment-editor";
+import { NewEnvironmentDialog } from "./new-environment-dialog";
 import {
   GettingStartedGuide,
   GettingStartedResume,
 } from "./getting-started-guide";
+import {
+  CancelInvitationDialog,
+  DeclineInvitationDialog,
+  DeviceRevokedDialog,
+  type InvitationTarget,
+  MemberRemovedNotice,
+  PROJECT_ROTATE_COMMAND,
+  type RemovalTarget,
+  RemoveMemberDialog,
+  RevokeDeviceDialog,
+  RoleChangeDialog,
+  type RoleChangeTarget,
+} from "./team-dialogs";
+import { AccountSettingsSection, TeamLifecycleCard } from "./account-lifecycle";
 
 type ProfileId = WorkspaceProfileId;
 type ConnectionState = "loading" | "online" | "offline";
@@ -240,15 +274,26 @@ const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
     "Members can view this team's projects, read shared values, and manage their own values.",
 };
 
-// A Member's account identity state (ADR 0015) and fingerprint.
+// A Member's account identity state (ADR 0015, ADR 0022) and fingerprint.
 const MemberAccountTrust = ({
   trust,
+  self,
   onTrust,
 }: Readonly<{
-  trust: Readonly<{ status: string; fingerprint: string | null }> | undefined;
+  trust:
+    | Readonly<{
+        status: string;
+        fingerprint: string | null;
+        confirmed: boolean;
+      }>
+    | undefined;
+  self: boolean;
   onTrust: () => void;
 }>) => {
   if (!trust) return null;
+  // Pinned on first sight in this browser: their history verifies, but no
+  // project key is taken from them until the fingerprint is confirmed.
+  const unconfirmed = trust.status === "verified" && !self && !trust.confirmed;
   const blocked =
     trust.status === "identity-changed" ||
     trust.status === "rollback" ||
@@ -259,20 +304,28 @@ const MemberAccountTrust = ({
       data-testid="member-account-trust"
     >
       <div className="flex items-center gap-2">
-        {trust.status === "verified" ? (
+        {unconfirmed ? (
+          <Badge variant="secondary">Not confirmed</Badge>
+        ) : trust.status === "verified" ? (
           <Badge variant="outline">Verified account</Badge>
         ) : trust.status === "unverified" ? (
-          <Badge variant="secondary">Unverified account</Badge>
+          <Badge variant="secondary">No signed device list</Badge>
         ) : (
           <Badge variant="destructive">
             {trust.status === "identity-changed"
               ? "Account key changed"
-              : "Account list rolled back"}
+              : trust.status === "rollback"
+                ? "Device list rolled back"
+                : "Device list failed verification"}
           </Badge>
         )}
         {trust.status === "identity-changed" ? (
           <Button size="sm" variant="outline" onClick={onTrust}>
             Trust new key
+          </Button>
+        ) : unconfirmed ? (
+          <Button size="sm" variant="outline" onClick={onTrust}>
+            Confirm fingerprint
           </Button>
         ) : null}
       </div>
@@ -281,18 +334,44 @@ const MemberAccountTrust = ({
           {trust.fingerprint}
         </code>
       ) : null}
+      {unconfirmed ? (
+        <p className="text-xs text-muted-foreground">
+          Compare this fingerprint with the member before you confirm it. Until
+          then, this browser takes no project key from them.
+        </p>
+      ) : null}
       {blocked ? (
         <p className="text-xs text-destructive">
-          Keys aren't shared with this member until you compare the fingerprint
-          with them and trust it.
+          {trust.status === "identity-changed"
+            ? "Keys aren't shared with this member until you compare the fingerprint with them and trust it."
+            : trust.status === "rollback"
+              ? "Keys aren't shared with this member: their device list is older than one this browser already saw. Ask them to open DotRelay on one of their devices; if this persists, contact your server administrator."
+              : "Keys aren't shared with this member: their device list didn't verify against their account key. Ask them to open DotRelay on one of their devices; if this persists, contact your server administrator."}
         </p>
       ) : null}
     </div>
   );
 };
 
+const shortDate = (iso: string): string =>
+  new Date(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+
 const roleLabel = (role: MembershipRole | undefined): string =>
   role === "OWNER" ? "Owner" : role === "ADMIN" ? "Admin" : "Member";
+
+const memberLabel = (
+  member: Readonly<{
+    name: string | null;
+    githubSubject: string;
+    deleted?: boolean;
+  }>,
+): string =>
+  member.deleted
+    ? "Deleted user"
+    : (member.name ?? `GitHub ${member.githubSubject}`);
 
 // Invitation and expiry timestamps are absolute, so a human-readable date is
 // shown rather than a raw offset.
@@ -557,6 +636,22 @@ const NavLinks = ({
       <KeyRound aria-hidden="true" className="size-4" />
       Recovery
     </button>
+    <button
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        view === "account"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-muted-foreground",
+      )}
+      onClick={() => {
+        onSetView("account");
+        onNavigate?.();
+      }}
+      type="button"
+    >
+      <UserRound aria-hidden="true" className="size-4" />
+      Account
+    </button>
   </nav>
 );
 
@@ -576,6 +671,12 @@ export const WorkspaceShell = ({
     emptyWorkspaceBoundary(DEPLOYMENT_PROFILE_ID),
   );
   const [connection, setConnection] = useState<ConnectionState>("loading");
+  // An account outside the alpha list stays that way until an operator
+  // adds it, so it leaves the workspace rather than polling it.
+  const alphaAdmissionRequired = boundary.session.alphaAdmissionRequired;
+  useEffect(() => {
+    if (alphaAdmissionRequired) window.location.replace(PRIVATE_ALPHA_PATH);
+  }, [alphaAdmissionRequired]);
   const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
   // While the boundary hasn't been verified, the shell shows a loading state.
   // If that load outlasts a generous threshold - a hung fetch, not a slow one -
@@ -627,6 +728,29 @@ export const WorkspaceShell = ({
     readonly membershipId: string;
     readonly message: string;
   } | null>(null);
+  // Destructive Team and Device actions open a confirmation first, and the
+  // ones that cannot take back downloaded keys end with rotation guidance.
+  const [removalTarget, setRemovalTarget] = useState<RemovalTarget | null>(
+    null,
+  );
+  const [removedNotice, setRemovedNotice] = useState<Readonly<{
+    readonly teamId: string;
+    readonly label: string;
+  }> | null>(null);
+  const [roleChangeTarget, setRoleChangeTarget] =
+    useState<RoleChangeTarget | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<Readonly<{
+    readonly id: string;
+    readonly label: string;
+  }> | null>(null);
+  const [deviceRevoked, setDeviceRevoked] = useState(false);
+  // An Environment just created from the web, opened once the refreshed
+  // boundary lists it.
+  const [pendingEnvironment, setPendingEnvironment] = useState<Readonly<{
+    readonly teamId: string;
+    readonly projectId: string;
+    readonly environmentId: string;
+  }> | null>(null);
   const [revokingDevice, setRevokingDevice] = useState<string | null>(null);
   const [revokeDeviceError, setRevokeDeviceError] = useState<string | null>(
     null,
@@ -638,6 +762,22 @@ export const WorkspaceShell = ({
     string | null
   >(null);
   const [acceptError, setAcceptError] = useState<string | null>(null);
+  const [declineTarget, setDeclineTarget] = useState<InvitationTarget | null>(
+    null,
+  );
+  const [decliningInvitationId, setDecliningInvitationId] = useState<
+    string | null
+  >(null);
+  const [declineError, setDeclineError] = useState<string | null>(null);
+  const [cancelInvitationTarget, setCancelInvitationTarget] =
+    useState<InvitationTarget | null>(null);
+  const [cancellingInvitationId, setCancellingInvitationId] = useState<
+    string | null
+  >(null);
+  const [cancelInvitationError, setCancelInvitationError] = useState<Readonly<{
+    readonly invitationId: string;
+    readonly message: string;
+  }> | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sessionsByKey, setSessionsByKey] = useState<
     ReadonlyMap<string, EnvironmentProtocolSession>
@@ -725,9 +865,23 @@ export const WorkspaceShell = ({
   // the receiver needs before the transfer lapses.
   const [sentTransfer, setSentTransfer] = useState<Readonly<{
     readonly transferId: string;
+    readonly transferCode: string;
     readonly expiresAt: string;
     readonly recipientDeviceId: string;
   }> | null>(null);
+  // ADR 0022: the receiving Device's key fingerprint as the server reports
+  // it, which the person compares with the one that Device shows, and
+  // whether they confirmed it matches.
+  const [transferTargetFingerprint, setTransferTargetFingerprint] = useState<
+    string | null
+  >(null);
+  const [transferFingerprintConfirmed, setTransferFingerprintConfirmed] =
+    useState(false);
+  // This browser's own key fingerprint, from its local keys, for another
+  // Device to compare before it sends the account key here.
+  const [deviceFingerprint, setDeviceFingerprint] = useState<string | null>(
+    null,
+  );
   // Detected after mount. The server render has no WebAuthn surface, so
   // reading it during the first render would disagree with the browser and
   // hydrate the Add passkey control as permanently unavailable.
@@ -830,6 +984,14 @@ export const WorkspaceShell = ({
       : (teams.find((team) => team.id === teamId)?.role ?? "MEMBER");
   const effectiveRole = teamRoleFor(selectedTeam?.id ?? null);
   const canAdminister = isPrivilegedRole(effectiveRole);
+  // Advice only: an owed rotation never blocks publication, and only the
+  // owners and admins who can rotate are asked to.
+  const rotationOwed =
+    canAdminister &&
+    selectedProject &&
+    displayBoundary.environment.projectId === selectedProject.id
+      ? (displayBoundary.environment.rotationOwed ?? null)
+      : null;
   const cliCommand = `dotrelay setup ${displayBoundary.profile.origin}`;
   const currentIdentity = environmentContextIdentity({
     profileId,
@@ -986,10 +1148,14 @@ export const WorkspaceShell = ({
         status: string;
         fingerprint: string | null;
         presentedIdentity: Uint8Array | null;
+        confirmed: boolean;
       }>
     >
   >(new Map());
   const [memberTrustTick, setMemberTrustTick] = useState(0);
+  // Why this browser refused the server's account or project keys
+  // (ADR 0022); shown until a session loads again.
+  const [trustProblem, setTrustProblem] = useState<string | null>(null);
   // accountUnlocked and memberTrustTick are refresh triggers: the AMK lives in a ref
   useEffect(() => {
     const serverProfileId = displayBoundary.profile.serverProfileId;
@@ -1030,23 +1196,39 @@ export const WorkspaceShell = ({
     memberTrustTick,
   ]);
 
-  const trustMemberKey = async (userId: string) => {
+  const trustMemberKey = async (userId: string, membershipId: string) => {
     const serverProfileId = displayBoundary.profile.serverProfileId;
     const trust = memberTrust.get(userId);
-    if (!serverProfileId || !browserDeviceId || !trust?.presentedIdentity)
+    const accountRoster = membershipState?.memberships.find(
+      (member) => member.userId === userId,
+    )?.accountRoster;
+    if (!serverProfileId || !browserDeviceId || !trust || !accountRoster)
       return;
+    const changed = trust.status === "identity-changed";
     if (
       !window.confirm(
-        `Trust this member's new account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`,
+        changed
+          ? `Trust this member's new account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`
+          : `Confirm this member's account fingerprint ${trust.fingerprint ?? ""}? Only do this after comparing it with them directly.`,
       )
     )
       return;
-    await retrustMember(
-      { serverProfileId, origin: displayBoundary.profile.origin },
-      browserDeviceId,
-      userId,
-      trust.presentedIdentity,
-    );
+    setMemberMutationError(null);
+    try {
+      await confirmMember(
+        { serverProfileId, origin: displayBoundary.profile.origin },
+        browserDeviceId,
+        userId,
+        accountRoster,
+      );
+    } catch {
+      setMemberMutationError({
+        membershipId,
+        message:
+          "This browser couldn't save the new fingerprint, so it is still untrusted. Try again.",
+      });
+      return;
+    }
     setMemberTrustTick((tick) => tick + 1);
   };
 
@@ -1079,6 +1261,23 @@ export const WorkspaceShell = ({
     apiOrigin && boundary.device.active && boundary.device.id
       ? { origin: apiOrigin, deviceId: boundary.device.id }
       : null;
+  // Device-scoped requests from this page prove the active Device (ADR
+  // 0020). Registering its proof session here lets every helper that knows
+  // only the API origin and Device id find it.
+  // Only in the browser: a server render never proves a Device.
+  if (
+    typeof window !== "undefined" &&
+    recoveryActor &&
+    boundary.profile.serverProfileId
+  )
+    browserDeviceProof({
+      apiOrigin: recoveryActor.origin,
+      pin: {
+        origin: boundary.profile.origin,
+        serverProfileId: boundary.profile.serverProfileId,
+      },
+      deviceId: recoveryActor.deviceId,
+    });
   const recoveryActorKey =
     recoveryActor?.deviceId ??
     (boundary.session.active ? "session-recovery" : null);
@@ -1091,7 +1290,15 @@ export const WorkspaceShell = ({
   const recoveryInputs = {
     actor: recoveryActor,
     onRecoveredDevice: async (deviceId: string, key: Uint8Array) => {
-      const next = await fetchWorkspaceBoundary(profileId, { deviceId });
+      const serverProfileId = boundary.profile.serverProfileId;
+      if (!serverProfileId) throw new Error("Recovered Device is not active");
+      const next = await fetchWorkspaceBoundary(profileId, {
+        device: browserDeviceProof({
+          apiOrigin: apiOrigin ?? boundary.profile.origin,
+          pin: { origin: boundary.profile.origin, serverProfileId },
+          deviceId,
+        }),
+      });
       if (!next.device.active || next.device.id !== deviceId)
         throw new Error("Recovered Device is not active");
       accountMasterKeyRef.current = key;
@@ -1266,11 +1473,13 @@ export const WorkspaceShell = ({
 
   // Sign out the account session. The session cookie is scoped to the API
   // origin (see apps/api/src/auth.ts), so the request goes there with
-  // credentials, mirroring the sign-in button. The workspace's local state
-  // (device keys, trust decisions) is left intact, exactly as it would be
-  // if the tab were closed, so the next sign-in restores the same browser
-  // without re-enrolling.
-  const signOut = async () => {
+  // credentials, mirroring the sign-in button. A plain sign-out leaves the
+  // workspace's local state (device keys, the sealed account key, trust
+  // decisions) intact, exactly as it would be if the tab were closed, so the
+  // next sign-in restores the same browser without re-enrolling. "Sign out
+  // and forget this browser" also clears that state, for a shared computer
+  // where the next person could sign in to the same GitHub account.
+  const signOut = async (forget = false) => {
     const origin = resolveApiOrigin() ?? displayBoundary.profile.origin;
     try {
       const response = await fetch(`${origin}/api/auth/sign-out`, {
@@ -1282,6 +1491,13 @@ export const WorkspaceShell = ({
       // The API is unreachable or rejected the request; the page that
       // follows offers sign-in either way.
     } finally {
+      // Device proofs are bound to the session that just ended.
+      forgetDeviceProofs();
+      if (forget) {
+        accountMasterKeyRef.current?.fill(0);
+        accountMasterKeyRef.current = null;
+        await forgetThisBrowser();
+      }
       window.location.assign("/sign-in");
     }
   };
@@ -1356,6 +1572,46 @@ export const WorkspaceShell = ({
       setAcceptError(result.message);
     }
   };
+  // The invitee turns the invitation down; the service then hides it from
+  // both their list and the Team's pending invitations.
+  const declineInvitation = async (target: InvitationTarget) => {
+    setDeclineTarget(null);
+    if (!apiOrigin || decliningInvitationId || acceptingInvitationId) return;
+    setDecliningInvitationId(target.invitationId);
+    setDeclineError(null);
+    setAcceptError(null);
+    const result = await declineTeamInvitation(apiOrigin, target.invitationId);
+    setDecliningInvitationId(null);
+    if (result.ok) {
+      refreshTeamAdministration();
+    } else {
+      setDeclineError(result.message);
+    }
+  };
+  // An owner or admin withdraws a pending invitation. A refusal stays on
+  // the invitation's row.
+  const cancelInvitation = async (target: InvitationTarget) => {
+    setCancelInvitationTarget(null);
+    const selectedTeamId = selectedTeam?.id;
+    if (!apiOrigin || !selectedTeamId || cancellingInvitationId) return;
+    setCancellingInvitationId(target.invitationId);
+    setCancelInvitationError(null);
+    const result = await revokeTeamInvitation(
+      apiOrigin,
+      selectedTeamId,
+      target.invitationId,
+      browserDeviceId,
+    );
+    setCancellingInvitationId(null);
+    if (result.ok) {
+      refreshTeamAdministration();
+    } else {
+      setCancelInvitationError({
+        invitationId: target.invitationId,
+        message: result.message,
+      });
+    }
+  };
   // Changes the Member's role in the Team. The server withholds the owner
   // and admin rows from admins and enforces the last-owner guard, so the
   // row's controls mirror those bounds and a refusal stays visible on the
@@ -1414,13 +1670,8 @@ export const WorkspaceShell = ({
   };
 
   const revokeDevice = async (deviceId: string) => {
+    setRevokeTarget(null);
     if (!apiOrigin || !browserDeviceId || revokingDevice) return;
-    if (
-      !window.confirm(
-        "Revoke this device and sign out all your browsers and CLI sessions? Previously downloaded secrets cannot be erased.",
-      )
-    )
-      return;
     setRevokingDevice(deviceId);
     setRevokeDeviceError(null);
     try {
@@ -1438,7 +1689,8 @@ export const WorkspaceShell = ({
       );
       let binary = "";
       for (const byte of signature) binary += String.fromCharCode(byte);
-      const response = await fetch(
+      const response = await fetchWithDeviceProof(
+        knownDeviceProof(apiOrigin, browserDeviceId),
         `${apiOrigin}/api/v1/devices/${deviceId}/revoke`,
         {
           method: "POST",
@@ -1454,7 +1706,9 @@ export const WorkspaceShell = ({
       if (!response.ok) throw new Error();
       accountMasterKeyRef.current?.fill(0);
       accountMasterKeyRef.current = null;
-      window.location.assign("/sign-in");
+      // Every session was signed out. The revoked device still holds what
+      // it downloaded, so the rotation guidance comes before sign-in.
+      setDeviceRevoked(true);
     } catch {
       setRevokeDeviceError(
         "We couldn't revoke this device. Refresh and try again.",
@@ -1464,11 +1718,13 @@ export const WorkspaceShell = ({
     }
   };
 
-  const removeMember = async (membershipId: string) => {
+  const removeMember = async ({ membershipId, label }: RemovalTarget) => {
+    setRemovalTarget(null);
     const selectedTeamId = selectedTeam?.id;
     if (!apiOrigin || !selectedTeamId || memberMutation) return;
     setMemberMutation({ membershipId, kind: "remove" });
     setMemberMutationError(null);
+    setRemovedNotice(null);
     const result = await removeTeamMember(
       apiOrigin,
       selectedTeamId,
@@ -1477,6 +1733,7 @@ export const WorkspaceShell = ({
     );
     setMemberMutation(null);
     if (result.ok) {
+      setRemovedNotice({ teamId: selectedTeamId, label });
       refreshTeamAdministration();
     } else {
       setMemberMutationError({ membershipId, message: result.message });
@@ -1617,7 +1874,72 @@ export const WorkspaceShell = ({
         setSentTransfer(staged);
         setTransferTarget(null);
       },
+      transferFingerprintConfirmed ? transferTargetFingerprint : null,
     );
+
+  useEffect(() => {
+    setTransferFingerprintConfirmed(false);
+    const peer = boundary.peerDevices?.find(
+      (candidate) => candidate.id === transferTarget,
+    );
+    if (!peer) {
+      setTransferTargetFingerprint(null);
+      return;
+    }
+    let cancelled = false;
+    void deviceKeyFingerprint({
+      encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
+      signingPublicKey: hexToBytes(peer.signingPublicKey),
+    })
+      .then((fingerprint) => {
+        if (!cancelled) setTransferTargetFingerprint(fingerprint);
+      })
+      .catch(() => {
+        if (!cancelled) setTransferTargetFingerprint(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transferTarget, boundary.peerDevices]);
+
+  useEffect(() => {
+    const serverProfileId = boundary.profile.serverProfileId;
+    const localDeviceId = boundary.device.id;
+    if (!serverProfileId || !localDeviceId) {
+      setDeviceFingerprint(null);
+      return;
+    }
+    let cancelled = false;
+    const pin = { serverProfileId, origin: boundary.profile.origin };
+    void (async () => {
+      try {
+        const keys = await loadDeviceKeyMaterial(
+          await createBrowserDeviceStorage(pin).load({
+            pin,
+            deviceId: uuidToBytes(localDeviceId),
+          }),
+        );
+        if (!keys.encryptionPublicKey || !keys.signingPublicKey)
+          throw new Error("device public keys are missing");
+        const raw = async (key: CryptoKey) =>
+          new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", key));
+        const fingerprint = await deviceKeyFingerprint({
+          encryptionPublicKey: await raw(keys.encryptionPublicKey),
+          signingPublicKey: await raw(keys.signingPublicKey),
+        });
+        if (!cancelled) setDeviceFingerprint(fingerprint);
+      } catch {
+        if (!cancelled) setDeviceFingerprint(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    boundary.profile.serverProfileId,
+    boundary.profile.origin,
+    boundary.device.id,
+  ]);
 
   // The unlock methods, in display order.
   const unlockMethodOffers = unlockMethods(recoveryWrappers, passkeyAvailable);
@@ -1928,6 +2250,46 @@ export const WorkspaceShell = ({
     requestSelection({ teamId, projectId, environmentId, view: nextView });
   };
 
+  const pendingEnvironmentListed =
+    pendingEnvironment !== null &&
+    displayBoundary.catalog.projects.some(
+      (project) =>
+        project.id === pendingEnvironment.projectId &&
+        project.environments.some(
+          (environment) => environment.id === pendingEnvironment.environmentId,
+        ),
+    );
+  useEffect(() => {
+    if (!pendingEnvironment || !pendingEnvironmentListed) return;
+    setPendingEnvironment(null);
+    requestSelection({ ...pendingEnvironment, view: "environment" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requestSelection is rebuilt each render; this runs once, when the created Environment first appears in the catalog.
+  }, [pendingEnvironment, pendingEnvironmentListed]);
+
+  const newEnvironmentControl = (project: WorkspaceProject) => {
+    const origin = apiOrigin ?? boundary.profile.origin;
+    if (!canAdminister || !origin || protectedPreview) return null;
+    return (
+      <NewEnvironmentDialog
+        apiOrigin={origin}
+        deviceId={browserDeviceId}
+        existingLabels={project.environments.map(
+          (environment) => environment.label,
+        )}
+        onCreated={(created) => {
+          setPendingEnvironment({
+            teamId: project.teamId,
+            projectId: project.id,
+            environmentId: created.environmentId,
+          });
+          reconnectNowRef.current?.();
+        }}
+        projectId={project.id}
+        projectName={projectDisplayName(project)}
+      />
+    );
+  };
+
   // Hydrate the location the URL names. Profile and view are validated up
   // front; team/project/environment ids are validated against the catalog by
   // the reconciliation effect once the boundary loads. A live deployment is
@@ -2194,15 +2556,19 @@ export const WorkspaceShell = ({
     setDeviceRenameBusy(true);
     setDeviceRenameError(null);
     try {
-      const response = await fetch(`${apiOrigin}/api/v1/devices/self`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-DotRelay-Device-Id": browserDeviceId,
+      const response = await fetchWithDeviceProof(
+        knownDeviceProof(apiOrigin, browserDeviceId),
+        `${apiOrigin}/api/v1/devices/self`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-DotRelay-Device-Id": browserDeviceId,
+          },
+          body: JSON.stringify({ displayName: name }),
         },
-        body: JSON.stringify({ displayName: name }),
-      });
+      );
       if (!response.ok) {
         setDeviceRenameError("Could not rename this Device");
         return;
@@ -2325,6 +2691,7 @@ export const WorkspaceShell = ({
         removeSessionByKey,
         setSessionsByKey,
         setContextStale,
+        setTrustProblem,
       },
       cancellation,
     );
@@ -2470,6 +2837,10 @@ export const WorkspaceShell = ({
       recoveryWrappers={recoveryWrappers}
       sentTransfer={sentTransfer}
       deviceId={boundary.device.id}
+      deviceFingerprint={deviceFingerprint}
+      transferTargetFingerprint={transferTargetFingerprint}
+      transferFingerprintConfirmed={transferFingerprintConfirmed}
+      onTransferFingerprintConfirmed={setTransferFingerprintConfirmed}
       sessionActive={sessionActive}
       transferIdInput={transferIdInput}
       transferTarget={transferTarget}
@@ -2636,6 +3007,19 @@ export const WorkspaceShell = ({
     selectedEnvironment !== null;
   const selectedEntry: RetainedEditorContext | null =
     currentIdentity.environmentId ? selectedEditorContext() : null;
+  // Revision authors are named from the selected Team's membership record,
+  // which the Team view already loads; other Teams' editors get no names.
+  const memberNames = new Map(
+    (membershipState?.memberships ?? []).map(
+      (member) => [member.userId, memberLabel(member)] as const,
+    ),
+  );
+  const environmentLabelFor = (identity: EnvironmentContextIdentity) =>
+    displayBoundary.catalog.projects
+      .find((project) => project.id === identity.projectId)
+      ?.environments.find(
+        (environment) => environment.id === identity.environmentId,
+      )?.label;
   const editorEntries: readonly RetainedEditorContext[] = selectedEntry
     ? [
         selectedEntry,
@@ -2775,6 +3159,13 @@ export const WorkspaceShell = ({
                   <LogOut aria-hidden="true" />
                   Sign out
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-testid="account-sign-out-forget"
+                  onClick={() => void signOut(true)}
+                >
+                  <LogOut aria-hidden="true" />
+                  Sign out and forget this browser
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
@@ -2868,6 +3259,15 @@ export const WorkspaceShell = ({
                     >
                       <LogOut aria-hidden="true" />
                       Sign out
+                    </Button>
+                    <Button
+                      data-testid="mobile-sign-out-forget"
+                      onClick={() => void signOut(true)}
+                      className="w-full justify-start gap-2"
+                      variant="ghost"
+                    >
+                      <LogOut aria-hidden="true" />
+                      Sign out and forget this browser
                     </Button>
                   </div>
                 ) : null}
@@ -3043,6 +3443,17 @@ export const WorkspaceShell = ({
                   </Button>
                 </div>
               ) : null}
+              {trustProblem && sessionActive ? (
+                <Alert
+                  className="mb-4 border-destructive/40"
+                  data-testid="workspace-trust-problem"
+                >
+                  <AlertTitle>
+                    This browser refused the server's keys
+                  </AlertTitle>
+                  <AlertDescription>{trustProblem}</AlertDescription>
+                </Alert>
+              ) : null}
               {missingResource && sessionActive ? (
                 <Alert
                   className="mb-4 border-amber-300/30 bg-amber-300/5"
@@ -3094,18 +3505,39 @@ export const WorkspaceShell = ({
                             {formatDate(invitation.expiresAt)}
                           </div>
                         </div>
-                        <Button
-                          disabled={
-                            acceptingInvitationId === invitation.invitationId
-                          }
-                          onClick={() =>
-                            acceptInvitation(invitation.invitationId)
-                          }
-                        >
-                          {acceptingInvitationId === invitation.invitationId
-                            ? "Accepting…"
-                            : "Accept invitation"}
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            disabled={
+                              acceptingInvitationId !== null ||
+                              decliningInvitationId !== null
+                            }
+                            onClick={() =>
+                              acceptInvitation(invitation.invitationId)
+                            }
+                          >
+                            {acceptingInvitationId === invitation.invitationId
+                              ? "Accepting…"
+                              : "Accept invitation"}
+                          </Button>
+                          <Button
+                            aria-label={`Decline invitation to ${invitation.teamName}`}
+                            disabled={
+                              acceptingInvitationId !== null ||
+                              decliningInvitationId !== null
+                            }
+                            onClick={() =>
+                              setDeclineTarget({
+                                invitationId: invitation.invitationId,
+                                label: invitation.teamName,
+                              })
+                            }
+                            variant="outline"
+                          >
+                            {decliningInvitationId === invitation.invitationId
+                              ? "Declining…"
+                              : "Decline"}
+                          </Button>
+                        </div>
                       </div>
                     ))}
                     {myInvitations.pendingMemberships.map((pending) => (
@@ -3116,7 +3548,11 @@ export const WorkspaceShell = ({
                         <div>
                           <div className="font-medium">{pending.teamName}</div>
                           <div className="text-sm text-muted-foreground">
-                            You accepted this team's invitation.
+                            You accepted this team's invitation. An owner or
+                            admin of {pending.teamName || "the team"} now has to
+                            open Team and choose Share project keys for you.
+                            When they have, refresh this page, or run{" "}
+                            <InlineCommand value="dotrelay pull" /> in the CLI.
                           </div>
                         </div>
                         <Badge
@@ -3133,6 +3569,19 @@ export const WorkspaceShell = ({
                         <AlertDescription>{acceptError}</AlertDescription>
                       </Alert>
                     ) : null}
+                    {declineError ? (
+                      <Alert className="border-destructive/30 bg-destructive/10">
+                        <AlertTitle>
+                          Couldn't decline that invitation
+                        </AlertTitle>
+                        <AlertDescription>{declineError}</AlertDescription>
+                      </Alert>
+                    ) : null}
+                    <DeclineInvitationDialog
+                      onCancel={() => setDeclineTarget(null)}
+                      onConfirm={(target) => void declineInvitation(target)}
+                      target={declineTarget}
+                    />
                   </CardContent>
                 </Card>
               ) : null}
@@ -3249,30 +3698,57 @@ export const WorkspaceShell = ({
                       </p>
                     ) : null}
                   </div>
-                  <Tabs
-                    className="mb-6"
-                    onValueChange={(nextId) => {
-                      if (typeof nextId !== "string") return;
-                      requestSelection({
-                        teamId: selectedTeam?.id ?? null,
-                        projectId: selectedProject.id,
-                        environmentId: nextId,
-                        view: "environment",
-                      });
-                    }}
-                    value={selectedEnvironment.id}
-                  >
-                    <TabsList aria-label="Environments">
-                      {selectedProject.environments.map((environment) => (
-                        <TabsTrigger
-                          key={environment.id}
-                          value={environment.id}
-                        >
-                          {environment.label}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                  </Tabs>
+                  <div className="mb-6 flex flex-wrap items-center gap-3">
+                    <Tabs
+                      onValueChange={(nextId) => {
+                        if (typeof nextId !== "string") return;
+                        requestSelection({
+                          teamId: selectedTeam?.id ?? null,
+                          projectId: selectedProject.id,
+                          environmentId: nextId,
+                          view: "environment",
+                        });
+                      }}
+                      value={selectedEnvironment.id}
+                    >
+                      <TabsList aria-label="Environments">
+                        {selectedProject.environments.map((environment) => (
+                          <TabsTrigger
+                            key={environment.id}
+                            value={environment.id}
+                          >
+                            {environment.label}
+                          </TabsTrigger>
+                        ))}
+                      </TabsList>
+                    </Tabs>
+                    {newEnvironmentControl(selectedProject)}
+                  </div>
+                  {rotationOwed ? (
+                    <Alert
+                      className="mb-6 border-amber-300/30 bg-amber-300/5"
+                      data-testid="rotation-owed"
+                    >
+                      <KeyRound aria-hidden="true" className="text-amber-300" />
+                      <AlertTitle>
+                        {rotationOwedCause(rotationOwed)} since{" "}
+                        {shortDate(rotationOwed.since)}
+                      </AlertTitle>
+                      <AlertDescription className="space-y-3">
+                        <p>
+                          They may still hold this project's key. Rotate it by
+                          running this in the project's repository, so new
+                          values use a key they never had. Then change any
+                          secrets they could already read. Publishing keeps
+                          working meanwhile.
+                        </p>
+                        <CopyableCommand
+                          data-testid="rotation-owed-command"
+                          value={PROJECT_ROTATE_COMMAND}
+                        />
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
                 </section>
               ) : null}
 
@@ -3294,8 +3770,14 @@ export const WorkspaceShell = ({
                       <CardDescription>
                         A project starts without an environment. Run{" "}
                         <InlineCommand value="dotrelay init" /> in this
-                        repository to create its first environment.
+                        repository to create its first environment
+                        {canAdminister ? ", or create one here" : ""}.
                       </CardDescription>
+                      {canAdminister ? (
+                        <CardAction>
+                          {newEnvironmentControl(selectedProject)}
+                        </CardAction>
+                      ) : null}
                     </CardHeader>
                   </Card>
                 </section>
@@ -3344,6 +3826,32 @@ export const WorkspaceShell = ({
                         {roleDisclosure[effectiveRole]}
                       </AlertDescription>
                     </Alert>
+                    {removedNotice &&
+                    removedNotice.teamId === selectedTeam?.id ? (
+                      <MemberRemovedNotice
+                        label={removedNotice.label}
+                        onDismiss={() => setRemovedNotice(null)}
+                      />
+                    ) : null}
+                    <RemoveMemberDialog
+                      onCancel={() => setRemovalTarget(null)}
+                      onConfirm={(target) => void removeMember(target)}
+                      target={removalTarget}
+                      teamName={selectedTeam?.name ?? "this team"}
+                    />
+                    <CancelInvitationDialog
+                      onCancel={() => setCancelInvitationTarget(null)}
+                      onConfirm={(target) => void cancelInvitation(target)}
+                      target={cancelInvitationTarget}
+                    />
+                    <RoleChangeDialog
+                      onCancel={() => setRoleChangeTarget(null)}
+                      onConfirm={(target) => {
+                        setRoleChangeTarget(null);
+                        void changeMemberRole(target.membershipId, target.to);
+                      }}
+                      target={roleChangeTarget}
+                    />
                     <Card data-testid="members-card">
                       <CardHeader>
                         <CardTitle>Members</CardTitle>
@@ -3408,97 +3916,127 @@ export const WorkspaceShell = ({
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {membershipState.memberships.map((member) => (
-                                <TableRow
-                                  key={member.membershipId}
-                                  data-testid={`member-row-${member.membershipId}`}
-                                >
-                                  <TableCell>
-                                    <div className="font-medium">
-                                      {member.name ??
-                                        `GitHub ${member.githubSubject}`}
-                                    </div>
-                                    <MemberAccountTrust
-                                      trust={memberTrust.get(member.userId)}
-                                      onTrust={() =>
-                                        void trustMemberKey(member.userId)
-                                      }
-                                    />
-                                  </TableCell>
-                                  {canAdminister ? (
+                              {membershipState.memberships.map((member) => {
+                                const label = memberLabel(member);
+                                const isSelf =
+                                  member.userId ===
+                                  displayBoundary.session.userId;
+                                const canManageRow =
+                                  member.lifecycle !== "REMOVED" &&
+                                  !isSelf &&
+                                  (effectiveRole === "OWNER" ||
+                                    member.role === "MEMBER");
+                                return (
+                                  <TableRow
+                                    key={member.membershipId}
+                                    data-testid={`member-row-${member.membershipId}`}
+                                  >
                                     <TableCell>
-                                      {roleLabel(member.role)}
+                                      <div className="font-medium">{label}</div>
+                                      <MemberAccountTrust
+                                        trust={memberTrust.get(member.userId)}
+                                        self={isSelf}
+                                        onTrust={() =>
+                                          void trustMemberKey(
+                                            member.userId,
+                                            member.membershipId,
+                                          )
+                                        }
+                                      />
                                     </TableCell>
-                                  ) : null}
-                                  <TableCell>
-                                    {member.lifecycle === "ACTIVE" ? (
-                                      <Badge variant="outline">Active</Badge>
-                                    ) : member.lifecycle === "REMOVED" ? (
-                                      <Badge variant="secondary">Removed</Badge>
-                                    ) : (
-                                      <Badge
-                                        className="border-amber-300/25 text-amber-200"
-                                        variant="outline"
-                                      >
-                                        Waiting for encryption keys
-                                      </Badge>
-                                    )}
-                                  </TableCell>
-                                  {canAdminister ? (
+                                    {canAdminister ? (
+                                      <TableCell>
+                                        {roleLabel(member.role)}
+                                      </TableCell>
+                                    ) : null}
                                     <TableCell>
-                                      {member.lifecycle !== "REMOVED" &&
-                                      member.userId !==
-                                        displayBoundary.session.userId &&
-                                      (effectiveRole === "OWNER" ||
-                                        member.role === "MEMBER") ? (
-                                        <div className="flex flex-col gap-2">
-                                          <Button
-                                            size="sm"
+                                      {member.lifecycle === "ACTIVE" ? (
+                                        <Badge variant="outline">Active</Badge>
+                                      ) : member.lifecycle === "REMOVED" ? (
+                                        <Badge variant="secondary">
+                                          Removed
+                                        </Badge>
+                                      ) : canAdminister ? (
+                                        <div className="flex max-w-56 flex-col gap-1">
+                                          <Badge
+                                            className="border-amber-300/25 text-amber-200"
                                             variant="outline"
-                                            disabled={
-                                              memberMutation !== null ||
-                                              !browserDeviceId
-                                            }
-                                            onClick={() =>
-                                              void provisionMember(
-                                                member.membershipId,
-                                              )
-                                            }
                                           >
-                                            {memberMutation?.kind ===
-                                              "provision" &&
-                                            memberMutation.membershipId ===
-                                              member.membershipId
-                                              ? "Sharing keys…"
-                                              : "Share project keys"}
-                                          </Button>
+                                            Action needed: share project keys
+                                          </Badge>
+                                          <p className="text-xs whitespace-normal text-muted-foreground">
+                                            They joined but can't read any
+                                            values yet. Use Share project keys
+                                            while this browser is set up and
+                                            unlocked.
+                                          </p>
                                         </div>
-                                      ) : null}
-                                      {member.lifecycle === "ACTIVE" &&
-                                      member.userId !==
-                                        displayBoundary.session.userId &&
-                                      (effectiveRole === "OWNER" ||
-                                        member.role === "MEMBER") ? (
-                                        <div className="flex flex-col gap-2">
-                                          <div className="flex items-center gap-2">
+                                      ) : (
+                                        <Badge
+                                          className="border-amber-300/25 text-amber-200"
+                                          variant="outline"
+                                        >
+                                          Waiting for encryption keys
+                                        </Badge>
+                                      )}
+                                    </TableCell>
+                                    {canAdminister ? (
+                                      <TableCell>
+                                        {canManageRow ? (
+                                          <div className="flex flex-col gap-2">
+                                            <Button
+                                              aria-label={`Share project keys with ${label}`}
+                                              size="sm"
+                                              variant={
+                                                member.lifecycle ===
+                                                "PENDING_KEY_GRANT"
+                                                  ? "default"
+                                                  : "outline"
+                                              }
+                                              disabled={
+                                                memberMutation !== null ||
+                                                !browserDeviceId
+                                              }
+                                              onClick={() =>
+                                                void provisionMember(
+                                                  member.membershipId,
+                                                )
+                                              }
+                                            >
+                                              {memberMutation?.kind ===
+                                                "provision" &&
+                                              memberMutation.membershipId ===
+                                                member.membershipId
+                                                ? "Sharing keys…"
+                                                : "Share project keys"}
+                                            </Button>
+                                          </div>
+                                        ) : null}
+                                        {member.lifecycle === "ACTIVE" &&
+                                        canManageRow ? (
+                                          <div className="mt-2 flex items-center gap-2">
                                             {effectiveRole === "OWNER" ? (
                                               <select
-                                                aria-label={`Role for ${
-                                                  member.name ??
-                                                  `GitHub ${member.githubSubject}`
-                                                }`}
+                                                aria-label={`Role for ${label}`}
                                                 className="h-8 rounded-lg border border-input bg-input/30 px-2 text-sm"
                                                 disabled={
                                                   memberMutation !== null
                                                 }
                                                 value={member.role ?? "MEMBER"}
-                                                onChange={(event) =>
-                                                  void changeMemberRole(
-                                                    member.membershipId,
-                                                    event.target
-                                                      .value as MembershipRole,
-                                                  )
-                                                }
+                                                onChange={(event) => {
+                                                  const to = event.target
+                                                    .value as MembershipRole;
+                                                  const from =
+                                                    member.role ?? "MEMBER";
+                                                  if (to === from) return;
+                                                  setRoleChangeTarget({
+                                                    membershipId:
+                                                      member.membershipId,
+                                                    label,
+                                                    from,
+                                                    to,
+                                                  });
+                                                }}
                                               >
                                                 <option value="OWNER">
                                                   Owner
@@ -3512,32 +4050,46 @@ export const WorkspaceShell = ({
                                               </select>
                                             ) : null}
                                             <Button
+                                              aria-label={`Remove member ${label}`}
                                               size="sm"
                                               variant="outline"
                                               disabled={memberMutation !== null}
                                               onClick={() =>
-                                                void removeMember(
-                                                  member.membershipId,
-                                                )
+                                                setRemovalTarget({
+                                                  membershipId:
+                                                    member.membershipId,
+                                                  label,
+                                                })
                                               }
                                             >
-                                              Remove member
+                                              {memberMutation?.kind ===
+                                                "remove" &&
+                                              memberMutation.membershipId ===
+                                                member.membershipId
+                                                ? "Removing…"
+                                                : "Remove member"}
                                             </Button>
                                           </div>
-                                        </div>
-                                      ) : null}
-                                      {memberMutationError?.membershipId ===
-                                      member.membershipId ? (
-                                        <p className="text-xs text-destructive">
-                                          {memberMutationError.message}
-                                        </p>
-                                      ) : null}
-                                    </TableCell>
-                                  ) : null}
-                                </TableRow>
-                              ))}
+                                        ) : null}
+                                        {memberMutationError?.membershipId ===
+                                        member.membershipId ? (
+                                          <p
+                                            className="mt-2 text-xs text-destructive"
+                                            role="alert"
+                                          >
+                                            {memberMutationError.message}
+                                          </p>
+                                        ) : null}
+                                      </TableCell>
+                                    ) : null}
+                                  </TableRow>
+                                );
+                              })}
                               {membershipState.invitations.map((invitation) => (
-                                <TableRow key={invitation.invitationId}>
+                                <TableRow
+                                  data-testid={`invitation-row-${invitation.invitationId}`}
+                                  key={invitation.invitationId}
+                                >
                                   <TableCell>
                                     <div className="font-medium">
                                       Invitation
@@ -3549,7 +4101,6 @@ export const WorkspaceShell = ({
                                   {canAdminister ? (
                                     <TableCell>Member</TableCell>
                                   ) : null}
-                                  {canAdminister ? <TableCell /> : null}
                                   <TableCell>
                                     <Badge
                                       className="border-amber-300/25 text-amber-200"
@@ -3559,6 +4110,39 @@ export const WorkspaceShell = ({
                                       {formatDate(invitation.expiresAt)}
                                     </Badge>
                                   </TableCell>
+                                  {canAdminister ? (
+                                    <TableCell>
+                                      <Button
+                                        aria-label={`Cancel invitation for GitHub ${invitation.providerSubject}`}
+                                        disabled={
+                                          cancellingInvitationId !== null
+                                        }
+                                        onClick={() =>
+                                          setCancelInvitationTarget({
+                                            invitationId:
+                                              invitation.invitationId,
+                                            label: `GitHub ${invitation.providerSubject}`,
+                                          })
+                                        }
+                                        size="sm"
+                                        variant="outline"
+                                      >
+                                        {cancellingInvitationId ===
+                                        invitation.invitationId
+                                          ? "Cancelling…"
+                                          : "Cancel invitation"}
+                                      </Button>
+                                      {cancelInvitationError?.invitationId ===
+                                      invitation.invitationId ? (
+                                        <p
+                                          className="mt-2 text-xs text-destructive"
+                                          role="alert"
+                                        >
+                                          {cancelInvitationError.message}
+                                        </p>
+                                      ) : null}
+                                    </TableCell>
+                                  ) : null}
                                 </TableRow>
                               ))}
                               {membershipState.memberships.length === 0 &&
@@ -3625,6 +4209,19 @@ export const WorkspaceShell = ({
                           </p>
                         ) : null}
                       </>
+                    ) : null}
+                    {apiOrigin && selectedTeam?.id ? (
+                      <TeamLifecycleCard
+                        apiOrigin={apiOrigin}
+                        deviceId={browserDeviceId}
+                        onChanged={() => {
+                          setView("projects");
+                          reconnectNowRef.current?.();
+                        }}
+                        role={effectiveRole}
+                        teamId={selectedTeam.id}
+                        teamName={selectedTeam.name}
+                      />
                     ) : null}
                   </section>
                 )
@@ -3772,6 +4369,12 @@ export const WorkspaceShell = ({
                                 </TableCell>
                                 <TableCell>
                                   <Button
+                                    aria-label={`Revoke device ${
+                                      device.name ??
+                                      (device.current
+                                        ? "This browser"
+                                        : device.id)
+                                    }`}
                                     size="sm"
                                     variant="outline"
                                     disabled={
@@ -3779,7 +4382,16 @@ export const WorkspaceShell = ({
                                       !browserDeviceId ||
                                       protectedPreview
                                     }
-                                    onClick={() => void revokeDevice(device.id)}
+                                    onClick={() =>
+                                      setRevokeTarget({
+                                        id: device.id,
+                                        label:
+                                          device.name ??
+                                          (device.current
+                                            ? "this browser"
+                                            : "this device"),
+                                      })
+                                    }
                                   >
                                     {revokingDevice === device.id
                                       ? "Revoking…"
@@ -3791,10 +4403,22 @@ export const WorkspaceShell = ({
                           </TableBody>
                         </Table>
                         {revokeDeviceError ? (
-                          <p className="mt-2 text-sm text-destructive">
+                          <p
+                            className="mt-2 text-sm text-destructive"
+                            role="alert"
+                          >
                             {revokeDeviceError}
                           </p>
                         ) : null}
+                        <RevokeDeviceDialog
+                          onCancel={() => setRevokeTarget(null)}
+                          onConfirm={(deviceId) => void revokeDevice(deviceId)}
+                          target={revokeTarget}
+                        />
+                        <DeviceRevokedDialog
+                          onContinue={() => window.location.assign("/sign-in")}
+                          open={deviceRevoked}
+                        />
                       </CardContent>
                     </Card>
                   ) : null}
@@ -3843,6 +4467,25 @@ export const WorkspaceShell = ({
                 </section>
               ) : null}
               {view === "recovery" ? recoveryArea : null}
+              {view === "account" ? (
+                !sessionActive ? (
+                  signInRequired
+                ) : apiOrigin && displayBoundary.session.userId ? (
+                  <AccountSettingsSection
+                    apiOrigin={apiOrigin}
+                    onDeleted={() => {
+                      // The deleted account's keys and Device are useless
+                      // now; a later sign-in is a new account with a new
+                      // Device, so clear everything this browser kept.
+                      forgetDeviceProofs();
+                      void forgetThisBrowser().finally(() =>
+                        window.location.assign("/sign-in"),
+                      );
+                    }}
+                    userId={displayBoundary.session.userId}
+                  />
+                ) : null
+              ) : null}
 
               <section
                 aria-hidden={envVisible ? undefined : true}
@@ -3870,7 +4513,13 @@ export const WorkspaceShell = ({
                             : entry.available
                         }
                         contextIdentity={entry.identity}
+                        environmentLabel={environmentLabelFor(entry.identity)}
                         loading={isCurrent && contextStale}
+                        memberNames={
+                          entry.identity.teamId === selectedTeam?.id
+                            ? memberNames
+                            : undefined
+                        }
                         role={teamRoleFor(entry.identity.teamId)}
                         onDraftDirtyChange={(dirty, changedVariableNames) => {
                           draftStateRef.current.set(entryKey, {

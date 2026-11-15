@@ -30,7 +30,10 @@ import {
   DeviceRepository,
   EnvironmentRepository,
   GrantRepository,
+  inactiveMembershipError,
   MembershipAdministrationRepository,
+  MembershipAwaitingKeysError,
+  MembershipNotActiveError,
   MembershipRepository,
   OperationConflictError,
   OperationRepository,
@@ -1014,6 +1017,73 @@ integrationDescribe("trust workflow integration", () => {
     ).rejects.toThrow("use initial trust bootstrap");
   });
 
+  // ADR 0021: revocation is terminal. Enrollment never moves a revoked Device
+  // back to PENDING or clears the times its Revisions are judged by.
+  test("a revoked Device never re-enters enrollment", async () => {
+    const user = await createUserFixture();
+    const devices = new DeviceRepository();
+    await createActiveDevice(user.id);
+    const x25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
+    const ed25519PublicKey = crypto.getRandomValues(new Uint8Array(32));
+    const keyId = new Uint8Array(await sha384Digest(x25519PublicKey));
+    const activatedAt = new Date(Date.now() - 60_000);
+    const revokedAt = new Date(Date.now() - 30_000);
+    const revoked = await database.device.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        lifecycle: "REVOKED",
+        identityGeneration: 1n,
+        keyId,
+        x25519PublicKey,
+        ed25519PublicKey,
+        activatedAt,
+        revokedAt,
+      },
+    });
+    for (const keys of [
+      { x25519PublicKey, ed25519PublicKey },
+      // The same X25519 key with a different Ed25519 key.
+      {
+        x25519PublicKey,
+        ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      },
+    ])
+      await expect(
+        devices.beginEnrollment(database, {
+          operation: {
+            ...(await createOperationInput(
+              user.id,
+              `re-enroll-${crypto.randomUUID()}`,
+              "DEVICE_ENROLLMENT",
+            )),
+            actorDeviceId: revoked.id,
+          },
+          enrollmentId: crypto.randomUUID(),
+          userId: user.id,
+          initiatorDeviceId: revoked.id,
+          transcriptHash: new Uint8Array(48),
+          challengeHash: new Uint8Array(48),
+          expiresAt: new Date(Date.now() + 60_000),
+          device: { id: revoked.id, identityGeneration: 1n, keyId, ...keys },
+        }),
+      ).rejects.toThrow("conflicts with the stored device");
+    const after = await database.device.findUniqueOrThrow({
+      where: { id: revoked.id },
+    });
+    expect(after.lifecycle).toBe("REVOKED");
+    expect(after.activatedAt?.getTime()).toBe(activatedAt.getTime());
+    expect(after.revokedAt?.getTime()).toBe(revokedAt.getTime());
+    // The database refuses the same change from any other writer.
+    await expect(
+      (async () =>
+        database.device.update({
+          where: { id: revoked.id },
+          data: { lifecycle: "PENDING", activatedAt: null, revokedAt: null },
+        }))(),
+    ).rejects.toThrow("revoked Device");
+  });
+
   // ADR 0010: a Device created by initial trust bootstrap is fully ACTIVE.
   // It may approve an enrollment on its own behalf — here the prospective
   // Device's self-started request, which activates it. The lifecycle gate
@@ -1297,6 +1367,105 @@ integrationDescribe("trust workflow integration", () => {
     if (!("membership" in activated))
       throw new Error("activation did not return a membership");
     expect(activated.membership.lifecycle).toBe("ACTIVE");
+  });
+
+  test("lets an active Member grant the Project key to their own Devices only", async () => {
+    const owner = await createUserFixture();
+    const ownerDevice = await createActiveDevice(owner.id);
+    const serverProfileId = owner.serverProfileId;
+    const teamId = crypto.randomUUID();
+    const projectId = crypto.randomUUID();
+    await new AdministrationRepository().createTeamWithOwner(database, {
+      teamId,
+      serverProfileId,
+      ownerUserId: owner.id,
+      name: "own-grant-team",
+      operation: {
+        ...(await createOperationInput(owner.id, "own-grant-team")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    await new ProjectRepository().create(database, {
+      teamId,
+      projectId,
+      githubRepositoryId: BigInt(Date.now()),
+      operation: {
+        ...(await createOperationInput(owner.id, "own-grant-project")),
+        actorDeviceId: ownerDevice.id,
+      },
+    });
+    const member = await createUserFixture(serverProfileId);
+    const memberDevice = await createActiveDevice(member.id);
+    const memberLaptop = await createActiveDevice(member.id);
+    const membership = await database.membership.create({
+      data: {
+        teamId,
+        userId: member.id,
+        role: "MEMBER",
+        lifecycle: "ACTIVE",
+        activatedAt: new Date(),
+      },
+    });
+    const grants = new GrantRepository();
+    const grantTo = async (recipientDeviceId: string, label: string) => {
+      const protocolObject = await createProtocolObjectInput(7);
+      const operation = {
+        ...(await createOperationInput(member.id, label)),
+        actorDeviceId: memberDevice.id,
+      };
+      await stageObject({
+        operation,
+        objectId: protocolObject.id,
+        canonicalBytes: protocolObject.canonicalBytes,
+        digest: protocolObject.digest,
+      });
+      return grants.create(database, {
+        operation,
+        grant: {
+          protocolObject,
+          projectId,
+          teamId,
+          senderDeviceId: memberDevice.id,
+          recipientDeviceId,
+          keyKind: "PROJECT_EPOCH",
+          grantKind: "CURRENT_PROJECT_EPOCH",
+          projectEpoch: 1n,
+          plaintextLength: 32,
+          ciphertextLength: 48,
+          ciphertextHash: new Uint8Array(48),
+          recipientDeviceIds: [recipientDeviceId],
+        },
+      });
+    };
+    const own = await grantTo(memberLaptop.id, "own-grant-laptop");
+    expect("grant" in own && own.grant.recipientDeviceId).toBe(memberLaptop.id);
+    await expect(grantTo(ownerDevice.id, "own-grant-foreign")).rejects.toThrow(
+      "not authorized for the Team: insufficient_role",
+    );
+    for (const data of [
+      { lifecycle: "PENDING_KEY_GRANT", activatedAt: null, removedAt: null },
+      { lifecycle: "REMOVED", removedAt: new Date() },
+    ] as const) {
+      const { lifecycle } = data;
+      await database.membership.update({
+        where: { id: membership.id },
+        data,
+      });
+      await expect(
+        grantTo(memberLaptop.id, `own-grant-${lifecycle}`),
+      ).rejects.toThrow("not authorized for the Team: membership_not_active");
+      // Sync and publication tell a Membership waiting for keys apart from
+      // a removed one.
+      const inactive = await inactiveMembershipError(
+        database,
+        teamId,
+        member.id,
+      );
+      expect(inactive).toBeInstanceOf(MembershipNotActiveError);
+      expect(inactive instanceof MembershipAwaitingKeysError).toBe(
+        lifecycle === "PENDING_KEY_GRANT",
+      );
+    }
   });
 
   // Acceptance and membership activation must take row locks in the same
@@ -1992,10 +2161,31 @@ integrationDescribe("trust workflow integration", () => {
         },
       ],
     };
+    // Revoking an active Device owes the Project a rotation; the rotation
+    // below clears it.
+    const revokedSpare = await createActiveDevice(user.id);
+    await new DeviceRepository().revoke(database, {
+      deviceId: revokedSpare.id,
+      operation: {
+        ...(await createOperationInput(user.id, "rotation-spare-revoke")),
+        actorDeviceId: device.id,
+      },
+    });
+    expect(
+      await database.projectRotationObligation.count({
+        where: { projectId, clearedAt: null },
+      }),
+    ).toBe(1);
     const result = await epochRotation.rotate(database, rotateInput);
     if (!("projectEpoch" in result))
       throw new Error("rotation reported an idempotent replay");
     expect(result.projectEpoch).toBe(2n);
+    expect(
+      await database.projectRotationObligation.findMany({
+        where: { projectId },
+        select: { clearedByEpoch: true, deviceId: true },
+      }),
+    ).toEqual([{ clearedByEpoch: 2n, deviceId: revokedSpare.id }]);
 
     const project = await database.project.findUniqueOrThrow({
       where: { id: projectId },

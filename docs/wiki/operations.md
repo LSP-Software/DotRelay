@@ -32,7 +32,10 @@ GitHub App authorization has no classic OAuth `scope=repo`. Classic OAuth/PAT
 credentials are refused by delegated access resolvers. Revoke old broad OAuth
 grants in GitHub settings, remove their stored account grants and sign in with
 the App again; changing the configuration alone does not revoke GitHub tokens.
-Existing Repository Linkages retain their stable identities. Never export tokens
+Existing Repository Linkages retain their stable identities. Linking a new Project resolves the
+repository with the acting User's own Delegated GitHub Access, and the repository names shown in
+the workspace catalog are cached per viewer, so one User's access never reveals a private
+repository's name to another. Never export tokens
 to the CLI or browser. App registration/installation permissions and token expiry
 must be checked by the operator with an actual test installation before launch.
 
@@ -52,9 +55,12 @@ approved stable numeric IDs. Explicit `ALPHA_ADMISSION_REQUIRED=false` disables
 admission, and must never be set accidentally. Behind TLS termination configure
 `SERVER_PROFILE_TRUST_PROXY=true` and the exact trusted proxy CIDRs; prevent any
 public direct access to the API container. Use a trusted proxy that overwrites
-forwarding headers. When the web app and the API use sibling hosts, set `COOKIE_DOMAIN` to
-their shared registrable domain (see [authentication](authentication.md)); give each
-deployment on that domain its own `COOKIE_PREFIX`. Expose only the TLS proxy, keep PostgreSQL/Valkey private,
+forwarding headers. Better Auth's sign-in limiter keys its buckets by client IP, which the API can
+only learn from a trusted proxy: without `SERVER_PROFILE_TRUST_PROXY=true` and accurate
+`SERVER_PROFILE_TRUSTED_PROXIES`, every client shares one bucket per auth route and a single
+abusive client can lock everyone out of sign-in. When the web app and the API use sibling hosts, set
+`COOKIE_DOMAIN` to their shared registrable domain (see [authentication](authentication.md)); give
+each deployment on that domain its own `COOKIE_PREFIX`. Expose only the TLS proxy, keep PostgreSQL/Valkey private,
 run API/web non-root with read-only roots, drop capabilities, set no-new-privileges,
 apply memory/CPU/PID limits and provide bounded private `/tmp` tmpfs volumes.
 The root `compose.yaml` is **development services only**, not a production bundle.
@@ -64,13 +70,122 @@ applied migration names/checksums, including failed migrations and unexpected
 newer migrations; it returns only a generic 200 or 503. It has a three-second
 response budget. When `VALKEY_URL` is set, readiness also pings Valkey.
 `MAINTENANCE_MODE=true` makes readiness fail, as does SIGTERM, which then waits
-`SHUTDOWN_DRAIN_MS` (default 5000) before closing the listener. Keep health endpoints
-on private monitoring paths where possible. The API process itself never migrates;
+`SHUTDOWN_DRAIN_MS` (default 5000) before closing the listener.
+
+Valkey is required in production for rate limiting, and is shared by every API replica. Each
+authenticated `/api/v1` request counts against its User's budget of 600 per minute. Requests that
+may call GitHub on the User's behalf (`github-users/resolve`, `github-repositories/resolve`, the
+workspace boundary) also count against 120 per minute, and requests that create durable rows
+(Teams, Projects, invitations, Device enrollments) against 60 per hour. A refused request answers
+`rate_limited` (429) with `Retry-After`. Without Valkey, production answers
+`rate_limit_unavailable` (503); development runs unlimited. Better Auth's own per-IP sign-in limits
+use the same Valkey, falling back to per-process memory if it is unreachable. Sessions slide for 30
+days of inactivity but end 90 days after creation, browser and CLI alike. Keep health endpoints
+on private monitoring paths where possible; see [Metrics and alerting](#metrics-and-alerting). The API process itself never migrates;
 hosted deploys run a migration step before it starts (see below).
 If the orchestrator overrides Docker's built-in healthcheck, configure
 `bun /app/scripts/probe-health.ts` (liveness, `/health`) or
 `bun /app/scripts/probe-ready.ts` (readiness) instead of an inherited curl/wget command;
 the image's probe uses the pinned Bun runtime and needs no apt-installed client.
+
+## Transactional email
+
+The API sends three emails through [Resend](https://resend.com):
+
+- **Invitation**, to the invitee: Team name, inviter, expiry and a link to `/workspace` on
+  `WEB_ORIGIN`, where the invitation is accepted or declined. Invitations address a GitHub id, so
+  only an invitee who has already signed in to DotRelay has a stored address. Anyone else gets no
+  email; the inviter still shares the invitation themselves.
+- **Project keys shared**, to the Member, once per Share project keys operation (web Members view
+  or `dotrelay team share-keys`), listing the Projects and the `dotrelay pull` hint. Not one email
+  per Device grant.
+- **Invitation accepted**, to each active owner and admin of the Team except the new Member: who
+  joined, and that the Project keys must be shared before they can pull.
+
+Recipients' addresses come from the GitHub primary email Better Auth stored at sign-in (the
+GitHub App's **Email addresses: read** permission). GitHub `users.noreply.github.com` addresses
+are skipped. The API never asks GitHub for an address at send time.
+
+Emails are sent only after the database transaction commits, in the background: a slow or failed
+send never fails or delays the API response. Each attempt times out after 10 seconds. A timeout,
+network error, 429 or 5xx is retried once after two seconds with the same Resend
+`Idempotency-Key`, so a retry never sends twice. Replays of an idempotent request send nothing. The
+in-process queue holds at most 200 events; queued emails get up to two seconds to finish on
+shutdown, then are dropped. Outcomes are the diagnostic events `api.email.sent`,
+`api.email.failed` and `api.email.skipped` (see [observability](observability.md)), with an email
+kind and a bounded reason only; never an address, link, name, key or Resend response.
+
+Templates are short plain text with a minimal inline-styled HTML part. User-controlled strings are
+escaped. There are no images or tracking pixels. Every email says why it was sent and that
+replies are not read, and names the support address. Turn off open and click tracking for the
+domain in Resend.
+
+| Variable                | Default                           | Notes                                                                                                                                                                   |
+| ----------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RESEND_API_KEY`        | unset                             | Unset turns email off (development, self-hosting, tests); the API logs one line at startup. A sending-only key is enough. `RESEND_API_KEY_FILE` accepts a private file. |
+| `EMAIL_FROM`            | `DotRelay <noreply@dotrelay.dev>` | An address or `Name <address>` on a domain verified in Resend.                                                                                                          |
+| `EMAIL_SUPPORT_ADDRESS` | `support@dotrelay.dev`            | Named in every email footer.                                                                                                                                            |
+
+The production config check does not require email, but rejects a malformed value when one is
+set.
+
+### Resend domain and DNS
+
+Add `dotrelay.dev` as a domain in the Resend dashboard (region of choice), then create the records
+the dashboard lists. The exact values, including the DKIM public key and the MX host for the
+region, come from the dashboard after the domain is added; copy them from there. The records are:
+
+| Name                             | Type | Purpose                                                                                                      |
+| -------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------ |
+| `resend._domainkey.dotrelay.dev` | TXT  | DKIM public key (`p=…`) that signs mail from the domain.                                                     |
+| `send.dotrelay.dev`              | MX   | Return-path (bounce) host for Resend's SES region, e.g. `feedback-smtp.<region>.amazonses.com`, priority 10. |
+| `send.dotrelay.dev`              | TXT  | SPF for the return-path subdomain, `v=spf1 include:amazonses.com ~all`.                                      |
+| `_dmarc.dotrelay.dev`            | TXT  | DMARC policy. Not issued by Resend; recommended below.                                                       |
+
+Start DMARC in monitoring mode, `v=DMARC1; p=none; rua=mailto:<reports address>`, and move to
+`p=quarantine` once reports show only aligned mail from Resend and any other senders on the
+domain. Keep the apex SPF record unchanged; Resend's SPF lives on `send`. Wait for Resend to show
+the domain as verified before setting `RESEND_API_KEY` in Coolify.
+
+## Metrics and alerting
+
+DotRelay sends no telemetry and has no access to self-hosted instances. Metrics are opt-in and
+pulled by the operator's own Prometheus-compatible scraper.
+
+Set `METRICS_ENABLED=true` to start a second, private listener on `METRICS_PORT` (default 9464).
+It serves only `GET /metrics` in the Prometheus text format; it shares no routes, CORS, cookies or
+sessions with the API on `PORT`. Production requires `METRICS_TOKEN` (at least 32 characters),
+compared in constant time against `Authorization: Bearer <token>`; other requests get 401. Keep
+`/health` and `/ready` on the API port for probes. Do not publish the metrics port or route it
+through the TLS proxy; scrape it from the private network:
+
+```yaml
+scrape_configs:
+  - job_name: dotrelay-api
+    authorization:
+      credentials_file: /etc/prometheus/dotrelay-metrics-token
+    static_configs:
+      - targets: ["api:9464"]
+```
+
+The metric names and the label policy are in [observability](observability.md#metrics).
+Counters reset when the process restarts and are per replica; aggregate with `sum`.
+
+`ops/alerts/dotrelay.rules.yml` has Prometheus alerting rules for: any expiry failure or failed
+retention run in the last hour; Security Request Log write failures; a rate-limit refusal spike
+(default: over 1 per second and 5 times the rate a day earlier, for 5 minutes); any
+`rate_limit_unavailable`; readiness failing for 5 minutes; a missing scrape; and a 5xx ratio over
+5% for 10 minutes. The thresholds are marked defaults; tune them to your traffic. Check edits with
+`promtool check rules` and `promtool test rules ops/alerts/dotrelay.rules.test.yml`.
+
+Without Prometheus, alert on the API's JSON log lines (stderr) instead. Each line has an
+`eventName` and, for failures, `outcome: "failure"`. Alert on any
+`api.staging.expiry_failed`, `api.security_request_log.expiry_failed`,
+`api.retention.expiry_failed`, `api.retention.cleanup_completed` with `outcome: "failure"`,
+`api.security_request_log.write_failed`, `api.rate_limit.unavailable`, or repeated
+`api.readiness.checked` failures; and on a rising count of `api.rate_limit.user_refused`,
+`github_refused`, `creation_refused` or `auth_refused`. `api.request.completed` lines carry the
+`problemCode` of every failed request; successful requests are sampled.
 
 ## Upgrade and migrations
 
@@ -114,8 +229,8 @@ who wants an encrypted backup taken immediately before a migration) use
    On the maintenance host provision PostgreSQL **17** clients, Python 3.11+ and
    `age` 1.x through your reviewed package source. Check `pg_dump --version`,
    `pg_restore --version` and `age --version`. Never dump with an older major client.
-3. Supply `DATABASE_URL`, `BACKUP_AGE_RECIPIENT`, `BACKUP_IDENTITY_FILE` and a unique
-   `BACKUP_ARCHIVE` in a private 0700 backup directory.
+3. Supply `DATABASE_URL`, `BACKUP_AGE_RECIPIENT`, `BACKUP_IDENTITY_FILE`,
+   `BACKUP_MAC_KEY_FILE` and a unique `BACKUP_ARCHIVE` in a private 0700 backup directory.
    The backup URL accepts only `sslmode`, `sslrootcert`, `sslcert` and `sslkey`
    query options. Remove Prisma-only options such as `schema` and
    `connection_limit` from this maintenance connection; configure supported TLS
@@ -152,8 +267,17 @@ python3 ops/postgres.py backup /private-backups/unique-name.age
 python3 ops/postgres.py verify /private-backups/unique-name.age
 ```
 
-Backups are age-encrypted PostgreSQL custom archives with a `.json` checksum
-sidecar. Both must be retained. The pipeline checks both `pg_dump` and encryption
+Backups are age-encrypted PostgreSQL custom archives with a `.json` manifest
+sidecar. Both must be retained. Encryption to a public age recipient does not say who
+made an archive, so the manifest records the archive's SHA-256 and size under an
+HMAC-SHA256 keyed by `BACKUP_MAC_KEY_FILE`: a private (`0600`) file holding at least
+32 random bytes, for example `openssl rand -hex 32`. Keep that key with the age identity
+and never on backup storage; whoever can write backup storage can replace an archive and
+its checksum, but not forge the MAC. `verify` and `restore` refuse an archive whose
+manifest does not authenticate before anything is decrypted. Archives made before
+manifests were authenticated (manifest version 1) are refused unless the operator sets
+`DOTRELAY_ALLOW_UNAUTHENTICATED_BACKUP=true` for that run after confirming the storage
+was not writable by anyone else. The pipeline checks both `pg_dump` and encryption
 exit codes; any failed output is unusable. Names are exclusive: a backup never
 overwrites another backup. Store copies outside the database host, encrypt disks,
 restrict access, monitor failures and capacity, and set retention/RPO/RTO appropriate
@@ -170,8 +294,10 @@ network using a newly created empty database and the matching release. Set
 DOTRELAY_WRITERS_STOPPED=true python3 ops/postgres.py restore /private-backups/unique-name.age
 ```
 
-Restore first authenticates the complete encrypted archive and refuses checksum
-mismatch or a nonempty target. It uses `pg_restore --single-transaction` and
+Restore first authenticates the manifest and the complete encrypted archive and refuses
+an unauthenticated manifest, a checksum mismatch or a nonempty target. Restore as a role
+that owns the new target database but is not a superuser, so the archive's SQL runs with
+no more privilege than the application needs. It uses `pg_restore --single-transaction` and
 `--exit-on-error`, without `--clean`, without dropping or overwriting the original
 DB. Preserve ownership/privileges by provisioning the dedicated role separately;
 archives intentionally omit role/ACL recreation. Verification uses an unlinked private
@@ -192,14 +318,16 @@ in #32; do not infer it from database readiness.
 
 ## Reproducibility and promotion
 
-The Docker bases and PostgreSQL/Valkey service images are digest-pinned. CI Bun is
-pinned to revision `da867c60bf0bcbf9d6d36994f8ca0efa42075115`; Docker verifies its
-reported revision. The matching Linux x64 Bun archive SHA-256 is
-`e8f27b24f74186e87fc0f0f603bdb6b79264dc86a1680da41e2025a3cb3efee0`.
-CI installs the official, immutable dated npm packages
-`@oven/bun-*@1.4.4-canary.20261030.1`, verifies their SHA-512 integrity from
-`ops/bun-toolchain.json` and checks the executable revision before use. It does
-not depend on GitHub's replaceable canary asset IDs. Direct package versions and transitive resolutions are locked; installs must use
+The Docker bases and PostgreSQL/Valkey service images are digest-pinned. The API image,
+the web build, the compiled CLI and CI run the stable Bun release `1.4.4`, revision
+`38afee6c84fcf48c0edb2466aa4b27d287a59c30` (`oven/bun:1.4.4@sha256:1d22548f…`); Docker
+verifies its reported revision. The matching Linux x64 Bun archive SHA-256 is
+`93ca5a2abe45f3bcac6dd55baff8bb06c4ac824b70f89650b54e5c8b80dbef18`. CI installs the
+official, immutable npm packages `@oven/bun-*@1.4.4`, verifies their SHA-512 integrity
+from `ops/bun-toolchain.json` and checks the executable revision before use. A dated
+canary (`@oven/bun-*@1.4.4-canary.20261030.1`, revision
+`da867c60bf0bcbf9d6d36994f8ca0efa42075115`) is pinned the same way, but only runs the
+built-in `bun lint`; it never builds or runs anything that ships. Direct package versions and transitive resolutions are locked; installs must use
 `--frozen-lockfile`. Pin changes require the full runtime/crypto matrix again.
 This is repeatable dependency resolution, not a claim of bit-for-bit reproducible
 Next.js/native binaries across different hosts.

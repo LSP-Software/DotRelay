@@ -64,6 +64,29 @@ test("production requires every essential setting, explicit mode, secure origins
   expect(message).not.toContain("secret-invalid-url");
 });
 
+test("metrics stay off by default and need a long bearer token when enabled", () => {
+  const metricsToken = ["metrics", "fixture", "token", "0123456789"].join("-");
+  expect(loadProductionEnvironment(valid).METRICS_ENABLED).toBeUndefined();
+  expect(
+    loadProductionEnvironment({
+      ...valid,
+      METRICS_ENABLED: "true",
+      METRICS_TOKEN: metricsToken,
+    }).METRICS_TOKEN,
+  ).toBe(metricsToken);
+  for (const change of [
+    { METRICS_ENABLED: "true" },
+    { METRICS_ENABLED: "true", METRICS_TOKEN: "short" },
+    {
+      METRICS_ENABLED: "true",
+      METRICS_TOKEN: metricsToken,
+      METRICS_PORT: "3001",
+    },
+    { METRICS_ENABLED: "on", METRICS_TOKEN: metricsToken },
+  ])
+    expect(() => loadProductionEnvironment({ ...valid, ...change })).toThrow();
+});
+
 test("private secret files work; conflicting, public, symlink and directory inputs fail closed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dotrelay-config-"));
   try {
@@ -105,6 +128,48 @@ test("private secret files work; conflicting, public, symlink and directory inpu
         }),
       ).toThrow("private");
     }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("transactional email is optional, but configured values must be well-formed", () => {
+  const resendKey = ["re", "fixtureOnlyKey123"].join("_");
+  expect(loadProductionEnvironment(valid).RESEND_API_KEY).toBeUndefined();
+  expect(
+    loadProductionEnvironment({
+      ...valid,
+      RESEND_API_KEY: resendKey,
+      EMAIL_FROM: "DotRelay <noreply@dotrelay.dev>",
+      EMAIL_SUPPORT_ADDRESS: "support@dotrelay.dev",
+    }).RESEND_API_KEY,
+  ).toBe(resendKey);
+  for (const change of [
+    { RESEND_API_KEY: "not-a-resend-key" },
+    { EMAIL_FROM: "DotRelay noreply@dotrelay.dev" },
+    { EMAIL_SUPPORT_ADDRESS: "support" },
+  ]) {
+    let message = "";
+    try {
+      loadProductionEnvironment({ ...valid, ...change });
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain(Object.keys(change)[0] ?? "");
+    expect(message).not.toContain(Object.values(change)[0] ?? "");
+  }
+});
+
+test("RESEND_API_KEY_FILE reads a private secret file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dotrelay-config-"));
+  try {
+    const path = join(directory, "resend");
+    const resendKey = ["re", "fixtureOnlyKey123"].join("_");
+    await writeFile(path, `${resendKey}\n`, { mode: 0o600 });
+    expect(
+      loadProductionEnvironment({ ...valid, RESEND_API_KEY_FILE: path })
+        .RESEND_API_KEY,
+    ).toBe(resendKey);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

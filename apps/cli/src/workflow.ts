@@ -1,16 +1,33 @@
 import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { ParsedArguments } from "./args";
 import { writePublicationBaseline } from "./baseline-store";
 import { kv, note, reviewFrame } from "./components";
-import { diffDotenvEntries, parseDotenv, serializeDotenv } from "./dotenv";
-import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
-import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
+import {
+  diffDotenvEntries,
+  literalDotenvNames,
+  parseDotenv,
+  serializeDotenv,
+} from "./dotenv";
+import { processControlPullWarning } from "./env-safety";
+import {
+  CliError,
+  CliInvocationError,
+  sanitizeCliLine,
+  sanitizeCliText,
+} from "./errors";
+import {
+  assertSafeStdout,
+  atomicWriteProtectedFile,
+  resolveOutputTarget,
+} from "./output";
 import { classifyPullValues, pullVariableNames } from "./pull-values";
 import { pad, visibleWidth } from "./theme";
 import { isUnreadableTerminalError, paint, readTerminalSecret } from "./ui";
 import {
   destinationRows,
   pullConfirmQuestion,
+  pullReplacementNotes,
   renderEnvDiff,
   reviewBody,
 } from "./value-diff";
@@ -33,6 +50,8 @@ import {
   resolveRollbackTarget,
   resolveVariableReferences,
   shareEnvironmentWithPeerDevices,
+  trackedInputWarning,
+  unpushedLocalChanges,
   variablesFromDotenv,
   withOwnership,
 } from "./workflow-publication";
@@ -54,6 +73,24 @@ export {
   enrollFirstDevice,
 } from "./workflow-device-enrollment";
 
+// The dotenv file push, init and diff read; a missing file names the path
+// and the way to point the command at another one.
+const readDotenvInput = async (inputPath: string): Promise<string> => {
+  try {
+    return await readFile(inputPath, "utf8");
+  } catch (error) {
+    const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+    throw new CliError(
+      "local-io",
+      missing
+        ? `could not read the dotenv input file ${inputPath}: it does not exist. Create it, or pass --from <file> to read another file.`
+        : `could not read the dotenv input file ${inputPath}; check that it is a readable file, or pass --from <file> to read another file.`,
+      {},
+      "input_read_failed",
+    );
+  }
+};
+
 export const runProtectedWorkflow = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -74,18 +111,7 @@ export const runProtectedWorkflow = async (
   }
   if (parsed.command === "diff") {
     const inputPath = parsed.from ?? ".env";
-    let source: string;
-    try {
-      source = await readFile(inputPath, "utf8");
-    } catch {
-      throw new CliError(
-        "local-io",
-        "could not read the dotenv input file",
-        {},
-        "input_read_failed",
-      );
-    }
-    const local = parseDotenv(source);
+    const local = parseDotenv(await readDotenvInput(inputPath), inputPath);
     const synced = await syncWorkflow(options, parsed);
     const groups = classifyPullValues(
       synced.variables,
@@ -100,7 +126,7 @@ export const runProtectedWorkflow = async (
       throw new CliError(
         "incomplete-export",
         groups.unreadable.length > 0
-          ? `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask an owner or admin to provision access, then try again.`
+          ? `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask a Team owner or admin to choose Share project keys for you in the web app (Members view), then try again.`
           : `${names} are required and have no value. Add them with dotrelay push, or run dotrelay pull to enter them.`,
         { missingCount: blocking.length, variableNames: names.slice(0, 512) },
         "missing_values",
@@ -159,6 +185,20 @@ export const runProtectedWorkflow = async (
     let gitExclusion: "established" | "present" | undefined;
     if (outputPath)
       gitExclusion = await guardPullOutputAgainstGit(options, outputPath);
+    // A symlinked output is written through to the file it names; the
+    // review and the report name that file so the write is never a surprise.
+    const linkedTarget = outputPath
+      ? await resolveOutputTarget(outputPath)
+          .then((target) =>
+            target === outputPath || target === resolve(outputPath)
+              ? undefined
+              : target,
+          )
+          .catch(() => undefined)
+      : undefined;
+    const linkNote = linkedTarget
+      ? ` (a symlink to ${sanitizeCliLine(linkedTarget)})`
+      : "";
     const synced = await syncWorkflow(options, parsed);
     const groups = classifyPullValues(
       synced.variables,
@@ -168,7 +208,7 @@ export const runProtectedWorkflow = async (
       const names = pullVariableNames(groups.unreadable);
       throw new CliError(
         "incomplete-export",
-        `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask an owner or admin to provision access, then pull again. Nothing was written.`,
+        `${names} cannot be decrypted on this Device. Run dotrelay device recover, or ask a Team owner or admin to choose Share project keys for you in the web app (Members view), then pull again. Nothing was written.`,
         {
           missingCount: groups.unreadable.length,
           variableNames: names.slice(0, 512),
@@ -197,11 +237,14 @@ export const runProtectedWorkflow = async (
       for (const variable of groups.requiredMissing) {
         supplied.set(
           variable.name,
-          await readTerminalSecret(`Value for ${variable.name}`, {
-            ...(options.terminal ? { terminal: options.terminal } : {}),
-            ...(options.prompt ? { prompt: options.prompt } : {}),
-            noInput: options.noInput,
-          }),
+          await readTerminalSecret(
+            `Value for ${sanitizeCliLine(variable.name)}`,
+            {
+              ...(options.terminal ? { terminal: options.terminal } : {}),
+              ...(options.prompt ? { prompt: options.prompt } : {}),
+              noInput: options.noInput,
+            },
+          ),
         );
       }
     }
@@ -231,7 +274,35 @@ export const runProtectedWorkflow = async (
         headHash: bytesToHex(hash),
       });
     };
-    const contents = serializeDotenv(entries);
+    // The file being replaced decides two things: a Value it single-quoted
+    // was meant literally and stays single-quoted, and a Variable that
+    // controls how programs or shells start is inert in the file but not
+    // once the file is loaded into a shell, so one new to the destination
+    // is called out for the user to check who published it.
+    const previousNames = new Set<string>();
+    let literalNames: ReadonlySet<string> = new Set();
+    if (outputPath)
+      try {
+        const previous = await readFile(outputPath, "utf8");
+        for (const entry of parseDotenv(previous))
+          previousNames.add(entry.name);
+        literalNames = literalDotenvNames(previous);
+      } catch {
+        // No readable previous file: every entry is new.
+      }
+    const contents = serializeDotenv(entries, { literalNames });
+    const processControlWarning = processControlPullWarning(
+      entries
+        .map((entry) => entry.name)
+        .filter((name) => !previousNames.has(name)),
+    );
+    if (processControlWarning && !parsed.json)
+      (options.terminal?.output ?? process.stderr).write(
+        `${note(processControlWarning, "warn")}\n`,
+      );
+    const warningsField = processControlWarning
+      ? { warnings: [processControlWarning] }
+      : {};
     if (parsed.stdout && parsed.reveal && !options.noInput) {
       const destination = await destinationFor(
         options,
@@ -273,18 +344,40 @@ export const runProtectedWorkflow = async (
           return {
             output: outputPath,
             unchanged: true,
+            ...(parsed.json ? warningsField : {}),
             ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
             ...(gitExclusion ? { gitExclusion } : {}),
             ...pendingActionsField(synced.workflow.pendingActions),
             message: `No changes found${omissionNote}`,
           };
         }
+        const unpushed = await unpushedLocalChanges(
+          options,
+          synced,
+          outputPath,
+          entries,
+        );
+        const unpushedNames = (unpushed ?? [])
+          .map((change) => change.name)
+          .join(", ");
         if (options.noInput) {
           if (!options.force)
             throw new CliError(
               "conflict",
               `${outputPath} differs from the Environment and was retained; re-run with --force to replace it`,
               changes !== null ? { changedCount: changes.length } : {},
+              "output_conflict",
+            );
+          // --force approves catching the file up, not losing work: edits
+          // made since the last pull need their own explicit approval.
+          if (unpushed && unpushed.length > 0 && !parsed.discardLocal)
+            throw new CliError(
+              "conflict",
+              `${outputPath} has local changes not yet pushed (${unpushedNames}) that this pull would discard. Nothing was written. Run dotrelay push first, or re-run with --force --discard-local to replace them.`,
+              {
+                changedCount: unpushed.length,
+                variableNames: unpushedNames.slice(0, 512),
+              },
               "output_conflict",
             );
         } else {
@@ -297,6 +390,15 @@ export const runProtectedWorkflow = async (
             title: `Review — replace ${outputPath}`,
             danger: true,
             body: reviewBody(changes, destination, parsed.reveal, [
+              ...pullReplacementNotes(outputPath, unpushed),
+              ...(linkedTarget
+                ? [
+                    `  ${paint(
+                      `${sanitizeCliLine(outputPath)} is a symlink; the write replaces ${sanitizeCliLine(linkedTarget)}`,
+                      "warn",
+                    )}`,
+                  ]
+                : []),
               `  ${paint(
                 `The current file is retained at ${outputPath}.previous`,
                 "faint",
@@ -319,6 +421,7 @@ export const runProtectedWorkflow = async (
     if (outputPath) {
       await atomicWriteProtectedFile(outputPath, contents, {
         ...(replaceExisting ? { retainPrevious: true } : {}),
+        followSymlink: true,
       });
       await rememberBaseline();
     }
@@ -333,49 +436,49 @@ export const runProtectedWorkflow = async (
         }
       : {
           output: outputPath ?? "",
+          ...(parsed.json ? warningsField : {}),
           ...(gitExclusion ? { gitExclusion } : {}),
           ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
+          ...(linkedTarget ? { target: linkedTarget } : {}),
           ...pendingActionsField(synced.workflow.pendingActions),
           ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
           message: replaceExisting
-            ? `Wrote ${entries.length} values to ${outputPath}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
-            : `Wrote ${entries.length} values to ${outputPath}${exclusionNote}${omissionNote}`,
+            ? `Wrote ${entries.length} values to ${outputPath}${linkNote}; prior file retained at ${outputPath}.previous${exclusionNote}${omissionNote}`
+            : `Wrote ${entries.length} values to ${outputPath}${linkNote}${exclusionNote}${omissionNote}`,
         };
   }
   if (parsed.command === "init" || parsed.command === "push") {
     const inputPath = parsed.from ?? ".env";
-    let source: string;
-    try {
-      source = await readFile(inputPath, "utf8");
-    } catch {
-      throw new CliError(
-        "local-io",
-        "could not read the dotenv input file",
-        {},
-        "input_read_failed",
-      );
-    }
+    const local = parseDotenv(await readDotenvInput(inputPath), inputPath);
+    const warnings: string[] = [];
+    const tracked = await trackedInputWarning(options, inputPath);
+    if (tracked) warnings.push(tracked);
     const synced = await syncWorkflow(options, parsed);
     const prepared = await preparePublicationBaseline(
       options,
       synced,
       inputPath,
     );
-    if (prepared.notice)
-      (options.terminal?.output ?? process.stderr).write(
-        `${note(prepared.notice)}\n`,
-      );
-    // Classification and draft ids follow the Environment this invocation
-    // just verified. The Publication Baseline is only the third side of
-    // reconciliation; using it here would treat a teammate's later publish
-    // as a brand-new Variable.
-    const entries = await classify(
-      options,
-      parsed,
-      parseDotenv(source),
+    if (prepared.notice) warnings.push(prepared.notice);
+    if (!parsed.json)
+      for (const warning of warnings)
+        (options.terminal?.output ?? process.stderr).write(
+          `${note(warning, "warn")}\n`,
+        );
+    // A name the Publication Baseline held keeps the baseline's id, so a
+    // teammate's later deletion or replacement of that Variable reaches
+    // reconciliation as such; classification and the ids of names the
+    // baseline never held follow the Environment this invocation verified,
+    // so a teammate's later addition is not treated as brand-new.
+    const entries = await classify(options, parsed, local, [
+      ...synced.variables,
+      ...prepared.snapshot,
+    ]);
+    const variables = variablesFromDotenv(
+      entries,
       synced.variables,
+      prepared.snapshot,
     );
-    const variables = variablesFromDotenv(entries, synced.variables);
     const result = await publish(
       options,
       parsed,
@@ -401,7 +504,9 @@ export const runProtectedWorkflow = async (
         environmentId: synced.workflow.createdEnvironmentId,
       });
     }
-    return result;
+    return parsed.json && warnings.length > 0
+      ? { ...result, warnings }
+      : result;
   }
   if (parsed.command === "rollback") {
     const synced = await syncWorkflow(options, parsed);

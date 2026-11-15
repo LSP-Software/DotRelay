@@ -9,6 +9,8 @@ import {
   protocolObjectFromFields,
   signProtocolObject,
 } from "@dotrelay/contracts";
+import { testDeviceProof } from "./device-proof-testing";
+import type { EmailEvent } from "./email-notifications";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -52,7 +54,12 @@ const fixture = async () => {
     $executeRaw: async () => 0,
     $queryRaw: async (parts: TemplateStringsArray) =>
       parts.join("").includes("COUNT(*)") ? [{ count: 0n, bytes: 0n }] : [],
-    user: { upsert: async () => ({ id: owner }) },
+    user: {
+      upsert: async (input: { create: { githubSubject: string } }) => ({
+        id: owner,
+        githubSubject: input.create.githubSubject,
+      }),
+    },
     authAccount: { findFirst: async () => ({ accountId: "1001" }) },
     team: {
       findFirst: async () => ({ id: member.teamId, lifecycle: "ACTIVE" }),
@@ -195,11 +202,23 @@ const fixture = async () => {
       }
     },
   };
+  const emailEvents: EmailEvent[] = [];
   const app = createApi({
+    notifications: {
+      notify: (event) => {
+        emailEvents.push(event);
+      },
+      drain: async () => undefined,
+    },
     profile,
     database: database as never,
     auth: {
-      api: { getSession: async () => ({ user: { id: "auth-owner" } }) },
+      api: {
+        getSession: async () => ({
+          session: { id: "owner-session" },
+          user: { id: "auth-owner" },
+        }),
+      },
     } as never,
   });
   const key = crypto.getRandomValues(new Uint8Array(32));
@@ -210,6 +229,11 @@ const fixture = async () => {
     plan,
     projectKeys: new Map([[plan.projects[0]?.id ?? "", key]]),
   });
+  const proof = await testDeviceProof(profile, {
+    sessionId: "owner-session",
+    userId: owner,
+    deviceId,
+  });
   const send = (body: unknown = request) =>
     app.request(
       `${profile.origin}/api/v1/teams/${member.teamId}/memberships/${member.id}/provision`,
@@ -218,6 +242,7 @@ const fixture = async () => {
         headers: {
           "Content-Type": "application/json",
           "X-DotRelay-Device-Id": deviceId,
+          "X-DotRelay-Device-Proof": proof,
           "Idempotency-Key": request.operationId,
         },
         body: JSON.stringify(body),
@@ -225,6 +250,7 @@ const fixture = async () => {
     );
   return {
     app,
+    emailEvents,
     profile,
     request,
     member,
@@ -308,4 +334,27 @@ test("active Members can receive new Project or Device grants without another ac
   expect((await setup.send()).status).toBe(200);
   expect(setup.member.lifecycle).toBe("ACTIVE");
   expect(setup.grants).toHaveLength(1);
+});
+
+test("shared keys notify the Member once per operation, never on replay or rollback", async () => {
+  const setup = await fixture();
+  expect((await setup.send()).status).toBe(200);
+  expect((await setup.send()).status).toBe(200);
+  expect(setup.emailEvents).toEqual([
+    {
+      kind: "keys_shared",
+      operationId: setup.request.operationId,
+      teamId: setup.member.teamId,
+      membershipId: setup.member.id,
+      projectIds: setup.plan.projects.map((project) => project.id),
+      actorUserId: expect.any(String),
+    },
+  ]);
+  const failed = await fixture();
+  const request = structuredClone(failed.request);
+  request.grants = [];
+  expect((await failed.send(request)).status).toBeGreaterThanOrEqual(400);
+  failed.setRole("MEMBER");
+  expect((await failed.send()).status).toBe(403);
+  expect(failed.emailEvents).toHaveLength(0);
 });

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   establishServerProfileTrust,
   type ServerProfilePin,
@@ -13,6 +13,7 @@ import {
   networkFailureCliError,
   transientResponseVerdict,
 } from "./network";
+import { setupHint } from "./hosted-origin";
 import { atomicWriteProtectedFile } from "./output";
 import { defaultOrigin } from "./version";
 
@@ -154,38 +155,86 @@ const validateCatalog = (value: unknown): ProfileCatalog => {
   });
 };
 
+// The state directory holds Device keys and sessions, so it is never
+// derived from the working directory: without an absolute home (or an
+// explicit DOTRELAY_CONFIG_DIR) the keys could land inside a project tree,
+// an image layer, or a CI artifact. A relative XDG_CONFIG_HOME is ignored,
+// as the XDG Base Directory specification requires.
 export const profileCatalogPath = (
   environment: NodeJS.ProcessEnv = process.env,
 ): string => {
-  const root =
-    environment.DOTRELAY_CONFIG_DIR ??
-    (process.platform === "win32"
-      ? join(environment.APPDATA ?? environment.LOCALAPPDATA ?? ".", "DotRelay")
-      : join(
-          environment.XDG_CONFIG_HOME ??
-            join(environment.HOME ?? ".", ".config"),
-          "dotrelay",
-        ));
-  return join(root, "profiles.json");
+  const explicit = environment.DOTRELAY_CONFIG_DIR;
+  if (explicit) return join(resolve(explicit), "profiles.json");
+  const absolute = (value: string | undefined): string | undefined =>
+    value && isAbsolute(value) ? value : undefined;
+  if (process.platform === "win32") {
+    const base =
+      absolute(environment.APPDATA) ?? absolute(environment.LOCALAPPDATA);
+    if (!base) throw missingHome("APPDATA");
+    return join(base, "DotRelay", "profiles.json");
+  }
+  const xdg = absolute(environment.XDG_CONFIG_HOME);
+  if (xdg) return join(xdg, "dotrelay", "profiles.json");
+  const home = absolute(environment.HOME);
+  if (!home) throw missingHome("HOME");
+  return join(home, ".config", "dotrelay", "profiles.json");
 };
+
+const missingHome = (variable: string): CliError =>
+  new CliError(
+    "local-io",
+    `${variable} is not set to an absolute path, so DotRelay has nowhere safe to keep its keys. Set ${variable}, or set DOTRELAY_CONFIG_DIR to the directory DotRelay should use.`,
+    {},
+    "state_directory_unavailable",
+  );
+
+// A damaged catalog names its path and the two ways out. The file holds
+// only profile names, origins, and server ids, so replacing it never loses
+// Device keys or sessions, which are stored separately.
+const damagedCatalog = (path: string, code: string): CliError =>
+  new CliError(
+    "local-io",
+    [
+      `the Server Profile catalog at ${path} is damaged and cannot be read.`,
+      "Repair it with dotrelay profile rebind <name> <origin>, or move the file aside and run dotrelay setup again with your origin (https://api.dotrelay.dev for the hosted service).",
+      "The file holds only server names, origins, and ids; Device keys and sessions are stored separately and are kept.",
+    ].join("\n"),
+    {},
+    code,
+  );
 
 export const createFileProfileCatalog = (path: string): ProfileCatalogStore =>
   Object.freeze({
     read: async () => {
+      let text: string;
       try {
-        return validateCatalog(
-          JSON.parse(await readFile(path, "utf8")) as unknown,
-        );
+        text = await readFile(path, "utf8");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT")
           return emptyCatalog();
-        if (error instanceof CliError) throw error;
         throw new CliError(
           "local-io",
-          "could not read profile catalog",
+          `could not read the Server Profile catalog at ${path}; check the file's permissions`,
           {},
           "profile_catalog_read_failed",
         );
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        throw damagedCatalog(path, "profile_catalog_invalid");
+      }
+      try {
+        return validateCatalog(parsed);
+      } catch (error) {
+        if (
+          error instanceof CliError &&
+          (error.code === "profile_catalog_invalid" ||
+            error.code === "profile_selection_invalid")
+        )
+          throw damagedCatalog(path, error.code);
+        throw error;
       }
     },
     write: async (catalog) => {
@@ -458,7 +507,7 @@ export const resolveServerProfile = async (
   const name = override ?? catalog.selected;
   if (!name)
     throw new CliInvocationError(
-      "No Server Profile selected; run dotrelay setup <origin>",
+      `no Server Profile is selected; run ${setupHint}`,
     );
   const profile = catalog.profiles.find((candidate) => candidate.name === name);
   if (!profile)

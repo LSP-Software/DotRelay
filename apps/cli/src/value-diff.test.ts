@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { reviewFrame } from "./components";
 import {
   destinationRows,
@@ -10,6 +11,7 @@ import {
   reviewBody,
   rollbackConfirmQuestion,
   valueDiffsForPull,
+  pullReplacementNotes,
 } from "./value-diff";
 
 const destination = {
@@ -431,5 +433,32 @@ describe("CLI value diffs", () => {
         ...destinationKv,
       ].join("\n"),
     );
+  });
+});
+
+describe("pull replacement notes", () => {
+  const plain = (lines: readonly string[]) =>
+    stripVTControlCharacters(lines.join("\n"));
+
+  test("names unpushed local edits apart and never their Values", () => {
+    const text = plain(
+      pullReplacementNotes(".env", [
+        { name: "API_TOKEN", kind: "updated" },
+        { name: "LOCAL_ONLY", kind: "added" },
+      ]),
+    );
+    expect(text).toContain("Local changes not yet pushed — will be lost:");
+    expect(text).toContain("API_TOKEN  edited locally");
+    expect(text).toContain("LOCAL_ONLY  added locally");
+    expect(text).toContain("dotrelay push first");
+    expect(text).toContain(
+      "Comments, blank lines and the order of entries in .env are not preserved.",
+    );
+  });
+
+  test("says when unpushed edits cannot be told apart", () => {
+    const text = plain(pullReplacementNotes(".env", null));
+    expect(text).toContain("No Publication Baseline is recorded for .env");
+    expect(text).not.toContain("will be lost");
   });
 });

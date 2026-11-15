@@ -9,10 +9,12 @@ import {
   CliError,
   type CliErrorCategory,
   CliInvocationError,
+  describeWait,
   detailForProblem,
   diagnosticForError,
   EXIT_CODES,
   humanDetailForError,
+  presentationForError,
   repositoryAccessDeniedDetail,
   sanitizeCliLine,
   sanitizeCliText,
@@ -195,6 +197,7 @@ describe("CLI diagnostics", () => {
       ["stale_head", "conflict", EXIT_CODES.conflict],
       ["device_not_active", "authentication", EXIT_CODES.authentication],
       ["membership_not_active", "conflict", EXIT_CODES.conflict],
+      ["membership_not_key_provisioned", "conflict", EXIT_CODES.conflict],
       ["service_unavailable", "transient", EXIT_CODES.transient],
     ];
     for (const [code, category, exitCode] of cases) {
@@ -230,6 +233,23 @@ describe("CLI diagnostics", () => {
     expect(inactive.category).toBe("conflict");
     expect(inactive.code).toBe("membership_not_active");
     expect(inactive.exitCode).toBe(EXIT_CODES.conflict);
+    // A pending Member needs keys shared, not a re-add; a removed one needs
+    // a new invitation. The problem cannot tell them apart, so both repairs
+    // are named, and neither claims a teammate's pull can share keys.
+    expect(inactive.detail).toContain('choose "Share project keys" for you');
+    expect(inactive.detail).toContain("dotrelay team share-keys");
+    expect(inactive.detail).toContain("invite you again");
+    expect(inactive.detail).not.toContain("re-add");
+    expect(inactive.detail.length).toBeLessThan(512);
+    // A Membership waiting for keys has its own code and names only the
+    // key share, not a new invitation.
+    const waiting = diagnosticForError(
+      transport("membership_not_key_provisioned"),
+    );
+    expect(waiting.category).toBe("conflict");
+    expect(waiting.code).toBe("membership_not_key_provisioned");
+    expect(waiting.detail).toContain("dotrelay team share-keys");
+    expect(waiting.detail).not.toContain("invite you again");
     const cryptoRejection = diagnosticForError(
       transport("invalid_crypto_object"),
     );
@@ -312,6 +332,103 @@ describe("CLI diagnostics", () => {
     expect(humanDetailForError(runtimeError)).toBe(
       "The command could not complete.",
     );
+  });
+});
+
+describe("problem codes added with Membership periods and rate limits", () => {
+  const transport = (
+    code: ProblemCode,
+    details?: Parameters<typeof createProblem>[1],
+  ) => new ProtocolTransportError(createProblem(code, details));
+
+  test("authored_at_out_of_range is a conflict that points at the system clock", () => {
+    const diagnostic = diagnosticForError(
+      transport("authored_at_out_of_range"),
+    );
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "authored_at_out_of_range",
+      exitCode: EXIT_CODES.conflict,
+    });
+    expect(diagnostic.detail).toContain("system clock");
+    expect(
+      presentationForError(transport("authored_at_out_of_range")).title,
+    ).toBe("Clock out of range");
+  });
+
+  test("pending_invitation_limit is a conflict that says how to free a slot", () => {
+    const diagnostic = diagnosticForError(
+      transport("pending_invitation_limit"),
+    );
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "pending_invitation_limit",
+      exitCode: EXIT_CODES.conflict,
+    });
+    expect(diagnostic.detail).toContain("revoke invitations");
+  });
+
+  test("rate_limited names the wait the service asked for", () => {
+    const diagnostic = diagnosticForError(
+      transport("rate_limited", { retryAfterSeconds: 90 }),
+    );
+    expect(diagnostic).toMatchObject({
+      category: "transient",
+      code: "rate_limited",
+      retryAfterSeconds: 90,
+    });
+    expect(diagnostic.detail).toContain("wait 2 minutes and retry");
+    expect(
+      humanDetailForError(transport("rate_limited", { retryAfterSeconds: 1 })),
+    ).toContain("wait 1 second and retry");
+    expect(detailForProblem("rate_limited")).toBe(
+      "the Server Profile rate-limited the request; wait and retry",
+    );
+  });
+
+  test("describes waits in the largest whole unit", () => {
+    expect(describeWait(0)).toBe("1 second");
+    expect(describeWait(45)).toBe("45 seconds");
+    expect(describeWait(60)).toBe("1 minute");
+    expect(describeWait(3599)).toBe("60 minutes");
+    expect(describeWait(7200)).toBe("2 hours");
+  });
+});
+
+describe("alpha admission", () => {
+  test("names the hosted support address only for the hosted origin", () => {
+    const hosted = detailForProblem("alpha_admission_required", {
+      origin: "https://api.dotrelay.dev/",
+    });
+    expect(hosted).toContain(
+      "DotRelay is in private alpha and this GitHub account isn't on the list yet. Email support@dotrelay.dev to request access.",
+    );
+    expect(hosted).toContain("dotrelay logout");
+    for (const origin of ["https://dotrelay.example.com", undefined]) {
+      const selfHosted = detailForProblem(
+        "alpha_admission_required",
+        origin === undefined ? {} : { origin },
+      );
+      expect(selfHosted).toContain("Ask this server's operator for access.");
+      expect(selfHosted).not.toContain("support@dotrelay.dev");
+      expect(selfHosted).toContain("dotrelay logout");
+    }
+  });
+
+  test("is an authentication failure with its own title and code", () => {
+    const error = new ProtocolTransportError(
+      createProblem("alpha_admission_required"),
+    );
+    expect(diagnosticForError(error)).toMatchObject({
+      category: "authentication",
+      code: "alpha_admission_required",
+      exitCode: EXIT_CODES.authentication,
+    });
+    const presentation = presentationForError(error);
+    expect(presentation.title).toBe("Private alpha");
+    expect(presentation.fixes).toEqual([
+      "To use another GitHub account, run dotrelay logout, then dotrelay login.",
+    ]);
   });
 });
 

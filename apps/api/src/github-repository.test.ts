@@ -60,6 +60,29 @@ describe("repository display lookup", () => {
     expect(calls).toHaveLength(2);
   });
 
+  // A-6: a repository name resolved with one viewer's delegated access is
+  // cached for that viewer only.
+  test("never serves one viewer's resolved name to another viewer", async () => {
+    const { calls, fetchImpl } = recordingFetch((init) =>
+      new Headers(init?.headers).get("Authorization") === "Bearer owner-token"
+        ? Response.json({ full_name: "owner-org/private-repo" })
+        : new Response(null, { status: 404 }),
+    );
+    const owner = await lookupGitHubRepositoryDisplay("4242424242", {
+      fetch: fetchImpl,
+      cacheScope: "owner",
+      accessToken: async () => "owner-token",
+    });
+    expect(owner).toEqual({ owner: "owner-org", name: "private-repo" });
+    const outsider = await lookupGitHubRepositoryDisplay("4242424242", {
+      fetch: fetchImpl,
+      cacheScope: "outsider",
+      accessToken: async () => "outsider-token",
+    });
+    expect(outsider).toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
   test("caches a 404 as a miss for the lookup scope", async () => {
     let time = 0;
     const { calls, fetchImpl } = recordingFetch(

@@ -1,3 +1,4 @@
+import { grantCreationAction } from "../administration";
 import {
   AuditFactRepository,
   type OperationInput,
@@ -20,6 +21,7 @@ import {
   StaleEpochError,
   StaleHeadError,
 } from "./repository-core";
+import { ProjectRotationObligationRepository } from "./rotation-obligations";
 import { inShortTransaction, type TransactionDatabase } from "./transaction";
 import { PERSISTENCE_LIMITS, validateDigest } from "./validation";
 export type EpochRotationInput = Readonly<{
@@ -253,6 +255,10 @@ export class ProjectEpochRepository {
         where: { id: input.projectId },
         data: { currentEpoch: input.newEpoch },
       });
+      await new ProjectRotationObligationRepository().clearForRotation(
+        transaction,
+        { projectId: input.projectId, newEpoch: input.newEpoch, now },
+      );
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
@@ -438,12 +444,14 @@ export class GrantRepository {
       });
       if (!project || project.teamId !== input.grant.teamId)
         throw new Error("Project not found");
+      // Any grant needs an active Device of an active Member; the role check
+      // follows once the recipients' owners are known.
       await requireTeamAction(
         transaction,
         input.operation.actorUserId,
         input.operation.actorDeviceId,
         input.grant.teamId,
-        "ADMINISTER_PROJECT",
+        "VIEW",
       );
       const recipientDeviceIds = [...input.grant.recipientDeviceIds].sort();
       if (
@@ -455,15 +463,31 @@ export class GrantRepository {
         )
       )
         throw new Error("grant recipient set is invalid");
+      const recipientUserIds: string[] = [];
       for (const recipientDeviceId of recipientDeviceIds) {
         const recipient = await transaction.device.findFirst({
           where: { id: recipientDeviceId, lifecycle: "ACTIVE" },
+          select: { userId: true },
         });
         if (!recipient)
           throw new DeviceNotActiveError(
             "grant recipient device is not active",
           );
+        recipientUserIds.push(recipient.userId);
       }
+      const action = grantCreationAction({
+        actorUserId: input.operation.actorUserId,
+        recipientUserIds,
+        membershipScoped: Boolean(input.grant.membershipId),
+      });
+      if (action !== "VIEW")
+        await requireTeamAction(
+          transaction,
+          input.operation.actorUserId,
+          input.operation.actorDeviceId,
+          input.grant.teamId,
+          action,
+        );
       if (input.grant.membershipId) {
         const membership = await transaction.membership.findUnique({
           where: { id: input.grant.membershipId },

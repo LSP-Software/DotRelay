@@ -50,7 +50,13 @@ export const stableReleaseExists = async (
   return Object.keys(body.versions ?? {}).some(isStableVersion);
 };
 
-// --provenance signs the tarball with the job's OIDC token (id-token: write).
+// Trusted publishing (OIDC): npm exchanges the job's GitHub OIDC token for a
+// short-lived publish credential, so no long-lived npm token exists anywhere.
+// The registry matches the token against the trusted publishers configured on
+// the @dotrelay/cli package (repository, workflow filename, environment).
+// --provenance is automatic under trusted publishing; it is kept explicit so a
+// publish that somehow fell back to a token still carries a provenance
+// statement.
 export const publishCommand = (
   packageDirectory: string,
   tag: string,
@@ -63,21 +69,48 @@ export const publishCommand = (
   "--tag",
   tag,
   "--provenance",
+  "--ignore-scripts",
   "--registry=https://registry.npmjs.org/",
 ];
 
+// npm 11.5.1 is the first release that performs the OIDC exchange.
+export const MINIMUM_TRUSTED_PUBLISHING_NPM = [11, 5, 1] as const;
+
+export const supportsTrustedPublishing = (npmVersion: string): boolean => {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(npmVersion.trim());
+  if (!match) return false;
+  const actual = match.slice(1, 4).map(Number);
+  for (const [index, minimum] of MINIMUM_TRUSTED_PUBLISHING_NPM.entries()) {
+    const difference = (actual[index] ?? 0) - minimum;
+    if (difference !== 0) return difference > 0;
+  }
+  return true;
+};
+
+const npmVersion = async (env: Record<string, string | undefined>) => {
+  const child = Bun.spawn(["npm", "--version"], {
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return (await child.exited) === 0 ? stdout.trim() : "";
+};
+
 const publish = async () => {
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: this release-only command runs directly, outside Turbo.
-  const token = process.env.NODE_AUTH_TOKEN;
-  if (!token?.trim() || /[\r\n]/.test(token))
+  if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
     throw new Error(
-      "Set the NPM_TOKEN repository secret to a publishing token with write access to dotrelay and permission to publish from CI.",
+      "Trusted publishing needs the GitHub OIDC token. Give the publishing job `permissions: id-token: write`, and run it only from the workflows configured as trusted publishers for @dotrelay/cli on npmjs.com.",
     );
   const packageDirectory = resolve(import.meta.dir, "../packages/dotrelay");
   const metadata = JSON.parse(
     await readFile(join(packageDirectory, "package.json"), "utf8"),
   ) as { name: string; version: string };
-  if (metadata.name !== "dotrelay")
+  if (metadata.name !== "@dotrelay/cli")
     throw new Error("Unexpected CLI package name");
   const tag = publicationTag(
     metadata.version,
@@ -86,24 +119,21 @@ const publish = async () => {
   const directory = await mkdtemp(join(tmpdir(), "dotrelay-npm-"));
   const config = join(directory, "npmrc");
   try {
-    await writeFile(
-      config,
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: npm expands the token from its environment; never write the token itself.
-      "registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n",
-      { mode: 0o600 },
-    );
-    const env = { ...process.env, NPM_CONFIG_USERCONFIG: config };
-    const who = Bun.spawn(
-      ["npm", "whoami", "--registry=https://registry.npmjs.org/"],
-      { env, stdout: "pipe", stderr: "pipe" },
-    );
-    await Promise.all([
-      new Response(who.stdout).text(),
-      new Response(who.stderr).text(),
-    ]);
-    if ((await who.exited) !== 0)
+    // A clean user config with no credentials: a stray token must never be
+    // preferred over the OIDC exchange.
+    await writeFile(config, "registry=https://registry.npmjs.org/\n", {
+      mode: 0o600,
+    });
+    const {
+      NODE_AUTH_TOKEN: _ignored,
+      NPM_TOKEN: _alsoIgnored,
+      ...rest
+    } = process.env;
+    const env = { ...rest, NPM_CONFIG_USERCONFIG: config };
+    const version = await npmVersion(env);
+    if (!supportsTrustedPublishing(version))
       throw new Error(
-        "NPM_TOKEN is missing, expired, or invalid. Replace the repository secret with a token authorized to publish dotrelay.",
+        `Trusted publishing needs npm 11.5.1 or later; this job has npm ${version || "(unknown)"}. Install Node 24 with actions/setup-node before publishing.`,
       );
     const child = Bun.spawn(publishCommand(packageDirectory, tag), {
       env,
@@ -112,7 +142,7 @@ const publish = async () => {
     });
     if ((await child.exited) !== 0)
       throw new Error(
-        "CLI publication failed. Check NPM_TOKEN has write access to dotrelay and allows CI publishing without an interactive OTP. The release has not been published successfully.",
+        "CLI publication failed. Check that @dotrelay/cli on npmjs.com lists this repository and workflow file (and, for release.yml, the security-review environment) as a trusted publisher. The release has not been published successfully.",
       );
   } finally {
     await rm(directory, { recursive: true, force: true });

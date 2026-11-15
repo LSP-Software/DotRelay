@@ -35,6 +35,7 @@ import {
   submitRotation,
   writePendingRotation,
 } from "./workflow-pending-rotation";
+import { publicationFloor } from "./workflow-publication";
 import { syncWorkflow } from "./workflow-session";
 
 const ROTATE_QUESTION = "Rotate this project's keys?";
@@ -81,6 +82,30 @@ export const planEpochRotation = (
     expectedHeadId: environment.currentHeadId as string,
     expectedHeadHash: hexToBytes(environment.currentHeadHash as string),
   }));
+};
+
+// The rotation signs one authored-at instant for the transitions of every
+// active Environment, and each must not precede that Environment's head.
+// Only one Environment was synced, so the listing's head instants raise the
+// synced floor to the latest head across the Project.
+export const rotationAuthoredAtFloor = (
+  syncedFloor: Readonly<{ authoredAtNotBeforeMs?: number }>,
+  environments: readonly EnvironmentSummary[],
+): Readonly<{ authoredAtNotBeforeMs?: number }> => {
+  const floors = [
+    ...(syncedFloor.authoredAtNotBeforeMs === undefined
+      ? []
+      : [syncedFloor.authoredAtNotBeforeMs]),
+    ...environments.flatMap((environment) =>
+      environment.lifecycle === "active" &&
+      typeof environment.currentHeadAuthoredAtMs === "number"
+        ? [environment.currentHeadAuthoredAtMs]
+        : [],
+    ),
+  ];
+  return floors.length === 0
+    ? {}
+    : { authoredAtNotBeforeMs: Math.max(...floors) };
 };
 
 // A rotation's transport calls can fail with any protocol problem code. Classify
@@ -158,6 +183,10 @@ export const rotateProjectEpoch = async (
     environments: rotationEnvironments,
     signingPrivateKey: context.signingPrivateKey,
     previousEpochKey,
+    // The transitions chain onto every active Environment's head: this
+    // Device's activation and Membership floor, the synced head, and every
+    // other head the listing reports.
+    ...rotationAuthoredAtFloor(publicationFloor(synced), environments),
   });
   const operationId = crypto.randomUUID();
   const workflow = synced.workflow;

@@ -297,3 +297,26 @@ test("denial failures map like approval failures", () => {
     kind: "recheck",
   });
 });
+
+test("a session outside the alpha list gets its own view from every check", () => {
+  const forbidden = { ok: false, status: 403 };
+  const body = { code: "alpha_admission_required" };
+  const alpha = { kind: "alpha-admission" } as const;
+  expect(parseDeviceStatusResponse(forbidden, body)).toEqual(alpha);
+  expect(parseSessionResponse(forbidden, body)).toEqual(alpha);
+  expect(parseDeviceApprovalAttempt(forbidden, body)).toEqual(alpha);
+  expect(
+    deviceApprovalView({ kind: "alpha-admission" }, { kind: "signed-in" }),
+  ).toEqual(alpha);
+  expect(
+    deviceApprovalView(
+      { kind: "code", status: "pending" },
+      { kind: "alpha-admission" },
+    ),
+  ).toEqual(alpha);
+  expect(deviceApprovalAttemptView({ kind: "alpha-admission" })).toEqual(alpha);
+  // A plain 403 from approve keeps its existing meaning.
+  expect(
+    parseDeviceApprovalAttempt(forbidden, { error: "access_denied" }),
+  ).toEqual({ kind: "forbidden" });
+});

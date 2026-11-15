@@ -12,6 +12,30 @@ import { resetTrustedEnvironmentHistory } from "./repair";
 import { defaultOrigin } from "./version";
 
 describe("CLI Server Profile catalog", () => {
+  test("a damaged catalog names its path and the repair", async () => {
+    const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
+    const store = createFileProfileCatalog(path);
+    try {
+      for (const contents of ["{not json", JSON.stringify({ version: 9 })]) {
+        await Bun.write(path, contents);
+        const error = await store.read().then(
+          () => null,
+          (caught: unknown) => caught as { code?: string; message?: string },
+        );
+        expect(error?.code).toBe("profile_catalog_invalid");
+        expect(error?.message).toContain(`catalog at ${path} is damaged`);
+        expect(error?.message).toContain("dotrelay profile rebind");
+        expect(error?.message).toContain("dotrelay setup");
+      }
+    } finally {
+      await (
+        await import("node:fs/promises")
+      )
+        .unlink(path)
+        .catch(() => undefined);
+    }
+  });
+
   test("pins capabilities and selects the first saved profile", async () => {
     const path = `${import.meta.dir}/.tmp-profile-${crypto.randomUUID()}.json`;
     const store = createFileProfileCatalog(path);
@@ -361,7 +385,7 @@ describe("CLI Server Profile catalog", () => {
         },
       }),
     ).rejects.toThrow(
-      "No Server Profile selected; run dotrelay setup <origin>",
+      "no Server Profile is selected; run dotrelay setup https://api.dotrelay.dev (or your own origin if you self-host)",
     );
   });
 

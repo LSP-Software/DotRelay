@@ -1,19 +1,24 @@
-import { readFile, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  accountFingerprint,
   prepareDeviceRecovery,
   authenticatedCreatorKeys,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
   decodeRecoveryCode,
-  deviceHistorySigningKeys,
+  deviceKeyFingerprint,
   encodeRecoveryCode,
   exportSigningPublicKey,
+  formatAccountKeyTransferCode,
   generateAccountMasterKey,
   generateRecoveryCode,
-  openAccountKeyTransfer,
+  openAccountKeyTransferWithRoster,
   parseAccountKeyTransfer,
+  parseAccountKeyTransferCode,
   parseAccountKeyWrapper,
+  sameFingerprint,
   unwrapAccountKeyWrapper,
 } from "@dotrelay/client";
 import {
@@ -26,16 +31,22 @@ import {
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { CliError, CliInvocationError } from "./errors";
-import { atomicWriteProtectedFile } from "./output";
 import { readTerminalSecret, selectOption } from "./ui";
+import {
+  establishAccountTrust,
+  loadAccountTrustPins,
+} from "./workflow-account-trust";
 import {
   accountKeyTrustedKeys,
   base64,
   bytesToHex,
+  confirmPrompt,
   fromBase64,
   hexToBytes,
   isRecord,
   loadAuthorizedDevice,
+  rawPublicKey,
+  reportedAccountSigningKeys,
   resolveDeviceStorage,
   type WorkflowOptions,
 } from "./workflow-core";
@@ -110,56 +121,54 @@ type PendingRecoveryCode = {
   readonly intent: "establish" | "rotate";
 };
 
-const pendingRecoveryPath = (
+// Until a run has shown it, the newest Recovery Code waits in the encrypted
+// credential store, beside the session and Device keys, so a crash between
+// publishing its wrapper and printing it can be retried without minting a
+// second code. Earlier versions kept it as a plaintext JSON file in the
+// state directory; such a file is moved into the store on first read.
+export const PENDING_RECOVERY_CODE_SERVICE = "dotrelay.recovery-code-pending";
+
+const legacyPendingRecoveryPath = (
   options: WorkflowOptions,
   deviceId: string,
 ): string =>
   join(options.stateDirectory, `recovery-code-pending-${deviceId}.json`);
 
 // Set only after the wrapper publish has succeeded, so the process can
-// delete the local copy once it has written the code to stdout. A failure
-// leaves this unset and the file in place for the retry.
-let displayedRecoveryCodePath: string | null = null;
+// delete the stored copy once it has written the code to stdout. A failure
+// leaves this unset and the code stored for the retry.
+let displayedRecoveryCode: (() => Promise<void>) | null = null;
 
 const markRecoveryCodeReadyToDisplay = (
   options: WorkflowOptions,
   deviceId: string,
 ): void => {
-  displayedRecoveryCodePath = pendingRecoveryPath(options, deviceId);
+  displayedRecoveryCode = () => clearPresentedRecoveryCode(options, deviceId);
 };
 
-export const consumeDisplayedRecoveryCodePath = (): string | null => {
-  const path = displayedRecoveryCodePath;
-  displayedRecoveryCodePath = null;
-  return path;
+export const consumeDisplayedRecoveryCode = ():
+  (() => Promise<void>) | null => {
+  const clear = displayedRecoveryCode;
+  displayedRecoveryCode = null;
+  return clear;
 };
 
-const readPendingRecoveryCode = async (
-  options: WorkflowOptions,
-  deviceId: string,
-): Promise<PendingRecoveryCode | null> => {
-  try {
-    const parsed = JSON.parse(
-      await readFile(pendingRecoveryPath(options, deviceId), "utf8"),
-    ) as Partial<PendingRecoveryCode>;
-    if (
-      (parsed.purpose !== "setup" && parsed.purpose !== "rotation") ||
-      typeof parsed.recoveryCode !== "string" ||
-      typeof parsed.wrapperId !== "string" ||
-      typeof parsed.operationId !== "string" ||
-      typeof parsed.objectId !== "string" ||
-      typeof parsed.object !== "string" ||
-      typeof parsed.identityGeneration !== "string" ||
-      typeof parsed.ciphertextHash !== "string" ||
-      typeof parsed.ciphertextLength !== "number" ||
-      (parsed.intent !== "establish" && parsed.intent !== "rotate")
-    )
-      return null;
-    return parsed as PendingRecoveryCode;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
+const parsePendingRecoveryCode = (text: string): PendingRecoveryCode | null => {
+  const parsed = JSON.parse(text) as Partial<PendingRecoveryCode>;
+  if (
+    (parsed.purpose !== "setup" && parsed.purpose !== "rotation") ||
+    typeof parsed.recoveryCode !== "string" ||
+    typeof parsed.wrapperId !== "string" ||
+    typeof parsed.operationId !== "string" ||
+    typeof parsed.objectId !== "string" ||
+    typeof parsed.object !== "string" ||
+    typeof parsed.identityGeneration !== "string" ||
+    typeof parsed.ciphertextHash !== "string" ||
+    typeof parsed.ciphertextLength !== "number" ||
+    (parsed.intent !== "establish" && parsed.intent !== "rotate")
+  )
+    return null;
+  return parsed as PendingRecoveryCode;
 };
 
 const writePendingRecoveryCode = async (
@@ -167,17 +176,47 @@ const writePendingRecoveryCode = async (
   deviceId: string,
   pending: PendingRecoveryCode,
 ): Promise<void> => {
-  await atomicWriteProtectedFile(
-    pendingRecoveryPath(options, deviceId),
-    JSON.stringify(pending),
+  await options.credentials.set(
+    PENDING_RECOVERY_CODE_SERVICE,
+    deviceId,
+    new TextEncoder().encode(JSON.stringify(pending)),
   );
+};
+
+const readPendingRecoveryCode = async (
+  options: WorkflowOptions,
+  deviceId: string,
+): Promise<PendingRecoveryCode | null> => {
+  const stored = await options.credentials.get(
+    PENDING_RECOVERY_CODE_SERVICE,
+    deviceId,
+  );
+  if (stored) {
+    try {
+      return parsePendingRecoveryCode(new TextDecoder().decode(stored));
+    } finally {
+      stored.fill(0);
+    }
+  }
+  const legacyPath = legacyPendingRecoveryPath(options, deviceId);
+  let legacy: PendingRecoveryCode | null;
+  try {
+    legacy = parsePendingRecoveryCode(await readFile(legacyPath, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  if (legacy) await writePendingRecoveryCode(options, deviceId, legacy);
+  await unlink(legacyPath).catch(() => undefined);
+  return legacy;
 };
 
 export const clearPresentedRecoveryCode = async (
   options: WorkflowOptions,
   deviceId: string,
 ): Promise<void> => {
-  await unlink(pendingRecoveryPath(options, deviceId)).catch(
+  await options.credentials.delete(PENDING_RECOVERY_CODE_SERVICE, deviceId);
+  await unlink(legacyPendingRecoveryPath(options, deviceId)).catch(
     (error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     },
@@ -327,13 +366,24 @@ export const readRecoveryCode = async (
   if (path !== undefined) {
     let file = "";
     try {
-      const info = await stat(path);
-      // A symlink or non-regular file never qualifies as a 0600 secret.
-      if (!info.isFile() || info.isSymbolicLink())
-        throw new Error("not a regular file");
-      if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600)
-        throw new Error("wrong mode");
-      file = await readFile(path, "utf8");
+      // Open first (O_NOFOLLOW refuses a symlink), then check the opened
+      // file itself, so nothing can be swapped in between the check and the
+      // read. A symlink or non-regular file never qualifies as a 0600 secret.
+      const handle = await open(
+        path,
+        process.platform === "win32"
+          ? constants.O_RDONLY
+          : constants.O_RDONLY | constants.O_NOFOLLOW,
+      );
+      try {
+        const info = await handle.stat();
+        if (!info.isFile()) throw new Error("not a regular file");
+        if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600)
+          throw new Error("wrong mode");
+        file = await handle.readFile("utf8");
+      } finally {
+        await handle.close();
+      }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT")
@@ -389,7 +439,7 @@ export const recoverAccountKey = async (
   const hasTransfer = input.transferId !== undefined;
   if (hasCodeFile && hasTransfer)
     throw new CliInvocationError(
-      "device recover accepts either --recovery-code-file <path> or --transfer <transfer-id>, not both",
+      "device recover accepts either --recovery-code-file <path> or --transfer <transfer-code>, not both",
     );
   try {
     await enrollFirstDevice(options);
@@ -543,7 +593,7 @@ export const recoverAccountKey = async (
             localSigningKey,
             authenticatedCreatorKeys(
               entry.creatorPublicKey ? [entry.creatorPublicKey] : [],
-              deviceHistorySigningKeys(authorized.boundary),
+              reportedAccountSigningKeys(authorized.boundary),
             ),
           ),
           context: {
@@ -562,7 +612,24 @@ export const recoverAccountKey = async (
     }
     via = "recovery-code";
   } else {
-    const transferId = (input.transferId as string).toLowerCase();
+    let code: ReturnType<typeof parseAccountKeyTransferCode>;
+    try {
+      code = parseAccountKeyTransferCode(input.transferId as string);
+    } catch {
+      throw new CliInvocationError(
+        "the transfer code is the value the sending Device printed: 32 hex digits, a dot, and the 40-digit account fingerprint",
+      );
+    }
+    // Without a prompt only the code can carry the fingerprint, so a bare
+    // transfer id is refused before the transfer is fetched.
+    if (code.accountFingerprint === null && options.noInput)
+      throw new CliError(
+        "invocation",
+        "with --no-input, pass the whole transfer code the sending Device printed: it ends with the account fingerprint this Device checks",
+        {},
+        "account_fingerprint_required",
+      );
+    const transferId = code.transferId;
     let result: Record<string, unknown>;
     try {
       result = await authorized.admin.post(
@@ -580,10 +647,6 @@ export const recoverAccountKey = async (
         );
       throw error;
     }
-    const creatorPublicKey =
-      typeof result.creatorPublicKey === "string"
-        ? [result.creatorPublicKey]
-        : [];
     let transfer: ReturnType<typeof parseAccountKeyTransfer>;
     try {
       transfer = parseAccountKeyTransfer(
@@ -597,41 +660,74 @@ export const recoverAccountKey = async (
         "response_invalid",
       );
     }
+    // The transfer is sealed to this Device's public key, so its signature
+    // is the only evidence of the sender. Only a roster signed by the
+    // account key it carries, listing the sender and this Device, vouches
+    // for it (ADR 0022); a key list from the service never does.
+    const pins = await loadAccountTrustPins(options);
+    const pinnedIdentity =
+      pins.own && pins.own.userId === authorized.userId
+        ? hexToBytes(pins.own.identity)
+        : null;
+    const servedRoster = authorized.boundary.accountRosters.get(
+      authorized.userId,
+    );
+    let opened: Awaited<ReturnType<typeof openAccountKeyTransferWithRoster>>;
     try {
-      const localSigningKey = await exportSigningPublicKey(
-        authorized.keys.signingPublicKey as CryptoKey,
-      );
-      accountMasterKey = await openAccountKeyTransfer(
+      opened = await openAccountKeyTransferWithRoster(
         transfer,
         authorized.keys.encryptionPrivateKey,
         {
-          trustedKeys: accountKeyTrustedKeys(
-            authorized.boundary,
-            localSigningKey,
-            authenticatedCreatorKeys(
-              creatorPublicKey,
-              deviceHistorySigningKeys(authorized.boundary),
+          serverProfileId: options.profile.pin.serverProfileId,
+          userId: authorized.userId,
+          device: {
+            deviceId: authorized.deviceId,
+            encryptionPublicKey: await rawPublicKey(
+              authorized.keys.encryptionPublicKey as CryptoKey,
             ),
-          ),
-          context: {
-            serverProfileId: uuidToBytes(options.profile.pin.serverProfileId),
-            userId: uuidToBytes(authorized.userId),
-            // The transfer's deviceId/userIdentityGeneration are the sender's
-            // (signature-authenticated); the recipient pins only the binding to
-            // itself (field 25) and the expiry window.
-            ownDeviceId: uuidToBytes(authorized.deviceId),
-            nowMs: Date.now(),
+            signingPublicKey: await rawPublicKey(
+              authorized.keys.signingPublicKey as CryptoKey,
+            ),
           },
+          nowMs: Date.now(),
+          roster:
+            typeof servedRoster === "string"
+              ? fromBase64(servedRoster, "Account Device roster")
+              : null,
+          expectedIdentity: pinnedIdentity,
         },
       );
     } catch {
       throw new CliError(
         "crypto",
-        "could not open the account key transfer for this Device",
+        "could not open the account key transfer for this Device. The sending Device must list this Device in the account's signed Device list; run dotrelay device transfer on it again",
         {},
         "account_key_transfer_invalid",
       );
     }
+    const fingerprint = await accountFingerprint(opened.identity);
+    const refuse = (error: Error): never => {
+      opened.accountMasterKey.fill(0);
+      throw error;
+    };
+    if (code.accountFingerprint !== null) {
+      if (!sameFingerprint(code.accountFingerprint, fingerprint))
+        refuse(
+          new CliError(
+            "crypto",
+            "the account key in this transfer does not match the account fingerprint in the transfer code. Do not trust this Server Profile until you have checked it",
+            {},
+            "account_fingerprint_mismatch",
+          ),
+        );
+    } else if (
+      !(await confirmPrompt(
+        options,
+        `The transfer carries the account key with fingerprint ${fingerprint}. Does it match the account fingerprint the sending Device shows?`,
+      ).catch((error: unknown) => refuse(error as Error)))
+    )
+      refuse(new CliInvocationError("the account key transfer was declined"));
+    accountMasterKey = opened.accountMasterKey;
     via = "transfer";
   }
   await storage.saveAccountKey(
@@ -639,7 +735,9 @@ export const recoverAccountKey = async (
     accountMasterKey,
   );
   if (via === "transfer") {
-    const transferId = (input.transferId as string).toLowerCase();
+    const { transferId } = parseAccountKeyTransferCode(
+      input.transferId as string,
+    );
     const signature = new Uint8Array(
       await crypto.subtle.sign(
         { name: "Ed25519" },
@@ -802,6 +900,8 @@ export const transferAccountKey = async (
   Readonly<{
     readonly deviceId: string;
     readonly transferId: string;
+    readonly transferCode: string;
+    readonly accountFingerprint: string;
     readonly recipientDeviceId: string;
     readonly expiresAt: string;
     readonly message: string;
@@ -819,59 +919,167 @@ export const transferAccountKey = async (
       {},
       "account_key_not_unlocked",
     );
-  let recipient = recipientDeviceId.trim();
+  const self = {
+    deviceId: authorized.deviceId,
+    encryptionPublicKey: await rawPublicKey(
+      authorized.keys.encryptionPublicKey as CryptoKey,
+    ),
+    signingPublicKey: await rawPublicKey(
+      authorized.keys.signingPublicKey as CryptoKey,
+    ),
+  };
+  const establish = (
+    approved?: Parameters<typeof establishAccountTrust>[0]["approved"],
+  ) =>
+    establishAccountTrust({
+      options,
+      boundary: authorized.boundary,
+      userId: authorized.userId,
+      deviceId: authorized.deviceId,
+      accountMasterKey,
+      encryptionPublicKey: self.encryptionPublicKey,
+      signingPublicKey: self.signingPublicKey,
+      ...(approved ? { approved } : {}),
+    });
+  // The Account Master Key goes only to a Device in this account's signed
+  // roster, with the keys that roster lists (ADR 0022).
+  const rosterOf = (trust: Awaited<ReturnType<typeof establish>>) => {
+    const own = trust.resolution.users.get(authorized.userId);
+    if (own?.status !== "verified" || !own.roster)
+      throw new CliError(
+        "crypto",
+        "this account's signed Device list could not be verified, so the account key cannot be sent. Run dotrelay pull, then try again",
+        {},
+        "account_roster_untrusted",
+      );
+    return { roster: own.roster, identity: own.identity ?? new Uint8Array() };
+  };
+  const trusted = rosterOf(await establish());
+  const reported = authorized.boundary.peerDevices;
+  let recipient = recipientDeviceId.trim().toLowerCase();
   if (!recipient) {
     if (options.noInput)
       throw new CliInvocationError(
         "device transfer requires --to <peer-device-id> with --no-input",
       );
-    if (authorized.boundary.peerDevices.length === 0)
+    if (reported.length === 0)
       throw new CliError(
         "conflict",
         "this account has no other active Device to receive the key",
         {},
         "transfer_recipient_unknown",
       );
-    recipient = await selectOption(
-      "Device to receive the key",
-      authorized.boundary.peerDevices.map((device) => ({
-        id: device.id,
-        // A human label where the Device has one (the Devices table in the
-        // web app shows the same), a bare id where it does not.
-        label: device.name ?? device.clientSummary ?? device.id,
-        ...(device.hasEpochGrant ? { detail: "holds the project key" } : {}),
-      })),
-      {
-        ...(options.terminal ? { terminal: options.terminal } : {}),
-        ...(options.prompt ? { prompt: options.prompt } : {}),
-        noInput: options.noInput,
-        // Sending the key to the wrong Device is the mistake this list exists
-        // to prevent, so an empty answer does not pick the first row.
-        defaultToFirst: false,
-      },
-    );
+    recipient = (
+      await selectOption(
+        "Device to receive the key",
+        reported.map((device) => ({
+          id: device.id,
+          // A human label where the Device has one (the Devices table in the
+          // web app shows the same), a bare id where it does not.
+          label: device.name ?? device.clientSummary ?? device.id,
+          detail: [
+            trusted.roster.devices.some(
+              (listed) =>
+                listed.deviceId === device.id.toLowerCase() &&
+                listed.revokedAtMs === undefined,
+            )
+              ? "in your signed Device list"
+              : "not in your signed Device list yet",
+            ...(device.hasEpochGrant ? ["holds the project key"] : []),
+          ].join(" · "),
+        })),
+        {
+          ...(options.terminal ? { terminal: options.terminal } : {}),
+          ...(options.prompt ? { prompt: options.prompt } : {}),
+          noInput: options.noInput,
+          // Sending the key to the wrong Device is the mistake this list exists
+          // to prevent, so an empty answer does not pick the first row.
+          defaultToFirst: false,
+        },
+      )
+    ).toLowerCase();
   }
-  const peer = authorized.boundary.peerDevices.find(
-    (device) => device.id.toLowerCase() === recipient.toLowerCase(),
+  let listed = trusted.roster.devices.find(
+    (device) =>
+      device.deviceId === recipient && device.revokedAtMs === undefined,
   );
-  if (!peer)
-    throw new CliError(
-      "conflict",
-      `device ${recipient} is not an active Device for this account`,
-      {},
-      "transfer_recipient_unknown",
+  if (!listed) {
+    if (trusted.roster.devices.some((device) => device.deviceId === recipient))
+      throw new CliError(
+        "conflict",
+        `device ${recipient} is revoked in this account's signed Device list`,
+        {},
+        "transfer_recipient_unknown",
+      );
+    // Not rostered yet: the user compares the key fingerprint the service
+    // reports with the one that Device shows, and only then is it added.
+    const peer = reported.find(
+      (device) => device.id.toLowerCase() === recipient,
     );
-  const recipientX25519PublicKey = hexToBytes(peer.encryptionPublicKey);
-  if (recipientX25519PublicKey.length !== 32)
-    throw new CliError(
-      "transient",
-      "the Server Profile returned an invalid peer Device key",
-      {},
-      "response_invalid",
+    if (!peer)
+      throw new CliError(
+        "conflict",
+        `device ${recipient} is not an active Device for this account`,
+        {},
+        "transfer_recipient_unknown",
+      );
+    let candidate: Readonly<{
+      deviceId: string;
+      encryptionPublicKey: Uint8Array;
+      signingPublicKey: Uint8Array;
+      addedAtMs: number;
+    }>;
+    try {
+      candidate = {
+        deviceId: recipient,
+        encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
+        signingPublicKey: hexToBytes(peer.signingPublicKey),
+        addedAtMs: Date.now(),
+      };
+      if (
+        candidate.encryptionPublicKey.length !== 32 ||
+        candidate.signingPublicKey.length !== 32
+      )
+        throw new Error("bad key");
+    } catch {
+      throw new CliError(
+        "transient",
+        "the Server Profile returned an invalid peer Device key",
+        {},
+        "response_invalid",
+      );
+    }
+    const fingerprint = await deviceKeyFingerprint(candidate);
+    if (options.noInput)
+      throw new CliError(
+        "conflict",
+        `device ${recipient} is not in your signed Device list yet. Run dotrelay device transfer without --no-input to compare its key fingerprint, or approve its enrollment from this Device`,
+        {},
+        "transfer_recipient_unverified",
+      );
+    if (
+      !(await confirmPrompt(
+        options,
+        `Device ${recipient} is not in your signed Device list yet. The Server Profile reports its key fingerprint as ${fingerprint}; dotrelay device list on that Device shows its own. If they match, add it to your Device list and send it the account key?`,
+      ))
+    )
+      throw new CliInvocationError("the account key transfer was declined");
+    const extended = rosterOf(await establish([candidate]));
+    listed = extended.roster.devices.find(
+      (device) =>
+        device.deviceId === recipient && device.revokedAtMs === undefined,
     );
+    if (!listed)
+      throw new CliError(
+        "transient",
+        "the Device could not be added to your signed Device list; try again",
+        {},
+        "account_roster_untrusted",
+      );
+  }
   const recipientEncryptionPublicKey = await crypto.subtle.importKey(
     "raw",
-    new Uint8Array(recipientX25519PublicKey),
+    new Uint8Array(listed.encryptionPublicKey),
     { name: "X25519" },
     true,
     [],
@@ -885,7 +1093,7 @@ export const transferAccountKey = async (
     createdAtMs: now,
     expiresAtMs,
     accountMasterKey,
-    recipientDeviceId: peer.id,
+    recipientDeviceId: listed.deviceId,
     recipientEncryptionPublicKey,
     signingPrivateKey: authorized.keys.signingPrivateKey,
   });
@@ -896,7 +1104,7 @@ export const transferAccountKey = async (
       operationId,
       objectId: crypto.randomUUID(),
       object: base64(encodeProtocolObject(transfer.object)),
-      recipientDeviceId: peer.id,
+      recipientDeviceId: listed.deviceId,
       transferId: bytesToHex(transfer.transferId),
       expiresAt: new Date(expiresAtMs).toISOString(),
       ciphertextHash: sha384ToHex(transfer.object.get(48) as Uint8Array),
@@ -905,13 +1113,19 @@ export const transferAccountKey = async (
     ["transferId", "recipientDeviceId", "expiresAt", "idempotent"],
     { idempotencyKey: operationId },
   );
+  const fingerprint = await accountFingerprint(trusted.identity);
+  const transferCode = formatAccountKeyTransferCode(
+    bytesToHex(transfer.transferId),
+    fingerprint,
+  );
   return {
     deviceId: authorized.deviceId,
     transferId: bytesToHex(transfer.transferId),
-    recipientDeviceId: peer.id,
+    transferCode,
+    accountFingerprint: fingerprint,
+    recipientDeviceId: listed.deviceId,
     expiresAt: new Date(expiresAtMs).toISOString(),
-    message:
-      "the Account Master Key is sealed for the receiving Device; run dotrelay device recover --transfer <id> on that Device before it expires",
+    message: `the Account Master Key is sealed for the receiving Device; run dotrelay device recover --transfer ${transferCode} on that Device before it expires. The code ends with this account's fingerprint, which that Device checks`,
   };
 };
 

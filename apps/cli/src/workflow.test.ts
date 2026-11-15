@@ -1,14 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  rm,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
+  accountFingerprint,
+  deviceKeyFingerprint,
+  formatAccountKeyTransferCode,
   createAccountKeyEnvelope,
   createAccountKeyTransfer,
   createAccountKeyWrapper,
@@ -23,7 +19,6 @@ import {
   createPublicationArtifacts,
   deriveAccountSigningKey,
   emptyAccountTrustPins,
-  retrustTeammate,
   serializeAccountTrustPins,
   verifyAccountDeviceRoster,
   encodeRecoveryCode,
@@ -42,6 +37,7 @@ import {
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   parseProtocolObject,
+  type ProblemCode,
   type SyncPageWire,
   sha384,
   uuidToBytes,
@@ -53,7 +49,11 @@ import { CliError } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
-import { consumeDisplayedRecoveryCodePath } from "./workflow-account-key";
+import {
+  consumeDisplayedRecoveryCode,
+  PENDING_RECOVERY_CODE_SERVICE,
+} from "./workflow-account-key";
+import { missingProjectKeyNotice } from "./workflow-session";
 
 const profile = {
   name: "relay",
@@ -197,6 +197,7 @@ const accountKeyService = (
   const publishedWrappers: string[] = [];
   const wrapperIntents: unknown[] = [];
   const acknowledgedTransfers: string[] = [];
+  const acceptedTransfers: string[] = [];
   let established = false;
   const publishedEnvelopes: string[] = [];
   const postedTransfers: Array<
@@ -277,6 +278,7 @@ const accountKeyService = (
       const match =
         /^\/api\/v1\/account-keys\/transfers\/([^/]+)\/accept$/u.exec(path);
       if (match) {
+        acceptedTransfers.push(match[1] ?? "");
         const transfer = seed.transfer;
         if (
           !transfer ||
@@ -299,6 +301,7 @@ const accountKeyService = (
     publishedWrappers: () => publishedWrappers,
     wrapperIntents: () => wrapperIntents,
     acknowledgedTransfers: () => acknowledgedTransfers,
+    acceptedTransfers: () => acceptedTransfers,
     publishedEnvelopes: () => publishedEnvelopes,
     postedTransfers: () => postedTransfers,
     revokedWrappers: () => revokedWrappers,
@@ -342,15 +345,122 @@ type TestSigningTrustDevice = Readonly<{
   readonly deviceActiveUntilMs?: number | null;
   readonly memberSinceMs?: number | null;
   readonly memberUntilMs?: number | null;
+  readonly membershipPeriods?: readonly Readonly<{
+    readonly sinceMs: number;
+    readonly untilMs: number | null;
+  }>[];
 }>;
+
+// The base64 Account Device roster a User's AMK signs (ADR 0015).
+const signedRosterB64 = async (
+  amk: Uint8Array,
+  userId: string,
+  version: number,
+  devices: Parameters<typeof createAccountDeviceRoster>[0]["devices"],
+): Promise<string> =>
+  Buffer.from(
+    (
+      await createAccountDeviceRoster({
+        serverProfileId: profile.pin.serverProfileId,
+        userId,
+        version,
+        devices,
+        signingKey: await deriveAccountSigningKey(amk, {
+          serverProfileId: profile.pin.serverProfileId,
+          userId,
+        }),
+      })
+    ).canonicalBytes,
+  ).toString("base64");
+
+const hexKey = (value: string): Uint8Array =>
+  Uint8Array.from(Buffer.from(value, "hex"));
+
+// An honest Server Profile after ADR 0015: every teammate a signing trust
+// entry names has published a roster, signed by their own account key, that
+// lists those Devices. This Device's account is covered when the test hands
+// it the Account Master Key.
+const honestRosters = async (
+  input: Readonly<{
+    readonly bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>;
+    readonly signingTrustDevices: readonly TestSigningTrustDevice[];
+    readonly peerDevices: readonly Readonly<{
+      readonly id: string;
+      readonly encryptionPublicKey: string;
+      readonly signingPublicKey?: string;
+    }>[];
+    readonly accountMasterKey?: Uint8Array;
+  }>,
+): Promise<Record<string, string>> => {
+  const byUser = new Map<string, TestSigningTrustDevice[]>();
+  for (const device of input.signingTrustDevices) {
+    if (!device.userId || !device.deviceId) continue;
+    byUser.set(device.userId, [...(byUser.get(device.userId) ?? []), device]);
+  }
+  const entry = (device: TestSigningTrustDevice) => ({
+    deviceId: device.deviceId ?? "",
+    encryptionPublicKey: crypto.getRandomValues(new Uint8Array(32)),
+    signingPublicKey: hexKey(device.signingPublicKey),
+    addedAtMs: 0,
+    ...(typeof device.deviceActiveUntilMs === "number"
+      ? { revokedAtMs: device.deviceActiveUntilMs }
+      : {}),
+  });
+  const rosters: Record<string, string> = {};
+  for (const [userId, devices] of byUser) {
+    if (userId === ids.user) continue;
+    rosters[userId] = await signedRosterB64(
+      generateAccountMasterKey(),
+      userId,
+      1,
+      devices.map(entry),
+    );
+  }
+  if (input.accountMasterKey) {
+    const own = new Map<
+      string,
+      Parameters<typeof createAccountDeviceRoster>[0]["devices"][number]
+    >();
+    own.set(input.bootstrap.deviceId, {
+      deviceId: input.bootstrap.deviceId,
+      encryptionPublicKey: input.bootstrap.x25519PublicKey,
+      signingPublicKey: input.bootstrap.ed25519PublicKey,
+      addedAtMs: 0,
+    });
+    for (const device of byUser.get(ids.user) ?? [])
+      if (!own.has(device.deviceId ?? ""))
+        own.set(device.deviceId ?? "", entry(device));
+    for (const peer of input.peerDevices)
+      if (peer.signingPublicKey && !own.has(peer.id))
+        own.set(peer.id, {
+          deviceId: peer.id,
+          encryptionPublicKey: hexKey(peer.encryptionPublicKey),
+          signingPublicKey: hexKey(peer.signingPublicKey),
+          addedAtMs: 0,
+        });
+    rosters[ids.user] = await signedRosterB64(
+      input.accountMasterKey,
+      ids.user,
+      1,
+      [...own.values()],
+    );
+  }
+  return rosters;
+};
 
 const setup = async (
   options: Readonly<{
+    /** Stored for this Device; its account roster is then served too. */
+    readonly accountMasterKey?: Uint8Array;
+    /** Overrides the honest rosters for the Users it names. */
+    readonly accountRosters?: Readonly<Record<string, string | null>>;
     readonly signingTrustKeys?: readonly string[];
     readonly signingTrustDevices?: readonly TestSigningTrustDevice[];
     readonly revisions?: SyncPageWire["revisions"];
     readonly bootstrap?: Awaited<ReturnType<typeof createDeviceBootstrap>>;
     readonly withoutBoundaryEnvironment?: boolean;
+    readonly rotationOwed?: Readonly<Record<string, unknown>>;
+    readonly finalizeProblem?: ProblemCode;
     readonly grantsReady?: boolean;
     readonly epochGrant?: string;
     readonly accountKeyEnvelope?: string;
@@ -395,6 +505,11 @@ const setup = async (
       deviceId: ids.device,
     }));
   await deviceStorage.save(bootstrap.bundle);
+  if (options.accountMasterKey)
+    await deviceStorage.saveAccountKey(
+      { pin: profile.pin, deviceId: uuidToBytes(bootstrap.deviceId) },
+      options.accountMasterKey,
+    );
   // A completed enrollment always records its Device id next to the bundle.
   const { writeDeviceId, deviceMetadataPath } =
     await import("./device-storage");
@@ -408,6 +523,7 @@ const setup = async (
     environment: {
       ...boundary.environment,
       id: options.withoutBoundaryEnvironment ? null : boundary.environment.id,
+      ...(options.rotationOwed ? { rotationOwed: options.rotationOwed } : {}),
     },
     ...(options.signingTrustKeys
       ? { signingTrustKeys: options.signingTrustKeys }
@@ -423,6 +539,17 @@ const setup = async (
     ...(options.grantsReady !== undefined
       ? { grantsReady: options.grantsReady }
       : {}),
+    accountRosters: {
+      ...(await honestRosters({
+        bootstrap,
+        signingTrustDevices: options.signingTrustDevices ?? [],
+        peerDevices: (options.peerDevices ?? []) as never,
+        ...(options.accountMasterKey
+          ? { accountMasterKey: options.accountMasterKey }
+          : {}),
+      })),
+      ...(options.accountRosters ?? {}),
+    },
   };
   const createdEnvironments: string[] = [];
   const admin: StrictJsonClient = {
@@ -469,7 +596,13 @@ const setup = async (
       trustedRevisionHash: new Uint8Array(48),
       currentHeadId: previous?.id ?? null,
       currentHeadHash: previous?.digest ?? null,
-      projectEpoch: 1n,
+      // An honest page reports the Project's current epoch, never one below
+      // its own history.
+      projectEpoch: revisions.reduce(
+        (highest, revision) =>
+          revision.projectEpoch > highest ? revision.projectEpoch : highest,
+        1n,
+      ),
       revisions,
       nextCursor: null,
     });
@@ -497,6 +630,10 @@ const setup = async (
       return Response.json({ staged: true }, { status: 201 });
     }
     if (path.endsWith("/finalize") && request.method === "POST") {
+      if (options.finalizeProblem) {
+        const problem = createProblem(options.finalizeProblem);
+        return Response.json(problem, { status: problem.status });
+      }
       const body = (await request.json()) as Record<string, unknown>;
       const revisionBody = body.revision as Record<string, unknown>;
       const revisionObjectId = revisionBody.protocolObjectId;
@@ -608,6 +745,7 @@ afterEach(async () => {
     if (
       file.startsWith(".tmp-workflow-code-") ||
       file.startsWith(".tmp-workflow-git-") ||
+      file.startsWith(".tmp-workflow-link-") ||
       file.startsWith(".tmp-workflow-profile-") ||
       file.startsWith(".tmp-workflow-state-") ||
       file.startsWith("head-") ||
@@ -797,7 +935,10 @@ describe("protected CLI workflows", () => {
     });
     if (!bootstrap.keyMaterial.encryptionPublicKey)
       throw new Error("Device encryption public key is missing");
+    // Another Device of this account, listed in its signed roster.
     const peer = await generateSigningKeyPair();
+    const peerId = "bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc";
+    const peerHex = bytesToHex(await rawSigningPublicKey(peer.publicKey));
     const artifacts = await createPublicationArtifacts(
       [
         {
@@ -816,7 +957,7 @@ describe("protected CLI workflows", () => {
         projectId: ids.project,
         environmentId: ids.environment,
         actorUserId: ids.user,
-        actorDeviceId: ids.device,
+        actorDeviceId: peerId,
         projectEpoch: 1,
         expectedHeadId: null,
         expectedHeadHash: null,
@@ -834,7 +975,16 @@ describe("protected CLI workflows", () => {
     const digest = await sha384(revisionObject.bytes);
     const runtime = await setup({
       bootstrap,
-      signingTrustKeys: [bytesToHex(await rawSigningPublicKey(peer.publicKey))],
+      accountMasterKey: generateAccountMasterKey(),
+      signingTrustKeys: [peerHex],
+      peerDevices: [
+        {
+          id: peerId,
+          encryptionPublicKey: "22".repeat(32),
+          signingPublicKey: peerHex,
+          hasEpochGrant: true,
+        } as never,
+      ],
       revisions: [
         {
           id: artifacts.request.revision.id,
@@ -882,7 +1032,9 @@ describe("protected CLI workflows", () => {
     });
     if (!bootstrap.keyMaterial.encryptionPublicKey)
       throw new Error("Device encryption public key is missing");
+    // Another Device of this account, listed in its signed roster.
     const peer = await generateSigningKeyPair();
+    const peerId = "bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc";
     const artifacts = await createPublicationArtifacts(
       [
         {
@@ -901,7 +1053,7 @@ describe("protected CLI workflows", () => {
         projectId: ids.project,
         environmentId: ids.environment,
         actorUserId: ids.user,
-        actorDeviceId: ids.device,
+        actorDeviceId: peerId,
         projectEpoch: 1,
         expectedHeadId: null,
         expectedHeadHash: null,
@@ -919,12 +1071,13 @@ describe("protected CLI workflows", () => {
     const digest = await sha384(revisionObject.bytes);
     const runtime = await setup({
       bootstrap,
+      accountMasterKey: generateAccountMasterKey(),
       signingTrustDevices: [
         {
           signingPublicKey: bytesToHex(
             await rawSigningPublicKey(peer.publicKey),
           ),
-          deviceId: ids.device,
+          deviceId: peerId,
           userId: ids.user,
           deviceActiveFromMs: 0,
           deviceActiveUntilMs: null,
@@ -1079,6 +1232,351 @@ describe("protected CLI workflows", () => {
       category: "local-io",
       code: "unexpected_failure",
     });
+  });
+
+  // A genesis Revision signed by `signingPrivateKey` at `nowMs`, ready to
+  // seed the fake service's history.
+  // A teammate whose Membership periods ADR 0017 is about; the honest
+  // Server Profile serves their signed roster.
+  const teammate = {
+    userId: "abababab-abab-4bab-8bab-abababababab",
+    deviceId: "acacacac-acac-4cac-8cac-acacacacacac",
+  } as const;
+
+  const seedGenesis = async (
+    bootstrap: Awaited<ReturnType<typeof createDeviceBootstrap>>,
+    signingPrivateKey: CryptoKey,
+    nowMs: number,
+    actor: Readonly<{ userId: string; deviceId: string }> = {
+      userId: ids.user,
+      deviceId: ids.device,
+    },
+  ): Promise<SyncPageWire["revisions"][number]> => {
+    if (!bootstrap.keyMaterial.encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const artifacts = await createPublicationArtifacts(
+      [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "DATABASE_URL",
+          description: "Connection string",
+          ownership: "SHARED_VALUE",
+          value: "postgres://example",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: actor.userId,
+        actorDeviceId: actor.deviceId,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: bootstrap.keyMaterial.encryptionPublicKey,
+        signingPrivateKey,
+        mutation: "GENESIS",
+        nowMs,
+      },
+    );
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    return {
+      id: artifacts.request.revision.id,
+      digest: await sha384(revisionObject.bytes),
+      parentId: ids.environment,
+      parentHash: new Uint8Array(48),
+      mutation: 1,
+      projectEpoch: 1n,
+      authoredAtMs: BigInt(artifacts.request.revision.authoredAtMs),
+      rollbackTargetId: null,
+      objects: await Promise.all(
+        artifacts.stagedObjects.map(async (object) =>
+          Object.freeze({
+            objectId: object.objectId,
+            canonicalBytes: object.bytes,
+            digest: await sha384(object.bytes),
+          }),
+        ),
+      ),
+    };
+  };
+
+  const pullStdout = (runtime: Awaited<ReturnType<typeof setup>>) =>
+    run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--stdout",
+        "--no-input",
+      ],
+      runtime,
+    );
+
+  test("verifies a Revision authored during the author's earlier Membership period (ADR 0017)", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await generateSigningKeyPair();
+    const authoredAtMs = Date.now() - 3 * 60 * 60_000;
+    const revision = await seedGenesis(
+      bootstrap,
+      peer.privateKey,
+      authoredAtMs,
+      teammate,
+    );
+    const currentSinceMs = Date.now() - 60_000;
+    const entry = {
+      signingPublicKey: bytesToHex(await rawSigningPublicKey(peer.publicKey)),
+      deviceId: teammate.deviceId,
+      userId: teammate.userId,
+      deviceActiveFromMs: 0,
+      deviceActiveUntilMs: null,
+      // The current period alone starts after the Revision was authored.
+      memberSinceMs: currentSinceMs,
+      memberUntilMs: null,
+    };
+    const withPeriods = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          ...entry,
+          membershipPeriods: [
+            { sinceMs: authoredAtMs - 60_000, untilMs: authoredAtMs + 60_000 },
+            { sinceMs: currentSinceMs, untilMs: null },
+          ],
+        },
+      ],
+      revisions: [revision],
+    });
+    const verified = await pullStdout(withPeriods);
+    expect(verified.exitCode).toBe(0);
+    expect(verified.stdout).toContain("DATABASE_URL='postgres://example'");
+    // Without the earlier period the same history is refused.
+    resetMemoryCredentialStore();
+    const currentOnly = await setup({
+      bootstrap,
+      signingTrustDevices: [entry],
+      revisions: [revision],
+    });
+    const refused = await pullStdout(currentOnly);
+    expect(refused.exitCode).toBe(8);
+    expect(refused.stdout).not.toContain("postgres://example");
+  });
+
+  test("refuses a Revision authored between two Membership periods", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    const peer = await generateSigningKeyPair();
+    const authoredAtMs = Date.now() - 3 * 60 * 60_000;
+    const currentSinceMs = Date.now() - 60_000;
+    const runtime = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(peer.publicKey),
+          ),
+          deviceId: teammate.deviceId,
+          userId: teammate.userId,
+          deviceActiveFromMs: 0,
+          deviceActiveUntilMs: null,
+          memberSinceMs: currentSinceMs,
+          memberUntilMs: null,
+          membershipPeriods: [
+            { sinceMs: 0, untilMs: authoredAtMs - 60_000 },
+            { sinceMs: currentSinceMs, untilMs: null },
+          ],
+        },
+      ],
+      revisions: [
+        await seedGenesis(bootstrap, peer.privateKey, authoredAtMs, teammate),
+      ],
+    });
+    const refused = await pullStdout(runtime);
+    expect(refused.exitCode).toBe(8);
+    expect(refused.stdout).not.toContain("postgres://example");
+  });
+
+  const historyJson = async (runtime: Awaited<ReturnType<typeof setup>>) => {
+    const history = await run(
+      [
+        "history",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(history.exitCode).toBe(0);
+    return JSON.parse(history.stdout) as {
+      revisions: Array<{ authoredAtMs: string }>;
+      pendingActions?: string[];
+    };
+  };
+
+  test("push raises a slow clock to this Device's Membership activation", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.signingPublicKey)
+      throw new Error("Device signing public key is missing");
+    // The service activated this Membership two minutes "ahead" of the
+    // local clock; a Revision stamped with the local time would be refused.
+    const memberSinceMs = Date.now() + 120_000;
+    const runtime = await setup({
+      bootstrap,
+      signingTrustDevices: [
+        {
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(bootstrap.keyMaterial.signingPublicKey),
+          ),
+          deviceId: ids.device,
+          userId: ids.user,
+          deviceActiveFromMs: 0,
+          deviceActiveUntilMs: null,
+          memberSinceMs,
+          memberUntilMs: null,
+          membershipPeriods: [{ sinceMs: memberSinceMs, untilMs: null }],
+        },
+      ],
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    const [genesis] = (await historyJson(runtime)).revisions;
+    expect(BigInt(genesis?.authoredAtMs ?? "0")).toBeGreaterThanOrEqual(
+      BigInt(memberSinceMs),
+    );
+  });
+
+  test("push never stamps a Revision before the head it chains onto", async () => {
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    if (!bootstrap.keyMaterial.signingPrivateKey)
+      throw new Error("Device signing private key is missing");
+    // The head was authored by a Device whose clock runs ahead of this one.
+    const headAuthoredAtMs = Date.now() + 120_000;
+    const runtime = await setup({
+      bootstrap,
+      revisions: [
+        await seedGenesis(
+          bootstrap,
+          bootstrap.keyMaterial.signingPrivateKey,
+          headAuthoredAtMs,
+        ),
+      ],
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://updated\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--force",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(0);
+    const revisions = (await historyJson(runtime)).revisions;
+    expect(revisions).toHaveLength(2);
+    expect(BigInt(revisions[1]?.authoredAtMs ?? "0")).toBeGreaterThanOrEqual(
+      BigInt(headAuthoredAtMs),
+    );
+  });
+
+  test("a Revision the service refuses for its timestamp asks to check the clock", async () => {
+    const runtime = await setup({
+      finalizeProblem: "authored_at_out_of_range",
+    });
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(pushed.exitCode).toBe(4);
+    const diagnostic = JSON.parse(pushed.stderr) as Record<string, unknown>;
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "authored_at_out_of_range",
+    });
+    expect(String(diagnostic.detail)).toContain("system clock");
+  });
+
+  test("reports an owed rotation as a pending action without blocking", async () => {
+    const runtime = await setup({
+      rotationOwed: {
+        since: "2026-11-01T09:30:00.000Z",
+        sinceEpoch: "1",
+        membershipRemovals: 1,
+        deviceRevocations: 2,
+      },
+    });
+    const body = await historyJson(runtime);
+    expect(body.pendingActions).toEqual([
+      "1 Member removed and 2 Devices revoked since 2026-11-01. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.",
+    ]);
+    // Advice only: a pull still completes.
+    const pulled = await pullStdout(runtime);
+    expect(pulled.exitCode).toBe(0);
   });
 
   test("stages and finalizes an encrypted genesis publication", async () => {
@@ -2313,21 +2811,37 @@ describe("protected CLI workflows", () => {
     );
     expect(initialized.exitCode).toBe(0);
     await Bun.write(input, "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n");
-    const result = await run(
-      [
-        "pull",
-        "--profile",
-        "relay",
-        "--environment",
-        ids.environment,
-        "--output",
-        input,
-        "--no-input",
-        "--force",
-        "--json",
-      ],
-      { ...runtime, gitTrackingProbe: gitOutside },
+    const pullArguments = [
+      "pull",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--output",
+      input,
+      "--no-input",
+      "--force",
+      "--json",
+    ];
+    // Both local lines are edits no Revision ever held, so --force alone
+    // refuses to discard them.
+    const refused = await run(pullArguments, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(refused.exitCode).toBe(4);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: "output_conflict",
+      changedCount: 2,
+      variableNames: "DATABASE_URL, LOCAL_ONLY",
+    });
+    expect(await Bun.file(input).text()).toBe(
+      "DATABASE_URL=postgres://local\nLOCAL_ONLY=kept\n",
     );
+    const result = await run([...pullArguments, "--discard-local"], {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
     expect(result.exitCode).toBe(0);
     const body = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(body).toMatchObject({
@@ -2403,6 +2917,163 @@ describe("protected CLI workflows", () => {
     expect(unchanged.exitCode).toBe(0);
     expect(unchanged.stdout).toBe("No changes found\n");
     expect(await Bun.file(output).text()).toBe(written);
+  });
+
+  test("pull warns when a process-control Variable first appears in the file", async () => {
+    const runtime = await setup();
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(
+      input,
+      "DATABASE_URL=postgres://secret\nNODE_OPTIONS=--require=./x.js\n",
+    );
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "NODE_OPTIONS=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    const pullArgs = [
+      "pull",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--output",
+      output,
+      "--no-input",
+      "--json",
+    ];
+    const fresh = await run(pullArgs, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(fresh.exitCode).toBe(0);
+    const body = JSON.parse(fresh.stdout) as { warnings?: string[] };
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings?.[0]).toContain("NODE_OPTIONS");
+    expect(body.warnings?.[0]).not.toContain("DATABASE_URL");
+    // Once the file holds the Variable, a later pull does not repeat it.
+    const again = await run(pullArgs, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(again.exitCode).toBe(0);
+    expect(JSON.parse(again.stdout)).not.toHaveProperty("warnings");
+  });
+
+  test("pull keeps a Value the file single-quoted literal", async () => {
+    const runtime = await setup();
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(input, "TOKEN='pa$word'\nREF=${HOME}/x\n");
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "TOKEN=shared",
+        "--classify",
+        "REF=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    await Bun.write(output, "TOKEN='pa$word'\nOLD=1\n");
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--force",
+        "--discard-local",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
+    const written = await Bun.file(output).text();
+    expect(written).toContain("TOKEN='pa$word'\n");
+    expect(written).toContain('REF="${HOME}/x"\n');
+  });
+
+  test("pull through a symlinked output names the file it writes", async () => {
+    const runtime = await setup();
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    const target = `${import.meta.dir}/.tmp-workflow-link-target-${crypto.randomUUID()}`;
+    const link = `${import.meta.dir}/.tmp-workflow-link-${crypto.randomUUID()}`;
+    try {
+      await Bun.write(input, "DATABASE_URL=postgres://secret\n");
+      const initialized = await run(
+        [
+          "init",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--from",
+          input,
+          "--classify",
+          "DATABASE_URL=shared",
+          "--no-input",
+          "--json",
+        ],
+        runtime,
+      );
+      expect(initialized.exitCode).toBe(0);
+      const { symlink, realpath } = await import("node:fs/promises");
+      await Bun.write(target, "OLD=1\n");
+      await symlink(target, link);
+      const pulled = await run(
+        [
+          "pull",
+          "--profile",
+          "relay",
+          "--environment",
+          ids.environment,
+          "--output",
+          link,
+          "--no-input",
+          "--force",
+          "--discard-local",
+          "--json",
+        ],
+        { ...runtime, gitTrackingProbe: gitOutside },
+      );
+      expect(pulled.exitCode).toBe(0);
+      const body = JSON.parse(pulled.stdout) as Record<string, unknown>;
+      expect(body.target).toBe(await realpath(target));
+      expect(String(body.message)).toContain("a symlink to");
+      expect(await Bun.file(target).text()).toContain("DATABASE_URL=");
+    } finally {
+      await rm(link, { force: true });
+      await rm(target, { force: true });
+    }
   });
 
   test("interactive pull replacement retains a recoverable prior file", async () => {
@@ -2486,9 +3157,11 @@ describe("protected CLI workflows", () => {
       const gitDirectory = `${gitRoot}/.git`;
       const output = `${gitRoot}/.env`;
       const probe: GitTrackingProbe = async (path) => {
-        const relativePath = path.endsWith(".previous")
-          ? ".env.previous"
-          : ".env";
+        // A temporary write target shares its output's exclusion.
+        const name = path.slice(gitRoot.length + 1);
+        const relativePath = name.endsWith(".tmp")
+          ? name.slice(1, name.lastIndexOf(".", name.length - 5))
+          : name;
         const exclusions = await readFile(
           `${gitDirectory}/info/exclude`,
           "utf8",
@@ -2526,7 +3199,7 @@ describe("protected CLI workflows", () => {
       expect(String(body.message)).toContain(".git/info/exclude");
       expect(String(body.message)).toContain("excluded from Git");
       expect(await Bun.file(`${gitDirectory}/info/exclude`).text()).toBe(
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2542,7 +3215,7 @@ describe("protected CLI workflows", () => {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
       await Bun.write(
         `${gitRoot}/.git/info/exclude`,
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
       await seededEnvironment(
         runtime,
@@ -2552,7 +3225,7 @@ describe("protected CLI workflows", () => {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
       await Bun.write(
         `${gitRoot}/.git/info/exclude`,
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
       const probe: GitTrackingProbe = async (path) =>
         Object.freeze({
@@ -2580,7 +3253,7 @@ describe("protected CLI workflows", () => {
       expect(body).toMatchObject({ ok: true, output, gitExclusion: "present" });
       expect(String(body.message)).not.toContain(".git/info/exclude");
       expect(await Bun.file(`${gitRoot}/.git/info/exclude`).text()).toBe(
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
     } finally {
       await rm(gitRoot, { recursive: true, force: true }).catch(
@@ -2720,7 +3393,7 @@ describe("protected CLI workflows", () => {
       await mkdir(`${gitRoot}/.git/info`, { recursive: true });
       await Bun.write(
         `${gitRoot}/.git/info/exclude`,
-        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n",
+        "/.env\n/..env.*.tmp\n/.env.previous\n/..env.previous.*.tmp\n/.env.previous.1\n/..env.previous.1.*.tmp\n/.env.previous.2\n/..env.previous.2.*.tmp\n",
       );
       const probe: GitTrackingProbe = async (path) =>
         Object.freeze({
@@ -3020,6 +3693,8 @@ describe("protected CLI workflows", () => {
     });
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "DATABASE_URL=abc123x\n");
+    // A hand-written file with no pulled baseline replaces an existing
+    // Value, which --no-input approves only with --force.
     const pushed = await run(
       [
         "push",
@@ -3030,6 +3705,7 @@ describe("protected CLI workflows", () => {
         "--from",
         input,
         "--no-input",
+        "--force",
         "--json",
       ],
       runtime,
@@ -3182,6 +3858,8 @@ describe("protected CLI workflows", () => {
     });
     const input = `${import.meta.dir}/.tmp-workflow-input`;
     await Bun.write(input, "DATABASE_URL=abc123x\n");
+    // A hand-written file with no pulled baseline replaces an existing
+    // Value, which --no-input approves only with --force.
     const pushed = await run(
       [
         "push",
@@ -3192,6 +3870,7 @@ describe("protected CLI workflows", () => {
         "--from",
         input,
         "--no-input",
+        "--force",
         "--json",
       ],
       runtime,
@@ -4058,7 +4737,26 @@ describe("protected CLI workflows", () => {
 
   test("device recover unlocks a Device from an Account Key Transfer", async () => {
     const amk = generateAccountMasterKey();
-    const runtime = await setup();
+    const bootstrap = await createDeviceBootstrap({
+      pin: profile.pin,
+      userId: ids.user,
+      deviceId: ids.device,
+    });
+    // The account roster, signed by the key the transfer carries, lists the
+    // sending Device and this one (ADR 0022). Here both are this Device.
+    const runtime = await setup({
+      bootstrap,
+      accountRosters: {
+        [ids.user]: await signedRosterB64(amk, ids.user, 1, [
+          {
+            deviceId: ids.device,
+            encryptionPublicKey: bootstrap.x25519PublicKey,
+            signingPublicKey: bootstrap.ed25519PublicKey,
+            addedAtMs: 0,
+          },
+        ]),
+      },
+    });
     const keyMaterial = runtime.bootstrap.keyMaterial;
     const signingPrivateKey = keyMaterial.signingPrivateKey;
     const encryptionPublicKey = keyMaterial.encryptionPublicKey;
@@ -4080,8 +4778,113 @@ describe("protected CLI workflows", () => {
     const objectB64 = Buffer.from(
       encodeProtocolObject(transfer.object),
     ).toString("base64");
+    const fingerprint = await accountFingerprint(
+      (
+        await deriveAccountSigningKey(amk, {
+          serverProfileId: profile.pin.serverProfileId,
+          userId: ids.user,
+        })
+      ).identity,
+    );
+    const recoverWith = async (code: string) => {
+      const service = accountKeyService(runtime.admin, {
+        transfer: { id: transferIdHex, object: objectB64 },
+      });
+      const result = await run(
+        [
+          "device",
+          "recover",
+          "--profile",
+          "relay",
+          "--transfer",
+          code,
+          "--no-input",
+          "--json",
+        ],
+        {
+          ...runtime,
+          admin: service.admin,
+          fetch: async () => Response.json({}),
+        },
+      );
+      return { result, service };
+    };
+    // A bare transfer id carries no fingerprint, so --no-input refuses it
+    // before the transfer is fetched.
+    const bare = await recoverWith(transferIdHex);
+    expect(bare.result.exitCode).toBe(2);
+    expect(JSON.parse(bare.result.stderr)).toMatchObject({
+      code: "account_fingerprint_required",
+    });
+    expect(bare.service.acceptedTransfers()).toHaveLength(0);
+    // A code naming another account's fingerprint is refused.
+    const wrong = await recoverWith(
+      formatAccountKeyTransferCode(transferIdHex, "00".repeat(20)),
+    );
+    expect(wrong.result.exitCode).toBe(5);
+    expect(JSON.parse(wrong.result.stderr)).toMatchObject({
+      code: "account_fingerprint_mismatch",
+    });
+    expect(wrong.service.acknowledgedTransfers()).toHaveLength(0);
+    const { result: recover, service } = await recoverWith(
+      formatAccountKeyTransferCode(transferIdHex, fingerprint),
+    );
+    expect(recover.exitCode).toBe(0);
+    const report = JSON.parse(recover.stdout) as Record<string, unknown>;
+    expect(report.ok).toBe(true);
+    expect(report.via).toBe("transfer");
+    const stored = await runtime.deviceStorage.loadAccountKey({
+      pin: profile.pin,
+      deviceId: uuidToBytes(ids.device),
+    });
+    expect(stored).toBeDefined();
+    expect(new Uint8Array(stored as Uint8Array)).toEqual(new Uint8Array(amk));
+    expect(service.acknowledgedTransfers()).toEqual([transferIdHex]);
+  });
+
+  test("device recover refuses an Account Key the service sealed and signed itself", async () => {
+    // C-3: the service builds a transfer carrying a key it chose, sealed to
+    // this Device and signed by a key it lists as trusted. Only a Device in
+    // the account's own signed roster may hand over the Account Master Key.
+    const attacker = await generateSigningKeyPair();
+    const attackerKeyHex = bytesToHex(
+      await rawSigningPublicKey(attacker.publicKey),
+    );
+    const runtime = await setup({
+      signingTrustKeys: [attackerKeyHex],
+      peerDevices: [
+        {
+          id: ids.approver,
+          encryptionPublicKey: "11".repeat(32),
+          signingPublicKey: attackerKeyHex,
+          hasEpochGrant: true,
+        } as never,
+      ],
+    });
+    const encryptionPublicKey =
+      runtime.bootstrap.keyMaterial.encryptionPublicKey;
+    if (!encryptionPublicKey)
+      throw new Error("Device encryption public key is missing");
+    const now = Date.now();
+    const transfer = await createAccountKeyTransfer({
+      serverProfileId: profile.pin.serverProfileId,
+      userId: uuidToBytes(ids.user),
+      deviceId: uuidToBytes(ids.approver),
+      createdAtMs: now,
+      expiresAtMs: now + 3_600_000,
+      accountMasterKey: generateAccountMasterKey(),
+      recipientDeviceId: ids.device,
+      recipientEncryptionPublicKey: encryptionPublicKey,
+      signingPrivateKey: attacker.privateKey,
+    });
+    const transferIdHex = bytesToHex(transfer.transferId);
     const service = accountKeyService(runtime.admin, {
-      transfer: { id: transferIdHex, object: objectB64 },
+      transfer: {
+        id: transferIdHex,
+        object: Buffer.from(encodeProtocolObject(transfer.object)).toString(
+          "base64",
+        ),
+      },
     });
     const recover = await run(
       [
@@ -4100,17 +4903,15 @@ describe("protected CLI workflows", () => {
         fetch: async () => Response.json({}),
       },
     );
-    expect(recover.exitCode).toBe(0);
-    const report = JSON.parse(recover.stdout) as Record<string, unknown>;
-    expect(report.ok).toBe(true);
-    expect(report.via).toBe("transfer");
-    const stored = await runtime.deviceStorage.loadAccountKey({
-      pin: profile.pin,
-      deviceId: uuidToBytes(ids.device),
-    });
-    expect(stored).toBeDefined();
-    expect(new Uint8Array(stored as Uint8Array).length).toBe(32);
-    expect(service.acknowledgedTransfers()).toEqual([transferIdHex]);
+    expect(recover.exitCode).not.toBe(0);
+    expect(service.acknowledgedTransfers()).toHaveLength(0);
+    const stored = await runtime.deviceStorage
+      .loadAccountKey({
+        pin: profile.pin,
+        deviceId: uuidToBytes(ids.device),
+      })
+      .catch(() => null);
+    expect(stored).toBeNull();
   });
 
   test("device recover does not acknowledge a transfer it cannot open", async () => {
@@ -4163,7 +4964,10 @@ describe("protected CLI workflows", () => {
         "--profile",
         "relay",
         "--transfer",
-        "deadbeefdeadbeefdeadbeefdeadbeef",
+        formatAccountKeyTransferCode(
+          "deadbeefdeadbeefdeadbeefdeadbeef",
+          "00".repeat(20),
+        ),
         "--no-input",
         "--json",
       ],
@@ -4353,13 +5157,30 @@ describe("protected CLI workflows", () => {
     expect(service.publishedWrappers()).toEqual([wrapperId]);
     const recoveryCode = report.recoveryCode;
     if (typeof recoveryCode !== "string") throw new Error("code missing");
-    const pendingPath = consumeDisplayedRecoveryCodePath();
-    if (!pendingPath) throw new Error("pending path missing");
-    const pending = JSON.parse(await readFile(pendingPath, "utf8")) as {
+    const clearDisplayed = consumeDisplayedRecoveryCode();
+    if (!clearDisplayed) throw new Error("pending code missing");
+    // The pending code is kept in the encrypted credential store, never as
+    // a plaintext file in the state directory.
+    const { readdir } = await import("node:fs/promises");
+    expect(
+      (await readdir(runtime.stateDirectory)).filter((name) =>
+        name.includes("recovery-code"),
+      ),
+    ).toEqual([]);
+    const deviceId = String(report.deviceId ?? "");
+    const stored = await runtime.credentials.get(
+      PENDING_RECOVERY_CODE_SERVICE,
+      deviceId,
+    );
+    if (!stored) throw new Error("pending code not stored");
+    const pending = JSON.parse(new TextDecoder().decode(stored)) as {
       recoveryCode?: string;
     };
     expect(pending.recoveryCode).toBe(recoveryCode);
-    await unlink(pendingPath);
+    await clearDisplayed();
+    expect(
+      await runtime.credentials.get(PENDING_RECOVERY_CODE_SERVICE, deviceId),
+    ).toBeNull();
   });
 
   test("device setup does not publish when the local key cannot be saved", async () => {
@@ -4426,19 +5247,22 @@ describe("protected CLI workflows", () => {
   test("device transfer seals the account key to the receiving Device and it opens back to the same key", async () => {
     const amk = generateAccountMasterKey();
     const peer = await peerX25519();
+    // The receiving Device is in this account's signed roster, so the key
+    // is sealed to its rostered key without a prompt.
+    const peerSigning = await generateSigningKeyPair();
     const runtime = await setup({
+      accountMasterKey: amk,
       peerDevices: [
         {
           id: peer.id,
           encryptionPublicKey: peer.encryptionPublicKey,
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(peerSigning.publicKey),
+          ),
           hasEpochGrant: false,
-        },
+        } as never,
       ],
     });
-    await runtime.deviceStorage.saveAccountKey(
-      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
-      amk,
-    );
     const service = accountKeyService(runtime.admin);
     const result = await run(
       [
@@ -4464,6 +5288,19 @@ describe("protected CLI workflows", () => {
     expect(report.transferId).toBeString();
     expect(report.recipientDeviceId).toBe(peer.id);
     expect(report.expiresAt).toBeString();
+    // The code the person carries ends with this account's fingerprint.
+    const fingerprint = await accountFingerprint(
+      (
+        await deriveAccountSigningKey(amk, {
+          serverProfileId: profile.pin.serverProfileId,
+          userId: ids.user,
+        })
+      ).identity,
+    );
+    expect(report.accountFingerprint).toBe(fingerprint);
+    expect(report.transferCode).toBe(
+      formatAccountKeyTransferCode(String(report.transferId), fingerprint),
+    );
     const posted = service.postedTransfers();
     expect(posted).toHaveLength(1);
     const transferBody = posted[0];
@@ -4504,30 +5341,62 @@ describe("protected CLI workflows", () => {
     const amk = generateAccountMasterKey();
     const first = await peerX25519();
     const second = await peerX25519();
+    const firstSigning = await generateSigningKeyPair();
+    const secondSigning = await generateSigningKeyPair();
+    const secondSigningHex = bytesToHex(
+      await rawSigningPublicKey(secondSigning.publicKey),
+    );
     const runtime = await setup({
+      accountMasterKey: amk,
       peerDevices: [
         {
           id: first.id,
           encryptionPublicKey: first.encryptionPublicKey,
+          signingPublicKey: bytesToHex(
+            await rawSigningPublicKey(firstSigning.publicKey),
+          ),
           hasEpochGrant: true,
           name: "CatchOS",
           clientKind: "cli",
           osName: "Linux",
           clientSummary: "dotrelay-cli",
-        },
-        {
-          // Unlabeled: the picker falls back to the Device id.
-          id: second.id,
-          encryptionPublicKey: second.encryptionPublicKey,
-          hasEpochGrant: false,
-        },
+        } as never,
       ],
     });
-    await runtime.deviceStorage.saveAccountKey(
-      { pin: profile.pin, deviceId: uuidToBytes(ids.device) },
-      amk,
-    );
-    const service = accountKeyService(runtime.admin);
+    // The second Device is active but not in the signed roster yet: the
+    // service reports it, and the person compares its fingerprint.
+    const reportsSecond: StrictJsonClient = {
+      ...runtime.admin,
+      get: async (path, fields) => {
+        const body = await runtime.admin.get(path, fields);
+        if (path !== "/api/v1/workspace/boundary") return body;
+        return {
+          ...body,
+          peerDevices: [
+            ...((body.peerDevices as unknown[]) ?? []),
+            {
+              // Unlabeled: the picker falls back to the Device id.
+              id: second.id,
+              encryptionPublicKey: second.encryptionPublicKey,
+              signingPublicKey: secondSigningHex,
+              hasEpochGrant: false,
+            },
+          ],
+        };
+      },
+    };
+    const postedRosters: string[] = [];
+    const service = accountKeyService({
+      ...reportsSecond,
+      post: async (path, body, fields, options) => {
+        if (path === "/api/v1/account-keys/rosters") {
+          postedRosters.push(String(body.object));
+          return { objectId: body.objectId, idempotent: false };
+        }
+        return reportsSecond.post(path, body, fields, options);
+      },
+    });
+    const questions: string[] = [];
     const terminalInput = new PassThrough();
     terminalInput.end();
     const terminalOutput = new PassThrough();
@@ -4542,6 +5411,12 @@ describe("protected CLI workflows", () => {
         terminal: { input: terminalInput, output: terminalOutput },
         prompt: async (question) => {
           if (question === "Device to receive the key") return "2";
+          if (
+            question.startsWith(`Device ${second.id} is not in your signed`)
+          ) {
+            questions.push(question);
+            return "y";
+          }
           throw new Error(`unexpected prompt: ${question}`);
         },
       },
@@ -4557,7 +5432,79 @@ describe("protected CLI workflows", () => {
     // ...and an unlabeled one falls back to its Device id.
     expect(shown).toContain(second.id);
     expect(shown).toContain("holds the project key");
+    expect(shown).toContain("not in your signed Device list yet");
+    // The person confirmed the reported key fingerprint, and the Device was
+    // added to the signed roster before the key was sealed to it.
+    expect(questions[0]).toContain(
+      await deviceKeyFingerprint({
+        encryptionPublicKey: hexKey(second.encryptionPublicKey),
+        signingPublicKey: hexKey(secondSigningHex),
+      }),
+    );
+    expect(postedRosters).toHaveLength(1);
+    const { identity } = await deriveAccountSigningKey(amk, {
+      serverProfileId: profile.pin.serverProfileId,
+      userId: ids.user,
+    });
+    const extended = await verifyAccountDeviceRoster(
+      Buffer.from(postedRosters[0] ?? "", "base64"),
+      {
+        serverProfileId: profile.pin.serverProfileId,
+        userId: ids.user,
+        identity,
+      },
+    );
+    expect(extended.devices.map((device) => device.deviceId)).toContain(
+      second.id,
+    );
     expect(service.postedTransfers()[0]?.recipientDeviceId).toBe(second.id);
+  });
+
+  test("device transfer under --no-input refuses a Device the signed roster does not list", async () => {
+    const amk = generateAccountMasterKey();
+    const peer = await peerX25519();
+    const runtime = await setup({ accountMasterKey: amk });
+    const unlisted: StrictJsonClient = {
+      ...runtime.admin,
+      get: async (path, fields) => {
+        const body = await runtime.admin.get(path, fields);
+        if (path !== "/api/v1/workspace/boundary") return body;
+        return {
+          ...body,
+          peerDevices: [
+            {
+              id: peer.id,
+              encryptionPublicKey: peer.encryptionPublicKey,
+              signingPublicKey: "33".repeat(32),
+              hasEpochGrant: false,
+            },
+          ],
+        };
+      },
+    };
+    const service = accountKeyService(unlisted);
+    const result = await run(
+      [
+        "device",
+        "transfer",
+        "--profile",
+        "relay",
+        "--to",
+        peer.id,
+        "--no-input",
+        "--json",
+      ],
+      {
+        ...runtime,
+        admin: service.admin,
+        fetch: async () => Response.json({}),
+      },
+    );
+    expect(result.exitCode).toBe(4);
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      code: "transfer_recipient_unverified",
+    });
+    expect(service.postedTransfers()).toHaveLength(0);
   });
 
   test("device transfer refuses a recipient that is not an active Device", async () => {
@@ -4938,8 +5885,15 @@ describe("peer grant provisioning during ordinary reads", () => {
   type TestPeer = Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
+    readonly signingPublicKey: string;
     readonly hasEpochGrant: boolean;
   }>;
+
+  // Keys go only to another Device of this account that its signed roster
+  // lists (ADR 0015, ADR 0022), so this Device holds the account key and the
+  // honest roster lists the peer.
+  const setupWithAccount = (options: Parameters<typeof setup>[0] = {}) =>
+    setup({ accountMasterKey: generateAccountMasterKey(), ...options });
 
   // Seals a known Project epoch key into the grant the service returns for
   // the presented Device, so the CLI exercises the reuse-and-wrap path.
@@ -4968,10 +5922,14 @@ describe("peer grant provisioning during ordinary reads", () => {
 
   const makePeer = async (hasEpochGrant: boolean): Promise<TestPeer> => {
     const peer = await generateEncryptionKeyPair();
+    const signing = await generateSigningKeyPair();
     return {
       id: peerDeviceId,
       encryptionPublicKey: bytesToHex(
         new Uint8Array(await crypto.subtle.exportKey("raw", peer.publicKey)),
+      ),
+      signingPublicKey: bytesToHex(
+        await rawSigningPublicKey(signing.publicKey),
       ),
       hasEpochGrant,
     };
@@ -5007,7 +5965,7 @@ describe("peer grant provisioning during ordinary reads", () => {
       deviceId: ids.device,
     });
     const peer = await makePeer(true);
-    const runtime = await setup({
+    const runtime = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(
         bootstrap,
@@ -5061,7 +6019,7 @@ describe("peer grant provisioning during ordinary reads", () => {
       deviceId: ids.device,
     });
     const peer = await makePeer(false);
-    const runtime = await setup({
+    const runtime = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(
         bootstrap,
@@ -5122,7 +6080,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(body.ok).toBe(true);
     expect(body.revisions).toEqual([]);
     expect(body.pendingActions).toEqual([
-      `Device ${peerDeviceId} is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device`,
+      `Device ${peerDeviceId} is missing the Project epoch grant, and this Device could not share it with that Device of yours. On that Device, run dotrelay device recover if it is locked, then dotrelay pull. If it still cannot read the Project, a Team owner or admin can share the Project keys with you from the Members view of the DotRelay web app ("Share project keys").`,
     ]);
     expect(scripted.calls).toHaveLength(1);
     expect(scriptedJson.calls).toHaveLength(1);
@@ -5135,7 +6093,7 @@ describe("peer grant provisioning during ordinary reads", () => {
       deviceId: ids.device,
     });
     const peer = await makePeer(false);
-    const runtime = await setup({
+    const runtime = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(
         bootstrap,
@@ -5182,7 +6140,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     });
     const peer = await makePeer(false);
     const epochKey = crypto.getRandomValues(new Uint8Array(32));
-    const first = await setup({
+    const first = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(bootstrap, epochKey),
       peerDevices: [{ ...peer, hasEpochGrant: false }],
@@ -5212,7 +6170,7 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(firstScripted.calls).toHaveLength(1);
     // The service now reports the peer as holding the epoch grant; the next
     // read must reuse it and write nothing.
-    const second = await setup({
+    const second = await setupWithAccount({
       bootstrap,
       epochGrant: await sealEpochGrant(bootstrap, epochKey),
       peerDevices: [{ ...peer, hasEpochGrant: true }],
@@ -5274,7 +6232,10 @@ describe("peer grant provisioning during ordinary reads", () => {
     const body = JSON.parse(pull.stdout) as Record<string, unknown>;
     expect(body.ok).toBe(true);
     expect(body.pendingActions).toEqual([
-      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+      missingProjectKeyNotice({
+        ownDeviceHoldsKey: true,
+        accountKeyUnlocked: false,
+      }),
     ]);
     // A matching Environment reports "no changes"; the missing-grant
     // remediation must survive that output variant as well, so the
@@ -5301,7 +6262,10 @@ describe("peer grant provisioning during ordinary reads", () => {
     expect(unchangedBody.ok).toBe(true);
     expect(unchangedBody.unchanged).toBe(true);
     expect(unchangedBody.pendingActions).toEqual([
-      "This Device is missing the Project epoch grant; an owner or admin can provision it by running dotrelay pull from their own Device",
+      missingProjectKeyNotice({
+        ownDeviceHoldsKey: true,
+        accountKeyUnlocked: false,
+      }),
     ]);
     // The read must not have minted or re-provisioned any Project epoch
     // grant: the peer already holds the key, so a grant write is both
@@ -5481,6 +6445,9 @@ describe("pull after Project epoch rotations", () => {
           ).object,
         ),
       ).toString("base64");
+    const authorKeyHex = bytesToHex(
+      await rawSigningPublicKey(author.publicKey),
+    );
     return {
       bootstrap,
       author,
@@ -5491,7 +6458,22 @@ describe("pull after Project epoch rotations", () => {
       epochKeys,
       authorUserId,
       authorDeviceId,
-      authorKeyHex: bytesToHex(await rawSigningPublicKey(author.publicKey)),
+      authorKeyHex,
+      // The author's own account has published a roster listing the
+      // Device that signs every Revision (ADR 0015).
+      authorRoster: await signedRosterB64(
+        generateAccountMasterKey(),
+        authorUserId,
+        1,
+        [
+          {
+            deviceId: authorDeviceId,
+            encryptionPublicKey: new Uint8Array(32).fill(9),
+            signingPublicKey: hexKey(authorKeyHex),
+            addedAtMs: 0,
+          },
+        ],
+      ),
     };
   };
 
@@ -5551,6 +6533,7 @@ describe("pull after Project epoch rotations", () => {
     const postedLinks: Record<string, unknown>[] = [];
     const postedRosters: Record<string, unknown>[] = [];
     const rosters: Record<string, string | null> = {
+      [project.authorUserId]: project.authorRoster,
       ...(options.accountRosters ?? {}),
     };
     const result = await run(
@@ -6056,7 +7039,11 @@ describe("pull against an unreadable Manifest", () => {
     });
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const heldKey = crypto.getRandomValues(new Uint8Array(32));
     const laneKey = crypto.getRandomValues(new Uint8Array(32));
     const artifacts = await createPublicationArtifacts(
@@ -6141,7 +7128,11 @@ describe("pull against an unreadable Manifest", () => {
     });
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const heldKey = crypto.getRandomValues(new Uint8Array(32));
     const laneKey = crypto.getRandomValues(new Uint8Array(32));
     const first = await createPublicationArtifacts(
@@ -6300,7 +7291,11 @@ describe("pull against an unreadable Manifest", () => {
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
     const stale = await generateEncryptionKeyPair();
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const artifacts = await createPublicationArtifacts(
       [
         {
@@ -6435,9 +7430,10 @@ describe("publication baseline reconciliation", () => {
   const seededRuntime = async (
     second: Readonly<{
       readonly name: string;
-      readonly value: string;
+      readonly value: string | null;
       readonly id: string;
       readonly hasDraftChange: boolean;
+      readonly tombstone?: boolean;
     }>[],
   ) => {
     const bootstrap = await createDeviceBootstrap({
@@ -6447,7 +7443,11 @@ describe("publication baseline reconciliation", () => {
     });
     const encryption = bootstrap.keyMaterial.encryptionPublicKey;
     if (!encryption) throw new Error("Device encryption public key is missing");
-    const signing = await generateSigningKeyPair();
+    // This Device signs its own history; its key needs no roster.
+    const signing = {
+      privateKey: bootstrap.keyMaterial.signingPrivateKey,
+      publicKey: bootstrap.keyMaterial.signingPublicKey as CryptoKey,
+    };
     const heldKey = crypto.getRandomValues(new Uint8Array(32));
     const baseContext = {
       serverProfileId: profile.pin.serverProfileId,
@@ -6495,9 +7495,10 @@ describe("publication baseline reconciliation", () => {
         name: string;
         description: string;
         ownership: "SHARED_VALUE";
-        value: string;
+        value: string | null;
         required: true;
         hasDraftChange: boolean;
+        tombstone?: boolean;
       }
     >([
       [
@@ -6522,6 +7523,7 @@ describe("publication baseline reconciliation", () => {
         value: variable.value,
         required: true,
         hasDraftChange: variable.hasDraftChange,
+        ...(variable.tombstone ? { tombstone: true } : {}),
       });
     const chained = await createPublicationArtifacts(
       [...chainedVariables.values()],
@@ -6682,5 +7684,363 @@ describe("publication baseline reconciliation", () => {
     ).toBe(baselineBefore);
     expect(pushed.stderr).not.toContain("two");
     expect(pushed.stderr).not.toContain("three");
+  });
+
+  // A later Revision the sync never serves; only the first one is live.
+  const unrelatedLater = [
+    {
+      id: databaseUrl,
+      name: "DATABASE_URL",
+      value: "postgres",
+      hasDraftChange: true,
+    },
+  ];
+
+  const pullThenPush = async (
+    second: Parameters<typeof seededRuntime>[0],
+    edited: string,
+    extra: readonly string[] = [],
+  ) => {
+    const { runtime, firstWire, secondWire } = await seededRuntime(second);
+    const output = `${runtime.stateDirectory}/dotenv`;
+    const pulled = await run(
+      [
+        "pull",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--output",
+        output,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pulled.exitCode).toBe(0);
+    await Bun.write(output, edited);
+    let finalized = 0;
+    const scripted = scriptSyncPage(runtime, {
+      environmentId: ids.environment,
+      trustedRevisionId: ids.environment,
+      trustedRevisionHash: new Uint8Array(48),
+      currentHeadId: secondWire.id,
+      currentHeadHash: secondWire.digest,
+      projectEpoch: 1n,
+      revisions: [firstWire, secondWire],
+      nextCursor: null,
+    });
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        output,
+        "--no-input",
+        "--json",
+        ...extra,
+      ],
+      {
+        ...runtime,
+        gitTrackingProbe: gitOutside,
+        fetch: async (input, init) => {
+          const request = new Request(input as never, init);
+          if (new URL(request.url).pathname.endsWith("/finalize"))
+            finalized += 1;
+          return scripted(input, init);
+        },
+      },
+    );
+    return { pushed, output, finalized: () => finalized };
+  };
+
+  test("an unchanged local line does not resurrect a teammate's deletion", async () => {
+    const { pushed, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='one'\n",
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout)).toMatchObject({
+      ok: true,
+      message: "up to date, nothing to publish",
+    });
+    expect(finalized()).toBe(0);
+  });
+
+  test("an edited local line meeting a teammate's deletion is a conflict", async () => {
+    const { pushed, output, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='edited'\n",
+    );
+    expect(pushed.exitCode).toBe(4);
+    expect(JSON.parse(pushed.stderr)).toMatchObject({
+      code: "variable_conflict",
+      variableNames: "API_TOKEN",
+    });
+    expect(finalized()).toBe(0);
+    expect(await Bun.file(output).text()).toBe("API_TOKEN='edited'\n");
+  });
+
+  test("a stale local line does not overwrite a Variable a teammate re-added", async () => {
+    const { pushed, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+        {
+          id: databaseUrl,
+          name: "API_TOKEN",
+          value: "new",
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='one'\n",
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout)).toMatchObject({
+      message: "up to date, nothing to publish",
+    });
+    expect(finalized()).toBe(0);
+  });
+
+  test("an edited local line meeting a re-added Variable is a conflict", async () => {
+    const { pushed, finalized } = await pullThenPush(
+      [
+        {
+          id: apiToken,
+          name: "API_TOKEN",
+          value: null,
+          tombstone: true,
+          hasDraftChange: true,
+        },
+        {
+          id: databaseUrl,
+          name: "API_TOKEN",
+          value: "new",
+          hasDraftChange: true,
+        },
+      ],
+      "API_TOKEN='mine'\n",
+    );
+    expect(pushed.exitCode).toBe(4);
+    expect(JSON.parse(pushed.stderr)).toMatchObject({
+      code: "variable_conflict",
+    });
+    expect(finalized()).toBe(0);
+  });
+
+  test("a push with no recorded baseline will not replace existing Values under --no-input", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/fresh.env`;
+    await Bun.write(input, "API_TOKEN=stale\n");
+    const pushArguments = [
+      "push",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--from",
+      input,
+      "--no-input",
+      "--json",
+    ];
+    const refused = await run(pushArguments, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(refused.exitCode).toBe(4);
+    const diagnostic = JSON.parse(refused.stderr);
+    expect(diagnostic).toMatchObject({
+      category: "conflict",
+      code: "baseline_unverifiable",
+      changedCount: 1,
+    });
+    expect(String(diagnostic.detail)).toContain("dotrelay pull");
+    expect(String(diagnostic.detail)).toContain("--force");
+    expect(refused.stderr).not.toContain("stale");
+    // A re-run is still refused: the persisted fallback anchor does not
+    // pass for a pulled baseline.
+    const again = await run(pushArguments, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(again.exitCode).toBe(4);
+    const forced = await run([...pushArguments, "--force"], {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(forced.exitCode).toBe(0);
+    expect(JSON.parse(forced.stdout)).toMatchObject({
+      message: "Published",
+      warnings: [expect.stringContaining("dotrelay pull first")],
+    });
+  });
+
+  test("a push with no recorded baseline shows a notice before the review", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/fresh.env`;
+    await Bun.write(input, "API_TOKEN=one\n");
+    const terminalOutput = new PassThrough();
+    const rendered: string[] = [];
+    terminalOutput.on("data", (chunk) => {
+      rendered.push(chunk.toString("utf8"));
+    });
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+      ],
+      {
+        ...runtime,
+        gitTrackingProbe: gitOutside,
+        terminal: { input: new PassThrough(), output: terminalOutput },
+      },
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(rendered.join("")).toContain("has no Publication Baseline");
+    expect(rendered.join("")).toContain("dotrelay pull first");
+  });
+
+  test("push warns when the dotenv file is tracked by Git", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/tracked.env`;
+    await Bun.write(input, "API_TOKEN=one\n");
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitTracked },
+    );
+    expect(pushed.exitCode).toBe(0);
+    expect(JSON.parse(pushed.stdout).warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`${input} is tracked by Git`),
+      ]),
+    );
+  });
+
+  test("push names a missing input file and how to point at another", async () => {
+    const { runtime } = await seededRuntime(unrelatedLater);
+    const input = `${runtime.stateDirectory}/missing.env`;
+    const pushed = await run(
+      [
+        "push",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--no-input",
+        "--json",
+      ],
+      { ...runtime, gitTrackingProbe: gitOutside },
+    );
+    expect(pushed.exitCode).not.toBe(0);
+    const diagnostic = JSON.parse(pushed.stderr);
+    expect(diagnostic.code).toBe("input_read_failed");
+    expect(String(diagnostic.detail)).toContain(input);
+    expect(String(diagnostic.detail)).toContain("--from");
+  });
+
+  test("pull --force keeps unpushed local edits unless --discard-local is given", async () => {
+    const { runtime, firstWire, secondWire } = await seededRuntime([
+      {
+        id: apiToken,
+        name: "API_TOKEN",
+        value: "three",
+        hasDraftChange: true,
+      },
+    ]);
+    const output = `${runtime.stateDirectory}/dotenv`;
+    const pullArguments = [
+      "pull",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--output",
+      output,
+      "--no-input",
+      "--json",
+    ];
+    expect(
+      (await run(pullArguments, { ...runtime, gitTrackingProbe: gitOutside }))
+        .exitCode,
+    ).toBe(0);
+    const later = {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+      fetch: scriptSyncPage(runtime, {
+        environmentId: ids.environment,
+        trustedRevisionId: ids.environment,
+        trustedRevisionHash: new Uint8Array(48),
+        currentHeadId: secondWire.id,
+        currentHeadHash: secondWire.digest,
+        projectEpoch: 1n,
+        revisions: [firstWire, secondWire],
+        nextCursor: null,
+      }),
+    };
+    // A stale copy of the pulled Value is caught up without ceremony.
+    const caughtUp = await run([...pullArguments, "--force"], later);
+    expect(caughtUp.exitCode).toBe(0);
+    expect(await Bun.file(output).text()).toBe("API_TOKEN='three'\n");
+    // An edit no Revision ever held is not.
+    await Bun.write(output, "API_TOKEN=mine\n");
+    const refused = await run([...pullArguments, "--force"], later);
+    expect(refused.exitCode).toBe(4);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: "output_conflict",
+      variableNames: "API_TOKEN",
+    });
+    expect(refused.stderr).not.toContain("mine");
+    expect(await Bun.file(output).text()).toBe("API_TOKEN=mine\n");
+    const discarded = await run(
+      [...pullArguments, "--force", "--discard-local"],
+      later,
+    );
+    expect(discarded.exitCode).toBe(0);
+    expect(await Bun.file(output).text()).toBe("API_TOKEN='three'\n");
+    expect(await Bun.file(`${output}.previous`).text()).toBe(
+      "API_TOKEN=mine\n",
+    );
   });
 });

@@ -15,10 +15,10 @@ permissions:
   contents: read
 
 env:
-  # Canary channel: the built-in `bun lint` linter is not enabled in stable
-  # releases yet (it is gated behind the canary build flavor). `bun check`
-  # and `bun fmt` work on both; the canary pin keeps all three built-ins.
-  BUN_VERSION: da867c60bf0bcbf9d6d36994f8ca0efa42075115
+  # Stable Bun builds, tests and ships DotRelay (ops/bun-toolchain.json).
+  # scripts/setup-bun.py also installs a pinned canary, used only for the
+  # built-in `bun lint` that stable releases do not include yet.
+  BUN_VERSION: 38afee6c84fcf48c0edb2466aa4b27d287a59c30
 
 jobs:
   check:
@@ -385,6 +385,11 @@ jobs:
     # The dev CLI targets the dev API deployed by this same commit, so it is
     # published only after that deployment has cleared CI.
     needs: [build-cli-dev, deploy-dev]
+    # npm --provenance signs with the job's OIDC token; without id-token the
+    # publish fails before upload.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
@@ -399,15 +404,18 @@ jobs:
       - run: |
           mkdir -p packages/dotrelay/dist
           cp -R release-binaries/*/* packages/dotrelay/dist/
+          cp LICENSE.md packages/dotrelay/LICENSE.md
           # The artifact round-trip drops the executable bit off the staged
           # native binaries; restore it so the npm tarball ships 755
           # executables and the package smoke test can run them.
           find packages/dotrelay/dist -type f -name dotrelay -exec chmod +x {} +
       - run: bun scripts/test-cli-package.ts
       - run: npm pack --dry-run ./packages/dotrelay
+      # Trusted publishing (OIDC) needs npm 11.5.1+ on Node 22.14+.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
       - name: publish npm dev selector
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: bun scripts/publish-cli.ts
 
   tracked-tree-clean:

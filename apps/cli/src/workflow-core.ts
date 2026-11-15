@@ -6,24 +6,27 @@ import {
   type createVerifiedEnvironmentSession,
   type DeviceKeyMaterial,
   type DevicePrivateBundle,
+  type MembershipPeriod,
   type ProjectEpochGrantVerification,
   loadDeviceKeyMaterial,
   type ProtocolTransport,
   type PublicationContext,
   type RevisionSigningTrust,
   type RevisionSigningTrustEntry,
+  revisionAuthoredAtNotBeforeMs,
 } from "@dotrelay/client";
 import { sha384ToHex, uuidToBytes } from "@dotrelay/contracts";
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
 import type { ParsedArguments } from "./args";
 import type { CredentialStore } from "./credentials";
 import { describeCliClient } from "./device-describe";
+import { cliDevice } from "./device-proof";
 import {
   createFileDeviceRecordStore,
   deviceMetadataPath,
   readDeviceId,
 } from "./device-storage";
-import { CliError, CliInvocationError } from "./errors";
+import { CliError, CliInvocationError, sanitizeCliLine } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import type { NetworkPolicy } from "./network";
 import { atomicWriteProtectedFile } from "./output";
@@ -63,6 +66,12 @@ export type Boundary = Readonly<{
     readonly headRevision: string;
     readonly headHash: string | null;
     readonly projectEpoch: string | null;
+    /**
+     * Set while a Project key rotation is owed after a Member was removed or
+     * a Device revoked; cleared when a rotation commits. Advice only: it
+     * never blocks publication.
+     */
+    readonly rotationOwed: RotationOwed | null;
   }>;
   readonly session: Readonly<{
     readonly active: boolean;
@@ -95,6 +104,12 @@ export type Boundary = Readonly<{
   readonly accountRosters: ReadonlyMap<string, string | null>;
   readonly signingTrustKeys: readonly string[];
   readonly signingTrustDevices: readonly SigningTrustDevice[];
+  /**
+   * Set only on a boundary narrowed by account trust (ADR 0015, ADR 0022):
+   * the Ed25519 keys (hex) a verified roster vouches for, by what they may
+   * sign. A boundary without it trusts only this Device's own key.
+   */
+  readonly verifiedSigners?: VerifiedSigners;
   readonly peerDevices: readonly Readonly<{
     readonly id: string;
     readonly encryptionPublicKey: string;
@@ -107,6 +122,34 @@ export type Boundary = Readonly<{
   }>[];
 }>;
 
+export type VerifiedSigners = Readonly<{
+  /** This account's roster Devices, active or revoked. */
+  readonly account: readonly string[];
+  /**
+   * The keys the service reports for this account's Devices, before any
+   * narrowing. They attribute Account Key Envelopes and Wrappers only: those
+   * are sealed under the Account Master Key or a User-held secret, and that
+   * seal, not the signature, is what the service cannot forge.
+   */
+  readonly reportedAccount: readonly string[];
+  /**
+   * Active Devices of this account and of confirmed teammates: Project key
+   * grants, which carry key material on the signer's word alone.
+   */
+  readonly grant: readonly string[];
+  /** Every roster-verified Device: Revisions and key chain links. */
+  readonly history: readonly string[];
+}>;
+
+export type RotationOwed = Readonly<{
+  /** When the first removal or revocation since the last rotation happened (ISO 8601). */
+  readonly since: string;
+  /** The Project epoch those removals and revocations happened in. */
+  readonly sinceEpoch: string;
+  readonly membershipRemovals: number;
+  readonly deviceRevocations: number;
+}>;
+
 export type SigningTrustDevice = Readonly<{
   readonly deviceId: string;
   readonly userId: string;
@@ -116,6 +159,12 @@ export type SigningTrustDevice = Readonly<{
   readonly deviceActiveUntilMs: number | null;
   readonly memberSinceMs: number | null;
   readonly memberUntilMs: number | null;
+  /**
+   * Every period the author was an active Member, oldest first, current
+   * last (ADR 0017). A re-invited Member's earlier Revisions verify only
+   * against these.
+   */
+  readonly membershipPeriods?: readonly MembershipPeriod[];
 }>;
 
 export type WorkflowSession = Readonly<{
@@ -127,6 +176,8 @@ export type WorkflowSession = Readonly<{
   readonly publicationContext: PublicationContext;
   readonly session: ReturnType<typeof createVerifiedEnvironmentSession>;
   readonly createdEnvironmentId?: string;
+  /** Project epoch keys by epoch, recovered from the key chain (ADR 0014). */
+  readonly sharedValueKeyRing?: ReadonlyMap<number, Uint8Array>;
   readonly pendingActions: readonly string[];
 }>;
 
@@ -166,6 +217,55 @@ export const workspaceBoundaryFields = [
   "peerDevices",
 ] as const;
 
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+// A malformed obligation is dropped rather than failing the workflow: it is
+// advice for the operator and never gates anything.
+export const parseRotationOwed = (value: unknown): RotationOwed | null => {
+  if (
+    !isRecord(value) ||
+    typeof value.since !== "string" ||
+    Number.isNaN(Date.parse(value.since)) ||
+    typeof value.sinceEpoch !== "string" ||
+    !/^\d+$/.test(value.sinceEpoch) ||
+    !isCount(value.membershipRemovals) ||
+    !isCount(value.deviceRevocations)
+  )
+    return null;
+  return Object.freeze({
+    since: value.since,
+    sinceEpoch: value.sinceEpoch,
+    membershipRemovals: value.membershipRemovals,
+    deviceRevocations: value.deviceRevocations,
+  });
+};
+
+// Periods arrive oldest first with only the current one open. A malformed
+// list is ignored, which falls back to the current memberSinceMs/memberUntilMs
+// window: current history still verifies, earlier periods do not.
+const parseMembershipPeriods = (
+  value: unknown,
+): readonly MembershipPeriod[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const periods: MembershipPeriod[] = [];
+  for (const period of value) {
+    if (
+      !isRecord(period) ||
+      typeof period.sinceMs !== "number" ||
+      !Number.isSafeInteger(period.sinceMs) ||
+      (period.untilMs !== null &&
+        (typeof period.untilMs !== "number" ||
+          !Number.isSafeInteger(period.untilMs)))
+    )
+      return undefined;
+    periods.push(
+      Object.freeze({ sinceMs: period.sinceMs, untilMs: period.untilMs }),
+    );
+  }
+  return Object.freeze(periods);
+};
+
 export const parseBoundary = (value: Record<string, unknown>): Boundary => {
   const environment = value.environment;
   const session = value.session;
@@ -192,6 +292,7 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
       ),
       headHash: optionalString(environment.headHash),
       projectEpoch: optionalString(environment.projectEpoch),
+      rotationOwed: parseRotationOwed(environment.rotationOwed),
     }),
     session: Object.freeze({
       active: session.active === true,
@@ -270,6 +371,9 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
             !isMillis(entry.memberUntilMs)
           )
             return [];
+          const membershipPeriods = parseMembershipPeriods(
+            entry.membershipPeriods,
+          );
           return [
             {
               deviceId: entry.deviceId,
@@ -282,6 +386,7 @@ export const parseBoundary = (value: Record<string, unknown>): Boundary => {
               deviceActiveUntilMs: entry.deviceActiveUntilMs,
               memberSinceMs: entry.memberSinceMs,
               memberUntilMs: entry.memberUntilMs,
+              ...(membershipPeriods ? { membershipPeriods } : {}),
             },
           ];
         })
@@ -350,7 +455,12 @@ export const collectSigningTrust = (
 ): RevisionSigningTrust => {
   if (boundary.signingTrustDevices.length > 0) {
     const entries: RevisionSigningTrustEntry[] = [];
+    // Keys that already have an entry, so the local fallback is not added
+    // twice. Entries themselves are kept even when they share a key: each
+    // carries its own windows (ADR 0017), and the verifier admits a
+    // Revision through any entry whose windows hold.
     const seen = new Set<string>();
+    const seenEntries = new Set<string>();
     for (const device of boundary.signingTrustDevices) {
       let publicKey: Uint8Array;
       try {
@@ -359,9 +469,8 @@ export const collectSigningTrust = (
         continue;
       }
       const hex = bytesToHex(publicKey);
-      if (seen.has(hex)) continue;
       seen.add(hex);
-      entries.push({
+      const entry: RevisionSigningTrustEntry = {
         publicKey,
         deviceId: device.deviceId,
         userId: device.userId,
@@ -369,7 +478,14 @@ export const collectSigningTrust = (
         deviceActiveUntilMs: device.deviceActiveUntilMs,
         memberSinceMs: device.memberSinceMs,
         memberUntilMs: device.memberUntilMs,
-      });
+        ...(device.membershipPeriods
+          ? { membershipPeriods: device.membershipPeriods }
+          : {}),
+      };
+      const identity = JSON.stringify({ ...entry, publicKey: hex });
+      if (seenEntries.has(identity)) continue;
+      seenEntries.add(identity);
+      entries.push(entry);
     }
     // This installation's own key is the one fallback that needs no window:
     // the service only ever accepted its writes while it was authorized.
@@ -398,44 +514,143 @@ export const collectSigningTrust = (
   return keys;
 };
 
-// Assemble the set of Ed25519 signing public keys (raw 32-byte) that are
-// trusted to have signed an account-key object on this Server Profile: the
-// local Device's key, the boundary's signing-trust devices, and peer Devices.
-// A creatorPublicKey from an API response is not added unless
-// authenticatedCreatorKeys has already found that key in this history.
+// The earliest authored-at instant the service accepts for a Revision this
+// Device signs: the latest of its own Device activation, its User's current
+// Membership activation (both from its signing trust entry), and the parent
+// Revision's authored-at instant. A slow local clock is raised to it instead
+// of producing a Revision the service rejects as authored_at_out_of_range.
+export const authoredAtFloor = (
+  boundary: Boundary,
+  deviceId: string,
+  parentAuthoredAtMs?: bigint | null,
+): number | undefined => {
+  const own = boundary.signingTrustDevices.find(
+    (device) => device.deviceId.toLowerCase() === deviceId.toLowerCase(),
+  );
+  return revisionAuthoredAtNotBeforeMs({
+    deviceActiveFromMs: own?.deviceActiveFromMs ?? null,
+    memberSinceMs: own?.memberSinceMs ?? null,
+    parentAuthoredAtMs: parentAuthoredAtMs ?? null,
+  });
+};
+
+// The authored-at instant of a synced page's head Revision. A page cut
+// short by --limit may not reach the head; its last Revision is then the
+// latest one known, which still bounds the head from below.
+export const headAuthoredAtMs = (
+  page: Readonly<{
+    readonly currentHeadId: string | null;
+    readonly revisions: readonly Readonly<{
+      readonly id: string;
+      readonly authoredAtMs: bigint;
+    }>[];
+  }>,
+): bigint | null => {
+  if (page.currentHeadId === null) return null;
+  return (
+    page.revisions.find((revision) => revision.id === page.currentHeadId)
+      ?.authoredAtMs ??
+    page.revisions.at(-1)?.authoredAtMs ??
+    null
+  );
+};
+
+const plural = (count: number, singular: string, pluralForm: string): string =>
+  `${count} ${count === 1 ? singular : pluralForm}`;
+
+// Advice for Team owners and admins after a removal or revocation: the
+// removed Member or revoked Device could read the Project's current key and
+// every secret it protects, until a rotation and new secrets.
+export const rotationOwedNotice = (owed: RotationOwed): string => {
+  const parts = [
+    ...(owed.membershipRemovals > 0
+      ? [`${plural(owed.membershipRemovals, "Member", "Members")} removed`]
+      : []),
+    ...(owed.deviceRevocations > 0
+      ? [`${plural(owed.deviceRevocations, "Device", "Devices")} revoked`]
+      : []),
+  ];
+  const what = parts.length > 0 ? parts.join(" and ") : "Access removed";
+  const since = sanitizeCliLine(owed.since).slice(0, 10);
+  return `${what} since ${since}. A Team owner or admin should rotate this Project's key with dotrelay project rotate, then change the secrets they could read.`;
+};
+
+const signerKeys = (
+  localSigningPublicKey: Uint8Array,
+  vouched: readonly string[],
+): Uint8Array[] => {
+  const keys: Uint8Array[] = [localSigningPublicKey];
+  const seen = new Set<string>([bytesToHex(localSigningPublicKey)]);
+  for (const value of vouched) {
+    try {
+      const bytes = hexToBytes(value);
+      const hex = bytesToHex(bytes);
+      if (seen.has(hex)) continue;
+      seen.add(hex);
+      keys.push(bytes);
+    } catch {
+      // A malformed key vouches for nothing.
+    }
+  }
+  return keys;
+};
+
+// The signing keys the service reports for this account's own Devices.
+export const reportedAccountSigningKeys = (
+  boundary: Boundary,
+): readonly string[] => [
+  ...(boundary.device.signingPublicKey
+    ? [boundary.device.signingPublicKey]
+    : []),
+  ...boundary.peerDevices
+    .map((peer) => peer.signingPublicKey)
+    .filter((key) => key.length > 0),
+  ...boundary.signingTrustDevices
+    .filter((device) => device.userId === boundary.session.userId)
+    .map((device) => device.signingPublicKey),
+];
+
+// The Ed25519 keys (raw 32-byte) accepted on an Account Key Envelope or
+// Wrapper on this Server Profile: this Device's key, this account's roster
+// Devices, and the keys the service reports for this account's Devices.
+// These objects are sealed under the Account Master Key or a User-held
+// secret, so the seal authenticates them and the signature only attributes
+// them (ADR 0022). An Account Key Transfer is sealed to a public key and is
+// never checked this way: see openAccountKeyTransferWithRoster. A creator key
+// that arrived with an object counts only when it is already one of these.
 export const accountKeyTrustedKeys = (
   boundary: Boundary,
   localSigningPublicKey: Uint8Array,
   extraKeys: readonly string[] = [],
 ): AccountKeyTrustedKeys => {
-  const keys: Uint8Array[] = [localSigningPublicKey];
-  const seen = new Set<string>([bytesToHex(localSigningPublicKey)]);
-  const addHex = (value: string): void => {
-    try {
-      const bytes = hexToBytes(value);
-      const hex = bytesToHex(bytes);
-      if (seen.has(hex)) return;
-      seen.add(hex);
-      keys.push(bytes);
-    } catch {
-      // ignore malformed keys
-    }
-  };
-  for (const device of boundary.signingTrustDevices)
-    addHex(device.signingPublicKey);
-  for (const key of boundary.signingTrustKeys) addHex(key);
-  if (boundary.device.signingPublicKey)
-    addHex(boundary.device.signingPublicKey);
-  for (const peer of boundary.peerDevices)
-    if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
-  for (const key of extraKeys) addHex(key);
-  return Object.freeze({ keys });
+  const known = [
+    ...(boundary.verifiedSigners?.account ?? []),
+    ...(boundary.verifiedSigners?.reportedAccount ??
+      reportedAccountSigningKeys(boundary)),
+  ];
+  const vouched = new Set(known.map((key) => key.toLowerCase()));
+  return Object.freeze({
+    keys: signerKeys(localSigningPublicKey, [
+      ...known,
+      ...extraKeys.filter((key) => vouched.has(key.toLowerCase())),
+    ]),
+  });
 };
 
+// The keys trusted to have signed a Project Epoch Key Link: every Device a
+// verified roster lists. The link's AES-GCM tag under the newer key is what
+// authenticates the sealed key; the signature attributes it.
+export const historySigningKeys = (
+  boundary: Boundary,
+  localSigningPublicKey: Uint8Array,
+): Uint8Array[] =>
+  signerKeys(localSigningPublicKey, boundary.verifiedSigners?.history ?? []);
+
 // What a Project grant on this boundary must prove before it is opened: a
-// signature by a Device in the signing trust history, addressed to this
-// Device, for the boundary's Project and epoch on this Server Profile and
-// Team. A grant the server forged or redirected fails before decryption.
+// signature by an active Device of this account or of a teammate the user
+// confirmed (ADR 0022), addressed to this Device, for the boundary's Project
+// and epoch on this Server Profile and Team. A grant the server forged or
+// redirected fails before decryption.
 export const projectGrantVerification = (
   boundary: Boundary,
   deviceId: string,
@@ -460,8 +675,10 @@ export const projectGrantVerification = (
         ? { teamId: boundary.environment.teamId }
         : {}),
     }),
-    trustedSigningKeys: accountKeyTrustedKeys(boundary, localSigningPublicKey)
-      .keys,
+    trustedSigningKeys: signerKeys(
+      localSigningPublicKey,
+      boundary.verifiedSigners?.grant ?? [],
+    ),
   });
 };
 
@@ -591,6 +808,22 @@ export const terminalConfirm = async (
   }
 };
 
+// A yes/no question shown in full here, such as a fingerprint comparison:
+// unlike confirmSilent, nothing printed it before.
+export const confirmPrompt = async (
+  options: WorkflowOptions,
+  question: string,
+): Promise<boolean> => {
+  if (options.confirm) return options.confirm(question);
+  if (options.noInput)
+    throw new CliInvocationError(
+      "this command requires interactive input; remove --no-input to answer the prompt",
+    );
+  if (options.prompt)
+    return parseConfirmAnswer(await options.prompt(`${question} [y/N]`));
+  return terminalConfirm(options, question, false);
+};
+
 // The review frame has already printed the question, so the terminal read
 // must not echo it a second time.
 export const confirmSilent = async (
@@ -668,16 +901,49 @@ export const fromBase64 = (value: unknown, label: string): Uint8Array => {
 export const rawPublicKey = async (key: CryptoKey): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.exportKey("raw", key));
 
+/** The protocol transport option that proves `admin`'s Device, if it has one. */
+export const deviceProofOption = (admin: StrictJsonClient) =>
+  admin.deviceProof ? { deviceProof: admin.deviceProof } : {};
+
+// One Device-bound client per invocation and Device, so every request of a
+// run shares one Device proof instead of exchanging a new one per call site.
+const deviceAdmins = new WeakMap<
+  WorkflowOptions,
+  Map<string, StrictJsonClient>
+>();
+
 export const createDeviceAdmin = (
   options: WorkflowOptions,
   deviceId?: string,
-): StrictJsonClient =>
-  options.admin ??
-  createStrictJsonClient(options.profile.pin, options.credentials, {
-    ...(options.fetch ? { fetch: options.fetch } : {}),
-    ...(options.networkPolicy ? { networkPolicy: options.networkPolicy } : {}),
-    ...(deviceId ? { deviceId } : {}),
-  });
+): StrictJsonClient => {
+  if (options.admin) return options.admin;
+  if (!deviceId) return adminClient(options);
+  const byDevice = deviceAdmins.get(options) ?? new Map();
+  deviceAdmins.set(options, byDevice);
+  const existing = byDevice.get(deviceId);
+  if (existing) return existing;
+  const client = createStrictJsonClient(
+    options.profile.pin,
+    options.credentials,
+    {
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.networkPolicy
+        ? { networkPolicy: options.networkPolicy }
+        : {}),
+      device: cliDevice({
+        pin: options.profile.pin,
+        credentials: options.credentials,
+        stateDirectory: options.stateDirectory,
+        deviceId,
+        ...(options.deviceStorage
+          ? { deviceStorage: options.deviceStorage }
+          : {}),
+      }),
+    },
+  );
+  byDevice.set(deviceId, client);
+  return client;
+};
 
 // Confirms that the boundary names this Device, loads the matching local
 // bundle, and checks the bundle's keys against the keys the Server Profile

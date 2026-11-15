@@ -281,6 +281,30 @@ describe("CLI device authorization", () => {
     ).rejects.toThrow("device authorization was denied");
   });
 
+  test("stops at sign-in when the account is outside the alpha list", async () => {
+    const sessions = createSessionStore(memoryCredentials());
+    let poll = 0;
+    const attempt = loginWithDeviceAuthorization(profile, sessions, {
+      noOpen: true,
+      sleep: async () => undefined,
+      fetch: async () => {
+        poll += 1;
+        if (poll === 1) return deviceCodeResponse();
+        return Response.json(
+          { code: "alpha_admission_required", status: 403 },
+          { status: 403 },
+        );
+      },
+    });
+    await expect(attempt).rejects.toMatchObject({
+      code: "alpha_admission_required",
+      category: "authentication",
+    });
+    await expect(attempt).rejects.toThrow("dotrelay logout");
+    expect(poll).toBe(2);
+    expect(await sessions.get(profile)).toBeNull();
+  });
+
   // Instant-sleep twin of the default policy so outage tests stay fast.
   const fastPolicy: NetworkPolicy = {
     requestDeadlineMs: 20,

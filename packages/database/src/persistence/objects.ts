@@ -279,7 +279,8 @@ export type OperationInput = Readonly<{
     | "REVISION_PUBLICATION"
     | "ROLLBACK"
     | "EPOCH_ROTATION"
-    | "EPOCH_KEY_LINK";
+    | "EPOCH_KEY_LINK"
+    | "ACCOUNT_DELETION";
   readonly commandBytes: Uint8Array;
   readonly commandDigest: Uint8Array;
   readonly expiresAt?: Date;
@@ -484,7 +485,11 @@ export type AuditFactInput = Readonly<{
     | "DEVICE_ENROLLMENT_STARTED"
     | "DEVICE_ENROLLMENT_APPROVED"
     | "OPERATION_CANCELLED"
-    | "OPERATION_EXPIRED";
+    | "OPERATION_EXPIRED"
+    | "INVITATION_REVOKED"
+    | "INVITATION_DECLINED"
+    | "TEAM_DELETED"
+    | "ACCOUNT_DELETED";
   readonly actorUserId?: string;
   readonly actorDeviceId?: string;
   readonly entityKind:
@@ -639,7 +644,9 @@ export const SECURITY_REQUEST_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Anonymous, unauthenticated probes (`/health`, `/api/v1/capabilities`) are
 // deliberately not recorded: a flood of them must not become database writes.
-// The database CHECK constraint still accepts the historical values.
+// Anonymous requests to the templates below are recorded only within a
+// per-address and overall budget the API enforces. The database CHECK
+// constraint still accepts the historical values.
 export const SECURITY_REQUEST_ENDPOINT_TEMPLATES = Object.freeze([
   "/api/v1/session",
   "/device",

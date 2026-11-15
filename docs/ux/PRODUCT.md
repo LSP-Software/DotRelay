@@ -58,8 +58,10 @@ adjectives, and verify claims against code.
   Codes, or passkey PRF outputs.** It stores and relays ciphertext, hashes,
   and signed protocol objects.
 - **Plaintext keys never leave** a Device or browser: decryption happens in
-  the client's memory. The browser holds the Account Master Key in memory
-  only for the session (decision D-005); every new session re-unlocks it.
+  the client's memory. The browser holds the plaintext Account Master Key
+  in memory and keeps only a copy sealed to its own Device key, so a
+  returning browser reopens it without a recovery method; a new or cleared
+  browser unlocks again (decision D-005).
 - **Revocation is logical, not erasure.** A revoked Device's and a removed
   member's _already-downloaded_ plaintext cannot be erased. Copy must say so
   instead of implying cleanup.
@@ -99,7 +101,7 @@ UX copy most often gets wrong:
 
 See `docs/ux/DECISIONS.md`: D-001 sign-out placement; D-002 no web team
 creation; D-003 member management scope (no leave-team); D-004 the recovery
-state matrix; D-005 AMK in browser memory only; D-006 prebuilt argon2 worker;
+state matrix; D-005 AMK sealed to the browser's Device; D-006 prebuilt argon2 worker;
 D-007 first-run checklist instead of the project list.
 
 ## Voice

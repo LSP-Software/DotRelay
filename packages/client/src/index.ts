@@ -23,6 +23,7 @@ export {
   type KeyEnvelopeType,
   openAccountKeyEnvelope,
   openAccountKeyTransfer,
+  openAccountKeyTransferWithRoster,
   type PasswordKdfParameters,
   parseAccountKeyEnvelope,
   parseAccountKeyTransfer,
@@ -69,6 +70,15 @@ export {
   createDeviceBootstrap,
   type DeviceBootstrap,
 } from "./device/bootstrap";
+export {
+  createDeviceProofSession,
+  type DeviceProofExchange,
+  DeviceProofError,
+  type DeviceProofSession,
+  type DeviceProofSigner,
+  deviceProofSignerFromBundle,
+  sendWithDeviceProof,
+} from "./device/proof";
 export {
   createDevicePrivateBundle,
   type DeviceKeyMaterial,
@@ -186,6 +196,10 @@ export {
   type AccountSigningKey,
   accountFingerprint,
   deriveAccountSigningKey,
+  deviceKeyFingerprint,
+  formatAccountKeyTransferCode,
+  parseAccountKeyTransferCode,
+  sameFingerprint,
 } from "./account/account-identity";
 export {
   ACCOUNT_DEVICE_ROSTER_KIND,
@@ -201,19 +215,30 @@ export {
   type AccountTrustPins,
   type AccountTrustResolution,
   type AccountTrustStatus,
+  confirmTeammateIdentity,
   type DeviceKeyClaim,
   type DeviceTrustDecision,
+  type DeviceTrustPurpose,
   decideDeviceTrust,
   emptyAccountTrustPins,
   isBlockingStatus,
   type OwnDeviceReport,
+  type ProjectEpochPin,
   parseAccountTrustPins,
   planOwnRoster,
   resolveAccountTrust,
-  retrustTeammate,
   serializeAccountTrustPins,
   type UserAccountTrust,
 } from "./trust/account-trust";
+export {
+  assertPinnedProjectEpochKeys,
+  assertProjectEpochCurrent,
+  highestProjectEpoch,
+  ProjectEpochTrustError,
+  pinProjectEpochKeys,
+  projectEpochKeyCommitment,
+  recordProjectEpoch,
+} from "./trust/project-epochs";
 export {
   createProjectEpochKeyLink,
   createProjectEpochKeyLinkBackfill,
@@ -249,6 +274,7 @@ export {
   decodeSyncVariables,
   isRollbackRevision,
   MAX_REVISION_CLOCK_SKEW_MS,
+  type MembershipPeriod,
   openLane,
   type PublicationArtifacts,
   type PublicationContext,
@@ -257,6 +283,7 @@ export {
   type PublicationVariable,
   type RevisionSigningTrust,
   type RevisionSigningTrustEntry,
+  revisionAuthoredAtNotBeforeMs,
   reviewPublication,
   type SharedValueKeyRing,
   type SharedValueSecrets,

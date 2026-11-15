@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   classifyDotenv,
   diffDotenvEntries,
+  literalDotenvNames,
   parseDotenv,
   serializeDotenv,
   summarizeClassification,
@@ -149,19 +150,32 @@ describe("local dotenv parsing", () => {
     );
   });
 
-  test("reports unsupported quoted syntax with line and column diagnostics", () => {
-    expect(() => parseDotenv('A="x\\qx"')).toThrow(
-      /unsupported escape "\\q" on line 1, column 5 in the double-quoted dotenv value for A; only \\\\, \\", \\\$, \\`, \\n, \\r and \\t are supported/,
-    );
-    expect(() => parseDotenv('A="line1\\')).toThrow(
-      /a backslash at the end of line 1, column 9 in the double-quoted dotenv value for A is not a supported escape; only \\\\, \\", \\\$, \\`, \\n, \\r and \\t are supported/,
-    );
+  test("reports unterminated and trailing quoted syntax with line and column diagnostics", () => {
     expect(() => parseDotenv('A="x\nmore')).toThrow(
       /unterminated double-quoted dotenv value for A starting on line 1, column 3/,
     );
     expect(() => parseDotenv("A='x\nmore'")).not.toThrow();
     expect(() => parseDotenv('A="x" tail')).toThrow(
       /unexpected content after the closing quote of A on line 1, column 7/,
+    );
+  });
+
+  test("keeps unknown double-quoted escapes literally, like npm dotenv", () => {
+    expect(parseDotenv('A="C:\\Users\\me"\nB="a\\qb"\n')).toEqual([
+      { name: "A", value: "C:\\Users\\me" },
+      { name: "B", value: "a\\qb" },
+    ]);
+    expect(parseDotenv('A="line1\\\nline2"\n')).toEqual([
+      { name: "A", value: "line1\\\nline2" },
+    ]);
+  });
+
+  test("names the file in parse errors when the caller gives it", () => {
+    expect(() => parseDotenv("BAD-NAME=value", "/tmp/app/.env")).toThrow(
+      /^\/tmp\/app\/\.env: invalid dotenv assignment on line 1, column 1$/,
+    );
+    expect(() => parseDotenv("BAD-NAME=value")).toThrow(
+      /^invalid dotenv assignment/,
     );
   });
 
@@ -222,20 +236,79 @@ describe("local dotenv parsing", () => {
 });
 
 describe("serializeDotenv safety", () => {
-  test("does not leave $ or backticks open to interpolation", () => {
-    // Bun's loader expands `$` even in single quotes, so `$` forces escaping.
-    expect(serializeDotenv([{ name: "A", value: "pa$HOME$x`id`" }])).toBe(
-      'A="pa\\$HOME\\$x\\`id\\`"\n',
+  test("writes $ so an expander sees the text the source gave it", () => {
+    // `${HOME}` from an unquoted line stays expandable; escaping it would
+    // turn dotenv-expand and Next.js interpolation into a literal.
+    const source = 'E=${HOME}/x\nL="cost \\$5"\nM="a $B c"\n';
+    const entries = parseDotenv(source);
+    expect(entries).toEqual([
+      { name: "E", value: "${HOME}/x" },
+      { name: "L", value: "cost \\$5" },
+      { name: "M", value: "a $B c" },
+    ]);
+    expect(serializeDotenv(entries)).toBe(
+      'E="${HOME}/x"\nL="cost \\$5"\nM="a $B c"\n',
     );
+    expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
     expect(serializeDotenv([{ name: "A", value: "plain value" }])).toBe(
       "A='plain value'\n",
     );
     expect(serializeDotenv([{ name: "A", value: "it's $HOME `id`\n" }])).toBe(
-      'A="it\'s \\$HOME \\`id\\`\\n"\n',
+      'A="it\'s $HOME \\`id\\`\\n"\n',
     );
     expect(parseDotenv('A="\\$X \\`y\\`"\n')).toEqual([
-      { name: "A", value: "$X `y`" },
+      { name: "A", value: "\\$X `y`" },
     ]);
+  });
+
+  test("keeps a $ that is not a variable reference literal", () => {
+    // Command substitution and bare dollars are never references an
+    // expander resolves; double quotes would hand `$(id)` to a shell.
+    expect(serializeDotenv([{ name: "T", value: "pa$word$(id)" }])).toBe(
+      "T='pa$word$(id)'\n",
+    );
+    expect(serializeDotenv([{ name: "H", value: "$2b$10$abc" }])).toBe(
+      "H='$2b$10$abc'\n",
+    );
+    expect(serializeDotenv([{ name: "D", value: "costs 5$" }])).toBe(
+      "D='costs 5$'\n",
+    );
+    expect(serializeDotenv([{ name: "M", value: "a\nb $(id)" }])).toBe(
+      "M='a\nb $(id)'\n",
+    );
+    for (const value of ["pa$word$(id)", "$2b$10$abc", "a\nb $(id)"])
+      expect(parseDotenv(serializeDotenv([{ name: "A", value }]))).toEqual([
+        { name: "A", value },
+      ]);
+    // A Value that also holds a single quote cannot be single-quoted.
+    expect(serializeDotenv([{ name: "Q", value: "it's $(id)" }])).toBe(
+      'Q="it\'s $(id)"\n',
+    );
+  });
+
+  test("a Value read from a single-quoted line is written back literally", () => {
+    const source = "P='pa$word'\nR=\"${HOME}/x\"\nU=$HOME\n";
+    const literal = literalDotenvNames(source);
+    expect([...literal]).toEqual(["P"]);
+    const entries = parseDotenv(source);
+    expect(serializeDotenv(entries, { literalNames: literal })).toBe(
+      'P=\'pa$word\'\nR="${HOME}/x"\nU="$HOME"\n',
+    );
+    expect(
+      parseDotenv(serializeDotenv(entries, { literalNames: literal })),
+    ).toEqual(entries);
+  });
+
+  test("keeps a backslash before $ distinct from an escaped backslash", () => {
+    const entries = [
+      { name: "A", value: "\\$X" },
+      { name: "B", value: "\\\\$X" },
+      { name: "C", value: "$X\\" },
+    ];
+    expect(serializeDotenv(entries)).toBe(
+      'A="\\$X"\nB="\\\\\\$X"\nC="$X\\\\"\n',
+    );
+    expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
   });
 
   test("rejects invalid and duplicate names", () => {

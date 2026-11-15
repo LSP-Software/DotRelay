@@ -7,6 +7,7 @@ type BoundaryBody = {
   catalog?: { readonly teams?: unknown; readonly projects?: unknown };
   session?: {
     readonly active?: unknown;
+    readonly alphaAdmissionRequired?: unknown;
     readonly displayName?: unknown;
     readonly image?: unknown;
     readonly userId?: unknown;
@@ -106,6 +107,35 @@ test("a session service error is unavailable rather than signed out", async () =
     const body = (await response.json()) as BoundaryBody;
     expect(body.connection).toBe("offline");
     expect(body.session).toEqual({ active: false });
+  } finally {
+    restoreFetch();
+    restoreEnv();
+  }
+});
+
+test("a session outside the alpha list is an online answer, not an outage", async () => {
+  const restoreEnv = withoutWorkspaceEnv();
+  const requested: string[] = [];
+  const restoreFetch = stubUpstream((url) => {
+    requested.push(url);
+    return url.includes("/api/v1/session")
+      ? Response.json(
+          { code: "alpha_admission_required", status: 403 },
+          { status: 403 },
+        )
+      : undefined;
+  });
+  try {
+    const response = await GET(boundaryRequest());
+    const body = (await response.json()) as BoundaryBody;
+    expect(body.connection).toBe("online");
+    expect(body.session).toEqual({
+      active: false,
+      alphaAdmissionRequired: true,
+    });
+    expect(body.catalog).toEqual({ teams: [], projects: [] });
+    // Nothing past the session check is asked for.
+    expect(requested).toHaveLength(1);
   } finally {
     restoreFetch();
     restoreEnv();
@@ -291,6 +321,64 @@ test("the development fixture keeps honoring the profile parameter", async () =>
     expect(body.source).toBe("fixture");
     expect(body.profile?.id).toBe("self-hosted");
   } finally {
+    restoreEnv();
+  }
+});
+
+test("Membership periods and an owed rotation reach the browser", async () => {
+  const restoreEnv = withoutWorkspaceEnv();
+  const restoreFetch = stubUpstream((url) => {
+    if (url.includes("/api/v1/session"))
+      return Response.json({ user: { id: "user-1", name: "Ari" } });
+    if (url.includes("/api/v1/capabilities"))
+      return Response.json({ serverProfileId: "profile-1" });
+    if (url.includes("/api/v1/workspace/boundary"))
+      return Response.json({
+        environment: {
+          headRevision: "rev-1",
+          rotationOwed: {
+            since: "2026-11-12T09:30:00.000Z",
+            sinceEpoch: "3",
+            membershipRemovals: 1,
+            deviceRevocations: 0,
+          },
+        },
+        signingTrustDevices: [
+          {
+            deviceId: "device-1",
+            userId: "user-2",
+            signingPublicKey: "aa",
+            deviceActiveFromMs: 0,
+            deviceActiveUntilMs: null,
+            memberSinceMs: 500,
+            memberUntilMs: null,
+            membershipPeriods: [
+              { sinceMs: 100, untilMs: 200 },
+              { sinceMs: 500, untilMs: null },
+            ],
+          },
+        ],
+      });
+    return undefined;
+  });
+  try {
+    const response = await GET(boundaryRequest());
+    const body = (await response.json()) as {
+      environment?: { rotationOwed?: unknown };
+      signingTrustDevices?: { membershipPeriods?: unknown }[];
+    };
+    expect(body.environment?.rotationOwed).toEqual({
+      since: "2026-11-12T09:30:00.000Z",
+      sinceEpoch: "3",
+      membershipRemovals: 1,
+      deviceRevocations: 0,
+    });
+    expect(body.signingTrustDevices?.[0]?.membershipPeriods).toEqual([
+      { sinceMs: 100, untilMs: 200 },
+      { sinceMs: 500, untilMs: null },
+    ]);
+  } finally {
+    restoreFetch();
     restoreEnv();
   }
 });

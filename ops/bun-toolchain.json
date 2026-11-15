@@ -1,36 +1,73 @@
 {
-  "revision": "1.4.4-canary.1+da867c60b",
-  "commit": "da867c60bf0bcbf9d6d36994f8ca0efa42075115",
+  "$comment": "Runtime: the stable Bun that builds, tests and ships DotRelay (API image, web build, compiled CLI). lint: the canary build, used only for `bun lint`, which stable releases do not include yet.",
+  "revision": "1.4.4+38afee6c8",
+  "commit": "38afee6c84fcf48c0edb2466aa4b27d287a59c30",
   "assets": [
     {
       "name": "@oven/bun-linux-x64",
-      "version": "1.4.4-canary.20261030.1",
-      "url": "https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4-canary.20261030.1.tgz",
-      "integrity": "sha512-vSnhkW4Ay9KaEnkGqjvwqsLp7aW3Dr+7TLvlFzN08oL9ZLu1Fxy8aSH1uAwlF6cJiSUPK99EIIpBQ4BQ68XZGA=="
+      "version": "1.4.4",
+      "url": "https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4.tgz",
+      "integrity": "sha512-CHbbkmHVM28T1GFq+6GL4Ao4ujwwYwj1CxFFwEFzLanPfNsId9AhbIP0Q4reWuWBkGimUkoQygrK7Rgjtj3vog=="
     },
     {
       "name": "@oven/bun-linux-aarch64",
-      "version": "1.4.4-canary.20261030.1",
-      "url": "https://registry.npmjs.org/@oven/bun-linux-aarch64/-/bun-linux-aarch64-1.4.4-canary.20261030.1.tgz",
-      "integrity": "sha512-O5n6tjvgTgQNx3wngh/GooSfDvNvYGNz7+8x+D20f7fAA7wDkuOoQDVzjoHWy6KH+EggqtJLQNRyFxj2X5qAKw=="
+      "version": "1.4.4",
+      "url": "https://registry.npmjs.org/@oven/bun-linux-aarch64/-/bun-linux-aarch64-1.4.4.tgz",
+      "integrity": "sha512-ZTVtpf9zmHSBVPX1sBwe5agGb/rN34yPGg/Hby8e2Ax2uCUA2URZKlZH7qLntK7qaFJCMXh9v0GWNYN2zINz1w=="
     },
     {
       "name": "@oven/bun-darwin-aarch64",
-      "version": "1.4.4-canary.20261030.1",
-      "url": "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.4.4-canary.20261030.1.tgz",
-      "integrity": "sha512-8FD31h0pV9p94i1wsc4t7+jUxn2WLmkezM8fZgKqvcnutGkaDUW8a5v4RySiByVhUR+62wNXVqCnhBLeOLCv5w=="
+      "version": "1.4.4",
+      "url": "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.4.4.tgz",
+      "integrity": "sha512-zW/hxwc8sJAILGwB5eTC4i48ouGXf0V4lrxmEOk3JIE6JkYVW1TZh1E2pIempqsezgW1sckTIIDudFON8bJ2Mw=="
     },
     {
       "name": "@oven/bun-darwin-x64",
-      "version": "1.4.4-canary.20261030.1",
-      "url": "https://registry.npmjs.org/@oven/bun-darwin-x64/-/bun-darwin-x64-1.4.4-canary.20261030.1.tgz",
-      "integrity": "sha512-I52Wa4xtj5T05BfEw+/LmGMmM31oaKtQ3xzs07MSRmp9IeJKKmhOWCZK7iieENEiW0zDpQZAdSDcQBJ4ipWlqw=="
+      "version": "1.4.4",
+      "url": "https://registry.npmjs.org/@oven/bun-darwin-x64/-/bun-darwin-x64-1.4.4.tgz",
+      "integrity": "sha512-oKGcxLsvh4oHjAo28nPm8c/xN0o/OmGyj1IHYc94vprkWsW2hNg2keEZt5f40cI5Hvu4jDlSRTR0UNpv1UIAxw=="
     },
     {
       "name": "@oven/bun-windows-x64",
-      "version": "1.4.4-canary.20261030.1",
-      "url": "https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-1.4.4-canary.20261030.1.tgz",
-      "integrity": "sha512-dbr4ZhCK6CweBCep+0CIoNeXZAi/qohF2Cpb82FJYdjgtrmvhTZ3K3S0BWRezFbtGcMZ/wJerBJoRaoHmoT33Q=="
+      "version": "1.4.4",
+      "url": "https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-1.4.4.tgz",
+      "integrity": "sha512-a3LNctBVO8PjePsFZfwDleF2JXYf2BfQ1u/PLRnBDLnC2Riml+4+LgJpKj4xRGhB92KweGyQI5PXaTkP9qypMQ=="
     }
-  ]
+  ],
+  "lint": {
+    "revision": "1.4.4-canary.1+da867c60b",
+    "commit": "da867c60bf0bcbf9d6d36994f8ca0efa42075115",
+    "assets": [
+      {
+        "name": "@oven/bun-linux-x64",
+        "version": "1.4.4-canary.20261030.1",
+        "url": "https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4-canary.20261030.1.tgz",
+        "integrity": "sha512-vSnhkW4Ay9KaEnkGqjvwqsLp7aW3Dr+7TLvlFzN08oL9ZLu1Fxy8aSH1uAwlF6cJiSUPK99EIIpBQ4BQ68XZGA=="
+      },
+      {
+        "name": "@oven/bun-linux-aarch64",
+        "version": "1.4.4-canary.20261030.1",
+        "url": "https://registry.npmjs.org/@oven/bun-linux-aarch64/-/bun-linux-aarch64-1.4.4-canary.20261030.1.tgz",
+        "integrity": "sha512-O5n6tjvgTgQNx3wngh/GooSfDvNvYGNz7+8x+D20f7fAA7wDkuOoQDVzjoHWy6KH+EggqtJLQNRyFxj2X5qAKw=="
+      },
+      {
+        "name": "@oven/bun-darwin-aarch64",
+        "version": "1.4.4-canary.20261030.1",
+        "url": "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.4.4-canary.20261030.1.tgz",
+        "integrity": "sha512-8FD31h0pV9p94i1wsc4t7+jUxn2WLmkezM8fZgKqvcnutGkaDUW8a5v4RySiByVhUR+62wNXVqCnhBLeOLCv5w=="
+      },
+      {
+        "name": "@oven/bun-darwin-x64",
+        "version": "1.4.4-canary.20261030.1",
+        "url": "https://registry.npmjs.org/@oven/bun-darwin-x64/-/bun-darwin-x64-1.4.4-canary.20261030.1.tgz",
+        "integrity": "sha512-I52Wa4xtj5T05BfEw+/LmGMmM31oaKtQ3xzs07MSRmp9IeJKKmhOWCZK7iieENEiW0zDpQZAdSDcQBJ4ipWlqw=="
+      },
+      {
+        "name": "@oven/bun-windows-x64",
+        "version": "1.4.4-canary.20261030.1",
+        "url": "https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-1.4.4-canary.20261030.1.tgz",
+        "integrity": "sha512-dbr4ZhCK6CweBCep+0CIoNeXZAi/qohF2Cpb82FJYdjgtrmvhTZ3K3S0BWRezFbtGcMZ/wJerBJoRaoHmoT33Q=="
+      }
+    ]
+  }
 }

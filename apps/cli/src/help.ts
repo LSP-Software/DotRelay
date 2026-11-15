@@ -10,6 +10,7 @@ import {
 } from "./args";
 import { banner, bold, paint, section } from "./components";
 import { CliInvocationError } from "./errors";
+import { HOSTED_ORIGIN } from "./hosted-origin";
 import { defaultOrigin } from "./version";
 
 export type CommandHelpEntry = Readonly<{
@@ -38,8 +39,10 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     notes: [
       "A changed server identity at a saved origin stops setup; resolve the replacement before continuing.",
       "On a loopback host, an HTTPS endpoint that cannot be reached is retried once over plain HTTP.",
+      "The hosted service is https://api.dotrelay.dev. A self-hosted installation uses its own API origin instead.",
     ],
     examples: [
+      "dotrelay setup https://api.dotrelay.dev",
       "dotrelay setup relay.example",
       "dotrelay setup https://relay.example --no-input",
     ],
@@ -57,8 +60,11 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   logout: {
     about:
-      "Remove the local session for the Server Profile. The session material is deleted from the credential store; the Device stays enrolled.",
-    examples: ["dotrelay logout"],
+      "Sign out of the Server Profile: the session is revoked on the server when it can be reached, and the local copy is always deleted from the credential store. The Device stays enrolled.",
+    notes: [
+      "When the server cannot be reached, the local session is still removed and the result says the server-side session was not revoked; it expires on its own.",
+    ],
+    examples: ["dotrelay logout", "dotrelay logout --profile work"],
   },
   init: {
     about:
@@ -77,6 +83,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
         "never prompt or guess; requires explicit --profile and Environment context",
       force: "approve publishing Variables that the file omits",
     },
+    notes: [
+      "On a Project that is new in this run, a label that does not exist yet becomes the first Environment's label. On an existing Project, create the Environment first with dotrelay env create <label>.",
+    ],
     examples: [
       "dotrelay init",
       "dotrelay init production --classify API_URL=shared",
@@ -103,6 +112,67 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "dotrelay push --environment <environment-id>",
     ],
   },
+  run: {
+    about:
+      "Decrypt the Environment in memory and start a command with its Values as environment variables. Nothing is written to disk. The command's exit code is returned, and Ctrl-C and termination signals are passed on to it.",
+    positional: [
+      "<command> [<argument>…]  The command to start and its arguments, after --.",
+    ],
+    options: {
+      environment:
+        "Environment id or label to load (default: the worktree selection)",
+      allowEnv:
+        "pass on a Variable that controls how programs or shells start, such as NODE_OPTIONS or PATH; repeat for more",
+      noInput:
+        "never prompt or guess; requires explicit --profile and Environment context",
+    },
+    notes: [
+      "Values from the Environment replace variables of the same name that are already set in the shell.",
+      "Everything after -- belongs to the command, so its own flags are never read by dotrelay.",
+      "A required Variable with no value, or a Value this Device cannot decrypt, stops the run before the command starts.",
+      "A Variable that controls how programs or shells start (PATH, NODE_OPTIONS, LD_*, DYLD_*, BASH_ENV, PYTHON*, GIT_* and similar) stops the run unless you name it with --allow-env, because any Member of the Team can set one.",
+    ],
+    examples: [
+      "dotrelay run -- npm start",
+      "dotrelay run --environment production -- ./deploy.sh",
+      "dotrelay run --profile ci --environment staging --no-input -- npm test",
+      "dotrelay run --allow-env NODE_OPTIONS -- node app.js",
+    ],
+  },
+  export: {
+    about:
+      "Print the decrypted Values to stdout as dotenv lines, a JSON object, or shell export statements. Nothing is written to disk. Terminal stdout requires --reveal.",
+    options: {
+      format: "output format: dotenv (default), json, or shell",
+      environment:
+        "Environment id or label to export (default: the worktree selection)",
+      reveal: "allow printing the Values to a terminal",
+      allowEnv:
+        "with --format shell, print a Variable that controls how programs or shells start; repeat for more",
+      noInput:
+        "never prompt or guess; requires explicit --profile and Environment context",
+    },
+    notes: [
+      "--format json prints the Values themselves; it is a data format, not the --json diagnostic mode, which never contains Values.",
+      "--format shell refuses Variables that control how programs or shells start (PATH, NODE_OPTIONS, LD_*, BASH_ENV and similar) unless you name each one with --allow-env.",
+    ],
+    examples: [
+      "dotrelay export",
+      "dotrelay export --format json",
+      "dotrelay export --format shell --reveal",
+    ],
+  },
+  list: {
+    about:
+      "List the Environment's Variables by name with their ownership and whether this Device has a Value for each. Values are never shown.",
+    options: {
+      environment:
+        "Environment id or label to list (default: the worktree selection)",
+      noInput:
+        "never prompt or guess; requires explicit --profile and Environment context",
+    },
+    examples: ["dotrelay list", "dotrelay list --environment production"],
+  },
   pull: {
     about:
       "Write decrypted Values to .env by default. The output's Git tracking state is checked before any Value is written: a Git-tracked output is refused, and an untracked one is added to the repository-local exclusion list.",
@@ -114,6 +184,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
         "Environment id or label to pull from (default: the worktree selection)",
       force:
         "approve replacing a differing output file under --no-input; the prior file is retained at <path>.previous",
+      discardLocal:
+        "with --force, also discard local changes made since the last pull that were never pushed",
       noInput:
         "never prompt or guess; requires explicit --profile and Environment context",
     },
@@ -123,6 +195,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     examples: [
       "dotrelay pull",
       "dotrelay pull --output .env",
+      "dotrelay pull -o .env.local",
       "dotrelay pull --stdout --reveal",
     ],
   },
@@ -296,20 +369,21 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Unlock this Device by recovering the account's Account Master Key, either from a Recovery Code entered on this machine or from an Account Key Transfer created by a trusted Device or browser.",
     notes: [
       "The Recovery Code is entered at a hidden prompt (or piped on stdin, or read from --recovery-code-file <path>); it is never placed on the command line and never sent to the Server Profile.",
-      "--no-input never prompts: pass --recovery-code-file or --transfer explicitly.",
+      "--no-input never prompts: pass --recovery-code-file or --transfer explicitly. With --no-input, --transfer needs the whole transfer code, not a bare transfer id.",
       "Passkey and encryption password unlock in a browser, which then hands the key to this machine as a transfer.",
     ],
     options: {
       recoveryCodeFile:
         "path to a 0600 file holding the Recovery Code (13 groups of 4 characters); automation channel",
-      transfer: "Account Key Transfer id to accept",
+      transfer:
+        "the transfer code the sending Device printed: the transfer id, a dot, and the account fingerprint this Device checks",
       profile: "Server Profile to recover onto (required with --no-input)",
       noInput: "never prompt; requires explicit --profile",
     },
     examples: [
       "dotrelay device recover",
       "dotrelay device recover --recovery-code-file <path-to-code>",
-      "dotrelay device recover --transfer <transfer-id>",
+      "dotrelay device recover --transfer <transfer-code>",
     ],
   },
   "device setup": {
@@ -327,12 +401,13 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   "device transfer": {
     about:
-      "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <id>. The key stays on this Device; transfers are an addition, not a move.",
+      "Hand this Device's Account Master Key to another active Device in the account: the key is sealed to the receiving Device's key and published as a one-time transfer it can accept with dotrelay device recover --transfer <transfer-code>. The key stays on this Device; transfers are an addition, not a move.",
     notes: [
       "Without --to, the command lists this account's other Devices and you choose one. --no-input requires --to.",
       "The receiving Device id comes from that list, from dotrelay status, or from the service, and must be an active Device for the same account.",
+      "The key is sealed only to a Device your signed Device list includes. A Device that is not listed yet shows the key fingerprint the service reports: compare it with dotrelay device list on that Device, and confirming adds it to the list. --no-input refuses an unlisted Device.",
       "The transfer stays retryable until the receiving Device acknowledges it or it expires. A lost response can be accepted again; after acknowledgement, or once it expires, it must be created again.",
-      "The command prints the full transfer ID. Paste it into Recovery on the receiving device, or pass it to dotrelay device recover --transfer on that device.",
+      "The command prints the transfer code: the transfer id, a dot, and this account's fingerprint. Paste it into Recovery on the receiving device, or pass it to dotrelay device recover --transfer on that device, which checks the fingerprint.",
     ],
     options: {
       to: "receiving Device id to seal the transfer for (required with --no-input)",
@@ -362,6 +437,11 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "dotrelay device revoke-wrapper --wrapper-id <wrapper-id>",
     ],
   },
+  "device list": {
+    about:
+      "List this account's active Devices on the Server Profile and mark this one. Other people's Devices are never listed.",
+    examples: ["dotrelay device list", "dotrelay device list --json"],
+  },
   "project link": {
     about:
       "Link a Project explicitly: the resolved GitHub Repository id is sent to the authenticated Server Profile, which creates a default Environment when the Project is new.",
@@ -382,12 +462,105 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       force: "confirm the rotation when --no-input is set",
     },
     notes: [
-      "The Project must have exactly one active Environment, and that Environment must already have a Revision.",
+      "Rotation is Project-wide: it advances every active Environment, so each one must already have a Revision. Run it from a worktree whose selected Environment is active.",
       "A Device that could not read the previous epoch receives the new key. Run dotrelay pull on that Device afterwards.",
     ],
     examples: [
       "dotrelay project rotate",
       "dotrelay project rotate --profile work --no-input --force",
+    ],
+  },
+  "team list": {
+    about:
+      "List the Teams you belong to with their ids, for --team. Teams you joined that are still waiting for an owner or admin to share the Project keys, and invitations you have not accepted yet, are listed separately.",
+    examples: ["dotrelay team list", "dotrelay team list --json"],
+  },
+  "team share-keys": {
+    about:
+      "Share the Team's Project keys with a Member, so their Devices can read every Project in the Team. This activates a Member who accepted an invitation, and re-shares keys with a Member who added a Device. It is the CLI equivalent of Share project keys in the web app's Members view.",
+    positional: [
+      "<github-login-or-user-id>  The Member's GitHub login, or their User id from dotrelay team members.",
+    ],
+    options: {
+      team: "Team id (defaults to your only Team, or the linked Project's Team)",
+      noInput: "never prompt; requires --force",
+      force: "confirm sharing when --no-input is set",
+    },
+    notes: [
+      "Only a Team owner or admin can share keys; an admin can share with Members only.",
+      "This Device must be able to read every Project in the Team. Keys go only to Devices listed in the Member's signed Device roster.",
+    ],
+    examples: [
+      "dotrelay team share-keys octocat",
+      "dotrelay team share-keys <user-id> --team <team-id>",
+    ],
+  },
+  "team decline": {
+    about:
+      "Decline a Team invitation addressed to you. Accepting stays in the DotRelay web app.",
+    positional: [
+      "<invitation-id-or-team>  The invitation id from dotrelay team list, or the inviting Team's id or name.",
+    ],
+    options: {
+      noInput: "never prompt; requires --force",
+      force: "confirm declining when --no-input is set",
+    },
+    notes: [
+      "A declined invitation cannot be accepted later; a Team owner or admin has to invite you again.",
+    ],
+    examples: [
+      "dotrelay team decline Platform",
+      "dotrelay team decline <invitation-id> --profile work --no-input --force",
+    ],
+  },
+  "team leave": {
+    about:
+      "Leave a Team: end your own Membership. Like a removal, every Project of the Team then owes a key rotation.",
+    positional: [
+      "<team-id-or-name>  The Team's id or name from dotrelay team list.",
+    ],
+    options: {
+      noInput: "never prompt; requires --force",
+      force: "confirm leaving when --no-input is set",
+    },
+    notes: [
+      "The Team's last active owner cannot leave while other Members remain: make another active Member an owner in the web app, or delete the Team there.",
+      "Values this machine already downloaded stay on it; the Team's owners should run dotrelay project rotate.",
+    ],
+    examples: [
+      "dotrelay team leave Platform",
+      "dotrelay team leave <team-id> --no-input --force",
+    ],
+  },
+  "account export": {
+    about:
+      "Export the account data this Server Profile holds about you as JSON: profile, Teams and roles, Devices, invitations, sessions, and activity timestamps.",
+    options: {
+      output: "write the JSON to this file (mode 0600) instead of stdout",
+    },
+    notes: [
+      "The export holds no Values, ciphertext, or keys. Decrypted Values come from a Device: dotrelay pull or dotrelay export.",
+    ],
+    examples: [
+      "dotrelay account export --output account.json",
+      "dotrelay account export --profile work",
+    ],
+  },
+  "account delete": {
+    about:
+      "Delete your account on this Server Profile. Your sign-in, sessions, Device keys, and recovery methods are deleted; teammates keep the history you wrote, shown as from a deleted user.",
+    options: {
+      noInput: "never prompt; requires --force",
+      force: "confirm deletion when --no-input is set",
+    },
+    notes: [
+      "Refused while you are the last active owner of a Team with other Members. Teams where you are the only Member are deleted with the account.",
+      "Afterwards the session and this Device's keys are removed from this machine. The Server Profile entry, pins, worktree contexts, and pulled .env files stay; the command lists them.",
+      "Signing in again with the same GitHub account creates a new, empty account.",
+    ],
+    examples: [
+      "dotrelay account delete",
+      "dotrelay account delete --profile work --no-input --force",
     ],
   },
   "team members": {
@@ -414,6 +587,25 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     },
     examples: ["dotrelay team trust <user-id>"],
   },
+  "env list": {
+    about:
+      "List the worktree Project's Environments with their labels, ids, and state, and mark the selected one.",
+    notes: [
+      "A Project must be linked first: run dotrelay project link or dotrelay init.",
+    ],
+    examples: ["dotrelay env list", "dotrelay env list --json"],
+  },
+  "env create": {
+    about:
+      "Create an Environment with the given label in the worktree's Project. Requires a Team owner or admin. The selection is not changed; select it with dotrelay env use <label>.",
+    positional: [
+      "<label>  The new Environment's label: a letter, then up to 62 letters, digits, dots, dashes, or underscores.",
+    ],
+    notes: [
+      "A label that already names an active Environment returns that Environment instead of creating another.",
+    ],
+    examples: ["dotrelay env create staging", "dotrelay env create production"],
+  },
   "env use": {
     about:
       "Select the worktree Environment by id or operator-visible label, resolved within the worktree's Project. The selection is saved in the worktree context.",
@@ -439,7 +631,9 @@ const GROUP_ABOUT: Readonly<Partial<Record<CommandName, string>>> = {
   device:
     "Manage Device enrollment, dual-control handoffs, and account recovery for this machine.",
   project: "Manage the Project linked to this GitHub Repository.",
-  env: "Select the worktree Environment.",
+  team: "List your Teams and their Members, share Project keys with a Member, decline invitations, and leave a Team.",
+  account: "Export or delete your account on a Server Profile.",
+  env: "List, create, and select the worktree Project's Environments.",
 };
 
 const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
@@ -449,7 +643,8 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
   from: "input file",
   recoveryCodeFile:
     "path to a file holding the Recovery Code that unlocks the account",
-  transfer: "Account Key Transfer id to accept",
+  transfer:
+    "the transfer code the sending Device printed: the transfer id, a dot, and the account fingerprint this Device checks",
   to: "receiving Device id to seal an account-key transfer for",
   wrapperId: "account-key wrapper id to revoke",
   team: "Team id used to resolve the Project",
@@ -460,6 +655,9 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
     "classify a new Variable as shared or user-defined (NAME=shared|user-defined)",
   variable:
     "Variable to roll back, by operator-visible name or stable Variable id; repeat for more",
+  format: "output format: dotenv, json, or shell",
+  allowEnv:
+    "pass on a named Variable that controls how programs or shells start; repeat for more",
   noOpen: "do not open the verification page in a browser",
   noInput: "never prompt, guess, or approve",
   force: "approve the documented destructive effect of this command",
@@ -475,7 +673,7 @@ const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   output: " <file>",
   from: " <file>",
   recoveryCodeFile: " <path>",
-  transfer: " <transfer-id>",
+  transfer: " <transfer-code>",
   to: " <peer-device-id>",
   wrapperId: " <wrapper-id>",
   team: " <team-id>",
@@ -483,6 +681,8 @@ const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   limit: " <count>",
   classify: " NAME=shared|user-defined",
   variable: " <variable-name-or-id>",
+  format: " <dotenv|json|shell>",
+  allowEnv: " <name>",
 };
 
 // Mirrors the parser's token walk well enough to route --help: the first
@@ -492,7 +692,7 @@ export const helpTopicFor = (args: readonly string[]): string[] => {
   const topic: string[] = [];
   for (const token of args) {
     if (token === "--") break;
-    if (token.startsWith("--")) continue;
+    if (token.startsWith("-")) continue;
     topic.push(token);
     if (topic.length === 2) break;
     const first = topic[0];
@@ -640,12 +840,15 @@ const EVERYDAY_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["init", "Publish this repository's .env for the first time"],
   ["push", "Publish changes from .env"],
   ["pull", "Write decrypted values to .env"],
+  ["run", "Start a command with the values in its environment"],
   ["diff", "Compare .env with the Environment"],
-  ["status", "Show this machine's connection"],
+  ["status", "Show this machine's connection and repository"],
 ];
 
 const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["help", "Show this list, or the help for one command"],
+  ["list", "List the Environment's Variable names"],
+  ["export", "Print decrypted values as dotenv, JSON, or shell"],
   ["profile add", "Save a server connection"],
   ["profile use", "Select the global Server Profile"],
   ["profile list", "List saved Server Profiles"],
@@ -660,16 +863,35 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["device setup", "Establish the account key and its Recovery Code"],
   ["device transfer", "Hand the account key to another Device"],
   ["device revoke-wrapper", "Retire an active Recovery Code wrapper"],
+  ["device list", "List this account's Devices"],
   ["context", "Detect the GitHub Repository"],
   ["context reselect", "Clear a stale Project or Environment selection"],
   ["project link", "Link a Project explicitly"],
   ["project rotate", "Advance the Project epoch and seal a new key"],
+  ["team list", "List your Teams and their ids"],
   ["team members", "List Members and their account fingerprints"],
   ["team trust", "Re-trust a Member whose account key changed"],
+  ["team share-keys", "Share the Project keys with a Member"],
+  ["team decline", "Decline a Team invitation addressed to you"],
+  ["team leave", "Leave a Team"],
+  ["account export", "Export your account data as JSON"],
+  ["account delete", "Delete your account on this Server Profile"],
+  ["env list", "List the Project's Environments"],
   ["env use", "Select an Environment by id or label"],
+  ["env create", "Create an Environment with a label"],
   ["history", "List verified Revisions with readable context"],
   ["rollback", "Append a lane-scoped Rollback Revision"],
 ];
+
+// Aligned flag rows for the directory views; the width follows the longest
+// flag so a long signature can never push its summary out of line.
+const flagRows = (rows: ReadonlyArray<readonly [string, string]>): string[] => {
+  const width = Math.max(...rows.map(([flag]) => flag.length));
+  return rows.map(
+    ([flag, summary]) =>
+      `  ${bold(flag.padEnd(width))}  ${paint(summary, "muted")}`,
+  );
+};
 
 const commandDirectory = (
   items: ReadonlyArray<readonly [string, string]>,
@@ -697,24 +919,30 @@ export const renderHelp = (): string => {
     ...commandDirectory(EVERYDAY_COMMANDS),
     "",
     section("More"),
-    `  ${bold("dotrelay help".padEnd(14))}  ${paint("Every command, with flags and examples", "muted")}`,
-    `  ${bold("dotrelay help <command>")}  ${paint("Full help for one command", "muted")}`,
+    ...flagRows([
+      ["dotrelay help", "Every command, with flags and examples"],
+      ["dotrelay help <command>", "Full help for one command"],
+    ]),
     "",
     section("Flags"),
-    `  ${bold("--profile <name>".padEnd(14))}  ${paint("Choose the Server Profile", "muted")}`,
-    `  ${bold("--environment".padEnd(14))}  ${paint("Choose the Environment by id or label", "muted")}`,
-    `  ${bold("--json".padEnd(14))}  ${paint("Machine-readable output; values never appear", "muted")}`,
-    `  ${bold("--no-input".padEnd(14))}  ${paint("Never prompt, guess, or approve", "muted")}`,
-    `  ${bold("--debug".padEnd(14))}  ${paint("Include sanitized detail in error diagnostics", "muted")}`,
+    ...flagRows([
+      ["--profile <name>", "Choose the Server Profile"],
+      ["--environment <label>", "Choose the Environment by label or id"],
+      ["--json", "Machine-readable output; values never appear"],
+      ["--no-input", "Never prompt, guess, or approve"],
+      ["--debug", "Include sanitized detail in error diagnostics"],
+      ["-h, --help", "Show help; -v, --version shows the version"],
+    ]),
   ];
-  if (defaultOrigin)
-    lines.push(
-      "",
-      paint(
-        `Default: with no Server Profile selected, this build uses ${defaultOrigin}`,
-        "faint",
-      ),
-    );
+  lines.push(
+    "",
+    paint(
+      defaultOrigin
+        ? `Default: with no Server Profile selected, this build uses ${defaultOrigin}`
+        : `New here? Run dotrelay setup ${HOSTED_ORIGIN} for the hosted service, or your own origin if you self-host.`,
+      "faint",
+    ),
+  );
   return lines.join("\n");
 };
 
@@ -736,11 +964,13 @@ export const renderPowerHelp = (): string => {
     ),
     "",
     section("Shared flags"),
-    `  ${bold("--profile <name>".padEnd(18))}  ${paint("Server Profile to use", "muted")}`,
-    `  ${bold("--environment".padEnd(18))}  ${paint("Environment id or label", "muted")}`,
-    `  ${bold("--team <id>".padEnd(18))}  ${paint("Team that scopes the Project lookup", "muted")}`,
-    `  ${bold("--json  --no-input".padEnd(18))}  ${paint("Automation mode; no prompts, no guesses", "muted")}`,
-    `  ${bold("--force".padEnd(18))}  ${paint("Approve the documented destructive effect", "muted")}`,
+    ...flagRows([
+      ["--profile <name>", "Server Profile to use"],
+      ["--environment <label>", "Environment label or id"],
+      ["--team <id>", "Team that scopes the Project lookup (see team list)"],
+      ["--json  --no-input", "Automation mode; no prompts, no guesses"],
+      ["--force", "Approve the documented destructive effect"],
+    ]),
     "",
     section("Notes"),
     "  Pull writes decrypted values; untracked outputs get a repository-local",

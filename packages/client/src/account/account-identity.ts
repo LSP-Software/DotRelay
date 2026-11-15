@@ -92,3 +92,70 @@ export const accountFingerprint = async (
   ).join("");
   return (hex.match(/.{8}/g) ?? []).join(" ");
 };
+
+const DEVICE_FINGERPRINT_DOMAIN = new TextEncoder().encode(
+  "DotRelay\0device-key-fingerprint\0v1\0",
+);
+
+// A Device's key fingerprint for comparing on two screens before one Device
+// trusts the other's keys (ADR 0022): the first 20 bytes of SHA-384 over a
+// domain label, the X25519 key and the Ed25519 key, as five groups of eight
+// hex digits.
+export const deviceKeyFingerprint = async (
+  keys: Readonly<{
+    readonly encryptionPublicKey: Uint8Array;
+    readonly signingPublicKey: Uint8Array;
+  }>,
+): Promise<string> => {
+  if (
+    keys.encryptionPublicKey.length !== 32 ||
+    keys.signingPublicKey.length !== 32
+  )
+    throw new TypeError("Device public keys must be 32 bytes");
+  const message = new Uint8Array(DEVICE_FINGERPRINT_DOMAIN.length + 64);
+  message.set(DEVICE_FINGERPRINT_DOMAIN);
+  message.set(keys.encryptionPublicKey, DEVICE_FINGERPRINT_DOMAIN.length);
+  message.set(keys.signingPublicKey, DEVICE_FINGERPRINT_DOMAIN.length + 32);
+  const digest = await sha384(message);
+  const hex = Array.from(digest.slice(0, 20), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return (hex.match(/.{8}/g) ?? []).join(" ");
+};
+
+/** Compares two fingerprints, ignoring spacing and case. */
+export const sameFingerprint = (left: string, right: string): boolean => {
+  const normalize = (value: string): string =>
+    value.replaceAll(/\s+/g, "").toLowerCase();
+  const a = normalize(left);
+  return /^[0-9a-f]{40}$/.test(a) && a === normalize(right);
+};
+
+// The code a person carries from the sending Device to the receiving one
+// (ADR 0022): the Account Key Transfer id, a dot, and the sender's account
+// fingerprint without spaces. The receiver checks the Account Master Key it
+// opens against that fingerprint, so a key the service substituted is
+// refused without the person comparing anything by eye.
+export const formatAccountKeyTransferCode = (
+  transferIdHex: string,
+  accountFingerprintText: string,
+): string =>
+  `${transferIdHex.toLowerCase()}.${accountFingerprintText.replaceAll(/\s+/g, "").toLowerCase()}`;
+
+export const parseAccountKeyTransferCode = (
+  text: string,
+): Readonly<{ transferId: string; accountFingerprint: string | null }> => {
+  const value = text.trim().toLowerCase();
+  const match = /^([0-9a-f]{32})(?:\.([0-9a-f]{40}))?$/.exec(value);
+  if (!match?.[1])
+    throw new TypeError(
+      "an Account Key Transfer code is 32 hex digits, optionally followed by a dot and 40 more",
+    );
+  const fingerprint = match[2];
+  return Object.freeze({
+    transferId: match[1],
+    accountFingerprint: fingerprint
+      ? (fingerprint.match(/.{8}/g) ?? []).join(" ")
+      : null,
+  });
+};

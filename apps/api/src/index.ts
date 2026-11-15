@@ -1,9 +1,10 @@
-import { databaseReady } from "./readiness";
+import { apiReady, databaseReady } from "./readiness";
 import {
   bytesToUuid,
   ContractError,
   createProblem,
   DEVICE_ID_HEADER,
+  DEVICE_PROOF_HEADER,
   type DeviceClientInfo,
   type ProblemCode,
   gitHubAppInstallUrl,
@@ -26,8 +27,11 @@ import {
   DeviceRepository,
   ensureServerProfile,
   GrantRepository,
+  loadTeamMembershipWindows,
   OperationConflictError,
   OperationRepository,
+  ProjectRotationObligationRepository,
+  recordGitHubLogin,
   requireTeamAction,
   resolveDotRelayUser,
   StagedObjectRepository,
@@ -38,10 +42,18 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { registerAccountRoutes } from "./account-routes";
 import { registerAdministrationRoutes } from "./administration-routes";
-import { createAuth, type DotRelayAuth } from "./auth";
+import { createAuth, type DotRelayAuth, signBearerToken } from "./auth";
 import { createClientIpResolver } from "./client-ip";
+import { registerDeviceProofRoutes } from "./device-proof-routes";
 import { registerDeviceRoutes } from "./device-routes";
+import { createResendTransport, loadEmailConfig } from "./email";
+import {
+  createEmailNotifier,
+  disabledEmailNotifier,
+  type EmailNotifier,
+} from "./email-notifications";
 import { delegatedGitHubAccessToken } from "./github-access";
 import {
   type GitHubRepositoryDisplayOptions,
@@ -49,6 +61,8 @@ import {
 } from "./github-repository";
 import { registerMembershipProvisioningRoutes } from "./membership-provisioning-routes";
 import { registerMembershipRoutes } from "./membership-routes";
+import { createMetricsRegistry, startMetricsServer } from "./metrics";
+import { loadMetricsConfig } from "./metrics-config";
 import {
   API_CORRELATION_HEADER,
   type ApiObservability,
@@ -69,8 +83,20 @@ import {
   type ServerProfileConfig,
 } from "./profile";
 import { registerProtocolRoutes } from "./protocol";
-import { requireProtocolActor } from "./protocol/context";
-import { valkeyReady } from "./protocol/rate-limit";
+import {
+  optionalProtocolActor,
+  requireProtocolActor,
+} from "./protocol/context";
+import {
+  apiRateLimitBuckets,
+  createUserRateLimit,
+  RATE_LIMIT_BUCKET_CONTEXT_KEY,
+} from "./protocol/rate-limit";
+import {
+  createSessionLifetimeGate,
+  requestSession,
+  requestWasAuthenticated,
+} from "./session";
 
 export type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
@@ -80,7 +106,40 @@ export type ApiDependencies = Readonly<{
   readonly githubFetch?: typeof fetch;
   readonly observability?: ApiObservability;
   readonly resolveClientIp?: (request: Request) => string | null;
+  /** Post-commit transactional email; disabled when omitted. */
+  readonly notifications?: EmailNotifier;
 }>;
+
+// Reads at most maxBytes of a body; a larger or unreadable one is null.
+const readCappedText = async (
+  request: Readonly<{
+    readonly headers: { get(name: string): string | null };
+    readonly body: ReadableStream<Uint8Array> | null;
+  }>,
+  maxBytes: number,
+): Promise<string | null> => {
+  if (Number(request.headers.get("Content-Length") ?? 0) > maxBytes)
+    return null;
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+};
 
 const jsonProblem = (context: Context, code: ProblemCode) => {
   const correlationId = context.get("correlationId" as never) as
@@ -185,6 +244,56 @@ const sanitizeAuthResponse = async (
     }
   }
   return jsonProblem(context, "service_unavailable");
+};
+
+// Session tokens never reach page script: get-session and list-sessions
+// answer without them. The CLI's device token is the one place a token
+// leaves the service, and it leaves signed, the only bearer form accepted.
+const protectSessionTokens = async (
+  authPath: string,
+  response: Response,
+  authSecret: string,
+): Promise<Response> => {
+  if (
+    response.status !== 200 ||
+    !response.headers.get("content-type")?.includes("application/json") ||
+    ![
+      "/api/auth/get-session",
+      "/api/auth/list-sessions",
+      "/api/auth/device/token",
+    ].includes(authPath)
+  )
+    return response;
+  const body = (await response.clone().json()) as unknown;
+  const withoutToken = (value: unknown): unknown => {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      return value;
+    const { token: _token, ...rest } = value as Record<string, unknown>;
+    return rest;
+  };
+  const replaced = await (async (): Promise<unknown> => {
+    if (authPath === "/api/auth/get-session")
+      return body !== null && typeof body === "object" && !Array.isArray(body)
+        ? {
+            ...(body as Record<string, unknown>),
+            session: withoutToken((body as Record<string, unknown>).session),
+          }
+        : body;
+    if (authPath === "/api/auth/list-sessions")
+      return Array.isArray(body) ? body.map(withoutToken) : body;
+    const grant = body as Record<string, unknown> | null;
+    if (!grant || typeof grant.access_token !== "string") return body;
+    return {
+      ...grant,
+      access_token: await signBearerToken(authSecret, grant.access_token),
+    };
+  })();
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(JSON.stringify(replaced), {
+    status: response.status,
+    headers,
+  });
 };
 
 // GitHub sends the browser to this API, which then redirects to the web app.
@@ -314,17 +423,14 @@ const loadWorkspaceCatalog = async (
 // Revision was authored. Windows let a legitimate historical Revision stay
 // verifiable after its signing Device is revoked or its Member leaves, while
 // a write made after the revocation or removal stays rejected.
+// memberSinceMs/memberUntilMs describe the current Membership period only;
+// membershipPeriods lists every period, so a Member who was removed and
+// invited back keeps their earlier Revisions verifiable (ADR 0017).
 const loadTeamSigningTrustDevices = async (
   database: DatabaseClient,
   teamId: string,
 ) => {
-  const memberships = await database.membership.findMany({
-    where: { teamId },
-    select: { userId: true, activatedAt: true, removedAt: true },
-  });
-  const membershipByUser = new Map(
-    memberships.map((membership) => [membership.userId, membership]),
-  );
+  const membershipByUser = await loadTeamMembershipWindows(database, teamId);
   const userIds = [...membershipByUser.keys()];
   if (userIds.length === 0) return [];
   const devices = await database.device.findMany({
@@ -350,8 +456,12 @@ const loadTeamSigningTrustDevices = async (
       encryptionPublicKey: bytesToHex(new Uint8Array(device.x25519PublicKey)),
       deviceActiveFromMs: toMillis(device.activatedAt),
       deviceActiveUntilMs: toMillis(device.revokedAt),
-      memberSinceMs: toMillis(membership?.activatedAt ?? null),
-      memberUntilMs: toMillis(membership?.removedAt ?? null),
+      memberSinceMs: toMillis(membership?.current.activatedAt ?? null),
+      memberUntilMs: toMillis(membership?.current.removedAt ?? null),
+      membershipPeriods: (membership?.periods ?? []).map((period) => ({
+        sinceMs: period.activatedAt.getTime(),
+        untilMs: toMillis(period.removedAt),
+      })),
     };
   });
 };
@@ -526,12 +636,15 @@ const protocolCors = (profile: ServerProfileConfig) =>
       "Content-Type",
       "Authorization",
       DEVICE_ID_HEADER,
+      DEVICE_PROOF_HEADER,
       "Idempotency-Key",
       "X-DotRelay-Operation-Kind",
       "X-DotRelay-Expires-At",
     ],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
+    // The protocol rate limiter sends Retry-After; the auth rate limiter's
+    // 429 carries X-Retry-After.
+    exposeHeaders: ["X-Correlation-ID", "Retry-After", "X-Retry-After"],
     maxAge: 600,
   });
 
@@ -562,6 +675,11 @@ export const shutdownDrainMs = (value: string | undefined): number => {
     : 5000;
 };
 
+const rateLimitBucketOf = (context: Context) => {
+  const bucket = context.get(RATE_LIMIT_BUCKET_CONTEXT_KEY as never) as unknown;
+  return typeof bucket === "string" ? { rateLimitBucket: bucket } : {};
+};
+
 const createApi = ({
   database,
   profile,
@@ -569,6 +687,7 @@ const createApi = ({
   githubFetch,
   observability: suppliedObservability,
   resolveClientIp,
+  notifications = disabledEmailNotifier,
 }: ApiDependencies) => {
   const app = new Hono();
   // Auth, Device bootstrap/self and grant bootstrap bodies are a few KB.
@@ -583,6 +702,7 @@ const createApi = ({
       resolveClientIp === undefined ? {} : { resolveClientIp },
     );
   const capabilities = createCapabilitiesDocument(profile);
+  const sessionLifetimeGate = createSessionLifetimeGate(database, auth);
   let capabilitiesEtagPromise: Promise<string> | undefined;
   const getCapabilitiesEtag = () => {
     capabilitiesEtagPromise ??= etagFor(capabilities);
@@ -605,7 +725,9 @@ const createApi = ({
           status: context.res.status,
           correlationId,
           durationMs: performance.now() - startedAt,
+          authenticated: await requestWasAuthenticated(context),
           ...problemDetails,
+          ...rateLimitBucketOf(context),
         });
       } catch {
         // Observability loss must never affect the response or domain behavior.
@@ -663,10 +785,84 @@ const createApi = ({
       allowMethods: ["GET", "POST", "OPTIONS"],
       // Set-Auth-Token is deliberately not exposed: browser script must never
       // read the bearer session token. Non-browser clients are unaffected.
-      exposeHeaders: ["X-Correlation-ID", "X-Retry-After"],
+      exposeHeaders: ["X-Correlation-ID", "Retry-After", "X-Retry-After"],
       maxAge: 600,
     }),
   );
+
+  // Sessions slide; this caps their absolute age before anything reads them.
+  app.use("*", async (context, next) => {
+    if (["/health", "/ready"].includes(context.req.path)) {
+      await next();
+      return;
+    }
+    return sessionLifetimeGate(context, next);
+  });
+
+  const isAlphaAdmitted = async (
+    allowed: readonly string[],
+    userId: string,
+  ): Promise<boolean> => {
+    const account = await database.authAccount.findFirst({
+      where: { userId, providerId: "github" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { accountId: true },
+    });
+    return account !== null && allowed.includes(account.accountId);
+  };
+
+  // A device code opened by a browser outside the alpha list can never be
+  // allowed, so it is declined on the spot and the waiting CLI learns why
+  // at sign-in instead of polling until the code expires. Only a pending,
+  // unexpired code that nobody else has claimed is touched.
+  const declineDeviceCodeOutsideAlpha = async (
+    context: Context,
+    userId: string,
+  ) => {
+    if (context.req.method !== "GET" || context.req.path !== "/api/auth/device")
+      return;
+    const userCode = context.req.query("user_code");
+    if (!userCode || userCode.length > 64) return;
+    const normalized = userCode.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+    await database.authDeviceCode.updateMany({
+      where: {
+        userCode: { in: [...new Set([userCode, normalized])] },
+        status: "pending",
+        expiresAt: { gt: new Date() },
+        OR: [{ userId: null }, { userId }],
+      },
+      data: { status: "denied", userId },
+    });
+  };
+
+  const readDeviceCodeFromTokenRequest = async (
+    context: Context,
+  ): Promise<string | null> => {
+    if (
+      context.req.method !== "POST" ||
+      context.req.path !== "/api/auth/device/token"
+    )
+      return null;
+    const text = await readCappedText(context.req.raw.clone(), 4096);
+    if (text === null) return null;
+    const contentType = context.req.header("Content-Type") ?? "";
+    let deviceCode: unknown;
+    if (contentType.startsWith("application/x-www-form-urlencoded"))
+      deviceCode = new URLSearchParams(text).get("device_code");
+    else {
+      try {
+        deviceCode = (JSON.parse(text) as { device_code?: unknown })
+          ?.device_code;
+      } catch {
+        return null;
+      }
+    }
+    return typeof deviceCode === "string" &&
+      deviceCode.length > 0 &&
+      deviceCode.length <= 255
+      ? deviceCode
+      : null;
+  };
 
   app.use("*", async (context, next) => {
     const allowed = profile.allowedGitHubIds;
@@ -681,33 +877,69 @@ const createApi = ({
       await next();
       return;
     }
-    const session = await auth.api.getSession({
-      headers: context.req.raw.headers,
-    });
+    const session = await requestSession(context, auth);
     if (session) {
-      const account = await database.authAccount.findFirst({
-        where: { userId: session.user.id, providerId: "github" },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: { accountId: true },
-      });
-      if (!account || !allowed.includes(account.accountId)) {
+      // The distinct code lets clients show "not on the list" instead of a
+      // generic error; the body names neither the list nor the account.
+      if (!(await isAlphaAdmitted(allowed, session.user.id))) {
+        // Best effort: the CLI falls back to waiting out the code.
+        await declineDeviceCodeOutsideAlpha(context, session.user.id).catch(
+          () => undefined,
+        );
         context.header("Cache-Control", "no-store");
-        return jsonProblem(context, "forbidden");
+        return jsonProblem(context, "alpha_admission_required");
       }
     } else if (context.req.path.startsWith("/api/v1/")) {
       return jsonProblem(context, "authentication_required");
+    } else {
+      const deviceCode = await readDeviceCodeFromTokenRequest(context);
+      if (deviceCode) {
+        const declined = await database.authDeviceCode.findUnique({
+          where: { deviceCode },
+          select: { id: true, status: true, userId: true },
+        });
+        if (
+          declined?.status === "denied" &&
+          declined.userId &&
+          !(await isAlphaAdmitted(allowed, declined.userId))
+        ) {
+          // Consumed like Better Auth consumes any denied code.
+          await database.authDeviceCode.deleteMany({
+            where: { id: declined.id },
+          });
+          context.header("Cache-Control", "no-store");
+          return jsonProblem(context, "alpha_admission_required");
+        }
+      }
     }
     await next();
+  });
+
+  // Every authenticated /api/v1 request counts against its User's budget;
+  // GitHub-calling and row-creating routes also count against tighter ones.
+  // The bucket owner is the server-verified session, never a header.
+  const apiRateLimit = createUserRateLimit({
+    isProduction: profile.isProduction,
+    identify: async (context) =>
+      (await requestSession(context, auth).catch(() => null))?.user.id ?? null,
+    buckets: (context) =>
+      apiRateLimitBuckets(context.req.method, context.req.path),
+  });
+  app.use("/api/v1/*", async (context, next) => {
+    if (
+      context.req.method === "OPTIONS" ||
+      context.req.path === "/api/v1/capabilities"
+    ) {
+      await next();
+      return;
+    }
+    return apiRateLimit(context, next);
   });
 
   app.get("/health", (context) => context.json({ status: "ok" }));
   app.get("/ready", async (context) => {
     context.header("Cache-Control", "no-store");
-    const ready =
-      process.env.MAINTENANCE_MODE !== "true" &&
-      (await Promise.all([databaseReady(database), valkeyReady()])).every(
-        Boolean,
-      );
+    const ready = await apiReady(database);
     return context.json(
       { status: ready ? "ready" : "unavailable" },
       ready ? 200 : 503,
@@ -762,12 +994,16 @@ const createApi = ({
       .toLowerCase();
     // Profile and email edits are blocked too: display names are shown in
     // Team views, so self-service renames could impersonate an owner.
+    // Account linking is off: a User keeps the one GitHub account that
+    // created them.
     if (
       [
         "/api/auth/get-access-token",
         "/api/auth/refresh-token",
         "/api/auth/update-user",
         "/api/auth/change-email",
+        "/api/auth/link-social",
+        "/api/auth/unlink-account",
       ].includes(authPath)
     )
       return jsonProblem(context, "forbidden");
@@ -775,7 +1011,10 @@ const createApi = ({
       const response = await auth.handler(context.req.raw);
       response.headers.set("Cache-Control", "no-store");
       return bridgeSessionRedirect(
-        await sanitizeAuthResponse(context, response),
+        await sanitizeAuthResponse(
+          context,
+          await protectSessionTokens(authPath, response, profile.authSecret),
+        ),
         profile,
       );
     } catch {
@@ -815,6 +1054,8 @@ const createApi = ({
   app.use("/api/v1/devices/enrollments", protocolCors(profile));
   app.use("/api/v1/devices/enrollments/*", protocolCors(profile));
   app.use("/api/v1/devices/self", protocolCors(profile));
+  app.use("/api/v1/devices/proofs", protocolCors(profile));
+  app.use("/api/v1/devices/proofs/*", protocolCors(profile));
   app.use("/api/v1/devices/*/revoke", protocolCors(profile));
   app.use("/api/v1/account-keys", protocolCors(profile));
   app.use("/api/v1/account-keys/*", protocolCors(profile));
@@ -890,6 +1131,13 @@ const createApi = ({
     }
   });
 
+  registerDeviceProofRoutes(app, {
+    database,
+    profile,
+    auth,
+    bodyLimit: smallBodyLimit,
+  });
+
   app.post("/api/v1/grants/bootstrap", smallBodyLimit, async (context) => {
     const actor = await requireProtocolActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
@@ -923,13 +1171,15 @@ const createApi = ({
       if (project.lifecycle !== "ACTIVE")
         throw new Error("Project is archived");
       // Cheap authorization pre-check before anything is staged; the
-      // repository repeats it inside the creating transaction.
+      // repository repeats it inside the creating transaction. This endpoint
+      // only seals the key to the actor's own Devices, which any active
+      // Member may do: they already hold the key (grantCreationAction).
       await requireTeamAction(
         database,
         actor.userId,
         actor.deviceId,
         request.teamId,
-        "ADMINISTER_PROJECT",
+        "VIEW",
       );
       const sender = await database.device.findUnique({
         where: { id: actor.deviceId },
@@ -944,11 +1194,7 @@ const createApi = ({
         recipientDeviceId === actor.deviceId
           ? sender
           : await database.device.findFirst({
-              where: {
-                id: recipientDeviceId,
-                userId: sender.userId,
-                lifecycle: "ACTIVE",
-              },
+              where: { id: recipientDeviceId, lifecycle: "ACTIVE" },
               select: {
                 x25519PublicKey: true,
                 ed25519PublicKey: true,
@@ -957,6 +1203,10 @@ const createApi = ({
             });
       if (!recipient)
         throw new DeviceNotActiveError("grant recipient device is not active");
+      // Another User's Devices receive keys only through Membership
+      // provisioning, never through this endpoint.
+      if (recipient.userId !== sender.userId)
+        throw new Error("actor is not authorized to grant to another User");
       if (
         !equalBytes(
           requiredBytes(39, 32),
@@ -992,6 +1242,8 @@ const createApi = ({
         throw new ContractError("invalid_crypto_object");
       if (!equalBytes(request.digest, await sha384Digest(request.grantBytes)))
         throw new ContractError("invalid_crypto_object");
+      // Begun before GrantRepository re-checks authorization, so a refused
+      // grant must not stay STAGED forever.
       const operation = {
         id: request.operationId,
         actorUserId: actor.userId,
@@ -999,6 +1251,9 @@ const createApi = ({
         kind: "ADMINISTRATION" as const,
         commandBytes: request.grantBytes,
         commandDigest: request.digest,
+        expiresAt: new Date(
+          Date.now() + profile.limits.stagingTtlSeconds * 1000,
+        ),
       };
       const begun = await new OperationRepository().begin(database, operation);
       if (begun.idempotent)
@@ -1082,6 +1337,22 @@ const createApi = ({
       allowRebind: profile.allowRebind,
     });
     if (!user) return jsonProblem(context, "service_unavailable");
+    // Device-scoped fields need a Device proof (ADR 0020). Without one the
+    // caller gets the session view: no Device ids, keys, rosters, links,
+    // grants or envelopes. A proof for a Device revoked since it was issued
+    // reads as no Device, as a revoked Device always has.
+    const deviceActor = await optionalProtocolActor(
+      context,
+      database,
+      profile,
+      auth,
+    );
+    if (deviceActor instanceof Response && deviceActor.status !== 403)
+      return deviceActor;
+    const provenDeviceId =
+      deviceActor && !(deviceActor instanceof Response)
+        ? deviceActor.deviceId
+        : null;
     let catalogAccessToken: Promise<string | null> | undefined;
 
     const requestedEnvironmentId = context.req.query("environment");
@@ -1182,7 +1453,6 @@ const createApi = ({
               },
             })
           : null;
-    const requestedDeviceId = context.req.header(DEVICE_ID_HEADER);
     const devices = await database.device.findMany({
       where: { userId: user.id, lifecycle: "ACTIVE" },
       orderBy: { createdAt: "asc" },
@@ -1196,13 +1466,12 @@ const createApi = ({
         clientSummary: true,
       },
     });
-    // Resolve only the Device this client presents. A fallback to the first
+    // Resolve only the Device this client proved. A fallback to the first
     // active Device would let a new installation claim a Device it does not
     // possess and receive another Device's epoch grant.
-    const device =
-      (requestedDeviceId
-        ? devices.find((candidate) => candidate.id === requestedDeviceId)
-        : undefined) ?? null;
+    const device = provenDeviceId
+      ? (devices.find((candidate) => candidate.id === provenDeviceId) ?? null)
+      : null;
     const deviceActive = device !== null;
     const currentEpochGrantCount =
       device && project
@@ -1234,73 +1503,89 @@ const createApi = ({
     // Key: any of the User's Devices that recovers the AMK can open it
     // without help from an existing Device. A stale-epoch envelope is
     // worthless for decryption, so only the current epoch is reported.
-    const accountKeyEnvelope = project
+    const accountKeyEnvelope =
+      device && project
+        ? await database.accountKeyEnvelopeObject.findFirst({
+            where: {
+              userId: user.id,
+              envelopeType: "PROJECT_EPOCH_KEY",
+              projectId: project.id,
+              projectEpoch: project.currentEpoch,
+              retiredAt: null,
+            },
+            orderBy: { createdAt: "desc" },
+            select: { protocolObject: { select: { canonicalBytes: true } } },
+          })
+        : null;
+    // The Project's key chain (ADR 0014): each link seals an epoch key under
+    // the next. Clients verify and walk them from the current epoch down.
+    const epochKeyLinks =
+      device && project
+        ? await database.projectEpochKeyLinkObject.findMany({
+            where: {
+              projectId: project.id,
+              toEpoch: { lte: project.currentEpoch },
+            },
+            orderBy: { toEpoch: "asc" },
+            select: { protocolObject: { select: { canonicalBytes: true } } },
+          })
+        : [];
+    const userValueKeyEnvelope = device
       ? await database.accountKeyEnvelopeObject.findFirst({
           where: {
             userId: user.id,
-            envelopeType: "PROJECT_EPOCH_KEY",
-            projectId: project.id,
-            projectEpoch: project.currentEpoch,
+            envelopeType: "USER_VALUE_KEY",
+            ownerUserId: user.id,
+            valueGeneration: 1n,
             retiredAt: null,
           },
           orderBy: { createdAt: "desc" },
           select: { protocolObject: { select: { canonicalBytes: true } } },
         })
       : null;
-    // The Project's key chain (ADR 0014): each link seals an epoch key under
-    // the next. Clients verify and walk them from the current epoch down.
-    const epochKeyLinks = project
-      ? await database.projectEpochKeyLinkObject.findMany({
-          where: {
-            projectId: project.id,
-            toEpoch: { lte: project.currentEpoch },
-          },
-          orderBy: { toEpoch: "asc" },
-          select: { protocolObject: { select: { canonicalBytes: true } } },
-        })
-      : [];
-    const userValueKeyEnvelope =
-      await database.accountKeyEnvelopeObject.findFirst({
-        where: {
-          userId: user.id,
-          envelopeType: "USER_VALUE_KEY",
-          ownerUserId: user.id,
-          valueGeneration: 1n,
-          retiredAt: null,
-        },
-        orderBy: { createdAt: "desc" },
-        select: { protocolObject: { select: { canonicalBytes: true } } },
-      });
-    const peerGrantRecipients = project
-      ? new Set(
-          (
-            await database.grantObject.findMany({
-              where: {
-                projectId: project.id,
-                projectEpoch: project.currentEpoch,
-                grantKind: "CURRENT_PROJECT_EPOCH",
-                recipientDeviceId: {
-                  in: devices.map((candidate) => candidate.id),
+    const peerGrantRecipients =
+      device && project
+        ? new Set(
+            (
+              await database.grantObject.findMany({
+                where: {
+                  projectId: project.id,
+                  projectEpoch: project.currentEpoch,
+                  grantKind: "CURRENT_PROJECT_EPOCH",
+                  recipientDeviceId: {
+                    in: devices.map((candidate) => candidate.id),
+                  },
                 },
-              },
-              select: { recipientDeviceId: true },
-            })
-          ).map((grant) => grant.recipientDeviceId),
-        )
-      : new Set<string>();
+                select: { recipientDeviceId: true },
+              })
+            ).map((grant) => grant.recipientDeviceId),
+          )
+        : new Set<string>();
     // With a resolved Project, the trust set spans the whole Team: Members'
     // Devices, including Devices revoked after they signed. Without one, a
     // client can sync nothing, so only its own Devices are reported.
-    const signingTrustDevices = project
-      ? await loadTeamSigningTrustDevices(database, project.teamId)
-      : [];
+    const signingTrustDevices =
+      device && project
+        ? await loadTeamSigningTrustDevices(database, project.teamId)
+        : [];
     // The latest Account Device roster (ADR 0015) of this User and of every
     // User whose Devices are in the trust set; null where none exists yet.
     // Clients verify each against the identity they derived or pinned.
-    const accountRosters = await new AccountRosterRepository().latestFor(
-      database,
-      [user.id, ...signingTrustDevices.map((entry) => entry.userId)],
-    );
+    const accountRosters = device
+      ? await new AccountRosterRepository().latestFor(database, [
+          user.id,
+          ...signingTrustDevices.map((entry) => entry.userId),
+        ])
+      : new Map<string, Uint8Array | null>();
+    // A rotation owed since a Member was removed or a Device revoked. It is
+    // advice for UI copy and never blocks publication; rotationRequired
+    // stays the publication gate and is not set by it.
+    const rotationOwed = project
+      ? await new ProjectRotationObligationRepository().outstanding(
+          database,
+          project.id,
+        )
+      : null;
     return context.json(
       {
         session: {
@@ -1320,6 +1605,14 @@ const createApi = ({
               )
             : null,
           projectEpoch: project?.currentEpoch.toString() ?? null,
+          rotationOwed: rotationOwed
+            ? {
+                since: rotationOwed.since.toISOString(),
+                sinceEpoch: rotationOwed.sinceEpoch.toString(),
+                membershipRemovals: rotationOwed.membershipRemovals,
+                deviceRevocations: rotationOwed.deviceRevocations,
+              }
+            : null,
         },
         device: {
           active: deviceActive,
@@ -1337,11 +1630,13 @@ const createApi = ({
               }
             : {}),
         },
-        signingTrustKeys: project
-          ? signingTrustDevices.map((entry) => entry.signingPublicKey)
-          : devices.map((candidate) =>
-              bytesToHex(new Uint8Array(candidate.ed25519PublicKey)),
-            ),
+        signingTrustKeys: !device
+          ? []
+          : project
+            ? signingTrustDevices.map((entry) => entry.signingPublicKey)
+            : devices.map((candidate) =>
+                bytesToHex(new Uint8Array(candidate.ed25519PublicKey)),
+              ),
         signingTrustDevices,
         ...(epochGrant?.protocolObject.canonicalBytes
           ? {
@@ -1377,7 +1672,7 @@ const createApi = ({
         epochKeyLinks: epochKeyLinks.map((link) =>
           bytesToBase64(new Uint8Array(link.protocolObject.canonicalBytes)),
         ),
-        peerDevices: devices
+        peerDevices: (device ? devices : [])
           .filter((candidate) => candidate.id !== device?.id)
           .map((candidate) => ({
             id: candidate.id,
@@ -1397,6 +1692,9 @@ const createApi = ({
           currentEpochGrantCount > 0,
         activeDeviceCount: devices.length,
         epochCurrent: project !== null,
+        // Current CLI and web clients refuse to publish while this is true,
+        // so a removal or revocation reports environment.rotationOwed
+        // instead (publication must not be blocked).
         rotationRequired: false,
         projectEpoch: project?.currentEpoch.toString() ?? null,
         profile: {
@@ -1528,11 +1826,18 @@ const createApi = ({
     database,
     profile,
     auth,
+    notifications,
     ...(githubFetch ? { githubFetch } : {}),
   });
 
   registerDeviceRoutes(app, { database, profile, auth });
-  registerMembershipProvisioningRoutes(app, { database, profile, auth });
+  registerAccountRoutes(app, { database, profile, auth });
+  registerMembershipProvisioningRoutes(app, {
+    database,
+    profile,
+    auth,
+    notifications,
+  });
 
   registerProtocolRoutes(app, { database, profile, auth });
 
@@ -1547,8 +1852,10 @@ type RequestIpServer = {
 };
 let server: RequestIpServer | undefined;
 const resolveClientIp = createClientIpResolver(profile);
+const runtimeMetrics = createMetricsRegistry();
 const runtimeObservability = createApiObservability(database, {
   ...(import.meta.main ? { diagnostics: createConsoleDiagnosticSink() } : {}),
+  metrics: runtimeMetrics,
   resolveClientIp: (request) =>
     resolveClientIp(
       server?.requestIP(request)?.address ?? null,
@@ -1558,12 +1865,43 @@ const runtimeObservability = createApiObservability(database, {
 export const auth = createAuth(
   createBetterAuthDatabaseAdapter(database),
   profile,
+  {
+    onGitHubProfile: (github) => recordGitHubLogin(database, github),
+  },
 );
+const emailConfig = loadEmailConfig();
+const runtimeNotifications = createEmailNotifier({
+  database,
+  profile,
+  config: emailConfig,
+  transport: emailConfig.apiKey
+    ? createResendTransport({
+        apiKey: emailConfig.apiKey,
+        from: emailConfig.from,
+      })
+    : null,
+  diagnostics: runtimeObservability.diagnostics,
+  // The same best-effort, cached lookup the workspace catalog uses, on the
+  // acting owner's or admin's Delegated GitHub Access.
+  resolveProjectName: async ({ githubRepositoryId, actorUserId }) => {
+    const actor = await database.user.findUnique({
+      where: { id: actorUserId },
+      select: { authSubject: true },
+    });
+    if (!actor) return undefined;
+    const repository = await lookupGitHubRepositoryDisplay(githubRepositoryId, {
+      accessToken: () => delegatedGitHubAccessToken(auth, actor.authSubject),
+      cacheScope: actor.authSubject,
+    });
+    return repository ? `${repository.owner}/${repository.name}` : undefined;
+  },
+});
 export const app = createApi({
   database,
   profile,
   auth,
   observability: runtimeObservability,
+  notifications: runtimeNotifications,
 });
 export { createApi, loadServerProfileConfig };
 
@@ -1577,12 +1915,21 @@ if (import.meta.main) {
     origin: profile.origin,
     allowRebind: profile.allowRebind,
   });
+  const metricsConfig = loadMetricsConfig(process.env, profile.isProduction);
   server = Bun.serve({
     fetch: app.fetch,
     port: Number(process.env.PORT ?? 3001),
     maxRequestBodySize: maxRequestBodyBytes(profile),
   });
   console.error(`DotRelay API listening on ${profile.origin}`);
+  if (!emailConfig.apiKey)
+    console.error("Transactional email is off: RESEND_API_KEY is not set");
+  // Private, opt-in listener; never routed through the public API surface.
+  startMetricsServer(metricsConfig, {
+    registry: runtimeMetrics,
+    ready: () => apiReady(database),
+    onReadiness: runtimeObservability.recordReadiness,
+  });
   const cleanupTimer = setInterval(
     () => {
       void runtimeObservability.runRetentionCleanup().catch(() => {
@@ -1608,6 +1955,8 @@ if (import.meta.main) {
           // /ready now fails; give load balancers time to stop routing here.
           await Bun.sleep(shutdownDrainMs(process.env.SHUTDOWN_DRAIN_MS));
           await server?.stop(false);
+          // Let queued emails finish within the remaining stop budget.
+          await Promise.race([runtimeNotifications.drain(), Bun.sleep(2_000)]);
           await database.$disconnect();
           clearTimeout(deadline);
           process.exit(0);

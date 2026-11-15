@@ -252,6 +252,54 @@ export const valueDiffsForPull = (
     }),
   );
 
+/** A local edit made since the last pull that a pull would overwrite. */
+export type UnpushedLocalChange = Readonly<{
+  readonly name: string;
+  readonly kind: "added" | "updated" | "removed";
+}>;
+
+const UNPUSHED_VERB: Readonly<Record<UnpushedLocalChange["kind"], string>> = {
+  added: "added locally",
+  updated: "edited locally",
+  removed: "removed locally",
+};
+
+/**
+ * Review lines for a pull that replaces an existing file: unpushed local
+ * edits are named apart from ordinary differences, because the pull
+ * discards them rather than catching the file up.
+ */
+export const pullReplacementNotes = (
+  path: string,
+  unpushed: readonly UnpushedLocalChange[] | null,
+): readonly string[] => {
+  const lines: string[] = [];
+  if (unpushed === null)
+    lines.push(
+      `  ${paint(
+        `No Publication Baseline is recorded for ${sanitizeCliText(path)}, so local edits not yet pushed cannot be told apart from older Values.`,
+        "warn",
+      )}`,
+    );
+  else if (unpushed.length > 0) {
+    lines.push(
+      `  ${paint("Local changes not yet pushed — will be lost:", "danger")}`,
+    );
+    for (const change of unpushed)
+      lines.push(
+        `    ${paint(sanitizeCliText(change.name), "fg")}  ${paint(UNPUSHED_VERB[change.kind], "muted")}`,
+      );
+    lines.push(`  ${paint("Run dotrelay push first to keep them.", "faint")}`);
+  }
+  lines.push(
+    `  ${paint(
+      `Comments, blank lines and the order of entries in ${sanitizeCliText(path)} are not preserved.`,
+      "faint",
+    )}`,
+  );
+  return lines;
+};
+
 export const publicationConfirmQuestion = (): string => "Publish? [y/N]";
 
 export const rollbackConfirmQuestion = (): string =>

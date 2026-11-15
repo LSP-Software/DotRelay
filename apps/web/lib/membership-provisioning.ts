@@ -3,20 +3,18 @@ import {
   createMembershipProvisioning,
   loadDeviceKeyMaterial,
   type MembershipProvisioningPlan,
-  openProjectEpochGrant,
   uuidToBytes,
 } from "@dotrelay/client";
-import {
-  type AccountKeyWrapperEntry,
-  fromBase64,
-  openProjectEpochEnvelope,
-  projectGrantVerification,
-} from "./account-keys";
-import { accountKeyVerification } from "./account-recovery";
+import type { AccountKeyWrapperEntry } from "./account-keys";
 import {
   assertProvisioningRecipients,
+  establishBrowserAccountTrust,
+  loadBrowserAccountTrustPins,
   resolveProvisioningTrust,
+  saveBrowserAccountTrustPins,
 } from "./account-trust";
+import { browserDeviceProof, fetchWithDeviceProof } from "./device-proof";
+import { adoptProjectEpochKey } from "./project-key-adoption";
 import {
   BROWSER_DEVICE_ID_HEADER,
   fetchWorkspaceBoundary,
@@ -42,11 +40,17 @@ export const provisionTeamMember = async (
     throw new Error("Unlock this browser before sharing project keys.");
   const path = `/api/v1/teams/${input.teamId}/memberships/${input.membershipId}/provision`;
   const headers = { [BROWSER_DEVICE_ID_HEADER]: deviceId };
-  const response = await fetch(`${input.apiOrigin}${path}`, {
-    headers,
-    credentials: "include",
-    cache: "no-store",
+  // Every request below acts as this browser's Device (ADR 0020).
+  const deviceProof = browserDeviceProof({
+    apiOrigin: input.apiOrigin,
+    pin: { origin: boundary.profile.origin, serverProfileId },
+    deviceId,
   });
+  const response = await fetchWithDeviceProof(
+    deviceProof,
+    `${input.apiOrigin}${path}`,
+    { headers, credentials: "include", cache: "no-store" },
+  );
   if (!response.ok) {
     const problem = await response.json().catch(() => null);
     throw new Error(
@@ -88,11 +92,24 @@ export const provisionTeamMember = async (
     deviceId: uuidToBytes(deviceId),
   });
   const keys = await loadDeviceKeyMaterial(bundle);
+  if (!keys.encryptionPublicKey || !keys.signingPublicKey)
+    throw new Error("Unlock this browser before sharing project keys.");
+  const raw = async (key: CryptoKey) =>
+    new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", key));
+  const ownKeys = {
+    encryptionPublicKey: await raw(keys.encryptionPublicKey),
+    signingPublicKey: await raw(keys.signingPublicKey),
+  };
+  const pinStore = {
+    load: () => loadBrowserAccountTrustPins(pin, deviceId),
+    save: (pins: Parameters<typeof saveBrowserAccountTrustPins>[2]) =>
+      saveBrowserAccountTrustPins(pin, deviceId, pins),
+  };
   const projectKeys = new Map<string, Uint8Array>();
   try {
     for (const project of plan.projects) {
       const scoped = await fetchWorkspaceBoundary(input.profileId, {
-        deviceId,
+        device: deviceProof,
         environmentId: project.environmentId,
       });
       if (
@@ -104,24 +121,21 @@ export const provisionTeamMember = async (
         Number(scoped.environment.projectEpoch) !== project.epoch
       )
         throw new Error("Project access changed. Refresh and try again.");
-      const verification = accountKeyVerification(scoped, input.wrappers);
-      let key: Uint8Array | null = null;
-      if (verification)
-        key = await openProjectEpochEnvelope(
-          scoped.accountKeyEnvelope,
-          input.accountMasterKey,
-          {
-            ...verification,
-            projectId: project.id,
-            projectEpoch: project.epoch,
-          },
-        );
-      if (!key && scoped.epochGrant)
-        key = await openProjectEpochGrant(
-          fromBase64(scoped.epochGrant),
-          keys.encryptionPrivateKey,
-          projectGrantVerification(scoped),
-        );
+      // Each Project's boundary is narrowed to roster-verified keys before
+      // its key is opened, exactly as a workspace session does (ADR 0022).
+      const { boundary: narrowed } = await establishBrowserAccountTrust({
+        boundary: scoped,
+        accountMasterKey: input.accountMasterKey,
+        actor: { origin: input.apiOrigin, deviceId },
+        ...ownKeys,
+      });
+      const key = await adoptProjectEpochKey({
+        boundary: narrowed,
+        accountMasterKey: input.accountMasterKey,
+        encryptionPrivateKey: keys.encryptionPrivateKey,
+        wrappers: input.wrappers,
+        pinStore,
+      });
       if (!key)
         throw new Error(
           "This browser is missing a project's keys. Open each project on a Device with access, then try again.",
@@ -135,16 +149,20 @@ export const provisionTeamMember = async (
       plan,
       projectKeys,
     });
-    const committed = await fetch(`${input.apiOrigin}${path}`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        ...headers,
-        "Content-Type": "application/json",
-        "Idempotency-Key": request.operationId,
+    const committed = await fetchWithDeviceProof(
+      deviceProof,
+      `${input.apiOrigin}${path}`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+          "Idempotency-Key": request.operationId,
+        },
+        body: JSON.stringify(request),
       },
-      body: JSON.stringify(request),
-    });
+    );
     if (!committed.ok)
       throw new Error(
         "Access couldn't be activated. Refresh the member list before trying again.",

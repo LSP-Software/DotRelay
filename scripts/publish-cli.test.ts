@@ -3,12 +3,16 @@ import {
   publicationTag,
   publishCommand,
   stableReleaseExists,
+  supportsTrustedPublishing,
 } from "./publish-cli";
 
 test("npm publication carries signed provenance", () => {
   const command = publishCommand("/tmp/pkg", "alpha");
   expect(command.slice(0, 3)).toEqual(["npm", "publish", "/tmp/pkg"]);
   expect(command).toContain("--provenance");
+  // The publishing job holds OIDC credentials, so npm runs no lifecycle
+  // scripts there.
+  expect(command).toContain("--ignore-scripts");
   expect(command[command.indexOf("--tag") + 1]).toBe("alpha");
 });
 
@@ -57,4 +61,13 @@ test("only an unsuffixed published version counts as a stable release", async ()
   await expect(
     stableReleaseExists("@dotrelay/cli", registry(500)),
   ).rejects.toThrow(/HTTP 500/);
+});
+
+test("trusted publishing requires npm 11.5.1 or later", () => {
+  expect(supportsTrustedPublishing("11.5.1")).toBe(true);
+  expect(supportsTrustedPublishing("11.19.1\n")).toBe(true);
+  expect(supportsTrustedPublishing("12.0.0")).toBe(true);
+  expect(supportsTrustedPublishing("11.5.0")).toBe(false);
+  expect(supportsTrustedPublishing("10.9.4")).toBe(false);
+  expect(supportsTrustedPublishing("")).toBe(false);
 });

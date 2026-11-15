@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { CliInvocationError, parseArguments } from "./args";
+import {
+  CliInvocationError,
+  ownArguments,
+  parseArguments,
+  rejectForbiddenFlags,
+} from "./args";
 
 describe("CLI argument contract", () => {
   test("parses profile override and safe output flags", () => {
@@ -101,7 +106,7 @@ describe("CLI argument contract", () => {
       ]),
     ).toThrow("--variable");
     expect(() => parseArguments(["rollback", "--no-input"])).toThrow(
-      "rollback takes exactly one positional argument",
+      "the rollback command takes exactly one positional argument",
     );
   });
 
@@ -226,16 +231,16 @@ describe("CLI argument contract", () => {
     expect(parseArguments(["diff", "--reveal"]).reveal).toBe(true);
     expect(() => parseArguments(["status", "--reveal"])).toThrow("--reveal");
     expect(() => parseArguments(["diff", "extra"])).toThrow(
-      "diff takes no positional arguments but received 1; use --environment extra instead; usage: dotrelay diff",
+      "the diff command takes no positional arguments but received 1; use --environment extra instead; usage: dotrelay diff",
     );
   });
 
   test("rejects unexpected positionals with a correction and usage", () => {
     expect(() => parseArguments(["pull", "production"])).toThrow(
-      "pull takes no positional arguments but received 1; use --environment production instead; usage: dotrelay pull",
+      "the pull command takes no positional arguments but received 1; use --environment production instead; usage: dotrelay pull",
     );
     expect(() => parseArguments(["pull", "a", "b"])).toThrow(
-      "pull takes no positional arguments but received 2; usage: dotrelay pull",
+      "the pull command takes no positional arguments but received 2; usage: dotrelay pull",
     );
     expect(() => parseArguments(["push", "extra"])).toThrow(
       "usage: dotrelay push",
@@ -419,5 +424,144 @@ describe("CLI argument contract", () => {
     expect(
       parseArguments(["push", "--from", ".env", "--team", "team-1"]).team,
     ).toBe("team-1");
+  });
+
+  test("accepts -o as the short form of --output", () => {
+    expect(parseArguments(["pull", "-o", ".env.local"]).output).toBe(
+      ".env.local",
+    );
+    expect(() => parseArguments(["pull", "-o"])).toThrow("-o needs a value");
+    expect(() => parseArguments(["status", "-o", "x"])).toThrow(
+      "--output is not supported by status",
+    );
+  });
+
+  test("names an unknown short option instead of treating it as a command", () => {
+    expect(() => parseArguments(["pull", "-x"])).toThrow(
+      "unknown option: -x; options use two dashes",
+    );
+    expect(() => parseArguments(["-x"])).toThrow("unknown option: -x");
+  });
+
+  test("never starts an error with the operator's own input", () => {
+    expect(() => parseArguments(["bogus"])).toThrow(
+      "unknown command: bogus; run dotrelay help",
+    );
+    expect(() => parseArguments(["pull", "extra"])).toThrow(
+      /^the pull command takes/,
+    );
+    expect(() => parseArguments(["env"])).toThrow(
+      "the env command needs a subcommand: list, use, create",
+    );
+  });
+
+  test("parses env list, env create, team list, team share-keys, and device list", () => {
+    expect(parseArguments(["env", "list"]).subcommand).toBe("list");
+    expect(parseArguments(["env", "create", "staging"]).positionals).toEqual([
+      "staging",
+    ]);
+    expect(() => parseArguments(["env", "create"])).toThrow(
+      "usage: dotrelay env create <label>",
+    );
+    expect(() => parseArguments(["env", "list", "extra"])).toThrow(
+      "usage: dotrelay env list",
+    );
+    expect(parseArguments(["team", "list", "--json"]).json).toBe(true);
+    expect(
+      parseArguments(["team", "share-keys", "octocat", "--team", "t"])
+        .positionals,
+    ).toEqual(["octocat"]);
+    expect(() => parseArguments(["team", "share-keys"])).toThrow(
+      "usage: dotrelay team share-keys <github-login-or-user-id>",
+    );
+    expect(parseArguments(["device", "list"]).subcommand).toBe("list");
+    expect(
+      parseArguments(["team", "decline", "Payments", "--no-input", "--force"])
+        .positionals,
+    ).toEqual(["Payments"]);
+    expect(() => parseArguments(["team", "decline"])).toThrow(
+      "usage: dotrelay team decline <invitation-id-or-team>",
+    );
+    expect(() =>
+      parseArguments(["team", "decline", "Payments", "--team", "t"]),
+    ).toThrow();
+  });
+
+  test("run takes the command after -- and leaves its flags alone", () => {
+    const parsed = parseArguments([
+      "run",
+      "--environment",
+      "production",
+      "--",
+      "node",
+      "server.js",
+      "--port",
+      "3000",
+      "--insecure",
+    ]);
+    expect(parsed.environment).toBe("production");
+    expect(parsed.positionals).toEqual([
+      "node",
+      "server.js",
+      "--port",
+      "3000",
+      "--insecure",
+    ]);
+    expect(() => parseArguments(["run", "node", "server.js"])).toThrow(
+      "put the command to run after --",
+    );
+    expect(() => parseArguments(["run"])).toThrow(
+      "the run command needs the command to start after --",
+    );
+    expect(() => parseArguments(["run", "--json", "--", "x"])).toThrow(
+      "--json is not supported by run",
+    );
+    // The child's own flags are never DotRelay's forbidden flags.
+    expect(() =>
+      rejectForbiddenFlags(["run", "--", "curl", "--insecure"]),
+    ).not.toThrow();
+    expect(() => rejectForbiddenFlags(["pull", "--insecure"])).toThrow(
+      "--insecure is not supported",
+    );
+    expect(ownArguments(["run", "-p", "--", "--help"])).toEqual(["run", "-p"]);
+  });
+
+  test("--allow-env names process-control Variables for run and export only", () => {
+    const parsed = parseArguments([
+      "run",
+      "--allow-env",
+      "NODE_OPTIONS",
+      "--allow-env=PATH",
+      "--",
+      "node",
+      "app.js",
+    ]);
+    expect(parsed.allowedEnvironmentNames).toEqual(["NODE_OPTIONS", "PATH"]);
+    expect(
+      parseArguments(["export", "--format", "shell", "--allow-env", "PATH"])
+        .allowedEnvironmentNames,
+    ).toEqual(["PATH"]);
+    expect(parseArguments(["run", "--", "x"]).allowedEnvironmentNames).toEqual(
+      [],
+    );
+    expect(() =>
+      parseArguments(["run", "--allow-env", "NOT-A-NAME", "--", "x"]),
+    ).toThrow("--allow-env requires a Variable name");
+    expect(() => parseArguments(["pull", "--allow-env", "PATH"])).toThrow(
+      "--allow-env is not supported by pull",
+    );
+  });
+
+  test("export validates --format", () => {
+    expect(parseArguments(["export"]).format).toBeUndefined();
+    expect(parseArguments(["export", "--format", "shell"]).format).toBe(
+      "shell",
+    );
+    expect(() => parseArguments(["export", "--format", "yaml"])).toThrow(
+      "--format must be one of: dotenv, json, shell",
+    );
+    expect(() => parseArguments(["pull", "--format", "json"])).toThrow(
+      "--format is not supported by pull",
+    );
   });
 });

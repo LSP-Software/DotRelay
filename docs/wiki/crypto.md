@@ -20,6 +20,16 @@ string `DotRelay\0dotrelay-e2ee-v3-classical-webcrypto\0Project-epoch-key-link\0
 data is the canonical CBOR of every link field except the signature envelope (3, 4), ciphertext,
 ciphertext hash and ciphertext length.
 
+A ciphertext lane (kind 13) names the layout of its AES-GCM associated data in field 50
+([ADR 0022](../adr/0022-client-trust-anchors-and-key-adoption.md)). Format 1, used before ADR 0022
+and still readable, binds the canonical CBOR of the Variable (15), Revision (16) and scope (36).
+Format 2, which every new lane uses, binds the canonical CBOR of the lane's Server Profile (8),
+Team (11), Project (13), Environment (14), Variable, Revision, owner (26) or original provider
+(27), Project epoch (30), scope and format (50) fields, so a ciphertext opens only in the lane
+context it was sealed for. Protocol validation accepts only these two formats, and a format-2 lane
+must name its Environment, Variable and Revision. The v3 corpus pins both layouts as known answers
+(`lane-format-1`, `lane-format-2`).
+
 Decryption returns only plaintext or one generic `InvalidCiphertextError`. Malformed envelopes,
 unsupported suites, wrong keys, wrong associated data, and authentication failures are
 indistinguishable to callers.
@@ -29,10 +39,12 @@ indistinguishable to callers.
 | Runtime                          | Operating system            | Evidence and support boundary                                                                     |
 | -------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------- |
 | Chromium installed by Playwright | Ubuntu Linux in CI          | Browser/Bun parity tests; this is the only browser entry currently evidenced.                     |
-| Bun `1.4.0`                      | Ubuntu Linux in CI          | Unit, import/export, encryption, and signature coverage.                                          |
-| Bun `1.4.0`                      | macOS and Windows CI matrix | CLI runtime targets; run the crypto suite on each OS before claiming secret-capable parity there. |
+| Bun `1.4.4`                      | Ubuntu Linux in CI          | Unit, import/export, encryption, and signature coverage.                                          |
+| Bun `1.4.4`                      | macOS and Windows CI matrix | CLI runtime targets; run the crypto suite on each OS before claiming secret-capable parity there. |
 
-Other browsers, browser versions, operating systems, and Bun versions require fresh compatibility
+Bun `1.4.4` is the stable release (revision `1.4.4+38afee6c8`) pinned in `ops/bun-toolchain.json`:
+CI runs the suites on it, the API image runs on it, and the compiled CLI embeds it. Other
+browsers, browser versions, operating systems, and Bun versions require fresh compatibility
 evidence before being added to the supported matrix.
 
 The JavaScript API cannot promise zeroization. Temporary byte arrays are cleared on a best-effort

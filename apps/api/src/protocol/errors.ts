@@ -6,12 +6,16 @@ import {
   DeviceNotActiveError,
   EnvironmentNotActiveError,
   GenesisExistsError,
+  InvitationNotPendingError,
+  MembershipAwaitingKeysError,
   MembershipNotActiveError,
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
+  PendingInvitationLimitError,
   ProjectEpochKeyLinkConflictError,
   ProjectNotActiveError,
+  RevisionAuthoredAtError,
   StagedObjectConflictError,
   StagingQuotaExceededError,
   StaleEpochError,
@@ -38,6 +42,12 @@ export const mapPersistenceError = (
       headId: error.currentHeadId,
     };
   if (error instanceof StaleEpochError) return { code: "stale_epoch" };
+  if (error instanceof RevisionAuthoredAtError)
+    return { code: "authored_at_out_of_range" };
+  if (error instanceof PendingInvitationLimitError)
+    return { code: "pending_invitation_limit" };
+  if (error instanceof InvitationNotPendingError)
+    return { code: "invitation_expired" };
   if (error instanceof OperationConflictError)
     return { code: "operation_conflict" };
   if (error instanceof StagedObjectConflictError)
@@ -55,6 +65,9 @@ export const mapPersistenceError = (
     return { code: "state_conflict" };
   if (error instanceof DeviceNotActiveError)
     return { code: "device_not_active" };
+  // Waiting for keys first: it is also a MembershipNotActiveError.
+  if (error instanceof MembershipAwaitingKeysError)
+    return { code: "membership_not_key_provisioned" };
   if (error instanceof MembershipNotActiveError)
     return { code: "membership_not_active" };
   if (

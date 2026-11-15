@@ -6,10 +6,11 @@ const url = process.env.DATABASE_URL;
 if (
   !url ||
   process.env.DOTRELAY_WRITERS_STOPPED !== "true" ||
-  !process.env.BACKUP_ARCHIVE
+  !process.env.BACKUP_ARCHIVE ||
+  !process.env.BACKUP_MAC_KEY_FILE
 )
   throw new Error(
-    "DATABASE_URL, BACKUP_ARCHIVE and DOTRELAY_WRITERS_STOPPED=true are required",
+    "DATABASE_URL, BACKUP_ARCHIVE, BACKUP_MAC_KEY_FILE and DOTRELAY_WRITERS_STOPPED=true are required",
   );
 const sql = postgres(url, {
   max: 1,

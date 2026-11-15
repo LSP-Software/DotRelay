@@ -18,6 +18,12 @@ import {
   writeStoredBrowserDeviceId,
 } from "@/lib/browser-storage";
 import { describeThisBrowser } from "@/lib/device-describe";
+import { retryAfterSecondsFrom } from "@/lib/rate-limit";
+import {
+  browserDeviceProof,
+  fetchDeviceBoundary,
+  fetchWithDeviceProof,
+} from "@/lib/device-proof";
 import {
   fetchWorkspaceBoundary,
   type WorkspaceBoundary,
@@ -97,7 +103,10 @@ class ProvisioningMessage extends Error {
 // Every problem code the server's devices/bootstrap route can return,
 // mapped to what the person at this browser can do about it. Codes the
 // route cannot return fall through to the neutral retry message.
-export const bootstrapFailureMessage = (code: string | null): string => {
+export const bootstrapFailureMessage = (
+  code: string | null,
+  retryAfterSeconds?: number,
+): string => {
   switch (code) {
     case "authentication_required":
       return "Sign in before setting up this browser.";
@@ -106,7 +115,9 @@ export const bootstrapFailureMessage = (code: string | null): string => {
     case "service_unavailable":
       return "The server couldn't finish setting up this browser right now. Try again in a moment.";
     case "rate_limited":
-      return "The server is limiting requests from this browser right now. Wait a moment, then try again.";
+      return retryAfterSeconds === undefined || retryAfterSeconds === 0
+        ? "The server is limiting requests from this browser right now. Wait a moment, then try again."
+        : `The server is limiting requests from this browser right now. Try again in ${retryAfterSeconds} ${retryAfterSeconds === 1 ? "second" : "seconds"}.`;
     case "device_not_active":
       return "This browser's device is no longer active on the server. It may have been revoked; check the Devices list, then try again.";
     case "unsupported_api_version":
@@ -213,7 +224,12 @@ export const provisionBrowserDevice = async (
       } | null;
       const code = typeof body?.code === "string" ? body.code : null;
       if (code !== "state_conflict")
-        throw new ProvisioningMessage(bootstrapFailureMessage(code));
+        throw new ProvisioningMessage(
+          bootstrapFailureMessage(
+            code,
+            retryAfterSecondsFrom(body, response.headers),
+          ),
+        );
       // Bootstrap creates the User's first Device only. When the User
       // already has an active Device, this browser joins through an
       // enrollment: its own keys start a self-signed request that one of
@@ -301,7 +317,16 @@ export const provisionBrowserDevice = async (
             bootstrap.keyMaterial.encryptionPublicKey,
           signingPrivateKey: bootstrap.keyMaterial.signingPrivateKey,
         });
-        const grantResponse = await fetch(
+        const grantResponse = await fetchWithDeviceProof(
+          browserDeviceProof({
+            apiOrigin,
+            pin,
+            deviceId: bootstrap.deviceId,
+            signing: {
+              userId: boundary.session.userId,
+              signingKey: bootstrap.keyMaterial.signingPrivateKey,
+            },
+          }),
           `${apiOrigin}/api/v1/grants/bootstrap`,
           {
             method: "POST",
@@ -326,14 +351,21 @@ export const provisionBrowserDevice = async (
           );
       }
     }
-    const nextBoundary = await fetchWorkspaceBoundary(profileId, {
-      deviceId: bootstrap.deviceId,
-      ...(ctx.selectedEnvironmentId
-        ? { environmentId: ctx.selectedEnvironmentId }
-        : ctx.environmentId
-          ? { environmentId: ctx.environmentId }
-          : {}),
-    });
+    // A Device still waiting for enrollment approval cannot prove itself
+    // yet, so its boundary is the session view until an approval lands.
+    const nextBoundary = await fetchDeviceBoundary(
+      profileId,
+      {
+        apiOrigin,
+        pin,
+        deviceId: bootstrap.deviceId,
+        signing: {
+          userId: boundary.session.userId,
+          signingKey: bootstrap.keyMaterial.signingPrivateKey,
+        },
+      },
+      ctx.selectedEnvironmentId ?? ctx.environmentId,
+    );
     if (nextBoundary.connection === "online") {
       onCommit(nextBoundary);
     } else {
@@ -483,7 +515,12 @@ const beginBrowserDeviceEnrollment = async (
       readonly code?: unknown;
     } | null;
     const code = typeof body?.code === "string" ? body.code : null;
-    throw new ProvisioningMessage(bootstrapFailureMessage(code));
+    throw new ProvisioningMessage(
+      bootstrapFailureMessage(
+        code,
+        retryAfterSecondsFrom(body, response.headers),
+      ),
+    );
   }
 };
 
@@ -527,14 +564,17 @@ export const repairStaleEpoch = async (
   onMessage(null);
   try {
     const storedId = readStoredBrowserDeviceId(pin.origin, pin.serverProfileId);
-    const nextBoundary = await fetchWorkspaceBoundary(profileId, {
-      ...(storedId ? { deviceId: storedId } : {}),
-      ...(ctx.selectedEnvironmentId
-        ? { environmentId: ctx.selectedEnvironmentId }
-        : ctx.environmentId
-          ? { environmentId: ctx.environmentId }
-          : {}),
-    });
+    const environmentScope = ctx.selectedEnvironmentId ?? ctx.environmentId;
+    const nextBoundary = storedId
+      ? await fetchDeviceBoundary(
+          profileId,
+          { apiOrigin: ctx.apiOrigin, pin, deviceId: storedId },
+          environmentScope,
+        )
+      : await fetchWorkspaceBoundary(
+          profileId,
+          environmentScope ? { environmentId: environmentScope } : {},
+        );
     if (nextBoundary.connection !== "online") {
       onOffline();
       onMessage(

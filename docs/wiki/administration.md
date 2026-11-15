@@ -15,6 +15,11 @@ owner. A Membership is `PENDING_KEY_GRANT`, `ACTIVE`, or `REMOVED`; only `ACTIVE
 | Invite/remove Members                | yes   | yes   | no     |
 | Manage admins and owners             | yes   | no    | no     |
 | Administer Projects and Environments | yes   | yes   | no     |
+| Leave the Team                       | yes   | yes   | yes    |
+| Delete the Team                      | yes   | no    | no     |
+
+Any Member can leave; the last active owner must promote another owner or delete the Team first.
+Deleting a Team ends every Membership at once, and retention purges its data after 30 days.
 
 Membership Invitations target a stable GitHub provider subject, expire exactly seven days after
 creation, and are single-use. The matching User accepts the invitation to create a
@@ -36,6 +41,11 @@ replacement is active. GitHub repository metadata remains descriptive and never 
 An Environment is created, archived, or restored explicitly by a Team owner or admin. Archive is
 logical: immutable Revisions remain retained, but Manifest lanes are not disclosed until the
 Environment is restored under an active Project.
+
+`POST /api/v1/projects` creates the Project's first Environment in the same transaction. An
+optional `environmentLabel` names it, under the same rules as `POST
+/api/v1/projects/:projectId/environments`; without one it is `default`. Linking a Repository that
+already has an active Project returns that Project and ignores the label.
 
 The service stores opaque Environment ids, an operator-visible label (default `default`),
 lifecycle, and current-head metadata. Variable names still live only in verified encrypted

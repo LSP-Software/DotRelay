@@ -989,3 +989,381 @@ create a Team or decrypt values, and that losing every device and the
 recovery code leaves values unreadable. Verified by
 `apps/web/lib/getting-started.test.ts` and
 `apps/web/e2e/workspace-getting-started.spec.ts`. See DECISIONS.md (D-007).
+
+## UX-030 - "Remove member" acted on one click and said nothing about keys
+
+Journey:
+WEB - Team view, owner or admin removes a member.
+State:
+Signed in as Owner or Admin, an active member row.
+Severity:
+HIGH (irreversible action with no confirmation, and silence about the
+security follow-up it needs)
+Observed:
+The row's "Remove member" button posted the removal immediately. Nothing
+said that removal is permanent (re-adding needs a new invitation and a new
+key share) or that the removed member keeps every key and value they
+already downloaded.
+Expected:
+A confirmation that names the member and states both facts, then rotation
+guidance after the removal.
+Status:
+FIXED - `RemoveMemberDialog` (`apps/web/app/workspace/team-dialogs.tsx`)
+names the member and the team, says removal is permanent, and warns that it
+does not revoke what they downloaded, pointing at `dotrelay project rotate`.
+A successful removal shows a notice with the same guidance and a copyable
+command. E2E: `workspace-team-management.spec.ts` (cancel posts nothing,
+confirm removes, notice shows the command).
+
+## UX-031 - Revoking a device jumped to sign-in without rotation guidance
+
+Journey:
+WEB - Devices, revoke another device.
+State:
+Enrolled browser, more than one device.
+Severity:
+HIGH (a revoked device keeps its downloaded secrets; the only moment to say
+so was skipped)
+Observed:
+A `window.confirm` asked first, and success went straight to `/sign-in`.
+Expected:
+An in-app confirmation naming the device, then a "Device revoked" step that
+says the device keeps what it downloaded and shows the rotate command before
+continuing to sign-in.
+Status:
+FIXED - `RevokeDeviceDialog` and `DeviceRevokedDialog` replace the native
+confirm and the immediate redirect; "Continue to sign in" leaves. E2E:
+`workspace.spec.ts` ("revoking a device confirms first and ends with
+rotation guidance").
+
+## UX-032 - Role select applied on change
+
+Journey:
+WEB - Team view, owner changes a member's role.
+State:
+Signed in as Owner.
+Severity:
+MEDIUM (one mis-click promoted someone to Owner)
+Observed:
+Choosing a role in the row's select posted the change at once.
+Expected:
+A confirmation stating the old and new role and what the new role can do.
+Status:
+FIXED - the select opens `RoleChangeDialog`; Cancel leaves the select on the
+recorded role. The own row never has controls, so self-demotion can't start
+here. E2E: `workspace-team-management.spec.ts`.
+
+## UX-033 - Pending key grant was a dead end on both sides
+
+Journey:
+WEB - invitee accepts an invitation; admin opens Team.
+State:
+Membership in `PENDING_KEY_GRANT`.
+Severity:
+HIGH (neither person was told what unblocks access)
+Observed:
+The invitee saw only "Waiting for encryption keys". Admins saw the same
+badge on the row, with a "Share project keys" button and no explanation.
+Expected:
+The invitee learns who acts next and what to do afterwards; the admin row
+reads as an action and says the browser must be unlocked.
+Status:
+FIXED - the invitee card says an owner or admin must open Team and choose
+Share project keys, then to refresh or run `dotrelay pull`. Admins see
+"Action needed: share project keys" with a one-line explanation; plain
+members still see the wait badge. E2E: `workspace-invitations.spec.ts`,
+`workspace-team-management.spec.ts`, `workspace.spec.ts`.
+
+## UX-034 - Team table polish: misaligned invitations, duplicate names, silent errors
+
+Journey:
+WEB - Team view.
+State:
+Owner or Admin with pending invitations and several members.
+Severity:
+LOW
+Observed:
+Invitation rows put an empty cell under Status and the badge under Actions.
+Every row's buttons had the same accessible name ("Remove member", "Share
+project keys"). Row errors were plain text with no live region. A failed
+fingerprint re-trust was an unhandled rejection. An invalid device roster
+was labelled "Account list rolled back".
+Expected:
+Columns line up; controls name their member; errors are announced; every
+trust state has an accurate label.
+Status:
+FIXED - invitation badge under Status; `aria-label`s include the member's
+name; row errors use `role="alert"`; `trustMemberKey` catches and shows the
+failure on the row; roster states read "Device list rolled back" and
+"Device list failed verification", each with its own explanation. E2E:
+`workspace-team-management.spec.ts`.
+
+## UX-035 - Every publish failure said "Refresh and try again"
+
+Journey:
+WEB - Environment editor, publish fails.
+State:
+Dirty draft; network down, session expired, keys rotated, or server error.
+Severity:
+MEDIUM (wrong advice: a page refresh discards the unpublished draft)
+Observed:
+Any non-stale failure produced "Publish was rejected. Refresh and try
+again."
+Expected:
+A message for the actual cause that says the draft is kept and never asks
+for a page reload.
+Status:
+FIXED - `apps/web/lib/publish-errors.ts` maps offline/network failures and
+known problem codes; conflicts point at the editor's own Refresh, which
+keeps the draft. Unit: `publish-errors.test.ts`. E2E:
+`workspace-editor-tools.spec.ts`.
+
+## UX-036 - History showed "Author unavailable" for everyone but you
+
+Journey:
+WEB - Environment editor, History.
+State:
+Revisions published by teammates.
+Severity:
+MEDIUM
+Observed:
+Only the viewer's own revisions had an author; every synced revision said
+"Author unavailable", and nothing said what a revision changed.
+Expected:
+Teammates' names, and the variables each revision changed.
+Status:
+FIXED - `verifiedRevisionFromWire` reads the author and changed lanes from
+the signed revision object on a verified page; the shell passes the team's
+member names to the editor. Unknown ids read "Unknown member". Unit:
+`environment-workflow.test.ts`. E2E: `workspace-role-permissions.spec.ts`,
+`workspace-protocol-publish.spec.ts`.
+
+## UX-037 - Read-only values couldn't be selected or copied
+
+Journey:
+WEB - Environment editor as a Member.
+State:
+A shared value someone else provided.
+Severity:
+MEDIUM
+Observed:
+Read-only values were disabled inputs (no focus, no selection), and the
+reason was only in a `title` tooltip.
+Expected:
+A selectable read-only field, a Copy control, and a visible reason.
+Status:
+FIXED - read-only lanes use `readOnly`; each readable value has a Copy
+button (clipboard only, never rendered; "Copied" announced briefly); the
+reason is shown under the description and linked with
+`aria-describedby`. E2E: `workspace-role-permissions.spec.ts`.
+
+## UX-038 - No filter, bulk import, or download in the editor
+
+Journey:
+WEB - Environment editor with many variables, or moving an existing .env.
+State:
+Any readable environment.
+Severity:
+MEDIUM (missing core actions the CLI already has)
+Observed:
+No way to find a variable by name, paste a .env, or save one.
+Expected:
+Filter by name; import pasted .env text into the draft after review;
+download readable values with a warning.
+Status:
+FIXED - filter box; "Import .env" parses with `apps/web/lib/dotenv.ts` (a
+strict port of the CLI parser), previews add/update/unchanged/skipped,
+asks who can read new variables, and stages into the draft; "Download .env"
+warns that the file is plain text and writes readable published values
+through a client-side Blob. Unit: `dotenv.test.ts`,
+`dotenv-import.test.ts`. E2E: `workspace-editor-tools.spec.ts`.
+
+## UX-039 - No way to add an environment from the web
+
+Journey:
+WEB - Project with one environment.
+State:
+Owner or Admin.
+Severity:
+MEDIUM
+Observed:
+Only `dotrelay init` created environments, though the API has
+`POST /api/v1/projects/:projectId/environments`.
+Expected:
+A "New environment" action for roles the API allows.
+Status:
+FIXED - `NewEnvironmentDialog` next to the environment tabs (and in the
+no-environments state) for Owners and Admins; it validates the label like
+the server, refreshes the workspace, and opens the new environment. Unit:
+`team-administration.test.ts`. E2E: `workspace-new-environment.spec.ts`.
+
+## UX-040 - Editor only refreshed on a 30-second poll
+
+Journey:
+WEB - Environment editor while a teammate publishes.
+State:
+Dirty or clean draft.
+Severity:
+LOW
+Observed:
+No manual refresh. After a stale-head publish with no conflicting
+variables, the editor kept showing the teammate's old values.
+Expected:
+A Refresh that keeps the draft, and fresh values after a stale-head retry.
+Status:
+FIXED - "Refresh" re-reads the verified head and rebases the draft (a
+teammate's change to a drafted variable becomes a conflict). The
+no-conflict stale-head path merges the teammate's values into view. E2E:
+`workspace-editor-tools.spec.ts`.
+
+## UX-041 - Signed-in visitors saw the sign-in page; missing API origin was silent
+
+Journey:
+WEB - open /sign-in while signed in; production deploy without an API
+origin.
+State:
+Active session / misconfigured deployment.
+Severity:
+LOW
+Observed:
+/sign-in rendered the GitHub button for a signed-in visitor, and in
+production it fell back to `http://localhost:3001` when no API origin was
+configured.
+Expected:
+Redirect signed-in visitors to /workspace; fail visibly without an origin
+outside development.
+Status:
+FIXED - sign-in uses the shared `isSessionActive` (`lib/server-session.ts`,
+unit-tested) and `resolveLiveApiOrigin`, which throws in production like the
+landing page and workspace boundary do.
+
+## UX-042 - Landing page had no install path, docs, or accurate security claim
+
+Journey:
+FIRST USE - landing page.
+State:
+Signed out.
+Severity:
+LOW
+Observed:
+The nav had only GitHub and Sign in. The privacy card said keys "never leave"
+the device and did not mention the classical cryptography or the
+first-use server confirmation.
+Expected:
+Install commands, a Docs link, an accurate short claim, and footer links to
+policy pages that exist.
+Status:
+FIXED - copyable `npm install -g @dotrelay/cli` and `dotrelay setup
+https://api.dotrelay.dev`, Docs (`docs/wiki/cli.md` on GitHub) in the nav and
+footer, a corrected claim, and `/privacy` and `/terms` placeholders that say
+the policy is being finalised and make no policy claims. E2E:
+`workspace.spec.ts`.
+
+## UX-043 - D-005 said the browser never stores the Account Master Key
+
+Journey:
+Docs.
+State:
+n/a
+Severity:
+LOW (a decision record that contradicted the code)
+Observed:
+D-005 and PRODUCT.md said the key lived in memory only; the browser has
+kept a Device-sealed copy for returning visits.
+Expected:
+The decision record matches the code.
+Status:
+FIXED - D-005 now describes the sealed copy, what binds it, and the
+tradeoff; PRODUCT.md matches.
+
+## UX-044 - No reminder that a removal or revocation still needs a key rotation
+
+Journey:
+TEAM - remove a Member or revoke a Device, then come back to the Project.
+State:
+Owner or Admin; the Project's epoch began before the removal or revocation
+(the boundary reports `environment.rotationOwed`).
+Severity:
+MEDIUM
+Observed:
+The rotation guidance appeared once, right after the removal or revocation,
+and was gone after dismissing it or reloading. Nothing on the Project said its
+key was still the one the removed Member or revoked Device held.
+Expected:
+Until a rotation commits, Owners and Admins see what happened and since when,
+the rotate command, and a reminder to change secrets the removed party could
+read. Members see nothing. Publishing is never blocked by it.
+Status:
+FIXED - a non-blocking banner on the Project's environment view (e.g. "1
+member removed since 12 Nov") with a copyable `dotrelay project rotate`,
+shown only to Owners and Admins. E2E: `workspace-rotation-owed.spec.ts`.
+
+## UX-045 - A pending invitation could not be cancelled or declined
+
+Journey:
+TEAM - pending invitations; INVITEE - "Invitations for you".
+State:
+An Owner or Admin with a pending invitation; an invitee holding one.
+Severity:
+MEDIUM
+Observed:
+An invitation sent to the wrong GitHub account stayed acceptable for seven
+days with no way to withdraw it, and an invitee could only accept or ignore
+an invitation. A Team at the 50 pending-invitation cap got "Something went
+wrong".
+Expected:
+Owners and Admins cancel a pending invitation from its row; an invitee
+declines next to Accept. Both confirm first, since neither can be undone. The
+cap names its limit and how to make room.
+Status:
+FIXED - "Cancel invitation" on each pending row (`POST
+/api/v1/teams/:teamId/invitations/:invitationId/revoke`) and "Decline" beside
+"Accept invitation" (`POST /api/v1/invitations/:invitationId/decline`), each
+behind a confirmation; a refusal stays on the row or card. `pending_invitation_limit`
+has its own message. E2E: `workspace-invitations.spec.ts`.
+
+## UX-046 - Rate limits and clock skew gave no usable advice
+
+Journey:
+TEAM administration and environment publication.
+State:
+The service answers 429 `rate_limited` (with `retryAfterSeconds` and
+`Retry-After`), or refuses a Revision with 409 `authored_at_out_of_range`.
+Severity:
+LOW
+Observed:
+Team calls showed "Something went wrong. Try again." for a rate limit, with
+no wait time. A publication from a device whose clock was behind its own
+activation, its Membership activation, or the head Revision was refused with
+the generic "The server rejected this publication".
+Expected:
+Rate-limited calls say how many seconds to wait. The browser never signs a
+Revision before that floor, and a refused timestamp points at the device
+clock.
+Status:
+FIXED - Team and invitation calls and publication read the wait from the
+problem body or `Retry-After` ("Try again in 42 seconds."). Every web
+publication sets `authoredAtNotBeforeMs` from this Device's trust entry and
+the head Revision, and `authored_at_out_of_range` says to fix the device
+clock. Unit: `rate-limit.test.ts`, `team-administration.test.ts`,
+`publish-errors.test.ts`, `environment-workflow.test.ts`.
+
+## UX-047 - A re-invited Member's earlier Revisions failed verification
+
+Journey:
+WEB - Environment editor after a Member was removed and invited back.
+State:
+The boundary lists several `membershipPeriods` for the author.
+Severity:
+HIGH (the whole Environment failed to load)
+Observed:
+The browser kept only the current Membership window, so a Revision the Member
+signed in an earlier period was "not authorized" and the editor reported an
+integrity failure.
+Expected:
+Revisions verify against any period the author was a Member (ADR 0017);
+Revisions authored between periods stay rejected.
+Status:
+FIXED - the boundary route forwards `membershipPeriods` and the session
+passes them into every signing trust entry. Unit:
+`environment-protocol-session.test.ts`, `route.test.ts`.

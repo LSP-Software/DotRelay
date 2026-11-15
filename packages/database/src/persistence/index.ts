@@ -10,9 +10,30 @@ export type {
 } from "./administration-repository";
 export {
   AdministrationRepository,
+  MAX_PENDING_INVITATIONS_PER_TEAM,
   MembershipAdministrationRepository,
   ProjectRepository,
 } from "./administration-repository";
+export {
+  archiveMembershipPeriod,
+  loadTeamMembershipWindows,
+  type MembershipWindow,
+  type TeamMembershipWindows,
+} from "./membership-periods";
+export {
+  type AccountDeletionPlan,
+  AccountDeletedError,
+  AccountDeletionConfirmationError,
+  AccountLifecycleRepository,
+  TEAM_PURGE_AFTER_MS,
+  TeamDeletionConfirmationError,
+  TeamLifecycleRepository,
+} from "./account-lifecycle";
+export { RetentionRepository } from "./retention";
+export {
+  type OutstandingRotation,
+  ProjectRotationObligationRepository,
+} from "./rotation-obligations";
 export type { DatabaseClient } from "./client";
 export { createDatabaseClient } from "./client";
 export type {
@@ -74,17 +95,23 @@ export {
   DeviceNotActiveError,
   EnvironmentNotActiveError,
   GenesisExistsError,
+  inactiveMembershipError,
+  InvitationNotPendingError,
+  MembershipAwaitingKeysError,
   MembershipNotActiveError,
   normalizeEnvironmentLabel,
   OperationConflictError,
   OperationNotCancellableError,
   OperationNotFoundError,
+  PendingInvitationLimitError,
   ProjectNotActiveError,
+  RevisionAuthoredAtError,
   requireTeamAction,
   StagedObjectConflictError,
   StagingQuotaExceededError,
   StaleEpochError,
   StaleHeadError,
+  OwnerTransferRequiredError,
   TeamNotActiveError,
 } from "./repository-core";
 export type { SyncInput, SyncObject, SyncPage, SyncRevision } from "./sync";

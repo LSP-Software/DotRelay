@@ -2,6 +2,7 @@ import {
   bytesToUuid,
   canonicalEncode,
   type CborValue,
+  checkRevisionAuthoredAt,
   parseProtocolObject,
   sha384,
 } from "@dotrelay/contracts";
@@ -17,11 +18,12 @@ import {
   databaseBytes,
   DeviceNotActiveError,
   GenesisExistsError,
-  MembershipNotActiveError,
+  inactiveMembershipError,
   normalizeEnvironmentLabel,
   OperationConflictError,
   ProjectNotActiveError,
   type PersistenceClient,
+  RevisionAuthoredAtError,
   requireTeamAction,
   StaleEpochError,
   StaleHeadError,
@@ -109,6 +111,8 @@ export type RevisionPublicationInput = Readonly<{
   // after every transition published, so an inner publication must not
   // commit it or let a COMMITTED status block the remaining Environments.
   readonly rotationInner?: boolean;
+  /** The service clock used to bound the authored-at instant. */
+  readonly now?: Date;
   readonly environmentId: string;
   readonly expectedHeadId: string | null;
   readonly revision: Readonly<{
@@ -246,6 +250,30 @@ export class PublicationRepository {
       include: { project: true },
     });
     if (!environment) throw new Error("Environment not found");
+    // Authorization comes before any check that reports the Environment's
+    // state (head, genesis, lifecycle, epoch), so a non-member learns none
+    // of it.
+    const device = await transaction.device.findFirst({
+      where: {
+        id: input.operation.actorDeviceId,
+        userId: input.operation.actorUserId,
+        lifecycle: "ACTIVE",
+      },
+    });
+    if (!device) throw new DeviceNotActiveError();
+    const membership = await transaction.membership.findFirst({
+      where: {
+        teamId: environment.project.teamId,
+        userId: input.operation.actorUserId,
+        lifecycle: "ACTIVE",
+      },
+    });
+    if (!membership)
+      throw await inactiveMembershipError(
+        transaction,
+        environment.project.teamId,
+        input.operation.actorUserId,
+      );
     if (
       input.revision.mutation === "GENESIS" &&
       environment.currentHeadId !== null
@@ -284,22 +312,24 @@ export class PublicationRepository {
       throw new Error("genesis cannot carry a parent hash");
     }
 
-    const device = await transaction.device.findFirst({
-      where: {
-        id: input.operation.actorDeviceId,
-        userId: input.operation.actorUserId,
-        lifecycle: "ACTIVE",
-      },
+    // Every client judges the signing Device's and the author's Membership
+    // windows, and the parent order, at the signed authored-at instant. A
+    // Revision outside them would be committed yet refused by every reader,
+    // which bricks the head; refuse it here with the same rule.
+    const notBeforeMs = [
+      (device.activatedAt ?? device.createdAt).getTime(),
+      (membership.activatedAt ?? membership.createdAt).getTime(),
+    ].reduce(
+      (latest, value) => (BigInt(value) > latest ? BigInt(value) : latest),
+      parentRevision ? parentRevision.authoredAtMs : 0n,
+    );
+    const authoredAtVerdict = checkRevisionAuthoredAt({
+      authoredAtMs: input.revision.authoredAtMs,
+      notBeforeMs,
+      nowMs: (input.now ?? new Date()).getTime(),
     });
-    if (!device) throw new DeviceNotActiveError();
-    const membership = await transaction.membership.findFirst({
-      where: {
-        teamId: environment.project.teamId,
-        userId: input.operation.actorUserId,
-        lifecycle: "ACTIVE",
-      },
-    });
-    if (!membership) throw new MembershipNotActiveError();
+    if (authoredAtVerdict !== "ok")
+      throw new RevisionAuthoredAtError(authoredAtVerdict, notBeforeMs);
 
     await validateSha384Digest(
       input.operation.commandBytes,

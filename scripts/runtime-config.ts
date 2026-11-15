@@ -5,6 +5,8 @@ import {
   openSync,
   readFileSync,
 } from "node:fs";
+import { loadEmailConfig } from "../apps/api/src/email";
+import { loadMetricsConfig } from "../apps/api/src/metrics-config";
 import { loadServerProfileConfig } from "../apps/api/src/profile";
 
 export const loadProductionEnvironment = (
@@ -19,6 +21,7 @@ export const loadProductionEnvironment = (
     "DATABASE_URL",
     "BETTER_AUTH_SECRET",
     "GITHUB_CLIENT_SECRET",
+    "RESEND_API_KEY",
   ]) {
     const path = environment[`${name}_FILE`];
     if (!path) continue;
@@ -80,5 +83,9 @@ export const loadProductionEnvironment = (
     throw new Error("VALKEY_URL must identify a Valkey server");
 
   loadServerProfileConfig(environment);
+  // Email is optional; when configured, its values must be well-formed.
+  loadEmailConfig(environment);
+  // Opt-in private metrics need a bearer token in production.
+  loadMetricsConfig(environment, true);
   return environment;
 };

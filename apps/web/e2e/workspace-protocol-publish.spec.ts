@@ -24,7 +24,9 @@ const fixtureIds = {
   teamId: "00000000-0000-4000-8000-000000000011",
   projectId: "00000000-0000-4000-8000-000000000021",
   environmentId: "00000000-0000-4000-8000-000000000031",
-  actorUserId: "00000000-0000-4000-8000-000000000061",
+  // A teammate authors the synthetic history: the browser verifies it
+  // against the teammate's signed roster the fixture serves (ADR 0022).
+  actorUserId: "00000000-0000-4000-8000-000000000071",
   actorDeviceId: "00000000-0000-4000-8000-000000000040",
 };
 
@@ -224,9 +226,13 @@ for (const lostResponse of [false, true])
     await expect(editor.getByLabel("OPTIONAL_FLAG Value")).toBeEnabled();
 
     // The verified history identifies the synced Revision by its change kind
-    // and reports the author the wire record does not provide as unavailable.
+    // and names its author from the signed Revision: here, the teammate who
+    // authored the fixture's history, whose name this page has not loaded.
     await expect(
-      editor.getByText("Author unavailable", { exact: true }),
+      editor.getByText("Unknown member", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      editor.getByText("Changed OPTIONAL_FLAG, FEATURE_GATE", { exact: true }),
     ).toBeVisible();
     await expect(
       editor.getByText("First publish", { exact: true }),
@@ -250,24 +256,32 @@ for (const lostResponse of [false, true])
     await editor.getByLabel("FEATURE_GATE Value").fill("newer-value");
     await expect(featureRow()).toContainText("Draft change");
 
-    await expect(page.getByText(/Published as /)).toBeVisible({
+    await expect(page.getByText(/Published as revision /)).toBeVisible({
       timeout: 15_000,
     });
 
-    // The published Revision joins the history with its verified context and
-    // the acting User as its author.
+    // The message names the revision by the same short id the history uses,
+    // and the published Revision joins the history as Current with its
+    // verified context and the acting User as its author.
     const publishedMessage =
       (await page
-        .getByText(/Published as /)
+        .getByText(/Published as revision /)
         .first()
         .textContent()) ?? "";
-    const publishedRevisionId = publishedMessage
-      .replace("Published as ", "")
+    const shortId = publishedMessage
+      .replace("Published as revision ", "")
       .replace(".", "");
-    const publishedRow = editor.getByTestId(
-      `history-revision-${publishedRevisionId}`,
-    );
+    expect(shortId).toHaveLength(8);
+    const publishedRow = editor
+      .getByTestId(/history-revision-/)
+      .filter({ hasText: "Current" });
     await expect(publishedRow).toBeVisible();
+    await expect(
+      publishedRow.getByText(shortId, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      publishedRow.getByText("Changed OPTIONAL_FLAG", { exact: true }),
+    ).toBeVisible();
     await expect(publishedRow.getByText("You", { exact: true })).toBeVisible();
     await expect(
       publishedRow.getByText("Update", { exact: true }),

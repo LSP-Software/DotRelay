@@ -323,7 +323,9 @@ export const registerAdministrationRoutes = (
         memberships: { some: { userId: actor.userId, lifecycle: "ACTIVE" } },
       },
       select: { id: true, name: true },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      // A response cap, not pagination: no client lists this many Teams.
+      take: 256,
     });
     return context.json({ teams }, 200, { "Cache-Control": "no-store" });
   });
@@ -379,6 +381,7 @@ export const registerAdministrationRoutes = (
         "repositoryOwner",
         "repositoryName",
         "githubRepositoryId",
+        "environmentLabel",
       ]);
       if (
         body.repositoryHost !== "github.com" ||
@@ -390,9 +393,45 @@ export const registerAdministrationRoutes = (
         return responseProblem(context, "invalid_request");
       const teamId = parseUuid(body.teamId, "teamId");
       const githubRepositoryId = requireRepositoryId(body.githubRepositoryId);
+      // The first Environment's label, checked like POST
+      // /projects/:projectId/environments; absent means `default`.
+      const environmentLabel =
+        body.environmentLabel === undefined
+          ? undefined
+          : normalizeEnvironmentLabel(body.environmentLabel);
       const operationId = parseIdempotencyKey(
         context.req.header("Idempotency-Key"),
       );
+      if (
+        !repositoryOwnerPattern.test(body.repositoryOwner) ||
+        !repositoryNamePattern.test(body.repositoryName)
+      )
+        return responseProblem(context, "invalid_request");
+      // The Repository Linkage needs the acting User's own access to the
+      // repository (ADR 0003): the identity must be the one their Delegated
+      // GitHub Access resolves owner/name to. Otherwise anyone could link
+      // another User's private repository id and see its name.
+      const resolved = await resolveGitHubRepositoryIdentity(
+        auth,
+        actor.authSubject,
+        { owner: body.repositoryOwner, name: body.repositoryName },
+        githubFetch ? { fetch: githubFetch } : {},
+      );
+      if (resolved.code !== "resolved") {
+        const problem = createProblem(
+          resolved.code,
+          resolved.code === "github_rate_limited" &&
+            resolved.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: resolved.retryAfterSeconds }
+            : undefined,
+        );
+        return context.json(problem, problem.status as ContentfulStatusCode, {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/problem+json",
+        });
+      }
+      if (resolved.githubRepositoryId !== githubRepositoryId.toString())
+        return responseProblem(context, "repository_access_denied");
       const commandBytes = new TextEncoder().encode(
         JSON.stringify({
           action: "project.link",
@@ -401,12 +440,14 @@ export const registerAdministrationRoutes = (
           repositoryOwner: body.repositoryOwner,
           repositoryName: body.repositoryName,
           githubRepositoryId: githubRepositoryId.toString(),
+          ...(environmentLabel === undefined ? {} : { environmentLabel }),
           operationId,
         }),
       );
       const result = await projects.create(database, {
         teamId,
         githubRepositoryId,
+        ...(environmentLabel === undefined ? {} : { environmentLabel }),
         operation: {
           id: operationId,
           actorUserId: actor.userId,
@@ -462,13 +503,26 @@ export const registerAdministrationRoutes = (
           lifecycle: true,
           currentHeadId: true,
           currentHead: {
-            select: { protocolObject: { select: { digest: true } } },
+            select: {
+              authoredAtMs: true,
+              protocolObject: { select: { digest: true } },
+            },
           },
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
       return context.json(
-        { environments: environments.map(environmentResponse) },
+        {
+          // The head's authored-at instant lets a Project rotation floor its
+          // signing time across every Environment, not only the synced one.
+          environments: environments.map((environment) => ({
+            ...environmentResponse(environment),
+            currentHeadAuthoredAtMs:
+              environment.currentHead === null
+                ? null
+                : Number(environment.currentHead.authoredAtMs),
+          })),
+        },
         200,
         { "Cache-Control": "no-store" },
       );

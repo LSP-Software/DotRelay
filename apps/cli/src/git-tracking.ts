@@ -7,7 +7,15 @@ import {
   stat,
   unlink,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { CliError } from "./errors";
 
 export type GitTrackingState = "tracked" | "untracked" | "ignored" | "outside";
@@ -35,9 +43,46 @@ export type GitCommandRunner = (
   args: readonly string[],
 ) => Promise<GitCommandResult>;
 
+// A repository can name programs for Git to run (core.fsmonitor, hooks, a
+// pager). The CLI reads a repository it did not create, such as an
+// unpacked archive with its own .git, so every Git command it runs turns
+// those off: asking whether a file is tracked must never execute code.
+const HARDENED_GIT_OPTIONS: readonly string[] = [
+  "--no-pager",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.untrackedCache=false",
+  "-c",
+  "protocol.allow=never",
+];
+
+export const gitCommand = (args: readonly string[]): string[] => [
+  "git",
+  ...HARDENED_GIT_OPTIONS,
+  ...args,
+];
+
+export const gitEnvironment = (
+  base: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> => {
+  const environment: Record<string, string> = {};
+  for (const [name, value] of Object.entries(base))
+    if (value !== undefined) environment[name] = value;
+  return {
+    ...environment,
+    GIT_PAGER: "cat",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+  };
+};
+
 const runGit: GitCommandRunner = async (directory, args) => {
-  const child = Bun.spawn(["git", ...args], {
+  const child = Bun.spawn(gitCommand(args), {
     cwd: directory,
+    env: gitEnvironment(),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -85,6 +130,19 @@ const nearestExistingDirectory = async (path: string): Promise<string> => {
 // make a file inside the repository compare as outside of it.
 const realProbeContext = async (path: string) => {
   const target = resolve(path);
+  // An existing path is resolved completely, a final symlink included: a
+  // write through a link lands on the file it names, so that file's own
+  // repository and index decide whether it is tracked.
+  try {
+    const realTarget = await realpath(target);
+    return {
+      realTarget,
+      realProbeDirectory: dirname(realTarget),
+      pathspec: basename(realTarget),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const probeDirectory = await nearestExistingDirectory(target);
   const realProbeDirectory = await realpath(probeDirectory);
   return {

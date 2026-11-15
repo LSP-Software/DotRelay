@@ -1,3 +1,5 @@
+import type { DeviceProofSession } from "@dotrelay/client";
+
 export type WorkspaceProfileId = "hosted" | "self-hosted";
 export type MembershipRole = "OWNER" | "ADMIN" | "MEMBER";
 export type ResourceLifecycle = "ACTIVE" | "ARCHIVED";
@@ -44,6 +46,32 @@ export type WorkspaceSigningTrustDevice = Readonly<{
   readonly deviceActiveUntilMs: number | null;
   readonly memberSinceMs: number | null;
   readonly memberUntilMs: number | null;
+  /**
+   * Every period the author was an active Member, oldest first, current
+   * last (ADR 0017). memberSinceMs/memberUntilMs describe only the current
+   * period, so a Member who was removed and invited back needs this to keep
+   * their earlier Revisions verifiable.
+   */
+  readonly membershipPeriods?: readonly WorkspaceMembershipPeriod[];
+}>;
+
+export type WorkspaceMembershipPeriod = Readonly<{
+  readonly sinceMs: number;
+  readonly untilMs: number | null;
+}>;
+
+/**
+ * The service's note that the selected Project's key should be rotated: a
+ * Member was removed or a Device revoked after the current epoch began, so
+ * the old key may still be held outside the Team. It never blocks
+ * publication; it clears when a rotation commits.
+ */
+export type RotationOwed = Readonly<{
+  /** ISO instant of the first removal or revocation since the last rotation. */
+  readonly since: string;
+  readonly sinceEpoch: string;
+  readonly membershipRemovals: number;
+  readonly deviceRevocations: number;
 }>;
 
 export type WorkspaceBoundary = Readonly<{
@@ -58,9 +86,13 @@ export type WorkspaceBoundary = Readonly<{
     readonly teamId?: string;
     readonly headHash?: string | null;
     readonly projectEpoch?: string;
+    /** A key rotation owed since a Member was removed or a Device revoked. */
+    readonly rotationOwed?: RotationOwed | null;
   }>;
   readonly session: Readonly<{
     readonly active: boolean;
+    /** Signed in, but the API's alpha list doesn't admit the account. */
+    readonly alphaAdmissionRequired?: true;
     readonly userId?: string;
     readonly displayName?: string;
     readonly image?: string;
@@ -89,6 +121,21 @@ export type WorkspaceBoundary = Readonly<{
   readonly rotationRequired: boolean;
   readonly signingTrustKeys?: readonly string[];
   readonly signingTrustDevices?: readonly WorkspaceSigningTrustDevice[];
+  /**
+   * Set only on a boundary narrowed by account trust (ADR 0015, ADR 0022):
+   * the Ed25519 keys (hex) a verified roster vouches for, by what they may
+   * sign. A boundary without it trusts only this browser's own key.
+   */
+  readonly verifiedSigners?: Readonly<{
+    /** This account's roster Devices, active or revoked. */
+    readonly account: readonly string[];
+    /** Keys the service reports for this account's Devices: AMK-sealed objects only. */
+    readonly reportedAccount: readonly string[];
+    /** Active Devices of this account and of confirmed teammates: grants. */
+    readonly grant: readonly string[];
+    /** Every roster-verified Device: Revisions and key chain links. */
+    readonly history: readonly string[];
+  }>;
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;
   readonly userValueKeyEnvelope?: string;
@@ -254,6 +301,30 @@ export const parsePeerDevices = (
   });
 };
 
+const isMillis = (candidate: unknown): candidate is number | null =>
+  candidate === null ||
+  (typeof candidate === "number" && Number.isSafeInteger(candidate));
+
+// undefined when the field is absent, null when it is malformed.
+const parseMembershipPeriods = (
+  value: unknown,
+): readonly WorkspaceMembershipPeriod[] | null | undefined => {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const periods: WorkspaceMembershipPeriod[] = [];
+  for (const period of value) {
+    if (
+      !isRecord(period) ||
+      typeof period.sinceMs !== "number" ||
+      !Number.isSafeInteger(period.sinceMs) ||
+      !isMillis(period.untilMs)
+    )
+      return null;
+    periods.push({ sinceMs: period.sinceMs, untilMs: period.untilMs });
+  }
+  return periods;
+};
+
 export const parseSigningTrustDevices = (
   value: unknown,
 ): readonly WorkspaceSigningTrustDevice[] => {
@@ -262,9 +333,8 @@ export const parseSigningTrustDevices = (
     if (!isRecord(entry)) return [];
     const signingPublicKey = asString(entry.signingPublicKey);
     if (!signingPublicKey) return [];
-    const isMillis = (candidate: unknown): candidate is number | null =>
-      candidate === null ||
-      (typeof candidate === "number" && Number.isSafeInteger(candidate));
+    const membershipPeriods = parseMembershipPeriods(entry.membershipPeriods);
+    if (membershipPeriods === null) return [];
     if (
       !isMillis(entry.deviceActiveFromMs) ||
       !isMillis(entry.deviceActiveUntilMs) ||
@@ -285,10 +355,45 @@ export const parseSigningTrustDevices = (
         deviceActiveUntilMs: entry.deviceActiveUntilMs,
         memberSinceMs: entry.memberSinceMs,
         memberUntilMs: entry.memberUntilMs,
+        ...(membershipPeriods ? { membershipPeriods } : {}),
       },
     ];
   });
 };
+
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+export const parseRotationOwed = (value: unknown): RotationOwed | null => {
+  if (!isRecord(value)) return null;
+  const { since, sinceEpoch, membershipRemovals, deviceRevocations } = value;
+  if (
+    typeof since !== "string" ||
+    Number.isNaN(Date.parse(since)) ||
+    typeof sinceEpoch !== "string" ||
+    !isCount(membershipRemovals) ||
+    !isCount(deviceRevocations) ||
+    membershipRemovals + deviceRevocations === 0
+  )
+    return null;
+  return { since, sinceEpoch, membershipRemovals, deviceRevocations };
+};
+
+const plural = (count: number, one: string, many: string): string =>
+  `${count} ${count === 1 ? one : many}`;
+
+/** What happened since the last rotation, e.g. "1 member removed". */
+export const rotationOwedCause = (owed: RotationOwed): string =>
+  [
+    owed.membershipRemovals > 0
+      ? `${plural(owed.membershipRemovals, "member", "members")} removed`
+      : null,
+    owed.deviceRevocations > 0
+      ? `${plural(owed.deviceRevocations, "device", "devices")} revoked`
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" and ");
 
 export const enrolledDeviceRows = (
   boundary: Pick<WorkspaceBoundary, "device" | "peerDevices" | "grantsReady">,
@@ -425,6 +530,19 @@ export const emptyWorkspaceBoundary = (
 // private key signs the synthetic sync pages served by the e2e specs.
 export const E2E_REVISION_SIGNING_TRUST_KEY =
   "302a300506032b65700321003106030b2495aaa5b5cdf8c65c723e8f81717a8eeebd45db288714034c80a978";
+// The same key in the raw form an Account Device roster lists: an Ed25519
+// SubjectPublicKeyInfo ends with the 32-byte raw key.
+export const E2E_REVISION_SIGNING_RAW_KEY =
+  E2E_REVISION_SIGNING_TRUST_KEY.slice(-64);
+// The Device that signs the fixture's history, and the fixture's teammate.
+const E2E_HISTORY_DEVICE_ID = "00000000-0000-4000-8000-000000000040";
+const E2E_TEAMMATE_USER_ID = "00000000-0000-4000-8000-000000000071";
+// The teammate's Account Device roster (ADR 0015), signed by a fixed
+// test-only account key (32 bytes of 0x71). It lists the history Device, so
+// a browser can verify the teammate's Revisions without unlocking anything,
+// as it would for any teammate it sees for the first time (ADR 0022).
+const E2E_TEAMMATE_ROSTER =
+  "qwADARgYAgEDWMKpAAMBGBgCAQhQAAAAAAAAQACAAAAAAAAAYglQAAAAAAAAQACAAAAAAAAAcRggGwAAAYvP5WgAGClYIETirk6GetbFfp4+DZcs8r0AIVVZX7tfrXKoasFvPUMaGGIBGGOBpQpQAAAAAAAAQACAAAAAAAAAQBggABgnWCBmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZhgpWCAxBgMLJJWqpbXN+MZccj6PgXF6ju69RdsohxQDTICpeBhPAgRYQLCtCiW0xr4s9MWEArXurJsjbk3OFgzHdhpjvi1TyktDSjMKHrmQTVmNlbwjVeFxp6oyav4in7aM+q/b9+P6gAIIUAAAAAAAAEAAgAAAAAAAAGIJUAAAAAAAAEAAgAAAAAAAAHEYIBsAAAGLz+VoABgpWCBE4q5OhnrWxX6ePg2XLPK9ACFVWV+7X61yqGrBbz1DGhhiARhjgaUKUAAAAAAAAEAAgAAAAAAAAEAYIAAYJ1ggZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmYYKVggMQYDCySVqqW1zfjGXHI+j4Fxeo7uvUXbKIcUA0yAqXgYTwI=";
 
 export const e2eWorkspaceBoundary = (
   profileId: WorkspaceProfileId,
@@ -512,18 +630,24 @@ export const e2eWorkspaceBoundary = (
     epochCurrent: true,
     rotationRequired: false,
     signingTrustKeys: [E2E_REVISION_SIGNING_TRUST_KEY],
+    // The fixture's synthetic history is signed by one key, attributed to a
+    // teammate and to the signed-in User's other Device. Every entry names
+    // its User and Device, so the browser can check it against that User's
+    // signed roster: the teammate's roster is served below, and the own
+    // account's only once a spec unlocks its Account Master Key.
     signingTrustDevices: [
-      {
-        // The fixture's synthetic history is signed by one key under several
-        // authors, so the entry names no identity: the open window verifies
-        // the specs' pages like a live Team's history would.
-        signingPublicKey: E2E_REVISION_SIGNING_TRUST_KEY,
-        deviceActiveFromMs: 0,
-        deviceActiveUntilMs: null,
-        memberSinceMs: 0,
-        memberUntilMs: null,
-      },
-    ],
+      "00000000-0000-4000-8000-000000000061",
+      E2E_TEAMMATE_USER_ID,
+    ].map((userId) => ({
+      userId,
+      deviceId: E2E_HISTORY_DEVICE_ID,
+      signingPublicKey: E2E_REVISION_SIGNING_RAW_KEY,
+      deviceActiveFromMs: 0,
+      deviceActiveUntilMs: null,
+      memberSinceMs: 0,
+      memberUntilMs: null,
+    })),
+    accountRosters: { [E2E_TEAMMATE_USER_ID]: E2E_TEAMMATE_ROSTER },
     ...(options?.accountKeyEnvelope
       ? { accountKeyEnvelope: options.accountKeyEnvelope }
       : {}),
@@ -535,6 +659,7 @@ export const e2eWorkspaceBoundary = (
 };
 
 export const BROWSER_DEVICE_ID_HEADER = "X-DotRelay-Device-Id";
+export const BROWSER_DEVICE_PROOF_HEADER = "X-DotRelay-Device-Proof";
 
 const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -588,21 +713,28 @@ const isWorkspaceBoundary = (value: unknown): value is WorkspaceBoundary => {
   );
 };
 
+// The Device's view of the boundary needs a Device proof (ADR 0020); without
+// one the service answers with the session view.
 export const fetchWorkspaceBoundary = async (
   profileId: WorkspaceProfileId,
   options?: Readonly<{
-    readonly deviceId?: string;
+    readonly device?: DeviceProofSession;
     readonly environmentId?: string;
   }>,
 ): Promise<WorkspaceBoundary> => {
   const params = new URLSearchParams({ profile: profileId });
   if (options?.environmentId) params.set("environment", options.environmentId);
-  const response = await fetch(`/api/workspace/boundary?${params}`, {
-    cache: "no-store",
-    ...(options?.deviceId
-      ? { headers: { [BROWSER_DEVICE_ID_HEADER]: options.deviceId } }
-      : {}),
-  });
+  const device = options?.device;
+  const send = (headers: Readonly<Record<string, string>>) =>
+    fetch(`/api/workspace/boundary?${params}`, { cache: "no-store", headers });
+  const proofHeaders = device ? await device.headers() : {};
+  let response = await send(proofHeaders);
+  // An expired or refused proof is replaced once; the relay passes the
+  // service's 401 through rather than answering with the session view.
+  if (device && response.status === 401) {
+    device.invalidate(proofHeaders);
+    response = await send(await device.headers());
+  }
   if (!response.ok) throw new Error("workspace boundary request failed");
   let body: unknown;
   try {

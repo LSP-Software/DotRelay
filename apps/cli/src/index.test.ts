@@ -21,7 +21,12 @@ import {
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
 import type { CredentialStore } from "./credentials";
-import { deviceMetadataPath, writeDeviceId } from "./device-storage";
+import { answerDeviceProofRoute } from "./device-proof-testing";
+import {
+  createFileDeviceRecordStore,
+  deviceMetadataPath,
+  writeDeviceId,
+} from "./device-storage";
 import { main, renderHelp, run, version } from "./index";
 import type { NetworkPolicy } from "./network";
 import type { FetchFunction } from "./profile";
@@ -637,6 +642,10 @@ const createAdminHttpFixture = (
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
+      const proof = await answerDeviceProofRoute(request, {
+        isActive: (id) => active.has(id),
+      });
+      if (proof) return proof;
       const url = new URL(request.url);
       if (
         !url.pathname.startsWith("/api/v1/projects") &&
@@ -740,17 +749,37 @@ const seedCommandState = async (
       ],
     }),
   );
-  if (options.withDevice)
+  const secrets = new Map<string, Uint8Array>();
+  const credentials: CredentialStore = Object.freeze({
+    get: async (_service, account) => {
+      const value = secrets.get(account);
+      return value ? new Uint8Array(value) : null;
+    },
+    set: async (_service, account, secret) => {
+      secrets.set(account, new Uint8Array(secret));
+    },
+    delete: async (_service, account) => {
+      secrets.delete(account);
+    },
+  });
+  await createSessionStore(credentials).save(fixture.pin, sessionToken);
+  if (options.withDevice) {
     await writeDeviceId(
       deviceMetadataPath(stateDirectory, fixture.pin),
       fixture.pin,
       deviceId,
     );
-  const credentials: CredentialStore = Object.freeze({
-    get: async () => new TextEncoder().encode(sessionToken),
-    set: async () => undefined,
-    delete: async () => undefined,
-  });
+    // The Device key signs the Device proof (ADR 0020), so the command
+    // needs the bundle as well as the recorded id.
+    const bootstrap = await createDeviceBootstrap({
+      pin: fixture.pin,
+      userId: protocolUserId,
+      deviceId,
+    });
+    await createCliDeviceStorage(fixture.pin, credentials, {
+      recordStore: createFileDeviceRecordStore(stateDirectory),
+    }).save(bootstrap.bundle);
+  }
   return {
     profilePath,
     stateDirectory,
@@ -984,8 +1013,9 @@ describe("command-to-HTTP administration", () => {
         exitCode: 6,
       });
       expect(String(diagnostic.detail)).toContain("device enroll");
-      expect(fixture.requests).toHaveLength(1);
-      expect(fixture.requests[0]?.deviceIdHeader).toBe(deviceId);
+      // The service refuses a revoked Device its proof (ADR 0020), so the
+      // administration request is never sent.
+      expect(fixture.requests).toHaveLength(0);
     } finally {
       fixture.stop();
       await state.cleanup();
@@ -1024,6 +1054,8 @@ const createProtocolHttpFixture = (
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
+      const proof = await answerDeviceProofRoute(request);
+      if (proof) return proof;
       const url = new URL(request.url);
       requests.push({
         method: request.method,
@@ -1846,6 +1878,8 @@ const createMultiProjectProtocolHttpFixture = (
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
+      const proof = await answerDeviceProofRoute(request);
+      if (proof) return proof;
       const url = new URL(request.url);
       requests.push({
         method: request.method,
@@ -3085,6 +3119,8 @@ const createLoginFixture = async (
   let poll = 0;
   const fetch: FetchFunction = async (input, init) => {
     const request = new Request(input as never, init);
+    const proof = await answerDeviceProofRoute(request.clone() as never);
+    if (proof) return proof;
     const url = new URL(request.url);
     if (url.pathname === "/api/v1/capabilities")
       return Response.json(
@@ -3808,6 +3844,10 @@ const createStatusHttpFixture = (
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
+      const proof = await answerDeviceProofRoute(request, {
+        isActive: () => options.device === "active",
+      });
+      if (proof) return proof;
       const url = new URL(request.url);
       requests.push({
         method: request.method,
@@ -4156,10 +4196,12 @@ describe("status verifies the session and this Device", () => {
         device: "not-active",
         nextAction: "run dotrelay device enroll",
       });
+      // The service refuses an inactive Device its proof (ADR 0020), so the
+      // probe stops before the boundary request.
       const boundaryProbe = fixture.requests.find((request) =>
         request.path.startsWith("/api/v1/workspace/boundary"),
       );
-      expect(boundaryProbe?.deviceIdHeader).toBe(deviceId);
+      expect(boundaryProbe).toBeUndefined();
     } finally {
       fixture.stop();
       await state.cleanup();
@@ -4261,7 +4303,8 @@ describe("status verifies the session and this Device", () => {
         service: "skipped",
         session: "not-stored",
         device: "not-enrolled",
-        nextAction: "run dotrelay setup <origin>",
+        nextAction:
+          "run dotrelay setup https://api.dotrelay.dev (or your own origin if you self-host)",
       });
     } finally {
       await (
@@ -4424,7 +4467,11 @@ describe("actionable error categories at the process boundary", () => {
 
   const resolveFetch =
     (response: (url: string) => Response): FetchFunction =>
-    async (input) => {
+    async (input, init) => {
+      const proof = await answerDeviceProofRoute(
+        new Request(input as never, init),
+      );
+      if (proof) return proof;
       const url = String(input);
       if (url.includes("/api/v1/github-repositories/resolve"))
         return response(url);
@@ -4555,7 +4602,12 @@ describe("actionable error categories at the process boundary", () => {
       const runtime = {
         ...runtimeForProtocolState(state),
         networkPolicy: instantNetworkPolicy,
-        fetch: (async (input) => {
+        fetch: (async (input, init) => {
+          // init gets a Device proof first (ADR 0020).
+          const proof = await answerDeviceProofRoute(
+            new Request(String(input), init),
+          );
+          if (proof) return proof;
           const url = String(input);
           requested.push(url);
           if (url.endsWith("/api/v1/github-app"))
@@ -4592,7 +4644,12 @@ describe("actionable error categories at the process boundary", () => {
       const runtime = {
         ...runtimeForProtocolState(state),
         networkPolicy: { ...instantNetworkPolicy, requestDeadlineMs: 50 },
-        fetch: (async (input) => {
+        fetch: (async (input, init) => {
+          // init gets a Device proof first (ADR 0020).
+          const proof = await answerDeviceProofRoute(
+            new Request(String(input), init),
+          );
+          if (proof) return proof;
           const url = String(input);
           if (url.endsWith("/api/v1/github-app"))
             // Headers arrive; the body never does.

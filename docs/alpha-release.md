@@ -12,6 +12,14 @@ the GitHub identity behind every authenticated request, including sessions creat
 was enabled, browser Device approval, and CLI bearer sessions. Public health and capabilities probes
 remain available, as does sign-out. Signing in to GitHub is not itself admission to DotRelay data.
 
+A signed-in account outside the list gets `403 alpha_admission_required` on every other request. The
+problem names neither the list nor the account. The web app shows `/private-alpha` for it, with a
+sign-out button; the CLI prints a "Private alpha" error (exit 6) that suggests `dotrelay logout`.
+On the hosted service both point at support@dotrelay.dev; a self-hosted server tells the user to
+ask its operator. When such an account opens a CLI sign-in code in the browser, the API declines
+the code, so `dotrelay login` and `setup` stop with the same error instead of waiting for the code
+to expire.
+
 ## Invite and provision a Member
 
 Invite the Member by GitHub login in the Members view. The invitee accepts and sets up a browser or
@@ -92,12 +100,24 @@ bounded before protocol parsing. Committed history is retained separately from p
 
 ## npm publishing
 
-The repository's `NPM_TOKEN` secret must identify an npm publisher with write access to `dotrelay`
-and permit non-interactive CI publishing. Replace an expired or unauthorized token in repository
-settings; source changes cannot grant npm permissions. Never put the token in this repository.
+The CLI publishes to npm with trusted publishing (OIDC). No npm token is stored in GitHub: each
+publishing job requests a short-lived credential with its `id-token: write` permission, and npm
+accepts it only from a trusted publisher configured on the `@dotrelay/cli` package. Configure two on
+npmjs.com under **@dotrelay/cli → Settings → Trusted publishing → GitHub Actions**:
 
-Both workflows run `scripts/publish-cli.ts`, which validates the token with npm before publishing
-and removes its temporary npm configuration afterward. Stable versions use `latest`; prereleases
+| Workflow filename | Environment       | Publishes                       |
+| ----------------- | ----------------- | ------------------------------- |
+| `release.yml`     | `security-review` | tagged releases and prereleases |
+| `ci.yml`          | (none)            | the `dev` selector from `main`  |
+
+Organization `LSP-Software`, repository `DotRelay`. Then choose **Publishing access → Require
+two-factor authentication and disallow tokens**; trusted publishers are unaffected. Delete the
+`NPM_TOKEN` repository secret once a publish has succeeded. Trusted publishing needs npm 11.5.1 or
+later, so both jobs install Node 24 with `actions/setup-node` before `scripts/publish-cli.ts`,
+which refuses to run without the OIDC token or with an older npm. Provenance is generated
+automatically for this public repository.
+
+Stable versions use `latest`; prereleases
 use their first prerelease identifier (`alpha`, `beta`, `rc`, or `dev`). An alpha therefore does not
 replace the stable channel. The `latest` identifier is reserved for stable releases: a tag such as
 `v1.2.3-latest.1` is rejected at publication time instead of moving the stable npm selector. Before announcing, verify the GitHub publish job succeeds and test
@@ -108,11 +128,11 @@ create a production release tag.
 
 The alpha changes also refresh the lockfile for the current dependency advisories, including
 Better Auth, Next.js, Hono, the shadcn tooling chain, and the issue panel's HTML sanitizer. The
-`fast-uri` override advances to the patched 3.1.9 release. `deepmerge` is temporarily pinned to
-4.1.2 because the current 4.3.1 release is affected by GHSA-gcqx-w48m-w2h4 and has no patched 4.x
-successor; Bun's audit resolver identifies 4.1.2 as the unaffected fallback. Keep that override
-until a fixed release is available. Run the sanitizer/panel regressions and the dependency audit
-before changing it.
+`fast-uri` override advances to the patched 3.1.9 release. `deepmerge`
+4.3.1 is affected by GHSA-gcqx-w48m-w2h4 (low) and has no patched 4.x successor; it reaches the
+tree only through the shadcn development CLI and never ships, so `security:audit` ignores that one
+advisory by id. Remove the ignore once a fixed release is available. Run the sanitizer/panel
+regressions and the dependency audit before changing it.
 
 ## Alpha release channels
 
@@ -125,7 +145,7 @@ version exists, alpha, beta and rc CLI builds also move npm `latest`, so `npm in
 @dotrelay/cli` installs the current alpha. Release runs serialize across tags so mutable image
 aliases cannot be advanced by overlapping workflows.
 
-Password and passkey wrappers require a validated active Device; session-only recovery never discloses them.
+Password and passkey wrappers require a proven active Device (a Device proof, ADR 0020); session-only recovery never discloses them.
 
 The release concurrency queue retains up to 100 pending tags.
 

@@ -143,7 +143,7 @@ describe("command help contract", () => {
     expect(rollback.stdout).not.toBe(`${everyday}\n`);
     const recover = await run(["device", "recover", "--help"]);
     expect(recover.stdout).toContain(
-      "Usage: dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
+      "Usage: dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
     );
     const begin = await run(["device", "begin", "--help"]);
     expect(begin.stdout).toContain(
@@ -170,7 +170,7 @@ describe("command help contract", () => {
     expect(one.stdout).toContain("--variable");
     const nested = await run(["help", "device", "recover"]);
     expect(nested.stdout).toContain(
-      "Usage: dotrelay device recover | --transfer <transfer-id> | --recovery-code-file <path>",
+      "Usage: dotrelay device recover | --transfer <transfer-code> | --recovery-code-file <path>",
     );
     const group = await run(["help", "profile"]);
     expect(group.stdout).toContain("Subcommands:");
@@ -221,7 +221,57 @@ describe("command help contract", () => {
       parseArguments(["pull", "--stdout"], { stdoutIsTerminal: true }),
     ).toThrow("usage: dotrelay pull");
     expect(() => parseArguments(["project", "link"])).toThrow(
-      "project link requires --team <team-id>; usage: dotrelay project link --team <team-id>",
+      "the project link command requires --team <team-id>; usage: dotrelay project link --team <team-id>",
     );
+    // An unknown subcommand has no usage line of its own: the error names
+    // the group's real subcommands instead of inventing one.
+    expect(() => parseArguments(["env", "bogus"])).toThrow(
+      "unknown env subcommand: bogus; choose one of: list, use, create; usage: dotrelay env <subcommand>",
+    );
+    expect(() => parseArguments(["env", "bogus"])).not.toThrow(
+      "dotrelay env bogus",
+    );
+  });
+
+  test("short aliases route to help and version", async () => {
+    const help = await run(["-h"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("Usage: dotrelay <command>");
+    const pullHelp = await run(["pull", "-h"]);
+    expect(pullHelp.stdout).toContain("Usage: dotrelay pull");
+    const version = await run(["-v"]);
+    expect(version.exitCode).toBe(0);
+    expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  test("everything after -- belongs to the command dotrelay run starts", async () => {
+    // --help after -- is the child's flag, so the usage error for a run
+    // without a linked profile appears instead of DotRelay's help.
+    const result = await run(["run", "--", "node", "--help"], {
+      profilePath: `${import.meta.dir}/.tmp-missing-profile-${crypto.randomUUID()}`,
+    });
+    expect(result.stdout).not.toContain("Usage: dotrelay");
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  test("the top-level flag block is aligned and names the environment value", () => {
+    const lines = renderHelp()
+      .split("\n")
+      .filter((line) => /^ {2}(--|-h)/.test(line));
+    expect(lines.some((line) => line.includes("--environment <label>"))).toBe(
+      true,
+    );
+    // Every summary starts in the same column, whatever the flag's length.
+    const starts = lines.map((line) => {
+      const match = /^ {2}(.+?) {2,}(\S.*)$/.exec(line);
+      return match ? line.length - (match[2] ?? "").length : -1;
+    });
+    expect(starts).not.toContain(-1);
+    expect(new Set(starts).size).toBe(1);
+  });
+
+  test("help names the hosted origin for setup", () => {
+    expect(renderHelp()).toContain("dotrelay setup https://api.dotrelay.dev");
+    expect(renderCommandHelp("setup")).toContain("https://api.dotrelay.dev");
   });
 });

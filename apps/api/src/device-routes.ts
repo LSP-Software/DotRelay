@@ -4,7 +4,6 @@ import {
   accountKeyTransferAcknowledgementMessage,
   ContractError,
   createProblem,
-  DEVICE_ID_HEADER,
   type ProtocolObject,
   parseDeviceClientInfo,
   parseIdempotencyKey,
@@ -33,7 +32,11 @@ import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DotRelayAuth } from "./auth";
 import type { ServerProfileConfig } from "./profile";
-import { requireProtocolActor, requireWebActor } from "./protocol/context";
+import {
+  optionalProtocolActor,
+  requireProtocolActor,
+  requireWebActor,
+} from "./protocol/context";
 import { mapPersistenceError } from "./protocol/errors";
 import { verifyProjectEpochKeyLink } from "./protocol/staging";
 
@@ -260,11 +263,16 @@ const validateActorBinding = (
     throw new ContractError("invalid_crypto_object");
 };
 
+// Routes begin the operation before the repository checks authorization,
+// so a refused command leaves a STAGED row behind. The expiry lets the
+// retention job expire it like any abandoned staging; a retry within the
+// staging lifetime still replays the same operation.
 const operation = async (
   body: Record<string, unknown>,
   actor: { readonly userId: string; readonly deviceId: string },
   kind: "DEVICE_ENROLLMENT" | "ACCOUNT_KEY" | "EPOCH_KEY_LINK",
   commandBytes: Uint8Array,
+  ttlSeconds: number,
 ) => {
   const operationId = parseUuid(body.operationId, "operationId");
   return {
@@ -274,6 +282,7 @@ const operation = async (
     kind,
     commandBytes,
     commandDigest: await sha384Digest(commandBytes),
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000),
   } as const;
 };
 
@@ -400,6 +409,7 @@ export const registerDeviceRoutes = (
         actor,
         "ACCOUNT_KEY",
         object.canonicalBytes,
+        profile.limits.stagingTtlSeconds,
       );
       await operations.begin(database, op);
       await stage(database, op, [object], profile.limits.stagingTtlSeconds);
@@ -473,6 +483,7 @@ export const registerDeviceRoutes = (
           actor,
           "EPOCH_KEY_LINK",
           object.canonicalBytes,
+          profile.limits.stagingTtlSeconds,
         );
         await operations.begin(database, op);
         await stage(database, op, [object], profile.limits.stagingTtlSeconds);
@@ -824,7 +835,13 @@ export const registerDeviceRoutes = (
         )
           throw new ContractError("invalid_crypto_object");
         const command = approval.canonicalBytes;
-        const op = await operation(body, actor, "DEVICE_ENROLLMENT", command);
+        const op = await operation(
+          body,
+          actor,
+          "DEVICE_ENROLLMENT",
+          command,
+          profile.limits.stagingTtlSeconds,
+        );
         await operations.begin(database, op);
         await stage(
           database,
@@ -955,6 +972,7 @@ export const registerDeviceRoutes = (
           actor,
           "DEVICE_ENROLLMENT",
           enrollmentObject.canonicalBytes,
+          profile.limits.stagingTtlSeconds,
         );
         await operations.begin(database, op);
         await stage(
@@ -1092,6 +1110,7 @@ export const registerDeviceRoutes = (
         actor,
         "ACCOUNT_KEY",
         object.canonicalBytes,
+        profile.limits.stagingTtlSeconds,
       );
       await operations.begin(database, op);
       await stage(database, op, [object], profile.limits.stagingTtlSeconds);
@@ -1136,12 +1155,16 @@ export const registerDeviceRoutes = (
 
   app.get("/api/v1/account-keys/wrappers", async (context) => {
     // Only the high-entropy Recovery Code wrapper is disclosed to a session
-    // alone. Password/passkey wrappers retain the active-Device gate.
+    // alone (ADR 0013). Password and passkey wrappers need a Device proof
+    // (ADR 0020): naming a Device in a header proves nothing.
     const actor = await requireWebActor(context, database, profile, auth);
     if (actor instanceof Response) return actor;
-    const deviceActor = context.req.header(DEVICE_ID_HEADER)
-      ? await requireProtocolActor(context, database, profile, auth)
-      : null;
+    const deviceActor = await optionalProtocolActor(
+      context,
+      database,
+      profile,
+      auth,
+    );
     if (deviceActor instanceof Response) return deviceActor;
     try {
       const wrappers = await database.accountKeyWrapperObject.findMany({
@@ -1254,7 +1277,13 @@ export const registerDeviceRoutes = (
       const body = await readBody(context);
       requireIdempotencyKey(context, body.operationId);
       const wrapperId = parseHex(body.wrapperId, 16);
-      const op = await operation(body, actor, "ACCOUNT_KEY", wrapperId);
+      const op = await operation(
+        body,
+        actor,
+        "ACCOUNT_KEY",
+        wrapperId,
+        profile.limits.stagingTtlSeconds,
+      );
       await operations.begin(database, op);
       const result = await accountKeys.revokeWrapper(database, {
         operation: op,
@@ -1368,6 +1397,7 @@ export const registerDeviceRoutes = (
         actor,
         "ACCOUNT_KEY",
         object.canonicalBytes,
+        profile.limits.stagingTtlSeconds,
       );
       await operations.begin(database, op);
       await stage(database, op, [object], profile.limits.stagingTtlSeconds);
@@ -1529,6 +1559,7 @@ export const registerDeviceRoutes = (
         actor,
         "ACCOUNT_KEY",
         object.canonicalBytes,
+        profile.limits.stagingTtlSeconds,
       );
       await operations.begin(database, op);
       await stage(database, op, [object], profile.limits.stagingTtlSeconds);
@@ -1668,5 +1699,4 @@ export const registerDeviceRoutes = (
       }
     },
   );
-  void DEVICE_ID_HEADER;
 };

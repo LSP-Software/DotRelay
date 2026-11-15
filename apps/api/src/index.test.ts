@@ -1,8 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { createProblem } from "@dotrelay/contracts";
-import { createInMemoryAuth } from "./auth";
+import { createInMemoryAuth, signBearerToken } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { app, createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
+
+// Device proofs (ADR 0020) for the stubbed sessions below. Every stub names
+// the session "session-token"; a proof binds that session, the User the
+// stubbed database resolves, and the Device.
+const PROVEN_DEVICE = "00000000-0000-4000-8000-0000000000d1";
+const LIFECYCLE_DEVICE = "00000000-0000-4000-8000-000000000005";
+const proofFor = (userId: string, deviceId: string = PROVEN_DEVICE) =>
+  testDeviceProof(loadServerProfileConfig({}), {
+    sessionId: "session-token",
+    userId,
+    deviceId,
+  });
+const USER_ID_PROOF = await proofFor("user-id");
+const LIFECYCLE_PROOF = await proofFor("user-1", LIFECYCLE_DEVICE);
 
 // Assembled at runtime so the secret scanner does not read a fixture as a key;
 // it still clears the production length and character-variety checks.
@@ -45,11 +60,17 @@ describe("API foundation", () => {
           authAccount: {
             findFirst: async () => ({ accountId: "github-user" }),
           },
-          user: { upsert: async () => ({ id: "user-1" }) },
+          user: {
+            upsert: async (input: { create: { githubSubject: string } }) => ({
+              id: "user-1",
+              githubSubject: input.create.githubSubject,
+            }),
+          },
         } as never,
         auth: {
           api: {
             getSession: async () => ({
+              session: { id: "session-token" },
               user: { id: "auth-user", name: "Ari", image },
             }),
           },
@@ -128,8 +149,10 @@ describe("API foundation", () => {
       observability: {
         diagnostics: { emit: () => undefined },
         expireSecurityRequestLogs: async () => 0,
+        expireShortLivedRecords: async () => ({}),
         expireStaging: async () => ({ operations: 0, stagedObjects: 0 }),
         runRetentionCleanup: async () => undefined,
+        recordReadiness: () => undefined,
         recordRequest: () => {
           throw new Error("observability sink unavailable");
         },
@@ -210,8 +233,10 @@ describe("API foundation", () => {
       observability: {
         diagnostics: { emit: () => undefined },
         expireSecurityRequestLogs: async () => 0,
+        expireShortLivedRecords: async () => ({}),
         expireStaging: async () => ({ operations: 0, stagedObjects: 0 }),
         runRetentionCleanup: async () => undefined,
+        recordReadiness: () => undefined,
         recordRequest: (input) => records.push(input),
       },
     });
@@ -362,6 +387,11 @@ describe("API foundation", () => {
     expect(response.headers.get("access-control-expose-headers")).toContain(
       "X-Correlation-ID",
     );
+    expect(
+      (response.headers.get("access-control-expose-headers") ?? "")
+        .split(",")
+        .map((name) => name.trim().toLowerCase()),
+    ).toContain("retry-after");
     expect(device).toMatchObject({
       verification_uri: `${profile.origin}/device`,
       interval: expect.any(Number),
@@ -408,6 +438,14 @@ describe("API foundation", () => {
     expect(response.headers.get("access-control-expose-headers")).toContain(
       "X-Correlation-ID",
     );
+    // The browser reads the rate limiter's retry window from either header.
+    const exposed = (
+      response.headers.get("access-control-expose-headers") ?? ""
+    )
+      .split(",")
+      .map((name) => name.trim().toLowerCase());
+    expect(exposed).toContain("retry-after");
+    expect(exposed).toContain("x-retry-after");
     expect(response.headers.get("x-correlation-id")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -463,7 +501,7 @@ describe("API foundation", () => {
       expires_in: number;
       interval: number;
     };
-    expect(code).toMatchObject({ expires_in: 1800, interval: 5 });
+    expect(code).toMatchObject({ expires_in: 600, interval: 5 });
 
     const pending = await deviceTokenRequest(
       testApp,
@@ -781,7 +819,7 @@ describe("API foundation", () => {
         headers: {
           Origin: profile.webOrigin,
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.token}`,
+          Authorization: `Bearer ${await signBearerToken(profile.authSecret, session.token)}`,
         },
         body: JSON.stringify({ userCode: "NOTACODE" }),
       },
@@ -851,7 +889,7 @@ describe("API foundation", () => {
         headers: {
           Origin: profile.webOrigin,
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionB.token}`,
+          Authorization: `Bearer ${await signBearerToken(profile.authSecret, sessionB.token)}`,
         },
         body: JSON.stringify({ userCode: "CROSSCODE" }),
       },
@@ -874,7 +912,7 @@ describe("API foundation", () => {
       {
         headers: {
           Origin: profile.webOrigin,
-          Authorization: `Bearer ${sessionB.token}`,
+          Authorization: `Bearer ${await signBearerToken(profile.authSecret, sessionB.token)}`,
         },
       },
     );
@@ -912,34 +950,43 @@ describe("API foundation", () => {
       if (!session) throw new Error("test session was not created");
       return session;
     };
-    const sessionHeaders = (token: string) =>
-      new Headers({ Authorization: `Bearer ${token}` });
+    // Only service-signed tokens are bearer credentials (A-4).
+    const sessionHeaders = async (token: string) =>
+      new Headers({
+        Authorization: `Bearer ${await signBearerToken(profile.authSecret, token)}`,
+      });
 
     const loggedOut = await createSession();
     expect(
-      await auth.api.getSession({ headers: sessionHeaders(loggedOut.token) }),
+      await auth.api.getSession({
+        headers: await sessionHeaders(loggedOut.token),
+      }),
     ).not.toBeNull();
     const logoutResponse = await testApp.request(
       `${profile.origin}/api/auth/sign-out`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${loggedOut.token}` },
+        headers: {
+          Authorization: `Bearer ${await signBearerToken(profile.authSecret, loggedOut.token)}`,
+        },
       },
     );
     expect(logoutResponse.status).toBe(200);
     expect(
-      await auth.api.getSession({ headers: sessionHeaders(loggedOut.token) }),
+      await auth.api.getSession({
+        headers: await sessionHeaders(loggedOut.token),
+      }),
     ).toBeNull();
 
     const administrator = await createSession();
     const remotelyRevoked = await createSession();
     await auth.api.revokeSession({
-      headers: sessionHeaders(administrator.token),
+      headers: await sessionHeaders(administrator.token),
       body: { token: remotelyRevoked.token },
     });
     expect(
       await auth.api.getSession({
-        headers: sessionHeaders(remotelyRevoked.token),
+        headers: await sessionHeaders(remotelyRevoked.token),
       }),
     ).toBeNull();
 
@@ -948,7 +995,9 @@ describe("API foundation", () => {
       expiresAt: new Date(0),
     });
     expect(
-      await auth.api.getSession({ headers: sessionHeaders(expired.token) }),
+      await auth.api.getSession({
+        headers: await sessionHeaders(expired.token),
+      }),
     ).toBeNull();
     expect(auth.options.session?.cookieCache).toEqual({ enabled: false });
   });
@@ -983,13 +1032,19 @@ describe("API foundation", () => {
     const auth = {
       api: {
         getSession: async () => ({
+          session: { id: "session-token" },
           user: { id: "auth-user", name: "Ari" },
         }),
       },
     } as never;
     const database = {
       authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
-      user: { upsert: async () => ({ id: "user-id" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: { findFirst: async () => ({ id: "device-id" }) },
       project: { findUnique: async () => ({ teamId: "team-id" }) },
       membership: { findFirst: async () => ({ id: "membership-id" }) },
@@ -1002,6 +1057,7 @@ describe("API foundation", () => {
             lifecycle: "ACTIVE",
             currentHeadId: "00000000-0000-4000-8000-0000000000aa",
             currentHead: {
+              authoredAtMs: 1_700_000_000_123n,
               protocolObject: { digest: new Uint8Array(48).fill(0xab) },
             },
           },
@@ -1023,7 +1079,8 @@ describe("API foundation", () => {
         headers: {
           Origin: profile.origin,
           Authorization: "Bearer session-token",
-          "X-DotRelay-Device-Id": "device-id",
+          "X-DotRelay-Device-Id": PROVEN_DEVICE,
+          "X-DotRelay-Device-Proof": USER_ID_PROOF,
         },
       },
     );
@@ -1038,6 +1095,7 @@ describe("API foundation", () => {
           lifecycle: "active",
           currentHeadId: "00000000-0000-4000-8000-0000000000aa",
           currentHeadHash: "ab".repeat(48),
+          currentHeadAuthoredAtMs: 1_700_000_000_123,
         },
         {
           id: "00000000-0000-4000-8000-000000000004",
@@ -1046,9 +1104,65 @@ describe("API foundation", () => {
           lifecycle: "active",
           currentHeadId: null,
           currentHeadHash: null,
+          currentHeadAuthoredAtMs: null,
         },
       ],
     });
+  });
+
+  test("rejects an invalid initial Environment label before creating a Project", async () => {
+    const profile = loadServerProfileConfig({});
+    const auth = {
+      api: {
+        getSession: async () => ({
+          session: { id: "session-token" },
+          user: { id: "auth-user", name: "Ari" },
+        }),
+      },
+    } as never;
+    let transactions = 0;
+    const database = {
+      authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
+      device: { findFirst: async () => ({ id: PROVEN_DEVICE }) },
+      $transaction: async () => {
+        transactions += 1;
+        throw new Error("unexpected transaction");
+      },
+    } as never;
+    const testApp = createApi({ database, profile, auth });
+    const response = await testApp.request(
+      `${profile.origin}/api/v1/projects`,
+      {
+        method: "POST",
+        headers: {
+          Origin: profile.origin,
+          Authorization: "Bearer session-token",
+          "X-DotRelay-Device-Id": PROVEN_DEVICE,
+          "X-DotRelay-Device-Proof": USER_ID_PROOF,
+          "Content-Type": "application/json",
+          "Idempotency-Key": "00000000-0000-4000-8000-0000000000f1",
+        },
+        body: JSON.stringify({
+          teamId: "00000000-0000-4000-8000-000000000001",
+          repositoryHost: "github.com",
+          repositoryOwner: "LSP-Software",
+          repositoryName: "DotRelay",
+          githubRepositoryId: "1311418611",
+          environmentLabel: "not a label",
+        }),
+      },
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      "invalid_request",
+    );
+    expect(transactions).toBe(0);
   });
 
   test("lists Team names and rejects an empty Team create body", async () => {
@@ -1056,13 +1170,19 @@ describe("API foundation", () => {
     const auth = {
       api: {
         getSession: async () => ({
+          session: { id: "session-token" },
           user: { id: "auth-user", name: "Ari" },
         }),
       },
     } as never;
     const database = {
       authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
-      user: { upsert: async () => ({ id: "user-id" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: { findFirst: async () => ({ id: "device-id" }) },
       team: {
         findMany: async () => [
@@ -1075,7 +1195,8 @@ describe("API foundation", () => {
       headers: {
         Origin: profile.origin,
         Authorization: "Bearer session-token",
-        "X-DotRelay-Device-Id": "device-id",
+        "X-DotRelay-Device-Id": PROVEN_DEVICE,
+        "X-DotRelay-Device-Proof": USER_ID_PROOF,
       },
     });
     expect(listed.status).toBe(200);
@@ -1090,7 +1211,8 @@ describe("API foundation", () => {
         Authorization: "Bearer session-token",
         "Content-Type": "application/json",
         "Idempotency-Key": "00000000-0000-4000-8000-000000000099",
-        "X-DotRelay-Device-Id": "device-id",
+        "X-DotRelay-Device-Id": PROVEN_DEVICE,
+        "X-DotRelay-Device-Proof": USER_ID_PROOF,
       },
       body: JSON.stringify({ name: "   " }),
     });
@@ -1113,7 +1235,10 @@ describe("Project and Environment lifecycle administration", () => {
 
   const ownerAuth = {
     api: {
-      getSession: async () => ({ user: { id: "auth-owner" } }),
+      getSession: async () => ({
+        session: { id: "session-token" },
+        user: { id: "auth-owner" },
+      }),
     },
   } as never;
 
@@ -1162,7 +1287,12 @@ describe("Project and Environment lifecycle administration", () => {
       ) => callback(database),
       $executeRaw: async () => 0,
       authAccount: { findFirst: async () => ({ accountId: "1001" }) },
-      user: { upsert: async () => ({ id: "user-1" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-1",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: { findFirst: async () => ({ id: DEVICE }) },
       membership: { findFirst: async () => ({ role, lifecycle: "ACTIVE" }) },
       project: {
@@ -1266,6 +1396,7 @@ describe("Project and Environment lifecycle administration", () => {
   const actorHeaders = (key: string) => ({
     Authorization: "Bearer owner-token",
     "X-DotRelay-Device-Id": DEVICE,
+    "X-DotRelay-Device-Proof": LIFECYCLE_PROOF,
     "Idempotency-Key": key,
   });
 
@@ -1360,6 +1491,7 @@ describe("Project and Environment lifecycle administration", () => {
       { action: "archive" },
       {
         "X-DotRelay-Device-Id": DEVICE,
+        "X-DotRelay-Device-Proof": LIFECYCLE_PROOF,
         "Idempotency-Key": idempotency(1),
       },
     );
@@ -1378,8 +1510,8 @@ describe("Project and Environment lifecycle administration", () => {
         "Idempotency-Key": idempotency(1),
       },
     );
-    expect(noDevice.status).toBe(400);
-    expect((await problem(noDevice)).code).toBe("invalid_request");
+    expect(noDevice.status).toBe(401);
+    expect((await problem(noDevice)).code).toBe("device_proof_required");
   });
 
   test("rejects an unknown lifecycle action and a malformed idempotency key", async () => {
@@ -1402,6 +1534,7 @@ describe("Project and Environment lifecycle administration", () => {
       {
         Authorization: "Bearer owner-token",
         "X-DotRelay-Device-Id": DEVICE,
+        "X-DotRelay-Device-Proof": LIFECYCLE_PROOF,
         "Idempotency-Key": "not-a-uuid",
       },
     );
@@ -1421,6 +1554,7 @@ describe("Resolving a GitHub Repository's identity", () => {
     auth: {
       api: {
         getSession: async () => ({
+          session: { id: "session-token" },
           user: { id: "auth-user", name: "Ari" },
         }),
       },
@@ -1439,7 +1573,12 @@ describe("Resolving a GitHub Repository's identity", () => {
       authAccount: {
         findFirst: async () => ({ accountId: "github-account" }),
       },
-      user: { upsert: async () => ({ id: "user-id" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: { findFirst: async () => ({ id: "device-id" }) },
     } as never,
   });
@@ -1455,7 +1594,8 @@ describe("Resolving a GitHub Repository's identity", () => {
         headers: {
           Origin: profile.origin,
           Authorization: "Bearer session-token",
-          "X-DotRelay-Device-Id": "device-id",
+          "X-DotRelay-Device-Id": PROVEN_DEVICE,
+          "X-DotRelay-Device-Proof": USER_ID_PROOF,
         },
       },
     );
@@ -1731,7 +1871,12 @@ describe("Project resolution against a GitHub Repository", () => {
     const members = new Set(memberTeamIds);
     const database = {
       authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
-      user: { upsert: async () => ({ id: "user-id" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: { findFirst: async () => ({ id: "device-id" }) },
       membership: {
         findFirst: async (args: { where: Record<string, unknown> }) => {
@@ -1764,7 +1909,10 @@ describe("Project resolution against a GitHub Repository", () => {
     const profile = loadServerProfileConfig({});
     const auth = {
       api: {
-        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+        getSession: async () => ({
+          session: { id: "session-token" },
+          user: { id: "auth-user", name: "Ari" },
+        }),
       },
     } as never;
     return {
@@ -1783,7 +1931,8 @@ describe("Project resolution against a GitHub Repository", () => {
       headers: {
         Origin: profile.origin,
         Authorization: "Bearer session-token",
-        "X-DotRelay-Device-Id": "device-id",
+        "X-DotRelay-Device-Id": PROVEN_DEVICE,
+        "X-DotRelay-Device-Proof": USER_ID_PROOF,
       },
     });
 
@@ -1896,6 +2045,9 @@ describe("workspace boundary Device binding", () => {
   const membershipActivatedAt = new Date("2026-01-01T00:00:00Z");
   const peerMembershipActivatedAt = new Date("2025-12-01T00:00:00Z");
   const peerMembershipRemovedAt = new Date("2026-02-01T00:00:00Z");
+  const peerEarlierPeriodActivatedAt = new Date("2025-06-01T00:00:00Z");
+  const peerEarlierPeriodRemovedAt = new Date("2025-08-01T00:00:00Z");
+  let rotationObligations: Array<Record<string, unknown>> = [];
   const olderDeviceActivatedAt = new Date("2026-01-02T00:00:00Z");
   const newerDeviceActivatedAt = new Date("2026-01-03T00:00:00Z");
   const peerDeviceActivatedAt = new Date("2025-12-15T00:00:00Z");
@@ -2007,8 +2159,24 @@ describe("workspace boundary Device binding", () => {
       authAccount: {
         findFirst: async () => ({ accountId: "github-user" }),
       },
-      user: { upsert: async () => ({ id: userId }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: userId,
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: {
+        findFirst: async ({
+          where,
+        }: {
+          where: { id?: string; userId?: string; lifecycle?: string };
+        }) =>
+          devices.find(
+            (candidate) =>
+              candidate.id === where.id &&
+              candidate.userId === where.userId &&
+              (!where.lifecycle || candidate.lifecycle === where.lifecycle),
+          ) ?? null,
         findMany: async ({
           where,
         }: {
@@ -2039,11 +2207,27 @@ describe("workspace boundary Device binding", () => {
         }: {
           where: { userId?: string; teamId?: string; lifecycle?: string };
         }) =>
-          memberships.filter((candidate) => {
-            if (where.teamId) return candidate.teamId === where.teamId;
-            if (where.userId && candidate.userId !== where.userId) return false;
-            return !where.lifecycle || candidate.lifecycle === where.lifecycle;
-          }),
+          memberships
+            .filter((candidate) => {
+              if (where.teamId) return candidate.teamId === where.teamId;
+              if (where.userId && candidate.userId !== where.userId)
+                return false;
+              return (
+                !where.lifecycle || candidate.lifecycle === where.lifecycle
+              );
+            })
+            .map((candidate) => ({
+              ...candidate,
+              periods:
+                candidate.userId === peerUserId
+                  ? [
+                      {
+                        activatedAt: peerEarlierPeriodActivatedAt,
+                        removedAt: peerEarlierPeriodRemovedAt,
+                      },
+                    ]
+                  : [],
+            })),
       },
       project: {
         findFirst: async () => ({
@@ -2078,11 +2262,17 @@ describe("workspace boundary Device binding", () => {
       accountDeviceRosterObject: {
         findMany: async () => [],
       },
+      projectRotationObligation: {
+        findMany: async () => rotationObligations,
+      },
     };
     const profile = loadServerProfileConfig({});
     const auth = {
       api: {
-        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+        getSession: async () => ({
+          session: { id: "session-token" },
+          user: { id: "auth-user", name: "Ari" },
+        }),
       },
     } as never;
     return createApi({ database: database as never, profile, auth });
@@ -2092,12 +2282,19 @@ describe("workspace boundary Device binding", () => {
     testApp: ReturnType<typeof createTestApp>,
     profile: ReturnType<typeof loadServerProfileConfig>,
     deviceId?: string,
+    // "claim" names the Device without proving it.
+    proof: "valid" | "claim" | string = "valid",
   ) => {
     const headers: Record<string, string> = {
       Origin: profile.origin,
       Authorization: "Bearer session-token",
     };
-    if (deviceId) headers["X-DotRelay-Device-Id"] = deviceId;
+    if (deviceId) {
+      headers["X-DotRelay-Device-Id"] = deviceId;
+      if (proof === "valid")
+        headers["X-DotRelay-Device-Proof"] = await proofFor(userId, deviceId);
+      else if (proof !== "claim") headers["X-DotRelay-Device-Proof"] = proof;
+    }
     return testApp.request(`${profile.origin}/api/v1/workspace/boundary`, {
       headers,
     });
@@ -2160,46 +2357,15 @@ describe("workspace boundary Device binding", () => {
     );
   });
 
-  test("a missing Device header reports no Device instead of falling back", async () => {
+  test("a session without a Device proof gets no Device ids, keys or key material", async () => {
     const profile = loadServerProfileConfig({});
     const testApp = createTestApp();
-    const response = await boundaryRequest(testApp, profile);
-    const body = (await response.json()) as Record<string, unknown>;
-
-    expect(response.status).toBe(200);
-    expect(body.device).toEqual({
-      active: false,
-      label: "No active Device",
-    });
-    expect(body.grantsReady).toBe(false);
-    expect(body).not.toHaveProperty("epochGrant");
-    expect(body.activeDeviceCount).toBe(2);
-    expect(body.peerDevices).toEqual([
-      {
-        id: olderDeviceId,
-        encryptionPublicKey: "55".repeat(32),
-        signingPublicKey: "22".repeat(32),
-        hasEpochGrant: true,
-      },
-      {
-        id: newerDeviceId,
-        encryptionPublicKey: "66".repeat(32),
-        signingPublicKey: "77".repeat(32),
-        hasEpochGrant: false,
-      },
-    ]);
-  });
-
-  test("an unknown or malformed Device header reports no Device", async () => {
-    const profile = loadServerProfileConfig({});
-    const testApp = createTestApp();
-    for (const header of [
-      "00000000-0000-4000-8000-0000000000ff",
-      "not-a-device-uuid",
+    // Neither no Device header nor a bare Device id claim (A-1) proves one.
+    for (const response of [
+      await boundaryRequest(testApp, profile),
+      await boundaryRequest(testApp, profile, olderDeviceId, "claim"),
     ]) {
-      const response = await boundaryRequest(testApp, profile, header);
       const body = (await response.json()) as Record<string, unknown>;
-
       expect(response.status).toBe(200);
       expect(body.device).toEqual({
         active: false,
@@ -2207,8 +2373,46 @@ describe("workspace boundary Device binding", () => {
       });
       expect(body.grantsReady).toBe(false);
       expect(body).not.toHaveProperty("epochGrant");
+      expect(body).not.toHaveProperty("accountKeyEnvelope");
+      expect(body).not.toHaveProperty("userValueKeyEnvelope");
       expect(body.activeDeviceCount).toBe(2);
+      expect(body.peerDevices).toEqual([]);
+      expect(body.signingTrustDevices).toEqual([]);
+      expect(body.signingTrustKeys).toEqual([]);
+      expect(body.accountRosters).toEqual({});
+      expect(body.epochKeyLinks).toEqual([]);
+      expect(JSON.stringify(body)).not.toContain(olderDeviceId);
+      expect(JSON.stringify(body)).not.toContain(newerDeviceId);
     }
+  });
+
+  test("a proof for an unknown Device reports no Device, and a bad proof is refused", async () => {
+    const profile = loadServerProfileConfig({});
+    const testApp = createTestApp();
+    const unknown = await boundaryRequest(
+      testApp,
+      profile,
+      "00000000-0000-4000-8000-0000000000ff",
+    );
+    const body = (await unknown.json()) as Record<string, unknown>;
+    expect(unknown.status).toBe(200);
+    expect(body.device).toEqual({
+      active: false,
+      label: "No active Device",
+    });
+    expect(body.grantsReady).toBe(false);
+    expect(body).not.toHaveProperty("epochGrant");
+    expect(body.activeDeviceCount).toBe(2);
+    const forged = await boundaryRequest(
+      testApp,
+      profile,
+      olderDeviceId,
+      "not-a-device-proof",
+    );
+    expect(forged.status).toBe(401);
+    expect(await forged.json()).toMatchObject({
+      code: "device_proof_required",
+    });
   });
 
   test("reports every authorized Device of the Team with its Device and Membership windows", async () => {
@@ -2233,6 +2437,9 @@ describe("workspace boundary Device binding", () => {
         deviceActiveUntilMs: null,
         memberSinceMs: membershipActivatedAt.getTime(),
         memberUntilMs: null,
+        membershipPeriods: [
+          { sinceMs: membershipActivatedAt.getTime(), untilMs: null },
+        ],
       },
       {
         deviceId: newerDeviceId,
@@ -2243,6 +2450,9 @@ describe("workspace boundary Device binding", () => {
         deviceActiveUntilMs: null,
         memberSinceMs: membershipActivatedAt.getTime(),
         memberUntilMs: null,
+        membershipPeriods: [
+          { sinceMs: membershipActivatedAt.getTime(), untilMs: null },
+        ],
       },
       {
         deviceId: peerDeviceId,
@@ -2253,8 +2463,69 @@ describe("workspace boundary Device binding", () => {
         deviceActiveUntilMs: peerDeviceRevokedAt.getTime(),
         memberSinceMs: peerMembershipActivatedAt.getTime(),
         memberUntilMs: peerMembershipRemovedAt.getTime(),
+        // An earlier, archived period comes first (ADR 0017).
+        membershipPeriods: [
+          {
+            sinceMs: peerEarlierPeriodActivatedAt.getTime(),
+            untilMs: peerEarlierPeriodRemovedAt.getTime(),
+          },
+          {
+            sinceMs: peerMembershipActivatedAt.getTime(),
+            untilMs: peerMembershipRemovedAt.getTime(),
+          },
+        ],
       },
     ]);
+  });
+
+  test("reports an owed rotation in environment.rotationOwed without gating publication", async () => {
+    const profile = loadServerProfileConfig({});
+    rotationObligations = [];
+    const quiet = (await (
+      await boundaryRequest(createTestApp(), profile, newerDeviceId)
+    ).json()) as {
+      environment: Record<string, unknown>;
+      rotationRequired: boolean;
+    };
+    expect(quiet.environment.rotationOwed).toBeNull();
+    const since = new Date("2026-10-01T00:00:00.000Z");
+    rotationObligations = [
+      {
+        reason: "MEMBERSHIP_REMOVED",
+        membershipId: "membership-a",
+        deviceId: null,
+        projectEpoch: 1n,
+        createdAt: since,
+      },
+      {
+        reason: "DEVICE_REVOKED",
+        membershipId: null,
+        deviceId: "device-a",
+        projectEpoch: 1n,
+        createdAt: new Date(since.getTime() + 1_000),
+      },
+      {
+        reason: "DEVICE_REVOKED",
+        membershipId: null,
+        deviceId: "device-a",
+        projectEpoch: 1n,
+        createdAt: new Date(since.getTime() + 2_000),
+      },
+    ];
+    const owed = (await (
+      await boundaryRequest(createTestApp(), profile, newerDeviceId)
+    ).json()) as {
+      environment: Record<string, unknown>;
+      rotationRequired: boolean;
+    };
+    rotationObligations = [];
+    expect(owed.environment.rotationOwed).toEqual({
+      since: since.toISOString(),
+      sinceEpoch: "1",
+      membershipRemovals: 1,
+      deviceRevocations: 1,
+    });
+    expect(owed.rotationRequired).toBe(false);
   });
 });
 
@@ -2272,7 +2543,12 @@ describe("POST /api/v1/devices/self display metadata", () => {
     let updated = { ...row };
     const database = {
       authAccount: { findFirst: async () => ({ accountId: "github-user" }) },
-      user: { upsert: async () => ({ id: "user-id" }) },
+      user: {
+        upsert: async (input: { create: { githubSubject: string } }) => ({
+          id: "user-id",
+          githubSubject: input.create.githubSubject,
+        }),
+      },
       device: {
         findFirst: async () => ({ id: deviceId }),
         findUnique: async () => ({ ...updated }),
@@ -2285,7 +2561,10 @@ describe("POST /api/v1/devices/self display metadata", () => {
     const profile = loadServerProfileConfig({});
     const auth = {
       api: {
-        getSession: async () => ({ user: { id: "auth-user", name: "Ari" } }),
+        getSession: async () => ({
+          session: { id: "session-token" },
+          user: { id: "auth-user", name: "Ari" },
+        }),
       },
     } as never;
     return createApi({ database, profile, auth });
@@ -2303,6 +2582,7 @@ describe("POST /api/v1/devices/self display metadata", () => {
         Authorization: "Bearer session-token",
         "Content-Type": "application/json",
         "X-DotRelay-Device-Id": deviceId,
+        "X-DotRelay-Device-Proof": await proofFor("user-id", deviceId),
       },
       body: JSON.stringify(body),
     });
