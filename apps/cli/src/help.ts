@@ -513,6 +513,56 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "dotrelay team decline <invitation-id> --profile work --no-input --force",
     ],
   },
+  "team leave": {
+    about:
+      "Leave a Team: end your own Membership. Like a removal, every Project of the Team then owes a key rotation.",
+    positional: [
+      "<team-id-or-name>  The Team's id or name from dotrelay team list.",
+    ],
+    options: {
+      noInput: "never prompt; requires --force",
+      force: "confirm leaving when --no-input is set",
+    },
+    notes: [
+      "The Team's last active owner cannot leave while other Members remain: make another active Member an owner in the web app, or delete the Team there.",
+      "Values this machine already downloaded stay on it; the Team's owners should run dotrelay project rotate.",
+    ],
+    examples: [
+      "dotrelay team leave Platform",
+      "dotrelay team leave <team-id> --no-input --force",
+    ],
+  },
+  "account export": {
+    about:
+      "Export the account data this Server Profile holds about you as JSON: profile, Teams and roles, Devices, invitations, sessions, and activity timestamps.",
+    options: {
+      output: "write the JSON to this file (mode 0600) instead of stdout",
+    },
+    notes: [
+      "The export holds no Values, ciphertext, or keys. Decrypted Values come from a Device: dotrelay pull or dotrelay export.",
+    ],
+    examples: [
+      "dotrelay account export --output account.json",
+      "dotrelay account export --profile work",
+    ],
+  },
+  "account delete": {
+    about:
+      "Delete your account on this Server Profile. Your sign-in, sessions, Device keys, and recovery methods are deleted; teammates keep the history you wrote, shown as from a deleted user.",
+    options: {
+      noInput: "never prompt; requires --force",
+      force: "confirm deletion when --no-input is set",
+    },
+    notes: [
+      "Refused while you are the last active owner of a Team with other Members. Teams where you are the only Member are deleted with the account.",
+      "Afterwards the session and this Device's keys are removed from this machine. The Server Profile entry, pins, worktree contexts, and pulled .env files stay; the command lists them.",
+      "Signing in again with the same GitHub account creates a new, empty account.",
+    ],
+    examples: [
+      "dotrelay account delete",
+      "dotrelay account delete --profile work --no-input --force",
+    ],
+  },
   "team members": {
     about:
       "List the linked Team's Members with the trust state of their account identity: verified (Devices come from a roster signed by the pinned account key), unverified (no signed roster yet), or a blocking key change or rollback.",
@@ -581,7 +631,8 @@ const GROUP_ABOUT: Readonly<Partial<Record<CommandName, string>>> = {
   device:
     "Manage Device enrollment, dual-control handoffs, and account recovery for this machine.",
   project: "Manage the Project linked to this GitHub Repository.",
-  team: "List your Teams and their Members, share Project keys with a Member, and decline invitations.",
+  team: "List your Teams and their Members, share Project keys with a Member, decline invitations, and leave a Team.",
+  account: "Export or delete your account on a Server Profile.",
   env: "List, create, and select the worktree Project's Environments.",
 };
 
@@ -822,6 +873,9 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["team trust", "Re-trust a Member whose account key changed"],
   ["team share-keys", "Share the Project keys with a Member"],
   ["team decline", "Decline a Team invitation addressed to you"],
+  ["team leave", "Leave a Team"],
+  ["account export", "Export your account data as JSON"],
+  ["account delete", "Delete your account on this Server Profile"],
   ["env list", "List the Project's Environments"],
   ["env use", "Select an Environment by id or label"],
   ["env create", "Create an Environment with a label"],

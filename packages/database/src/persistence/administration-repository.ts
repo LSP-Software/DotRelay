@@ -8,7 +8,10 @@ import {
   EnvironmentNotActiveError,
   InvitationNotPendingError,
   managedRoleAction,
+  MembershipNotActiveError,
   normalizeEnvironmentLabel,
+  OwnerTransferRequiredError,
+  type PersistenceClient,
   PendingInvitationLimitError,
   ProjectNotActiveError,
   requireActiveDevice,
@@ -372,8 +375,6 @@ export class AdministrationRepository {
 export class MembershipAdministrationRepository {
   private readonly operations = new OperationRepository();
   private readonly audit = new AuditFactRepository();
-  private readonly rotationObligations =
-    new ProjectRotationObligationRepository();
 
   async invite(
     database: TransactionDatabase,
@@ -775,39 +776,147 @@ export class MembershipAdministrationRepository {
       if (membership.lifecycle === "REMOVED")
         throw new Error("Membership is already removed");
       const now = input.now ?? new Date();
-      const priorLifecycle = membership.lifecycle;
-      const removed = await transaction.membership.update({
-        where: { id: membership.id },
-        data: { lifecycle: "REMOVED", removedAt: now },
+      const removed = await endMembership(transaction, {
+        membership,
+        operation: input.operation,
+        now,
       });
-      // An active Member held the Team's Project keys: owe each Project a
-      // rotation. A pending Member never received keys in this period.
-      if (priorLifecycle === "ACTIVE")
-        await this.rotationObligations.recordMembershipRemoval(transaction, {
-          teamId: input.teamId,
-          membershipId: membership.id,
-          now,
-        });
       await transaction.operation.update({
         where: { id: operation.operation.id },
         data: { status: "COMMITTED", committedAt: now },
       });
-      await this.audit.append(transaction, {
-        operationId: operation.operation.id,
-        kind: "MEMBERSHIP_REMOVED",
-        actorUserId: input.operation.actorUserId,
-        ...(input.operation.actorDeviceId
-          ? { actorDeviceId: input.operation.actorDeviceId }
-          : {}),
-        entityKind: "MEMBERSHIP",
-        entityId: membership.id,
-        priorLifecycle: membership.lifecycle,
-        newLifecycle: "REMOVED",
+      return { operation: operation.operation, membership: removed };
+    });
+  }
+
+  // A Member ends their own Membership (ADR 0019). It is a removal with the
+  // Member as actor; only the session's own User may leave, and the Team's
+  // last active owner may not while anyone else remains.
+  async leave(
+    database: TransactionDatabase,
+    input: Readonly<{
+      readonly operation: OperationInput;
+      readonly teamId: string;
+      readonly now?: Date;
+    }>,
+  ) {
+    return inShortTransaction(database, async (transaction) => {
+      await transaction.$executeRaw`SELECT "id" FROM "teams" WHERE "id" = ${input.teamId} FOR UPDATE`;
+      const operation = await this.operations.begin(
+        transaction,
+        input.operation,
+      );
+      if (operation.idempotent) return operation;
+      const [team, membership] = await Promise.all([
+        transaction.team.findUnique({
+          where: { id: input.teamId },
+          select: { lifecycle: true },
+        }),
+        transaction.membership.findUnique({
+          where: {
+            teamId_userId: {
+              teamId: input.teamId,
+              userId: input.operation.actorUserId,
+            },
+          },
+        }),
+      ]);
+      if (team?.lifecycle !== "ACTIVE") throw new TeamNotActiveError();
+      if (!membership || membership.lifecycle === "REMOVED")
+        throw new MembershipNotActiveError();
+      await requireLeavePermitted(transaction, membership);
+      const now = input.now ?? new Date();
+      const removed = await endMembership(transaction, {
+        membership,
+        operation: input.operation,
+        now,
+      });
+      await transaction.operation.update({
+        where: { id: operation.operation.id },
+        data: { status: "COMMITTED", committedAt: now },
       });
       return { operation: operation.operation, membership: removed };
     });
   }
 }
+
+/**
+ * The Team's last active owner may not leave while another Member remains,
+ * and its only Member may not leave at all: ownership moves first, or the
+ * Team is deleted.
+ */
+export const requireLeavePermitted = async (
+  transaction: PersistenceClient,
+  membership: Readonly<{
+    readonly id: string;
+    readonly teamId: string;
+    readonly role: string;
+    readonly lifecycle: string;
+  }>,
+) => {
+  const others = await transaction.membership.findMany({
+    where: {
+      teamId: membership.teamId,
+      id: { not: membership.id },
+      lifecycle: { not: "REMOVED" },
+    },
+    select: { role: true, lifecycle: true },
+  });
+  if (others.length === 0) throw new OwnerTransferRequiredError();
+  if (
+    membership.role === "OWNER" &&
+    membership.lifecycle === "ACTIVE" &&
+    !others.some(
+      (other) => other.role === "OWNER" && other.lifecycle === "ACTIVE",
+    )
+  )
+    throw new OwnerTransferRequiredError();
+};
+
+/**
+ * Ends one Membership inside the caller's transaction: the shared path for
+ * removal, leaving, and Account deletion. An active Member held the Team's
+ * Project keys, so each Project owes a rotation; a pending Member never
+ * received keys in this period.
+ */
+export const endMembership = async (
+  transaction: PersistenceClient,
+  input: Readonly<{
+    readonly membership: Readonly<{
+      readonly id: string;
+      readonly teamId: string;
+      readonly lifecycle: "PENDING_KEY_GRANT" | "ACTIVE" | "REMOVED";
+    }>;
+    readonly operation: OperationInput;
+    readonly now: Date;
+    readonly owesRotation?: boolean;
+  }>,
+) => {
+  const { membership, now } = input;
+  const priorLifecycle = membership.lifecycle;
+  const removed = await transaction.membership.update({
+    where: { id: membership.id },
+    data: { lifecycle: "REMOVED", removedAt: now },
+  });
+  if (priorLifecycle === "ACTIVE" && input.owesRotation !== false)
+    await new ProjectRotationObligationRepository().recordMembershipRemoval(
+      transaction,
+      { teamId: membership.teamId, membershipId: membership.id, now },
+    );
+  await new AuditFactRepository().append(transaction, {
+    operationId: input.operation.id,
+    kind: "MEMBERSHIP_REMOVED",
+    actorUserId: input.operation.actorUserId,
+    ...(input.operation.actorDeviceId
+      ? { actorDeviceId: input.operation.actorDeviceId }
+      : {}),
+    entityKind: "MEMBERSHIP",
+    entityId: membership.id,
+    priorLifecycle,
+    newLifecycle: "REMOVED",
+  });
+  return removed;
+};
 
 export type ProjectCreationInput = Readonly<{
   readonly operation: OperationInput & { readonly actorDeviceId: string };

@@ -3,6 +3,7 @@ import type { DatabaseClient } from "@dotrelay/database";
 import {
   OperationRepository,
   RetentionRepository,
+  TeamLifecycleRepository,
   SECURITY_REQUEST_ENDPOINT_TEMPLATES,
   SECURITY_REQUEST_LOG_RETENTION_MS,
   type SecurityRequestEndpointTemplate,
@@ -419,6 +420,7 @@ export const createApiObservability = (
   const operations = new OperationRepository();
   const stagedObjects = new StagedObjectRepository();
   const retention = new RetentionRepository();
+  const teamLifecycle = new TeamLifecycleRepository();
   const expireShortLivedRecords = async (at = now()) => {
     try {
       return Object.freeze({
@@ -436,6 +438,8 @@ export const createApiObservability = (
           await retention.expireDeviceEnrollments(database, at)
         ).count,
         invitations: (await retention.expireInvitations(database, at)).count,
+        deletedTeams: (await teamLifecycle.purgeDeletedTeams(database, at))
+          .count,
       });
     } catch (error) {
       emitDiagnosticFailure(

@@ -63,6 +63,11 @@ changed. **Trust new key** re-trusts a changed key after confirmation; compare t
 the Member first. A workspace session also verifies this account's own roster when it loads, and
 publishes a new version when this browser holds the Account Master Key and is not listed yet.
 
+Every Member can **Leave team**; owners can **Delete team** after typing its name. The
+**Account** view exports the account data as JSON and deletes the account after typing
+`delete my account` ([what deletion keeps](account-deletion.md)). A deleted User's rows and
+Revisions read "Deleted user".
+
 Archive and restore operations require confirmation. Archiving an Environment keeps immutable
 Revision history but hides Variables until restore. Restoring a Project fails closed if another
 active Project holds the same stable GitHub Repository linkage.

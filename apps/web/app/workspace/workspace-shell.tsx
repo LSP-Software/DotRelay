@@ -20,6 +20,7 @@ import {
   Menu,
   MonitorSmartphone,
   RotateCcw,
+  UserRound,
   Users,
   WifiOff,
 } from "lucide-react";
@@ -210,6 +211,7 @@ import {
   RoleChangeDialog,
   type RoleChangeTarget,
 } from "./team-dialogs";
+import { AccountSettingsSection, TeamLifecycleCard } from "./account-lifecycle";
 
 type ProfileId = WorkspaceProfileId;
 type ConnectionState = "loading" | "online" | "offline";
@@ -359,8 +361,15 @@ const roleLabel = (role: MembershipRole | undefined): string =>
   role === "OWNER" ? "Owner" : role === "ADMIN" ? "Admin" : "Member";
 
 const memberLabel = (
-  member: Readonly<{ name: string | null; githubSubject: string }>,
-): string => member.name ?? `GitHub ${member.githubSubject}`;
+  member: Readonly<{
+    name: string | null;
+    githubSubject: string;
+    deleted?: boolean;
+  }>,
+): string =>
+  member.deleted
+    ? "Deleted user"
+    : (member.name ?? `GitHub ${member.githubSubject}`);
 
 // Invitation and expiry timestamps are absolute, so a human-readable date is
 // shown rather than a raw offset.
@@ -624,6 +633,22 @@ const NavLinks = ({
     >
       <KeyRound aria-hidden="true" className="size-4" />
       Recovery
+    </button>
+    <button
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        view === "account"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-muted-foreground",
+      )}
+      onClick={() => {
+        onSetView("account");
+        onNavigate?.();
+      }}
+      type="button"
+    >
+      <UserRound aria-hidden="true" className="size-4" />
+      Account
     </button>
   </nav>
 );
@@ -4175,6 +4200,19 @@ export const WorkspaceShell = ({
                         ) : null}
                       </>
                     ) : null}
+                    {apiOrigin && selectedTeam?.id ? (
+                      <TeamLifecycleCard
+                        apiOrigin={apiOrigin}
+                        deviceId={browserDeviceId}
+                        onChanged={() => {
+                          setView("projects");
+                          reconnectNowRef.current?.();
+                        }}
+                        role={effectiveRole}
+                        teamId={selectedTeam.id}
+                        teamName={selectedTeam.name}
+                      />
+                    ) : null}
                   </section>
                 )
               ) : null}
@@ -4419,6 +4457,25 @@ export const WorkspaceShell = ({
                 </section>
               ) : null}
               {view === "recovery" ? recoveryArea : null}
+              {view === "account" ? (
+                !sessionActive ? (
+                  signInRequired
+                ) : apiOrigin && displayBoundary.session.userId ? (
+                  <AccountSettingsSection
+                    apiOrigin={apiOrigin}
+                    onDeleted={() => {
+                      // The deleted account's keys and Device are useless
+                      // now; a later sign-in is a new account with a new
+                      // Device, so clear everything this browser kept.
+                      forgetDeviceProofs();
+                      void forgetThisBrowser().finally(() =>
+                        window.location.assign("/sign-in"),
+                      );
+                    }}
+                    userId={displayBoundary.session.userId}
+                  />
+                ) : null
+              ) : null}
 
               <section
                 aria-hidden={envVisible ? undefined : true}

@@ -13,3 +13,4 @@ Read the [development commands](development.md), [quality gates](quality-gates.m
 [release policy](release-policy.md) before changing the repository foundation.
 
 - [Deployment, backup and recovery](operations.md)
+- [Account deletion, Team deletion, and data export](account-deletion.md)

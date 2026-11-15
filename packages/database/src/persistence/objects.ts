@@ -279,7 +279,8 @@ export type OperationInput = Readonly<{
     | "REVISION_PUBLICATION"
     | "ROLLBACK"
     | "EPOCH_ROTATION"
-    | "EPOCH_KEY_LINK";
+    | "EPOCH_KEY_LINK"
+    | "ACCOUNT_DELETION";
   readonly commandBytes: Uint8Array;
   readonly commandDigest: Uint8Array;
   readonly expiresAt?: Date;
@@ -486,7 +487,9 @@ export type AuditFactInput = Readonly<{
     | "OPERATION_CANCELLED"
     | "OPERATION_EXPIRED"
     | "INVITATION_REVOKED"
-    | "INVITATION_DECLINED";
+    | "INVITATION_DECLINED"
+    | "TEAM_DELETED"
+    | "ACCOUNT_DELETED";
   readonly actorUserId?: string;
   readonly actorDeviceId?: string;
   readonly entityKind:

@@ -40,6 +40,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { registerAccountRoutes } from "./account-routes";
 import { registerAdministrationRoutes } from "./administration-routes";
 import { createAuth, type DotRelayAuth, signBearerToken } from "./auth";
 import { createClientIpResolver } from "./client-ip";
@@ -1682,6 +1683,7 @@ const createApi = ({
   });
 
   registerDeviceRoutes(app, { database, profile, auth });
+  registerAccountRoutes(app, { database, profile, auth });
   registerMembershipProvisioningRoutes(app, { database, profile, auth });
 
   registerProtocolRoutes(app, { database, profile, auth });

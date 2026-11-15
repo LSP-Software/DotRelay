@@ -1290,3 +1290,250 @@ describe("status reports an owed Project key rotation", () => {
     }
   });
 });
+
+describe("team leave and account lifecycle", () => {
+  const paymentsTeamId = "00000000-0000-4000-8000-000000000009";
+  const lifecycleRoutes = (
+    options: Readonly<{
+      leave?: () => Response;
+      blockingTeams?: readonly Record<string, string>[];
+    }> = {},
+  ): Route[] => [
+    (request, url) =>
+      request.method === "GET" && url.pathname === "/api/v1/teams"
+        ? jsonResponse({
+            teams: [{ id: paymentsTeamId, name: "Payments", role: "MEMBER" }],
+          })
+        : undefined,
+    (request, url) =>
+      request.method === "POST" &&
+      url.pathname === `/api/v1/teams/${paymentsTeamId}/leave`
+        ? (options.leave?.() ??
+          jsonResponse(
+            { teamId: paymentsTeamId, membershipId, lifecycle: "REMOVED" },
+            201,
+          ))
+        : undefined,
+    (request, url) =>
+      request.method === "GET" && url.pathname === "/api/v1/account/export"
+        ? jsonResponse({
+            format: "dotrelay-account-export-v1",
+            exportedAt: "2026-11-15T00:00:00.000Z",
+            serverOrigin: url.origin,
+            user: { id: userId },
+            profile: null,
+            linkedAccounts: [],
+            sessions: [],
+            memberships: [],
+            invitations: [],
+            devices: [],
+            accountKeyWrappers: [],
+            projectsCreated: [],
+            revisionsAuthored: { count: 0 },
+            auditFacts: [],
+          })
+        : undefined,
+    (request, url) =>
+      request.method === "GET" && url.pathname === "/api/v1/account/deletion"
+        ? jsonResponse({
+            userId,
+            blockingTeams: options.blockingTeams ?? [],
+            teamsDeleted: [],
+            teamsLeft: [{ teamId: paymentsTeamId, name: "Payments" }],
+          })
+        : undefined,
+    (request, url) =>
+      request.method === "POST" && url.pathname === "/api/v1/account/delete"
+        ? jsonResponse(
+            {
+              userId,
+              status: "DELETED",
+              deletedAt: "2026-11-15T00:00:00.000Z",
+              teamsDeleted: [],
+              teamsLeft: [{ teamId: paymentsTeamId, name: "Payments" }],
+            },
+            201,
+          )
+        : undefined,
+  ];
+  const posts = (requests: readonly Recorded[]) =>
+    requests.filter((request) => request.method === "POST");
+
+  test("leaves a Team named by its name", async () => {
+    const server = startServer(lifecycleRoutes());
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "team",
+          "leave",
+          "payments",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        teamId: paymentsTeamId,
+        lifecycle: "REMOVED",
+      });
+      expect(posts(server.requests)).toEqual([
+        {
+          method: "POST",
+          path: `/api/v1/teams/${paymentsTeamId}/leave`,
+          body: "{}",
+        },
+      ]);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("leaving requires --force without input, and reports a last owner", async () => {
+    const server = startServer(
+      lifecycleRoutes({
+        leave: () => problemResponse("owner_transfer_required"),
+      }),
+    );
+    const state = await seedState(server.pin);
+    try {
+      const unforced = await run(
+        ["team", "leave", "Payments", "--profile", "relay", "--no-input"],
+        state.runtime,
+      );
+      expect(unforced.exitCode).toBe(2);
+      expect(unforced.stderr).toContain("--force");
+      expect(posts(server.requests)).toHaveLength(0);
+      const owner = await run(
+        [
+          "team",
+          "leave",
+          "Payments",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        state.runtime,
+      );
+      expect(owner.exitCode).toBe(4);
+      expect(JSON.parse(owner.stderr)).toMatchObject({
+        code: "owner_transfer_required",
+        detail: expect.stringContaining("last active owner"),
+      });
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("exports the account to stdout or a protected file", async () => {
+    const server = startServer(lifecycleRoutes());
+    const state = await seedState(server.pin);
+    try {
+      const printed = await run(["account", "export"], state.runtime);
+      expect(printed.exitCode).toBe(0);
+      expect(JSON.parse(printed.stdout)).toMatchObject({
+        format: "dotrelay-account-export-v1",
+      });
+      const output = join(state.stateDirectory, "account.json");
+      const written = await run(
+        ["account", "export", "--output", output],
+        state.runtime,
+      );
+      expect(written.exitCode).toBe(0);
+      expect(await Bun.file(output).json()).toMatchObject({
+        user: { id: userId },
+      });
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("refuses to delete the account of a Team's last owner", async () => {
+    const server = startServer(
+      lifecycleRoutes({
+        blockingTeams: [{ teamId: paymentsTeamId, name: "Payments" }],
+      }),
+    );
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "account",
+          "delete",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(4);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        code: "owner_transfer_required",
+        detail: expect.stringContaining("Payments"),
+      });
+      expect(posts(server.requests)).toHaveLength(0);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("deletes the account after the typed phrase and clears local keys", async () => {
+    const server = startServer(lifecycleRoutes());
+    const state = await seedState(server.pin);
+    try {
+      const wrong = await run(["account", "delete"], {
+        ...state.runtime,
+        prompt: async () => "yes",
+      });
+      expect(wrong.exitCode).toBe(2);
+      expect(posts(server.requests)).toHaveLength(0);
+
+      const questions: string[] = [];
+      const result = await run(["account", "delete", "--json"], {
+        ...state.runtime,
+        prompt: async (question) => {
+          questions.push(question);
+          return "delete my account";
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(questions[0]).toContain("You leave: Payments.");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        status: "DELETED",
+        localDataRemoved: ["session", "device keys"],
+      });
+      expect(posts(server.requests)).toEqual([
+        {
+          method: "POST",
+          path: "/api/v1/account/delete",
+          body: JSON.stringify({ confirmUserId: userId }),
+        },
+      ]);
+      expect(
+        await createSessionStore(state.credentials).get(server.pin),
+      ).toBeNull();
+      expect(
+        await Bun.file(
+          deviceMetadataPath(state.stateDirectory, server.pin),
+        ).exists(),
+      ).toBe(false);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+});

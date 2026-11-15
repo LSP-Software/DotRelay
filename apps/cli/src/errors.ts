@@ -131,6 +131,7 @@ const safeDiagnosticCodes = new Set([
   "output_conflict",
   "output_tracked",
   "output_write_failed",
+  "owner_transfer_required",
   "payload_too_large",
   "peer_share_failed",
   "pending_invitation_limit",
@@ -241,6 +242,7 @@ export const categoryForProblem = (
       "genesis_exists",
       "authored_at_out_of_range",
       "pending_invitation_limit",
+      "owner_transfer_required",
     ].includes(code)
   )
     return "conflict";
@@ -332,6 +334,8 @@ export const detailForProblem = (
     return "this Team has reached its limit of pending invitations; revoke invitations that are no longer needed in the DotRelay web app, or wait for them to be accepted, declined, or expire";
   if (code === "rate_limit_unavailable")
     return "the Server Profile's rate limiter is unavailable; retry later";
+  if (code === "owner_transfer_required")
+    return "you are this Team's last active owner; make another active Member an owner in the DotRelay web app, or delete the Team, first";
   if (categoryForProblem(code) === "conflict")
     return "the requested change conflicts with current Server Profile state";
   if (categoryForProblem(code) === "crypto")
@@ -384,6 +388,7 @@ const errorTitles: Record<string, string> = {
   staged_object_missing: "Staged request missing",
   invitation_expired: "Invitation expired",
   pending_invitation_limit: "Too many pending invitations",
+  owner_transfer_required: "Ownership transfer required",
   authored_at_out_of_range: "Clock out of range",
   rollback_target_unavailable: "Rollback target unavailable",
   rollback_variable_absent: "Rollback target missing Variables",
