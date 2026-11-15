@@ -228,7 +228,7 @@ test("landing page leads to the GitHub sign-in page", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("landing page offers install steps, docs, and placeholder policies", async ({
+test("landing page offers install steps, docs, and policies", async ({
   page,
 }) => {
   await page.goto("/");
@@ -252,12 +252,16 @@ test("landing page offers install steps, docs, and placeholder policies", async 
   await expect(
     page.getByRole("heading", { name: "Privacy policy" }),
   ).toBeVisible();
-  await expect(page.getByText("This policy is being finalised")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "What we cannot see" }),
+  ).toBeVisible();
   await page.goto("/terms");
   await expect(
     page.getByRole("heading", { name: "Terms of service" }),
   ).toBeVisible();
-  await expect(page.getByText("Placeholder", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Privacy policy" }).first(),
+  ).toBeVisible();
 });
 
 test("the Team menu shows the current Team and lets you switch", async ({
