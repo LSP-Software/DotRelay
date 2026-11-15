@@ -12,6 +12,14 @@ the GitHub identity behind every authenticated request, including sessions creat
 was enabled, browser Device approval, and CLI bearer sessions. Public health and capabilities probes
 remain available, as does sign-out. Signing in to GitHub is not itself admission to DotRelay data.
 
+A signed-in account outside the list gets `403 alpha_admission_required` on every other request. The
+problem names neither the list nor the account. The web app shows `/private-alpha` for it, with a
+sign-out button; the CLI prints a "Private alpha" error (exit 6) that suggests `dotrelay logout`.
+On the hosted service both point at support@dotrelay.dev; a self-hosted server tells the user to
+ask its operator. When such an account opens a CLI sign-in code in the browser, the API declines
+the code, so `dotrelay login` and `setup` stop with the same error instead of waiting for the code
+to expire.
+
 ## Invite and provision a Member
 
 Invite the Member by GitHub login in the Members view. The invitee accepts and sets up a browser or
