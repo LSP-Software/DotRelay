@@ -10,6 +10,7 @@ import {
   sha384Digest,
 } from "@dotrelay/database";
 import type { DotRelayAuth } from "./auth";
+import { testDeviceProof } from "./device-proof-testing";
 import { createApi } from "./index";
 import { loadServerProfileConfig } from "./profile";
 
@@ -94,6 +95,7 @@ type Person = Readonly<{
   readonly userId: string;
   readonly deviceId: string;
   readonly token: string;
+  readonly sessionId: string;
   readonly githubId: string;
 }>;
 
@@ -117,9 +119,10 @@ const createPerson = async (label: string): Promise<Person> => {
       accessToken: `gho_${label}_secret`,
     },
   });
+  const sessionId = crypto.randomUUID();
   await database.authSession.create({
     data: {
-      id: crypto.randomUUID(),
+      id: sessionId,
       token,
       userId: authSubject,
       expiresAt: new Date(Date.now() + 3_600_000),
@@ -142,7 +145,7 @@ const createPerson = async (label: string): Promise<Person> => {
       displayName: `${label} laptop`,
     },
   });
-  return { userId: user.id, deviceId: device.id, token, githubId };
+  return { userId: user.id, deviceId: device.id, token, sessionId, githubId };
 };
 
 const command = async (actorUserId: string, actorDeviceId: string) => {
@@ -186,7 +189,7 @@ const join = (teamId: string, person: Person) =>
     },
   });
 
-const request = (
+const request = async (
   person: Person,
   method: "GET" | "POST",
   path: string,
@@ -198,7 +201,17 @@ const request = (
     headers: {
       Origin: profile.origin,
       Authorization: `Bearer ${person.token}`,
-      ...(withDevice ? { "X-DotRelay-Device-Id": person.deviceId } : {}),
+      // A Device-scoped request proves the Device (ADR 0020).
+      ...(withDevice
+        ? {
+            "X-DotRelay-Device-Id": person.deviceId,
+            "X-DotRelay-Device-Proof": await testDeviceProof(profile, {
+              sessionId: person.sessionId,
+              userId: person.userId,
+              deviceId: person.deviceId,
+            }),
+          }
+        : {}),
       ...(method === "POST"
         ? {
             "Content-Type": "application/json",
