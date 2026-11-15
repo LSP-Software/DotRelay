@@ -101,7 +101,7 @@ and removes its temporary npm configuration afterward. Stable versions use `late
 use their first prerelease identifier (`alpha`, `beta`, `rc`, or `dev`). An alpha therefore does not
 replace the stable channel. The `latest` identifier is reserved for stable releases: a tag such as
 `v1.2.3-latest.1` is rejected at publication time instead of moving the stable npm selector. Before announcing, verify the GitHub publish job succeeds and test
-`npx dotrelay@alpha --version` in a clean environment. This change does not publish a package or
+`npx @dotrelay/cli@alpha --version` in a clean environment. This change does not publish a package or
 create a production release tag.
 
 ## Dependency audit

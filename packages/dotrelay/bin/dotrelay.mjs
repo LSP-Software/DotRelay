@@ -104,7 +104,7 @@ const reportUnlaunchable = (path) => {
     "The binary is not launchable on this machine, usually because it was built for another architecture or operating system, or it is not an intact native executable.",
   );
   console.error(
-    `Reinstall a release for ${platformDirectory} (npm install -g dotrelay@${selectorVersion ?? "latest"}) or download the matching binary from the DotRelay GitHub releases.`,
+    `Reinstall a release for ${platformDirectory} (npm install -g @dotrelay/cli@${selectorVersion ?? "latest"}) or download the matching binary from the DotRelay GitHub releases.`,
   );
   if (binaryOverride !== undefined)
     console.error(
@@ -161,7 +161,7 @@ if (selected) {
       `${label}: the native binary for ${platformDirectory} at ${found.path} is not executable.`,
     );
     console.error(
-      `Restore the execute permission (chmod +x ${found.path}) or reinstall the release (npm install -g dotrelay@${selectorVersion ?? "latest"}).`,
+      `Restore the execute permission (chmod +x ${found.path}) or reinstall the release (npm install -g @dotrelay/cli@${selectorVersion ?? "latest"}).`,
     );
   } else {
     console.error(
@@ -176,7 +176,7 @@ if (selected) {
         `This package ships native binaries for: ${shippedPlatforms.join(", ")}.`,
       );
     console.error(
-      `Reinstall a release for ${platformDirectory} (npm install -g dotrelay@${selectorVersion ?? "latest"} or npm install -g dotrelay@latest) or run dotrelay from a native binary built for ${platformDirectory}.`,
+      `Reinstall a release for ${platformDirectory} (npm install -g @dotrelay/cli@${selectorVersion ?? "latest"} or npm install -g @dotrelay/cli@latest) or run dotrelay from a native binary built for ${platformDirectory}.`,
     );
   }
   process.exitCode = 1;

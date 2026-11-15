@@ -317,7 +317,7 @@ export const runCliPackageProbes = async (): Promise<void> => {
       `dotrelay ${probeVersion}`,
       `no native binary is packaged for ${platformDirectory}`,
       `${otherPlatform}-x64`,
-      "npm install -g dotrelay@",
+      "npm install -g @dotrelay/cli@",
     ]);
   } finally {
     await rm(missingProbe, { recursive: true, force: true });
@@ -335,7 +335,7 @@ export const runCliPackageProbes = async (): Promise<void> => {
       "DOTRELAY_BINARY points at",
       missingBinary,
       `no native binary is packaged for ${platformDirectory}`,
-      "npm install -g dotrelay@",
+      "npm install -g @dotrelay/cli@",
     ]);
   } finally {
     await rm(overrideProbe, { recursive: true, force: true });
@@ -357,7 +357,7 @@ export const runCliPackageProbes = async (): Promise<void> => {
       `dotrelay ${probeVersion}`,
       "is not executable",
       "chmod +x",
-      "npm install -g dotrelay@",
+      "npm install -g @dotrelay/cli@",
     ]);
   } finally {
     await rm(notExecutableProbe, { recursive: true, force: true });
@@ -379,7 +379,7 @@ export const runCliPackageProbes = async (): Promise<void> => {
     expectFailure(result, "unlaunchable selector probe", [
       `dotrelay ${probeVersion}`,
       `could not start the native binary for ${platformDirectory}`,
-      "npm install -g dotrelay@",
+      "npm install -g @dotrelay/cli@",
     ]);
   } finally {
     await rm(unlaunchableProbe, { recursive: true, force: true });
