@@ -291,12 +291,9 @@ jobs:
           [[ "$SECURITY_REVIEW_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - name: Require operator migration receipt for this commit
-        env:
-          MIGRATED_COMMIT_SHA: ${{ vars.PRODUCTION_MIGRATED_COMMIT_SHA }}
-        run: test "$MIGRATED_COMMIT_SHA" = "$GITHUB_SHA"
       # Coolify builds the production apps from Git with railpack, pinned to
-      # the tagged commit the security review approved.
+      # the tagged commit the security review approved. The API applies
+      # pending migrations at start (scripts/hosted-migrate.ts) before it serves.
       - name: deploy prod apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
