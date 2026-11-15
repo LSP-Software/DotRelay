@@ -54,6 +54,7 @@ enum OperationKind {
   ROLLBACK
   EPOCH_ROTATION
   EPOCH_KEY_LINK
+  ACCOUNT_DELETION
 }
 
 enum MutationKind {
@@ -152,6 +153,8 @@ enum AuditEventKind {
   OPERATION_EXPIRED
   INVITATION_REVOKED
   INVITATION_DECLINED
+  TEAM_DELETED
+  ACCOUNT_DELETED
 }
 
 enum RotationObligationReason {
@@ -277,6 +280,9 @@ model User {
   githubSubject      String   @db.VarChar(255)
   identityGeneration BigInt   @default(1) @db.BigInt
   createdAt          DateTime @default(now()) @db.Timestamptz(3)
+  // Account deletion (ADR 0018): the row stays for history, the subjects
+  // above become a tombstone.
+  deletedAt          DateTime? @db.Timestamptz(3)
 
   serverProfile               ServerProfile             @relation(fields: [serverProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   identityGenerations         UserIdentityGeneration[]
@@ -389,6 +395,8 @@ model Team {
   lifecycle       ResourceLifecycle @default(ACTIVE)
   createdAt       DateTime          @default(now()) @db.Timestamptz(3)
   archivedAt      DateTime?         @db.Timestamptz(3)
+  // Team deletion (ADR 0019): ARCHIVED with deletedAt set until purged.
+  deletedAt       DateTime?         @db.Timestamptz(3)
 
   serverProfile ServerProfile          @relation(fields: [serverProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   memberships   Membership[]
@@ -398,6 +406,7 @@ model Team {
   activationObjects MembershipActivationObject[]
 
   @@index([serverProfileId, lifecycle])
+  @@index([deletedAt])
   @@map("teams")
 }
 

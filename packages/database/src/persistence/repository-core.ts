@@ -249,3 +249,12 @@ export class InvitationNotPendingError extends Error {
     this.name = "InvitationNotPendingError";
   }
 }
+
+// Leaving or deleting the account would leave a Team without an active
+// owner while other Members remain, or a Team with no Member at all.
+export class OwnerTransferRequiredError extends Error {
+  constructor() {
+    super("transfer Team ownership or delete the Team first");
+    this.name = "OwnerTransferRequiredError";
+  }
+}

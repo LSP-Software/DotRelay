@@ -26,10 +26,10 @@ kept so teammates can still verify history.
 
 ### Deleted
 
-| Data                                                   | How                                                                                  |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| Better Auth user, sessions, linked GitHub account      | Row deleted; sessions, OAuth tokens and device codes cascade. Signs out every client |
-| GitHub email, name, avatar                             | Held only on the Better Auth user, so deleted with it                                |
+| Data                                                    | How                                                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Better Auth user, sessions, linked GitHub account       | Row deleted; sessions, OAuth tokens and device codes cascade. Signs out every client |
+| GitHub email, name, avatar                              | Held only on the Better Auth user, so deleted with it                                |
 | Account Key Wrappers (password, passkey, Recovery Code) | Projection rows and their protocol objects deleted                                   |
 | Account Key Envelopes (Project Epoch, User Value Keys)  | Projection rows and their protocol objects deleted                                   |
 | Account Key Transfers                                   | Projection rows and their protocol objects deleted                                   |
@@ -39,6 +39,10 @@ kept so teammates can still verify history.
 | Unaccepted invitations addressed to the User            | Deleted                                                                              |
 | Device display metadata (name, OS, client summary)      | Cleared                                                                              |
 
+Wrapper, envelope, transfer, and grant objects are append-only protocol objects; the deletion
+transaction sets `dotrelay.purge` to remove them, as Team purge does
+([ADR 0019](0019-leaving-and-deleting-a-team.md)).
+
 Deleting every wrapper, envelope, and grant leaves no server-held path to the Account Master Key
 or to a key sealed for this User. User-defined Value lanes the User owned stay in Revision history
 (Revisions commit to them), but they are sealed to the User's Value Key, which nobody else holds:
@@ -46,14 +50,14 @@ the ciphertext is unreadable to everyone, including the operator.
 
 ### Kept, and why
 
-| Data                                                            | Why                                                                     |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `users` row: id, Server Profile, `createdAt`, new `deletedAt`   | Revisions, rosters, Devices, Memberships, Audit Facts reference the id  |
-| Device rows: id, public keys, activation and revocation times   | Teammates verify the User's Revision signatures with them              |
-| Device certificates, identity objects, Account Device rosters   | Signed public keys; the roster is what clients trust Device keys from   |
-| Memberships (role, lifecycle, times) and Membership periods     | Signing windows for the User's Revisions (ADR 0017)                     |
-| Revisions, lanes, Shared Values the User provided               | Team data: the Team's history, not the User's personal data              |
-| Operations and Audit Facts                                      | Opaque ids and times only; idempotency guards and the security record   |
+| Data                                                          | Why                                                                    |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `users` row: id, Server Profile, `createdAt`, new `deletedAt` | Revisions, rosters, Devices, Memberships, Audit Facts reference the id |
+| Device rows: id, public keys, activation and revocation times | Teammates verify the User's Revision signatures with them              |
+| Device certificates, identity objects, Account Device rosters | Signed public keys; the roster is what clients trust Device keys from  |
+| Memberships (role, lifecycle, times) and Membership periods   | Signing windows for the User's Revisions (ADR 0017)                    |
+| Revisions, lanes, Shared Values the User provided             | Team data: the Team's history, not the User's personal data            |
+| Operations and Audit Facts                                    | Opaque ids and times only; idempotency guards and the security record  |
 
 None of the kept material is a credential or a secret. It is public keys, opaque UUIDs, roles, and
 timestamps, and every item is needed to verify or explain the Team's retained history.

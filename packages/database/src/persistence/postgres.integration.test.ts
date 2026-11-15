@@ -22,6 +22,9 @@ import type {
   RevisionPublicationInput,
 } from "..";
 import {
+  AccountDeletedError,
+  AccountDeletionConfirmationError,
+  AccountLifecycleRepository,
   AdministrationDisclosureRepository,
   AdministrationRepository,
   createDatabaseClient,
@@ -33,8 +36,10 @@ import {
   loadTeamMembershipWindows,
   MAX_PENDING_INVITATIONS_PER_TEAM,
   MembershipAdministrationRepository,
+  MembershipNotActiveError,
   MembershipRepository,
   OperationConflictError,
+  OwnerTransferRequiredError,
   PendingInvitationLimitError,
   ProjectRotationObligationRepository,
   RetentionRepository,
@@ -49,6 +54,10 @@ import {
   StaleHeadError,
   SyncRepository,
   sha384Digest,
+  resolveDotRelayUser,
+  TEAM_PURGE_AFTER_MS,
+  TeamDeletionConfirmationError,
+  TeamLifecycleRepository,
 } from "..";
 
 const integrationDescribe = process.env.DATABASE_URL ? describe : describe.skip;
@@ -3110,5 +3119,449 @@ integrationDescribe("PostgreSQL persistence integration", () => {
     await expect(
       Promise.resolve(database.auditEvent.delete({ where: { id: audit.id } })),
     ).rejects.toThrow("immutable DotRelay row");
+  });
+
+  const addActiveMember = async (
+    teamId: string,
+    serverProfileId: string,
+    role: "OWNER" | "ADMIN" | "MEMBER" = "MEMBER",
+  ) => {
+    const member = await createUserAndDevice(serverProfileId);
+    const membership = await database.membership.create({
+      data: {
+        teamId,
+        userId: member.user.id,
+        role,
+        lifecycle: "ACTIVE",
+        activatedAt: new Date(),
+      },
+    });
+    return { ...member, membership };
+  };
+
+  test("lets a Member leave like a removal and keeps the last owner", async () => {
+    const { device, projectId, teamId, user } =
+      await createProjectFixture("leave-team");
+    const profile = await database.user.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { serverProfileId: true },
+    });
+    const memberships = new MembershipAdministrationRepository();
+    const leave = async (actorUserId: string, label: string) =>
+      memberships.leave(database, {
+        teamId,
+        operation: await createOperationInput(
+          actorUserId,
+          label,
+          "MEMBERSHIP_CHANGE",
+        ),
+      });
+
+    // The only Member, who is also the owner, cannot leave.
+    await expect(leave(user.id, "leave-sole")).rejects.toBeInstanceOf(
+      OwnerTransferRequiredError,
+    );
+    const member = await addActiveMember(teamId, profile.serverProfileId);
+    // Nor can the last active owner while another Member remains.
+    await expect(leave(user.id, "leave-last-owner")).rejects.toBeInstanceOf(
+      OwnerTransferRequiredError,
+    );
+
+    const left = await leave(member.user.id, "leave-member");
+    expect("membership" in left && left.membership.lifecycle).toBe("REMOVED");
+    expect(
+      await new ProjectRotationObligationRepository().outstanding(
+        database,
+        projectId,
+      ),
+    ).toMatchObject({ membershipRemovals: 1, deviceRevocations: 0 });
+    expect(
+      await database.auditEvent.findFirst({
+        where: { entityId: member.membership.id, kind: "MEMBERSHIP_REMOVED" },
+      }),
+    ).toMatchObject({ actorUserId: member.user.id });
+    await expect(leave(member.user.id, "leave-again")).rejects.toBeInstanceOf(
+      MembershipNotActiveError,
+    );
+
+    // With a second active owner, the first may leave.
+    const coOwner = await addActiveMember(
+      teamId,
+      profile.serverProfileId,
+      "OWNER",
+    );
+    await leave(user.id, "leave-owner");
+    expect(
+      await database.membership.findFirstOrThrow({
+        where: { teamId, userId: user.id },
+      }),
+    ).toMatchObject({ lifecycle: "REMOVED" });
+    expect(coOwner.device.id).not.toBe(device.id);
+  });
+
+  test("soft-deletes a Team at once and purges it after the window", async () => {
+    const { device, projectId, teamId, user } =
+      await createProjectFixture("delete-team");
+    const profile = await database.user.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { serverProfileId: true },
+    });
+    const environmentId = crypto.randomUUID();
+    const genesis = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: null,
+      mutation: "GENESIS",
+      label: "delete-team-genesis",
+    });
+    await new EnvironmentRepository().createWithGenesis(database, {
+      environmentId,
+      projectId,
+      createdByUserId: user.id,
+      publication: genesis,
+    });
+    await new PublicationRepository().publishRevision(
+      database,
+      await preparePublication({
+        actorUserId: user.id,
+        actorDeviceId: device.id,
+        projectId,
+        environmentId,
+        expectedHeadId: genesis.revision.id,
+        parentHash: genesis.revisionObject.digest,
+        mutation: "MANIFEST_UPDATE",
+        label: "delete-team-update",
+      }),
+    );
+    const member = await addActiveMember(teamId, profile.serverProfileId);
+    const teams = new TeamLifecycleRepository();
+    const deleteOperation = async (actorUserId: string, label: string) => ({
+      ...(await createOperationInput(actorUserId, label)),
+      actorDeviceId: actorUserId === user.id ? device.id : member.device.id,
+    });
+
+    await expect(
+      teams.deleteTeam(database, {
+        teamId,
+        confirmName: "delete-team",
+        operation: await deleteOperation(member.user.id, "delete-by-member"),
+      }),
+    ).rejects.toThrow("not authorized");
+    await expect(
+      teams.deleteTeam(database, {
+        teamId,
+        confirmName: "wrong name",
+        operation: await deleteOperation(user.id, "delete-wrong-name"),
+      }),
+    ).rejects.toBeInstanceOf(TeamDeletionConfirmationError);
+
+    const deletedAt = new Date();
+    await teams.deleteTeam(database, {
+      teamId,
+      confirmName: "delete-team",
+      operation: await deleteOperation(user.id, "delete-team"),
+      now: deletedAt,
+    });
+    expect(
+      await database.team.findUniqueOrThrow({ where: { id: teamId } }),
+    ).toMatchObject({ lifecycle: "ARCHIVED", deletedAt });
+    expect(
+      await database.membership.count({
+        where: { teamId, lifecycle: { not: "REMOVED" } },
+      }),
+    ).toBe(0);
+    // Nobody, the owner included, is authorized for the Team any more.
+    await expect(
+      new AdministrationDisclosureRepository().getEnvironmentMetadata(
+        database,
+        { actorUserId: user.id, actorDeviceId: device.id, environmentId },
+      ),
+    ).rejects.toThrow();
+
+    // Within the window nothing is purged.
+    expect((await teams.purgeDeletedTeams(database, new Date())).count).toBe(0);
+    const purged = await teams.purgeDeletedTeams(
+      database,
+      new Date(deletedAt.getTime() + TEAM_PURGE_AFTER_MS + 1),
+    );
+    expect(purged.count).toBeGreaterThanOrEqual(1);
+    expect(
+      await database.team.findUnique({ where: { id: teamId } }),
+    ).toBeNull();
+    expect(await database.project.count({ where: { teamId } })).toBe(0);
+    expect(await database.revision.count({ where: { environmentId } })).toBe(0);
+    expect(await database.protocolObject.count({ where: { projectId } })).toBe(
+      0,
+    );
+    // Opaque Operations and Audit Facts stay.
+    expect(
+      await database.auditEvent.count({
+        where: { entityId: teamId, kind: "TEAM_DELETED" },
+      }),
+    ).toBe(1);
+    // History outside a purge stays append-only.
+    const audit = await database.auditEvent.findFirstOrThrow({
+      where: { entityId: teamId },
+    });
+    await expect(
+      Promise.resolve(database.auditEvent.delete({ where: { id: audit.id } })),
+    ).rejects.toThrow("immutable DotRelay row");
+  });
+
+  test("deletes an account, keeps verification material, and blocks sole owners", async () => {
+    const { device, projectId, teamId, user } =
+      await createProjectFixture("delete-account");
+    const profile = await database.user.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { serverProfileId: true },
+    });
+    const environmentId = crypto.randomUUID();
+    const member = await addActiveMember(teamId, profile.serverProfileId);
+    const genesis = await preparePublication({
+      actorUserId: user.id,
+      actorDeviceId: device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: null,
+      mutation: "GENESIS",
+      label: "delete-account-genesis",
+    });
+    await new EnvironmentRepository().createWithGenesis(database, {
+      environmentId,
+      projectId,
+      createdByUserId: user.id,
+      publication: genesis,
+    });
+    const authored = await preparePublication({
+      actorUserId: member.user.id,
+      actorDeviceId: member.device.id,
+      projectId,
+      environmentId,
+      expectedHeadId: genesis.revision.id,
+      parentHash: genesis.revisionObject.digest,
+      mutation: "MANIFEST_UPDATE",
+      label: "delete-account-member-update",
+    });
+    await new PublicationRepository().publishRevision(database, authored);
+    // The member's Better Auth identity, session and GitHub link.
+    const authUserId = crypto.randomUUID();
+    await database.authUser.create({
+      data: {
+        id: authUserId,
+        name: "Departing Member",
+        email: `${authUserId}@example.test`,
+      },
+    });
+    await database.authSession.create({
+      data: {
+        id: crypto.randomUUID(),
+        token: crypto.randomUUID(),
+        userId: authUserId,
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const githubAccountId = `${Date.now()}`;
+    await database.authAccount.create({
+      data: {
+        id: crypto.randomUUID(),
+        accountId: githubAccountId,
+        providerId: "github",
+        userId: authUserId,
+        accessToken: "gho_secret",
+      },
+    });
+    await database.user.update({
+      where: { id: member.user.id },
+      data: { authSubject: authUserId, githubSubject: githubAccountId },
+    });
+    // A password wrapper whose ciphertext must not survive.
+    const wrapperBytes = crypto.getRandomValues(new Uint8Array(64));
+    const wrapperObject = await database.protocolObject.create({
+      data: {
+        id: crypto.randomUUID(),
+        suite: "dotrelay-e2ee-v3-classical-webcrypto",
+        formatVersion: 3,
+        kind: 19,
+        canonicalBytes: wrapperBytes,
+        digest: new Uint8Array(await sha384Digest(wrapperBytes)),
+      },
+    });
+    await database.accountKeyWrapperObject.create({
+      data: {
+        protocolObjectId: wrapperObject.id,
+        userId: member.user.id,
+        identityGeneration: 1n,
+        wrapperType: "PASSWORD",
+        wrapperId: crypto.getRandomValues(new Uint8Array(16)),
+        ciphertextHash: new Uint8Array(await sha384Digest(wrapperBytes)),
+        ciphertextLength: 64,
+      },
+    });
+    const accounts = new AccountLifecycleRepository();
+
+    // The export is metadata only.
+    const exported = await accounts.exportAccount(database, member.user.id);
+    const exportedJson = JSON.stringify(exported);
+    expect(exported.profile?.email).toBe(`${authUserId}@example.test`);
+    expect(exported.accountKeyWrappers).toEqual([
+      expect.objectContaining({ type: "PASSWORD" }),
+    ]);
+    expect(exported.memberships).toEqual([
+      expect.objectContaining({ teamId, role: "MEMBER" }),
+    ]);
+    for (const secret of [
+      "gho_secret",
+      Buffer.from(wrapperBytes).toString("base64"),
+      Buffer.from(wrapperBytes).toString("hex"),
+      Buffer.from(member.device.ed25519PublicKey).toString("hex"),
+      Buffer.from(member.device.x25519PublicKey).toString("base64"),
+    ])
+      expect(exportedJson).not.toContain(secret);
+    for (const key of ["canonicalBytes", "ciphertext", "token", "accessToken"])
+      expect(exportedJson).not.toContain(`"${key}"`);
+
+    // The sole owner of a Team with another Member is refused.
+    expect(
+      (await accounts.deletionPlan(database, user.id)).blockingTeams,
+    ).toEqual([{ teamId, name: "delete-account" }]);
+    await expect(
+      accounts.deleteAccount(database, {
+        confirmUserId: user.id,
+        operation: await createOperationInput(
+          user.id,
+          "delete-owner",
+          "ACCOUNT_DELETION",
+        ),
+      }),
+    ).rejects.toBeInstanceOf(OwnerTransferRequiredError);
+    await expect(
+      accounts.deleteAccount(database, {
+        confirmUserId: user.id,
+        operation: await createOperationInput(
+          member.user.id,
+          "delete-wrong-confirmation",
+          "ACCOUNT_DELETION",
+        ),
+      }),
+    ).rejects.toBeInstanceOf(AccountDeletionConfirmationError);
+
+    const deletedAt = new Date();
+    await accounts.deleteAccount(database, {
+      confirmUserId: member.user.id,
+      operation: await createOperationInput(
+        member.user.id,
+        "delete-member",
+        "ACCOUNT_DELETION",
+      ),
+      now: deletedAt,
+    });
+    const tombstone = await database.user.findUniqueOrThrow({
+      where: { id: member.user.id },
+    });
+    expect(tombstone).toMatchObject({
+      authSubject: `deleted:${member.user.id}`,
+      githubSubject: `deleted:${member.user.id}`,
+      deletedAt,
+    });
+    expect(
+      await database.authUser.findUnique({ where: { id: authUserId } }),
+    ).toBeNull();
+    expect(
+      await database.authSession.count({ where: { userId: authUserId } }),
+    ).toBe(0);
+    expect(
+      await database.authAccount.count({ where: { userId: authUserId } }),
+    ).toBe(0);
+    expect(
+      await database.accountKeyWrapperObject.count({
+        where: { userId: member.user.id },
+      }),
+    ).toBe(0);
+    expect(
+      await database.protocolObject.findUnique({
+        where: { id: wrapperObject.id },
+      }),
+    ).toBeNull();
+    // Public verification material stays: the Device keys and windows, the
+    // Membership period, and the Revision the member signed.
+    expect(
+      await database.device.findUniqueOrThrow({
+        where: { id: member.device.id },
+      }),
+    ).toMatchObject({
+      lifecycle: "REVOKED",
+      revokedAt: deletedAt,
+      displayName: null,
+    });
+    expect(
+      Buffer.from(
+        (
+          await database.device.findUniqueOrThrow({
+            where: { id: member.device.id },
+          })
+        ).ed25519PublicKey,
+      ).equals(Buffer.from(member.device.ed25519PublicKey)),
+    ).toBe(true);
+    const windows = await loadTeamMembershipWindows(database, teamId);
+    expect(windows.get(member.user.id)?.periods).toEqual([
+      {
+        activatedAt: member.membership.activatedAt as Date,
+        removedAt: deletedAt,
+      },
+    ]);
+    expect(
+      await database.revision.findUniqueOrThrow({
+        where: { id: authored.revision.id },
+      }),
+    ).toMatchObject({ authorUserId: member.user.id });
+    expect(
+      await new ProjectRotationObligationRepository().outstanding(
+        database,
+        projectId,
+      ),
+    ).toMatchObject({ membershipRemovals: 1 });
+
+    // Signing in again with the same GitHub identity makes a new User.
+    const newAuthUserId = crypto.randomUUID();
+    await database.authUser.create({
+      data: {
+        id: newAuthUserId,
+        name: "Returning Member",
+        email: `${newAuthUserId}@example.test`,
+      },
+    });
+    await database.authAccount.create({
+      data: {
+        id: crypto.randomUUID(),
+        accountId: githubAccountId,
+        providerId: "github",
+        userId: newAuthUserId,
+      },
+    });
+    const returning = await resolveDotRelayUser(database, {
+      serverProfileId: profile.serverProfileId,
+      authSubject: newAuthUserId,
+    });
+    expect(returning?.id).toBeDefined();
+    expect(returning?.id).not.toBe(member.user.id);
+    await expect(
+      accounts.exportAccount(database, member.user.id),
+    ).rejects.toBeInstanceOf(AccountDeletedError);
+
+    // The owner, now the only Member, deletes the account and the Team.
+    await accounts.deleteAccount(database, {
+      confirmUserId: user.id,
+      operation: await createOperationInput(
+        user.id,
+        "delete-owner-last",
+        "ACCOUNT_DELETION",
+      ),
+    });
+    expect(
+      await database.team.findUniqueOrThrow({ where: { id: teamId } }),
+    ).toMatchObject({ lifecycle: "ARCHIVED" });
+    expect(device.id).toBeDefined();
   });
 });

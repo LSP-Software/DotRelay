@@ -20,6 +20,15 @@ export {
   type MembershipWindow,
   type TeamMembershipWindows,
 } from "./membership-periods";
+export {
+  type AccountDeletionPlan,
+  AccountDeletedError,
+  AccountDeletionConfirmationError,
+  AccountLifecycleRepository,
+  TEAM_PURGE_AFTER_MS,
+  TeamDeletionConfirmationError,
+  TeamLifecycleRepository,
+} from "./account-lifecycle";
 export { RetentionRepository } from "./retention";
 export {
   type OutstandingRotation,
@@ -102,6 +111,7 @@ export {
   StagingQuotaExceededError,
   StaleEpochError,
   StaleHeadError,
+  OwnerTransferRequiredError,
   TeamNotActiveError,
 } from "./repository-core";
 export type { SyncInput, SyncObject, SyncPage, SyncRevision } from "./sync";

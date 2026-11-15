@@ -16,7 +16,8 @@ export type TeamAction =
   | "MANAGE_ADMIN"
   | "MANAGE_OWNER"
   | "ADMINISTER_PROJECT"
-  | "ADMINISTER_ENVIRONMENT";
+  | "ADMINISTER_ENVIRONMENT"
+  | "DELETE_TEAM";
 
 export type PolicyDenial =
   | "membership_missing"
@@ -44,6 +45,7 @@ const roleActions: Readonly<Record<MembershipRole, ReadonlySet<TeamAction>>> = {
     "MANAGE_OWNER",
     "ADMINISTER_PROJECT",
     "ADMINISTER_ENVIRONMENT",
+    "DELETE_TEAM",
   ]),
   ADMIN: new Set<TeamAction>([
     "VIEW",
