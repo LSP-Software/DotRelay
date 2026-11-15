@@ -1253,7 +1253,7 @@ Expected:
 Install commands, a Docs link, an accurate short claim, and footer links to
 policy pages that exist.
 Status:
-FIXED - copyable `npm install -g dotrelay` and `dotrelay setup
+FIXED - copyable `npm install -g @dotrelay/cli` and `dotrelay setup
 https://api.dotrelay.dev`, Docs (`docs/wiki/cli.md` on GitHub) in the nav and
 footer, a corrected claim, and `/privacy` and `/terms` placeholders that say
 the policy is being finalised and make no policy claims. E2E:
