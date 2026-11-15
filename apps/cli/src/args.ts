@@ -50,6 +50,8 @@ export type ParsedArguments = Readonly<{
   readonly classifications: Readonly<Record<string, "shared" | "user-defined">>;
   /** Variable references: operator-visible names or stable Variable ids. */
   readonly variableReferences: readonly string[];
+  /** Process-control Variable names `run` and the shell export may pass on. */
+  readonly allowedEnvironmentNames: readonly string[];
   readonly noOpen: boolean;
   readonly noInput: boolean;
   readonly force: boolean;
@@ -80,6 +82,7 @@ type MutableArguments = {
   format?: string;
   classifications: Record<string, "shared" | "user-defined">;
   variableReferences: string[];
+  allowedEnvironmentNames: string[];
   noOpen: boolean;
   noInput: boolean;
   force: boolean;
@@ -107,6 +110,7 @@ const valueFlags = new Set([
   "--classify",
   "--variable",
   "--format",
+  "--allow-env",
 ]);
 
 const forbiddenFlags = new Set([
@@ -170,6 +174,14 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
     // Variable id; names are resolved against the live Manifest after the
     // Environment sync, where only an id can be validated up front.
     parsed.variableReferences.push(value);
+  } else if (flag === "--allow-env") {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+      const usage = usageFor(parsed.command, parsed.subcommand);
+      throw new CliInvocationError(
+        `--allow-env requires a Variable name${usage ? `; usage: ${usage}` : ""}`,
+      );
+    }
+    parsed.allowedEnvironmentNames.push(value);
   }
 };
 
@@ -189,6 +201,7 @@ export const FLAG_KEYS = [
   "classify",
   "variable",
   "format",
+  "allowEnv",
   "noOpen",
   "noInput",
   "force",
@@ -217,6 +230,7 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
   classify: "--classify",
   variable: "--variable",
   format: "--format",
+  allowEnv: "--allow-env",
   noOpen: "--no-open",
   noInput: "--no-input",
   force: "--force",
@@ -362,13 +376,14 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
     "reveal",
   ],
   help: [],
-  run: ["profile", "environment", "team", "remote", "noInput"],
+  run: ["profile", "environment", "team", "remote", "allowEnv", "noInput"],
   export: [
     "profile",
     "environment",
     "team",
     "remote",
     "format",
+    "allowEnv",
     "noInput",
     "reveal",
   ],
@@ -445,6 +460,7 @@ const usageFor = (
 const flagPresent = (parsed: MutableArguments, key: FlagKey): boolean => {
   if (key === "classify") return Object.keys(parsed.classifications).length > 0;
   if (key === "variable") return parsed.variableReferences.length > 0;
+  if (key === "allowEnv") return parsed.allowedEnvironmentNames.length > 0;
   return Boolean(parsed[key]);
 };
 
@@ -674,6 +690,7 @@ export const parseArguments = (
     fingerprints: false,
     classifications: {},
     variableReferences: [],
+    allowedEnvironmentNames: [],
   };
   let index = 0;
   while (index < args.length) {
@@ -780,5 +797,8 @@ export const parseArguments = (
     positionals: Object.freeze(parsed.positionals),
     classifications: Object.freeze({ ...parsed.classifications }),
     variableReferences: Object.freeze([...parsed.variableReferences]),
+    allowedEnvironmentNames: Object.freeze([
+      ...parsed.allowedEnvironmentNames,
+    ]),
   }) as ParsedArguments;
 };

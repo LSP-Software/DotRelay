@@ -3,6 +3,7 @@ import type { ParsedArguments } from "./args";
 import { writePublicationBaseline } from "./baseline-store";
 import { kv, note, reviewFrame } from "./components";
 import { diffDotenvEntries, parseDotenv, serializeDotenv } from "./dotenv";
+import { processControlPullWarning } from "./env-safety";
 import { CliError, CliInvocationError, sanitizeCliText } from "./errors";
 import { assertSafeStdout, atomicWriteProtectedFile } from "./output";
 import { classifyPullValues, pullVariableNames } from "./pull-values";
@@ -242,6 +243,32 @@ export const runProtectedWorkflow = async (
       });
     };
     const contents = serializeDotenv(entries);
+    // A Variable that controls how programs or shells start is inert in the
+    // file, but not once the file is loaded into a shell: warn when one is
+    // new to the destination so the user can check who published it.
+    const previousNames = new Set<string>();
+    if (outputPath)
+      try {
+        for (const entry of parseDotenv(
+          await readFile(outputPath, "utf8"),
+          outputPath,
+        ))
+          previousNames.add(entry.name);
+      } catch {
+        // No readable previous file: every entry is new.
+      }
+    const processControlWarning = processControlPullWarning(
+      entries
+        .map((entry) => entry.name)
+        .filter((name) => !previousNames.has(name)),
+    );
+    if (processControlWarning && !parsed.json)
+      (options.terminal?.output ?? process.stderr).write(
+        `${note(processControlWarning, "warn")}\n`,
+      );
+    const warningsField = processControlWarning
+      ? { warnings: [processControlWarning] }
+      : {};
     if (parsed.stdout && parsed.reveal && !options.noInput) {
       const destination = await destinationFor(
         options,
@@ -283,6 +310,7 @@ export const runProtectedWorkflow = async (
           return {
             output: outputPath,
             unchanged: true,
+            ...(parsed.json ? warningsField : {}),
             ...(optionalOmitted > 0 ? { optionalOmitted } : {}),
             ...(gitExclusion ? { gitExclusion } : {}),
             ...pendingActionsField(synced.workflow.pendingActions),
@@ -366,6 +394,7 @@ export const runProtectedWorkflow = async (
         }
       : {
           output: outputPath ?? "",
+          ...(parsed.json ? warningsField : {}),
           ...(gitExclusion ? { gitExclusion } : {}),
           ...(replaceExisting ? { previous: `${outputPath}.previous` } : {}),
           ...pendingActionsField(synced.workflow.pendingActions),

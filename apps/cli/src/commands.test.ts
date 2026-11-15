@@ -21,7 +21,8 @@ import { serializeDotenv } from "./dotenv";
 import { deviceMetadataPath, writeDeviceId } from "./device-storage";
 import { type CliRuntime, run } from "./index";
 import type { NetworkPolicy } from "./network";
-import { formatEntries } from "./workflow-values";
+import { CliError } from "./errors";
+import { childEnvironment, formatEntries } from "./workflow-values";
 
 // Command-level tests for the onboarding and everyday commands: logout,
 // env list/create, team list, team share-keys, device list, run, export,
@@ -603,6 +604,58 @@ describe("run, export, and list read the Environment without writing", () => {
       server.stop();
       await state.cleanup();
     }
+  });
+
+  test("the shell export refuses process-control Variables unless allowed", () => {
+    const entries = [
+      { name: "API_URL", value: "https://x.example" },
+      { name: "NODE_OPTIONS", value: "--require ./x.js" },
+    ];
+    expect(() => formatEntries(entries, "shell")).toThrow(
+      "--allow-env NODE_OPTIONS",
+    );
+    expect(formatEntries(entries, "shell", ["NODE_OPTIONS"])).toContain(
+      "export NODE_OPTIONS='--require ./x.js'\n",
+    );
+    // dotenv and JSON are data formats that nothing evaluates.
+    expect(formatEntries(entries, "dotenv")).toContain("NODE_OPTIONS=");
+    expect(formatEntries(entries, "json")).toContain("NODE_OPTIONS");
+  });
+
+  test("run refuses process-control Variables unless each is allowed", () => {
+    const base = { PATH: "/usr/bin", HOME: "/home/me" };
+    const entries = [
+      { name: "API_URL", value: "https://x.example" },
+      { name: "PATH", value: "/tmp/evil" },
+      { name: "LD_PRELOAD", value: "/tmp/evil.so" },
+    ];
+    let refused: unknown;
+    try {
+      childEnvironment(base, entries, []);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(CliError);
+    expect((refused as CliError).message).toContain("PATH, LD_PRELOAD");
+    expect((refused as CliError).message).toContain(
+      "--allow-env PATH --allow-env LD_PRELOAD",
+    );
+    expect(() => childEnvironment(base, entries, ["PATH"])).toThrow(
+      "--allow-env LD_PRELOAD",
+    );
+    expect(
+      childEnvironment(base, entries, ["path", "LD_PRELOAD"]),
+    ).toEqual({
+      PATH: "/tmp/evil",
+      HOME: "/home/me",
+      API_URL: "https://x.example",
+      LD_PRELOAD: "/tmp/evil.so",
+    });
+    // The shell's own environment is never filtered; only Environment Values.
+    expect(childEnvironment(base, entries.slice(0, 1), [])).toEqual({
+      ...base,
+      API_URL: "https://x.example",
+    });
   });
 
   test("formats dotenv, JSON, and shell exports", () => {

@@ -2,7 +2,8 @@ import { constants } from "node:os";
 import type { DecodedVariable } from "@dotrelay/client";
 import type { ExportFormat, ParsedArguments } from "./args";
 import { type DotenvEntry, serializeDotenv } from "./dotenv";
-import { CliError } from "./errors";
+import { refuseProcessControlNames } from "./env-safety";
+import { CliError, sanitizeCliLine } from "./errors";
 import { assertSafeStdout } from "./output";
 import { classifyPullValues, pullVariableNames } from "./pull-values";
 import type { WorkflowOptions } from "./workflow-core";
@@ -61,6 +62,7 @@ const shellQuote = (value: string): string =>
 export const formatEntries = (
   entries: readonly DotenvEntry[],
   format: ExportFormat,
+  allowedNames: readonly string[] = [],
 ): string => {
   // serializeDotenv validates names and duplicates for every format, so a
   // JSON or shell export can never carry a name a dotenv file would reject.
@@ -72,6 +74,13 @@ export const formatEntries = (
       null,
       2,
     )}\n`;
+  // Shell statements are evaluated, so a Variable that controls how the
+  // shell or the programs it starts behave needs the user's explicit name.
+  refuseProcessControlNames(
+    entries.map(({ name }) => name),
+    allowedNames,
+    "printed",
+  );
   return entries
     .map(({ name, value }) => `export ${name}=${shellQuote(value)}\n`)
     .join("");
@@ -92,6 +101,7 @@ export const exportEnvironment = async (
     stdout: formatEntries(
       completeEntries(synced, "printed"),
       parsed.format ?? "dotenv",
+      parsed.allowedEnvironmentNames,
     ),
   };
 };
@@ -205,6 +215,29 @@ export const spawnChildProcess: ChildProcessRunner = async (
   }
 };
 
+// The child's environment: the caller's own variables overlaid with the
+// Environment's Values. A Value whose name controls how the command, its
+// loader, its interpreter, or a shell starts is refused unless the user
+// named it with --allow-env, because any Member can publish one.
+export const childEnvironment = (
+  base: Readonly<Record<string, string | undefined>>,
+  entries: readonly DotenvEntry[],
+  allowedNames: readonly string[],
+): Record<string, string> => {
+  // Validates the names the same way an exported file would.
+  serializeDotenv(entries);
+  refuseProcessControlNames(
+    entries.map(({ name }) => name),
+    allowedNames,
+    "started",
+  );
+  const environment: Record<string, string> = {};
+  for (const [name, value] of Object.entries(base))
+    if (value !== undefined) environment[name] = value;
+  for (const { name, value } of entries) environment[name] = value;
+  return environment;
+};
+
 export const runWithEnvironment = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
@@ -212,11 +245,8 @@ export const runWithEnvironment = async (
 ): Promise<number> => {
   const synced = await syncWorkflow(options, parsed);
   const entries = completeEntries(synced, "started");
-  // Validates the names the same way an exported file would.
-  serializeDotenv(entries);
-  const environment: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env))
-    if (value !== undefined) environment[name] = value;
-  for (const { name, value } of entries) environment[name] = value;
-  return runner(parsed.positionals, environment);
+  return runner(
+    parsed.positionals,
+    childEnvironment(process.env, entries, parsed.allowedEnvironmentNames),
+  );
 };

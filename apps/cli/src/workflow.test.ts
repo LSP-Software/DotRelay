@@ -2765,6 +2765,62 @@ describe("protected CLI workflows", () => {
     expect(await Bun.file(output).text()).toBe(written);
   });
 
+  test("pull warns when a process-control Variable first appears in the file", async () => {
+    const runtime = await setup();
+    const output = `${import.meta.dir}/.tmp-workflow-output`;
+    const input = `${import.meta.dir}/.tmp-workflow-input`;
+    await Bun.write(
+      input,
+      "DATABASE_URL=postgres://secret\nNODE_OPTIONS=--require=./x.js\n",
+    );
+    const initialized = await run(
+      [
+        "init",
+        "--profile",
+        "relay",
+        "--environment",
+        ids.environment,
+        "--from",
+        input,
+        "--classify",
+        "DATABASE_URL=shared",
+        "--classify",
+        "NODE_OPTIONS=shared",
+        "--no-input",
+        "--json",
+      ],
+      runtime,
+    );
+    expect(initialized.exitCode).toBe(0);
+    const pullArgs = [
+      "pull",
+      "--profile",
+      "relay",
+      "--environment",
+      ids.environment,
+      "--output",
+      output,
+      "--no-input",
+      "--json",
+    ];
+    const fresh = await run(pullArgs, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(fresh.exitCode).toBe(0);
+    const body = JSON.parse(fresh.stdout) as { warnings?: string[] };
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings?.[0]).toContain("NODE_OPTIONS");
+    expect(body.warnings?.[0]).not.toContain("DATABASE_URL");
+    // Once the file holds the Variable, a later pull does not repeat it.
+    const again = await run(pullArgs, {
+      ...runtime,
+      gitTrackingProbe: gitOutside,
+    });
+    expect(again.exitCode).toBe(0);
+    expect(JSON.parse(again.stdout)).not.toHaveProperty("warnings");
+  });
+
   test("interactive pull replacement retains a recoverable prior file", async () => {
     const runtime = await setup();
     const input = `${import.meta.dir}/.tmp-workflow-input`;

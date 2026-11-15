@@ -119,6 +119,7 @@ const safeDiagnosticCodes = new Set([
   "membership_not_key_provisioned",
   "membership_pending",
   "missing_values",
+  "process_control_variable",
   "operation_conflict",
   "output_conflict",
   "output_tracked",

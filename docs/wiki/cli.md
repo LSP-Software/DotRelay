@@ -313,10 +313,23 @@ command, so its flags are never read as DotRelay flags. `run` returns the comman
 on to it. A Value this Device cannot decrypt, or a required Variable with no value, stops the run
 before the command starts.
 
+Any active Member can publish a Variable, and some names control how a program, its loader, its
+interpreter, or a shell starts rather than configuring the application: `PATH`, `HOME`,
+`NODE_OPTIONS`, `NODE_PATH`, `BUN_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `ENV`,
+`PROMPT_COMMAND`, `PS1`, `PS4`, `IFS`, `PYTHON*`, `PERL5*`, `RUBYOPT`, `RUBYLIB`,
+`JAVA_TOOL_OPTIONS`, `GIT_*`, `npm_config_*`, `EDITOR`, `PAGER` and similar. A Member who sets
+one of these could run code as every teammate who starts a command through DotRelay. `run`
+therefore refuses such a Variable (`process_control_variable`, exit 2) and names it; check who
+set it with `history`, and pass it on deliberately with `--allow-env <name>`, once per name
+(`dotrelay run --allow-env NODE_OPTIONS -- node app.js`). Names are matched case-insensitively.
+`pull` writes these Variables like any other, but warns the first time one appears in the output
+file, because loading that file into a shell or a process manager passes it on.
+
 `export --format dotenv|json|shell` prints the decrypted Values to stdout (dotenv by default) and
 writes nothing to disk. Like `pull --stdout`, terminal stdout requires `--reveal`. `--format json`
 is a data format that contains the Values; it is not the `--json` diagnostic mode, which never
-does. `list` prints each Variable's name, ownership, and whether this Device has a Value for it,
+does. `--format shell` prints statements meant to be evaluated, so it refuses the same
+process-control Variables as `run` unless each is named with `--allow-env <name>`. `list` prints each Variable's name, ownership, and whether this Device has a Value for it,
 never the Values.
 
 `diff` compares `.env` with the decrypted Environment and prints added, updated, and removed

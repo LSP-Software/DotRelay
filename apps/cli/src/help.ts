@@ -121,6 +121,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     options: {
       environment:
         "Environment id or label to load (default: the worktree selection)",
+      allowEnv:
+        "pass on a Variable that controls how programs or shells start, such as NODE_OPTIONS or PATH; repeat for more",
       noInput:
         "never prompt or guess; requires explicit --profile and Environment context",
     },
@@ -128,11 +130,13 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Values from the Environment replace variables of the same name that are already set in the shell.",
       "Everything after -- belongs to the command, so its own flags are never read by dotrelay.",
       "A required Variable with no value, or a Value this Device cannot decrypt, stops the run before the command starts.",
+      "A Variable that controls how programs or shells start (PATH, NODE_OPTIONS, LD_*, DYLD_*, BASH_ENV, PYTHON*, GIT_* and similar) stops the run unless you name it with --allow-env, because any Member of the Team can set one.",
     ],
     examples: [
       "dotrelay run -- npm start",
       "dotrelay run --environment production -- ./deploy.sh",
       "dotrelay run --profile ci --environment staging --no-input -- npm test",
+      "dotrelay run --allow-env NODE_OPTIONS -- node app.js",
     ],
   },
   export: {
@@ -143,11 +147,14 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       environment:
         "Environment id or label to export (default: the worktree selection)",
       reveal: "allow printing the Values to a terminal",
+      allowEnv:
+        "with --format shell, print a Variable that controls how programs or shells start; repeat for more",
       noInput:
         "never prompt or guess; requires explicit --profile and Environment context",
     },
     notes: [
       "--format json prints the Values themselves; it is a data format, not the --json diagnostic mode, which never contains Values.",
+      "--format shell refuses Variables that control how programs or shells start (PATH, NODE_OPTIONS, LD_*, BASH_ENV and similar) unless you name each one with --allow-env.",
     ],
     examples: [
       "dotrelay export",
@@ -595,6 +602,8 @@ const SHARED_FLAG_SUMMARIES: Readonly<Partial<Record<FlagKey, string>>> = {
   variable:
     "Variable to roll back, by operator-visible name or stable Variable id; repeat for more",
   format: "output format: dotenv, json, or shell",
+  allowEnv:
+    "pass on a named Variable that controls how programs or shells start; repeat for more",
   noOpen: "do not open the verification page in a browser",
   noInput: "never prompt, guess, or approve",
   force: "approve the documented destructive effect of this command",
@@ -619,6 +628,7 @@ const FLAG_SIGNATURES: Readonly<Partial<Record<FlagKey, string>>> = {
   classify: " NAME=shared|user-defined",
   variable: " <variable-name-or-id>",
   format: " <dotenv|json|shell>",
+  allowEnv: " <name>",
 };
 
 // Mirrors the parser's token walk well enough to route --help: the first
