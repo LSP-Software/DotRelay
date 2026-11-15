@@ -1,4 +1,5 @@
 """Real-service regression. Uses unique throwaway databases, never a live DB."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -36,21 +37,38 @@ def main():
             backup.run(["age-keygen", "-o", str(key)])
             os.chmod(key, 0o600)
             recipient = backup.run(["age-keygen", "-y", str(key)]).decode().strip()
+            mac_key = Path(directory) / "backup.key"
+            mac_key.write_text(os.urandom(32).hex())
+            os.chmod(mac_key, 0o600)
             archive = Path(directory) / "database.age"
-            backup.backup(archive, src, recipient, key)
-            backup.restore(archive, dst, key)
+            backup.backup(archive, src, recipient, key, mac_key)
+            backup.restore(archive, dst, key, mac_key)
             assert query(dst, "SELECT id FROM server_profiles").strip().decode() == identity
             assert query(dst, "SELECT encode(ciphertext,'hex') FROM backup_fixture").strip() == b"deadbeef00010203"
             assert query(dst, 'SELECT count(*) FROM "_prisma_migrations"') == query(src, 'SELECT count(*) FROM "_prisma_migrations"')
             try:
-                backup.restore(archive, dst, key)
+                backup.restore(archive, dst, key, mac_key)
             except RuntimeError:
                 pass
             else:
                 raise AssertionError("Nonempty target accepted")
+            # A replacement archive made with the public recipient, with a
+            # recomputed checksum, still fails: storage cannot forge the MAC.
+            replacement = Path(directory) / "replacement.age"
+            backup.backup(replacement, src, recipient, key, mac_key)
+            forged = json.loads(Path(str(replacement) + ".json").read_text())
+            forged["mac"] = "00" * 32
+            Path(str(archive) + ".json").write_text(json.dumps(forged))
+            archive.write_bytes(replacement.read_bytes())
+            try:
+                backup.verify(archive, key, mac_key)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Forged backup manifest accepted")
             archive.write_bytes(archive.read_bytes()[:-8] + b"corrupt!")
             try:
-                backup.verify(archive, key)
+                backup.verify(archive, key, mac_key)
             except RuntimeError:
                 pass
             else:
