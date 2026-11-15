@@ -1,3 +1,4 @@
+import { parseGitHubAppDocument } from "@dotrelay/contracts";
 import {
   BROWSER_DEVICE_ID_HEADER,
   e2eWorkspaceBoundary,
@@ -15,6 +16,23 @@ import {
 
 const isProfileId = (value: string | null): value is WorkspaceProfileId =>
   value === "hosted" || value === "self-hosted";
+
+// Older servers and servers without GITHUB_APP_SLUG answer 404: no link.
+const fetchGitHubAppInstallUrl = async (
+  apiOrigin: string,
+): Promise<string | undefined> => {
+  try {
+    // A stalled lookup must not hold up the workspace; it only adds a link.
+    const response = await fetch(`${apiOrigin}/api/v1/github-app`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (!response.ok) return undefined;
+    return parseGitHubAppDocument(await response.json()).installUrl;
+  } catch {
+    return undefined;
+  }
+};
 
 const fetchLiveBoundary = async (
   profileId: WorkspaceProfileId,
@@ -55,9 +73,12 @@ const fetchLiveBoundary = async (
       ? { image: sessionBody.user.image }
       : {}),
   };
-  const capabilitiesResponse = await fetch(`${apiOrigin}/api/v1/capabilities`, {
-    cache: "no-store",
-  }).catch(() => undefined);
+  const [capabilitiesResponse, githubAppInstallUrl] = await Promise.all([
+    fetch(`${apiOrigin}/api/v1/capabilities`, {
+      cache: "no-store",
+    }).catch(() => undefined),
+    sessionActive ? fetchGitHubAppInstallUrl(apiOrigin) : undefined,
+  ]);
   const capabilities = capabilitiesResponse?.ok
     ? ((await capabilitiesResponse.json().catch(() => undefined)) as
         | {
@@ -72,6 +93,7 @@ const fetchLiveBoundary = async (
     ...(typeof capabilities?.serverProfileId === "string"
       ? { serverProfileId: capabilities.serverProfileId }
       : {}),
+    ...(githubAppInstallUrl ? { githubAppInstallUrl } : {}),
   };
   const environmentId = new URL(request.url).searchParams.get("environment");
   const workspaceUrl = new URL(`${apiOrigin}/api/v1/workspace/boundary`);

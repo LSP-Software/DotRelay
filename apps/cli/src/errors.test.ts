@@ -13,6 +13,7 @@ import {
   diagnosticForError,
   EXIT_CODES,
   humanDetailForError,
+  repositoryAccessDeniedDetail,
   sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
@@ -38,15 +39,16 @@ describe("CLI diagnostics", () => {
         code: "repository_access_denied",
         exitCode: EXIT_CODES.authentication,
       });
+      expect(diagnostic.detail).toContain("Check the repository name");
       expect(diagnostic.detail).toContain(
-        "Check the repository name and your GitHub access",
+        "Install this server's DotRelay GitHub App",
       );
       expect(diagnostic.detail).toContain(
-        "https://github.com/settings/applications",
+        "https://github.com/settings/installations",
       );
+      expect(diagnostic.detail).not.toContain("OAuth");
       expect(diagnostic.detail).toContain("organization owner");
       expect(diagnostic.detail).toContain("SSO");
-      expect(diagnostic.detail).toContain("sign out of the DotRelay web app");
       expect(diagnostic.detail).toContain("retry your command");
       expect(diagnostic.detail.length).toBeLessThanOrEqual(512);
       expect(humanDetailForError(error)).toBe(diagnostic.detail);
@@ -61,6 +63,22 @@ describe("CLI diagnostics", () => {
         ).detail,
       ).toBe(diagnostic.detail);
     }
+  });
+
+  test("repository access denial links the server's GitHub App install page", () => {
+    const installUrl = `https://github.com/apps/${"a".repeat(100)}/installations/new`;
+    const detail = repositoryAccessDeniedDetail(installUrl);
+    expect(detail).toContain(
+      `Install the DotRelay GitHub App and choose this repository: ${installUrl}`,
+    );
+    expect(detail).not.toContain("Ask the server operator");
+    expect(detail).not.toContain("OAuth");
+    const diagnostic = diagnosticForError(
+      new CliError("authentication", detail, {}, "repository_access_denied"),
+    );
+    // Even the longest slug GitHub allows fits the diagnostic detail limit.
+    expect(diagnostic.detail).toBe(detail);
+    expect(repositoryAccessDeniedDetail().length).toBeLessThanOrEqual(512);
   });
 
   test("keeps unknown errors opaque without --debug", () => {

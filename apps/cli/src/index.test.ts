@@ -4546,6 +4546,79 @@ describe("actionable error categories at the process boundary", () => {
     }
   });
 
+  test("repository access denial links the Server Profile's GitHub App", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const installUrl =
+        "https://github.com/apps/dotrelay-dev/installations/new";
+      const requested: string[] = [];
+      const runtime = {
+        ...runtimeForProtocolState(state),
+        networkPolicy: instantNetworkPolicy,
+        fetch: (async (input) => {
+          const url = String(input);
+          requested.push(url);
+          if (url.endsWith("/api/v1/github-app"))
+            return jsonResponse({ installUrl });
+          if (url.includes("/api/v1/github-repositories/resolve"))
+            return jsonResponse(createProblem("repository_access_denied"), 403);
+          throw new Error(`unexpected fetch: ${url}`);
+        }) satisfies FetchFunction,
+      };
+      const result = await run(
+        ["init", "--profile", "relay", "--no-input", "--json"],
+        runtime,
+      );
+      expect(result.exitCode).toBe(6);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        code: "repository_access_denied",
+        category: "authentication",
+      });
+      expect(diagnostic.detail).toContain(
+        `Install the DotRelay GitHub App and choose this repository: ${installUrl}`,
+      );
+      expect(
+        requested.filter((url) => url.endsWith("/api/v1/github-app")),
+      ).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a stalled install-link body still reports the access denial", async () => {
+    const { state, cleanup } = await seededState();
+    try {
+      const runtime = {
+        ...runtimeForProtocolState(state),
+        networkPolicy: { ...instantNetworkPolicy, requestDeadlineMs: 50 },
+        fetch: (async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/github-app"))
+            // Headers arrive; the body never does.
+            return new Response(new ReadableStream({ start: () => {} }), {
+              headers: { "Content-Type": "application/json" },
+            });
+          if (url.includes("/api/v1/github-repositories/resolve"))
+            return jsonResponse(createProblem("repository_access_denied"), 403);
+          throw new Error(`unexpected fetch: ${url}`);
+        }) satisfies FetchFunction,
+      };
+      const result = await run(
+        ["init", "--profile", "relay", "--no-input", "--json"],
+        runtime,
+      );
+      expect(result.exitCode).toBe(6);
+      const diagnostic = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(diagnostic.code).toBe("repository_access_denied");
+      expect(diagnostic.detail).toContain(
+        "Ask the server operator for the install link",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("repository access denial gives init recovery steps in both output modes", async () => {
     const { state, cleanup } = await seededState();
     try {
@@ -4570,7 +4643,7 @@ describe("actionable error categories at the process boundary", () => {
           exitCode: 6,
         });
         expect(diagnostic.detail).toContain(
-          "https://github.com/settings/applications",
+          "Ask the server operator for the install link",
         );
         expect(diagnostic.detail).toContain("organization owner");
         expect(diagnostic.detail).toContain("retry your command.");
