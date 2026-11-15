@@ -79,9 +79,8 @@ export const supportsTrustedPublishing = (npmVersion: string): boolean => {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(npmVersion.trim());
   if (!match) return false;
   const actual = match.slice(1, 4).map(Number);
-  for (let index = 0; index < 3; index += 1) {
-    const difference =
-      (actual[index] ?? 0) - MINIMUM_TRUSTED_PUBLISHING_NPM[index];
+  for (const [index, minimum] of MINIMUM_TRUSTED_PUBLISHING_NPM.entries()) {
+    const difference = (actual[index] ?? 0) - minimum;
     if (difference !== 0) return difference > 0;
   }
   return true;
