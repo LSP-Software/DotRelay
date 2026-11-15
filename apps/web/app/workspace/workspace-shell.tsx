@@ -1229,7 +1229,7 @@ export const WorkspaceShell = ({
       ? { origin: apiOrigin, deviceId: boundary.device.id }
       : null;
   // Device-scoped requests from this page prove the active Device (ADR
-  // 0018). Registering its proof session here lets every helper that knows
+  // 0020). Registering its proof session here lets every helper that knows
   // only the API origin and Device id find it.
   // Only in the browser: a server render never proves a Device.
   if (
