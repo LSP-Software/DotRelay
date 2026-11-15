@@ -133,9 +133,10 @@ the production origins. The release concurrency queue retains up to 100 pending 
 ## Remaining deployment and security gates
 
 See [the versioned operations runbook](wiki/operations.md) for GitHub App permissions,
-production configuration, explicit backed-up migrations, encrypted PostgreSQL
-backup/restore, readiness, exact toolchain pins and failure handling. API startup
-no longer applies migrations. Configure the maintenance process before deploying.
+production configuration, migrations, encrypted PostgreSQL backup/restore,
+readiness, exact toolchain pins and failure handling. Hosted (Coolify) deploys
+apply pending migrations before the API starts; self-hosted images never migrate
+and use the backed-up maintenance process.
 Issues #32 and #36 remain open: independent review, complete artifact-bound security
 evidence, signed release packaging, supported production self-host bundle and full
 operator restore/recovery workflows are not established merely by passing CI.

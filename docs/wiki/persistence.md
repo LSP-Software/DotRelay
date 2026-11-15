@@ -75,7 +75,8 @@ cutover ships without a data-export prerequisite; the reasoning is in
 `docs/adr/0011-legacy-recovery-cutover-is-destructive-and-guarded.md`.
 
 Before running `prisma migrate deploy` against a durable deployment, operators must run the
-pre-deploy guard. It reports the dropped tables, the legacy enum rows, and the used recovery
+pre-deploy guard. Hosted deploys run it automatically, without the override, before they migrate
+(`scripts/hosted-migrate.ts`); a finding stops the deploy. It reports the dropped tables, the legacy enum rows, and the used recovery
 generations it found, and refuses (exit 1) until the operator either exports the data or passes
 `--acknowledge-legacy-recovery-data` to record that the data is disposable:
 

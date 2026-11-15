@@ -274,12 +274,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false }
-      - name: Require operator migration receipt for this commit
-        env:
-          MIGRATED_COMMIT_SHA: ${{ vars.DEV_MIGRATED_COMMIT_SHA }}
-        run: test "$MIGRATED_COMMIT_SHA" = "$GITHUB_SHA"
       # Coolify builds the dev apps from Git with railpack (railpack.json),
-      # pinned to the commit that just passed CI.
+      # pinned to the commit that just passed CI. The API applies pending
+      # migrations at start (scripts/hosted-migrate.ts) before it serves.
       - name: deploy dev apps via Coolify
         env:
           COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}

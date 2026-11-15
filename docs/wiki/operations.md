@@ -53,13 +53,46 @@ newer migrations; it returns only a generic 200 or 503. It has a three-second
 response budget. When `VALKEY_URL` is set, readiness also pings Valkey.
 `MAINTENANCE_MODE=true` makes readiness fail, as does SIGTERM, which then waits
 `SHUTDOWN_DRAIN_MS` (default 5000) before closing the listener. Keep health endpoints
-on private monitoring paths where possible. Production startup never migrates.
+on private monitoring paths where possible. The API process itself never migrates;
+hosted deploys run a migration step before it starts (see below).
 If the orchestrator overrides Docker's built-in healthcheck, configure
 `bun /app/scripts/probe-health.ts` (liveness, `/health`) or
 `bun /app/scripts/probe-ready.ts` (readiness) instead of an inherited curl/wget command;
 the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 
 ## Upgrade and migrations
+
+### Hosted deploys (Coolify)
+
+Hosted deploys migrate automatically. `scripts/railpack-start.sh api` runs
+`scripts/hosted-migrate.ts` and starts the API only if it exits 0. That step:
+
+1. waits up to five minutes for the same PostgreSQL advisory lock that
+   `deploy-migrate.ts` takes, so two starts (or a start and a manual run) never
+   migrate at once;
+2. runs the legacy-recovery guard **without an override**;
+3. runs the installed Prisma `migrate deploy`.
+
+Each step logs a `[migrate]` line to the container log. If any step fails it
+logs `[migrate] FAILED at step: ...` and the container exits before the API
+listens, so the deploy fails its health check. Nothing resolves or rolls back a
+failed migration. Coolify keeps restarting the container, and each restart stops
+at the same step until an operator fixes the database. Hosted deploys stop the
+old container before starting the new one (no rolling updates), so an old API
+never runs against a newer schema.
+
+There is no deploy-time `pg_dump`: the shared Coolify PostgreSQL has scheduled
+daily, weekly and monthly backups to S3. To recover from a failed migration,
+prefer a reviewed forward repair; if that is impossible, restore the most recent
+Coolify S3 backup into a new database. The deploy CI jobs no longer need a
+manual migration receipt. See
+[ADR 0016](../adr/0016-hosted-deploys-migrate-at-start.md).
+
+### Self-hosted images and manual maintenance
+
+The self-hosted image's entrypoint never migrates. Self-hosters (or an operator
+who wants an encrypted backup taken immediately before a migration) use
+`scripts/deploy-migrate.ts`:
 
 1. Select the checked commit (and, for self-hosted images, the verified image
    digests). Retain old artifacts.
@@ -170,9 +203,8 @@ and `scripts/railpack-build.sh` and `scripts/railpack-start.sh` reproduce the
 Dockerfile build and the non-root start. The apps track `main` with auto-deploy
 off. CI pins them to an exact commit (`git_commit_sha`) through the Coolify API
 and then deploys: dev gets each `main` commit that passes CI, production gets
-the commit a stable tag points at. Each needs an operator migration receipt for
-that exact source SHA (`DEV_MIGRATED_COMMIT_SHA` or
-`PRODUCTION_MIGRATED_COMMIT_SHA`). The web app's `NEXT_PUBLIC_*` values are
+the commit a stable tag points at. The API applies that commit's pending
+migrations when it starts (see [Hosted deploys](#hosted-deploys-coolify)). The web app's `NEXT_PUBLIC_*` values are
 build-time variables in Coolify, set per environment.
 
 Releases package each CLI platform into a unique timestamp-normalized archive,

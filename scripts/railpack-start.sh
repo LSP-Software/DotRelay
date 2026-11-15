@@ -15,7 +15,9 @@ case "${1:-}" in
     : "${ALPHA_ADMISSION_REQUIRED:=true}"
     : "${ALPHA_GITHUB_IDS:=}"
     export ALPHA_ADMISSION_REQUIRED ALPHA_GITHUB_IDS
-    set -- sh scripts/api-entrypoint.sh
+    # Hosted deploys apply pending migrations before the API serves. If they
+    # fail, the API does not start (docs/adr/0016-hosted-deploys-migrate-at-start.md).
+    set -- sh -c 'bun scripts/hosted-migrate.ts && exec sh scripts/api-entrypoint.sh'
     ;;
   web)
     cd apps/web/.next/standalone/apps/web
