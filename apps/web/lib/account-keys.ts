@@ -402,11 +402,29 @@ export const stageAccountKeyTransfer = async (
       ciphertextLength: Number(transfer.object.get(72)),
     },
   );
+  // The transfer id is shown inside a command the user copies into a shell,
+  // so it is always the one this browser created, never text from the
+  // response; a response naming another transfer is refused outright. The
+  // recipient is the Device this browser chose, and the expiry is the
+  // server's only when it is a real timestamp.
+  const transferId = bytesToHex(transfer.transferId);
+  if (
+    typeof body.transferId === "string" &&
+    body.transferId.toLowerCase() !== transferId
+  )
+    throw new AccountKeyRequestError(
+      "response_invalid",
+      "The server reported a different transfer than the one this browser created.",
+    );
+  const expiresAt =
+    typeof body.expiresAt === "string" &&
+    Number.isFinite(Date.parse(body.expiresAt))
+      ? new Date(body.expiresAt).toISOString()
+      : target.expiresAt;
   return Object.freeze({
-    transferId: typeof body.transferId === "string" ? body.transferId : "",
-    recipientDeviceId:
-      typeof body.recipientDeviceId === "string" ? body.recipientDeviceId : "",
-    expiresAt: typeof body.expiresAt === "string" ? body.expiresAt : "",
+    transferId,
+    recipientDeviceId: target.recipientDeviceId,
+    expiresAt,
     idempotent: body.idempotent === true,
   });
 };
