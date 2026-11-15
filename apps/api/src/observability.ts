@@ -125,8 +125,58 @@ export type ApiObservability = Readonly<{
     readonly durationMs: number;
     readonly problemCode?: ServerDiagnosticProblemCode;
     readonly retryAfterSeconds?: number;
+    /**
+     * Whether a signed-in session made the request. Anonymous requests
+     * write Security Request Log rows only within a budget.
+     */
+    readonly authenticated?: boolean;
   }) => void;
 }>;
+
+export type AnonymousLogBudget = Readonly<{
+  /** Rows one client address may write per window. */
+  readonly perAddress: number;
+  /** Rows all anonymous clients together may write per window. */
+  readonly total: number;
+  readonly windowMs: number;
+}>;
+
+// An anonymous client can send requests as fast as it likes, so its
+// Security Request Log rows are capped per address and overall. The first
+// requests of a burst are recorded, which is what an investigation needs.
+const DEFAULT_ANONYMOUS_LOG_BUDGET: AnonymousLogBudget = Object.freeze({
+  perAddress: 30,
+  total: 600,
+  windowMs: 60_000,
+});
+const MAX_TRACKED_ANONYMOUS_ADDRESSES = 10_000;
+
+const createAnonymousLogBudget = (budget: AnonymousLogBudget) => {
+  const addresses = new Map<string, { windowStart: number; count: number }>();
+  let total = { windowStart: 0, count: 0 };
+  return (address: string, nowMs: number): boolean => {
+    if (nowMs - total.windowStart >= budget.windowMs)
+      total = { windowStart: nowMs, count: 0 };
+    if (total.count >= budget.total) return false;
+    const current = addresses.get(address);
+    const entry =
+      current && nowMs - current.windowStart < budget.windowMs
+        ? current
+        : { windowStart: nowMs, count: 0 };
+    if (entry.count >= budget.perAddress) return false;
+    entry.count += 1;
+    total.count += 1;
+    // Most recently used last, so the oldest address is evicted first.
+    addresses.delete(address);
+    addresses.set(address, entry);
+    while (addresses.size > MAX_TRACKED_ANONYMOUS_ADDRESSES) {
+      const oldest = addresses.keys().next().value;
+      if (oldest === undefined) break;
+      addresses.delete(oldest);
+    }
+    return true;
+  };
+};
 
 const safeToken = /^[A-Za-z0-9._:-]+$/;
 const forbiddenProblemCodes = new Set<string>(FORBIDDEN_PROBLEM_CODES);
@@ -353,8 +403,12 @@ export const createApiObservability = (
     readonly resolveClientIp?: (request: Request) => string | null;
     readonly sampleRate?: number;
     readonly maxSessionAgeMs?: number;
+    readonly anonymousLogBudget?: AnonymousLogBudget;
   }>,
 ): ApiObservability => {
+  const allowAnonymousLog = createAnonymousLogBudget(
+    options?.anonymousLogBudget ?? DEFAULT_ANONYMOUS_LOG_BUDGET,
+  );
   const diagnostics = options?.diagnostics ?? createInMemoryDiagnosticSink();
   const now = options?.now ?? (() => new Date());
   const random = options?.random ?? Math.random;
@@ -470,6 +524,11 @@ export const createApiObservability = (
         const ipAddress = options?.resolveClientIp?.(input.request) ?? null;
         if (!endpointTemplate || !ipAddress) return;
         const requestedAt = now();
+        if (
+          input.authenticated !== true &&
+          !allowAnonymousLog(ipAddress, requestedAt.getTime())
+        )
+          return;
         const contentLength = input.request.headers.get("Content-Length");
         const transferBytes =
           contentLength && /^\d+$/.test(contentLength)

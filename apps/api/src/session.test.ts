@@ -57,3 +57,36 @@ test("a session within the lifetime, or a request without credentials, is untouc
   expect(aged.deleted).toEqual([]);
   expect(SESSION_MAX_AGE_MS).toBe(90 * 24 * 60 * 60 * 1_000);
 });
+
+// A-7: the request log budgets anonymous requests, so it needs to know which
+// requests a signed-in session made.
+test("reports whether a signed-in session made the request", async () => {
+  const { requestWasAuthenticated } = await import("./session");
+  const seen: boolean[] = [];
+  const auth = {
+    api: {
+      getSession: async ({ headers }: { headers: Headers }) =>
+        headers.get("Authorization") === "Bearer valid"
+          ? {
+              user: { id: "auth-user" },
+              session: { id: "session-id", createdAt: new Date() },
+            }
+          : null,
+    },
+  } as never;
+  const app = new Hono();
+  app.use("*", async (context, next) => {
+    await next();
+    seen.push(await requestWasAuthenticated(context));
+  });
+  app.use("*", createSessionLifetimeGate({} as never, auth));
+  app.get("*", (context) => context.text("ok"));
+  await app.request("/api/auth/get-session");
+  await app.request("/api/auth/get-session", {
+    headers: { Authorization: "Bearer forged" },
+  });
+  await app.request("/api/auth/get-session", {
+    headers: { Authorization: "Bearer valid" },
+  });
+  expect(seen).toEqual([false, false, true]);
+});

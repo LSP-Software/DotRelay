@@ -80,7 +80,11 @@ import {
   createUserRateLimit,
   valkeyReady,
 } from "./protocol/rate-limit";
-import { createSessionLifetimeGate, requestSession } from "./session";
+import {
+  createSessionLifetimeGate,
+  requestSession,
+  requestWasAuthenticated,
+} from "./session";
 
 export type ApiDependencies = Readonly<{
   readonly database: DatabaseClient;
@@ -668,6 +672,7 @@ const createApi = ({
           status: context.res.status,
           correlationId,
           durationMs: performance.now() - startedAt,
+          authenticated: await requestWasAuthenticated(context),
           ...problemDetails,
         });
       } catch {

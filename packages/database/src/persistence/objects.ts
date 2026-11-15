@@ -641,7 +641,9 @@ export const SECURITY_REQUEST_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Anonymous, unauthenticated probes (`/health`, `/api/v1/capabilities`) are
 // deliberately not recorded: a flood of them must not become database writes.
-// The database CHECK constraint still accepts the historical values.
+// Anonymous requests to the templates below are recorded only within a
+// per-address and overall budget the API enforces. The database CHECK
+// constraint still accepts the historical values.
 export const SECURITY_REQUEST_ENDPOINT_TEMPLATES = Object.freeze([
   "/api/v1/session",
   "/device",

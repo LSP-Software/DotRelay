@@ -46,7 +46,10 @@ Security Request Logs are separate, allowlisted records containing only the serv
 canonical endpoint template, HTTP status, transfer size, request time, and expiry. They do not
 contain User-Agent data, request bodies, query values, credentials, plaintext, ciphertext, or free-
 form metadata. Anonymous liveness and discovery probes (`/health` and `/api/v1/capabilities`) are
-not recorded, so a flood of them never becomes database writes. Hosted deployments retain them for
+not recorded, so a flood of them never becomes database writes. Other requests without a signed-in
+session (sign-in, device authorization, a rejected session) are recorded only within a budget: 30
+rows per client address and 600 rows overall per minute, per API process. Requests from signed-in
+sessions are always recorded; the per-User rate limit bounds them. Hosted deployments retain them for
 30 days by default and operators must restrict access more tightly than ordinary diagnostics. Cleanup may remove expired Security Request Logs;
 Audit Facts and accepted protocol history are not physically deleted.
 

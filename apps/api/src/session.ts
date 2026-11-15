@@ -31,6 +31,21 @@ export const requestSession = (
   return lookup;
 };
 
+/**
+ * Whether a signed-in session made this request, as the middlewares that
+ * looked it up found. Every request with credentials passes the session
+ * lifetime gate, which looks the session up, so a request without a lookup
+ * carried no credentials and is anonymous.
+ */
+export const requestWasAuthenticated = async (
+  context: Context,
+): Promise<boolean> => {
+  const cached = context.get(SESSION_KEY as never) as
+    Promise<RequestSession | null> | undefined;
+  if (!cached) return false;
+  return (await cached.catch(() => null)) !== null;
+};
+
 const hasCredentials = (request: Request) =>
   request.headers.has("Cookie") || request.headers.has("Authorization");
 
