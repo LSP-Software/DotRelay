@@ -162,8 +162,11 @@ Set `METRICS_ENABLED=true` to start a second, private listener on `METRICS_PORT`
 It serves only `GET /metrics` in the Prometheus text format; it shares no routes, CORS, cookies or
 sessions with the API on `PORT`. Production requires `METRICS_TOKEN` (at least 32 characters),
 compared in constant time against `Authorization: Bearer <token>`; other requests get 401. Keep
-`/health` and `/ready` on the API port for probes. Do not publish the metrics port or route it
-through the TLS proxy; scrape it from the private network:
+`/health` and `/ready` on the API port for probes. The listener binds `METRICS_HOSTNAME`, which
+defaults to `127.0.0.1`, so only a scraper on the same host reaches it. To scrape from another
+container or host on a private network, set it to that interface (or `0.0.0.0` inside a container
+network). Do not publish the metrics port or route it through the TLS proxy; scrape it from the
+private network:
 
 ```yaml
 scrape_configs:
