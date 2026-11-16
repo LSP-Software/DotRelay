@@ -202,13 +202,30 @@ export const trustTeamMember = async (
       "resource_not_found",
     );
   // A confirmed identity needs nothing; a first-sight or changed one is
-  // confirmed against the roster the Member's account key signed.
-  if (trust.status === "verified" && trust.confirmed)
+  // confirmed against the roster the Member's account key signed. A
+  // fingerprint the user passed is still compared, so a caller that pins
+  // one hears when it no longer names the confirmed identity.
+  if (trust.status === "verified" && trust.confirmed) {
+    if (parsed.fingerprint !== undefined) {
+      if (!trust.identity)
+        throw new CliError(
+          "crypto",
+          "the Member's account identity is unavailable",
+          {},
+          "trust_failed",
+        );
+      requireExpectedFingerprint(
+        options,
+        parsed,
+        await accountFingerprint(trust.identity),
+      );
+    }
     return {
       userId: targetUserId,
       status: trust.status,
       message: "This Member's account identity is already confirmed.",
     };
+  }
   if (
     member.accountRoster === null ||
     !(

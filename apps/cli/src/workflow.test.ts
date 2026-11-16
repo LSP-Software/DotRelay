@@ -6935,6 +6935,17 @@ describe("pull after Project epoch rotations", () => {
       expect(accepted.result.stdout).toContain(
         "DATABASE_URL='postgres://epoch-one'",
       );
+      // A confirmed identity still answers to a fingerprint passed again.
+      const again = await trustWith("--fingerprint", author?.fingerprint ?? "");
+      expect(again.result.exitCode).toBe(0);
+      expect(JSON.parse(again.result.stdout)).toMatchObject({
+        message: expect.stringContaining("already confirmed"),
+      });
+      const stale = await trustWith("--fingerprint", "0".repeat(40));
+      expect(stale.result.exitCode).not.toBe(0);
+      expect(JSON.parse(stale.result.stderr)).toMatchObject({
+        code: "account_fingerprint_mismatch",
+      });
     });
 
     test("a teammate's injected Device cannot sign Revisions the client accepts", async () => {
