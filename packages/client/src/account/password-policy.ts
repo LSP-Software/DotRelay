@@ -101,6 +101,8 @@ const isRepetition = (text: string): boolean => {
 };
 
 const isCommonWord = (text: string): boolean => {
+  // Nothing is left of a password with no a-z letters: that is no word.
+  if (text.length === 0) return false;
   if (COMMON_WORDS.has(text)) return true;
   // The same word typed two or more times.
   for (const word of COMMON_WORDS)
@@ -134,8 +136,16 @@ export const encryptionPasswordProblem = (
     return "too-simple";
   const unleet = (text: string): string =>
     [...text].map((character) => LEET[character] ?? character).join("");
-  const stripEnds = (text: string): string =>
-    text.replace(/^[^a-z]+/, "").replace(/[^a-z]+$/, "");
+  // Removes everything but a-z letters from both ends, in one linear pass.
+  const stripEnds = (text: string): string => {
+    const isLetter = (index: number): boolean =>
+      text.charAt(index) >= "a" && text.charAt(index) <= "z";
+    let start = 0;
+    let end = text.length;
+    while (start < end && !isLetter(start)) start += 1;
+    while (end > start && !isLetter(end - 1)) end -= 1;
+    return text.slice(start, end);
+  };
   // Digits and symbols around a word add little: "Password2024!" is
   // "password" to a guessing tool, and so is "P@ssw0rd" once the usual
   // substitutions are undone.

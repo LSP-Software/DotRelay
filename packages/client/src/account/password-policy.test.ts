@@ -55,6 +55,29 @@ describe("encryption password policy", () => {
       expect(encryptionPasswordProblem(password)).toBeNull();
   });
 
+  test("accepts passwords with no a-z letters at all", () => {
+    // Removing digits, symbols and substitutions leaves nothing of these,
+    // and an empty remainder is no common word.
+    for (const password of [
+      "海星蓝鲸森林山川日月风雨",
+      "солнце море ветер",
+      "🌊🏔🌲🌙☀🌧🔥🪨🍎🎈🚲🎹",
+    ])
+      expect(encryptionPasswordProblem(password)).toBeNull();
+  });
+
+  test("checks a long run of symbols in linear time", () => {
+    // Long runs of characters that are not a-z letters, where a
+    // backtracking end-anchored pattern would be quadratic.
+    const started = performance.now();
+    for (const password of [
+      `${"`!#".repeat(340)}xq7`,
+      `xq${"`!#".repeat(340)}7`,
+    ])
+      expect(encryptionPasswordProblem(password)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   test("names a fix for every problem", () => {
     for (const problem of [
       "too-short",
