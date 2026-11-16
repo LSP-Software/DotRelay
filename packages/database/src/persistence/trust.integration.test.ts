@@ -1082,6 +1082,16 @@ integrationDescribe("trust workflow integration", () => {
           data: { lifecycle: "PENDING", activatedAt: null, revokedAt: null },
         }))(),
     ).rejects.toThrow("revoked Device");
+    // Nor can a writer delete the row and insert the id again with other
+    // keys and times; no Device row is ever deleted.
+    await expect(
+      (async () => database.device.delete({ where: { id: revoked.id } }))(),
+    ).rejects.toThrow("never deleted");
+    await expect(
+      (async () =>
+        database.$executeRaw`DELETE FROM "devices" WHERE "id" = ${revoked.id}::uuid`)(),
+    ).rejects.toThrow("never deleted");
+    expect(await database.device.count({ where: { id: revoked.id } })).toBe(1);
   });
 
   // ADR 0010: a Device created by initial trust bootstrap is fully ACTIVE.
