@@ -1,14 +1,7 @@
-import { Braces, MonitorSmartphone } from "lucide-react";
+import { MonitorSmartphone } from "lucide-react";
 import type { Metadata } from "next";
-import Link from "next/link";
 import { CommandText } from "@/components/inline-command";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { SiteShell } from "@/components/site-shell";
 import { oauthErrorMessage } from "@/lib/oauth-error";
 import { DeviceApproveCard } from "./device-approve-card";
 
@@ -29,53 +22,43 @@ const DevicePage = async ({
   const signInError = oauthErrorMessage(error);
 
   return (
-    <main className="landing-grid grid min-h-screen place-items-center px-5 py-12">
-      <div className="w-full max-w-md">
-        <Link className="mb-8 flex items-center justify-center gap-3" href="/">
-          <span className="grid size-9 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-primary">
-            <Braces aria-hidden="true" className="size-5" />
-          </span>
-          <span className="font-heading text-lg font-semibold">DotRelay</span>
-        </Link>
-        <Card className="border-primary/15 bg-card/90 shadow-2xl backdrop-blur">
-          <CardHeader className="space-y-2">
-            <div className="mb-3 grid size-10 place-items-center rounded-lg bg-primary/10 text-primary">
-              <MonitorSmartphone aria-hidden="true" />
-            </div>
-            <CardTitle className="text-2xl">
-              <h1>Allow this CLI?</h1>
-            </CardTitle>
-            <CardDescription>
-              A DotRelay CLI is asking to sign in as you. Only allow it if you
-              started this sign-in from your own terminal just now and it shows
-              the code below. Allowing gives that terminal full access to your
-              DotRelay account, including your teams, invitations and roles. It
-              still can&apos;t decrypt your values until you set it up as one of
-              your devices.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {signInError ? (
-              <p className="text-sm text-destructive" role="alert">
-                {signInError}
-              </p>
-            ) : null}
-            {userCode ? (
-              <>
-                <p className="rounded-lg border bg-background/60 px-3 py-2 text-center font-mono text-lg tracking-[0.3em]">
-                  {userCode}
-                </p>
-                <DeviceApproveCard userCode={userCode} />
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                <CommandText text="Open this page from `dotrelay setup` or `dotrelay login` so the code is included." />
-              </p>
-            )}
-          </CardContent>
-        </Card>
+    <SiteShell>
+      <span className="grid size-10 place-items-center rounded-lg bg-primary/10 text-primary">
+        <MonitorSmartphone aria-hidden="true" />
+      </span>
+      <h1 className="mt-4 font-heading text-2xl font-semibold tracking-tight">
+        Allow this CLI?
+      </h1>
+      <p className="mt-2 text-muted-foreground">
+        A DotRelay CLI is asking to sign in as you. Only allow it if you started
+        this sign-in from your own terminal just now and it shows the code
+        below.
+      </p>
+      <p className="mt-3 text-sm text-muted-foreground">
+        Allowing gives that terminal access to your DotRelay account, including
+        your teams, invitations and roles. It still can&apos;t decrypt your
+        values until you set it up as one of your devices.
+      </p>
+      <div className="mt-6 space-y-5">
+        {signInError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {signInError}
+          </p>
+        ) : null}
+        {userCode ? (
+          <>
+            <p className="rounded-lg border bg-card px-3 py-3 text-center font-mono text-xl tracking-[0.3em]">
+              {userCode}
+            </p>
+            <DeviceApproveCard userCode={userCode} />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            <CommandText text="Open this page from `dotrelay setup` or `dotrelay login` so the code is included." />
+          </p>
+        )}
       </div>
-    </main>
+    </SiteShell>
   );
 };
 

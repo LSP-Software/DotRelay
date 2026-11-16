@@ -47,7 +47,10 @@ const installMemberships = async (page: Page) => {
   });
 };
 
-const openView = async (page: Page, name: "Team" | "Account") => {
+const openView = async (
+  page: Page,
+  name: "Members" | "Devices and recovery",
+) => {
   await page.goto("/workspace");
   await expect(page.getByTestId("workspace-loading")).toBeHidden({
     timeout: 15_000,
@@ -76,7 +79,7 @@ test("the last owner is told to transfer ownership before leaving", async ({
       },
     });
   });
-  await openView(page, "Team");
+  await openView(page, "Members");
   // A deleted account stays in the Team's history under a neutral label.
   await expect(
     page.getByTestId("members-card").getByText("Deleted user"),
@@ -109,10 +112,12 @@ test("an owner deletes a Team only after typing its name", async ({ page }) => {
       },
     });
   });
-  await openView(page, "Team");
+  await openView(page, "Members");
   const teamName = (
     await page.locator("#administration h1").first().textContent()
-  )?.trim();
+  )
+    ?.replace(/^Members of /, "")
+    .trim();
   expect(teamName).toBeTruthy();
 
   await page.getByTestId("delete-team").click();
@@ -166,8 +171,10 @@ test("the account page exports data and deletes the account with a typed phrase"
       },
     });
   });
-  await openView(page, "Account");
-  await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
+  await openView(page, "Devices and recovery");
+  await expect(
+    page.getByRole("heading", { name: "Your account" }),
+  ).toBeVisible();
 
   const download = page.waitForEvent("download");
   await page.getByTestId("export-account").click();

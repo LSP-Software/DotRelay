@@ -14,17 +14,20 @@ test("workspace shows a copyable CLI setup command after opening Devices", async
   await expect(page.getByTestId("cli-setup-command")).toContainText(
     "dotrelay setup",
   );
-  await page.getByRole("button", { name: "Copy command" }).click();
+  await page.getByTestId("cli-setup-command").click();
   await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
 });
 
 test("Devices lists other devices besides this browser", async ({ page }) => {
   await page.goto("/workspace");
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
-  const devices = page.getByRole("table", { name: "Your devices" });
-  await expect(devices).toContainText("00000000-0000-4000-8000-000000000041");
-  await expect(devices).toContainText("00000000-0000-4000-8000-000000000042");
-  await expect(devices).toContainText("Has project access");
+  const devices = page.getByRole("list", { name: "Your devices" });
+  await expect(
+    devices.getByTestId("enrolled-device-00000000-0000-4000-8000-000000000041"),
+  ).toBeVisible();
+  await expect(
+    devices.getByTestId("enrolled-device-00000000-0000-4000-8000-000000000042"),
+  ).toBeVisible();
   await expect(devices).toContainText("Waiting for project keys");
   // A labeled device shows its machine name and client summary so a row is
   // not just a bare UUID...
@@ -104,8 +107,9 @@ test("the Devices table does not repeat this browser's OS in its summary line", 
     }),
   ).toBeVisible({ timeout: 15_000 });
   const thisBrowserRow = page
-    .getByRole("table", { name: "Your devices" })
-    .getByRole("row", { name: /This browser/ });
+    .getByRole("list", { name: "Your devices" })
+    .getByRole("listitem")
+    .filter({ hasText: "This browser" });
   // The summary line is the client's own description, which already names
   // the OS; repeating it after the summary ("…on Linux · Linux") is what
   // this test pins against.
@@ -145,7 +149,12 @@ test("a reload of an enrolled browser keeps it out of the setup prompt", async (
     }),
   ).toBeVisible({ timeout: 15_000 });
   // ...and the table names the row as this browser's.
-  await expect(page.getByRole("row", { name: /This browser/ })).toBeVisible();
+  await expect(
+    page
+      .getByRole("list", { name: "Your devices" })
+      .getByRole("listitem")
+      .filter({ hasText: "This browser" }),
+  ).toBeVisible();
 });
 
 test("revoking a device confirms first and ends with rotation guidance", async ({
@@ -218,10 +227,14 @@ test("landing page leads to the GitHub sign-in page", async ({ page }) => {
 
   await expect(
     page.getByRole("heading", {
-      name: "Share your .env files, with your team and your machines.",
+      name: "Share environment variables with your team.",
     }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Get started" }).click();
+  await page
+    .getByRole("main")
+    .getByRole("link", { name: "Sign in with GitHub" })
+    .first()
+    .click();
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Continue with GitHub" }),
@@ -232,6 +245,10 @@ test("landing page offers install steps, docs, and policies", async ({
   page,
 }) => {
   await page.goto("/");
+  await expect(page.getByTestId("install-command")).toContainText(
+    "scripts/install.sh | sh",
+  );
+  await page.getByRole("tab", { name: "npm" }).click();
   await expect(page.getByTestId("install-command")).toContainText(
     "npm install -g @dotrelay/cli",
   );
@@ -351,7 +368,7 @@ test("role-aware administration reflects the persisted Team record", async ({
   });
 
   await page.goto("/workspace");
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
 
   const membersCard = page.getByTestId("members-card");
   await page
@@ -363,7 +380,7 @@ test("role-aware administration reflects the persisted Team record", async ({
   await expect(
     membersCard.getByText("Action needed: share project keys"),
   ).toBeVisible();
-  await expect(membersCard.getByText("Invitation pending")).toBeVisible();
+  await expect(membersCard.getByText(/^Invited, expires/)).toBeVisible();
 
   // Inviting resolves a familiar login and only reports the invitation once
   // the service confirms it.
@@ -374,7 +391,7 @@ test("role-aware administration reflects the persisted Team record", async ({
   await page.getByRole("button", { name: "Create invitation" }).click();
   await expect(page.getByTestId("invitation-dialog")).toBeHidden();
   expect(invitationCreates).toBe(1);
-  await expect(membersCard.getByText("Invitation pending")).toBeVisible();
+  await expect(membersCard.getByText(/^Invited, expires/)).toBeVisible();
 
   // A plain Member loses the invitation controls and the role column, but
   // still sees the active members the service reported.
@@ -386,11 +403,9 @@ test("role-aware administration reflects the persisted Team record", async ({
   ).toBeDisabled();
   await expect(membersCard.getByText("Owner", { exact: true })).toHaveCount(0);
   await expect(
-    page
-      .getByRole("alert")
-      .getByText(
-        "Members can view this team's projects, read shared values, and manage their own values.",
-      ),
+    page.getByText(
+      "As a member, you can see team values and edit your own values.",
+    ),
   ).toBeVisible();
 });
 
@@ -496,7 +511,7 @@ test("keyboard and responsive navigation keep critical routes reachable", async 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Open navigation" }).click();
   await expect(
-    page.getByRole("dialog").getByRole("button", { name: "Team" }),
+    page.getByRole("dialog").getByRole("button", { name: "Members" }),
   ).toBeVisible();
 });
 
@@ -553,7 +568,13 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await page.goto("/workspace?preview=protected");
 
   await expect(page.getByRole("heading", { name: "Variables" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
+  await page.getByRole("button", { name: "More actions" }).click();
+  await expect(
+    page.getByRole("menuitem", { name: "Load latest values" }),
+  ).toHaveCount(0);
+  await page.getByRole("menu").press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await page.getByRole("tab", { name: "History" }).click();
   await expect(page.getByText("rev_0184", { exact: true })).toBeVisible();
   await expect(page.getByText("rev_0183", { exact: true })).toBeVisible();
   // The development preview has no verified wire record, so its history is
@@ -564,6 +585,7 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(
     page.getByText("Author unavailable", { exact: true }).first(),
   ).toBeVisible();
+  await page.getByRole("tab", { name: "Variables" }).click();
   await expect(
     page.getByText("The server never sees these values."),
   ).toHaveCount(0);
@@ -573,31 +595,31 @@ test("protected Environment editor keeps Values masked and previews a local draf
 
   const originRow = page.getByTestId("environment-variable-API_ORIGIN");
   await page.getByLabel("API_ORIGIN value").fill("https://changed.invalid");
-  await expect(originRow).toContainText("Draft change");
+  await expect(originRow).toContainText("Not published");
   await page.getByLabel("API_ORIGIN value").fill("");
-  await expect(originRow).not.toContainText("Draft change");
+  await expect(originRow).not.toContainText("Not published");
 
   await page.getByRole("button", { name: "Add variable" }).click();
-  await page.getByLabel("Variable name").fill("DATABASE_URL");
+  await page.getByLabel("Name", { exact: true }).fill("DATABASE_URL");
   await page.getByLabel("Description (optional)").fill("Database connection.");
-  await page.getByText("User-defined value", { exact: true }).last().click();
+  await page.getByText("Only me", { exact: true }).last().click();
   await page
-    .getByRole("textbox", { name: "Initial value" })
+    .getByRole("textbox", { name: "Value", exact: true })
     .fill("local-only-value");
   await page.getByRole("button", { name: "Add variable" }).last().click();
 
   const value = page.getByLabel("DATABASE_URL value");
   await expect(value).toHaveAttribute("type", "password");
-  await expect(
-    page.getByText("User-defined value", { exact: true }).last(),
-  ).toBeVisible();
+  await expect(page.getByText("Only me", { exact: true }).last()).toBeVisible();
 
   await page.getByRole("button", { name: "Reveal DATABASE_URL" }).click();
   await expect(value).toHaveAttribute("type", "text");
   await expect(value).toHaveValue("local-only-value");
 
-  await page.getByRole("button", { name: "Save changes" }).click();
-  const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
+  await page.getByRole("button", { name: "Review and publish" }).click();
+  const reviewDialog = page.getByRole("dialog", {
+    name: /^Publish \d+ change/,
+  });
   await expect(reviewDialog).toContainText("DATABASE_URL");
   await expect(reviewDialog).not.toContainText("local-only-value");
   await expect(reviewDialog).toContainText("••••••••");
@@ -612,7 +634,7 @@ test("protected Environment editor keeps Values masked and previews a local draf
   ).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "Cancel" }).click();
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await page.getByRole("button", { name: "Review and publish" }).click();
   await expect(reviewDialog).not.toContainText("local-only-value");
   await expect(showReviewValues).toHaveAttribute("aria-pressed", "false");
   await page.getByRole("button", { name: "Publish" }).click();
@@ -622,18 +644,17 @@ test("protected Environment editor keeps Values masked and previews a local draf
 test("protected Environment editor offers lane rollback", async ({ page }) => {
   await page.goto("/workspace?preview=protected");
 
-  await page.getByRole("button", { name: "Rollback" }).first().click();
-  const rollbackDialog = page.getByRole("dialog", { name: "Rollback" });
+  await page.getByRole("tab", { name: "History" }).click();
+  await page.getByRole("button", { name: "Roll back" }).first().click();
+  const rollbackDialog = page.getByRole("dialog", { name: "Roll back" });
   await expect(rollbackDialog).toContainText(
-    "Publishing creates a new revision without deleting the current one",
+    "Publishing adds a new revision and keeps the history",
   );
   // The dialog identifies the selected target and the rollback consequence.
   await expect(
     rollbackDialog.getByText("rev_0183", { exact: true }),
   ).toBeVisible();
-  await expect(rollbackDialog).toContainText(
-    "Staging puts the selected values in your draft",
-  );
+
   await expect(rollbackDialog).toContainText("1 of 1 variables selected");
   await expect(rollbackDialog).toContainText("API_ORIGIN");
   await expect(rollbackDialog).not.toContainText("SIGNING_KEY");
@@ -649,7 +670,7 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   await rollbackLane.uncheck();
   await expect(rollbackDialog).toContainText("0 of 1 variables selected");
   await expect(
-    rollbackDialog.getByRole("button", { name: "Stage rollback" }),
+    rollbackDialog.getByRole("button", { name: "Add to my changes" }),
   ).toBeDisabled();
   await rollbackLane.check();
 
@@ -660,12 +681,12 @@ test("protected Environment editor offers lane rollback", async ({ page }) => {
   ).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "Cancel" }).click();
-  await page.getByRole("button", { name: "Rollback" }).first().click();
+  await page.getByRole("button", { name: "Roll back" }).first().click();
   await expect(rollbackDialog).not.toContainText("https://api.acme.example");
   await expect(rollbackDialog).toContainText("••••••••");
   await expect(showRollbackValues).toHaveAttribute("aria-pressed", "false");
 
-  await page.getByRole("button", { name: "Stage rollback" }).click();
+  await page.getByRole("button", { name: "Add to my changes" }).click();
   await expect(
     page.getByText(/Values from revision rev_0183 are in your draft/),
   ).toBeVisible();
@@ -677,17 +698,15 @@ test("Environment drafts enforce unique names and preserve tombstones", async ({
   await page.goto("/workspace?preview=protected");
 
   await page.getByRole("button", { name: "Add variable" }).click();
-  await page.getByLabel("Variable name").fill("API_ORIGIN");
-  await page.getByText("Shared value", { exact: true }).last().click();
+  await page.getByLabel("Name", { exact: true }).fill("API_ORIGIN");
+  await page.getByText("Team", { exact: true }).last().click();
   await page.getByRole("button", { name: "Add variable" }).last().click();
   await expect(page.getByRole("alert")).toContainText("already exists");
 
-  await page.getByLabel("Variable name").fill("OPTIONAL_FLAG");
-  await page.getByText("Shared value", { exact: true }).last().click();
+  await page.getByLabel("Name", { exact: true }).fill("OPTIONAL_FLAG");
+  await page.getByText("Team", { exact: true }).last().click();
   await page.getByLabel("Require a value").uncheck();
-  await page
-    .getByLabel("Leave the value unset, rather than save an empty string")
-    .check();
+  await page.getByLabel("Leave it unset instead of empty").check();
   await page.getByRole("button", { name: "Add variable" }).last().click();
   await expect(page.getByText("OPTIONAL_FLAG", { exact: true })).toBeVisible();
   const optionalRow = page.getByTestId("environment-variable-OPTIONAL_FLAG");
@@ -697,9 +716,7 @@ test("Environment drafts enforce unique names and preserve tombstones", async ({
   await expect(optionalRow).toContainText("Not set");
 
   await page.getByRole("button", { name: "Delete FEATURE_GATE" }).click();
-  await expect(
-    page.getByText("This variable is marked for deletion."),
-  ).toBeVisible();
+  await expect(page.getByText("Removed in your changes.")).toBeVisible();
   await page.getByRole("button", { name: "Undo delete" }).click();
   await expect(
     page.getByRole("button", { name: "Delete FEATURE_GATE" }),

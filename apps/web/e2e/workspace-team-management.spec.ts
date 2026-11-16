@@ -126,7 +126,7 @@ const installTeamAdministration = async (
 
 const openTeamView = async (page: Page) => {
   await page.goto("/workspace");
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
 };
 
 test("a failed Team member load can be retried from the error itself", async ({
@@ -378,7 +378,7 @@ test("invitation rows keep their badge in the Status column", async ({
     .getByTestId("invitation-row-inv-1")
     .getByRole("cell");
   await expect(cells).toHaveCount(4);
-  await expect(cells.nth(statusIndex)).toContainText("Invitation pending");
+  await expect(cells.nth(statusIndex)).toContainText("Invited, expires");
 });
 
 test("an admin removes members only and never touches owners, admins, or themselves", async ({

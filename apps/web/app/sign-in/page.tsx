@@ -1,8 +1,7 @@
-import { Braces } from "lucide-react";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { SiteShell } from "@/components/site-shell";
 import { oauthErrorMessage } from "@/lib/oauth-error";
 import { PRIVATE_ALPHA_PATH } from "@/lib/alpha-admission";
 import { readServerSession } from "@/lib/server-session";
@@ -44,47 +43,31 @@ const SignInPage = async ({
   const signInError = oauthErrorMessage(error);
 
   return (
-    <main className="landing-grid grid min-h-screen place-items-center px-5 py-12">
-      <div className="flex w-full max-w-sm flex-col items-center text-center">
-        <div className="relative">
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 scale-150 rounded-full bg-primary/15 blur-2xl"
-          />
-          <Link
-            aria-label="DotRelay home"
-            className="relative grid size-14 place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary shadow-[0_0_40px_-12px_var(--primary)]"
-            href="/"
-          >
-            <Braces aria-hidden="true" className="size-7" />
-          </Link>
-        </div>
-        <p className="mt-4 font-heading text-base font-semibold tracking-tight">
-          DotRelay
-        </p>
-
-        <h1 className="mt-14 font-heading text-3xl font-semibold tracking-[-0.02em]">
-          Sign in
-        </h1>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Use your GitHub account to continue.
-        </p>
-
-        <div className="mt-9 w-full space-y-3">
-          {signInError ? (
-            <p className="text-sm text-destructive" role="alert">
-              {signInError}
-            </p>
-          ) : null}
-          <GitHubSignInButton
-            apiOrigin={apiOrigin}
-            callbackUrl={callbackUrl}
-            errorCallbackURL={callbackUrl}
-            className="h-11 shadow-[0_0_32px_-8px_var(--primary)]"
-          />
-        </div>
+    <SiteShell>
+      <h1 className="font-heading text-2xl font-semibold tracking-tight">
+        Sign in
+      </h1>
+      <p className="mt-2 text-muted-foreground">
+        Use your GitHub account to continue.
+      </p>
+      <div className="mt-8 space-y-3">
+        {signInError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {signInError}
+          </p>
+        ) : null}
+        <GitHubSignInButton
+          apiOrigin={apiOrigin}
+          callbackUrl={callbackUrl}
+          errorCallbackURL={callbackUrl}
+          className="h-11"
+        />
       </div>
-    </main>
+      <p className="mt-6 text-sm text-muted-foreground">
+        Signing in only tells DotRelay who you are. Your values stay encrypted
+        until you unlock them on one of your devices.
+      </p>
+    </SiteShell>
   );
 };
 

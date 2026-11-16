@@ -1,0 +1,3070 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DotRelay dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: oklch(0.105 0.008 165);
+        --sidebar: oklch(0.125 0.009 165);
+        --surface: oklch(0.145 0.011 165);
+        --surface-2: oklch(0.19 0.012 165);
+        --hover: oklch(0.21 0.018 160);
+        --text: oklch(0.94 0.008 160);
+        --muted: oklch(0.72 0.015 160);
+        --faint: oklch(0.58 0.015 160);
+        --border: oklch(0.92 0.01 160 / 12%);
+        --border-strong: oklch(0.92 0.01 160 / 20%);
+        --primary: oklch(0.82 0.17 150);
+        --primary-text: oklch(0.12 0.022 155);
+        --primary-soft: oklch(0.82 0.17 150 / 12%);
+        --warn: oklch(0.82 0.14 80);
+        --warn-soft: oklch(0.82 0.14 80 / 12%);
+        --danger: oklch(0.7 0.18 28);
+        --danger-soft: oklch(0.7 0.18 28 / 12%);
+        --personal: oklch(0.78 0.11 290);
+        --mono: "Geist Mono",ui-monospace,monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          400 14px/1.5 "Geist",
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+        color: inherit;
+      }
+      a {
+        color: var(--primary);
+      }
+      code,
+      .mono {
+        font-family: var(--mono);
+      }
+      :focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+        border-radius: 6px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      svg.i {
+        width: 16px;
+        height: 16px;
+        flex: none;
+      }
+      .sr {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+      }
+
+      /* ---------- shell ---------- */
+      .shell {
+        display: grid;
+        grid-template-columns: 248px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+      aside.side {
+        background: var(--sidebar);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+      .side-top {
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .team-btn {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px;
+        border-radius: 8px;
+        border: 0;
+        background: none;
+        cursor: pointer;
+        text-align: left;
+      }
+      .team-btn:hover {
+        background: var(--hover);
+      }
+      .team-btn .av {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        background: var(--primary-soft);
+        color: var(--primary);
+        display: grid;
+        place-items: center;
+        font-weight: 600;
+        border: 1px solid oklch(0.82 0.17 150 / 25%);
+      }
+      .team-btn b {
+        display: block;
+        font-weight: 600;
+      }
+      .team-btn small {
+        color: var(--faint);
+        font-size: 12px;
+      }
+      .team-btn svg {
+        margin-left: auto;
+        color: var(--faint);
+      }
+      .side-nav {
+        padding: 12px;
+        flex: 1;
+        overflow-y: auto;
+      }
+      .side-label {
+        font-size: 12px;
+        color: var(--faint);
+        padding: 8px 8px 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .side-label button {
+        border: 0;
+        background: none;
+        color: var(--faint);
+        cursor: pointer;
+        padding: 2px 4px;
+        border-radius: 4px;
+      }
+      .side-label button:hover {
+        color: var(--text);
+        background: var(--hover);
+      }
+      .nav-item {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 8px;
+        border-radius: 7px;
+        border: 0;
+        background: none;
+        cursor: pointer;
+        color: var(--muted);
+        text-align: left;
+      }
+      .nav-item:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .nav-item[aria-current="page"] {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .nav-item .count {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--warn);
+        background: var(--warn-soft);
+        border-radius: 999px;
+        padding: 0 7px;
+      }
+      .nav-sep {
+        height: 1px;
+        background: var(--border);
+        margin: 12px 8px;
+      }
+      .side-user {
+        padding: 12px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .side-user .av {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: oklch(0.35 0.06 250);
+        display: grid;
+        place-items: center;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .side-user > span:not(.av) {
+        flex: 1;
+        min-width: 0;
+      }
+      .side-user .av {
+        flex: none;
+      }
+      .side-user b {
+        display: block;
+        font-weight: 500;
+      }
+      .side-user small {
+        color: var(--faint);
+        font-size: 12px;
+      }
+
+      .topbar-m {
+        display: none;
+      }
+      .content {
+        min-width: 0;
+      }
+      .page {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 28px 32px 120px;
+      }
+
+      /* ---------- common ---------- */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        height: 34px;
+        padding: 0 13px;
+        border-radius: 8px;
+        border: 1px solid var(--border-strong);
+        background: transparent;
+        font-weight: 500;
+        cursor: pointer;
+        white-space: nowrap;
+        color: var(--text);
+      }
+      .btn:hover {
+        background: var(--hover);
+      }
+      .btn.primary {
+        background: var(--primary);
+        color: var(--primary-text);
+        border-color: transparent;
+      }
+      .btn.primary:hover {
+        filter: brightness(1.07);
+      }
+      .btn.ghost {
+        border-color: transparent;
+        color: var(--muted);
+      }
+      .btn.ghost:hover {
+        color: var(--text);
+      }
+      .btn.danger {
+        color: var(--danger);
+        border-color: oklch(0.7 0.18 28 / 35%);
+      }
+      .btn.danger:hover {
+        background: var(--danger-soft);
+      }
+      .btn.danger-solid {
+        background: var(--danger);
+        color: #1a0703;
+        border-color: transparent;
+      }
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .btn.sm {
+        height: 28px;
+        padding: 0 10px;
+        font-size: 13px;
+      }
+      .icon-btn {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        border: 0;
+        background: none;
+        border-radius: 7px;
+        color: var(--faint);
+        cursor: pointer;
+      }
+      .icon-btn:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .input {
+        height: 34px;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: var(--bg);
+        padding: 0 11px;
+        width: 100%;
+      }
+      .input:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px oklch(0.82 0.17 150 / 18%);
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 500;
+        border-radius: 999px;
+        padding: 1px 8px;
+        border: 1px solid var(--border-strong);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .badge.green {
+        color: var(--primary);
+        border-color: oklch(0.82 0.17 150 / 30%);
+        background: var(--primary-soft);
+      }
+      .badge.warn {
+        color: var(--warn);
+        border-color: oklch(0.82 0.14 80 / 30%);
+        background: var(--warn-soft);
+      }
+      .badge.purple {
+        color: var(--personal);
+        border-color: oklch(0.78 0.11 290 / 30%);
+        background: oklch(0.78 0.11 290 / 10%);
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+      .cmd {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 7px 7px 7px 12px;
+        font: 13px var(--mono);
+      }
+      .cmd code {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .cmd code::before {
+        content: "$ ";
+        color: var(--faint);
+      }
+      .cmd .btn {
+        height: 26px;
+        font-family: "Geist", sans-serif;
+        font-size: 12px;
+        padding: 0 9px;
+      }
+
+      /* page header */
+      .ph {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+      }
+      .ph h1 {
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0;
+      }
+      .ph p {
+        margin: 4px 0 0;
+        color: var(--muted);
+      }
+      .ph p a {
+        color: var(--muted);
+      }
+
+      /* environment tabs */
+      .env-tabs {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 16px;
+        overflow-x: auto;
+      }
+      .env-tab {
+        border: 0;
+        background: none;
+        padding: 9px 12px;
+        color: var(--muted);
+        font-weight: 500;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        white-space: nowrap;
+      }
+      .env-tab:hover {
+        color: var(--text);
+      }
+      .env-tab[aria-selected="true"] {
+        color: var(--text);
+        border-bottom-color: var(--primary);
+      }
+      .env-tab .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--warn);
+      }
+      .env-tabs .add {
+        margin-left: 4px;
+        color: var(--faint);
+      }
+
+      .subtabs {
+        display: inline-flex;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        padding: 3px;
+        gap: 2px;
+      }
+      .subtabs button {
+        border: 0;
+        background: none;
+        padding: 5px 12px;
+        border-radius: 6px;
+        color: var(--muted);
+        cursor: pointer;
+        font-weight: 500;
+      }
+      .subtabs button[aria-selected="true"] {
+        background: var(--hover);
+        color: var(--text);
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .toolbar .search {
+        position: relative;
+        flex: 1;
+        max-width: 300px;
+        min-width: 160px;
+      }
+      .toolbar .search svg {
+        position: absolute;
+        left: 10px;
+        top: 9px;
+        color: var(--faint);
+      }
+      .toolbar .search .input {
+        padding-left: 32px;
+      }
+      .spacer {
+        flex: 1;
+      }
+
+      /* variables table */
+      .vt {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+      .vt th {
+        text-align: left;
+        font-weight: 500;
+        font-size: 12.5px;
+        color: var(--faint);
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--sidebar);
+      }
+      .vt td {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+      }
+      .vt tr:last-child td {
+        border-bottom: 0;
+      }
+      .vt tbody tr:hover td {
+        background: oklch(0.17 0.012 165);
+      }
+      .vt tr.changed td {
+        background: oklch(0.82 0.14 80 / 6%);
+      }
+      .vt tr.changed td:first-child {
+        box-shadow: inset 3px 0 0 var(--warn);
+      }
+      .vt tr.removed td {
+        opacity: 0.55;
+      }
+      .vt tr.removed .vname {
+        text-decoration: line-through;
+      }
+      .vname {
+        font: 13.5px var(--mono);
+        font-weight: 500;
+      }
+      .vdesc {
+        display: block;
+        color: var(--faint);
+        font-size: 12.5px;
+        margin-top: 1px;
+      }
+      .vval {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        min-width: 0;
+      }
+      .vval .input {
+        font: 13px var(--mono);
+        height: 32px;
+        background: transparent;
+        border-color: transparent;
+      }
+      .vval .input:hover {
+        border-color: var(--border-strong);
+        background: var(--bg);
+      }
+      .vval .input:focus {
+        background: var(--bg);
+      }
+      .vval .input.masked {
+        color: var(--faint);
+        letter-spacing: 0.12em;
+      }
+      .vval .input[placeholder]::placeholder {
+        color: var(--faint);
+        font-style: italic;
+        letter-spacing: 0;
+      }
+      .vmeta {
+        color: var(--faint);
+        font-size: 12.5px;
+        white-space: nowrap;
+      }
+      .vmeta.pending {
+        color: var(--warn);
+      }
+      .col-name {
+        width: 30%;
+      }
+      .col-vis {
+        width: 110px;
+      }
+      .col-meta {
+        width: 150px;
+      }
+      .col-act {
+        width: 40px;
+      }
+
+      /* history */
+      .hist {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+      .rev {
+        border-bottom: 1px solid var(--border);
+      }
+      .rev:last-child {
+        border-bottom: 0;
+      }
+      .rev-head {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 14px;
+        width: 100%;
+        border: 0;
+        background: none;
+        text-align: left;
+        cursor: pointer;
+      }
+      .rev-head:hover {
+        background: oklch(0.17 0.012 165);
+      }
+      .rev-num {
+        font: 500 13px var(--mono);
+        color: var(--muted);
+        min-width: 42px;
+      }
+      .rev-head b {
+        font-weight: 500;
+      }
+      .rev-head small {
+        display: block;
+        color: var(--faint);
+        font-size: 12.5px;
+      }
+      .rev-body {
+        padding: 0 14px 14px 70px;
+      }
+      .rev-body ul {
+        list-style: none;
+        margin: 0 0 12px;
+        padding: 0;
+        font: 13px var(--mono);
+      }
+      .rev-body li {
+        padding: 2px 0;
+        color: var(--muted);
+      }
+      .rev-body li .k {
+        display: inline-block;
+        width: 72px;
+        font-family: "Geist", sans-serif;
+        font-size: 12.5px;
+        color: var(--faint);
+      }
+
+      /* draft bar */
+      .draft {
+        position: fixed;
+        bottom: 20px;
+        left: calc(248px + (100vw - 248px) / 2);
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: var(--surface-2);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        padding: 8px 8px 8px 16px;
+        box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.8);
+        z-index: 20;
+        max-width: calc(100vw - 280px);
+      }
+      .draft .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--warn);
+      }
+      .draft span {
+        white-space: nowrap;
+      }
+
+      /* dialogs */
+      dialog {
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border-strong);
+        border-radius: 14px;
+        padding: 0;
+        width: min(520px, calc(100vw - 32px));
+        box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.9);
+      }
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .dlg {
+        padding: 22px;
+      }
+      .dlg h2 {
+        margin: 0 0 6px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .dlg > p {
+        margin: 0 0 16px;
+        color: var(--muted);
+      }
+      .dlg .foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 20px;
+      }
+      .field {
+        display: block;
+        margin-top: 14px;
+      }
+      .field > span {
+        display: block;
+        font-weight: 500;
+        margin-bottom: 6px;
+      }
+      .field small {
+        display: block;
+        color: var(--faint);
+        margin-top: 6px;
+        font-size: 12.5px;
+      }
+      .radio-cards {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .radio-cards label {
+        border: 1px solid var(--border-strong);
+        border-radius: 9px;
+        padding: 10px 12px;
+        cursor: pointer;
+      }
+      .radio-cards label:has(input:checked) {
+        border-color: var(--primary);
+        background: var(--primary-soft);
+      }
+      .radio-cards label:has(input:focus-visible) {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+      }
+      .radio-cards input {
+        position: absolute;
+        opacity: 0;
+      }
+      .radio-cards b {
+        display: block;
+        font-weight: 500;
+      }
+      .radio-cards small {
+        color: var(--faint);
+        font-size: 12.5px;
+      }
+      .changes {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+      .changes div {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 4px 10px;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--border);
+        font-size: 13px;
+      }
+      .changes div:last-child {
+        border-bottom: 0;
+      }
+      .changes .k {
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .changes .k.added {
+        color: var(--primary);
+      }
+      .changes .k.changed {
+        color: var(--warn);
+      }
+      .changes .k.removed {
+        color: var(--danger);
+      }
+      .changes .n {
+        font-family: var(--mono);
+      }
+      .changes .v {
+        grid-column: 2;
+        font: 12.5px var(--mono);
+        color: var(--faint);
+        overflow-wrap: anywhere;
+      }
+      .changes .v del {
+        color: var(--danger);
+        opacity: 0.8;
+      }
+      .changes .v ins {
+        text-decoration: none;
+        color: var(--text);
+      }
+      .check {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 12px;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .check input {
+        accent-color: var(--primary);
+      }
+
+      /* menus */
+      .menu-wrap {
+        position: relative;
+      }
+      .menu {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        min-width: 200px;
+        background: var(--surface-2);
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        padding: 5px;
+        z-index: 30;
+        box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.8);
+      }
+      .menu button {
+        width: 100%;
+        display: flex;
+        gap: 9px;
+        align-items: center;
+        border: 0;
+        background: none;
+        padding: 7px 9px;
+        border-radius: 6px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .menu button:hover {
+        background: var(--hover);
+      }
+      .menu hr {
+        border: 0;
+        border-top: 1px solid var(--border);
+        margin: 5px 0;
+      }
+      .menu .danger {
+        color: var(--danger);
+      }
+
+      /* toast */
+      .toast {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--surface-2);
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        padding: 11px 14px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        z-index: 50;
+        box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.8);
+      }
+      .toast svg {
+        color: var(--primary);
+      }
+
+      /* states */
+      .center-card {
+        max-width: 620px;
+        margin: 32px auto 0;
+      }
+      .center-card h2 {
+        font-size: 20px;
+        margin: 0 0 6px;
+        font-weight: 600;
+      }
+      .center-card > p {
+        color: var(--muted);
+        margin: 0 0 20px;
+      }
+      .option {
+        padding: 18px;
+        border-bottom: 1px solid var(--border);
+      }
+      .option:last-child {
+        border-bottom: 0;
+      }
+      .option h3 {
+        margin: 0 0 4px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .option p {
+        margin: 0 0 12px;
+        color: var(--muted);
+      }
+      .waiting {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+        color: var(--faint);
+        font-size: 13px;
+      }
+      .waiting i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--primary);
+        animation: p 1.4s infinite;
+      }
+      @keyframes p {
+        50% {
+          opacity: 0.25;
+        }
+      }
+      .inline-form {
+        display: flex;
+        gap: 8px;
+      }
+      .inline-form .input {
+        font-family: var(--mono);
+      }
+      .err {
+        color: var(--danger);
+        font-size: 13px;
+        margin-top: 8px;
+      }
+      .empty {
+        border: 1px dashed var(--border-strong);
+        border-radius: 12px;
+        padding: 40px 24px;
+        text-align: center;
+      }
+      .empty h3 {
+        margin: 0 0 6px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .empty p {
+        margin: 0 auto 16px;
+        color: var(--muted);
+        max-width: 44ch;
+      }
+      .empty .cmd {
+        max-width: 360px;
+        margin: 0 auto 8px;
+        text-align: left;
+      }
+
+      .banner {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px 10px 14px;
+        border: 1px solid oklch(0.82 0.14 80 / 30%);
+        background: var(--warn-soft);
+        border-radius: 10px;
+        margin-bottom: 16px;
+      }
+      .banner svg {
+        color: var(--warn);
+      }
+      .banner p {
+        margin: 0;
+        flex: 1;
+      }
+
+      /* settings pages */
+      .section {
+        margin-top: 28px;
+      }
+      .section h2 {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .section > p {
+        color: var(--muted);
+        margin: 0 0 12px;
+      }
+      .list {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .li {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      .li:last-child {
+        border-bottom: 0;
+      }
+      .li .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      .li b {
+        font-weight: 500;
+      }
+      .li small {
+        display: block;
+        color: var(--faint);
+        font-size: 12.5px;
+      }
+      .li .av {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-weight: 600;
+        font-size: 13px;
+        flex: none;
+      }
+      .select {
+        height: 30px;
+        border: 1px solid var(--border-strong);
+        border-radius: 7px;
+        background: var(--bg);
+        padding: 0 8px;
+      }
+      .roles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+      .roles div {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+        background: var(--surface);
+      }
+      .roles b {
+        display: block;
+        margin-bottom: 2px;
+        font-weight: 600;
+      }
+      .roles span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .danger-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        padding: 14px;
+        border: 1px solid oklch(0.7 0.18 28 / 30%);
+        border-radius: 12px;
+        flex-wrap: wrap;
+      }
+      .danger-row p {
+        margin: 0;
+        color: var(--muted);
+        max-width: 56ch;
+      }
+      .danger-row b {
+        display: block;
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      /* prototype switcher */
+      .proto {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        z-index: 60;
+        background: #fff;
+        color: #111;
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-size: 12px;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        color-scheme: light;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      }
+      .proto select {
+        font-size: 12px;
+        color: #111;
+        background: #fff;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 2px 4px;
+      }
+
+      /* ---------- responsive ---------- */
+      @media (max-width: 860px) {
+        .shell {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        aside.side {
+          position: fixed;
+          inset: 0 auto 0 0;
+          width: 272px;
+          z-index: 40;
+          transform: translateX(-100%);
+          transition: transform 0.2s;
+        }
+        aside.side.open {
+          transform: none;
+          box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.6);
+        }
+        .topbar-m {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          height: 52px;
+          padding: 0 12px;
+          border-bottom: 1px solid var(--border);
+          position: sticky;
+          top: 0;
+          background: var(--bg);
+          z-index: 10;
+        }
+        .topbar-m b {
+          font-weight: 600;
+        }
+        .topbar-m small {
+          color: var(--faint);
+        }
+        .page {
+          padding: 20px 16px 140px;
+        }
+        .draft {
+          left: 50%;
+          max-width: calc(100vw - 24px);
+          bottom: 12px;
+        }
+        .roles {
+          grid-template-columns: 1fr;
+        }
+        .proto {
+          position: static;
+          margin: 0 16px 120px;
+          flex-wrap: wrap;
+        }
+        .toast {
+          top: 60px;
+          max-width: calc(100vw - 24px);
+        }
+      }
+      @media (max-width: 640px) {
+        .vt thead {
+          display: none;
+        }
+        .vt,
+        .vt tbody {
+          display: block;
+        }
+        .vt tr {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          padding: 10px 12px;
+          border-bottom: 1px solid var(--border);
+        }
+        .vt tr:last-child {
+          border-bottom: 0;
+        }
+        .vt td {
+          display: block;
+          padding: 0;
+          border: 0;
+        }
+        .vt td.c-val {
+          grid-column: 1/-1;
+          grid-row: 2;
+          margin-top: 6px;
+        }
+        .vt td.c-vis {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .vt td.c-meta {
+          grid-column: 1/-1;
+          grid-row: 3;
+          margin-top: 4px;
+        }
+        .vt td.c-act {
+          grid-column: 2;
+          grid-row: 3;
+          justify-self: end;
+        }
+        .vval .input {
+          border-color: var(--border-strong);
+          background: var(--bg);
+        }
+        .draft span.long {
+          display: none;
+        }
+        .draft {
+          left: 12px;
+          right: 12px;
+          transform: none;
+          max-width: none;
+          gap: 8px;
+          padding-left: 12px;
+        }
+        .draft > span:nth-child(2) {
+          flex: 1;
+          min-width: 0;
+        }
+        .rev-body {
+          padding-left: 14px;
+        }
+        .radio-cards {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol
+        id="i-chev"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M5 6l3 3 3-3" />
+      </symbol>
+      <symbol
+        id="i-folder"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+        stroke-linejoin="round"
+      >
+        <path
+          d="M2 4.5a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1z"
+        />
+      </symbol>
+      <symbol
+        id="i-users"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+        stroke-linecap="round"
+      >
+        <circle cx="6" cy="5.5" r="2.5" />
+        <path
+          d="M1.5 13.5a4.5 4.5 0 019 0M11 3.2a2.5 2.5 0 010 4.6M12.5 13.5a4.5 4.5 0 00-1.5-3.3"
+        />
+      </symbol>
+      <symbol
+        id="i-laptop"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+        stroke-linejoin="round"
+      >
+        <rect x="2.5" y="3" width="11" height="7.5" rx="1" />
+        <path d="M1 13h14" />
+      </symbol>
+      <symbol
+        id="i-search"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+      >
+        <circle cx="7" cy="7" r="4.5" />
+        <path d="M10.5 10.5L14 14" />
+      </symbol>
+      <symbol
+        id="i-plus"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+      >
+        <path d="M8 3v10M3 8h10" />
+      </symbol>
+      <symbol
+        id="i-eye"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+      >
+        <path
+          d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"
+        />
+        <circle cx="8" cy="8" r="2" />
+      </symbol>
+      <symbol
+        id="i-eyeoff"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+        stroke-linecap="round"
+      >
+        <path
+          d="M2 2l12 12M6.6 3.7A6.6 6.6 0 018 3.5c4 0 6.5 4.5 6.5 4.5a11 11 0 01-1.8 2.3M4.2 5.1A11 11 0 001.5 8S4 12.5 8 12.5a6 6 0 002.7-.6"
+        />
+      </symbol>
+      <symbol
+        id="i-copy"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+      >
+        <rect x="5" y="5" width="8.5" height="8.5" rx="1.5" />
+        <path d="M3 10.5V3.5a1 1 0 011-1h7" />
+      </symbol>
+      <symbol id="i-more" viewBox="0 0 16 16" fill="currentColor">
+        <circle cx="3.5" cy="8" r="1.3" />
+        <circle cx="8" cy="8" r="1.3" />
+        <circle cx="12.5" cy="8" r="1.3" />
+      </symbol>
+      <symbol
+        id="i-check"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M3 8.5l3 3 7-7" />
+      </symbol>
+      <symbol
+        id="i-alert"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+      >
+        <path d="M8 2l6.5 11.5h-13z" />
+        <path d="M8 6.5v3M8 11.5v.01" />
+      </symbol>
+      <symbol
+        id="i-menu"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+      >
+        <path d="M2 4h12M2 8h12M2 12h12" />
+      </symbol>
+      <symbol
+        id="i-lock"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.4"
+      >
+        <rect x="3" y="7" width="10" height="7" rx="1.5" />
+        <path d="M5.5 7V5a2.5 2.5 0 015 0v2" />
+      </symbol>
+      <symbol id="i-gh" viewBox="0 0 16 16" fill="currentColor">
+        <path
+          d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+        />
+      </symbol>
+    </svg>
+
+    <div class="shell">
+      <aside class="side" id="side" aria-label="Sidebar">
+        <div class="side-top">
+          <button
+            class="team-btn"
+            type="button"
+            aria-label="Switch team. Current team: acme"
+          >
+            <span class="av" aria-hidden="true">a</span>
+            <span><b>acme</b><small>3 members</small></span>
+            <svg class="i"><use href="#i-chev" /></svg>
+          </button>
+        </div>
+        <nav class="side-nav" aria-label="Main">
+          <div class="side-label">
+            Projects
+            <button type="button" id="new-project" aria-label="Add a project">
+              <svg class="i"><use href="#i-plus" /></svg>
+            </button>
+          </div>
+          <div id="project-list"></div>
+          <div class="nav-sep"></div>
+          <button class="nav-item" type="button" data-page="members">
+            <svg class="i"><use href="#i-users" /></svg>Members<span
+              class="count"
+              id="members-count"
+              >1</span
+            >
+          </button>
+          <button class="nav-item" type="button" data-page="devices">
+            <svg class="i"><use href="#i-laptop" /></svg>Devices and recovery
+          </button>
+        </nav>
+        <div class="side-user">
+          <span class="av" aria-hidden="true">S</span>
+          <span><b>samk</b><small>GitHub account</small></span>
+          <div class="menu-wrap">
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="Account menu"
+              aria-haspopup="menu"
+              data-menu="user-menu"
+            >
+              <svg class="i"><use href="#i-more" /></svg>
+            </button>
+            <div
+              class="menu"
+              id="user-menu"
+              role="menu"
+              hidden
+              style="bottom: calc(100% + 6px); top: auto"
+            >
+              <button role="menuitem" type="button" data-page="devices">
+                Devices and recovery
+              </button>
+              <button role="menuitem" type="button">Download my data</button>
+              <hr />
+              <button role="menuitem" type="button">Sign out</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="content">
+        <div class="topbar-m">
+          <button
+            class="icon-btn"
+            type="button"
+            id="open-side"
+            aria-label="Open menu"
+            aria-controls="side"
+          >
+            <svg class="i"><use href="#i-menu" /></svg>
+          </button>
+          <b id="m-title">acme-api</b><small>acme</small>
+        </div>
+
+        <!-- ================= PROJECT ================= -->
+        <main class="page" id="p-project">
+          <div class="ph">
+            <div>
+              <h1 id="proj-name">acme-api</h1>
+              <p>
+                <svg
+                  class="i"
+                  style="vertical-align: -3px; color: var(--faint)"
+                >
+                  <use href="#i-gh" />
+                </svg>
+                <a href="#" id="proj-repo">acme/acme-api</a>
+              </p>
+            </div>
+          </div>
+
+          <div id="locked" hidden>
+            <div class="center-card">
+              <h2>
+                <svg
+                  class="i"
+                  style="
+                    vertical-align: -2px;
+                    color: var(--primary);
+                    width: 18px;
+                    height: 18px;
+                  "
+                >
+                  <use href="#i-lock" />
+                </svg>
+                Unlock this browser to see values
+              </h2>
+              <p>
+                You're signed in, but this browser hasn't been set up to decrypt
+                your values yet. Choose one of these.
+              </p>
+              <div class="card">
+                <div class="option">
+                  <h3>Approve from your terminal</h3>
+                  <p>
+                    On a computer where the CLI is already set up, run this
+                    command.
+                  </p>
+                  <div class="cmd">
+                    <code>dotrelay device approve KJ4-9QX</code
+                    ><button
+                      class="btn"
+                      type="button"
+                      data-copy="dotrelay device approve KJ4-9QX"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <div class="waiting">
+                    <i aria-hidden="true"></i>Waiting for approval. This page
+                    will update on its own.
+                  </div>
+                </div>
+                <div class="option">
+                  <h3>Use your recovery code</h3>
+                  <p>The code you saved when you first set up DotRelay.</p>
+                  <form class="inline-form" id="recover">
+                    <label class="sr" for="rc">Recovery code</label>
+                    <input
+                      class="input"
+                      id="rc"
+                      placeholder="XXXX-XXXX-XXXX-…"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                    <button class="btn primary" type="submit">Unlock</button>
+                  </form>
+                  <div class="err" id="rc-err" role="alert" hidden></div>
+                </div>
+                <div class="option">
+                  <h3>Other options</h3>
+                  <p style="margin: 0">
+                    If you set up an encryption password or a passkey, you can
+                    <a href="#">use that instead</a>.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="no-projects" hidden>
+            <div class="empty">
+              <h3>Add your first project</h3>
+              <p>
+                Projects are created from the terminal. Run these in the folder
+                of a GitHub repository.
+              </p>
+              <div class="cmd">
+                <code>npm install -g @dotrelay/cli</code
+                ><button
+                  class="btn"
+                  type="button"
+                  data-copy="npm install -g @dotrelay/cli"
+                >
+                  Copy
+                </button>
+              </div>
+              <div class="cmd">
+                <code>dotrelay init</code
+                ><button class="btn" type="button" data-copy="dotrelay init">
+                  Copy
+                </button>
+              </div>
+              <p style="margin-top: 14px; font-size: 13px">
+                The project shows up here once it's created.
+              </p>
+            </div>
+          </div>
+
+          <div id="unlocked">
+            <div class="banner" id="rc-banner">
+              <svg class="i"><use href="#i-alert" /></svg>
+              <p>
+                You haven't saved a recovery code. Without one, losing all your
+                devices means losing access to your values.
+              </p>
+              <button class="btn sm" type="button" data-page="devices">
+                Save a recovery code
+              </button>
+            </div>
+
+            <div
+              class="env-tabs"
+              role="tablist"
+              aria-label="Environments"
+              id="env-tabs"
+            ></div>
+
+            <div class="toolbar">
+              <div class="subtabs" role="tablist" aria-label="View">
+                <button
+                  role="tab"
+                  type="button"
+                  aria-selected="true"
+                  data-view="vars"
+                >
+                  Variables
+                </button>
+                <button
+                  role="tab"
+                  type="button"
+                  aria-selected="false"
+                  data-view="history"
+                >
+                  History
+                </button>
+              </div>
+              <div class="search" id="search-wrap">
+                <svg class="i"><use href="#i-search" /></svg>
+                <input
+                  class="input"
+                  type="search"
+                  placeholder="Search variables"
+                  aria-label="Search variables"
+                  id="search"
+                />
+              </div>
+              <span class="spacer"></span>
+              <button class="btn ghost" type="button" id="toggle-values">
+                <svg class="i"><use href="#i-eye" /></svg
+                ><span>Show values</span>
+              </button>
+              <button class="btn primary" type="button" id="add-var">
+                <svg class="i"><use href="#i-plus" /></svg>Add variable
+              </button>
+              <div class="menu-wrap">
+                <button
+                  class="btn"
+                  type="button"
+                  aria-label="More actions"
+                  aria-haspopup="menu"
+                  data-menu="env-menu"
+                  style="padding: 0 8px"
+                >
+                  <svg class="i"><use href="#i-more" /></svg>
+                </button>
+                <div class="menu" id="env-menu" role="menu" hidden>
+                  <button role="menuitem" type="button">
+                    Import from a .env file
+                  </button>
+                  <button role="menuitem" type="button">
+                    Download as a .env file
+                  </button>
+                  <button role="menuitem" type="button">
+                    Rename environment
+                  </button>
+                  <hr />
+                  <button
+                    role="menuitem"
+                    type="button"
+                    class="danger"
+                    id="archive-env"
+                  >
+                    Archive environment
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div id="view-vars">
+              <table class="vt" id="vt">
+                <thead>
+                  <tr>
+                    <th class="col-name" scope="col">Name</th>
+                    <th scope="col">Value</th>
+                    <th class="col-vis" scope="col">Visible to</th>
+                    <th class="col-meta" scope="col">Last changed</th>
+                    <th class="col-act" scope="col">
+                      <span class="sr">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="rows"></tbody>
+              </table>
+              <div class="empty" id="env-empty" hidden>
+                <h3>No variables in <span id="env-empty-name"></span> yet</h3>
+                <p>
+                  Add them here, import a .env file, or push from the terminal.
+                </p>
+                <div
+                  style="
+                    display: flex;
+                    gap: 8px;
+                    justify-content: center;
+                    flex-wrap: wrap;
+                  "
+                >
+                  <button class="btn primary" type="button" data-add>
+                    Add variable
+                  </button>
+                  <button class="btn" type="button">Import a .env file</button>
+                </div>
+                <div class="cmd" style="margin-top: 16px">
+                  <code>dotrelay push --env development</code
+                  ><button
+                    class="btn"
+                    type="button"
+                    data-copy="dotrelay push --env development"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <p class="vmeta" id="no-results" hidden style="padding: 16px 4px">
+                No variables match "<span id="q"></span>".
+              </p>
+            </div>
+
+            <div id="view-history" hidden>
+              <div class="hist" id="hist"></div>
+            </div>
+          </div>
+        </main>
+
+        <!-- ================= MEMBERS ================= -->
+        <main class="page" id="p-members" hidden>
+          <div class="ph">
+            <div>
+              <h1>Members</h1>
+              <p>
+                Everyone in acme can see the shared values in all of acme's
+                projects.
+              </p>
+            </div>
+            <button class="btn primary" type="button" id="invite-btn">
+              <svg class="i"><use href="#i-plus" /></svg>Invite member
+            </button>
+          </div>
+
+          <div class="banner" id="confirm-banner">
+            <svg class="i"><use href="#i-alert" /></svg>
+            <p>
+              <b>jo-dev</b> joined but can't see any values until someone
+              confirms their identity.
+            </p>
+            <button class="btn sm" type="button" id="confirm-jo">
+              Confirm jo-dev
+            </button>
+          </div>
+
+          <div class="list" id="member-list">
+            <div class="li">
+              <span class="av" style="background: oklch(0.35 0.06 250)">S</span>
+              <div class="grow">
+                <b>samk</b> <span class="badge">You</span
+                ><small>Joined March 2026</small>
+              </div>
+              <span class="badge green">Owner</span>
+            </div>
+            <div class="li">
+              <span class="av" style="background: oklch(0.38 0.07 40)">P</span>
+              <div class="grow">
+                <b>priya-n</b><small>Joined April 2026</small>
+              </div>
+              <label class="sr" for="role-p">Role for priya-n</label
+              ><select class="select" id="role-p">
+                <option>Member</option>
+                <option selected>Admin</option>
+                <option>Owner</option>
+              </select>
+              <div class="menu-wrap">
+                <button
+                  class="icon-btn"
+                  type="button"
+                  aria-label="More for priya-n"
+                  data-menu="m-p"
+                >
+                  <svg class="i"><use href="#i-more" /></svg>
+                </button>
+                <div class="menu" id="m-p" role="menu" hidden>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    class="danger"
+                    data-remove="priya-n"
+                  >
+                    Remove from team
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="li" id="row-jo">
+              <span class="av" style="background: oklch(0.38 0.07 150)">J</span>
+              <div class="grow">
+                <b>jo-dev</b>
+                <span class="badge warn" id="jo-badge">Needs confirming</span
+                ><small>Joined yesterday</small>
+              </div>
+              <label class="sr" for="role-j">Role for jo-dev</label
+              ><select class="select" id="role-j">
+                <option selected>Member</option>
+                <option>Admin</option>
+                <option>Owner</option>
+              </select>
+              <div class="menu-wrap">
+                <button
+                  class="icon-btn"
+                  type="button"
+                  aria-label="More for jo-dev"
+                  data-menu="m-j"
+                >
+                  <svg class="i"><use href="#i-more" /></svg>
+                </button>
+                <div class="menu" id="m-j" role="menu" hidden>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    class="danger"
+                    data-remove="jo-dev"
+                  >
+                    Remove from team
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Pending invites</h2>
+            <div class="list" id="invites">
+              <div class="li">
+                <span
+                  class="av"
+                  style="background: var(--surface-2); color: var(--faint)"
+                  >?</span
+                >
+                <div class="grow">
+                  <b>marta-r</b
+                  ><small>Invited 2 days ago. Expires in 5 days.</small>
+                </div>
+                <button class="btn sm ghost" type="button" data-cancel-invite>
+                  Cancel invite
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Roles</h2>
+            <div class="roles">
+              <div><b>Member</b><span>Can view and edit variables.</span></div>
+              <div>
+                <b>Admin</b
+                ><span
+                  >Can also invite and remove members, and archive
+                  projects.</span
+                >
+              </div>
+              <div>
+                <b>Owner</b
+                ><span>Can also change anyone's role and delete the team.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Leave or delete</h2>
+            <div class="danger-row" style="margin-bottom: 10px">
+              <p>
+                <b>Leave acme</b>You'll lose access to all of acme's projects.
+              </p>
+              <button class="btn" type="button">Leave team</button>
+            </div>
+            <div class="danger-row">
+              <p>
+                <b>Delete acme</b>Deletes the team and every project in it, for
+                everyone. This can't be undone.
+              </p>
+              <button class="btn danger" type="button">Delete team</button>
+            </div>
+          </div>
+        </main>
+
+        <!-- ================= DEVICES ================= -->
+        <main class="page" id="p-devices" hidden>
+          <div class="ph">
+            <div>
+              <h1>Devices and recovery</h1>
+              <p>
+                A device is a browser or a computer with the CLI. Each one can
+                decrypt your values.
+              </p>
+            </div>
+          </div>
+
+          <div class="section" style="margin-top: 0">
+            <h2>Your devices</h2>
+            <p>
+              To add a computer, install the CLI and run
+              <code>dotrelay login</code> on it.
+            </p>
+            <div class="list" id="device-list">
+              <div class="li">
+                <svg class="i" style="color: var(--faint)">
+                  <use href="#i-laptop" />
+                </svg>
+                <div class="grow">
+                  <b>Chrome on Linux</b>
+                  <span class="badge green">This browser</span
+                  ><small>Added today</small>
+                </div>
+                <button class="btn sm ghost" type="button">Rename</button>
+              </div>
+              <div class="li">
+                <svg class="i" style="color: var(--faint)">
+                  <use href="#i-laptop" />
+                </svg>
+                <div class="grow">
+                  <b>work-laptop</b
+                  ><small>CLI on macOS. Last used 2 hours ago.</small>
+                </div>
+                <button class="btn sm ghost" type="button">Rename</button
+                ><button
+                  class="btn sm danger"
+                  type="button"
+                  data-revoke="work-laptop"
+                >
+                  Revoke
+                </button>
+              </div>
+              <div class="li">
+                <svg class="i" style="color: var(--faint)">
+                  <use href="#i-laptop" />
+                </svg>
+                <div class="grow">
+                  <b>old-thinkpad</b>
+                  <span class="badge warn">Not used for 61 days</span
+                  ><small>CLI on Linux. Last used 15 September.</small>
+                </div>
+                <button class="btn sm ghost" type="button">Rename</button
+                ><button
+                  class="btn sm danger"
+                  type="button"
+                  data-revoke="old-thinkpad"
+                >
+                  Revoke
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Recovery</h2>
+            <p>
+              If you lose every device, you'll need one of these to get your
+              values back. Nobody else can recover them for you.
+            </p>
+            <div class="list">
+              <div class="li">
+                <div class="grow">
+                  <b>Recovery code</b
+                  ><small id="rc-status">Not saved yet</small>
+                </div>
+                <span class="badge warn" id="rc-badge">Recommended</span
+                ><button class="btn sm primary" type="button" id="make-code">
+                  Create recovery code
+                </button>
+              </div>
+              <div class="li">
+                <div class="grow">
+                  <b>Encryption password</b
+                  ><small
+                    >A separate password just for unlocking your values. Not
+                    your GitHub password.</small
+                  >
+                </div>
+                <button class="btn sm" type="button">Set password</button>
+              </div>
+              <div class="li">
+                <div class="grow">
+                  <b>Passkey</b
+                  ><small
+                    >Unlock with your fingerprint, face or security key, in
+                    browsers that support it.</small
+                  >
+                </div>
+                <button class="btn sm" type="button">Add passkey</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h2>Your account</h2>
+            <div class="list">
+              <div class="li">
+                <div class="grow">
+                  <b>Download my data</b
+                  ><small
+                    >Everything the server stores about your account, as JSON.
+                    Contains no values.</small
+                  >
+                </div>
+                <button class="btn sm" type="button">Download</button>
+              </div>
+            </div>
+            <div class="danger-row" style="margin-top: 10px">
+              <p>
+                <b>Delete account</b>Removes you from every team. Teams where
+                you're the only member are deleted too.
+              </p>
+              <button class="btn danger" type="button">Delete account</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <div
+      class="draft"
+      id="draft"
+      role="region"
+      aria-label="Unpublished changes"
+      hidden
+    >
+      <span class="dot" aria-hidden="true"></span>
+      <span
+        ><b id="draft-count"></b><span class="long" id="draft-env"></span
+      ></span>
+      <button class="btn ghost sm" type="button" id="discard">Discard</button>
+      <button class="btn primary sm" type="button" id="review">
+        Review and publish
+      </button>
+    </div>
+
+    <!-- dialogs -->
+    <dialog id="d-add">
+      <form method="dialog" class="dlg" id="add-form" novalidate>
+        <h2>Add variable to <span class="env-name"></span></h2>
+        <label class="field"
+          ><span>Name</span
+          ><input
+            class="input mono"
+            id="f-name"
+            placeholder="STRIPE_WEBHOOK_SECRET"
+            autocomplete="off"
+            spellcheck="false" /><small id="name-err" class="err" hidden></small
+        ></label>
+        <label class="field"
+          ><span>Value</span
+          ><input
+            class="input mono"
+            id="f-val"
+            autocomplete="off"
+            spellcheck="false"
+        /></label>
+        <div class="field">
+          <span>Visible to</span>
+          <div class="radio-cards">
+            <label
+              ><input type="radio" name="vis" value="shared" checked /><b
+                >The team</b
+              ><small>Everyone sees the same value.</small></label
+            >
+            <label
+              ><input type="radio" name="vis" value="me" /><b>Only me</b
+              ><small>Each person sets their own value.</small></label
+            >
+          </div>
+        </div>
+        <label class="field"
+          ><span
+            >Description
+            <span style="color: var(--faint); font-weight: 400"
+              >(optional)</span
+            ></span
+          ><input class="input" id="f-desc"
+        /></label>
+        <div class="foot">
+          <button class="btn" value="cancel" formnovalidate>Cancel</button
+          ><button class="btn primary" value="ok" id="add-ok">
+            Add variable
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="d-review">
+      <form method="dialog" class="dlg">
+        <h2 id="review-title"></h2>
+        <p>Teammates will get these changes the next time they pull.</p>
+        <div class="changes" id="changes"></div>
+        <label class="check"
+          ><input type="checkbox" id="show-diff-values" /> Show values</label
+        >
+        <div class="foot">
+          <button class="btn" value="cancel">Keep editing</button
+          ><button class="btn primary" value="ok" id="publish-ok">
+            Publish
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="d-confirm">
+      <form method="dialog" class="dlg">
+        <h2 id="c-title"></h2>
+        <p id="c-body"></p>
+        <div class="foot">
+          <button class="btn" value="cancel">Cancel</button
+          ><button class="btn primary" value="ok" id="c-ok"></button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="d-invite">
+      <form method="dialog" class="dlg">
+        <h2>Invite a member to acme</h2>
+        <p>
+          They'll see the invite when they sign in to DotRelay with GitHub.
+          Invites expire after 7 days.
+        </p>
+        <label class="field"
+          ><span>GitHub username</span
+          ><input
+            class="input"
+            id="inv-name"
+            placeholder="octocat"
+            autocomplete="off"
+        /></label>
+        <label class="field"
+          ><span>Role</span
+          ><select class="input" id="inv-role">
+            <option>Member</option>
+            <option>Admin</option>
+          </select></label
+        >
+        <div class="foot">
+          <button class="btn" value="cancel">Cancel</button
+          ><button class="btn primary" value="ok">Send invite</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="d-jo">
+      <form method="dialog" class="dlg">
+        <h2>Confirm jo-dev's identity</h2>
+        <p>
+          Ask jo-dev to run <code>dotrelay whoami</code> and read you their
+          fingerprint, over a call or in person. Only confirm if it matches
+          exactly.
+        </p>
+        <div
+          class="cmd"
+          style="
+            font-size: 16px;
+            letter-spacing: 0.06em;
+            justify-content: center;
+          "
+        >
+          <span>7F3A 91C0 BE44 D2E8</span>
+        </div>
+        <div class="foot">
+          <button class="btn" value="cancel">It doesn't match</button
+          ><button class="btn primary" value="ok">It matches, confirm</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="d-code">
+      <form method="dialog" class="dlg">
+        <h2>Save your recovery code</h2>
+        <p>Put it in your password manager. You'll only see it once.</p>
+        <div class="cmd" style="font-size: 14px; line-height: 1.7">
+          <code style="letter-spacing: 0.04em"
+            >R7KQ-M2XD-9PLA-V4TE-HN8C-QW3Z-6YBF-J5GS-K2RM-X8DA-P7VL-C3NE-T9QH</code
+          ><button
+            class="btn"
+            type="button"
+            data-copy="R7KQ-M2XD-9PLA-V4TE-HN8C-QW3Z-6YBF-J5GS-K2RM-X8DA-P7VL-C3NE-T9QH"
+          >
+            Copy
+          </button>
+        </div>
+        <label class="check"
+          ><input type="checkbox" id="saved" /> I've saved this code somewhere
+          safe</label
+        >
+        <div class="foot">
+          <button class="btn primary" value="ok" id="code-ok" disabled>
+            Done
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" hidden>
+      <svg class="i"><use href="#i-check" /></svg><span id="toast-text"></span>
+    </div>
+
+    <div class="proto" aria-label="Prototype controls">
+      <b>Prototype</b>
+      <select id="proto">
+        <option value="normal">Normal</option>
+        <option value="locked">New browser (locked)</option>
+        <option value="empty-env">Empty environment</option>
+        <option value="no-projects">No projects yet</option>
+      </select>
+      <a href="landing-themes.html" style="color: #0b7a4b">Landing page</a>
+    </div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const $$ = (s) => [...document.querySelectorAll(s)];
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+        );
+
+      const seed = () => ({
+        "acme-api": {
+          repo: "acme/acme-api",
+          envs: {
+            development: [
+              {
+                name: "DATABASE_URL",
+                value: "postgres://localhost:5432/acme",
+                desc: "Local Postgres from docker compose",
+                vis: "shared",
+                by: "priya-n",
+                at: "3 days ago",
+              },
+              {
+                name: "STRIPE_SECRET_KEY",
+                value: "sk_test_example",
+                desc: "Test mode",
+                vis: "shared",
+                by: "priya-n",
+                at: "3 days ago",
+              },
+              {
+                name: "STRIPE_WEBHOOK_SECRET",
+                value: "whsec_example",
+                desc: "",
+                vis: "shared",
+                by: "jo-dev",
+                at: "last week",
+              },
+              {
+                name: "REDIS_URL",
+                value: "redis://localhost:6379",
+                desc: "",
+                vis: "shared",
+                by: "samk",
+                at: "2 weeks ago",
+              },
+              {
+                name: "LOCAL_DB_PASSWORD",
+                value: "hunter2-but-longer",
+                desc: "Your own local password",
+                vis: "me",
+                by: "you",
+                at: "2 weeks ago",
+              },
+              {
+                name: "LOG_LEVEL",
+                value: "info",
+                desc: "",
+                vis: "shared",
+                by: "samk",
+                at: "last month",
+              },
+              {
+                name: "SENTRY_DSN",
+                value: "",
+                desc: "Leave empty to turn off error reporting",
+                vis: "shared",
+                by: "samk",
+                at: "last month",
+              },
+            ],
+            staging: [
+              {
+                name: "DATABASE_URL",
+                value: "postgres://acme@stg-db.internal/acme",
+                desc: "",
+                vis: "shared",
+                by: "jo-dev",
+                at: "last week",
+              },
+              {
+                name: "STRIPE_SECRET_KEY",
+                value: "sk_test_example",
+                desc: "",
+                vis: "shared",
+                by: "jo-dev",
+                at: "last week",
+              },
+              {
+                name: "LOG_LEVEL",
+                value: "info",
+                desc: "",
+                vis: "shared",
+                by: "samk",
+                at: "last month",
+              },
+            ],
+            production: [
+              {
+                name: "DATABASE_URL",
+                value: "postgres://acme@prod-db.internal/acme",
+                desc: "",
+                vis: "shared",
+                by: "samk",
+                at: "2 weeks ago",
+              },
+              {
+                name: "STRIPE_SECRET_KEY",
+                value: "sk_live_example",
+                desc: "",
+                vis: "shared",
+                by: "samk",
+                at: "2 weeks ago",
+              },
+              {
+                name: "LOG_LEVEL",
+                value: "warn",
+                desc: "",
+                vis: "shared",
+                by: "samk",
+                at: "last month",
+              },
+            ],
+          },
+          history: {
+            development: [
+              {
+                n: 42,
+                by: "priya-n",
+                at: "3 days ago",
+                changes: [
+                  ["changed", "DATABASE_URL"],
+                  ["changed", "STRIPE_SECRET_KEY"],
+                ],
+              },
+              {
+                n: 41,
+                by: "jo-dev",
+                at: "last week",
+                changes: [["added", "STRIPE_WEBHOOK_SECRET"]],
+              },
+              {
+                n: 40,
+                by: "samk",
+                at: "2 weeks ago",
+                changes: [
+                  ["added", "REDIS_URL"],
+                  ["added", "LOCAL_DB_PASSWORD"],
+                  ["removed", "MEMCACHE_URL"],
+                ],
+              },
+              {
+                n: 39,
+                by: "samk",
+                at: "last month",
+                changes: [
+                  ["added", "DATABASE_URL"],
+                  ["added", "LOG_LEVEL"],
+                  ["added", "SENTRY_DSN"],
+                ],
+              },
+            ],
+            staging: [
+              {
+                n: 27,
+                by: "jo-dev",
+                at: "last week",
+                changes: [["changed", "DATABASE_URL"]],
+              },
+              {
+                n: 26,
+                by: "samk",
+                at: "last month",
+                changes: [["added", "LOG_LEVEL"]],
+              },
+            ],
+            production: [
+              {
+                n: 18,
+                by: "samk",
+                at: "2 weeks ago",
+                changes: [["changed", "STRIPE_SECRET_KEY"]],
+              },
+              {
+                n: 17,
+                by: "samk",
+                at: "last month",
+                changes: [["changed", "LOG_LEVEL"]],
+              },
+            ],
+          },
+        },
+        "acme-web": {
+          repo: "acme/acme-web",
+          envs: { development: [], production: [] },
+          history: { development: [], production: [] },
+        },
+        "billing-worker": {
+          repo: "acme/billing-worker",
+          envs: { development: [] },
+          history: { development: [] },
+        },
+      });
+
+      let data = seed();
+      let project = "acme-api";
+      let env = "development";
+      let draft = {}; // key: project/env -> array of rows
+      let showAll = false;
+      let revealed = new Set();
+      let view = "vars";
+      let page = "project";
+
+      const key = () => `${project}/${env}`;
+      const base = () => data[project].envs[env];
+      const rows = () => draft[key()] ?? base();
+      const ensureDraft = () => {
+        if (!draft[key()]) draft[key()] = structuredClone(base());
+        return draft[key()];
+      };
+
+      const diff = (k = key()) => {
+        const [p, e] = k.split("/");
+        const b = data[p].envs[e],
+          d = draft[k];
+        if (!d) return [];
+        const out = [];
+        d.forEach((r) => {
+          const o = b.find((x) => x.name === r.name);
+          if (!o) out.push({ kind: "added", name: r.name, to: r.value });
+          else if (r.removed)
+            out.push({ kind: "removed", name: r.name, from: o.value });
+          else if (o.value !== r.value)
+            out.push({
+              kind: "changed",
+              name: r.name,
+              from: o.value,
+              to: r.value,
+            });
+        });
+        return out;
+      };
+      const pendingEnvs = () =>
+        Object.keys(draft).filter(
+          (k) => k.startsWith(project + "/") && diff(k).length,
+        );
+
+      /* ---------- render ---------- */
+      const renderSidebar = () => {
+        $("#project-list").innerHTML = Object.keys(data)
+          .map((p) => {
+            const n = Object.keys(draft).filter(
+              (k) => k.startsWith(p + "/") && diff(k).length,
+            ).length;
+            return `<button class="nav-item" type="button" data-project="${p}" ${page === "project" && p === project ? 'aria-current="page"' : ""}>
+      <svg class="i"><use href="#i-folder"/></svg>${p}${n ? `<span class="count" title="Unpublished changes">${n}</span>` : ""}</button>`;
+          })
+          .join("");
+        $$("[data-page]").forEach(
+          (b) =>
+            b.classList.contains("nav-item") &&
+            (page === b.dataset.page
+              ? b.setAttribute("aria-current", "page")
+              : b.removeAttribute("aria-current")),
+        );
+      };
+
+      const renderTabs = () => {
+        const envs = Object.keys(data[project].envs);
+        $("#env-tabs").innerHTML =
+          envs
+            .map((e) => {
+              const dirty =
+                draft[`${project}/${e}`] && diff(`${project}/${e}`).length;
+              return `<button class="env-tab" role="tab" type="button" aria-selected="${e === env}" data-env="${e}">${e}${dirty ? '<span class="dot" title="Unpublished changes"></span>' : ""}</button>`;
+            })
+            .join("") +
+          `<button class="btn ghost sm add" type="button"><svg class="i"><use href="#i-plus"/></svg>New environment</button>`;
+      };
+
+      const timeCell = (r, o) => {
+        if (!o) return `<span class="vmeta pending">New, not published</span>`;
+        if (r.removed)
+          return `<span class="vmeta pending">Will be removed</span>`;
+        if (o.value !== r.value)
+          return `<span class="vmeta pending">Edited, not published</span>`;
+        return `<span class="vmeta">${r.by === "you" ? "You" : r.by}, ${r.at}</span>`;
+      };
+
+      const renderRows = () => {
+        const q = $("#search").value.trim().toLowerCase();
+        const all = rows();
+        const list = all.filter(
+          (r) =>
+            r.name.toLowerCase().includes(q) ||
+            r.desc.toLowerCase().includes(q),
+        );
+        $("#vt").hidden = all.length === 0 || list.length === 0;
+        $("#env-empty").hidden = all.length !== 0;
+        $("#env-empty-name").textContent = env;
+        $("#no-results").hidden = !(all.length && !list.length);
+        $("#q").textContent = q;
+        $("#rows").innerHTML = list
+          .map((r) => {
+            const o = base().find((x) => x.name === r.name);
+            const changed = !o || o.value !== r.value || r.removed;
+            const show =
+              showAll || revealed.has(r.name) || (changed && !r.removed);
+            const val = show
+              ? `<input class="input" data-edit value="${esc(r.value)}" ${r.value ? "" : 'placeholder="Empty"'} aria-label="Value of ${r.name}" ${r.removed ? "disabled" : ""} spellcheck="false" autocomplete="off">`
+              : `<input class="input masked" data-reveal-edit readonly value="${r.value ? "••••••••••••" : ""}" ${r.value ? "" : 'placeholder="Empty"'} aria-label="Value of ${r.name}, hidden. Select to show and edit.">`;
+            return `<tr data-name="${r.name}" class="${changed ? "changed" : ""} ${r.removed ? "removed" : ""}">
+      <td class="c-name"><span class="vname">${r.name}</span>${r.desc ? `<span class="vdesc">${esc(r.desc)}</span>` : ""}</td>
+      <td class="c-val"><div class="vval">${val}
+        <button class="icon-btn" type="button" data-toggle aria-label="${show ? "Hide" : "Show"} ${r.name}"><svg class="i"><use href="#i-${show ? "eyeoff" : "eye"}"/></svg></button>
+        <button class="icon-btn" type="button" data-copyval aria-label="Copy value of ${r.name}"><svg class="i"><use href="#i-copy"/></svg></button></div></td>
+      <td class="c-vis">${r.vis === "me" ? '<span class="badge purple">Only me</span>' : '<span class="badge">Team</span>'}</td>
+      <td class="c-meta">${timeCell(r, o)}</td>
+      <td class="c-act"><div class="menu-wrap">
+        <button class="icon-btn" type="button" aria-label="More for ${r.name}" data-menu="rm-${r.name}"><svg class="i"><use href="#i-more"/></svg></button>
+        <div class="menu" id="rm-${r.name}" role="menu" hidden>
+          <button role="menuitem" type="button" data-hist>See history</button>
+          ${changed && o ? '<button role="menuitem" type="button" data-undo>Undo my edit</button>' : ""}
+          <hr><button role="menuitem" type="button" class="danger" data-del>${r.removed ? "Keep variable" : "Remove variable"}</button>
+        </div></div></td>
+    </tr>`;
+          })
+          .join("");
+        $("#toggle-values span").textContent = showAll
+          ? "Hide values"
+          : "Show values";
+        $("#toggle-values use").setAttribute(
+          "href",
+          showAll ? "#i-eyeoff" : "#i-eye",
+        );
+      };
+
+      const renderHistory = () => {
+        const h = data[project].history[env];
+        $("#hist").innerHTML = h.length
+          ? h
+              .map(
+                (r, i) => `<div class="rev">
+    <button class="rev-head" type="button" aria-expanded="${i === 0}" data-rev="${r.n}">
+      <span class="rev-num">#${r.n}</span>
+      <span><b>${r.changes.length === 1 ? `${cap(r.changes[0][0])} ${r.changes[0][1]}` : r.rollback ? `Rolled back to #${r.rollback}` : `${r.changes.length} changes`}</b>
+      <small>${r.by === "samk" ? "You" : r.by}, ${r.at}</small></span>
+      ${i === 0 ? '<span class="badge green">Current</span>' : '<span class="vmeta">Details</span>'}
+    </button>
+    <div class="rev-body" ${i === 0 ? "" : "hidden"}>
+      <ul>${r.changes.map(([k, n]) => `<li><span class="k">${cap(k)}</span>${n}</li>`).join("")}</ul>
+      ${i === 0 ? "" : `<button class="btn sm" type="button" data-rollback="${r.n}">Roll back to #${r.n}</button>`}
+    </div></div>`,
+              )
+              .join("")
+          : `<div class="empty" style="border:0"><h3>Nothing published yet</h3><p>Every time you publish, a numbered revision shows up here so you can see what changed and roll back.</p></div>`;
+      };
+      const cap = (s) => s[0].toUpperCase() + s.slice(1);
+
+      const renderDraft = () => {
+        const n = diff().length;
+        const others = pendingEnvs().filter((k) => k !== key()).length;
+        $("#draft").hidden =
+          page !== "project" || n === 0 || !$("#locked").hidden;
+        $("#draft-count").innerHTML =
+          `${n} <span class="long">unpublished </span>${n === 1 ? "change" : "changes"}`;
+        $("#draft-env").textContent =
+          ` in ${env}${others ? ` (and ${others} other ${others === 1 ? "environment" : "environments"})` : ""}`;
+      };
+
+      const render = () => {
+        $("#proj-name").textContent = project;
+        $("#m-title").textContent =
+          page === "project"
+            ? project
+            : page === "members"
+              ? "Members"
+              : "Devices and recovery";
+        $("#proj-repo").textContent = data[project].repo;
+        $$(".env-name").forEach((e) => (e.textContent = env));
+        renderSidebar();
+        renderTabs();
+        renderRows();
+        renderHistory();
+        renderDraft();
+        $("#view-vars").hidden = view !== "vars";
+        $("#view-history").hidden = view !== "history";
+        $("#search-wrap").hidden = view !== "vars";
+        $("#toggle-values").hidden = view !== "vars";
+        $$("[data-view]").forEach((b) =>
+          b.setAttribute("aria-selected", String(b.dataset.view === view)),
+        );
+      };
+
+      const toast = (msg) => {
+        $("#toast-text").textContent = msg;
+        $("#toast").hidden = false;
+        clearTimeout(toast.t);
+        toast.t = setTimeout(() => ($("#toast").hidden = true), 3200);
+      };
+
+      const confirmBox = ({ title, body, ok, danger }, onOk) => {
+        $("#c-title").textContent = title;
+        $("#c-body").textContent = body;
+        $("#c-ok").textContent = ok;
+        $("#c-ok").className = danger ? "btn danger-solid" : "btn primary";
+        const d = $("#d-confirm");
+        const handler = () => {
+          d.removeEventListener("close", handler);
+          if (d.returnValue === "ok") onOk();
+        };
+        d.returnValue = "";
+        d.addEventListener("close", handler);
+        d.showModal();
+      };
+
+      const go = (p) => {
+        page = p;
+        ["project", "members", "devices"].forEach(
+          (x) => ($(`#p-${x}`).hidden = x !== p),
+        );
+        $("#side").classList.remove("open");
+        render();
+        window.scrollTo(0, 0);
+      };
+
+      /* ---------- events ---------- */
+      document.addEventListener("click", (e) => {
+        const t = e.target;
+        // menus
+        const mBtn = t.closest("[data-menu]");
+        $$(".menu").forEach((m) => {
+          if (!mBtn || m.id !== mBtn.dataset.menu) m.hidden = true;
+        });
+        if (mBtn) {
+          const m = document.getElementById(mBtn.dataset.menu);
+          m.hidden = !m.hidden;
+          mBtn.setAttribute("aria-expanded", String(!m.hidden));
+          return;
+        }
+
+        const pg = t.closest("[data-page]");
+        if (pg) {
+          go(pg.dataset.page);
+          return;
+        }
+        const pj = t.closest("[data-project]");
+        if (pj) {
+          project = pj.dataset.project;
+          env = Object.keys(data[project].envs)[0];
+          view = "vars";
+          revealed.clear();
+          go("project");
+          return;
+        }
+        const et = t.closest("[data-env]");
+        if (et) {
+          env = et.dataset.env;
+          revealed.clear();
+          $("#search").value = "";
+          render();
+          return;
+        }
+        const vw = t.closest("[data-view]");
+        if (vw) {
+          view = vw.dataset.view;
+          render();
+          return;
+        }
+        if (t.closest("[data-add]")) {
+          openAdd();
+          return;
+        }
+
+        const tr = t.closest("tr[data-name]");
+        if (tr) {
+          const name = tr.dataset.name;
+          if (t.closest("[data-toggle]")) {
+            revealed.has(name) ? revealed.delete(name) : revealed.add(name);
+            renderRows();
+            return;
+          }
+          if (t.closest("[data-reveal-edit]")) {
+            revealed.add(name);
+            renderRows();
+            const i = $(`tr[data-name="${name}"] [data-edit]`);
+            i?.focus();
+            i?.select();
+            return;
+          }
+          if (t.closest("[data-copyval]")) {
+            const r = rows().find((x) => x.name === name);
+            navigator.clipboard?.writeText(r.value).catch(() => {});
+            toast(`Copied the value of ${name}`);
+            return;
+          }
+          if (t.closest("[data-hist]")) {
+            view = "history";
+            render();
+            return;
+          }
+          if (t.closest("[data-undo]")) {
+            const r = ensureDraft().find((x) => x.name === name);
+            r.value = base().find((x) => x.name === name).value;
+            delete r.removed;
+            render();
+            return;
+          }
+          if (t.closest("[data-del]")) {
+            const d = ensureDraft();
+            const r = d.find((x) => x.name === name);
+            if (!base().find((x) => x.name === name))
+              draft[key()] = d.filter((x) => x.name !== name);
+            else r.removed = !r.removed;
+            render();
+            return;
+          }
+        }
+
+        const rh = t.closest("[data-rev]");
+        if (rh) {
+          const body = rh.nextElementSibling;
+          body.hidden = !body.hidden;
+          rh.setAttribute("aria-expanded", String(!body.hidden));
+          return;
+        }
+        const rb = t.closest("[data-rollback]");
+        if (rb) {
+          const n = +rb.dataset.rollback;
+          const cur = data[project].history[env][0].n;
+          if (diff().length) {
+            toast("Publish or discard your changes before rolling back");
+            return;
+          }
+          confirmBox(
+            {
+              title: `Roll back ${env} to #${n}?`,
+              body: `This publishes a new revision, #${cur + 1}, with the values from #${n}. Nothing is deleted, so you can undo this from History.`,
+              ok: `Roll back to #${n}`,
+            },
+            () => {
+              data[project].history[env].unshift({
+                n: cur + 1,
+                by: "samk",
+                at: "just now",
+                rollback: n,
+                changes: [["changed", "values restored from #" + n]],
+              });
+              render();
+              toast(`Rolled back. #${cur + 1} has the values from #${n}.`);
+            },
+          );
+          return;
+        }
+        const rv = t.closest("[data-revoke]");
+        if (rv) {
+          const name = rv.dataset.revoke;
+          confirmBox(
+            {
+              title: `Revoke ${name}?`,
+              body: `${name} won't be able to get any new changes. Values it has already pulled stay on it, so if it was lost or stolen, change those values too.`,
+              ok: "Revoke device",
+              danger: true,
+            },
+            () => {
+              rv.closest(".li").remove();
+              toast(`Revoked ${name}`);
+            },
+          );
+          return;
+        }
+        const rm = t.closest("[data-remove]");
+        if (rm) {
+          const name = rm.dataset.remove;
+          confirmBox(
+            {
+              title: `Remove ${name} from acme?`,
+              body: `${name} won't get any new changes. Anything they've already pulled stays on their machines, so change sensitive values afterwards.`,
+              ok: `Remove ${name}`,
+              danger: true,
+            },
+            () => {
+              rm.closest(".li").remove();
+              toast(`Removed ${name} from acme`);
+            },
+          );
+          return;
+        }
+        if (t.closest("[data-cancel-invite]")) {
+          t.closest(".li").remove();
+          toast("Invite cancelled");
+          return;
+        }
+        const cp = t.closest("[data-copy]");
+        if (cp) {
+          navigator.clipboard?.writeText(cp.dataset.copy).catch(() => {});
+          cp.textContent = "Copied";
+          setTimeout(() => (cp.textContent = "Copy"), 1500);
+        }
+      });
+
+      $("#rows").addEventListener("input", (e) => {
+        if (!e.target.matches("[data-edit]")) return;
+        const name = e.target.closest("tr").dataset.name;
+        ensureDraft().find((x) => x.name === name).value = e.target.value;
+        const tr = e.target.closest("tr");
+        const o = base().find((x) => x.name === name);
+        const changed = !o || o.value !== e.target.value;
+        tr.classList.toggle("changed", changed);
+        tr.querySelector(".c-meta").innerHTML = timeCell(
+          rows().find((x) => x.name === name),
+          o,
+        );
+        renderDraft();
+        renderTabs();
+        renderSidebar();
+      });
+      $("#search").addEventListener("input", renderRows);
+      $("#toggle-values").addEventListener("click", () => {
+        showAll = !showAll;
+        renderRows();
+      });
+      $("#open-side").addEventListener("click", () =>
+        $("#side").classList.add("open"),
+      );
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          $("#side").classList.remove("open");
+          $$(".menu").forEach((m) => (m.hidden = true));
+        }
+      });
+
+      // add variable
+      const openAdd = () => {
+        $("#add-form").reset();
+        $("#name-err").hidden = true;
+        $$(".env-name").forEach((x) => (x.textContent = env));
+        $("#d-add").showModal();
+        $("#f-name").focus();
+      };
+      $("#add-var").addEventListener("click", openAdd);
+      $("#f-name").addEventListener("input", (e) => {
+        e.target.value = e.target.value
+          .toUpperCase()
+          .replace(/[^A-Z0-9_]/g, "_");
+        $("#name-err").hidden = true;
+      });
+      $("#add-ok").addEventListener("click", (e) => {
+        const name = $("#f-name").value.trim();
+        const err = !name
+          ? "Enter a name."
+          : /^[0-9]/.test(name)
+            ? "Names can't start with a number."
+            : rows().some((r) => r.name === name)
+              ? `${name} already exists in ${env}.`
+              : "";
+        if (err) {
+          e.preventDefault();
+          $("#name-err").textContent = err;
+          $("#name-err").hidden = false;
+          $("#f-name").focus();
+        }
+      });
+      $("#d-add").addEventListener("close", () => {
+        if ($("#d-add").returnValue !== "ok") return;
+        ensureDraft().push({
+          name: $("#f-name").value.trim(),
+          value: $("#f-val").value,
+          desc: $("#f-desc").value,
+          vis: document.querySelector("[name=vis]:checked").value,
+          by: "you",
+          at: "",
+        });
+        view = "vars";
+        render();
+      });
+
+      // review & publish
+      const renderChanges = () => {
+        const show = $("#show-diff-values").checked;
+        const m = (v) =>
+          v === "" ? "(empty)" : show ? esc(v) : "•".repeat(10);
+        $("#changes").innerHTML = diff()
+          .map(
+            (
+              c,
+            ) => `<div><span class="k ${c.kind}">${cap(c.kind)}</span><span class="n">${c.name}</span>
+    <span class="v">${c.kind === "changed" ? `<del>${m(c.from)}</del> → <ins>${m(c.to)}</ins>` : c.kind === "added" ? `<ins>${m(c.to)}</ins>` : `<del>${m(c.from)}</del>`}</span></div>`,
+          )
+          .join("");
+      };
+      $("#review").addEventListener("click", () => {
+        const n = diff().length;
+        $("#review-title").textContent =
+          `Publish ${n} ${n === 1 ? "change" : "changes"} to ${env}`;
+        $("#publish-ok").textContent = `Publish to ${env}`;
+        $("#show-diff-values").checked = false;
+        renderChanges();
+        $("#d-review").showModal();
+      });
+      $("#show-diff-values").addEventListener("change", renderChanges);
+      $("#d-review").addEventListener("close", () => {
+        if ($("#d-review").returnValue !== "ok") return;
+        const c = diff();
+        const h = data[project].history[env];
+        const n = (h[0]?.n ?? 0) + 1;
+        h.unshift({
+          n,
+          by: "samk",
+          at: "just now",
+          changes: c.map((x) => [x.kind, x.name]),
+        });
+        data[project].envs[env] = draft[key()]
+          .filter((r) => !r.removed)
+          .map((r) => {
+            const o = base().find((x) => x.name === r.name);
+            return !o || o.value !== r.value
+              ? { ...r, by: "samk", at: "just now" }
+              : r;
+          });
+        delete draft[key()];
+        revealed.clear();
+        render();
+        toast(`Published #${n} to ${env}`);
+      });
+      $("#discard").addEventListener("click", () => {
+        confirmBox(
+          {
+            title: `Discard changes to ${env}?`,
+            body: `Your ${diff().length} unpublished ${diff().length === 1 ? "change" : "changes"} will be lost.`,
+            ok: "Discard changes",
+            danger: true,
+          },
+          () => {
+            delete draft[key()];
+            revealed.clear();
+            render();
+            toast("Changes discarded");
+          },
+        );
+      });
+      $("#archive-env").addEventListener("click", () => {
+        confirmBox(
+          {
+            title: `Archive ${env}?`,
+            body: `Nobody will be able to pull ${env} until it's restored. Its history is kept.`,
+            ok: `Archive ${env}`,
+            danger: true,
+          },
+          () => toast(`Archived ${env} (not simulated in this prototype)`),
+        );
+      });
+      $("#new-project").addEventListener("click", () => {
+        const was = data;
+        setState("no-projects");
+      });
+
+      // members
+      $("#invite-btn").addEventListener("click", () => {
+        $("#inv-name").value = "";
+        $("#d-invite").showModal();
+      });
+      $("#d-invite").addEventListener("close", () => {
+        if ($("#d-invite").returnValue !== "ok" || !$("#inv-name").value.trim())
+          return;
+        const u = esc($("#inv-name").value.trim());
+        $("#invites").insertAdjacentHTML(
+          "afterbegin",
+          `<div class="li"><span class="av" style="background:var(--surface-2);color:var(--faint)">?</span><div class="grow"><b>${u}</b><small>Invited just now. Expires in 7 days.</small></div><button class="btn sm ghost" type="button" data-cancel-invite>Cancel invite</button></div>`,
+        );
+        toast(`Invited ${u}`);
+      });
+      $("#confirm-jo").addEventListener("click", () => $("#d-jo").showModal());
+      $("#d-jo").addEventListener("close", () => {
+        if ($("#d-jo").returnValue !== "ok") return;
+        $("#confirm-banner").remove();
+        $("#jo-badge").remove();
+        $("#members-count").remove();
+        toast("Confirmed jo-dev. They can now see shared values.");
+      });
+
+      // recovery
+      $("#make-code").addEventListener("click", () => {
+        $("#saved").checked = false;
+        $("#code-ok").disabled = true;
+        $("#d-code").showModal();
+      });
+      $("#saved").addEventListener(
+        "change",
+        () => ($("#code-ok").disabled = !$("#saved").checked),
+      );
+      $("#d-code").addEventListener("close", () => {
+        if (!$("#saved").checked) return;
+        $("#rc-status").textContent = "Saved today";
+        $("#rc-badge").textContent = "Saved";
+        $("#rc-badge").className = "badge green";
+        $("#make-code").textContent = "Replace code";
+        $("#make-code").className = "btn sm";
+        $("#rc-banner").hidden = true;
+        toast("Recovery code saved");
+      });
+
+      // unlock
+      $("#recover").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const v = $("#rc").value.replace(/[^A-Z0-9]/gi, "");
+        if (v.length !== 52) {
+          $("#rc-err").textContent =
+            `That code has ${v.length} characters. A recovery code has 52 (13 groups of 4).`;
+          $("#rc-err").hidden = false;
+          return;
+        }
+        setState("normal");
+        $("#proto").value = "normal";
+        toast("This browser is unlocked");
+      });
+      $("#rc").addEventListener("input", () => ($("#rc-err").hidden = true));
+
+      // prototype states
+      const setState = (s) => {
+        data = seed();
+        draft = {};
+        revealed.clear();
+        view = "vars";
+        project = "acme-api";
+        env = "development";
+        if (s === "empty-env")
+          ((data["acme-api"].envs.development = []),
+            (data["acme-api"].history.development = []));
+        $("#locked").hidden = s !== "locked";
+        $("#no-projects").hidden = s !== "no-projects";
+        $("#unlocked").hidden = s === "locked" || s === "no-projects";
+        $("#proj-name").closest(".ph").hidden = s === "no-projects";
+        $("#project-list").hidden = s === "no-projects";
+        $("#proto").value = s;
+        go("project");
+      };
+      $("#proto").addEventListener("change", (e) => setState(e.target.value));
+
+      render();
+    </script>
+  </body>
+</html>

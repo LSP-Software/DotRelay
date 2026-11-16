@@ -228,6 +228,7 @@ for (const lostResponse of [false, true])
     // The verified history identifies the synced Revision by its change kind
     // and names its author from the signed Revision: here, the teammate who
     // authored the fixture's history, whose name this page has not loaded.
+    await editor.getByRole("tab", { name: "History" }).click();
     await expect(
       editor.getByText("Unknown member", { exact: true }),
     ).toBeVisible();
@@ -238,11 +239,14 @@ for (const lostResponse of [false, true])
       editor.getByText("First publish", { exact: true }),
     ).toBeVisible();
 
+    await editor.getByRole("tab", { name: "Variables" }).click();
     await editor.getByLabel("OPTIONAL_FLAG Value").fill("submitted-value");
-    await expect(optionalRow()).toContainText("Draft change");
+    await expect(optionalRow()).toContainText("Not published");
 
-    await editor.getByRole("button", { name: "Save changes" }).click();
-    const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
+    await editor.getByRole("button", { name: "Review and publish" }).click();
+    const reviewDialog = page.getByRole("dialog", {
+      name: /^Publish \d+ change/,
+    });
     await expect(reviewDialog).toBeVisible();
     await reviewDialog.getByRole("button", { name: "Publish" }).click();
     await expect(
@@ -254,9 +258,9 @@ for (const lostResponse of [false, true])
     await page.keyboard.press("Escape");
     await expect(reviewDialog).toBeHidden();
     await editor.getByLabel("FEATURE_GATE Value").fill("newer-value");
-    await expect(featureRow()).toContainText("Draft change");
+    await expect(featureRow()).toContainText("Not published");
 
-    await expect(page.getByText(/Published as revision /)).toBeVisible({
+    await expect(page.getByText(/^Published \S+\.$/)).toBeVisible({
       timeout: 15_000,
     });
 
@@ -265,13 +269,12 @@ for (const lostResponse of [false, true])
     // verified context and the acting User as its author.
     const publishedMessage =
       (await page
-        .getByText(/Published as revision /)
+        .getByText(/^Published \S+\.$/)
         .first()
         .textContent()) ?? "";
-    const shortId = publishedMessage
-      .replace("Published as revision ", "")
-      .replace(".", "");
+    const shortId = publishedMessage.replace("Published ", "").replace(".", "");
     expect(shortId).toHaveLength(8);
+    await editor.getByRole("tab", { name: "History" }).click();
     const publishedRow = editor
       .getByTestId(/history-revision-/)
       .filter({ hasText: "Current" });
@@ -287,10 +290,11 @@ for (const lostResponse of [false, true])
       publishedRow.getByText("Update", { exact: true }),
     ).toBeVisible();
 
+    await editor.getByRole("tab", { name: "Variables" }).click();
     // The submitted lane is published and no longer a draft; the newer edit made
     // while the publication was in flight remains visibly unpublished.
-    await expect(optionalRow()).not.toContainText("Draft change");
-    await expect(featureRow()).toContainText("Draft change");
+    await expect(optionalRow()).not.toContainText("Not published");
+    await expect(featureRow()).toContainText("Not published");
     expect(finalizeCalls).toBe(1);
     expect(cancellations).toBe(0);
     expect(

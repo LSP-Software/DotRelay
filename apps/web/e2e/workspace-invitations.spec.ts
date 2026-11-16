@@ -116,7 +116,7 @@ test("resolving an unknown GitHub login keeps the form and reports the problem",
 
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
 
   await page.getByLabel("GitHub login").fill("nobody-here");
@@ -155,7 +155,7 @@ test("a rejected invitation keeps the resolved identity and the error", async ({
 
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
 
   await page.getByLabel("GitHub login").fill("octocat");
@@ -196,25 +196,25 @@ test("the Members table is the Team's record and survives reloads and switches",
 
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
 
   const membersCard = page.getByTestId("members-card");
   await expect(membersCard.getByText("Ari Stone")).toBeVisible();
-  await expect(membersCard.getByText("Invitation pending")).toBeVisible();
+  await expect(membersCard.getByText(/^Invited, expires/)).toBeVisible();
 
   // Reloading re-reads the Team's record from the service, so the same
   // members are still there.
   await page.reload();
   await expect(membersCard.getByText("Ari Stone")).toBeVisible();
-  await expect(membersCard.getByText("Invitation pending")).toBeVisible();
+  await expect(membersCard.getByText(/^Invited, expires/)).toBeVisible();
 
   // Switching Teams lands on that Team's Projects view and reads its own
   // record; re-open the Team view to see the members.
   await page.locator("aside").getByLabel("Team").selectOption(TEAM_B);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await expect(membersCard.getByText("Bea Acme")).toBeVisible();
   await expect(membersCard.getByText("Ari Stone")).toHaveCount(0);
-  await expect(membersCard.getByText("Invitation pending")).toHaveCount(0);
+  await expect(membersCard.getByText(/^Invited, expires/)).toHaveCount(0);
 });
 
 test("an invitee accepts the invitation addressed to them and goes pending", async ({
@@ -257,7 +257,7 @@ test("an invitee accepts the invitation addressed to them and goes pending", asy
   await expect(card.getByText("Waiting for encryption keys")).toBeVisible();
   // The wait is not a dead end: it names who acts next and what to do once
   // they have.
-  await expect(card).toContainText("Share project keys for you");
+  await expect(card).toContainText("share the project keys with you");
   await expect(card).toContainText("refresh this page");
   await expect(card).toContainText("dotrelay pull");
   await expect(
@@ -308,7 +308,7 @@ test("an owner cancels a pending invitation after confirming", async ({
 
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   const membersCard = page.getByTestId("members-card");
   const row = membersCard.getByTestId(
     "invitation-row-00000000-0000-4000-8000-0000000000a1",
@@ -350,7 +350,7 @@ test("a refused cancellation stays on the invitation row", async ({ page }) => {
   );
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   const row = page.getByTestId(
     "invitation-row-00000000-0000-4000-8000-0000000000a2",
   );
@@ -448,7 +448,7 @@ test("the pending invitation cap is explained when inviting", async ({
   );
   await page.goto("/workspace");
   await trustWorkspaceServer(page);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByRole("button", { name: "Invite member" }).click();
   await page.getByLabel("GitHub login").fill("octocat");
   await page.getByRole("button", { name: "Resolve" }).click();

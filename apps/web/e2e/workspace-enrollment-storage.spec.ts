@@ -177,7 +177,9 @@ test("enrollment is blocked before a Device is created when IndexedDB is unavail
     page.getByText("can't save keys in persistent storage"),
   ).toBeVisible({ timeout: 15_000 });
   await expect(
-    page.locator("#devices").getByText("Set up this browser", { exact: true }),
+    page
+      .getByTestId("recovery-device-setup")
+      .getByText("Set up this browser", { exact: true }),
   ).toBeVisible();
   await expect(
     page.locator("#devices").getByText("This browser is set up", {
@@ -207,7 +209,9 @@ test("enrollment is blocked before a Device is created when local storage is den
     timeout: 15_000,
   });
   await expect(
-    page.locator("#devices").getByText("Set up this browser", { exact: true }),
+    page
+      .getByTestId("recovery-device-setup")
+      .getByText("Set up this browser", { exact: true }),
   ).toBeVisible();
   await expect(
     page.locator("#devices").getByText("This browser is set up", {

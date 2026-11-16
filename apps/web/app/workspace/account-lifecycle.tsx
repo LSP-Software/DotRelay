@@ -102,11 +102,15 @@ export const TeamLifecycleCard = ({
     } else setError(result.message);
   };
   return (
-    <Card className="mt-6" data-testid="team-lifecycle-card">
+    <Card
+      className="mt-10 border-destructive/30"
+      data-testid="team-lifecycle-card"
+    >
       <CardHeader>
         <CardTitle>Leave or delete this team</CardTitle>
         <CardDescription>
-          Leaving ends your membership. Deleting removes the team for everyone.
+          Leaving removes your access. Deleting removes the team for everyone
+          and can&apos;t be undone.
         </CardDescription>
       </CardHeader>
       <CardFooter className="flex flex-wrap gap-2">
@@ -276,11 +280,11 @@ export const AccountSettingsSection = ({
 
   return (
     <section data-testid="account-settings" id="account">
-      <h1 className="font-heading text-3xl font-semibold">Account</h1>
-      <p className="mt-2 max-w-2xl text-muted-foreground">
+      <h2 className="font-heading text-lg font-semibold">Your account</h2>
+      <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
         Your DotRelay account on this server.
       </p>
-      <div className="mt-6 grid gap-4">
+      <div className="mt-4 grid gap-4">
         <Card>
           <CardHeader>
             <CardTitle>Export my data</CardTitle>

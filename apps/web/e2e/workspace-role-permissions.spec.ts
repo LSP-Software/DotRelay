@@ -329,7 +329,7 @@ const enrollBrowserAndReturn = async (page: Page) => {
 };
 
 const setPreviewRole = async (page: Page, value: string) => {
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByLabel("Preview role").selectOption(value);
 };
 
@@ -400,12 +400,14 @@ test("a Member reads every Value but edits only the Values they provided or own"
   ).toBeDisabled();
 
   await editor.getByLabel("MY_TOKEN Value").fill("member-token");
-  await expect(tokenRow).toContainText("Draft change");
+  await expect(tokenRow).toContainText("Not published");
   await expect(
-    editor.getByRole("button", { name: "Save changes" }),
+    editor.getByRole("button", { name: "Review and publish" }),
   ).toBeEnabled();
-  await editor.getByRole("button", { name: "Save changes" }).click();
-  const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
+  await editor.getByRole("button", { name: "Review and publish" }).click();
+  const reviewDialog = page.getByRole("dialog", {
+    name: /^Publish \d+ change/,
+  });
   await expect(reviewDialog).toBeVisible();
   await expect(
     reviewDialog.getByText("MY_TOKEN", { exact: true }),
@@ -416,12 +418,13 @@ test("a Member reads every Value but edits only the Values they provided or own"
   await reviewDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(reviewDialog).toBeHidden();
 
+  await editor.getByRole("tab", { name: "History" }).click();
   await editor
     .getByTestId(/history-revision-/)
-    .getByRole("button", { name: "Rollback" })
+    .getByRole("button", { name: "Roll back" })
     .first()
     .click();
-  const rollbackDialog = page.getByRole("dialog", { name: "Rollback" });
+  const rollbackDialog = page.getByRole("dialog", { name: "Roll back" });
   await expect(rollbackDialog).toBeVisible();
   await expect(
     rollbackDialog.getByText("0 of 1 variables selected"),
@@ -433,7 +436,7 @@ test("a Member reads every Value but edits only the Values they provided or own"
     ),
   ).toBeVisible();
   await expect(
-    rollbackDialog.getByRole("button", { name: "Stage rollback" }),
+    rollbackDialog.getByRole("button", { name: "Add to my changes" }),
   ).toBeDisabled();
   await rollbackDialog.getByRole("button", { name: "Cancel" }).click();
 });
@@ -455,11 +458,11 @@ test("demoting to Member mid-draft removes the Values the new role cannot publis
   await editor.getByLabel("OTHER_SHARED Value").fill("hijacked-value");
   await expect(
     editor.getByTestId("environment-variable-OTHER_SHARED"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
   await editor.getByLabel("MY_TOKEN Value").fill("kept-token");
   await expect(
     editor.getByTestId("environment-variable-MY_TOKEN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 
   await setPreviewRole(page, "MEMBER");
   await page
@@ -476,17 +479,19 @@ test("demoting to Member mid-draft removes the Values the new role cannot publis
   const tokenRow = editor.getByTestId("environment-variable-MY_TOKEN");
   await expect(editor.getByLabel("OTHER_SHARED Value")).not.toBeEditable();
   await expect(otherRow.getByText("Read-only", { exact: true })).toBeVisible();
-  await expect(otherRow).not.toContainText("Draft change");
-  await expect(tokenRow).toContainText("Draft change");
+  await expect(otherRow).not.toContainText("Not published");
+  await expect(tokenRow).toContainText("Not published");
   await expect(
     editor.getByRole("button", { name: "Add Variable" }),
   ).toBeDisabled();
   await expect(
-    editor.getByRole("button", { name: "Save changes" }),
+    editor.getByRole("button", { name: "Review and publish" }),
   ).toBeEnabled();
 
-  await editor.getByRole("button", { name: "Save changes" }).click();
-  const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
+  await editor.getByRole("button", { name: "Review and publish" }).click();
+  const reviewDialog = page.getByRole("dialog", {
+    name: /^Publish \d+ change/,
+  });
   await expect(reviewDialog).toBeVisible();
   await expect(
     reviewDialog.getByText("MY_TOKEN", { exact: true }),
@@ -515,12 +520,13 @@ test("an Owner edits every Value, adds Variables, and may roll back any Value", 
     editor.getByRole("button", { name: "Add Variable" }),
   ).toBeEnabled();
 
+  await editor.getByRole("tab", { name: "History" }).click();
   await editor
     .getByTestId(/history-revision-/)
-    .getByRole("button", { name: "Rollback" })
+    .getByRole("button", { name: "Roll back" })
     .first()
     .click();
-  const rollbackDialog = page.getByRole("dialog", { name: "Rollback" });
+  const rollbackDialog = page.getByRole("dialog", { name: "Roll back" });
   await expect(rollbackDialog).toBeVisible();
   await expect(
     rollbackDialog.getByText("1 of 1 variables selected"),
@@ -569,6 +575,7 @@ test("history names each revision's author from the Team's members", async ({
   await unlockAccount(page, recoveryCode);
   const editor = await editorReady(page);
 
+  await editor.getByRole("tab", { name: "History" }).click();
   const rows = editor.getByTestId(/history-revision-/);
   await expect(rows).toHaveCount(3);
   // Newest first or oldest first, each row names who published it and

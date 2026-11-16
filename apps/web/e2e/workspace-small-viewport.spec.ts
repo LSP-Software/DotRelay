@@ -132,19 +132,16 @@ test("the Add Variable form stays reachable on a short phone viewport", async ({
   // ownership choices in the middle, and the value and Value-presence
   // checkboxes at the bottom.
   await setDialogScroll(dialog, 0);
-  await expectInViewport(page, dialog.getByLabel("Variable name"));
+  await expectInViewport(page, dialog.getByLabel("Name", { exact: true }));
 
   await dialog.evaluate((element) => {
     element.scrollTop = (element.scrollHeight - element.clientHeight) / 2;
   });
   await expectInViewport(page, dialog.getByLabel("Description (optional)"));
-  await expectInViewport(
-    page,
-    dialog.getByText("Shared value", { exact: true }),
-  );
+  await expectInViewport(page, dialog.getByText("Team", { exact: true }));
 
   await setDialogScroll(dialog, Number.MAX_SAFE_INTEGER);
-  const initial = dialog.getByRole("textbox", { name: "Initial value" });
+  const initial = dialog.getByRole("textbox", { name: "Value", exact: true });
   await expectInViewport(page, initial);
   await expectInViewport(page, dialog.getByText("Require a value"));
   await expectInViewport(page, add);
@@ -167,12 +164,12 @@ test("the Add Variable form stays reachable at 200% zoom", async ({ page }) => {
 
   const add = dialog.getByRole("button", { name: "Add Variable" });
   await expectInViewport(page, add);
-  const name = dialog.getByLabel("Variable name");
+  const name = dialog.getByLabel("Name", { exact: true });
   await expectInViewport(page, name);
 
   // The pinned footer never covers a focused field: focusing the Initial
   // Value field scrolls it fully above the footer actions.
-  const initial = dialog.getByRole("textbox", { name: "Initial value" });
+  const initial = dialog.getByRole("textbox", { name: "Value", exact: true });
   await initial.focus();
   await expectInViewport(page, initial);
   await expectAboveDialogFooter(dialog, initial);
@@ -200,7 +197,7 @@ test("a focused field and the submit action stay visible over the keyboard", asy
 
   // Focusing a mid-form field keeps both the field and the submit action on
   // screen, with the field clear of the pinned footer.
-  const initial = dialog.getByRole("textbox", { name: "Initial value" });
+  const initial = dialog.getByRole("textbox", { name: "Value", exact: true });
   await initial.focus();
   await expectInViewport(page, initial);
   await expectAboveDialogFooter(dialog, initial);
@@ -260,7 +257,9 @@ test("a long Project list keeps desktop navigation reachable", async ({
   await expectInViewport(page, sidebar.getByText("Ari Stone", { exact: true }));
 
   await devices.click();
-  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Devices and recovery" }),
+  ).toBeVisible();
 });
 
 test("a long Project list keeps mobile navigation reachable", async ({
@@ -285,5 +284,7 @@ test("a long Project list keeps mobile navigation reachable", async ({
   await expectInViewport(page, sheet.getByRole("button", { name: "Close" }));
 
   await recovery.click();
-  await expect(page.getByRole("heading", { name: "Recovery" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Recovery", exact: true }),
+  ).toBeVisible();
 });

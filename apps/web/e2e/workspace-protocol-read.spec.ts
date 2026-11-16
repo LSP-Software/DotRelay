@@ -6,9 +6,7 @@ const openFirstProject = async (page: Page) => {
 };
 
 const expectEmptyClaimAbsent = async (page: Page) => {
-  await expect(
-    page.getByText("Add a variable to save your first secrets here."),
-  ).toHaveCount(0);
+  await expect(page.getByText("No variables yet")).toHaveCount(0);
 };
 
 const expectMutationControlsBlocked = async (page: Page) => {
@@ -16,8 +14,8 @@ const expectMutationControlsBlocked = async (page: Page) => {
     page.getByRole("button", { name: "Add Variable" }),
   ).toBeDisabled();
   await expect(
-    page.getByRole("button", { name: "Save changes" }),
-  ).toBeDisabled();
+    page.getByRole("button", { name: "Review and publish" }),
+  ).toHaveCount(0);
 };
 
 const expectFailedRead = async (page: Page) => {

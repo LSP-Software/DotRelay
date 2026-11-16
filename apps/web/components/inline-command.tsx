@@ -21,9 +21,14 @@ const copyValue = async (value: string) => {
 type InlineCommandProps = Readonly<{
   readonly value: string;
   readonly className?: string;
+  readonly "data-testid"?: string | undefined;
 }>;
 
-export const InlineCommand = ({ value, className }: InlineCommandProps) => {
+export const InlineCommand = ({
+  value,
+  className,
+  "data-testid": testId,
+}: InlineCommandProps) => {
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
   const copied = copiedAt !== null;
 
@@ -43,6 +48,7 @@ export const InlineCommand = ({ value, className }: InlineCommandProps) => {
         render={
           <button
             aria-label={copied ? "Copied" : `Copy ${value}`}
+            data-testid={testId}
             onClick={() => void copy()}
             className={cn(
               "group/chip inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-muted/50 px-1.5 font-mono text-[0.85em] leading-5 text-foreground transition-all duration-200",

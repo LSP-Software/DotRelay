@@ -12,11 +12,11 @@ const openProtectedEditor = async (page: Page) => {
 
 const addLongVariable = async (page: Page) => {
   await page.getByRole("button", { name: "Add Variable" }).click();
-  await page.getByLabel("Variable name").fill(LONG_NAME);
+  await page.getByLabel("Name", { exact: true }).fill(LONG_NAME);
   await page.getByLabel("Description (optional)").fill(LONG_DESCRIPTION);
-  await page.getByText("Shared value", { exact: true }).last().click();
+  await page.getByText("Team", { exact: true }).last().click();
   await page
-    .getByRole("textbox", { name: "Initial value" })
+    .getByRole("textbox", { name: "Value", exact: true })
     .fill("wrap-check-value");
   await page.getByRole("button", { name: "Add Variable" }).last().click();
 };
@@ -69,7 +69,7 @@ test("a long name stays distinguishable next to its Value and delete controls", 
   await expect(
     row.getByRole("button", { name: `Delete ${LONG_NAME}` }),
   ).toBeVisible();
-  await expect(row.getByText("Draft change", { exact: true })).toBeVisible();
+  await expect(row.getByText("Not published", { exact: true })).toBeVisible();
 });
 
 const boxesDoNotOverlap = async (a: Locator, b: Locator) => {
@@ -98,8 +98,8 @@ const assertRowReadable = async (row: Locator) => {
   await assertReadableWithoutHover(
     row.getByText(LONG_DESCRIPTION, { exact: true }),
   );
-  const ownership = row.getByText("Shared value", { exact: true });
-  const draft = row.getByText("Draft change", { exact: true });
+  const ownership = row.getByText("Team", { exact: true });
+  const draft = row.getByText("Not published", { exact: true });
   await expect(ownership).toBeVisible();
   await expect(draft).toBeVisible();
   // toBeVisible cannot detect overlap; assert the boxes stay disjoint.
@@ -135,8 +135,10 @@ test("the Save changes review shows full long names without hover", async ({
   await openProtectedEditor(page);
   await addLongVariable(page);
 
-  await page.getByRole("button", { name: "Save changes" }).click();
-  const reviewDialog = page.getByRole("dialog", { name: "Save changes" });
+  await page.getByRole("button", { name: "Review and publish" }).click();
+  const reviewDialog = page.getByRole("dialog", {
+    name: /^Publish \d+ change/,
+  });
   await assertReadableWithoutHover(
     reviewDialog.getByText(LONG_NAME, { exact: true }),
   );
