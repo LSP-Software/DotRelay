@@ -1881,20 +1881,6 @@ const runtimeNotifications = createEmailNotifier({
       })
     : null,
   diagnostics: runtimeObservability.diagnostics,
-  // The same best-effort, cached lookup the workspace catalog uses, on the
-  // acting owner's or admin's Delegated GitHub Access.
-  resolveProjectName: async ({ githubRepositoryId, actorUserId }) => {
-    const actor = await database.user.findUnique({
-      where: { id: actorUserId },
-      select: { authSubject: true },
-    });
-    if (!actor) return undefined;
-    const repository = await lookupGitHubRepositoryDisplay(githubRepositoryId, {
-      accessToken: () => delegatedGitHubAccessToken(auth, actor.authSubject),
-      cacheScope: actor.authSubject,
-    });
-    return repository ? `${repository.owner}/${repository.name}` : undefined;
-  },
 });
 export const app = createApi({
   database,

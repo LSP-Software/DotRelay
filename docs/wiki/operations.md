@@ -92,15 +92,21 @@ the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 
 The API sends three emails through [Resend](https://resend.com):
 
-- **Invitation**, to the invitee: Team name, inviter, expiry and a link to `/workspace` on
-  `WEB_ORIGIN`, where the invitation is accepted or declined. Invitations address a GitHub id, so
-  only an invitee who has already signed in to DotRelay has a stored address. Anyone else gets no
-  email; the inviter still shares the invitation themselves.
+- **Invitation**, to the invitee: the expiry and a link to `/workspace` on `WEB_ORIGIN`, where the
+  invitation, its Team and its inviter are shown and it is accepted or declined. Invitations
+  address a GitHub id, so only an invitee who has already signed in to DotRelay has a stored
+  address. Anyone else gets no email; the inviter still shares the invitation themselves.
 - **Project keys shared**, to the Member, once per Share project keys operation (web Members view
-  or `dotrelay team share-keys`), listing the Projects and the `dotrelay pull` hint. Not one email
-  per Device grant.
-- **Invitation accepted**, to each active owner and admin of the Team except the new Member: who
-  joined, and that the Project keys must be shared before they can pull.
+  or `dotrelay team share-keys`), with the number of Projects and the `dotrelay pull` hint. Not
+  one email per Device grant.
+- **Invitation accepted**, to each active owner and admin of the Team except the new Member: that
+  someone joined, the `dotrelay team share-keys` command for them, and that the Project keys must
+  be shared before they can pull.
+
+Subjects and headings are fixed text. No email names a Team, a person's display name, or a
+repository: Members choose Team and display names, so mail from DotRelay's domain does not carry
+their words, and a repository name resolved with one Member's GitHub access may be private to
+them.
 
 Recipients' addresses come from the GitHub primary email Better Auth stored at sign-in (the
 GitHub App's **Email addresses: read** permission). GitHub `users.noreply.github.com` addresses
