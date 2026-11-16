@@ -121,6 +121,10 @@ const boundaryFor = (environmentId: string | null) => ({
 // command needs.
 const startServer = (
   routes: readonly Route[],
+  options: Readonly<{
+    /** False when the Server Profile has revoked this machine's Device. */
+    readonly deviceActive?: boolean;
+  }> = {},
 ): Readonly<{
   origin: string;
   pin: ServerProfilePin;
@@ -132,7 +136,10 @@ const startServer = (
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
-      const proof = await answerDeviceProofRoute(request);
+      const proof = await answerDeviceProofRoute(
+        request,
+        options.deviceActive === false ? { isActive: () => false } : {},
+      );
       if (proof) return proof;
       const url = new URL(request.url);
       const body = request.method === "GET" ? "" : await request.clone().text();
@@ -1632,6 +1639,76 @@ describe("team leave and account lifecycle", () => {
           deviceMetadataPath(state.stateDirectory, server.pin),
         ).exists(),
       ).toBe(false);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("acts on the session alone once this machine's Device is revoked", async () => {
+    const seen: boolean[] = [];
+    const server = startServer(
+      lifecycleRoutes({ record: (request) => seen.push(proven(request)) }),
+      { deviceActive: false },
+    );
+    const state = await seedState(server.pin);
+    try {
+      const flags = ["--profile", "relay", "--no-input", "--force", "--json"];
+      const left = await run(
+        ["team", "leave", "payments", ...flags],
+        state.runtime,
+      );
+      expect(left.exitCode).toBe(0);
+      const exported = await run(["account", "export"], state.runtime);
+      expect(exported.exitCode).toBe(0);
+      const deleted = await run(["account", "delete", ...flags], state.runtime);
+      expect(deleted.exitCode).toBe(0);
+      expect(JSON.parse(deleted.stdout)).toMatchObject({
+        status: "DELETED",
+        localDataRemoved: ["session", "device keys"],
+      });
+      // No proof and no signature from a revoked Device; the service
+      // decides from the session (ADR 0024).
+      expect(seen).toEqual([false, false, false]);
+      const deletion = posts(server.requests).find(
+        (request) => request.path === "/api/v1/account/delete",
+      );
+      expect(JSON.parse(deletion?.body ?? "{}")).toEqual({
+        confirmUserId: userId,
+      });
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("names the active Device when the session alone is not enough", async () => {
+    const server = startServer(
+      lifecycleRoutes({
+        leave: () => problemResponse("device_proof_required"),
+      }),
+      { deviceActive: false },
+    );
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "team",
+          "leave",
+          "payments",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(6);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        code: "device_not_active",
+        detail: expect.stringContaining("still has an active Device"),
+      });
     } finally {
       server.stop();
       await state.cleanup();

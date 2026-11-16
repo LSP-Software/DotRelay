@@ -31,8 +31,37 @@ const uuidPattern =
 /** The phrase `dotrelay account delete` asks the User to type. */
 export const ACCOUNT_DELETION_PHRASE = "delete my account";
 
+// The session-only client for a machine whose Device was revoked. The
+// service still wants a Device proof while the account has another active
+// Device, so that refusal names the way out.
+const withoutRevokedDevice = (admin: StrictJsonClient): StrictJsonClient => {
+  const explain = (error: unknown): never => {
+    if (error instanceof CliError && error.code === "device_proof_required")
+      throw new CliError(
+        "authentication",
+        "this machine's Device is no longer active and your account still has an active Device; run the command on that Device, or run dotrelay device enroll to authorize this machine again",
+        {},
+        "device_not_active",
+      );
+    throw error;
+  };
+  return Object.freeze({
+    get: (path: string, fields: readonly string[]) =>
+      admin.get(path, fields).catch(explain),
+    post: (
+      path: string,
+      body: Record<string, unknown>,
+      fields: readonly string[],
+      postOptions?: Readonly<{ readonly idempotencyKey?: string }>,
+    ) => admin.post(path, body, fields, postOptions).catch(explain),
+  });
+};
+
 // This machine's Device for the profile, when it has one, and a client that
-// proves it on every request.
+// proves it on every request. A Device revoked since this machine stored it
+// cannot prove itself; the action then goes ahead on the session alone,
+// which the service accepts only while the account has no active Device and
+// the sign-in is recent (ADR 0024).
 const accountClient = async (
   options: WorkflowOptions,
 ): Promise<
@@ -46,9 +75,17 @@ const accountClient = async (
     (await readDeviceId(
       deviceMetadataPath(options.stateDirectory, options.profile.pin),
     ));
-  return deviceId
-    ? { deviceId, admin: createDeviceAdmin(options, deviceId) }
-    : { deviceId: null, admin: adminClient(options) };
+  if (!deviceId) return { deviceId: null, admin: adminClient(options) };
+  const admin = createDeviceAdmin(options, deviceId);
+  try {
+    // The client keeps this proof for the action's own requests.
+    await admin.deviceProof?.headers();
+    return { deviceId, admin };
+  } catch (error) {
+    if (!(error instanceof CliError && error.code === "device_not_active"))
+      throw error;
+  }
+  return { deviceId: null, admin: withoutRevokedDevice(adminClient(options)) };
 };
 
 // The Device's Ed25519 signature over the account deletion command.
