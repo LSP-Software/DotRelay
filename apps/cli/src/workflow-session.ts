@@ -26,6 +26,7 @@ import {
   USER_VALUE_KEY_GENERATION,
 } from "@dotrelay/client";
 import {
+  bytesToUuid,
   encodeProtocolObject,
   sha384,
   sha384ToHex,
@@ -668,8 +669,9 @@ export const loadWorkflowSession = async (
     ...(options.fetch ? { fetch: options.fetch as never } : {}),
   });
   const signingPublicKey = await exportSigningPublicKey(deviceSigningPublicKey);
+  // This Device's own key speaks for the User its bundle belongs to.
   const signingTrustKeys = collectSigningTrust(boundary, signingPublicKey, {
-    userId: boundary.session.userId,
+    userId: bytesToUuid(bundle.userId),
     deviceId,
   });
   let userValueKey: Uint8Array | undefined;
