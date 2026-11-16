@@ -497,7 +497,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     examples: [
       "dotrelay team share-keys octocat",
       "dotrelay team share-keys <user-id> --team <team-id>",
-      "dotrelay team share-keys octocat --no-input --force --fingerprint '1a2b3c4d 5e6f7a8b 9c0d1e2f 3a4b5c6d 7e8f9a0b'",
+      "dotrelay team share-keys octocat --no-input --force --fingerprint 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
     ],
   },
   "team decline": {
@@ -597,7 +597,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     ],
     examples: [
       "dotrelay team trust <user-id>",
-      "dotrelay team trust <user-id> --no-input --fingerprint '1a2b3c4d 5e6f7a8b 9c0d1e2f 3a4b5c6d 7e8f9a0b'",
+      "dotrelay team trust <user-id> --no-input --fingerprint 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
     ],
   },
   "env list": {
