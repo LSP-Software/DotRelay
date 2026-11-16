@@ -5,11 +5,15 @@ Credentials are read from the environment, never accepted as command arguments.
 age encryption to a public recipient does not say who made an archive, so each
 backup's manifest carries an HMAC-SHA256 under BACKUP_MAC_KEY_FILE, a private key
 kept away from backup storage; verify and restore refuse an archive whose
-manifest does not authenticate before anything is decrypted.
+manifest does not authenticate before anything is decrypted. The MAC also binds
+the archive's file name, its creation time and the source database, so an older
+authentic archive renamed over a newer one is refused, and verify and restore
+print the authenticated creation time.
 Only stable, non-sensitive failures are printed. Requires PostgreSQL 17 clients
 and age 1.x. Stop all API/maintenance writers before migrate or restore.
 """
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -58,8 +62,8 @@ def checksum(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-MANIFEST_VERSION = 2
-MAC_DOMAIN = b"dotrelay-backup-manifest-v2\n"
+MANIFEST_VERSION = 3
+MAC_DOMAINS = {2: b"dotrelay-backup-manifest-v2\n", 3: b"dotrelay-backup-manifest-v3\n"}
 
 
 def mac_key(path):
@@ -76,19 +80,48 @@ def mac_key(path):
 
 def manifest_mac(key, fields):
     body = json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()
-    return hmac.new(key, MAC_DOMAIN + body, hashlib.sha256).hexdigest()
+    return hmac.new(key, MAC_DOMAINS[fields["version"]] + body, hashlib.sha256).hexdigest()
 
 
-def verify(archive, identity, key_path, allow_unauthenticated=False):
+def source_identity(env):
+    """The database a backup was taken from: host, port and database name."""
+    return f"{env.get('PGHOST', '')}:{env.get('PGPORT', '')}/{env.get('PGDATABASE', '')}"
+
+
+def authenticated_fields(archive, manifest, key_path, allow_unbound=False):
+    """The manifest fields its MAC covers, once the MAC verifies."""
+    version = manifest.get("version")
+    if version == MANIFEST_VERSION:
+        fields = {name: manifest.get(name) for name in ("archive", "createdAt", "source", "sha256", "size")}
+        if not all(isinstance(fields[name], str) for name in ("archive", "createdAt", "source")):
+            raise RuntimeError("Backup manifest is not authentic")
+    elif version == 2 and allow_unbound:
+        # Authenticated, but made before the MAC bound the archive name, time
+        # and source: accepted only on the operator's explicit, per-run
+        # assertion that no older archive was renamed over this one.
+        fields = {"sha256": manifest.get("sha256"), "size": manifest.get("size")}
+    else:
+        raise RuntimeError("Backup manifest is not authentic")
+    fields["version"] = version
+    expected = manifest_mac(mac_key(key_path), fields)
+    if not isinstance(manifest.get("mac"), str) or not hmac.compare_digest(manifest["mac"], expected):
+        raise RuntimeError("Backup manifest is not authentic")
+    # An authentic manifest written for another file: an older archive and
+    # its manifest renamed over a newer backup.
+    if version == MANIFEST_VERSION and fields["archive"] != archive.name:
+        raise RuntimeError("Backup manifest is not authentic")
+    return fields
+
+
+def verify(archive, identity, key_path, allow_unauthenticated=False, allow_unbound=False, report=None):
     archive = Path(archive)
     manifest = json.loads(Path(str(archive) + ".json").read_text())
-    if manifest.get("version") == MANIFEST_VERSION:
-        fields = {"version": MANIFEST_VERSION, "sha256": manifest.get("sha256"), "size": manifest.get("size")}
-        expected = manifest_mac(mac_key(key_path), fields)
-        if not isinstance(manifest.get("mac"), str) or not hmac.compare_digest(manifest["mac"], expected):
-            raise RuntimeError("Backup manifest is not authentic")
+    if manifest.get("version") in (2, MANIFEST_VERSION):
+        fields = authenticated_fields(archive, manifest, key_path, allow_unbound)
         if fields["size"] != archive.stat().st_size or fields["sha256"] != checksum(archive):
             raise RuntimeError("Backup checksum mismatch")
+        if report is not None and "createdAt" in fields:
+            report(f"Backup created at {fields['createdAt']}")
     elif manifest.get("version") == 1 and allow_unauthenticated:
         # Archives made before manifests were authenticated: accepted only on
         # the operator's explicit, per-run assertion that storage was trusted.
@@ -134,15 +167,22 @@ def backup(archive, env, recipient, identity, key_path):
             if dump.poll() is None:
                 dump.kill()
                 dump.wait()
-    fields = {"version": MANIFEST_VERSION, "sha256": checksum(archive), "size": archive.stat().st_size}
+    fields = {
+        "version": MANIFEST_VERSION,
+        "archive": archive.name,
+        "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": source_identity(env),
+        "sha256": checksum(archive),
+        "size": archive.stat().st_size,
+    }
     manifest = dict(fields, mac=manifest_mac(key, fields))
     with Path(str(archive) + ".json").open("x") as output:
         json.dump(manifest, output)
     verify(archive, identity, key_path).close()
 
 
-def restore(archive, env, identity, key_path, allow_unauthenticated=False):
-    plaintext = verify(archive, identity, key_path, allow_unauthenticated)
+def restore(archive, env, identity, key_path, allow_unauthenticated=False, allow_unbound=False, report=None):
+    plaintext = verify(archive, identity, key_path, allow_unauthenticated, allow_unbound, report)
     try:
         # Never --clean, DROP DATABASE, or overwrite an existing schema. The
         # operator supplies a newly created isolated target and switches only
@@ -164,8 +204,10 @@ def main():
     identity = os.environ["BACKUP_IDENTITY_FILE"]
     key_path = os.environ["BACKUP_MAC_KEY_FILE"]
     legacy = os.environ.get("DOTRELAY_ALLOW_UNAUTHENTICATED_BACKUP") == "true"
+    unbound = os.environ.get("DOTRELAY_ALLOW_UNBOUND_BACKUP") == "true"
+    report = print
     if args.action == "verify":
-        verify(args.archive, identity, key_path, legacy).close()
+        verify(args.archive, identity, key_path, legacy, unbound, report).close()
     else:
         env = pg_environment(os.environ["RESTORE_DATABASE_URL" if args.action == "restore" else "DATABASE_URL"])
         if args.action == "backup":
@@ -173,7 +215,7 @@ def main():
         else:
             if os.environ.get("DOTRELAY_WRITERS_STOPPED") != "true":
                 raise RuntimeError("Stop all writers and set DOTRELAY_WRITERS_STOPPED=true")
-            restore(args.archive, env, identity, key_path, legacy)
+            restore(args.archive, env, identity, key_path, legacy, unbound, report)
     print("Backup operation verified")
 
 

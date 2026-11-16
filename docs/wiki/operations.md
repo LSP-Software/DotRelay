@@ -278,15 +278,20 @@ python3 ops/postgres.py verify /private-backups/unique-name.age
 
 Backups are age-encrypted PostgreSQL custom archives with a `.json` manifest
 sidecar. Both must be retained. Encryption to a public age recipient does not say who
-made an archive, so the manifest records the archive's SHA-256 and size under an
-HMAC-SHA256 keyed by `BACKUP_MAC_KEY_FILE`: a private (`0600`) file holding at least
-32 random bytes, for example `openssl rand -hex 32`. Keep that key with the age identity
-and never on backup storage; whoever can write backup storage can replace an archive and
-its checksum, but not forge the MAC. `verify` and `restore` refuse an archive whose
-manifest does not authenticate before anything is decrypted. Archives made before
-manifests were authenticated (manifest version 1) are refused unless the operator sets
-`DOTRELAY_ALLOW_UNAUTHENTICATED_BACKUP=true` for that run after confirming the storage
-was not writable by anyone else. The pipeline checks both `pg_dump` and encryption
+made an archive, so the manifest records the archive's SHA-256 and size, its file name, its
+creation time and the source database (host, port and name) under an HMAC-SHA256 keyed by
+`BACKUP_MAC_KEY_FILE`: a private (`0600`) file holding at least 32 random bytes, for example
+`openssl rand -hex 32`. Keep that key with the age identity and never on backup storage;
+whoever can write backup storage can replace an archive and its checksum, but not forge the
+MAC, and cannot rename an older authentic archive over a newer one, because the manifest names
+the file it was written for. `verify` and `restore` refuse an archive whose manifest does not
+authenticate before anything is decrypted, and print its authenticated creation time; check it
+is the backup you meant to restore. Archives made before manifests were authenticated (manifest
+version 1) are refused unless the operator sets `DOTRELAY_ALLOW_UNAUTHENTICATED_BACKUP=true`
+for that run after confirming the storage was not writable by anyone else. Archives authenticated
+before the name, time and source were bound (manifest version 2) need
+`DOTRELAY_ALLOW_UNBOUND_BACKUP=true` for that run, after confirming no older archive was renamed
+over them. The pipeline checks both `pg_dump` and encryption
 exit codes; any failed output is unusable. Names are exclusive: a backup never
 overwrites another backup. Store copies outside the database host, encrypt disks,
 restrict access, monitor failures and capacity, and set retention/RPO/RTO appropriate
