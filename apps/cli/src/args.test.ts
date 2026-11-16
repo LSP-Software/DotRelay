@@ -474,6 +474,31 @@ describe("CLI argument contract", () => {
     expect(() => parseArguments(["team", "share-keys"])).toThrow(
       "usage: dotrelay team share-keys <github-login-or-user-id>",
     );
+    // --fingerprint takes the 40 hex digits as shown, spaces allowed, and is
+    // read only by the commands that confirm an identity.
+    expect(
+      parseArguments([
+        "team",
+        "trust",
+        "user",
+        "--fingerprint",
+        "1A2B3C4D 5e6f7a8b 9c0d1e2f 3a4b5c6d 7e8f9a0b",
+      ]).fingerprint,
+    ).toBe("1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b");
+    expect(
+      parseArguments([
+        "team",
+        "share-keys",
+        "octocat",
+        `--fingerprint=${"ab".repeat(20)}`,
+      ]).fingerprint,
+    ).toBe("ab".repeat(20));
+    expect(() =>
+      parseArguments(["team", "trust", "user", "--fingerprint", "abc"]),
+    ).toThrow("--fingerprint requires the 40 hex digits");
+    expect(() =>
+      parseArguments(["pull", "--fingerprint", "ab".repeat(20)]),
+    ).toThrow("--fingerprint is not supported by pull");
     expect(parseArguments(["device", "list"]).subcommand).toBe("list");
     expect(
       parseArguments(["team", "decline", "Payments", "--no-input", "--force"])

@@ -13,6 +13,7 @@ import {
   type PublicationContext,
   type RevisionSigningTrustEntry,
   revisionAuthoredAtNotBeforeMs,
+  sameFingerprint,
 } from "@dotrelay/client";
 import { sha384ToHex, uuidToBytes } from "@dotrelay/contracts";
 import { createStrictJsonClient, type StrictJsonClient } from "./admin";
@@ -815,6 +816,35 @@ export const confirmPrompt = async (
   if (options.prompt)
     return parseConfirmAnswer(await options.prompt(`${question} [y/N]`));
   return terminalConfirm(options, question, false);
+};
+
+// Confirming a teammate's account identity makes their Devices grant
+// signers and key recipients (ADR 0022), so it always rests on a compared
+// fingerprint: the one the user passed with --fingerprint, which must match
+// the identity the Server Profile presents, or the one a prompt shows them.
+// Without a terminal only --fingerprint can confirm; --force never does.
+export const requireExpectedFingerprint = (
+  options: WorkflowOptions,
+  parsed: Readonly<{ readonly fingerprint?: string }>,
+  fingerprint: string,
+): void => {
+  if (parsed.fingerprint === undefined) {
+    if (options.noInput)
+      throw new CliError(
+        "invocation",
+        "--no-input needs --fingerprint with the Member's account fingerprint before their identity is confirmed; compare it with the one their own dotrelay team members --fingerprints shows",
+        {},
+        "account_fingerprint_required",
+      );
+    return;
+  }
+  if (!sameFingerprint(parsed.fingerprint, fingerprint))
+    throw new CliError(
+      "crypto",
+      `the account fingerprint the Server Profile presents for this Member (${fingerprint}) does not match --fingerprint. Nothing was confirmed; compare it with the Member before trying again`,
+      {},
+      "account_fingerprint_mismatch",
+    );
 };
 
 // The review frame has already printed the question, so the terminal read

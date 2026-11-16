@@ -62,6 +62,12 @@ export type ParsedArguments = Readonly<{
   readonly stdout: boolean;
   readonly reveal: boolean;
   readonly fingerprints: boolean;
+  /**
+   * The account fingerprint the user compared out of band, which `team
+   * trust` and `team share-keys` require before confirming an identity
+   * without a terminal (ADR 0022, ADR 0023).
+   */
+  readonly fingerprint?: string;
 }>;
 
 type MutableArguments = {
@@ -93,6 +99,7 @@ type MutableArguments = {
   stdout: boolean;
   reveal: boolean;
   fingerprints: boolean;
+  fingerprint?: string;
 };
 
 const valueFlags = new Set([
@@ -112,6 +119,7 @@ const valueFlags = new Set([
   "--variable",
   "--format",
   "--allow-env",
+  "--fingerprint",
 ]);
 
 const forbiddenFlags = new Set([
@@ -183,6 +191,16 @@ const assignValue = (parsed: MutableArguments, flag: string, value: string) => {
       );
     }
     parsed.allowedEnvironmentNames.push(value);
+  } else if (flag === "--fingerprint") {
+    // Spaces are allowed so the fingerprint can be pasted as shown.
+    const fingerprint = value.replaceAll(/\s+/g, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(fingerprint)) {
+      const usage = usageFor(parsed.command, parsed.subcommand);
+      throw new CliInvocationError(
+        `--fingerprint requires the 40 hex digits of an account fingerprint${usage ? `; usage: ${usage}` : ""}`,
+      );
+    }
+    parsed.fingerprint = fingerprint;
   }
 };
 
@@ -211,6 +229,7 @@ export const FLAG_KEYS = [
   "reveal",
   "stdout",
   "fingerprints",
+  "fingerprint",
 ] as const;
 
 export type FlagKey = (typeof FLAG_KEYS)[number];
@@ -240,6 +259,7 @@ export const FLAG_TOKENS: Record<FlagKey, string> = {
   reveal: "--reveal",
   stdout: "--stdout",
   fingerprints: "--fingerprints",
+  fingerprint: "--fingerprint",
 };
 
 export const USAGE: Record<string, string> = {
@@ -279,8 +299,9 @@ export const USAGE: Record<string, string> = {
   "project rotate": "dotrelay project rotate",
   "team list": "dotrelay team list",
   "team members": "dotrelay team members | --fingerprints",
-  "team trust": "dotrelay team trust <user-id>",
-  "team share-keys": "dotrelay team share-keys <github-login-or-user-id>",
+  "team trust": "dotrelay team trust <user-id> | --fingerprint <fingerprint>",
+  "team share-keys":
+    "dotrelay team share-keys <github-login-or-user-id> | --fingerprint <fingerprint>",
   "team decline": "dotrelay team decline <invitation-id-or-team>",
   "team leave": "dotrelay team leave <team-id-or-name>",
   "account export": "dotrelay account export | --output <file>",
@@ -416,8 +437,15 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "project rotate": ["profile", "noInput", "force", "json"],
   "team list": ["profile", "json"],
   "team members": ["profile", "team", "fingerprints", "noInput", "json"],
-  "team trust": ["profile", "team", "noInput", "force", "json"],
-  "team share-keys": ["profile", "team", "noInput", "force", "json"],
+  "team trust": ["profile", "team", "fingerprint", "noInput", "force", "json"],
+  "team share-keys": [
+    "profile",
+    "team",
+    "fingerprint",
+    "noInput",
+    "force",
+    "json",
+  ],
   "team decline": ["profile", "noInput", "force", "json"],
   "team leave": ["profile", "noInput", "force", "json"],
   "account export": ["profile", "output", "json"],

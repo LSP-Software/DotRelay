@@ -303,10 +303,12 @@ verified, not confirmed, unverified (no signed Device roster yet, so none of the
 trusted), or blocked because the account key changed or the roster rolled back. `--fingerprints`
 adds each Member's account fingerprint for comparison out of band. The first time this
 installation sees a Member, it pins their identity: their Revisions verify, but no Project key is
-taken from them until you confirm the fingerprint. `team trust <user-id>` confirms a Member seen
-for the first time, or re-trusts one whose identity changed, after you compare fingerprints;
-`--no-input` requires `--force`. Until a changed identity is re-trusted, the CLI does not accept
-that Member's Devices. Every protected command also verifies this account's own roster and
+taken from them, and none of their legacy-format Values is read, until you confirm the
+fingerprint. `team trust <user-id>` confirms a Member seen for the first time, or re-trusts one
+whose identity changed, after you compare fingerprints. `--fingerprint <fingerprint>` passes the
+fingerprint you compared; the command confirms only when it matches, and with `--no-input` it is
+required: `--force` alone never confirms an identity. Until a changed identity is re-trusted, the
+CLI does not accept that Member's Devices. Every protected command also verifies this account's own roster and
 publishes a new one when this Device holds the AMK and is not listed yet; a first roster lists only
 this Device. Each installation also pins the highest epoch and the key it accepted for each
 Project, and refuses an older epoch or a different key for the same epoch.
@@ -346,7 +348,9 @@ login to a GitHub user id instead. The match only picks the Member: keys go to t
 id and signed roster. The command reads the service's provisioning plan for that Membership, opens each
 Project's current key, seals it only to Devices in the Member's signed Device roster, and posts
 the signed activation; `--no-input` requires `--force`. The question names the Member's account
-fingerprint, and sharing confirms it. A Member without a signed Device roster cannot receive keys
+fingerprint, and sharing confirms it; with `--no-input`, a Member not confirmed yet also needs
+`--fingerprint <fingerprint>` with the value they read from their own `team members
+--fingerprints`, and a different value is refused. A Member without a signed Device roster cannot receive keys
 yet. The Member then runs `dotrelay pull`.
 While a Membership is waiting for keys, protected commands in that Repository say so and name
 this step, instead of reporting the Repository as unlinked or creating a second Team and Project

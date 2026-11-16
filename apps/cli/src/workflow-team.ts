@@ -19,6 +19,7 @@ import {
   createDeviceAdmin,
   fromBase64,
   isRecord,
+  requireExpectedFingerprint,
   type WorkflowOptions,
 } from "./workflow-core";
 import { loadWorkflowSession } from "./workflow-session";
@@ -245,8 +246,12 @@ export const trustTeamMember = async (
     );
   const fingerprint = await accountFingerprint(identity);
   const changed = trust.status === "identity-changed";
+  // Confirming makes this identity a grant signer and a key recipient
+  // (ADR 0022), so it always compares a fingerprint: one the user passed, or
+  // one they read in the prompt. --force never stands in for it.
+  requireExpectedFingerprint(options, parsed, fingerprint);
   if (
-    !(options.noInput && options.force) &&
+    parsed.fingerprint === undefined &&
     !(await confirmPrompt(
       options,
       changed

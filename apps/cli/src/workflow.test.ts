@@ -6884,22 +6884,46 @@ describe("pull after Project epoch rotations", () => {
       );
       expect(author?.status).toBe("identity-changed");
       expect(author?.fingerprint).toMatch(/^([0-9a-f]{8} ){4}[0-9a-f]{8}$/);
-      const trusted = await pullWith(project, {
+      const trustWith = (...flags: string[]) =>
+        pullWith(project, {
+          links: project.links,
+          listedEpochs: [],
+          runtime: first.runtime,
+          accountRosters: rosters,
+          args: [
+            "team",
+            "trust",
+            project.authorUserId,
+            "--profile",
+            "relay",
+            "--no-input",
+            "--json",
+            ...flags,
+          ],
+        });
+      // Without a terminal --force never confirms an identity: only a
+      // fingerprint the user compared does, and it must match.
+      const forced = await trustWith("--force");
+      expect(forced.result.exitCode).not.toBe(0);
+      expect(JSON.parse(forced.result.stderr)).toMatchObject({
+        code: "account_fingerprint_required",
+      });
+      const mismatched = await trustWith("--fingerprint", "0".repeat(40));
+      expect(mismatched.result.exitCode).not.toBe(0);
+      expect(JSON.parse(mismatched.result.stderr)).toMatchObject({
+        code: "account_fingerprint_mismatch",
+      });
+      const stillRefused = await pullWith(project, {
         links: project.links,
         listedEpochs: [],
         runtime: first.runtime,
         accountRosters: rosters,
-        args: [
-          "team",
-          "trust",
-          project.authorUserId,
-          "--profile",
-          "relay",
-          "--no-input",
-          "--force",
-          "--json",
-        ],
       });
+      expect(stillRefused.result.exitCode).not.toBe(0);
+      const trusted = await trustWith(
+        "--fingerprint",
+        author?.fingerprint ?? "",
+      );
       expect(trusted.result.exitCode).toBe(0);
       const accepted = await pullWith(project, {
         links: project.links,

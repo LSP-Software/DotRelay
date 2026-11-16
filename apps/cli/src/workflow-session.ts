@@ -37,7 +37,7 @@ import { createSessionStore } from "./auth";
 import { note } from "./components";
 import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
-import { CliError, CliInvocationError } from "./errors";
+import { CliError, CliInvocationError, sanitizeCliLine } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
 import {
   establishAccountTrust,

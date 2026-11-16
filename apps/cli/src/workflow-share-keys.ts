@@ -24,6 +24,7 @@ import {
   hexToBytes,
   isRecord,
   parseBoundary,
+  requireExpectedFingerprint,
   verifyDeviceBundle,
   type WorkflowOptions,
   workspaceBoundaryFields,
@@ -392,6 +393,20 @@ export const shareProjectKeys = async (
       ? ` Their account fingerprint is ${fingerprint}; compare it with them first.`
       : ""
   }`;
+  // Sharing with a Member this installation has not confirmed also confirms
+  // their identity, which needs a compared fingerprint (ADR 0022): without a
+  // terminal only --fingerprint gives one, and --force never stands in for
+  // it. A fingerprint passed for a confirmed Member must still match.
+  if (memberTrust?.confirmed !== true || parsed.fingerprint !== undefined) {
+    if (fingerprint === null)
+      throw new CliError(
+        "crypto",
+        "the Member's account identity is unavailable; no keys were shared",
+        {},
+        "trust_failed",
+      );
+    requireExpectedFingerprint(options, parsed, fingerprint);
+  }
   if (options.noInput && !options.force)
     throw new CliInvocationError(
       "--no-input requires --force to confirm sharing the Project keys",

@@ -483,16 +483,21 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     ],
     options: {
       team: "Team id (defaults to your only Team, or the linked Project's Team)",
-      noInput: "never prompt; requires --force",
+      fingerprint:
+        "the Member's account fingerprint, compared with them out of band; required with --no-input until their identity is confirmed",
+      noInput:
+        "never prompt; requires --force, and --fingerprint for an unconfirmed Member",
       force: "confirm sharing when --no-input is set",
     },
     notes: [
       "Only a Team owner or admin can share keys; an admin can share with Members only.",
       "This Device must be able to read every Project in the Team. Keys go only to Devices listed in the Member's signed Device roster.",
+      "Sharing confirms the Member's account identity on this installation. Without a terminal that needs --fingerprint with the value the Member's own dotrelay team members --fingerprints shows; --force alone never confirms an identity.",
     ],
     examples: [
       "dotrelay team share-keys octocat",
       "dotrelay team share-keys <user-id> --team <team-id>",
+      "dotrelay team share-keys octocat --no-input --force --fingerprint '1a2b3c4d 5e6f7a8b 9c0d1e2f 3a4b5c6d 7e8f9a0b'",
     ],
   },
   "team decline": {
@@ -578,14 +583,22 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
   },
   "team trust": {
     about:
-      "Re-trust a Member whose account identity changed, after you compared the new fingerprint with them out of band. Until then this installation sends them no keys and does not accept their Devices.",
+      "Confirm a Member's account identity, or re-trust one that changed, after you compared its fingerprint with them out of band. Until then this installation takes no keys from them, applies none of their legacy-format Values, and, for a changed identity, does not accept their Devices.",
     positional: ["<user-id>  The Member's User id from dotrelay team members."],
     options: {
       team: "Team id (defaults to the linked Project's Team)",
-      noInput: "never prompt; requires --force",
-      force: "confirm the re-trust when --no-input is set",
+      fingerprint:
+        "the fingerprint you compared with the Member; it must match the identity the Server Profile presents",
+      noInput: "never prompt; requires --fingerprint",
+      force: "accepted for compatibility; never confirms an identity by itself",
     },
-    examples: ["dotrelay team trust <user-id>"],
+    notes: [
+      "With --fingerprint the command confirms only when the fingerprint matches, and without a terminal it is the only way to confirm.",
+    ],
+    examples: [
+      "dotrelay team trust <user-id>",
+      "dotrelay team trust <user-id> --no-input --fingerprint '1a2b3c4d 5e6f7a8b 9c0d1e2f 3a4b5c6d 7e8f9a0b'",
+    ],
   },
   "env list": {
     about:

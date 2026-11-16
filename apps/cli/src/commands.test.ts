@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  accountFingerprint,
   createAccountDeviceRoster,
   createCliDeviceStorage,
   createDeviceBootstrap,
@@ -907,8 +908,8 @@ describe("team share-keys", () => {
         return { membershipId, lifecycle: "ACTIVE" };
       },
     };
-    try {
-      const result = await run(
+    const shareKeys = (...flags: string[]) =>
+      run(
         [
           "team",
           "share-keys",
@@ -918,9 +919,35 @@ describe("team share-keys", () => {
           "--no-input",
           "--force",
           "--json",
+          ...flags,
         ],
         { ...state.runtime, admin },
       );
+    const memberFingerprint = await accountFingerprint(
+      (
+        await deriveAccountSigningKey(memberAccountKey, {
+          serverProfileId,
+          userId: memberUserId,
+        })
+      ).identity,
+    );
+    try {
+      // Sharing confirms the Member's first-sight identity, so without a
+      // terminal it needs the fingerprint the user compared: --force alone
+      // is refused, and a different fingerprint is refused.
+      const unconfirmed = await shareKeys();
+      expect(unconfirmed.exitCode).not.toBe(0);
+      expect(JSON.parse(unconfirmed.stderr)).toMatchObject({
+        code: "account_fingerprint_required",
+      });
+      const mismatched = await shareKeys("--fingerprint", "f".repeat(40));
+      expect(JSON.parse(mismatched.stderr)).toMatchObject({
+        code: "account_fingerprint_mismatch",
+      });
+      expect(posts.some((post) => post.path.endsWith("/provision"))).toBe(
+        false,
+      );
+      const result = await shareKeys("--fingerprint", memberFingerprint);
       expect(result.stderr).toBe("");
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
@@ -937,19 +964,7 @@ describe("team share-keys", () => {
       // Without a signed roster for the Member there is nothing to seal to.
       servedRoster = null;
       posts.length = 0;
-      const refused = await run(
-        [
-          "team",
-          "share-keys",
-          "octocat",
-          "--profile",
-          "relay",
-          "--no-input",
-          "--force",
-          "--json",
-        ],
-        { ...state.runtime, admin },
-      );
+      const refused = await shareKeys("--fingerprint", memberFingerprint);
       expect(refused.exitCode).not.toBe(0);
       expect(JSON.parse(refused.stderr)).toMatchObject({
         code: "trust_failed",
