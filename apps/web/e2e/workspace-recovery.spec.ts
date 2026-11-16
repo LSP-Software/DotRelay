@@ -3,6 +3,7 @@ import {
   createAccountKeyTransfer,
   createAccountKeyWrapper,
   createPublicationArtifacts,
+  deviceKeyFingerprint,
   encodeRecoveryCode,
   generateAccountMasterKey,
   generateRecoveryCode,
@@ -1268,11 +1269,15 @@ test.describe("workspace recovery", () => {
 
     // Stage the transfer toward one of the account's other devices. It is
     // not in the signed roster yet, so the sender is refused until the
-    // person confirms the key fingerprint, which adds it to the roster.
+    // person types the key fingerprint that device shows, which must match
+    // the keys the server reports; then it joins the roster. The sender
+    // never displays the server's fingerprint to copy from.
     await page.locator("#transfer-target").selectOption({ index: 1 });
-    await expect(page.getByTestId("transfer-target-fingerprint")).toContainText(
-      /([0-9a-f]{8} ){4}[0-9a-f]{8}/,
-    );
+    const fingerprintInput = page.getByTestId("transfer-fingerprint-input");
+    await expect(fingerprintInput).toBeVisible();
+    await expect(
+      page.getByTestId("transfer-target-fingerprint"),
+    ).not.toContainText(/([0-9a-f]{8} ){4}[0-9a-f]{8}/);
     await status.getByTestId("send-transfer-confirm").click();
     await expect(
       page
@@ -1280,7 +1285,22 @@ test.describe("workspace recovery", () => {
         .getByRole("alert")
         .filter({ hasText: "isn't in your signed device list yet" }),
     ).toBeVisible({ timeout: 30_000 });
-    await page.getByTestId("transfer-fingerprint-confirmed").check();
+    await fingerprintInput.fill("0".repeat(40));
+    await status.getByTestId("send-transfer-confirm").click();
+    await expect(
+      page
+        .getByTestId("recovery-area")
+        .getByRole("alert")
+        .filter({ hasText: "doesn't match the key the server reports" }),
+    ).toBeVisible({ timeout: 30_000 });
+    // What the receiving device shows: its own keys, as the fixture's first
+    // peer device reports them.
+    await fingerprintInput.fill(
+      await deviceKeyFingerprint({
+        encryptionPublicKey: hexToBytes("11".repeat(32)),
+        signingPublicKey: hexToBytes("22".repeat(32)),
+      }),
+    );
     await status.getByTestId("send-transfer-confirm").click();
     const transferNotice = page
       .getByRole("status")

@@ -94,10 +94,13 @@ export type RecoveryAreaProps = Readonly<{
   readonly deviceId: string | undefined;
   /** This browser's key fingerprint, from its local keys (ADR 0022). */
   readonly deviceFingerprint?: string | null;
-  /** The chosen receiving Device's key fingerprint, as the server reports it. */
-  readonly transferTargetFingerprint?: string | null;
-  readonly transferFingerprintConfirmed?: boolean;
-  readonly onTransferFingerprintConfirmed?: (confirmed: boolean) => void;
+  /**
+   * The key fingerprint the person typed from the receiving Device's own
+   * screen (ADR 0022). It is compared with the keys the server reports for
+   * that Device; this view never shows the server's value to copy from.
+   */
+  readonly transferFingerprintInput?: string;
+  readonly onTransferFingerprintInput?: (value: string) => void;
   readonly peerDevices:
     | readonly Readonly<{
         readonly id: string;
@@ -153,9 +156,8 @@ export const RecoveryArea = ({
   onTransferIdInput,
   deviceId,
   deviceFingerprint = null,
-  transferTargetFingerprint = null,
-  transferFingerprintConfirmed = false,
-  onTransferFingerprintConfirmed,
+  transferFingerprintInput = "",
+  onTransferFingerprintInput,
   peerDevices,
   sentTransfer,
   transferTarget,
@@ -800,30 +802,33 @@ export const RecoveryArea = ({
                     </option>
                   ))}
                 </select>
-                {transferTargetFingerprint ? (
+                {transferTarget !== null ? (
                   <div
                     className="space-y-1 text-xs"
                     data-testid="transfer-target-fingerprint"
                   >
+                    <Label htmlFor="transfer-fingerprint">
+                      Key fingerprint shown on that device
+                    </Label>
                     <p className="text-muted-foreground">
-                      The server reports this device's key fingerprint as{" "}
-                      <code>{transferTargetFingerprint}</code>. That device
-                      shows its own under Recovery, or with{" "}
-                      <code>dotrelay device list</code>. If it isn't in your
-                      signed device list yet, it is added once you confirm.
+                      On the receiving device, open Recovery (or run{" "}
+                      <code>dotrelay device list</code>) and type the key
+                      fingerprint it shows. The key is sent only if it matches
+                      the device the server reports. A device that isn't in your
+                      signed device list yet is added once it matches.
                     </p>
-                    <label className="flex items-center gap-2">
-                      <input
-                        checked={transferFingerprintConfirmed}
-                        data-testid="transfer-fingerprint-confirmed"
-                        disabled={recoveryBusy}
-                        onChange={(event) =>
-                          onTransferFingerprintConfirmed?.(event.target.checked)
-                        }
-                        type="checkbox"
-                      />
-                      The fingerprints match
-                    </label>
+                    <Input
+                      autoComplete="off"
+                      data-testid="transfer-fingerprint-input"
+                      disabled={recoveryBusy}
+                      id="transfer-fingerprint"
+                      onChange={(event) =>
+                        onTransferFingerprintInput?.(event.target.value)
+                      }
+                      placeholder="xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx"
+                      spellCheck={false}
+                      value={transferFingerprintInput}
+                    />
                   </div>
                 ) : null}
                 <Button

@@ -1201,13 +1201,17 @@ export const sendAccountKeyTransfer = (
             "The server returned an invalid key for that device. Nothing was sent.",
           );
         }
+        // The fingerprint the person typed from the receiving Device's own
+        // screen, against the keys the server reports for it: a server that
+        // substituted keys cannot make that Device show their fingerprint.
         const fingerprint = await deviceKeyFingerprint(candidate);
-        if (
-          confirmedFingerprint === null ||
-          !sameFingerprint(confirmedFingerprint, fingerprint)
-        )
+        if (confirmedFingerprint === null)
           throw new TransferRecipientError(
-            "That device isn't in your signed device list yet. Compare its fingerprint with the one it shows, confirm it, and try again.",
+            "That device isn't in your signed device list yet. Type the key fingerprint it shows (Recovery on that device, or dotrelay device list) and try again.",
+          );
+        if (!sameFingerprint(confirmedFingerprint, fingerprint))
+          throw new TransferRecipientError(
+            "The fingerprint you typed doesn't match the key the server reports for that device, so nothing was sent. Check it on that device; if it still differs, don't send the key.",
           );
         listed = rostered((await establish([candidate])).roster);
         if (!listed)

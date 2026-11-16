@@ -869,14 +869,11 @@ export const WorkspaceShell = ({
     readonly expiresAt: string;
     readonly recipientDeviceId: string;
   }> | null>(null);
-  // ADR 0022: the receiving Device's key fingerprint as the server reports
-  // it, which the person compares with the one that Device shows, and
-  // whether they confirmed it matches.
-  const [transferTargetFingerprint, setTransferTargetFingerprint] = useState<
-    string | null
-  >(null);
-  const [transferFingerprintConfirmed, setTransferFingerprintConfirmed] =
-    useState(false);
+  // ADR 0022: the key fingerprint the person typed from the receiving
+  // Device's own screen. The send compares it with the keys the server
+  // reports for that Device, so the check never compares a value with
+  // itself.
+  const [transferFingerprintInput, setTransferFingerprintInput] = useState("");
   // This browser's own key fingerprint, from its local keys, for another
   // Device to compare before it sends the account key here.
   const [deviceFingerprint, setDeviceFingerprint] = useState<string | null>(
@@ -1874,33 +1871,14 @@ export const WorkspaceShell = ({
         setSentTransfer(staged);
         setTransferTarget(null);
       },
-      transferFingerprintConfirmed ? transferTargetFingerprint : null,
+      transferFingerprintInput.trim() === "" ? null : transferFingerprintInput,
     );
 
+  // A fingerprint typed for one Device never carries over to another.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- transferTarget is the trigger; the effect only clears the typed fingerprint.
   useEffect(() => {
-    setTransferFingerprintConfirmed(false);
-    const peer = boundary.peerDevices?.find(
-      (candidate) => candidate.id === transferTarget,
-    );
-    if (!peer) {
-      setTransferTargetFingerprint(null);
-      return;
-    }
-    let cancelled = false;
-    void deviceKeyFingerprint({
-      encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
-      signingPublicKey: hexToBytes(peer.signingPublicKey),
-    })
-      .then((fingerprint) => {
-        if (!cancelled) setTransferTargetFingerprint(fingerprint);
-      })
-      .catch(() => {
-        if (!cancelled) setTransferTargetFingerprint(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transferTarget, boundary.peerDevices]);
+    setTransferFingerprintInput("");
+  }, [transferTarget]);
 
   useEffect(() => {
     const serverProfileId = boundary.profile.serverProfileId;
@@ -2838,9 +2816,8 @@ export const WorkspaceShell = ({
       sentTransfer={sentTransfer}
       deviceId={boundary.device.id}
       deviceFingerprint={deviceFingerprint}
-      transferTargetFingerprint={transferTargetFingerprint}
-      transferFingerprintConfirmed={transferFingerprintConfirmed}
-      onTransferFingerprintConfirmed={setTransferFingerprintConfirmed}
+      transferFingerprintInput={transferFingerprintInput}
+      onTransferFingerprintInput={setTransferFingerprintInput}
       sessionActive={sessionActive}
       transferIdInput={transferIdInput}
       transferTarget={transferTarget}

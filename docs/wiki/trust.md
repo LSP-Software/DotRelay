@@ -217,7 +217,9 @@ AMK approves it again or sends it the key with a confirmed fingerprint.
 - **Sending a transfer.** The sender seals the AMK only to a Device its verified roster lists,
   using the rostered key. For a Device not listed yet, the user compares the key fingerprint the
   service reports with the one that Device shows (`dotrelay device list`, or Recovery in the
-  browser), and the sender adds it to the roster before sealing.
+  browser), and the sender adds it to the roster before sealing. The browser does not show the
+  service's value: the person types the fingerprint the receiving Device shows, and the sender
+  seals only when it matches the keys the service reports.
 - **The transfer code.** The sender shows `<transfer id>.<account fingerprint>`. The person carries
   that code to the receiving Device.
 - **Receiving a transfer.** The receiver accepts the key only when a roster signed by the identity
