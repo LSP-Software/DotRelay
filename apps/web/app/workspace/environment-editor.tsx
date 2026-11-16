@@ -21,13 +21,11 @@ import {
   Eye,
   EyeOff,
   FileUp,
-  GitBranch,
-  List,
   LockKeyhole,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   RotateCcw,
-  Save,
   Search,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,10 +36,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -54,6 +50,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { serializeDotenv } from "@/lib/dotenv";
 import { applyDotenvImport } from "@/lib/dotenv-import";
@@ -127,6 +129,7 @@ import {
   verifiedParentEpoch,
 } from "@/lib/environment-workflow";
 import { publishFailureMessage } from "@/lib/publish-errors";
+import { cn } from "@/lib/utils";
 import type { MembershipRole } from "@/lib/workspace-boundary";
 
 type EnvironmentEditorProps = Readonly<{
@@ -247,6 +250,7 @@ export const EnvironmentEditor = ({
     useState<AddVariableState>(emptyVariableDraft);
   const [addError, setAddError] = useState<string | null>(null);
   const [nameFilter, setNameFilter] = useState("");
+  const [panel, setPanel] = useState<"variables" | "history">("variables");
   const [importOpen, setImportOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(
@@ -872,7 +876,7 @@ export const EnvironmentEditor = ({
         clearConflictState();
         setReviewOpen(false);
         setPublishMessage(
-          `Published as revision ${displayRevisionId(artifacts.request.revision.id)}.`,
+          `Published ${displayRevisionId(artifacts.request.revision.id)}.`,
         );
         return;
       }
@@ -1171,71 +1175,72 @@ export const EnvironmentEditor = ({
     const action = setupAction;
     return (
       <section className="scroll-mt-24" id="environment">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <LockKeyhole className="size-5 text-amber-300" />
-              <h2>
+        <div className="mx-auto max-w-3xl rounded-xl border bg-card p-6">
+          <div className="flex items-start gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+              <LockKeyhole aria-hidden="true" className="size-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="font-heading text-lg font-semibold">
                 {loading
                   ? "Loading environment…"
                   : (action?.title ?? "Variables are hidden")}
               </h2>
-            </CardTitle>
-            <CardDescription>
-              {loading ? (
-                "Fetching the latest verified state for this environment."
-              ) : (
-                <CommandText
-                  text={
-                    action?.body ??
-                    "Set up this browser to view and edit its variables."
-                  }
-                />
-              )}
-            </CardDescription>
-          </CardHeader>
-          {setupCommand || setupMessage ? (
-            <CardContent className="space-y-3">
-              {setupCommand ? (
-                <>
-                  <p className="text-sm text-muted-foreground">
-                    Prefer the CLI? It sets up the CLI, not this browser.
-                  </p>
-                  <CopyableCommand
-                    className="mt-2"
-                    data-testid="cli-setup-command"
-                    value={setupCommand}
+              <p className="mt-1 text-sm text-muted-foreground">
+                {loading ? (
+                  "Getting the latest values for this environment."
+                ) : (
+                  <CommandText
+                    text={
+                      action?.body ??
+                      "Set up this browser to view and edit its variables."
+                    }
                   />
-                </>
+                )}
+              </p>
+              {setupCommand || setupMessage ? (
+                <div className="mt-4 space-y-3">
+                  {setupCommand ? (
+                    <>
+                      <p className="text-sm text-muted-foreground">
+                        Prefer the CLI? It sets up the CLI, not this browser.
+                      </p>
+                      <CopyableCommand
+                        data-testid="cli-setup-command"
+                        value={setupCommand}
+                      />
+                    </>
+                  ) : null}
+                  {setupMessage ? (
+                    <p className="text-sm text-muted-foreground" role="status">
+                      <CommandText text={setupMessage} />
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
-              {setupMessage ? (
-                <p className="text-sm text-muted-foreground" role="status">
-                  <CommandText text={setupMessage} />
-                </p>
+              {action && (onSetupAction || action.id === "sign-in") ? (
+                <div className="mt-5">
+                  {action.id === "sign-in" ? (
+                    <a
+                      className="inline-flex h-8 items-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
+                      href="/sign-in"
+                    >
+                      {action.actionLabel}
+                    </a>
+                  ) : (
+                    <Button
+                      disabled={setupBusy}
+                      onClick={onSetupAction}
+                      type="button"
+                    >
+                      {action.actionLabel}
+                    </Button>
+                  )}
+                </div>
               ) : null}
-            </CardContent>
-          ) : null}
-          {action && (onSetupAction || action.id === "sign-in") ? (
-            <CardFooter>
-              {action.id === "sign-in" ? (
-                <a
-                  className="inline-flex h-8 items-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
-                  href="/sign-in"
-                >
-                  {action.actionLabel}
-                </a>
-              ) : (
-                <Button
-                  disabled={setupBusy}
-                  onClick={onSetupAction}
-                  type="button"
-                >
-                  {action.actionLabel}
-                </Button>
-              )}
-            </CardFooter>
-          ) : null}
-        </Card>
+            </div>
+          </div>
+        </div>
       </section>
     );
   }
@@ -1243,11 +1248,16 @@ export const EnvironmentEditor = ({
   return (
     <section className="scroll-mt-24" id="environment">
       {publishMessage ? (
-        <Alert className="mb-4 bg-card/60">
-          <Check className="text-primary" />
-          <AlertTitle>Status</AlertTitle>
-          <AlertDescription>{publishMessage}</AlertDescription>
-        </Alert>
+        <div
+          className="mb-4 flex items-start gap-2.5 rounded-lg border border-primary/25 bg-primary/5 px-4 py-2.5 text-sm"
+          role="status"
+        >
+          <Check
+            aria-hidden="true"
+            className="mt-0.5 size-4 shrink-0 text-primary"
+          />
+          <span>{publishMessage}</span>
+        </div>
       ) : null}
 
       {conflictLaneIds.size > 0 ? (
@@ -1319,109 +1329,126 @@ export const EnvironmentEditor = ({
         </Alert>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <List aria-hidden="true" className="size-4" />
-            <h2>Variables</h2>
-          </CardTitle>
-          <CardAction className="flex flex-wrap justify-end gap-2">
+      <h2 className="sr-only">
+        {panel === "variables" ? "Variables" : "History"}
+      </h2>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div
+          aria-label="Environment view"
+          className="inline-flex rounded-lg border bg-card p-0.5"
+          role="tablist"
+        >
+          {(["variables", "history"] as const).map((candidate) => (
+            <button
+              aria-selected={panel === candidate}
+              className={cn(
+                "rounded-md px-3 py-1 text-sm font-medium transition-colors",
+                panel === candidate
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              key={candidate}
+              onClick={() => setPanel(candidate)}
+              role="tab"
+              type="button"
+            >
+              {candidate === "variables" ? "Variables" : "History"}
+            </button>
+          ))}
+        </div>
+        {panel === "variables" &&
+        loadPhase !== "failed" &&
+        variables.length > 0 ? (
+          <div className="relative min-w-40 flex-1 sm:max-w-xs">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              aria-label="Search variables"
+              className="h-8 pl-8"
+              onChange={(event) => setNameFilter(event.target.value)}
+              placeholder="Search variables"
+              type="search"
+              value={nameFilter}
+            />
+          </div>
+        ) : null}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {loadPhase === "failed" ? (
             <Button
-              disabled={loadPhase !== "ready" || !canChangeDefinitions}
-              onClick={() => {
-                setAddError(null);
-                setAddOpen(true);
-              }}
+              data-testid="environment-retry-read"
+              onClick={retryRead}
               size="sm"
               variant="outline"
             >
-              <Plus aria-hidden="true" /> Add variable
+              <RotateCcw aria-hidden="true" /> Try again
             </Button>
-            <Button
-              disabled={!canPublish}
-              onClick={() => {
-                setReviewValuesRevealed(false);
-                setReviewOpen(true);
-              }}
-              size="sm"
+          ) : null}
+          <Button
+            disabled={loadPhase !== "ready" || !canChangeDefinitions}
+            onClick={() => {
+              setPanel("variables");
+              setAddError(null);
+              setAddOpen(true);
+            }}
+            size="sm"
+          >
+            <Plus aria-hidden="true" /> Add variable
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  aria-label="More actions"
+                  size="icon-sm"
+                  variant="outline"
+                />
+              }
             >
-              <Save aria-hidden="true" /> Save changes
-            </Button>
-            {loadPhase === "failed" ? (
-              <Button
-                data-testid="environment-retry-read"
-                onClick={retryRead}
-                size="sm"
-                variant="outline"
+              <MoreHorizontal aria-hidden="true" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                disabled={loadPhase !== "ready"}
+                onClick={() => setImportOpen(true)}
               >
-                <RotateCcw aria-hidden="true" /> Retry reading
-              </Button>
-            ) : session ? (
-              <Button
-                disabled={loadPhase !== "ready" || publishing}
-                onClick={refreshRead}
-                size="sm"
-                title="Load the latest published values. Your draft is kept."
-                variant="ghost"
+                <FileUp aria-hidden="true" /> Import from a .env file
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={
+                  loadPhase !== "ready" || downloadableEntries.length === 0
+                }
+                onClick={() => setDownloadOpen(true)}
               >
-                <RefreshCw
-                  aria-hidden="true"
-                  className={loadPhase === "loading" ? "animate-spin" : ""}
-                />{" "}
-                Refresh
-              </Button>
-            ) : null}
-          </CardAction>
-          {!canChangeDefinitions ? (
-            <CardDescription data-testid="member-permissions-note">
-              As a {roleLabel(role).toLowerCase()}, you can read every variable.
-              You can edit the user-defined values you own and the shared values
-              you originally provided. Owners and admins can edit other values,
-              and add or delete variables.
-            </CardDescription>
-          ) : null}
-        </CardHeader>
-        <CardContent className="px-0">
-          {loadPhase !== "failed" ? (
-            <div className="flex flex-col gap-2 border-b px-4 pb-3 sm:flex-row sm:items-center">
-              {variables.length > 0 ? (
-                <div className="relative sm:max-w-xs sm:flex-1">
-                  <Search
-                    aria-hidden="true"
-                    className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-                  />
-                  <Input
-                    aria-label="Filter variables by name"
-                    className="h-8 pl-8"
-                    onChange={(event) => setNameFilter(event.target.value)}
-                    placeholder="Filter by name"
-                    type="search"
-                    value={nameFilter}
-                  />
-                </div>
+                <Download aria-hidden="true" /> Download as a .env file
+              </DropdownMenuItem>
+              {session && loadPhase !== "failed" ? (
+                <DropdownMenuItem
+                  disabled={loadPhase !== "ready" || publishing}
+                  onClick={refreshRead}
+                >
+                  <RefreshCw aria-hidden="true" /> Load latest values
+                </DropdownMenuItem>
               ) : null}
-              <div className="flex flex-wrap gap-2 sm:ml-auto">
-                <Button
-                  disabled={loadPhase !== "ready"}
-                  onClick={() => setImportOpen(true)}
-                  size="sm"
-                  variant="ghost"
-                >
-                  <FileUp aria-hidden="true" /> Import .env
-                </Button>
-                <Button
-                  disabled={
-                    loadPhase !== "ready" || downloadableEntries.length === 0
-                  }
-                  onClick={() => setDownloadOpen(true)}
-                  size="sm"
-                  variant="ghost"
-                >
-                  <Download aria-hidden="true" /> Download .env
-                </Button>
-              </div>
-            </div>
-          ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      {!canChangeDefinitions ? (
+        <p
+          className="mb-3 text-sm text-muted-foreground"
+          data-testid="member-permissions-note"
+        >
+          As a {roleLabel(role).toLowerCase()}, you can see every variable. You
+          can edit your own &ldquo;Only me&rdquo; values and team values you
+          added. Owners and admins can edit the rest, and add or remove
+          variables.
+        </p>
+      ) : null}
+
+      {panel === "variables" ? (
+        <div className="overflow-hidden rounded-xl border bg-card">
           {variables.length === 0 ? (
             loadPhase === "loading" ? (
               <p
@@ -1436,113 +1463,163 @@ export const EnvironmentEditor = ({
                 data-testid="environment-read-failed"
                 role="status"
               >
-                This environment couldn't be read, so its variables are hidden.
-                Use Retry reading to try again.
+                This environment couldn&apos;t be loaded, so its variables are
+                hidden. Select Try again to reload it.
               </p>
             ) : (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                Add a variable to save your first secrets here.
-              </p>
+              <div className="px-6 py-12 text-center">
+                <p className="font-medium">No variables yet</p>
+                <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+                  Add one here, import a .env file, or run{" "}
+                  <code className="font-mono">dotrelay push</code> in the
+                  repository.
+                </p>
+              </div>
             )
           ) : (
+            <>
+              <div
+                aria-hidden="true"
+                className="hidden grid-cols-[minmax(0,2fr)_minmax(0,3fr)_6rem] gap-3 border-b bg-sidebar px-4 py-2 text-xs font-medium text-muted-foreground md:grid"
+              >
+                <span>Name</span>
+                <span>Value</span>
+                <span>Visible to</span>
+              </div>
+              <ul className="divide-y divide-border">
+                {visibleVariables.length === 0 ? (
+                  <li
+                    className="px-4 py-6 text-sm text-muted-foreground"
+                    role="status"
+                  >
+                    No variables match “{nameFilter.trim()}”.
+                  </li>
+                ) : null}
+                {visibleVariables.map((variable) => (
+                  <VariableRow
+                    canDelete={canChangeDefinitions}
+                    canEdit={canActorChangeVariableValue(actor, variable)}
+                    canUndoDelete={deletedVariableSnapshots.has(variable.id)}
+                    editingDisabled={loadPhase !== "ready"}
+                    key={variable.id}
+                    onDelete={() => deleteVariable(variable.id)}
+                    onSetAbsent={() =>
+                      setVariables((current) =>
+                        current.map((candidate) =>
+                          candidate.id === variable.id
+                            ? withDraftFlag(
+                                updateVariableValue(candidate, null),
+                              )
+                            : candidate,
+                        ),
+                      )
+                    }
+                    onToggleReveal={() => toggleReveal(variable.id)}
+                    onUndoDelete={() => undoDelete(variable.id)}
+                    onValueChange={(value) => updateValue(variable.id, value)}
+                    readOnlyDisclosure={readOnlyReason(actor, variable)}
+                    revealed={revealed.has(variable.id)}
+                    variable={variable}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border bg-card">
+          {historyRows.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-muted-foreground">
+              Nothing has been published yet. Each publish shows up here, so you
+              can see what changed and roll back.
+            </p>
+          ) : (
             <ul className="divide-y divide-border">
-              {visibleVariables.length === 0 ? (
-                <li
-                  className="px-4 py-6 text-sm text-muted-foreground"
-                  role="status"
-                >
-                  No variables match “{nameFilter.trim()}”.
-                </li>
-              ) : null}
-              {visibleVariables.map((variable) => (
-                <VariableRow
-                  canDelete={canChangeDefinitions}
-                  canEdit={canActorChangeVariableValue(actor, variable)}
-                  canUndoDelete={deletedVariableSnapshots.has(variable.id)}
-                  editingDisabled={loadPhase !== "ready"}
-                  key={variable.id}
-                  onDelete={() => deleteVariable(variable.id)}
-                  onSetAbsent={() =>
-                    setVariables((current) =>
-                      current.map((candidate) =>
-                        candidate.id === variable.id
-                          ? withDraftFlag(updateVariableValue(candidate, null))
-                          : candidate,
-                      ),
-                    )
-                  }
-                  onToggleReveal={() => toggleReveal(variable.id)}
-                  onUndoDelete={() => undoDelete(variable.id)}
-                  onValueChange={(value) => updateValue(variable.id, value)}
-                  readOnlyDisclosure={readOnlyReason(actor, variable)}
-                  revealed={revealed.has(variable.id)}
-                  variable={variable}
-                />
-              ))}
+              {historyRows.map((revision) => {
+                const isCurrent = revision.id === headRevision;
+                const rollbackTargetId = revision.rollbackTargetId;
+                const rollbackTargetKnown =
+                  rollbackTargetId !== null &&
+                  historyRows.some((entry) => entry.id === rollbackTargetId);
+                return (
+                  <li
+                    className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                    data-testid={`history-revision-${revision.id}`}
+                    key={revision.id}
+                  >
+                    <div className="min-w-0">
+                      <RevisionIdentity
+                        actorUserId={session?.context.actorUserId}
+                        memberNames={memberNames}
+                        variableNames={variableNames}
+                        lineSuffix={
+                          rollbackTargetId !== null
+                            ? `. Rolled back to ${rollbackTargetKnown ? displayRevisionId(rollbackTargetId) : "an earlier revision"}`
+                            : null
+                        }
+                        revision={revision}
+                      />
+                    </div>
+                    {isCurrent ? (
+                      <Badge
+                        className="border-primary/30 bg-primary/10 text-primary"
+                        variant="outline"
+                      >
+                        Current
+                      </Badge>
+                    ) : (
+                      <Button
+                        disabled={loadPhase !== "ready" || !canStageAnyRollback}
+                        onClick={() => {
+                          void openRollback(revision.id);
+                        }}
+                        size="sm"
+                        variant="outline"
+                      >
+                        <RotateCcw aria-hidden="true" /> Roll back
+                      </Button>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
 
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <GitBranch className="size-4" /> History
-          </CardTitle>
-          <CardDescription>
-            Verified revisions of this environment. Choose an earlier revision
-            to restore selected values. Publishing a rollback creates a new
-            revision and keeps the existing history.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-2">
-          {historyRows.map((revision) => {
-            const isCurrent = revision.id === headRevision;
-            const rollbackTargetId = revision.rollbackTargetId;
-            const rollbackTargetKnown =
-              rollbackTargetId !== null &&
-              historyRows.some((entry) => entry.id === rollbackTargetId);
-            return (
-              <div
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
-                data-testid={`history-revision-${revision.id}`}
-                key={revision.id}
-              >
-                <div className="min-w-0">
-                  <RevisionIdentity
-                    actorUserId={session?.context.actorUserId}
-                    memberNames={memberNames}
-                    variableNames={variableNames}
-                    lineSuffix={
-                      <>
-                        {rollbackTargetId !== null
-                          ? ` · Rollback of ${rollbackTargetKnown ? displayRevisionId(rollbackTargetId) : "an earlier revision"}`
-                          : null}
-                        {!isCurrent ? " · Earlier revision" : null}
-                      </>
-                    }
-                    revision={revision}
-                  />
-                </div>
-                {isCurrent ? (
-                  <Badge>Current</Badge>
-                ) : (
-                  <Button
-                    disabled={loadPhase !== "ready" || !canStageAnyRollback}
-                    onClick={() => {
-                      void openRollback(revision.id);
-                    }}
-                    size="sm"
-                    variant="outline"
-                  >
-                    <RotateCcw aria-hidden="true" /> Rollback
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
+      {active !== false && hasDirtyDraft && pendingDiffs.length > 0 ? (
+        <div
+          aria-label="Unpublished changes"
+          className="fixed inset-x-3 bottom-3 z-30 mx-auto flex max-w-xl items-center gap-3 rounded-xl border border-border bg-popover py-2 pr-2 pl-4 shadow-2xl shadow-black/60 lg:left-64"
+          data-testid="draft-bar"
+          role="region"
+        >
+          <span
+            aria-hidden="true"
+            className="size-2 shrink-0 rounded-full bg-amber-300"
+          />
+          <span className="min-w-0 flex-1 truncate text-sm">
+            <span className="font-medium">
+              {pendingDiffs.length}{" "}
+              {pendingDiffs.length === 1 ? "change" : "changes"}
+            </span>{" "}
+            <span className="hidden text-muted-foreground sm:inline">
+              not published
+              {environmentLabel ? ` in ${environmentLabel}` : ""}
+            </span>
+          </span>
+          <Button
+            disabled={!canPublish}
+            onClick={() => {
+              setReviewValuesRevealed(false);
+              setReviewOpen(true);
+            }}
+            size="sm"
+          >
+            Review and publish
+          </Button>
+        </div>
+      ) : null}
 
       <ImportDotenvDialog
         actor={actor}
@@ -1583,11 +1660,14 @@ export const EnvironmentEditor = ({
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Save changes</DialogTitle>
+            <DialogTitle>
+              Publish {pendingDiffs.length}{" "}
+              {pendingDiffs.length === 1 ? "change" : "changes"}
+              {environmentLabel ? ` to ${environmentLabel}` : ""}
+            </DialogTitle>
             <DialogDescription>
-              Publish to save these changes as a new revision. Shared values are
-              available to your team. User-defined values remain private to
-              their owner.
+              This saves a new revision. Teammates get team values the next time
+              they pull. &ldquo;Only me&rdquo; values stay visible to you only.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end">
@@ -1631,11 +1711,11 @@ export const EnvironmentEditor = ({
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Rollback</DialogTitle>
+            <DialogTitle>Roll back</DialogTitle>
             <DialogDescription>
-              Choose which values to restore from this revision. Nothing is
-              saved until you publish the draft. Publishing creates a new
-              revision without deleting the current one.
+              Choose which values to bring back from this revision. They go into
+              your unpublished changes, so nothing is saved until you publish.
+              Publishing adds a new revision and keeps the history.
             </DialogDescription>
           </DialogHeader>
           {rollbackTargetEntry ? (
@@ -1647,11 +1727,6 @@ export const EnvironmentEditor = ({
                 revision={rollbackTargetEntry}
                 variableNames={variableNames}
               />
-              <p className="text-xs text-muted-foreground">
-                Staging puts the selected values in your draft. Review and
-                publish the draft to save a new revision. Earlier history and
-                unselected variables stay unchanged.
-              </p>
             </div>
           ) : null}
           {rollbackHistoryLoading ? (
@@ -1789,7 +1864,7 @@ export const EnvironmentEditor = ({
               }
               onClick={applyRollback}
             >
-              Stage rollback
+              Add to my changes
             </Button>
           </DialogFooter>
         </DialogContent>

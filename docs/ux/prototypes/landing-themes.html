@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="en" data-theme="original">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DotRelay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* ---------- themes ---------- */
+      :root[data-theme="original"] {
+        color-scheme: dark;
+        --bg: oklch(0.105 0.008 165);
+        --surface: oklch(0.145 0.011 165);
+        --surface-2: oklch(0.2 0.01 165);
+        --text: oklch(0.94 0.008 160);
+        --muted: oklch(0.72 0.015 160);
+        --border: oklch(0.92 0.01 160 / 13%);
+        --primary: oklch(0.82 0.17 150);
+        --primary-text: oklch(0.12 0.022 155);
+        --link: oklch(0.82 0.17 150);
+        --term-bg: oklch(0.08 0.006 165);
+        --term-text: oklch(0.9 0.01 160);
+        --term-dim: oklch(0.6 0.015 160);
+        --term-ok: oklch(0.82 0.17 150);
+        --glow: color-mix(in oklch, var(--primary) 12%, transparent);
+        --grid: color-mix(in oklch, var(--text) 4%, transparent);
+      }
+      :root[data-theme="light"] {
+        color-scheme: light;
+        --bg: #FFFFFF;
+        --surface: #F5F7F6;
+        --surface-2: #E9EDEB;
+        --text: #101513;
+        --muted: #56605B;
+        --border: #DCE2DF;
+        --primary: #0B7A4B;
+        --primary-text: #FFFFFF;
+        --link: #0B7A4B;
+        --term-bg: #101513;
+        --term-text: #E8EDEA;
+        --term-dim: #8A958F;
+        --term-ok: #5FD39A;
+        --glow: transparent;
+        --grid: transparent;
+      }
+      :root[data-theme="slate"] {
+        color-scheme: dark;
+        --bg: #171B22;
+        --surface: #1F242D;
+        --surface-2: #2A303B;
+        --text: #ECEFF4;
+        --muted: #A3ABB8;
+        --border: #333A46;
+        --primary: #7AA7FF;
+        --primary-text: #0E1420;
+        --link: #9DBDFF;
+        --term-bg: #11141A;
+        --term-text: #E3E7EE;
+        --term-dim: #7D8594;
+        --term-ok: #7FD6A4;
+        --glow: transparent;
+        --grid: transparent;
+      }
+
+      /* ---------- base ---------- */
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 80px;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          400 16px/1.6 "Geist",
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: var(--link);
+      }
+      code,
+      .mono {
+        font-family: "Geist Mono", ui-monospace, monospace;
+      }
+      :focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 3px;
+        border-radius: 6px;
+      }
+      .wrap {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 24px;
+      }
+      .skip {
+        position: absolute;
+        left: -999px;
+      }
+      .skip:focus {
+        left: 16px;
+        top: 12px;
+        z-index: 50;
+        background: var(--surface);
+        padding: 8px 12px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+
+      /* ---------- nav ---------- */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: color-mix(in srgb, var(--bg) 90%, transparent);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--border);
+      }
+      .nav .wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 64px;
+      }
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 600;
+        font-size: 17px;
+        text-decoration: none;
+        color: var(--text);
+        margin-right: 16px;
+      }
+      .logo span {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: color-mix(in oklch, var(--primary) 14%, transparent);
+        color: var(--primary);
+        font:
+          600 14px "Geist Mono",
+          monospace;
+        border: 1px solid color-mix(in oklch, var(--primary) 30%, transparent);
+      }
+      .nav ul {
+        display: flex;
+        gap: 2px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .nav ul a {
+        display: block;
+        padding: 8px 12px;
+        border-radius: 8px;
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 15px;
+      }
+      .nav ul a:hover {
+        color: var(--text);
+        background: var(--surface);
+      }
+      .nav .right {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        height: 40px;
+        padding: 0 16px;
+        border-radius: 9px;
+        font:
+          500 15px "Geist",
+          sans-serif;
+        text-decoration: none;
+        border: 1px solid transparent;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .btn svg {
+        width: 17px;
+        height: 17px;
+      }
+      .btn-primary {
+        background: var(--primary);
+        color: var(--primary-text);
+      }
+      .btn-primary:hover {
+        filter: brightness(1.07);
+      }
+      .btn-outline {
+        border-color: var(--border);
+        color: var(--text);
+        background: transparent;
+      }
+      .btn-outline:hover {
+        background: var(--surface);
+      }
+      .btn-lg {
+        height: 46px;
+        padding: 0 20px;
+        font-size: 16px;
+      }
+
+      /* ---------- hero ---------- */
+      .hero {
+        padding: 80px 0 72px;
+        background:
+          radial-gradient(circle at 80% 10%, var(--glow), transparent 32rem),
+          linear-gradient(var(--grid) 1px, transparent 1px),
+          linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+        background-size:
+          auto,
+          48px 48px,
+          48px 48px;
+      }
+      .hero .wrap {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 56px;
+        align-items: center;
+      }
+      h1 {
+        font-size: clamp(36px, 5vw, 56px);
+        line-height: 1.05;
+        letter-spacing: -0.03em;
+        font-weight: 600;
+        margin: 0;
+      }
+      .sub {
+        font-size: 19px;
+        color: var(--muted);
+        margin: 20px 0 0;
+        max-width: 34em;
+      }
+      .cta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 28px;
+      }
+      .note {
+        font-size: 14px;
+        color: var(--muted);
+        margin-top: 14px;
+      }
+
+      /* install box */
+      .install {
+        margin-top: 32px;
+        max-width: 520px;
+      }
+      .install-tabs {
+        display: flex;
+        gap: 2px;
+        border-bottom: 1px solid var(--border);
+      }
+      .install-tabs button {
+        background: none;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        padding: 8px 12px;
+        color: var(--muted);
+        font:
+          500 14px "Geist",
+          sans-serif;
+        cursor: pointer;
+      }
+      .install-tabs button[aria-selected="true"] {
+        color: var(--text);
+        border-bottom-color: var(--primary);
+      }
+      .cmd {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-top: 0;
+        border-radius: 0 0 10px 10px;
+        padding: 10px 10px 10px 14px;
+        font:
+          14px/1.5 "Geist Mono",
+          monospace;
+        min-height: 52px;
+      }
+      .cmd code {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .cmd code::before {
+        content: "$ ";
+        color: var(--muted);
+      }
+      .copy {
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        border-radius: 7px;
+        padding: 5px 10px;
+        font:
+          500 13px "Geist",
+          sans-serif;
+        cursor: pointer;
+        flex: none;
+      }
+      .copy:hover {
+        background: var(--surface-2);
+      }
+
+      /* terminal */
+      .term {
+        background: var(--term-bg);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.45);
+      }
+      .term-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+        border-bottom: 1px solid
+          color-mix(in oklch, var(--term-text) 10%, transparent);
+        color: var(--term-dim);
+        font-size: 13px;
+      }
+      .term-bar i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: color-mix(in oklch, var(--term-text) 18%, transparent);
+      }
+      .term-bar span {
+        margin-left: 8px;
+      }
+      .term pre {
+        margin: 0;
+        padding: 18px 20px 22px;
+        font:
+          14px/1.75 "Geist Mono",
+          monospace;
+        color: var(--term-text);
+        overflow-x: auto;
+      }
+      .term .p {
+        color: var(--term-dim);
+      }
+      .term .ok {
+        color: var(--term-ok);
+      }
+      .term .dim {
+        color: var(--term-dim);
+      }
+      .term .gap {
+        display: block;
+        height: 12px;
+      }
+
+      /* ---------- sections ---------- */
+      section.sec {
+        padding: 88px 0;
+        border-top: 1px solid var(--border);
+      }
+      h2 {
+        font-size: clamp(28px, 3.2vw, 36px);
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        margin: 0;
+        font-weight: 600;
+      }
+      .lead {
+        color: var(--muted);
+        font-size: 18px;
+        margin: 12px 0 0;
+        max-width: 40em;
+      }
+
+      .steps {
+        list-style: none;
+        margin: 40px 0 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+        counter-reset: n;
+      }
+      .steps li {
+        counter-increment: n;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 24px;
+      }
+      .steps li::before {
+        content: "Step " counter(n);
+        display: block;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--primary);
+        margin-bottom: 8px;
+      }
+      .steps h3 {
+        margin: 0 0 6px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .steps p {
+        margin: 0 0 16px;
+        color: var(--muted);
+      }
+      .steps .cmd {
+        border-top: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--bg);
+        min-height: 0;
+        padding: 8px 12px;
+        font-size: 13.5px;
+      }
+
+      .feats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+        margin-top: 40px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      .feat {
+        padding: 28px;
+        border-top: 1px solid var(--border);
+      }
+      .feat:nth-child(-n + 2) {
+        border-top: 0;
+      }
+      .feat:nth-child(even) {
+        border-left: 1px solid var(--border);
+      }
+      .feat svg {
+        width: 22px;
+        height: 22px;
+        color: var(--primary);
+        margin-bottom: 12px;
+      }
+      .feat h3 {
+        margin: 0 0 6px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .feat p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .sec-split {
+        display: grid;
+        grid-template-columns: 5fr 7fr;
+        gap: 56px;
+        align-items: start;
+      }
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        font-size: 15px;
+      }
+      .table th,
+      .table td {
+        text-align: left;
+        padding: 12px 16px;
+        border-top: 1px solid var(--border);
+        vertical-align: top;
+      }
+      .table thead th {
+        background: var(--surface);
+        border-top: 0;
+        font-weight: 600;
+      }
+      .table td:last-child,
+      .table th:last-child {
+        width: 9rem;
+      }
+      .yes,
+      .no {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 500;
+      }
+      .yes {
+        color: var(--muted);
+      }
+      .no {
+        color: var(--primary);
+      }
+      .honest {
+        margin-top: 20px;
+        color: var(--muted);
+        font-size: 15px;
+      }
+      .honest p {
+        margin: 0 0 10px;
+      }
+
+      .faq {
+        margin-top: 32px;
+        border-top: 1px solid var(--border);
+        max-width: 780px;
+      }
+      .faq details {
+        border-bottom: 1px solid var(--border);
+      }
+      .faq summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 18px 0;
+        font-weight: 500;
+        font-size: 17px;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .faq summary::-webkit-details-marker {
+        display: none;
+      }
+      .faq summary::after {
+        content: "+";
+        color: var(--muted);
+        font-weight: 400;
+        font-size: 22px;
+        line-height: 1;
+      }
+      .faq details[open] summary::after {
+        content: "−";
+      }
+      .faq details p {
+        margin: -6px 0 18px;
+        color: var(--muted);
+        max-width: 44em;
+      }
+
+      .final {
+        text-align: center;
+        padding: 96px 0;
+      }
+      .final .cta {
+        justify-content: center;
+      }
+      .final .lead {
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      footer {
+        border-top: 1px solid var(--border);
+        padding: 28px 0 40px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      footer .wrap {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      footer nav {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+      footer a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+      footer a:hover {
+        color: var(--text);
+      }
+
+      /* prototype switcher */
+      .proto {
+        color-scheme: light;
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 40;
+        background: #fff;
+        color: #111;
+        border-radius: 12px;
+        padding: 10px 12px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        font:
+          13px "Geist",
+          sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .proto b {
+        font-weight: 600;
+      }
+      .proto label {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        cursor: pointer;
+      }
+
+      /* ---------- responsive ---------- */
+      @media (max-width: 900px) {
+        .hero .wrap,
+        .sec-split {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 40px;
+        }
+        .steps {
+          grid-template-columns: 1fr;
+        }
+        .feats {
+          grid-template-columns: 1fr;
+        }
+        .feat:nth-child(2) {
+          border-top: 1px solid var(--border);
+        }
+        .feat:nth-child(even) {
+          border-left: 0;
+        }
+        .nav ul {
+          display: none;
+        }
+        .hero {
+          padding: 48px 0 56px;
+        }
+      }
+      @media (max-width: 480px) {
+        .wrap {
+          padding: 0 16px;
+        }
+        .nav .gh {
+          display: none;
+        }
+        .cta .btn {
+          flex: 1;
+        }
+        .table td:last-child,
+        .table th:last-child {
+          width: auto;
+        }
+        .proto {
+          left: 16px;
+          right: 16px;
+          flex-direction: row;
+          flex-wrap: wrap;
+          gap: 4px 12px;
+        }
+        footer {
+          padding-bottom: 110px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="nav">
+      <div class="wrap">
+        <a class="logo" href="#"><span aria-hidden="true">{}</span>DotRelay</a>
+        <nav aria-label="Main">
+          <ul>
+            <li><a href="#how">How it works</a></li>
+            <li><a href="#security">Security</a></li>
+            <li><a href="#faq">FAQ</a></li>
+            <li><a href="#">Docs</a></li>
+          </ul>
+        </nav>
+        <div class="right">
+          <a class="btn btn-outline gh" href="#">GitHub</a>
+          <a class="btn btn-primary" href="#">Sign in</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <div class="wrap">
+          <div>
+            <h1>Share environment variables with your team.</h1>
+            <p class="sub">
+              DotRelay keeps your <code>.env</code> values in one place and gets
+              them onto every machine that needs them. Values are encrypted
+              before they leave your computer.
+            </p>
+            <div class="cta">
+              <a class="btn btn-primary btn-lg" href="#">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path
+                    d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+                  />
+                </svg>
+                Sign in with GitHub</a
+              >
+              <a class="btn btn-outline btn-lg" href="#how">How it works</a>
+            </div>
+            <p class="note">
+              DotRelay is in private alpha. Sign-in works once your GitHub
+              account has been let in.
+            </p>
+
+            <div class="install">
+              <div
+                class="install-tabs"
+                role="tablist"
+                aria-label="Install the CLI"
+              >
+                <button
+                  role="tab"
+                  aria-selected="true"
+                  data-cmd="curl -fsSL https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.sh | sh"
+                >
+                  macOS / Linux
+                </button>
+                <button
+                  role="tab"
+                  aria-selected="false"
+                  data-cmd="irm https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.ps1 | iex"
+                >
+                  Windows
+                </button>
+                <button
+                  role="tab"
+                  aria-selected="false"
+                  data-cmd="npm install -g @dotrelay/cli"
+                >
+                  npm
+                </button>
+              </div>
+              <div class="cmd" role="tabpanel">
+                <code id="install-cmd"
+                  >curl -fsSL
+                  https://raw.githubusercontent.com/LSP-Software/DotRelay/main/scripts/install.sh
+                  | sh</code
+                ><button
+                  class="copy"
+                  type="button"
+                  data-copy-from="install-cmd"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="term" aria-label="Example terminal session">
+            <div class="term-bar">
+              <i></i><i></i><i></i><span>~/acme-api</span>
+            </div>
+            <pre><span class="p">$</span> dotrelay push
+<span class="dim">  changed  DATABASE_URL
+  added    STRIPE_WEBHOOK_SECRET</span>
+<span class="ok">✓</span> Published revision 42 to development
+<span class="gap"></span><span class="dim"># on a teammate's laptop</span>
+<span class="p">$</span> dotrelay pull
+<span class="ok">✓</span> Updated .env from revision 42 <span class="dim">(2 changes)</span>
+<span class="gap"></span><span class="p">$</span> dotrelay history
+<span class="dim">  42  samk     2 minutes ago   2 changes
+  41  priya-n  3 days ago      1 change
+  40  jo-dev   last week       3 changes</span></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="how">
+        <div class="wrap">
+          <h2>How it works</h2>
+          <p class="lead">
+            Set it up once per repository. After that, it's one command to share
+            a change and one to get it.
+          </p>
+          <ol class="steps">
+            <li>
+              <h3>Add your repository</h3>
+              <p>
+                Run this in your project folder. It creates the project and a
+                development environment.
+              </p>
+              <div class="cmd"><code>dotrelay init</code></div>
+            </li>
+            <li>
+              <h3>Push your .env</h3>
+              <p>
+                Uploads your values, encrypted. Each push is saved as a new
+                revision.
+              </p>
+              <div class="cmd"><code>dotrelay push</code></div>
+            </li>
+            <li>
+              <h3>Pull on any machine</h3>
+              <p>
+                Teammates and your other computers get the same values in their
+                <code>.env</code>.
+              </p>
+              <div class="cmd"><code>dotrelay pull</code></div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="sec" id="features">
+        <div class="wrap">
+          <h2>What you can do</h2>
+          <div class="feats">
+            <div class="feat">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="12" rx="2" />
+                <path d="M8 20h8M12 16v4" />
+              </svg>
+              <h3>Keep every machine in sync</h3>
+              <p>
+                Development, staging and production each have their own values.
+                Pull whichever one you need.
+              </p>
+            </div>
+            <div class="feat">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+                <path d="M3 3v5h5M12 7v5l3 2" />
+              </svg>
+              <h3>Undo a bad change</h3>
+              <p>
+                See who changed what and when. Roll back to any earlier revision
+                from the terminal or the browser.
+              </p>
+            </div>
+            <div class="feat">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4 21a8 8 0 0 1 16 0" />
+              </svg>
+              <h3>Keep some values to yourself</h3>
+              <p>
+                Mark a variable as personal, like a local database password.
+                Everyone sets their own value.
+              </p>
+            </div>
+            <div class="feat">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M7 8l3 3-3 3M13 15h4" />
+              </svg>
+              <h3>Use the terminal or the browser</h3>
+              <p>
+                Edit values, invite teammates and review history on the web.
+                Everything also works from the CLI.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="security">
+        <div class="wrap sec-split">
+          <div>
+            <h2>The server can't read your values</h2>
+            <p class="lead">
+              Encryption happens on your computer. The server only stores and
+              passes on encrypted data.
+            </p>
+            <div class="honest">
+              <p>
+                Signing in with GitHub only tells DotRelay who you are. It
+                doesn't give anyone access to your values.
+              </p>
+              <p>
+                DotRelay uses standard cryptography (X25519, Ed25519,
+                AES-256-GCM). It isn't designed to resist quantum computers.
+              </p>
+              <p><a href="#">Read the security model</a></p>
+            </div>
+          </div>
+          <table class="table">
+            <caption class="skip">
+              What the DotRelay server can read
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Data</th>
+                <th scope="col">Server can read it?</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Variable values</td>
+                <td><span class="no">No</span></td>
+              </tr>
+              <tr>
+                <td>Variable names and descriptions</td>
+                <td><span class="no">No</span></td>
+              </tr>
+              <tr>
+                <td>Your recovery code and encryption password</td>
+                <td><span class="no">No</span></td>
+              </tr>
+              <tr>
+                <td>Your GitHub username and team members</td>
+                <td><span class="yes">Yes</span></td>
+              </tr>
+              <tr>
+                <td>Project, repository and environment names</td>
+                <td><span class="yes">Yes</span></td>
+              </tr>
+              <tr>
+                <td>When a change was made, and by whom</td>
+                <td><span class="yes">Yes</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="sec" id="faq">
+        <div class="wrap">
+          <h2>Questions</h2>
+          <div class="faq">
+            <details>
+              <summary>How much does it cost?</summary>
+              <p>
+                Nothing during the private alpha. DotRelay is open source under
+                AGPL-3.0, so you can also run your own server.
+              </p>
+            </details>
+            <details>
+              <summary>What happens if I lose my laptop?</summary>
+              <p>
+                Revoke it from another device or the browser so it can't get new
+                changes. To get back in on a new machine, approve it from a
+                device you still have, or use the recovery code you saved when
+                you set up.
+              </p>
+            </details>
+            <details>
+              <summary>
+                What if I lose every device and my recovery code?
+              </summary>
+              <p>
+                Your values can't be recovered. Nobody, including us, has a copy
+                we can decrypt. That's why we ask you to save a recovery code
+                when you set up.
+              </p>
+            </details>
+            <details>
+              <summary>
+                What happens when I remove someone from the team?
+              </summary>
+              <p>
+                They can't get any new changes. Anything they already pulled is
+                still on their machine, so change those values afterwards.
+              </p>
+            </details>
+            <details>
+              <summary>Can I run DotRelay on my own server?</summary>
+              <p>
+                Yes. The server and CLI are open source. Point the CLI at your
+                server with <code>dotrelay setup https://your-server</code>.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec final">
+        <div class="wrap">
+          <h2>Try it on one repository</h2>
+          <p class="lead">
+            Install the CLI, run <code>dotrelay init</code> in a repository,
+            then push.
+          </p>
+          <div class="cta">
+            <a class="btn btn-primary btn-lg" href="#">Sign in with GitHub</a>
+            <a class="btn btn-outline btn-lg" href="#">Read the docs</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <span>DotRelay</span>
+        <nav aria-label="Footer">
+          <a href="#">Docs</a><a href="#">GitHub</a><a href="#">Self-hosting</a
+          ><a href="#">Privacy</a><a href="#">Terms</a>
+        </nav>
+      </div>
+    </footer>
+
+    <fieldset class="proto" aria-label="Prototype theme">
+      <b>Prototype theme</b>
+      <label
+        ><input type="radio" name="theme" value="original" checked /> Green on
+        black (current)</label
+      >
+      <label><input type="radio" name="theme" value="light" /> Light</label>
+      <label
+        ><input type="radio" name="theme" value="slate" /> Slate and blue</label
+      >
+    </fieldset>
+
+    <script>
+      document
+        .querySelectorAll("[name=theme]")
+        .forEach((r) =>
+          r.addEventListener(
+            "change",
+            () => (document.documentElement.dataset.theme = r.value),
+          ),
+        );
+      const tabs = [...document.querySelectorAll(".install-tabs button")];
+      tabs.forEach((t) =>
+        t.addEventListener("click", () => {
+          tabs.forEach((x) => x.setAttribute("aria-selected", String(x === t)));
+          document.getElementById("install-cmd").textContent = t.dataset.cmd;
+        }),
+      );
+      document.querySelectorAll("[data-copy-from]").forEach((b) =>
+        b.addEventListener("click", async () => {
+          const text = document.getElementById(b.dataset.copyFrom).textContent;
+          try {
+            await navigator.clipboard.writeText(text);
+            b.textContent = "Copied";
+          } catch {
+            b.textContent = "Select and copy";
+          }
+          setTimeout(() => (b.textContent = "Copy"), 1600);
+        }),
+      );
+    </script>
+  </body>
+</html>

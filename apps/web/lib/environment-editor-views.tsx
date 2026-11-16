@@ -20,6 +20,7 @@ import {
 import { SecretValueInput } from "@/components/secret-value-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import {
   type ConflictChangeKind,
   type ConflictResolution,
@@ -47,8 +48,7 @@ type SessionSigningTrustSource = Readonly<{
 
 export const ownershipLabel = (
   ownership: EnvironmentVariable["ownership"],
-): string =>
-  ownership === "SHARED_VALUE" ? "Shared value" : "User-defined value";
+): string => (ownership === "SHARED_VALUE" ? "Team" : "Only me");
 
 // The history signers a session verifies Revisions against. Without
 // roster-verified entries only this browser's own key counts, bound to its
@@ -169,10 +169,7 @@ export const RevisionIdentity = ({
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className={idClassName}>{displayRevisionId(revision.id)}</span>
         {mutationLabel ? (
-          <Badge
-            className="h-4 text-[10px] font-medium uppercase tracking-wide"
-            variant="secondary"
-          >
+          <Badge className="h-4 text-[10px] font-medium" variant="secondary">
             {mutationLabel}
           </Badge>
         ) : null}
@@ -342,7 +339,7 @@ export const ConflictSides = ({
     return (
       <div className="min-w-0 font-mono text-sm leading-5">
         <div className="flex gap-2">
-          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <span className="w-14 shrink-0 text-[11px] text-muted-foreground">
             Theirs
           </span>
           <span className={showFrom ? "text-red-300/90" : undefined}>
@@ -350,7 +347,7 @@ export const ConflictSides = ({
           </span>
         </div>
         <div className="flex gap-2">
-          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <span className="w-14 shrink-0 text-[11px] text-muted-foreground">
             Yours
           </span>
           <span className={showTo ? "text-emerald-300/90" : undefined}>
@@ -363,13 +360,13 @@ export const ConflictSides = ({
   return (
     <div className="grid gap-1">
       <div className="flex gap-2">
-        <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+        <span className="w-14 shrink-0 text-[11px] text-muted-foreground">
           Theirs
         </span>
         <MaskedValue value={remoteValue} revealed={revealed} />
       </div>
       <div className="flex gap-2">
-        <span className="w-14 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+        <span className="w-14 shrink-0 text-[11px] text-muted-foreground">
           Yours
         </span>
         <MaskedValue value={localValue} revealed={revealed} />
@@ -388,7 +385,7 @@ export const ConflictDefinitionLines = ({
   const lines: string[] = [];
   if (local.ownership !== remote.ownership)
     lines.push(
-      `Sharing: yours is ${ownershipLabel(local.ownership).toLowerCase()}, theirs is ${ownershipLabel(remote.ownership).toLowerCase()}`,
+      `Visible to: yours is “${ownershipLabel(local.ownership)}”, theirs is “${ownershipLabel(remote.ownership)}”`,
     );
   if (local.description !== remote.description)
     lines.push(
@@ -401,7 +398,7 @@ export const ConflictDefinitionLines = ({
   if (lines.length === 0) return null;
   return (
     <div className="grid gap-0.5 text-xs text-muted-foreground">
-      <p className="text-[11px] uppercase tracking-wide">Other settings</p>
+      <p className="text-[11px]">Other settings</p>
       {lines.map((line) => (
         <p key={line}>{line}</p>
       ))}
@@ -433,7 +430,7 @@ export const ConflictLane = ({
         </span>
         {kinds.map((kind) => (
           <Badge
-            className="h-4 text-[10px] font-medium uppercase tracking-wide"
+            className="h-4 text-[10px] font-medium"
             key={kind}
             variant="secondary"
           >
@@ -441,10 +438,7 @@ export const ConflictLane = ({
           </Badge>
         ))}
         {!remoteAvailable ? (
-          <Badge
-            className="h-4 text-[10px] font-medium uppercase tracking-wide"
-            variant="outline"
-          >
+          <Badge className="h-4 text-[10px] font-medium" variant="outline">
             Their version unavailable
           </Badge>
         ) : null}
@@ -583,131 +577,149 @@ export const VariableRow = ({
 
   return (
     <li
-      className="px-4 py-1.5 hover:bg-muted/20"
+      className={cn(
+        "relative grid gap-2 px-4 py-2.5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_6rem] md:items-center md:gap-3",
+        variable.hasDraftChange
+          ? "bg-amber-300/[0.06] before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-amber-300"
+          : "hover:bg-muted/20",
+      )}
       data-testid={`environment-variable-${variable.name}`}
     >
-      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
-        <div className="min-w-0 sm:w-[min(22rem,36%)] sm:shrink-0">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className="min-w-0 flex-1 break-all font-mono text-sm font-medium tracking-tight">
-              {variable.name}
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="min-w-0 break-all font-mono text-[13px] font-medium">
+            {variable.name}
+          </span>
+          {variable.hasDraftChange ? (
+            <span className="shrink-0 text-xs text-amber-200">
+              {variable.tombstone ? "Will be removed" : "Not published"}
             </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground">
-              {ownershipLabel(variable.ownership)}
-            </span>
-            {readOnlyDisclosure ? (
-              <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                Read-only
-              </span>
-            ) : null}
-            {variable.hasDraftChange ? (
-              <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-200">
-                Draft change
-              </span>
-            ) : null}
-          </div>
-          {variable.description ? (
-            <p className="break-words text-xs leading-5 text-muted-foreground/80">
-              {variable.description}
-            </p>
           ) : null}
           {readOnlyDisclosure ? (
-            <p
-              className="break-words text-[11px] leading-4 text-muted-foreground"
-              id={`read-only-${variable.id}`}
-            >
-              {readOnlyDisclosure}
-            </p>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              Read-only
+            </span>
           ) : null}
         </div>
+        {variable.description ? (
+          <p className="break-words text-xs leading-5 text-muted-foreground">
+            {variable.description}
+          </p>
+        ) : null}
+        {readOnlyDisclosure ? (
+          <p
+            className="break-words text-xs leading-4 text-muted-foreground"
+            id={`read-only-${variable.id}`}
+          >
+            {readOnlyDisclosure}
+          </p>
+        ) : null}
+      </div>
 
-        {variable.tombstone ? (
-          <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
-            <span className="text-xs text-muted-foreground">
-              This variable is marked for deletion.
-            </span>
-            {variable.hasDraftChange && canUndoDelete ? (
-              <Button
-                disabled={editingDisabled || !canDelete}
-                onClick={onUndoDelete}
-                size="xs"
-                variant="outline"
-              >
-                Undo delete
-              </Button>
-            ) : null}
-          </div>
-        ) : (
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <Label className="sr-only" htmlFor={`value-${variable.id}`}>
-              {variable.name} value
-            </Label>
-            <SecretValueInput
-              aria-describedby={
-                readOnlyDisclosure ? `read-only-${variable.id}` : undefined
-              }
-              autoCapitalize="off"
-              autoComplete="new-password"
-              autoCorrect="off"
-              className="font-mono read-only:bg-transparent"
-              data-1p-ignore
-              data-lpignore="true"
-              disabled={editingDisabled}
-              id={`value-${variable.id}`}
-              readOnly={!canEdit}
-              onChange={(event) => onValueChange(event.target.value)}
-              placeholder={variable.value === null ? "Not set" : "Empty value"}
-              spellCheck={false}
-              type={revealed ? "text" : "password"}
-              value={variable.value ?? ""}
-            />
-            {showState ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {state}
-              </span>
-            ) : null}
+      {variable.tombstone ? (
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <span className="text-xs text-muted-foreground">
+            Removed in your changes.
+          </span>
+          {variable.hasDraftChange && canUndoDelete ? (
             <Button
-              aria-label={`${revealed ? "Hide" : "Reveal"} ${variable.name}`}
+              disabled={editingDisabled || !canDelete}
+              onClick={onUndoDelete}
+              size="xs"
+              variant="outline"
+            >
+              Undo delete
+            </Button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex min-w-0 items-center gap-1">
+          <Label className="sr-only" htmlFor={`value-${variable.id}`}>
+            {variable.name} value
+          </Label>
+          <SecretValueInput
+            aria-describedby={
+              readOnlyDisclosure ? `read-only-${variable.id}` : undefined
+            }
+            autoCapitalize="off"
+            autoComplete="new-password"
+            autoCorrect="off"
+            className="h-8 min-w-0 flex-1 border-transparent bg-transparent font-mono text-[13px] hover:border-input focus-visible:border-ring read-only:hover:border-transparent dark:bg-transparent"
+            data-1p-ignore
+            data-lpignore="true"
+            disabled={editingDisabled}
+            id={`value-${variable.id}`}
+            readOnly={!canEdit}
+            onChange={(event) => onValueChange(event.target.value)}
+            placeholder={variable.value === null ? "" : "Empty"}
+            spellCheck={false}
+            type={revealed ? "text" : "password"}
+            value={variable.value ?? ""}
+          />
+          {showState ? (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {state}
+            </span>
+          ) : null}
+          <Button
+            aria-label={`${revealed ? "Hide" : "Reveal"} ${variable.name}`}
+            disabled={editingDisabled}
+            onClick={onToggleReveal}
+            size="icon-sm"
+            title={revealed ? "Hide value" : "Show value"}
+            variant="ghost"
+          >
+            {revealed ? (
+              <EyeOff aria-hidden="true" />
+            ) : (
+              <Eye aria-hidden="true" />
+            )}
+          </Button>
+          {variable.value !== null ? (
+            <CopyValueButton
               disabled={editingDisabled}
-              onClick={onToggleReveal}
-              size="icon-sm"
+              name={variable.name}
+              value={variable.value}
+            />
+          ) : null}
+          {!variable.required && variable.value !== null && canEdit ? (
+            <Button
+              disabled={editingDisabled}
+              onClick={onSetAbsent}
+              size="xs"
+              title="Remove the value but keep the variable"
               variant="ghost"
             >
-              {revealed ? (
-                <EyeOff aria-hidden="true" />
-              ) : (
-                <Eye aria-hidden="true" />
-              )}
+              Unset value
             </Button>
-            {variable.value !== null ? (
-              <CopyValueButton
-                disabled={editingDisabled}
-                name={variable.name}
-                value={variable.value}
-              />
-            ) : null}
-            {!variable.required && variable.value !== null ? (
-              <Button
-                disabled={editingDisabled || !canEdit}
-                onClick={onSetAbsent}
-                size="xs"
-                variant="ghost"
-              >
-                Unset value
-              </Button>
-            ) : null}
+          ) : null}
+          {canDelete ? (
             <Button
               aria-label={`Delete ${variable.name}`}
               className="text-muted-foreground hover:text-destructive"
-              disabled={editingDisabled || !canDelete}
+              disabled={editingDisabled}
               onClick={onDelete}
               size="icon-sm"
+              title="Delete variable"
               variant="ghost"
             >
               <Trash2 aria-hidden="true" />
             </Button>
-          </div>
-        )}
+          ) : null}
+        </div>
+      )}
+      <div className="md:order-none">
+        <Badge
+          className={cn(
+            "font-normal",
+            variable.ownership === "SHARED_VALUE"
+              ? "text-muted-foreground"
+              : "border-violet-300/30 bg-violet-300/10 text-violet-200",
+          )}
+          variant="outline"
+        >
+          {ownershipLabel(variable.ownership)}
+        </Badge>
       </div>
     </li>
   );
@@ -738,13 +750,12 @@ export const AddVariableDialog = ({
         <DialogHeader>
           <DialogTitle>Add variable</DialogTitle>
           <DialogDescription>
-            Choose who can read the value. Add it to your draft before
-            publishing.
+            It&apos;s added to your unpublished changes. Publish to share it.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
-            <Label htmlFor="new-variable-name">Variable name</Label>
+            <Label htmlFor="new-variable-name">Name</Label>
             <Input
               autoComplete="off"
               id="new-variable-name"
@@ -771,11 +782,9 @@ export const AddVariableDialog = ({
             />
           </div>
           <fieldset className="grid gap-2">
-            <legend className="text-sm font-medium">
-              Who can read the value
-            </legend>
+            <legend className="text-sm font-medium">Visible to</legend>
             <label
-              aria-label="Shared value"
+              aria-label="Team"
               className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5"
             >
               <input
@@ -787,15 +796,15 @@ export const AddVariableDialog = ({
                 type="radio"
               />
               <span>
-                <span className="block text-sm font-medium">Shared value</span>
+                <span className="block text-sm font-medium">Team</span>
                 <span className="block text-xs text-muted-foreground">
-                  Teammates with project keys can read it. You, owners, and
-                  admins can edit it.
+                  Everyone on the team sees the same value. You, owners and
+                  admins can change it.
                 </span>
               </span>
             </label>
             <label
-              aria-label="User-defined value"
+              aria-label="Only me"
               className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5"
             >
               <input
@@ -807,17 +816,16 @@ export const AddVariableDialog = ({
                 type="radio"
               />
               <span>
-                <span className="block text-sm font-medium">
-                  User-defined value
-                </span>
+                <span className="block text-sm font-medium">Only me</span>
                 <span className="block text-xs text-muted-foreground">
-                  Only the devices you have set up can read it.
+                  Each person sets their own value. Only your devices can read
+                  yours.
                 </span>
               </span>
             </label>
           </fieldset>
           <div className="grid gap-2">
-            <Label htmlFor="new-variable-value">Initial value</Label>
+            <Label htmlFor="new-variable-value">Value</Label>
             <div className="flex items-center gap-2">
               <SecretValueInput
                 autoCapitalize="off"
@@ -830,13 +838,13 @@ export const AddVariableDialog = ({
                 onChange={(event) =>
                   onDraftChange({ ...draft, value: event.target.value })
                 }
-                placeholder="Leave blank to save an empty string"
+                placeholder="Leave blank for an empty value"
                 spellCheck={false}
                 type={valueRevealed ? "text" : "password"}
                 value={draft.value}
               />
               <Button
-                aria-label={`${valueRevealed ? "Hide" : "Reveal"} initial value`}
+                aria-label={`${valueRevealed ? "Hide" : "Reveal"} value`}
                 aria-pressed={valueRevealed}
                 data-testid="add-variable-reveal"
                 onClick={() => setValueRevealed((current) => !current)}
@@ -864,7 +872,7 @@ export const AddVariableDialog = ({
                 }
                 type="checkbox"
               />
-              Leave the value unset, rather than save an empty string
+              Leave it unset instead of empty
             </label>
           ) : null}
           <label className="flex items-center gap-2 text-xs text-muted-foreground">

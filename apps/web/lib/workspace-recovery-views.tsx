@@ -189,10 +189,10 @@ export const RecoveryArea = ({
     <section id="recovery" data-testid="recovery-area">
       {setupMode ? null : (
         <>
-          <h1 className="font-heading text-3xl font-semibold">Recovery</h1>
-          <p className="mt-2 max-w-2xl text-muted-foreground">
-            Your account's encryption key stays on your devices. If every device
-            is lost, one of the recovery methods below unlocks it again.
+          <h2 className="font-heading text-lg font-semibold">Recovery</h2>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            If you lose every device, you need one of these to get your values
+            back. Nobody else can recover them for you.
           </p>
         </>
       )}
@@ -709,7 +709,7 @@ export const RecoveryArea = ({
                         )
                           ? passkeyAvailable
                             ? "Active"
-                            : "Active · PRF not supported here"
+                            : "Active, but this browser can't use it"
                           : "Not set up"}
                       </Badge>
                     </TableCell>

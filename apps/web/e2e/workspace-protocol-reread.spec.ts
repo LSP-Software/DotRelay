@@ -132,7 +132,7 @@ const expectLockedEditor = async (editor: Locator) => {
     editor.getByRole("button", { name: "Add Variable" }),
   ).toBeDisabled();
   await expect(
-    editor.getByRole("button", { name: "Save changes" }),
+    editor.getByRole("button", { name: "Review and publish" }),
   ).toBeDisabled();
   await expect(editor.getByLabel("OPTIONAL_FLAG Value")).toBeDisabled();
   await expect(
@@ -147,7 +147,7 @@ const expectLockedEditor = async (editor: Locator) => {
   await expect(
     editor
       .getByTestId("environment-variable-FEATURE_GATE")
-      .getByText("This variable is marked for deletion."),
+      .getByText("Removed in your changes."),
   ).toBeVisible();
   await expect(
     editor.getByRole("button", { name: "Undo delete" }),
@@ -209,15 +209,13 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
     editor().getByTestId("environment-variable-FEATURE_GATE");
   await expect(optionalRow()).toBeVisible({ timeout: 30_000 });
   await expect(featureRow()).toBeVisible();
-  await expect(
-    editor().getByText("Add a variable to save your first secrets here."),
-  ).toHaveCount(0);
+  await expect(editor().getByText("No variables yet")).toHaveCount(0);
   await expect(editor().getByLabel("OPTIONAL_FLAG Value")).toBeEnabled();
 
   await editor().getByLabel("OPTIONAL_FLAG Value").fill("local-edit");
   await editor().getByRole("button", { name: "Delete FEATURE_GATE" }).click();
   await expect(
-    featureRow().getByText("This variable is marked for deletion."),
+    featureRow().getByText("Removed in your changes."),
   ).toBeVisible();
 
   // A later read fails: switch away (keeping the draft) and back, which
@@ -238,8 +236,6 @@ test("a verified read that later fails keeps Variables visible but locked", asyn
 
   await expect(optionalRow()).toBeVisible();
   await expect(featureRow()).toBeVisible();
-  await expect(
-    editor().getByText("Add a variable to save your first secrets here."),
-  ).toHaveCount(0);
+  await expect(editor().getByText("No variables yet")).toHaveCount(0);
   await expectLockedEditor(editor());
 });

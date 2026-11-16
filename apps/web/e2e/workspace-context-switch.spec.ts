@@ -11,7 +11,7 @@ const startDraft = async (page: Page) => {
   await editor.getByLabel("API_ORIGIN Value").fill("draft-value");
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 };
 
 test("keeping a draft on Environment switch restores it on return", async ({
@@ -28,7 +28,7 @@ test("keeping a draft on Environment switch restores it on return", async ({
   const staging = activeEditor(page);
   await expect(
     staging.getByTestId("environment-variable-API_ORIGIN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
   await staging.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(staging.getByLabel("API_ORIGIN Value")).toHaveValue("");
 
@@ -36,7 +36,7 @@ test("keeping a draft on Environment switch restores it on return", async ({
   const production = activeEditor(page);
   await expect(
     production.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
   await production.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(production.getByLabel("API_ORIGIN Value")).toHaveValue(
     "draft-value",
@@ -57,7 +57,7 @@ test("discarding a draft on Environment switch abandons it everywhere", async ({
   const staging = activeEditor(page);
   await expect(
     staging.getByTestId("environment-variable-API_ORIGIN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
   await staging.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(staging.getByLabel("API_ORIGIN Value")).toHaveValue("");
 
@@ -65,7 +65,7 @@ test("discarding a draft on Environment switch abandons it everywhere", async ({
   const production = activeEditor(page);
   await expect(
     production.getByTestId("environment-variable-API_ORIGIN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
   await production.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(production.getByLabel("API_ORIGIN Value")).toHaveValue("");
 });
@@ -96,7 +96,7 @@ test("cancelling the switch prompt keeps the current Environment and draft", asy
   const production = activeEditor(page);
   await expect(
     production.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 });
 
 test("switching Environments without unsaved changes does not prompt", async ({
@@ -114,7 +114,7 @@ test("switching Environments without unsaved changes does not prompt", async ({
   const staging = activeEditor(page);
   await expect(
     staging.getByTestId("environment-variable-API_ORIGIN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
 });
 
 test("a retained draft cannot be published from another Environment", async ({
@@ -130,12 +130,12 @@ test("a retained draft cannot be published from another Environment", async ({
 
   const staging = activeEditor(page);
   await expect(
-    staging.getByRole("button", { name: "Save changes" }),
-  ).toBeDisabled();
+    staging.getByRole("button", { name: "Review and publish" }),
+  ).toHaveCount(0);
 
   await page.getByRole("tab", { name: "production" }).click();
   const production = activeEditor(page);
   await expect(
-    production.getByRole("button", { name: "Save changes" }),
+    production.getByRole("button", { name: "Review and publish" }),
   ).toBeEnabled();
 });

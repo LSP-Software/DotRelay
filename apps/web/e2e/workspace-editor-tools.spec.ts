@@ -259,7 +259,7 @@ test("the variable filter narrows rows by name", async ({ page: target }) => {
   test.setTimeout(90_000);
   await installEnvironment(target);
   const editor = await openEditor(target);
-  const filter = editor.getByLabel("Filter variables by name");
+  const filter = editor.getByLabel("Search variables");
   await filter.fill("tok");
   await expect(editor.getByTestId("environment-variable-TOKEN")).toBeVisible();
   await expect(editor.getByTestId("environment-variable-API_URL")).toHaveCount(
@@ -279,7 +279,11 @@ test("an imported .env is reviewed, then staged into the draft", async ({
   test.setTimeout(90_000);
   await installEnvironment(target);
   const editor = await openEditor(target);
-  await editor.getByRole("button", { name: "Import .env" }).click();
+  await editor.getByRole("button", { name: "More actions" }).click();
+  await editor
+    .page()
+    .getByRole("menuitem", { name: "Import from a .env file" })
+    .click();
   const dialog = target.getByTestId("import-dotenv-dialog");
   const text = dialog.getByLabel(".env contents");
 
@@ -307,26 +311,30 @@ test("an imported .env is reviewed, then staged into the draft", async ({
   await expect(
     dialog.getByRole("button", { name: "Add to draft" }),
   ).toBeDisabled();
-  await dialog.getByRole("radio", { name: /Shared value/ }).check();
+  await dialog.getByRole("radio", { name: /Team/ }).check();
   await dialog.getByRole("button", { name: "Add to draft" }).click();
   await expect(dialog).toBeHidden();
 
   await expect(editor.getByTestId("environment-variable-TOKEN")).toContainText(
-    "Draft change",
+    "Not published",
   );
   await expect(
     editor.getByTestId("environment-variable-NEW_VAR"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
   await expect(
     editor.getByTestId("environment-variable-API_URL"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
   await expect(await tokenValue(editor)).toHaveValue("new-token");
   await expect(
-    editor.getByRole("button", { name: "Save changes" }),
+    editor.getByRole("button", { name: "Review and publish" }),
   ).toBeEnabled();
 
   // Reopening starts empty: the pasted secrets were not kept.
-  await editor.getByRole("button", { name: "Import .env" }).click();
+  await editor.getByRole("button", { name: "More actions" }).click();
+  await editor
+    .page()
+    .getByRole("menuitem", { name: "Import from a .env file" })
+    .click();
   await expect(dialog.getByLabel(".env contents")).toHaveValue("");
 });
 
@@ -336,7 +344,11 @@ test("downloading .env warns first and writes the readable published values", as
   test.setTimeout(90_000);
   await installEnvironment(target);
   const editor = await openEditor(target);
-  await editor.getByRole("button", { name: "Download .env" }).click();
+  await editor.getByRole("button", { name: "More actions" }).click();
+  await editor
+    .page()
+    .getByRole("menuitem", { name: "Download as a .env file" })
+    .click();
   const dialog = target.getByTestId("download-dotenv-dialog");
   await expect(dialog).toContainText("plain text");
   await expect(dialog).toContainText("1 variable has no value");
@@ -361,11 +373,15 @@ test("Refresh loads a teammate's change and keeps the draft", async ({
   await editor.getByLabel("API_URL Value").fill("https://draft.test");
   await expect(
     editor.getByTestId("environment-variable-API_URL"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 
   fixture.publishTeammateChange();
   const before = fixture.syncCalls;
-  await editor.getByRole("button", { name: "Refresh" }).click();
+  await editor.getByRole("button", { name: "More actions" }).click();
+  await editor
+    .page()
+    .getByRole("menuitem", { name: "Load latest values" })
+    .click();
   await expect.poll(() => fixture.syncCalls).toBeGreaterThan(before);
   await expect(await tokenValue(editor)).toHaveValue("rotated-token");
   await expect(editor.getByLabel("API_URL Value")).toHaveValue(
@@ -373,7 +389,7 @@ test("Refresh loads a teammate's change and keeps the draft", async ({
   );
   await expect(
     editor.getByTestId("environment-variable-API_URL"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 });
 
 test("a publish failure says what happened and that the draft is kept", async ({
@@ -400,9 +416,9 @@ test("a publish failure says what happened and that the draft is kept", async ({
   const editor = await openEditor(target);
   await editor.getByLabel("API_URL Value").fill("https://draft.test");
   const publish = async () => {
-    await editor.getByRole("button", { name: "Save changes" }).click();
+    await editor.getByRole("button", { name: "Review and publish" }).click();
     await target
-      .getByRole("dialog", { name: "Save changes" })
+      .getByRole("dialog", { name: /^Publish \d+ change/ })
       .getByRole("button", { name: "Publish" })
       .click();
   };
@@ -464,9 +480,9 @@ test("after a stale-head publish without conflicts, others' values are shown fre
   await editor.getByLabel("API_URL Value").fill("https://draft.test");
 
   fixture.publishTeammateChange();
-  await editor.getByRole("button", { name: "Save changes" }).click();
+  await editor.getByRole("button", { name: "Review and publish" }).click();
   await target
-    .getByRole("dialog", { name: "Save changes" })
+    .getByRole("dialog", { name: /^Publish \d+ change/ })
     .getByRole("button", { name: "Publish" })
     .click();
   await expect(
@@ -476,7 +492,7 @@ test("after a stale-head publish without conflicts, others' values are shown fre
   await expect(editor.getByLabel("TOKEN Value")).toHaveValue("rotated-token");
   await expect(
     editor.getByTestId("environment-variable-TOKEN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
   await expect(editor.getByLabel("API_URL Value")).toHaveValue(
     "https://draft.test",
   );

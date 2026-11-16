@@ -17,17 +17,23 @@ test("back and forward traverse workspace views", async ({ page }) => {
   ).toBeVisible();
   await expectUrl(page, "view=projects");
 
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("Your team permissions")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /^Members of/ }),
+  ).toBeVisible();
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
   await expectUrl(page, "view=devices");
-  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Devices and recovery" }),
+  ).toBeVisible();
 
   await page.goBack();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("Your team permissions")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /^Members of/ }),
+  ).toBeVisible();
 
   await page.goBack();
   await expectUrl(page, "view=projects");
@@ -37,7 +43,9 @@ test("back and forward traverse workspace views", async ({ page }) => {
 
   await page.goForward();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("Your team permissions")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /^Members of/ }),
+  ).toBeVisible();
 });
 
 test("switching Teams is a history entry that Back and Forward traverse", async ({
@@ -107,14 +115,18 @@ test("reload and shared links reopen the visible view and server", async ({
 }) => {
   await page.goto("/workspace");
   await openFirstProject(page);
-  await page.locator("aside").getByRole("button", { name: "Recovery" }).click();
+  await page.goto(page.url().replace(/view=[a-z]+/, "view=recovery"));
   await expectUrl(page, "view=recovery");
-  await expect(page.getByRole("heading", { name: "Recovery" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Recovery", exact: true }),
+  ).toBeVisible();
   const recoveryUrl = page.url();
 
   await page.goto(recoveryUrl);
   await expectUrl(page, "view=recovery");
-  await expect(page.getByRole("heading", { name: "Recovery" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Recovery", exact: true }),
+  ).toBeVisible();
 
   await page
     .getByRole("combobox", { name: "Server" })
@@ -147,14 +159,18 @@ test("reloading Team with a selected Project reopens the Team view", async ({
 }) => {
   await page.goto("/workspace");
   await openFirstProject(page);
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await expectUrl(page, "view=team");
-  await expect(page.getByText("Your team permissions")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /^Members of/ }),
+  ).toBeVisible();
   const teamUrl = page.url();
 
   await page.goto(teamUrl);
   await expectUrl(page, "view=team");
-  await expect(page.getByText("Your team permissions")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /^Members of/ }),
+  ).toBeVisible();
   // The selected Project survives the reload; the URL keeps naming it.
   await expect
     .poll(() => new URL(page.url()).searchParams.has("project"))
@@ -173,19 +189,23 @@ test("reloading the Projects, Team, and Devices views reopens them", async ({
     page.getByRole("heading", { name: "LSP-Software / DotRelay" }),
   ).toBeVisible();
 
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await expectUrl(page, "view=team");
   const teamUrl = page.url();
   await page.goto(teamUrl);
   await expectUrl(page, "view=team");
-  await expect(page.getByText("Your team permissions")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /^Members of/ }),
+  ).toBeVisible();
 
   await page.locator("aside").getByRole("button", { name: "Devices" }).click();
   await expectUrl(page, "view=devices");
   const devicesUrl = page.url();
   await page.goto(devicesUrl);
   await expectUrl(page, "view=devices");
-  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Devices and recovery" }),
+  ).toBeVisible();
 });
 
 test("links to deleted resources recover instead of blanking the page", async ({
@@ -254,7 +274,7 @@ test("history navigation keeps dirty drafts for the return trip", async ({
   await editor.getByLabel("API_ORIGIN Value").fill("draft-value");
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 
   await page.locator("aside").getByRole("button", { name: "Projects" }).click();
   await expect(page.getByTestId("switch-draft-prompt")).toHaveCount(0);
@@ -265,7 +285,7 @@ test("history navigation keeps dirty drafts for the return trip", async ({
   await expectUrl(page, "view=environment");
   await expect(
     restored.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
   await restored.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(restored.getByLabel("API_ORIGIN Value")).toHaveValue(
     "draft-value",
@@ -287,7 +307,7 @@ test("a history rebind with a dirty draft prompts and Stay returns to the entry 
   await editor.getByLabel("API_ORIGIN Value").fill("draft-value");
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 
   // One Back step reaches the entry left behind (the pre-rebind view); the
   // browser's own initial entry sits before the app's history, so a second
@@ -308,7 +328,7 @@ test("a history rebind with a dirty draft prompts and Stay returns to the entry 
   await expectUrl(page, "profile=self-hosted");
   await expect(
     restored.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 });
 
 test("discarding from a history rebind prompt commits the rebind", async ({
@@ -324,7 +344,7 @@ test("discarding from a history rebind prompt commits the rebind", async ({
   await editor.getByLabel("API_ORIGIN Value").fill("draft-value");
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 
   // One Back step reaches the hosted entry left behind; the protected
   // preview then reopens the first Project for it.

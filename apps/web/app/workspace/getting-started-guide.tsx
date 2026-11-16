@@ -223,29 +223,25 @@ export const GettingStartedGuide = ({
     writeCliPackageManager(manager);
   };
   const guide = (
-    <section className="mb-8" data-testid="getting-started">
-      <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground">
-        FIRST RUN
-      </p>
-      <Title className="mt-2 font-heading text-3xl font-semibold tracking-tight">
+    <section className="mx-auto mb-10 max-w-3xl" data-testid="getting-started">
+      <Title className="font-heading text-2xl font-semibold tracking-tight">
         Get started
       </Title>
-      <p className="mt-2 max-w-2xl text-muted-foreground">
+      <p className="mt-1 max-w-2xl text-muted-foreground">
         {model.steps[0]?.id === "cli"
           ? "Install the CLI, then create your first team from your repository."
           : "Finish these steps to open your workspace."}
       </p>
-      <ol className="mt-6 grid list-none gap-3 p-0">
+      <ol className="mt-6 list-none divide-y overflow-hidden rounded-xl border bg-card p-0">
         {model.steps.map((step, index) => {
           const Heading = step.status === "current" ? "h2" : "p";
           return (
             <li
               aria-current={step.status === "current" ? "step" : undefined}
               className={cn(
-                "rounded-xl border px-4 py-3",
+                "relative px-4 py-4",
                 step.status === "current" &&
-                  "border-amber-300/40 bg-amber-300/5",
-                step.status === "later" && "border-border",
+                  "bg-primary/[0.03] before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary",
               )}
               key={step.id}
             >
@@ -253,9 +249,9 @@ export const GettingStartedGuide = ({
                 <span
                   aria-hidden="true"
                   className={cn(
-                    "mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border font-mono text-[11px]",
+                    "mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border text-xs font-medium",
                     step.status === "current" &&
-                      "border-amber-300/40 text-amber-200",
+                      "border-primary bg-primary text-primary-foreground",
                     step.status === "later" &&
                       "border-border text-muted-foreground",
                   )}
@@ -313,11 +309,11 @@ export const GettingStartedResume = ({
   onShow,
 }: Readonly<{ onShow: () => void }>) => (
   <div
-    className="mb-6 flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+    className="mx-auto mb-6 flex max-w-3xl flex-col gap-3 rounded-xl border border-amber-300/30 bg-amber-300/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
     data-testid="getting-started-collapsed"
   >
     <p className="text-sm text-muted-foreground">
-      This browser is not ready to read values yet.
+      This browser can&apos;t show values yet.
     </p>
     <Button onClick={onShow} type="button" variant="outline">
       Show setup steps

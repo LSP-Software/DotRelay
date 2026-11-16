@@ -36,7 +36,9 @@ const expectSetupBlocked = async (
 ): Promise<void> => {
   await expect(page.getByText(message)).toBeVisible({ timeout: 15_000 });
   await expect(
-    page.locator("#devices").getByText("Set up this browser", { exact: true }),
+    page
+      .getByTestId("recovery-device-setup")
+      .getByText("Set up this browser", { exact: true }),
   ).toBeVisible();
   await expect(
     page.locator("#devices").getByText("This browser is set up", {
@@ -132,7 +134,9 @@ test("a conflicting bootstrap starts an enrollment awaiting approval", async ({
   // card reports it as set up and keeps the pending-approval guidance instead
   // of offering the first-Device bootstrap action again.
   await expect(
-    page.locator("#devices").getByText("Set up this browser", { exact: true }),
+    page
+      .getByTestId("recovery-device-setup")
+      .getByText("Set up this browser", { exact: true }),
   ).toHaveCount(0);
   await expect(
     page.locator("#devices").getByText("This browser is set up", {

@@ -10,12 +10,12 @@ test("the Add variable dialog lets you check the masked value before adding it",
   const dialog = page.getByRole("dialog", { name: "Add variable" });
   await expect(dialog).toBeVisible();
 
-  const value = dialog.getByRole("textbox", { name: "Initial value" });
+  const value = dialog.getByRole("textbox", { name: "Value", exact: true });
   await expect(value).toHaveAttribute("type", "password");
 
   const reveal = dialog.getByTestId("add-variable-reveal");
   await expect(reveal).toBeVisible();
-  await expect(reveal).toHaveAttribute("aria-label", "Reveal initial value");
+  await expect(reveal).toHaveAttribute("aria-label", "Reveal value");
   await expect(reveal).toHaveAttribute("aria-pressed", "false");
 
   await value.fill("sk-local-check-123");
@@ -28,15 +28,15 @@ test("the Add variable dialog lets you check the masked value before adding it",
   await expect(value).toHaveAttribute("type", "text");
   await expect(value).toHaveValue("sk-local-check-123");
   await expect(reveal).toHaveAttribute("aria-pressed", "true");
-  await expect(reveal).toHaveAttribute("aria-label", "Hide initial value");
+  await expect(reveal).toHaveAttribute("aria-label", "Hide value");
 
   await reveal.click();
   await expect(value).toHaveAttribute("type", "password");
   await expect(reveal).toHaveAttribute("aria-pressed", "false");
 
   // The value typed while masked is stored exactly as typed.
-  await dialog.getByLabel("Variable name").fill("CHECK_VALUE");
-  await dialog.getByText("User-defined value", { exact: true }).last().click();
+  await dialog.getByLabel("Name", { exact: true }).fill("CHECK_VALUE");
+  await dialog.getByText("Only me", { exact: true }).last().click();
   await dialog.getByRole("button", { name: "Add variable" }).last().click();
 
   const row = page.getByTestId("environment-variable-CHECK_VALUE");
