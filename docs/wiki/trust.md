@@ -106,6 +106,15 @@ Recovery Code generation, presentation, and key exchange are client, browser, an
 (ADR 0009). The server enforces one active recovery-code wrapper per User and refuses codes
 that do not match the stored wrapper.
 
+An optional `PASSWORD` wrapper, set and used in the browser, derives its key with Argon2id
+(64 MiB of memory, 3 passes, 1 lane by default; the parameters are stored in each wrapper and
+capped before any memory is allocated) and then HKDF-SHA-384. Anyone holding the server's database
+can guess it offline, so `encryptionPasswordProblem` in `@dotrelay/client` refuses a password
+shorter than 12 characters, a repeated, sequential or all-number pattern, or one built on a common
+word with digits, symbols or letter substitutions around it. A password set under the older
+8-character rule still unlocks; the browser then asks the person to change it, and **Change** adds
+the new password wrapper before it retires the old one.
+
 ## Epoch rotation
 
 **`ProjectEpochRepository.rotate`** atomically advances a Project epoch, publishes

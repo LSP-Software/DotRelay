@@ -45,6 +45,13 @@ export {
   USER_VALUE_KEY_GENERATION,
 } from "./account/user-value-key";
 export {
+  ENCRYPTION_PASSWORD_MAX_LENGTH,
+  ENCRYPTION_PASSWORD_MIN_LENGTH,
+  type EncryptionPasswordProblem,
+  encryptionPasswordAdvice,
+  encryptionPasswordProblem,
+} from "./account/password-policy";
+export {
   type AccountKeyTrustedKeys,
   type AccountKeyVerificationContext,
   AccountKeyVerificationError,

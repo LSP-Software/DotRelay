@@ -1,4 +1,9 @@
 import {
+  ENCRYPTION_PASSWORD_MIN_LENGTH,
+  encryptionPasswordAdvice,
+  encryptionPasswordProblem,
+} from "@dotrelay/client";
+import {
   KeyRound,
   LockKeyhole,
   MonitorSmartphone,
@@ -120,6 +125,11 @@ export type RecoveryAreaProps = Readonly<{
   readonly addPassword: string;
   readonly onAddPassword: (value: string) => void;
   readonly onAddPasswordOpen: (open: boolean) => void;
+  /**
+   * The encryption password this browser was unlocked with no longer meets
+   * the policy; the person is asked to change it.
+   */
+  readonly passwordNeedsChange?: boolean;
   readonly onRotateRecoveryCode: () => void;
   readonly onAddEncryptionPassword: () => void;
   readonly onRemovePasswordDialogOpen: (open: boolean) => void;
@@ -166,6 +176,7 @@ export const RecoveryArea = ({
   addPassword,
   onAddPassword,
   onAddPasswordOpen,
+  passwordNeedsChange = false,
   onRotateRecoveryCode,
   onAddEncryptionPassword,
   onAddPasskey,
@@ -173,6 +184,7 @@ export const RecoveryArea = ({
   onRemovePasskeyDialogOpen,
   onSendTransfer,
 }: RecoveryAreaProps) => {
+  const newPasswordProblem = encryptionPasswordProblem(addPassword);
   return (
     <section id="recovery" data-testid="recovery-area">
       {setupMode ? null : (
@@ -534,6 +546,32 @@ export const RecoveryArea = ({
         </div>
       ) : (
         <div data-testid="recovery-status">
+          {passwordNeedsChange ? (
+            <Alert
+              className="mt-6 border-destructive/30 bg-destructive/10"
+              data-testid="weak-password-notice"
+            >
+              <AlertTitle>Change your encryption password</AlertTitle>
+              <AlertDescription>
+                <p>
+                  It is shorter or more common than DotRelay now allows. Anyone
+                  holding the server's database can try to guess it offline, so
+                  choose at least {ENCRYPTION_PASSWORD_MIN_LENGTH} characters
+                  that aren't a common word.
+                </p>
+                <Button
+                  className="mt-2"
+                  data-testid="change-weak-password"
+                  disabled={recoveryBusy}
+                  onClick={() => onAddPasswordOpen(true)}
+                  size="sm"
+                  variant="outline"
+                >
+                  Change encryption password
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <Card className="mt-6">
             <CardHeader>
               <CardTitle>
@@ -620,15 +658,26 @@ export const RecoveryArea = ({
                       {recoveryWrappers.some(
                         (wrapper) => wrapper.type === "password",
                       ) ? (
-                        <Button
-                          data-testid="remove-encryption-password"
-                          disabled={recoveryBusy}
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => onRemovePasswordDialogOpen(true)}
-                        >
-                          Remove
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            data-testid="change-encryption-password"
+                            disabled={recoveryBusy}
+                            size="sm"
+                            variant="outline"
+                            onClick={() => onAddPasswordOpen(true)}
+                          >
+                            Change
+                          </Button>
+                          <Button
+                            data-testid="remove-encryption-password"
+                            disabled={recoveryBusy}
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => onRemovePasswordDialogOpen(true)}
+                          >
+                            Remove
+                          </Button>
+                        </div>
                       ) : (
                         <Button
                           data-testid="add-encryption-password"
@@ -699,19 +748,35 @@ export const RecoveryArea = ({
                   New encryption password
                 </Label>
                 <Input
+                  aria-describedby="add-encryption-password-advice"
                   data-testid="add-encryption-password-input"
                   id="add-encryption-password"
                   onChange={(event) => onAddPassword(event.target.value)}
                   type="password"
                   value={addPassword}
                 />
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="add-encryption-password-advice"
+                  id="add-encryption-password-advice"
+                >
+                  {addPassword.length > 0 && newPasswordProblem !== null
+                    ? encryptionPasswordAdvice(newPasswordProblem)
+                    : `At least ${ENCRYPTION_PASSWORD_MIN_LENGTH} characters, not built on a common word. The server's operator could try to guess it offline, so make it hard to guess.`}
+                </p>
                 <div className="flex gap-2">
                   <Button
                     data-testid="add-encryption-password-confirm"
-                    disabled={recoveryBusy || addPassword.length < 8}
+                    disabled={recoveryBusy || newPasswordProblem !== null}
                     onClick={() => onAddEncryptionPassword()}
                   >
-                    {recoveryBusy ? "Adding…" : "Add password"}
+                    {recoveryBusy
+                      ? "Saving…"
+                      : recoveryWrappers.some(
+                            (wrapper) => wrapper.type === "password",
+                          )
+                        ? "Change password"
+                        : "Add password"}
                   </Button>
                   <Button
                     variant="outline"

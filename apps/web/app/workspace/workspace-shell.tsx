@@ -856,6 +856,9 @@ export const WorkspaceShell = ({
   const [password, setPassword] = useState("");
   const [addPassword, setAddPassword] = useState("");
   const [addPasswordOpen, setAddPasswordOpen] = useState(false);
+  // The encryption password this browser was unlocked with no longer meets
+  // the password policy (it was set under the older, weaker rule).
+  const [passwordNeedsChange, setPasswordNeedsChange] = useState(false);
   const [transferIdInput, setTransferIdInput] = useState("");
   const [removePasswordDialogOpen, setRemovePasswordDialogOpen] =
     useState(false);
@@ -1331,6 +1334,7 @@ export const WorkspaceShell = ({
       setTransferIdInput("");
     },
     setAccountUnlocked,
+    setPasswordNeedsChange,
   };
   const onRecoveryMutated = () =>
     setRecoveryGeneration((generation) => generation + 1);
@@ -2787,6 +2791,7 @@ export const WorkspaceShell = ({
       setupMode={accountSetupRequired}
       onAddPassword={setAddPassword}
       onAddPasswordOpen={setAddPasswordOpen}
+      passwordNeedsChange={passwordNeedsChange}
       onAddEncryptionPassword={addEncryptionPasswordHandler}
       onAddPasskey={addPasskeyHandler}
       onDeviceSetup={provisionBrowserDevice}

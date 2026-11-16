@@ -1063,6 +1063,109 @@ test.describe("workspace recovery", () => {
     });
   });
 
+  test("a password set under the old rule still unlocks but is flagged for a change", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const accountMasterKey = await generateAccountMasterKey();
+    const recoveryCode = await generateRecoveryCode();
+    const weakPassword = "password1";
+    const signer = await importSigningKey();
+    const revoked: string[] = [];
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => {
+        if (
+          typeof body.wrapperId === "string" &&
+          typeof body.object === "string"
+        )
+          scenario.wrappers = [
+            ...scenario.wrappers,
+            {
+              wrapperId: body.wrapperId,
+              type: "password",
+              object: body.object,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+      },
+    });
+    await installRecoveryRoutes(page, scenario);
+    await page.route("**/api/v1/account-keys/wrappers/revoke", (route) => {
+      const body = route.request().postDataJSON() as { wrapperId?: string };
+      if (typeof body.wrapperId === "string") revoked.push(body.wrapperId);
+      return route.fulfill({ status: 200, json: { revoked: true } });
+    });
+    await enrollDevice(page);
+    const deviceKeys = capturedDeviceKeys(scenario);
+    const weakWrapper = await createAccountKeyWrapper({
+      serverProfileId: fixtureIds.serverProfileId,
+      userId: hexToBytes(fixtureIds.actorUserId.replaceAll("-", "")),
+      deviceId: hexToBytes(deviceKeys.id.replaceAll("-", "")),
+      userIdentityGeneration: 1,
+      createdAtMs: Date.now(),
+      accountMasterKey,
+      signingPrivateKey: signer,
+      kind: {
+        type: "password",
+        password: new TextEncoder().encode(weakPassword),
+      },
+    });
+    const weakWrapperId = bytesToHex(weakWrapper.wrapperId);
+    scenario.wrappers = [
+      await buildRecoveryCodeWrapper({
+        accountMasterKey,
+        recoveryCode,
+        deviceId: deviceKeys.id,
+        signer,
+      }),
+      {
+        wrapperId: weakWrapperId,
+        type: "password",
+        object: bytesToBase64(canonicalEncode(weakWrapper.object)),
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    scenario.envelopeB64 = await buildEpochEnvelopeB64({
+      accountMasterKey,
+      deviceId: deviceKeys.id,
+      signer,
+    });
+    scenario.syncPage = await buildVerifiedFixturePage(
+      deviceKeys.encryptionPublicKey,
+    );
+    await page.reload();
+    await openRecoveryView(page);
+    await page
+      .getByTestId("recovery-unlock")
+      .getByTestId("recovery-method-password")
+      .click();
+    await unlockWith(page, "password", weakPassword);
+    const status = page.getByTestId("recovery-status");
+    await expect(status).toBeVisible({ timeout: 90_000 });
+    // The old password still unlocks, and the person is asked to change it.
+    await expect(page.getByTestId("weak-password-notice")).toBeVisible();
+    await page.getByTestId("change-weak-password").click();
+    const input = page.getByTestId("add-encryption-password-input");
+    const confirm = page.getByTestId("add-encryption-password-confirm");
+    const advice = page.getByTestId("add-encryption-password-advice");
+    await input.fill("hunter2");
+    await expect(confirm).toBeDisabled();
+    await expect(advice).toContainText("at least 12 characters");
+    await input.fill("Password2024!");
+    await expect(confirm).toBeDisabled();
+    await expect(advice).toContainText("common word");
+    await input.fill("correct-horse-battery-9");
+    await expect(confirm).toBeEnabled();
+    await expect(confirm).toHaveText("Change password");
+    await confirm.click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "was changed" }),
+    ).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByTestId("weak-password-notice")).toHaveCount(0);
+    // The new password was added first, then the old one retired.
+    expect(revoked).toEqual([weakWrapperId]);
+  });
+
   test("an encryption password can be added, used after a reload, and removed", async ({
     page,
   }) => {
