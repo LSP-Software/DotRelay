@@ -86,7 +86,6 @@ import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
   fetchAccountKeyWrappers,
-  hexToBytes,
 } from "@/lib/account-keys";
 import {
   addEncryptionPassword,
@@ -1868,7 +1867,6 @@ export const WorkspaceShell = ({
     );
 
   // A fingerprint typed for one Device never carries over to another.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- transferTarget is the trigger; the effect only clears the typed fingerprint.
   useEffect(() => {
     setTransferFingerprintInput("");
   }, [transferTarget]);
