@@ -66,4 +66,6 @@ repeats the User id.
   window as bootstrap without an active Device (ADR 0010).
 - The web app passes its Device to these requests and signs deletion with the Device key in its
   store; the CLI proves its Device for `team leave`, `account export` and `account delete` and signs
-  deletion with its stored key. API, web and CLI ship together.
+  deletion with its stored key. A CLI whose stored Device was revoked sends neither; the
+  service then accepts the action only from a recent sign-in of an account with no other active
+  Device. API, web and CLI ship together.

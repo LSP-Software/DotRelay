@@ -307,7 +307,8 @@ taken from them, and none of their legacy-format Values is read, until you confi
 fingerprint. `team trust <user-id>` confirms a Member seen for the first time, or re-trusts one
 whose identity changed, after you compare fingerprints. `--fingerprint <fingerprint>` passes the
 fingerprint you compared; the command confirms only when it matches, and with `--no-input` it is
-required: `--force` alone never confirms an identity. Until a changed identity is re-trusted, the
+required: `--force` alone never confirms an identity. For a Member already confirmed, a passed
+fingerprint is still compared, so a script that pins one fails when it no longer matches. Until a changed identity is re-trusted, the
 CLI does not accept that Member's Devices. Every protected command also verifies this account's own roster and
 publishes a new one when this Device holds the AMK and is not listed yet; a first roster lists only
 this Device. Each installation also pins the highest epoch and the key it accepted for each
@@ -323,7 +324,9 @@ invitations; owners and admins do that in the web app.
 
 `team leave <team-id-or-name>` ends your own Membership after a confirmation; `--no-input`
 requires `--force`. It proves this machine's Device; an account with no active Device needs a
-sign-in from the last ten minutes instead (`recent_sign_in_required`). Like a removal, every Project of the Team then owes a
+sign-in from the last ten minutes instead (`recent_sign_in_required`). If this machine's Device
+was revoked, the command goes on with the session alone, which works only while the account has
+no other active Device. Like a removal, every Project of the Team then owes a
 key rotation. The Team's last active owner gets `owner_transfer_required` while other Members
 remain: promote another active Member to owner, or delete the Team, in the web app. Deleting a
 Team is web-only.
@@ -336,7 +339,8 @@ is how to keep a copy of Values. `account delete` deletes the account
 and refuses while you are a Team's last active owner, then asks you to type `delete my account`;
 `--no-input` requires `--force`. This machine's Device proves itself and signs the deletion
 command; `account export` also proves the Device
-([ADR 0024](../adr/0024-account-actions-need-a-device.md)). Afterwards it removes this profile's session and this Device's
+([ADR 0024](../adr/0024-account-actions-need-a-device.md)). A machine whose Device was revoked
+acts on the session alone, without a signature, as an account with no active Device does. Afterwards it removes this profile's session and this Device's
 keys from the machine and lists what stays: the Server Profile entry, trusted-head and teammate
 pins, worktree contexts, and any `.env` files you pulled.
 
