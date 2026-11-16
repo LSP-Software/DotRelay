@@ -11,7 +11,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DotRelayAuth } from "../auth";
 import { verifyDeviceProof } from "../device-proof";
 import type { ServerProfileConfig } from "../profile";
-import { requestSession } from "../session";
+import { requestSession, sessionCreatedAt } from "../session";
 
 export type ProtocolActor = Readonly<{
   readonly userId: string;
@@ -137,6 +137,62 @@ export const requireWebActor = async (
       userId: user.id,
       authSubject: session.user.id,
     });
+  } catch {
+    return problem(context, "service_unavailable");
+  }
+};
+
+/**
+ * How long after signing in a session alone may act for an account that has
+ * no active Device to vouch for it (ADR 0024).
+ */
+export const RECENT_SIGN_IN_MS = 10 * 60_000;
+
+/** An account-level actor: the Device it proved, or null after a recent sign-in. */
+export type AccountActor = Readonly<{
+  readonly userId: string;
+  readonly authSubject: string;
+  readonly deviceId: string | null;
+}>;
+
+/**
+ * For account-level actions a session alone must not take: deleting the
+ * account, leaving a Team, and exporting account data (ADR 0024). While the
+ * User has any active Device, the request must prove one of them (ADR 0020).
+ * A User with no active Device has nothing to prove, so the session must
+ * come from a sign-in in the last RECENT_SIGN_IN_MS instead.
+ */
+export const requireAccountAuthority = async (
+  context: Context,
+  database: DatabaseClient,
+  profile: ServerProfileConfig,
+  auth: DotRelayAuth,
+  nowMs: number = Date.now(),
+): Promise<AccountActor | Response> => {
+  const actor = await requireWebActor(context, database, profile, auth);
+  if (actor instanceof Response) return actor;
+  try {
+    const activeDevices = await database.device.count({
+      where: { userId: actor.userId, lifecycle: "ACTIVE" },
+    });
+    if (activeDevices > 0) {
+      const proven = await requireProtocolActor(
+        context,
+        database,
+        profile,
+        auth,
+      );
+      if (proven instanceof Response) return proven;
+      return Object.freeze({ ...actor, deviceId: proven.deviceId });
+    }
+    const createdAt = sessionCreatedAt(await requestSession(context, auth));
+    if (
+      !createdAt ||
+      nowMs - createdAt.getTime() > RECENT_SIGN_IN_MS ||
+      createdAt.getTime() - nowMs > RECENT_SIGN_IN_MS
+    )
+      return problem(context, "recent_sign_in_required");
+    return Object.freeze({ ...actor, deviceId: null });
   } catch {
     return problem(context, "service_unavailable");
   }

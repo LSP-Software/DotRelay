@@ -322,7 +322,8 @@ accepted later: an owner or admin has to invite you again. The CLI cannot send o
 invitations; owners and admins do that in the web app.
 
 `team leave <team-id-or-name>` ends your own Membership after a confirmation; `--no-input`
-requires `--force`. It needs only a session. Like a removal, every Project of the Team then owes a
+requires `--force`. It proves this machine's Device; an account with no active Device needs a
+sign-in from the last ten minutes instead (`recent_sign_in_required`). Like a removal, every Project of the Team then owes a
 key rotation. The Team's last active owner gets `owner_transfer_required` while other Members
 remain: promote another active Member to owner, or delete the Team, in the web app. Deleting a
 Team is web-only.
@@ -333,7 +334,9 @@ with mode 0600 instead. It holds no Values, ciphertext, or keys: `pull` or `expo
 is how to keep a copy of Values. `account delete` deletes the account
 ([what deletion keeps](account-deletion.md)). It first lists the Teams it would leave or delete
 and refuses while you are a Team's last active owner, then asks you to type `delete my account`;
-`--no-input` requires `--force`. Afterwards it removes this profile's session and this Device's
+`--no-input` requires `--force`. This machine's Device proves itself and signs the deletion
+command; `account export` also proves the Device
+([ADR 0024](../adr/0024-account-actions-need-a-device.md)). Afterwards it removes this profile's session and this Device's
 keys from the machine and lists what stays: the Server Profile entry, trusted-head and teammate
 pins, worktree contexts, and any `.env` files you pulled.
 

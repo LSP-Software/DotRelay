@@ -1,6 +1,7 @@
 # Leaving and deleting a Team
 
-Status: accepted
+Status: accepted; amended by [ADR 0024](0024-account-actions-need-a-device.md), which requires a
+proven Device to leave a Team while the User has an active Device, and a recent sign-in otherwise.
 
 Members could only be removed by an owner or admin, and a Team could not be deleted at all. A
 public service needs both as self-service actions, without weakening the signed history the

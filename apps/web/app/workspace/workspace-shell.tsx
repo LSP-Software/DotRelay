@@ -4473,6 +4473,15 @@ export const WorkspaceShell = ({
                 ) : apiOrigin && displayBoundary.session.userId ? (
                   <AccountSettingsSection
                     apiOrigin={apiOrigin}
+                    device={
+                      browserDeviceId
+                        ? {
+                            deviceId: browserDeviceId,
+                            signingKey: () =>
+                              loadDeviceSigningKey(displayBoundary),
+                          }
+                        : undefined
+                    }
                     onDeleted={() => {
                       // The deleted account's keys and Device are useless
                       // now; a later sign-in is a new account with a new

@@ -1,3 +1,4 @@
+import { accountDeletionCommand } from "@dotrelay/contracts";
 import {
   DeviceProofRequestError,
   fetchWithDeviceProof,
@@ -8,6 +9,9 @@ import { BROWSER_DEVICE_ID_HEADER } from "./workspace-boundary";
 
 // Browser client for the self-service lifecycle routes: leaving or deleting
 // a Team, and exporting or deleting the signed-in account (ADRs 0018, 0019).
+// Each of them needs this browser's Device while the account has an active
+// Device, and deleting the account also needs the Device's signature
+// (ADR 0024).
 
 export type LifecycleResult<T> =
   | Readonly<{ readonly ok: true; readonly data: T }>
@@ -27,6 +31,7 @@ export type AccountDeletionPlan = Readonly<{
 export const lifecycleProblemMessage = (
   code: unknown,
   retryAfterSeconds?: number,
+  provedDevice = true,
 ): string => {
   switch (code) {
     case "owner_transfer_required":
@@ -38,7 +43,11 @@ export const lifecycleProblemMessage = (
     case "device_not_active":
       return "Set up this browser before deleting a team.";
     case "device_proof_required":
-      return "This browser couldn't prove its Device. Reload the page and try again.";
+      return provedDevice
+        ? "This browser couldn't prove its Device. Reload the page and try again."
+        : "This needs one of your devices. Open DotRelay in a browser that's set up as one of your devices, or use the CLI on one.";
+    case "recent_sign_in_required":
+      return "For your safety, sign out and sign in again, then try this within ten minutes.";
     case "forbidden":
       return "Only a team owner can delete the team.";
     case "invalid_request":
@@ -76,7 +85,10 @@ const call = async (
     );
   } catch (error) {
     if (error instanceof DeviceProofRequestError)
-      return { ok: false, message: lifecycleProblemMessage(error.code) };
+      return {
+        ok: false,
+        message: lifecycleProblemMessage(error.code, undefined, true),
+      };
     return {
       ok: false,
       message:
@@ -98,19 +110,40 @@ const call = async (
     message: lifecycleProblemMessage(
       body?.code,
       retryAfterSecondsFrom(body, response.headers),
+      deviceId !== null,
     ),
   };
 };
 
-const post = (body: unknown, deviceId?: string): RequestInit => ({
+const post = (
+  body: unknown,
+  deviceId?: string,
+  operationId: string = globalThis.crypto.randomUUID(),
+): RequestInit => ({
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    "Idempotency-Key": globalThis.crypto.randomUUID(),
+    "Idempotency-Key": operationId,
     ...(deviceId ? { [BROWSER_DEVICE_ID_HEADER]: deviceId } : {}),
   },
   body: JSON.stringify(body),
 });
+
+const deviceHeaders = (deviceId?: string): RequestInit =>
+  deviceId ? { headers: { [BROWSER_DEVICE_ID_HEADER]: deviceId } } : {};
+
+const base64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+/** This browser's Device, as account-level actions need it (ADR 0024). */
+export type LifecycleDevice = Readonly<{
+  readonly deviceId: string;
+  /** Loads the Device's Ed25519 signing key, or null when it is gone. */
+  readonly signingKey: () => Promise<CryptoKey | null>;
+}>;
 
 const parseTeamRefs = (value: unknown): TeamRef[] =>
   (Array.isArray(value) ? value : []).flatMap((entry) =>
@@ -124,11 +157,12 @@ const parseTeamRefs = (value: unknown): TeamRef[] =>
 export const leaveTeam = async (
   apiOrigin: string,
   teamId: string,
+  deviceId?: string,
 ): Promise<LifecycleResult<null>> => {
   const outcome = await call(
     apiOrigin,
     `/api/v1/teams/${teamId}/leave`,
-    post({}),
+    post({}, deviceId),
   );
   return outcome.ok ? { ok: true, data: null } : outcome;
 };
@@ -169,14 +203,42 @@ export const fetchAccountDeletionPlan = async (
   };
 };
 
+// Deleting the account: with this browser's Device, the Device signs the
+// exact deletion command, as it signs a Device revocation; a browser without
+// a Device sends only the confirmation and needs a recent sign-in.
 export const deleteAccount = async (
   apiOrigin: string,
   userId: string,
+  device?: LifecycleDevice,
 ): Promise<LifecycleResult<null>> => {
+  const operationId = globalThis.crypto.randomUUID();
+  let signature: string | undefined;
+  if (device) {
+    const signingKey = await device.signingKey().catch(() => null);
+    if (!signingKey)
+      return {
+        ok: false,
+        message:
+          "This browser couldn't use its device key. Reload the page and try again.",
+      };
+    signature = base64(
+      new Uint8Array(
+        await globalThis.crypto.subtle.sign(
+          "Ed25519",
+          signingKey,
+          accountDeletionCommand({ userId, operationId }),
+        ),
+      ),
+    );
+  }
   const outcome = await call(
     apiOrigin,
     "/api/v1/account/delete",
-    post({ confirmUserId: userId }),
+    post(
+      { confirmUserId: userId, ...(signature ? { signature } : {}) },
+      device?.deviceId,
+      operationId,
+    ),
   );
   return outcome.ok ? { ok: true, data: null } : outcome;
 };
@@ -184,8 +246,13 @@ export const deleteAccount = async (
 /** Fetches the account export and hands it to the browser as a download. */
 export const downloadAccountExport = async (
   apiOrigin: string,
+  deviceId?: string,
 ): Promise<LifecycleResult<null>> => {
-  const outcome = await call(apiOrigin, "/api/v1/account/export");
+  const outcome = await call(
+    apiOrigin,
+    "/api/v1/account/export",
+    deviceHeaders(deviceId),
+  );
   if (!outcome.ok) return outcome;
   const blob = new Blob([`${JSON.stringify(outcome.data, null, 2)}\n`], {
     type: "application/json",

@@ -101,6 +101,7 @@ const safeDiagnosticCodes = new Set([
   "device_mismatch",
   "device_not_active",
   "device_proof_required",
+  "recent_sign_in_required",
   "enrollment_binding_mismatch",
   "enrollment_certificate_invalid",
   "environment_ambiguous",
@@ -226,6 +227,7 @@ export const categoryForProblem = (
     code === "alpha_admission_required" ||
     code === "device_not_active" ||
     code === "device_proof_required" ||
+    code === "recent_sign_in_required" ||
     code === "forbidden" ||
     code === "repository_access_denied"
   )
@@ -330,6 +332,8 @@ export const detailForProblem = (
     return "this Device is not active; run dotrelay device enroll to re-authorize it";
   if (code === "device_proof_required")
     return "the Server Profile did not accept this Device's proof of its key; run the command again, and run dotrelay login if it keeps failing";
+  if (code === "recent_sign_in_required")
+    return "this account has no active Device, so this action needs a sign-in from the last ten minutes; run dotrelay login and try again";
   if (code === "membership_not_key_provisioned")
     return [
       "you joined this Team, but its Project keys have not been shared with you yet.",
@@ -397,6 +401,7 @@ const errorTitles: Record<string, string> = {
   alpha_admission_required: "Private alpha",
   device_not_active: "Device not active",
   device_proof_required: "Device not proven",
+  recent_sign_in_required: "Recent sign-in required",
   membership_not_active: "Membership not active",
   membership_not_key_provisioned: "Waiting for Project keys",
   device_bundle_missing: "No Device enrolled",

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import { accountDeletionCommand } from "@dotrelay/contracts";
 import {
   AdministrationRepository,
   createDatabaseClient,
@@ -97,9 +98,14 @@ type Person = Readonly<{
   readonly token: string;
   readonly sessionId: string;
   readonly githubId: string;
+  /** The Device's Ed25519 key, which signs an account deletion. */
+  readonly signingKey: CryptoKey;
 }>;
 
-const createPerson = async (label: string): Promise<Person> => {
+const createPerson = async (
+  label: string,
+  options: Readonly<{ sessionAgeMs?: number }> = {},
+): Promise<Person> => {
   const authSubject = `auth-${label}-${crypto.randomUUID()}`;
   const githubId = `${Math.floor(Math.random() * 1e9) + 1}`;
   const token = `token-${crypto.randomUUID()}`;
@@ -126,8 +132,13 @@ const createPerson = async (label: string): Promise<Person> => {
       token,
       userId: authSubject,
       expiresAt: new Date(Date.now() + 3_600_000),
+      createdAt: new Date(Date.now() - (options.sessionAgeMs ?? 0)),
     },
   });
+  const signing = (await crypto.subtle.generateKey("Ed25519", true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
   const user = await database.user.create({
     data: { serverProfileId: profile.id, authSubject, githubSubject: githubId },
   });
@@ -140,12 +151,37 @@ const createPerson = async (label: string): Promise<Person> => {
       identityGeneration: 1n,
       keyId: new Uint8Array(await sha384Digest(x25519PublicKey)),
       x25519PublicKey,
-      ed25519PublicKey: crypto.getRandomValues(new Uint8Array(32)),
+      ed25519PublicKey: new Uint8Array(
+        await crypto.subtle.exportKey("raw", signing.publicKey),
+      ),
       activatedAt: new Date(),
       displayName: `${label} laptop`,
     },
   });
-  return { userId: user.id, deviceId: device.id, token, sessionId, githubId };
+  return {
+    userId: user.id,
+    deviceId: device.id,
+    token,
+    sessionId,
+    githubId,
+    signingKey: signing.privateKey,
+  };
+};
+
+// The Device's signature over the account deletion command for `operationId`.
+const deletionSignature = async (
+  person: Person,
+  operationId: string,
+  userId: string = person.userId,
+): Promise<string> => {
+  const signature = new Uint8Array(
+    await crypto.subtle.sign(
+      "Ed25519",
+      person.signingKey,
+      accountDeletionCommand({ userId, operationId }),
+    ),
+  );
+  return btoa(String.fromCharCode(...signature));
 };
 
 const command = async (actorUserId: string, actorDeviceId: string) => {
@@ -195,6 +231,7 @@ const request = async (
   path: string,
   body?: unknown,
   withDevice = false,
+  operationId: string = crypto.randomUUID(),
 ) =>
   testApp.request(`${profile.origin}${path}`, {
     method,
@@ -215,7 +252,7 @@ const request = async (
       ...(method === "POST"
         ? {
             "Content-Type": "application/json",
-            "Idempotency-Key": crypto.randomUUID(),
+            "Idempotency-Key": operationId,
           }
         : {}),
     },
@@ -275,15 +312,27 @@ integrationDescribe("account and Team lifecycle routes (PostgreSQL)", () => {
       "POST",
       `/api/v1/teams/${teamId}/leave`,
       {},
+      true,
     );
     expect(ownerLeave.status).toBe(409);
     expect(await problemCode(ownerLeave)).toBe("owner_transfer_required");
+
+    // A session alone cannot make a User with an active Device leave.
+    const sessionOnly = await request(
+      member,
+      "POST",
+      `/api/v1/teams/${teamId}/leave`,
+      {},
+    );
+    expect(sessionOnly.status).toBe(401);
+    expect(await problemCode(sessionOnly)).toBe("device_proof_required");
 
     const left = await request(
       member,
       "POST",
       `/api/v1/teams/${teamId}/leave`,
       {},
+      true,
     );
     expect(left.status).toBe(201);
     expect(await left.json()).toMatchObject({ teamId, lifecycle: "REMOVED" });
@@ -297,6 +346,7 @@ integrationDescribe("account and Team lifecycle routes (PostgreSQL)", () => {
       "POST",
       `/api/v1/teams/${teamId}/leave`,
       {},
+      true,
     );
     expect(await problemCode(again)).toBe("membership_not_active");
   });
@@ -356,7 +406,13 @@ integrationDescribe("account and Team lifecycle routes (PostgreSQL)", () => {
     await join(teamId, member);
     const solo = await createTeam(member, "member-solo-team");
 
-    const exported = await request(member, "GET", "/api/v1/account/export");
+    const exported = await request(
+      member,
+      "GET",
+      "/api/v1/account/export",
+      undefined,
+      true,
+    );
     expect(exported.status).toBe(200);
     expect(exported.headers.get("Content-Disposition")).toContain("attachment");
     const exportText = await exported.text();
@@ -371,18 +427,33 @@ integrationDescribe("account and Team lifecycle routes (PostgreSQL)", () => {
     expect(await plan.json()).toMatchObject({
       blockingTeams: [{ teamId, name: "account-team" }],
     });
-    const blocked = await request(owner, "POST", "/api/v1/account/delete", {
-      confirmUserId: owner.userId,
-    });
+    const signedDeletion = async (
+      person: Person,
+      confirmUserId: string = person.userId,
+    ) => {
+      const operationId = crypto.randomUUID();
+      return request(
+        person,
+        "POST",
+        "/api/v1/account/delete",
+        {
+          confirmUserId,
+          signature: await deletionSignature(
+            person,
+            operationId,
+            confirmUserId,
+          ),
+        },
+        true,
+        operationId,
+      );
+    };
+    const blocked = await signedDeletion(owner);
     expect(await problemCode(blocked)).toBe("owner_transfer_required");
 
-    const wrong = await request(member, "POST", "/api/v1/account/delete", {
-      confirmUserId: owner.userId,
-    });
+    const wrong = await signedDeletion(member, owner.userId);
     expect(await problemCode(wrong)).toBe("invalid_request");
-    const deleted = await request(member, "POST", "/api/v1/account/delete", {
-      confirmUserId: member.userId,
-    });
+    const deleted = await signedDeletion(member);
     expect(deleted.status).toBe(201);
     expect(await deleted.json()).toMatchObject({
       status: "DELETED",
@@ -391,7 +462,13 @@ integrationDescribe("account and Team lifecycle routes (PostgreSQL)", () => {
     });
 
     // Every session ended with the account.
-    const after = await request(member, "GET", "/api/v1/account/export");
+    const after = await request(
+      member,
+      "GET",
+      "/api/v1/account/export",
+      undefined,
+      true,
+    );
     expect(after.status).toBe(401);
 
     // Teammates still see the departed Member, marked deleted.
@@ -403,5 +480,78 @@ integrationDescribe("account and Team lifecycle routes (PostgreSQL)", () => {
     expect(
       members.memberships.find((entry) => entry.userId === member.userId),
     ).toMatchObject({ deleted: true, name: null });
+  });
+  test("a session alone cannot delete or export an account that has an active Device", async () => {
+    const victim = await createPerson("session-only");
+    const deletion = { confirmUserId: victim.userId };
+    for (const [method, path, body] of [
+      ["POST", "/api/v1/account/delete", deletion],
+      ["GET", "/api/v1/account/export", undefined],
+    ] as const) {
+      const refused = await request(victim, method, path, body);
+      expect(refused.status).toBe(401);
+      expect(await problemCode(refused)).toBe("device_proof_required");
+    }
+    // A Device proof is not enough: deletion needs the Device's signature
+    // over this exact command.
+    const unsigned = await request(
+      victim,
+      "POST",
+      "/api/v1/account/delete",
+      deletion,
+      true,
+    );
+    expect(await problemCode(unsigned)).toBe("invalid_request");
+    const operationId = crypto.randomUUID();
+    const replayed = await request(
+      victim,
+      "POST",
+      "/api/v1/account/delete",
+      {
+        ...deletion,
+        // Signed for another operation.
+        signature: await deletionSignature(victim, crypto.randomUUID()),
+      },
+      true,
+      operationId,
+    );
+    expect(await problemCode(replayed)).toBe("invalid_crypto_object");
+    const user = await database.user.findUnique({
+      where: { id: victim.userId },
+      select: { deletedAt: true },
+    });
+    expect(user?.deletedAt).toBeNull();
+    expect(
+      await database.device.count({
+        where: { userId: victim.userId, lifecycle: "ACTIVE" },
+      }),
+    ).toBe(1);
+  });
+
+  test("an account without an active Device needs a recent sign-in", async () => {
+    const stale = await createPerson("stale-session", {
+      sessionAgeMs: 20 * 60_000,
+    });
+    const fresh = await createPerson("fresh-session");
+    for (const person of [stale, fresh])
+      await database.device.update({
+        where: { id: person.deviceId },
+        data: { lifecycle: "REVOKED", revokedAt: new Date() },
+      });
+    const staleExport = await request(stale, "GET", "/api/v1/account/export");
+    expect(staleExport.status).toBe(403);
+    expect(await problemCode(staleExport)).toBe("recent_sign_in_required");
+    const staleDelete = await request(stale, "POST", "/api/v1/account/delete", {
+      confirmUserId: stale.userId,
+    });
+    expect(await problemCode(staleDelete)).toBe("recent_sign_in_required");
+
+    expect((await request(fresh, "GET", "/api/v1/account/export")).status).toBe(
+      200,
+    );
+    const deleted = await request(fresh, "POST", "/api/v1/account/delete", {
+      confirmUserId: fresh.userId,
+    });
+    expect(deleted.status).toBe(201);
   });
 });

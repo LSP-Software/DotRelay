@@ -9,6 +9,7 @@ import {
   createDeviceBootstrap,
   createMemoryDeviceRecordStore,
   deriveAccountSigningKey,
+  loadDeviceKeyMaterial,
 } from "@dotrelay/client";
 import {
   createProblem,
@@ -16,6 +17,8 @@ import {
   PROTOCOL_MEDIA_TYPE,
   type ProblemCode,
   type ServerProfilePin,
+  accountDeletionCommand,
+  uuidToBytes,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
@@ -1312,6 +1315,8 @@ describe("team leave and account lifecycle", () => {
     options: Readonly<{
       leave?: () => Response;
       blockingTeams?: readonly Record<string, string>[];
+      /** Sees each leave, export and delete request. */
+      record?: (request: Request) => void;
     }> = {},
   ): Route[] => [
     (request, url) =>
@@ -1323,15 +1328,17 @@ describe("team leave and account lifecycle", () => {
     (request, url) =>
       request.method === "POST" &&
       url.pathname === `/api/v1/teams/${paymentsTeamId}/leave`
-        ? (options.leave?.() ??
-          jsonResponse(
-            { teamId: paymentsTeamId, membershipId, lifecycle: "REMOVED" },
-            201,
-          ))
+        ? (options.record?.(request),
+          options.leave?.() ??
+            jsonResponse(
+              { teamId: paymentsTeamId, membershipId, lifecycle: "REMOVED" },
+              201,
+            ))
         : undefined,
     (request, url) =>
       request.method === "GET" && url.pathname === "/api/v1/account/export"
-        ? jsonResponse({
+        ? (options.record?.(request),
+          jsonResponse({
             format: "dotrelay-account-export-v1",
             exportedAt: "2026-11-15T00:00:00.000Z",
             serverOrigin: url.origin,
@@ -1346,7 +1353,7 @@ describe("team leave and account lifecycle", () => {
             projectsCreated: [],
             revisionsAuthored: { count: 0 },
             auditFacts: [],
-          })
+          }))
         : undefined,
     (request, url) =>
       request.method === "GET" && url.pathname === "/api/v1/account/deletion"
@@ -1359,7 +1366,8 @@ describe("team leave and account lifecycle", () => {
         : undefined,
     (request, url) =>
       request.method === "POST" && url.pathname === "/api/v1/account/delete"
-        ? jsonResponse(
+        ? (options.record?.(request),
+          jsonResponse(
             {
               userId,
               status: "DELETED",
@@ -1368,14 +1376,20 @@ describe("team leave and account lifecycle", () => {
               teamsLeft: [{ teamId: paymentsTeamId, name: "Payments" }],
             },
             201,
-          )
+          ))
         : undefined,
   ];
+  const proven = (request: Request) =>
+    request.headers.get("X-DotRelay-Device-Id") === deviceId &&
+    request.headers.has("X-DotRelay-Device-Proof");
   const posts = (requests: readonly Recorded[]) =>
     requests.filter((request) => request.method === "POST");
 
   test("leaves a Team named by its name", async () => {
-    const server = startServer(lifecycleRoutes());
+    const seen: boolean[] = [];
+    const server = startServer(
+      lifecycleRoutes({ record: (request) => seen.push(proven(request)) }),
+    );
     const state = await seedState(server.pin);
     try {
       const result = await run(
@@ -1404,6 +1418,8 @@ describe("team leave and account lifecycle", () => {
           body: "{}",
         },
       ]);
+      // A session alone may not make the account leave a Team (ADR 0024).
+      expect(seen).toEqual([true]);
     } finally {
       server.stop();
       await state.cleanup();
@@ -1450,7 +1466,10 @@ describe("team leave and account lifecycle", () => {
   });
 
   test("exports the account to stdout or a protected file", async () => {
-    const server = startServer(lifecycleRoutes());
+    const seen: boolean[] = [];
+    const server = startServer(
+      lifecycleRoutes({ record: (request) => seen.push(proven(request)) }),
+    );
     const state = await seedState(server.pin);
     try {
       const printed = await run(["account", "export"], state.runtime);
@@ -1467,6 +1486,7 @@ describe("team leave and account lifecycle", () => {
       expect(await Bun.file(output).json()).toMatchObject({
         user: { id: userId },
       });
+      expect(seen).toEqual([true, true]);
     } finally {
       server.stop();
       await state.cleanup();
@@ -1506,8 +1526,35 @@ describe("team leave and account lifecycle", () => {
   });
 
   test("deletes the account after the typed phrase and clears local keys", async () => {
-    const server = startServer(lifecycleRoutes());
+    const seen: Array<
+      Readonly<{ proven: boolean; operationId: string | null }>
+    > = [];
+    const server = startServer(
+      lifecycleRoutes({
+        record: (request) =>
+          seen.push({
+            proven: proven(request),
+            operationId: request.headers.get("Idempotency-Key"),
+          }),
+      }),
+    );
     const state = await seedState(server.pin);
+    const storedKey = (
+      await loadDeviceKeyMaterial(
+        await state.runtime.deviceStorage!.load({
+          pin: server.pin,
+          deviceId: uuidToBytes(deviceId),
+        }),
+      )
+    ).signingPublicKey;
+    if (!storedKey) throw new Error("Device signing key is missing");
+    const signingPublicKey = await crypto.subtle.importKey(
+      "raw",
+      await crypto.subtle.exportKey("raw", storedKey),
+      "Ed25519",
+      false,
+      ["verify"],
+    );
     try {
       const wrong = await run(["account", "delete"], {
         ...state.runtime,
@@ -1531,13 +1578,26 @@ describe("team leave and account lifecycle", () => {
         status: "DELETED",
         localDataRemoved: ["session", "device keys"],
       });
-      expect(posts(server.requests)).toEqual([
-        {
-          method: "POST",
-          path: "/api/v1/account/delete",
-          body: JSON.stringify({ confirmUserId: userId }),
-        },
-      ]);
+      // The proven Device signs the exact deletion command (ADR 0024).
+      const [deletion] = posts(server.requests);
+      expect(deletion?.path).toBe("/api/v1/account/delete");
+      const body = JSON.parse(deletion?.body ?? "{}") as {
+        confirmUserId: string;
+        signature: string;
+      };
+      expect(body.confirmUserId).toBe(userId);
+      expect(seen).toEqual([{ proven: true, operationId: expect.any(String) }]);
+      expect(
+        await crypto.subtle.verify(
+          "Ed25519",
+          signingPublicKey,
+          Buffer.from(body.signature, "base64"),
+          accountDeletionCommand({
+            userId,
+            operationId: seen[0]?.operationId ?? "",
+          }),
+        ),
+      ).toBe(true);
       expect(
         await createSessionStore(state.credentials).get(server.pin),
       ).toBeNull();
