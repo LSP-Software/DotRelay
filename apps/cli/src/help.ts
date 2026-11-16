@@ -130,7 +130,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
       "Values from the Environment replace variables of the same name that are already set in the shell.",
       "Everything after -- belongs to the command, so its own flags are never read by dotrelay.",
       "A required Variable with no value, or a Value this Device cannot decrypt, stops the run before the command starts.",
-      "A Variable that controls how programs or shells start (PATH, NODE_OPTIONS, LD_*, DYLD_*, BASH_ENV, PYTHON*, GIT_* and similar) stops the run unless you name it with --allow-env, because any Member of the Team can set one.",
+      "A Variable that controls how programs, shells or build tools start (PATH, NODE_OPTIONS, LD_*, DYLD_*, BASH_ENV, PYTHON*, GIT_*, GOFLAGS, CC, CXX, CGO_*, RUSTC_WRAPPER, BROWSER, XDG_* and similar) stops the run unless you name it with --allow-env, because any Member of the Team can set one.",
     ],
     examples: [
       "dotrelay run -- npm start",

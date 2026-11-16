@@ -665,6 +665,32 @@ describe("run, export, and list read the Environment without writing", () => {
     });
   });
 
+  test("refuses toolchain and launcher hooks a Member could set", () => {
+    // Each runs code, or loads configuration that does, in a teammate's
+    // build or tool: go -toolexec through GOFLAGS, a compiler wrapper, a
+    // browser opener, or a configuration directory.
+    const hooks = [
+      { name: "GOFLAGS", value: "-toolexec=/tmp/evil" },
+      { name: "CC", value: "/tmp/evil-cc" },
+      { name: "CXX", value: "/tmp/evil-cxx" },
+      { name: "CGO_LDFLAGS", value: "-Wl,--wrap=main" },
+      { name: "BROWSER", value: "/tmp/evil-open" },
+      { name: "RUSTC_WRAPPER", value: "/tmp/evil-rustc" },
+      { name: "XDG_CONFIG_HOME", value: "/tmp/evil-config" },
+    ];
+    for (const hook of hooks) {
+      expect(() =>
+        childEnvironment({}, [{ name: "API_URL", value: "x" }, hook], []),
+      ).toThrow(`--allow-env ${hook.name}`);
+      expect(childEnvironment({}, [hook], [hook.name.toLowerCase()])).toEqual({
+        [hook.name]: hook.value,
+      });
+    }
+    expect(
+      childEnvironment({}, [{ name: "NODE_ENV", value: "production" }], []),
+    ).toEqual({ NODE_ENV: "production" });
+  });
+
   test("formats dotenv, JSON, and shell exports", () => {
     const entries = [
       { name: "API_URL", value: "https://x.example" },
