@@ -31,6 +31,7 @@ import {
   deleteTeam,
   downloadAccountExport,
   fetchAccountDeletionPlan,
+  type LifecycleDevice,
   type LifecycleResult,
   leaveTeam,
 } from "@/lib/account-lifecycle";
@@ -39,7 +40,8 @@ import { PROJECT_ROTATE_COMMAND } from "./team-dialogs";
 
 // Leaving and deleting a Team (ADR 0019), and exporting or deleting the
 // account (ADR 0018). Every destructive action asks for a typed
-// confirmation; the service checks it again.
+// confirmation; the service checks it again, and needs this browser's Device
+// while the account has one (ADR 0024).
 
 const TypedConfirmation = ({
   id,
@@ -162,7 +164,9 @@ export const TeamLifecycleCard = ({
                 <Button
                   data-testid="confirm-leave-team"
                   disabled={busy}
-                  onClick={() => void run(() => leaveTeam(apiOrigin, teamId))}
+                  onClick={() =>
+                    void run(() => leaveTeam(apiOrigin, teamId, deviceId))
+                  }
                   variant="destructive"
                 >
                   Leave team
@@ -237,10 +241,13 @@ const TeamList = ({
 export const AccountSettingsSection = ({
   apiOrigin,
   userId,
+  device,
   onDeleted,
 }: Readonly<{
   readonly apiOrigin: string;
   readonly userId: string;
+  /** This browser's Device, when it has one. */
+  readonly device?: LifecycleDevice | undefined;
   readonly onDeleted: () => void;
 }>) => {
   const [exportState, setExportState] = useState<
@@ -254,7 +261,7 @@ export const AccountSettingsSection = ({
 
   const startExport = async () => {
     setExportState("busy");
-    const result = await downloadAccountExport(apiOrigin);
+    const result = await downloadAccountExport(apiOrigin, device?.deviceId);
     setExportState(result.ok ? "idle" : { error: result.message });
   };
   const openDeletion = async () => {
@@ -269,7 +276,7 @@ export const AccountSettingsSection = ({
   const confirmDeletion = async () => {
     setBusy(true);
     setError(null);
-    const result = await deleteAccount(apiOrigin, userId);
+    const result = await deleteAccount(apiOrigin, userId, device);
     setBusy(false);
     if (result.ok) {
       setOpen(false);

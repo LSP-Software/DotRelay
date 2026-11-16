@@ -62,8 +62,9 @@ everything under them ([ADR 0019](../adr/0019-leaving-and-deleting-a-team.md)). 
 transaction-local `dotrelay.purge` setting, the only way past the append-only triggers. Archival,
 Membership removal, and Device revocation are logical lifecycle changes. Device revocation is
 terminal: the `devices_lifecycle_guard` trigger refuses any update that moves a Device out of
-`REVOKED`, back to `PENDING`, or rewrites its activation time, revocation time, owner or keys
-([ADR 0021](../adr/0021-device-revocation-is-terminal.md)). A removed Membership that
+`REVOKED`, back to `PENDING`, or rewrites its activation time, revocation time, owner or keys, and
+the `devices_delete_guard` trigger refuses deleting a Device row, so its id can never be inserted
+again with other keys or times ([ADR 0021](../adr/0021-device-revocation-is-terminal.md)). A removed Membership that
 is invited back keeps its row; its finished period is first archived in the append-only
 `membership_periods` table so signing windows for earlier Revisions survive
 ([ADR 0017](../adr/0017-membership-periods-survive-reinvitation.md)). Removing an active Member or

@@ -2,6 +2,7 @@ import {
   bytesToUuid,
   ContractError,
   type FinalizePublicationRequest,
+  LANE_FORMAT_CONTEXT_BOUND,
   parseProtocolObject,
   validateProtocolObject,
   verifyProtocolObject,
@@ -101,6 +102,29 @@ export const verifyRevisionSignature = async (
   return verifyProtocolObject(parsedRevision, signature, publicKey);
 };
 
+// The fields that tie a lane or Manifest descriptor to the Revision that
+// carries it (ADR 0023). Clients refuse a page that breaks this binding; the
+// service refuses to store one.
+const REVISION_BINDING_FIELDS = [8, 11, 13, 14, 16] as const;
+
+const sameBytes = (left: unknown, right: unknown): boolean =>
+  left instanceof Uint8Array &&
+  right instanceof Uint8Array &&
+  left.length === right.length &&
+  left.every((byte, index) => byte === right[index]);
+
+const requireBoundToRevision = (
+  object: ReturnType<typeof parseProtocolObject>,
+  revision: ReturnType<typeof parseProtocolObject>,
+): void => {
+  if (
+    !REVISION_BINDING_FIELDS.every((field) =>
+      sameBytes(object.get(field), revision.get(field)),
+    )
+  )
+    throw new ContractError("invalid_crypto_object");
+};
+
 export const buildPublicationInput = (input: {
   readonly operationId: string;
   readonly finalizationDigest?: Uint8Array;
@@ -146,6 +170,12 @@ export const buildPublicationInput = (input: {
     throw new ContractError("invalid_crypto_object");
   if (input.finalizeRequest.revision.mutation === "ROLLBACK")
     validateRollbackLaneScope(parsedRevision, input, build);
+  requireBoundToRevision(
+    parseProtocolObject(
+      build(input.finalizeRequest.descriptor.protocolObjectId).canonicalBytes,
+    ),
+    parsedRevision,
+  );
   const operationKind =
     input.finalizeRequest.revision.mutation === "ROLLBACK"
       ? "ROLLBACK"
@@ -189,11 +219,13 @@ export const buildPublicationInput = (input: {
     },
     lanes: input.finalizeRequest.lanes.map((lane) => {
       const protocolObject = build(lane.protocolObjectId);
-      validateLaneOwnership(
-        lane,
-        parseProtocolObject(protocolObject.canonicalBytes),
-        input.actorUserId,
-      );
+      const parsedLane = parseProtocolObject(protocolObject.canonicalBytes);
+      validateLaneOwnership(lane, parsedLane, input.actorUserId);
+      requireBoundToRevision(parsedLane, parsedRevision);
+      // Every current client seals lanes in format 2 (ADR 0022); a new
+      // legacy lane would bind neither its context nor its author.
+      if (parsedLane.get(50) !== LANE_FORMAT_CONTEXT_BOUND)
+        throw new ContractError("invalid_crypto_object");
       return {
         lane: {
           id: lane.id,

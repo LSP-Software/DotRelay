@@ -18,6 +18,8 @@ import {
   runPasskeyAssertion,
   sameFingerprint,
   uuidToBytes,
+  encryptionPasswordAdvice,
+  encryptionPasswordProblem,
 } from "@dotrelay/client";
 import {
   type AccountKeyActor,
@@ -109,6 +111,12 @@ export type AccountRecoveryFeedback = Readonly<{
   readonly setCode: (code: string | null, note: string | null) => void;
   readonly clearInputs: () => void;
   readonly setAccountUnlocked: (unlocked: boolean) => void;
+  /**
+   * Called after an unlock with the encryption password: true when that
+   * password no longer meets the policy and should be changed, false once
+   * a compliant password replaced it.
+   */
+  readonly setPasswordNeedsChange?: (needsChange: boolean) => void;
 }>;
 
 // A completed recovery mutation: the key's bytes changed in memory or a
@@ -456,6 +464,12 @@ export const unlockAccount = async (
     feedback.setMessage(
       "This browser can now open your account's encryption key. Keep your recovery code safe for another device or cleared browser storage.",
     );
+    // A password set under the older, weaker rule still unlocks, but the
+    // person is asked to change it now (it is guessable offline).
+    if (method === "password")
+      feedback.setPasswordNeedsChange?.(
+        encryptionPasswordProblem(secret) !== null,
+      );
     onMutated();
   } catch (error) {
     feedback.setError(
@@ -878,10 +892,17 @@ export const addEncryptionPassword = (
       );
       return;
     }
-    if (password.length < 8) {
-      feedback.setError("The encryption password needs at least 8 characters.");
+    const problem = encryptionPasswordProblem(password);
+    if (problem !== null) {
+      feedback.setError(encryptionPasswordAdvice(problem));
       return;
     }
+    // Changing the password: the new wrapper is added first, then every
+    // older password wrapper is retired, so the account is never left
+    // without the password the person just chose.
+    const replaced = inputs.wrappers.filter(
+      (wrapper) => wrapper.type === "password",
+    );
     feedback.setBusy(true);
     feedback.setError(null);
     feedback.setMessage(null);
@@ -909,9 +930,18 @@ export const addEncryptionPassword = (
         String(bundle.userIdentityGeneration),
         "add",
       );
+      for (const wrapper of replaced)
+        await revokeAccountKeyWrapper(
+          actor,
+          globalThis.crypto.randomUUID(),
+          wrapper.wrapperId,
+        );
       onAdded();
+      feedback.setPasswordNeedsChange?.(false);
       feedback.setMessage(
-        "You can now unlock this account with the encryption password, next to your recovery code.",
+        replaced.length > 0
+          ? "Your encryption password was changed. The old one no longer unlocks this account."
+          : "You can now unlock this account with the encryption password, next to your recovery code.",
       );
     } catch (error) {
       feedback.setError(
@@ -1201,13 +1231,17 @@ export const sendAccountKeyTransfer = (
             "The server returned an invalid key for that device. Nothing was sent.",
           );
         }
+        // The fingerprint the person typed from the receiving Device's own
+        // screen, against the keys the server reports for it: a server that
+        // substituted keys cannot make that Device show their fingerprint.
         const fingerprint = await deviceKeyFingerprint(candidate);
-        if (
-          confirmedFingerprint === null ||
-          !sameFingerprint(confirmedFingerprint, fingerprint)
-        )
+        if (confirmedFingerprint === null)
           throw new TransferRecipientError(
-            "That device isn't in your signed device list yet. Compare its fingerprint with the one it shows, confirm it, and try again.",
+            "That device isn't in your signed device list yet. Type the key fingerprint it shows (Recovery on that device, or dotrelay device list) and try again.",
+          );
+        if (!sameFingerprint(confirmedFingerprint, fingerprint))
+          throw new TransferRecipientError(
+            "The fingerprint you typed doesn't match the key the server reports for that device, so nothing was sent. Check it on that device; if it still differs, don't send the key.",
           );
         listed = rostered((await establish([candidate])).roster);
         if (!listed)

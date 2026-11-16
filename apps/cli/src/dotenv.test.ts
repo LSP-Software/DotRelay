@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   classifyDotenv,
   diffDotenvEntries,
@@ -239,15 +242,17 @@ describe("serializeDotenv safety", () => {
   test("writes $ so an expander sees the text the source gave it", () => {
     // `${HOME}` from an unquoted line stays expandable; escaping it would
     // turn dotenv-expand and Next.js interpolation into a literal.
+    // `\$` before something that is not a reference means a plain `$` to
+    // every reader, so it is read as one.
     const source = 'E=${HOME}/x\nL="cost \\$5"\nM="a $B c"\n';
     const entries = parseDotenv(source);
     expect(entries).toEqual([
       { name: "E", value: "${HOME}/x" },
-      { name: "L", value: "cost \\$5" },
+      { name: "L", value: "cost $5" },
       { name: "M", value: "a $B c" },
     ]);
     expect(serializeDotenv(entries)).toBe(
-      'E="${HOME}/x"\nL="cost \\$5"\nM="a $B c"\n',
+      'E="${HOME}/x"\nL=\'cost $5\'\nM="a $B c"\n',
     );
     expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
     expect(serializeDotenv([{ name: "A", value: "plain value" }])).toBe(
@@ -280,9 +285,10 @@ describe("serializeDotenv safety", () => {
       expect(parseDotenv(serializeDotenv([{ name: "A", value }]))).toEqual([
         { name: "A", value },
       ]);
-    // A Value that also holds a single quote cannot be single-quoted.
+    // A Value that also holds a single quote cannot be single-quoted, so
+    // its non-reference `$` is escaped instead.
     expect(serializeDotenv([{ name: "Q", value: "it's $(id)" }])).toBe(
-      'Q="it\'s $(id)"\n',
+      'Q="it\'s \\$(id)"\n',
     );
   });
 
@@ -310,6 +316,71 @@ describe("serializeDotenv safety", () => {
     );
     expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
   });
+
+  // Sourcing a pulled file into a shell (`set -a; . ./.env`) must never run
+  // any of it, whatever a Member published. Each Value goes through the
+  // shell the tests run on, and a command it ran would create the marker.
+  test.skipIf(process.platform === "win32")(
+    "a sourced file runs nothing, even when a Value holds a single quote",
+    () => {
+      const directory = mkdtempSync(join(tmpdir(), "dotrelay-dotenv-"));
+      try {
+        const marker = join(directory, "ran");
+        const values = [
+          "x'$(touch MARKER)",
+          "x'`touch MARKER`",
+          "it's $((1+1)) $(touch MARKER)",
+          "a'b\\$(touch MARKER)",
+          "'$(touch MARKER)'\n$(touch MARKER)",
+          "x'\r$(touch MARKER)",
+          "x' \\`touch MARKER\\`",
+          "x'$",
+        ].map((value) => value.replaceAll("MARKER", marker));
+        const entries = values.map((value, index) => ({
+          name: `V${index}`,
+          value,
+        }));
+        const file = join(directory, ".env");
+        writeFileSync(file, serializeDotenv(entries));
+        const printed = Bun.spawnSync(
+          [
+            "sh",
+            "-c",
+            `set -a; . "$1"; ${entries.map(({ name }) => `printf '%s\\0' "$${name}"`).join("; ")}`,
+            "sh",
+            file,
+          ],
+          { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } },
+        );
+        expect(printed.exitCode).toBe(0);
+        expect(existsSync(marker)).toBe(false);
+        // These Values hold no references, so the shell reads each back
+        // exactly, apart from line breaks, which dotenv writes as `\n` and
+        // `\r` escapes a shell does not decode; the parser reads every one.
+        const read = printed.stdout.toString().split("\0").slice(0, -1);
+        values.forEach((value, index) => {
+          if (!/[\n\r]/.test(value)) expect(read[index]).toBe(value);
+        });
+        expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
+        // A default inside a reference is not run either.
+        writeFileSync(
+          file,
+          serializeDotenv([
+            { name: "D", value: `x'\${UNSET:-$(touch ${marker})}` },
+          ]),
+        );
+        const sourced = Bun.spawnSync(
+          ["sh", "-c", 'set -a; . "$1"', "sh", file],
+          { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } },
+        );
+        // The file must source cleanly, or the marker check proves nothing.
+        expect(sourced.exitCode).toBe(0);
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("rejects invalid and duplicate names", () => {
     expect(() => serializeDotenv([{ name: "1A", value: "" }])).toThrow(

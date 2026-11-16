@@ -145,3 +145,20 @@ export const parseDeviceProof = (value: unknown): DeviceProof => {
     expiresIn: parseLifetime(body.expiresIn),
   });
 };
+
+/**
+ * The exact command a Device signs to delete its account (ADR 0024), in the
+ * form the service records: UTF-8 JSON naming the action, the User and the
+ * operation id (the request's Idempotency-Key). Like a Device revocation, a
+ * session that holds no Device key cannot produce the signature.
+ */
+export const accountDeletionCommand = (
+  input: Readonly<{ readonly userId: string; readonly operationId: string }>,
+): Uint8Array<ArrayBuffer> =>
+  new TextEncoder().encode(
+    JSON.stringify({
+      action: "account.delete",
+      userId: parseUuid(input.userId, "userId"),
+      operationId: parseUuid(input.operationId, "operationId"),
+    }),
+  );

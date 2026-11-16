@@ -19,6 +19,13 @@ const variableName = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const escapeHelp = 'only \\\\, \\", \\$, \\`, \\n, \\r and \\t are supported';
 
+// Whether the `$` at `index` starts a reference an expander resolves:
+// `$NAME`, `${NAME}`, or `${NAME:-default}` and its kin.
+const REFERENCE_AT =
+  /^\$(?:[A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?][^}]*)?\})/;
+const startsReference = (text: string, index: number): boolean =>
+  REFERENCE_AT.test(text.slice(index));
+
 const readQuotedValue = (
   lines: readonly string[],
   crlf: readonly boolean[],
@@ -59,6 +66,9 @@ const readQuotedValue = (
           throw new DotenvError(
             `Unsupported escape "\\${next}" on line ${line + 1}, column ${col + 1} in the double-quoted value for ${name}; ${escapeHelp}.`,
           );
+        // As in the CLI, `\$` before a variable reference (`\$NAME`,
+        // `\${NAME}`) is expansion syntax and stays in the Value as written;
+        // before anything else it means a plain `$`.
         chunks.push(
           next === "n"
             ? "\n"
@@ -66,7 +76,9 @@ const readQuotedValue = (
               ? "\r"
               : next === "t"
                 ? "\t"
-                : next,
+                : next === "$" && startsReference(text, col + 1)
+                  ? "\\$"
+                  : next,
         );
         col += 2;
         continue;
@@ -163,17 +175,28 @@ export const parseDotenv = (source: string): readonly DotenvEntry[] => {
 
 // Single quotes are literal for sh and python-dotenv, but Bun's loader still
 // expands `$` inside them, so any value with `$` or a backtick takes the
-// escaped double-quoted form, which Bun, sh and dotenv-expand read literally.
+// double-quoted form the CLI writes: a `$` that starts a reference stays as
+// written, as does a `\$` before one, and every other `$`, every backtick
+// and every backslash is escaped, so Bun, sh and dotenv-expand read the
+// rest literally and the parser above reads the same Value back.
 const serializeValue = (value: string): string => {
   if (!/['\n\r$`]/.test(value)) return `'${value}'`;
-  const escaped = value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("\n", "\\n")
-    .replaceAll("\r", "\\r")
-    .replaceAll("\t", "\\t")
-    .replaceAll('"', '\\"')
-    .replaceAll("$", "\\$")
-    .replaceAll("`", "\\`");
+  let escaped = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value.charAt(index);
+    if (ch === "\\")
+      escaped +=
+        value[index + 1] === "$" && startsReference(value, index + 1)
+          ? "\\"
+          : "\\\\";
+    else if (ch === "$") escaped += startsReference(value, index) ? "$" : "\\$";
+    else if (ch === "\n") escaped += "\\n";
+    else if (ch === "\r") escaped += "\\r";
+    else if (ch === "\t") escaped += "\\t";
+    else if (ch === '"') escaped += '\\"';
+    else if (ch === "`") escaped += "\\`";
+    else escaped += ch;
+  }
   return `"${escaped}"`;
 };
 

@@ -230,6 +230,7 @@ export const startMetricsServer = (
 ) => {
   if (!config.enabled) return undefined;
   const server = Bun.serve({
+    hostname: config.hostname,
     port: config.port,
     fetch: createMetricsHandler({
       ...options,
@@ -237,6 +238,8 @@ export const startMetricsServer = (
     }),
     maxRequestBodySize: 1024,
   });
-  console.error(`DotRelay metrics listening on port ${config.port}`);
+  console.error(
+    `DotRelay metrics listening on ${config.hostname} port ${config.port}`,
+  );
   return server;
 };

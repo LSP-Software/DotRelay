@@ -106,6 +106,15 @@ Recovery Code generation, presentation, and key exchange are client, browser, an
 (ADR 0009). The server enforces one active recovery-code wrapper per User and refuses codes
 that do not match the stored wrapper.
 
+An optional `PASSWORD` wrapper, set and used in the browser, derives its key with Argon2id
+(64 MiB of memory, 3 passes, 1 lane by default; the parameters are stored in each wrapper and
+capped before any memory is allocated) and then HKDF-SHA-384. Anyone holding the server's database
+can guess it offline, so `encryptionPasswordProblem` in `@dotrelay/client` refuses a password
+shorter than 12 characters, a repeated, sequential or all-number pattern, or one built on a common
+word with digits, symbols or letter substitutions around it. A password set under the older
+8-character rule still unlocks; the browser then asks the person to change it, and **Change** adds
+the new password wrapper before it retires the old one.
+
 ## Epoch rotation
 
 **`ProjectEpochRepository.rotate`** atomically advances a Project epoch, publishes
@@ -183,7 +192,11 @@ keys from its JSON (ADR 0015).
   Their Devices count only when a roster signed by the pinned identity lists them. No grant from
   them is accepted until the user compares fingerprints and confirms the identity
   (`dotrelay team trust <user-id>`, **Confirm fingerprint** in Members, or the share-keys
-  question). A changed identity, a lower version, or a missing roster, whether the service sends
+  question). Without a terminal, `dotrelay team trust` and `dotrelay team share-keys` confirm
+  only with `--fingerprint <fingerprint>`, which must match the teammate's identity. A first-sight
+  author can change a Value only with a lane sealed for their own Revision, and their legacy
+  (format 1) lanes are not applied until the user confirms them
+  ([ADR 0023](../adr/0023-lanes-are-bound-to-their-revision.md)). A changed identity, a lower version, or a missing roster, whether the service sends
   null or leaves the User out, blocks that teammate: no grants or provisioning go to them and their
   Revisions do not verify, until the user compares fingerprints and re-trusts them
   (`dotrelay team trust <user-id>` or **Trust new key** in Members). A confirmed or re-trusted pin
@@ -213,7 +226,9 @@ AMK approves it again or sends it the key with a confirmed fingerprint.
 - **Sending a transfer.** The sender seals the AMK only to a Device its verified roster lists,
   using the rostered key. For a Device not listed yet, the user compares the key fingerprint the
   service reports with the one that Device shows (`dotrelay device list`, or Recovery in the
-  browser), and the sender adds it to the roster before sealing.
+  browser), and the sender adds it to the roster before sealing. The browser does not show the
+  service's value: the person types the fingerprint the receiving Device shows, and the sender
+  seals only when it matches the keys the service reports.
 - **The transfer code.** The sender shows `<transfer id>.<account fingerprint>`. The person carries
   that code to the receiving Device.
 - **Receiving a transfer.** The receiver accepts the key only when a roster signed by the identity

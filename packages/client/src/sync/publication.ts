@@ -9,6 +9,8 @@ import {
   type FinalizePublicationRequest,
   InvalidCiphertextError,
   LANE_FORMAT_CONTEXT_BOUND,
+  LANE_FORMAT_LEGACY,
+  LANE_FORMATS,
   laneAssociatedData,
   open,
   openWithSharedSecret,
@@ -199,9 +201,44 @@ export type SyncPageVerificationOptions = SyncDisclosureOptions &
      * knows it; no Revision of the page may name an older epoch.
      */
     readonly trustedRevisionProjectEpoch?: bigint;
+    /**
+     * The Server Profile, Team and Project this Device synced the page for.
+     * Every Revision must name them (ADR 0023); a Revision of another
+     * context never verifies here, whatever its signer.
+     */
+    readonly expectedContext?: SyncPageContext;
+    /**
+     * Revision ids this Device already verified in the Environment's history
+     * before the page's starting point (an incremental sync). A Revision id
+     * appears once in a history; a page that repeats one would let a signer
+     * carry lanes sealed for that earlier Revision (ADR 0023). A sync from
+     * genesis carries every id in the page itself and needs none.
+     */
+    readonly knownRevisionIds?: Iterable<string>;
     /** This Device's clock; defaults to Date.now(). */
     readonly nowMs?: number;
   }>;
+
+export type SyncPageContext = Readonly<{
+  readonly serverProfileId: string;
+  readonly teamId: string;
+  readonly projectId: string;
+}>;
+
+export type SyncDecodeOptions = Readonly<{
+  /**
+   * The Users whose legacy (format 1) lanes this Device applies: its own
+   * User, which is always included, and the teammates whose identity it
+   * confirmed (ADR 0023). A format-1 lane binds only its Variable, Revision
+   * and scope, so any history signer could re-wrap a format-1 ciphertext
+   * from another Environment of the same Project in a Revision of its own.
+   * A format-1 lane whose Revision another User authored is therefore not
+   * applied: its Variable reads as unreadable (UnreadableLaneError with the
+   * reason "unconfirmed-legacy-author" at the head) until a later Revision
+   * publishes it again in format 2 or the user confirms the author.
+   */
+  readonly legacyLaneAuthors?: Iterable<string>;
+}>;
 
 /**
  * The Project epoch keys this Device holds, keyed by Project epoch. Each lane
@@ -274,6 +311,21 @@ export type UnreadableLaneKind =
   "VARIABLE_DEFINITION" | "SHARED_VALUE" | "USER_DEFINED_VALUE";
 
 /**
+ * Why a lane is unreadable: this Device holds no key that opens it, or it is
+ * a legacy (format 1) lane written by a User this Device has not confirmed
+ * (ADR 0023), which it never applies.
+ */
+export type UnreadableLaneReason =
+  "undecryptable" | "unconfirmed-legacy-author";
+
+const laneKindLabel = (kind: UnreadableLaneKind): string =>
+  kind === "VARIABLE_DEFINITION"
+    ? "definition"
+    : kind === "SHARED_VALUE"
+      ? "Shared Value"
+      : "User-defined Value";
+
+/**
  * A lane the verified page covers but this Device cannot decrypt: the
  * Variable's definition, a Shared Value, or a User-defined Value the actor
  * owns (or whose owner cannot be established). Callers must stop exporting
@@ -283,25 +335,34 @@ export class UnreadableLaneError extends Error {
   readonly variableId: string;
   readonly laneKind: UnreadableLaneKind;
   readonly ownerUserId: string | null;
+  readonly reason: UnreadableLaneReason;
+  /** For "unconfirmed-legacy-author": who authored the legacy lane. */
+  readonly authorUserId: string | null;
 
   constructor(
     input: Readonly<{
       readonly variableId: string;
       readonly laneKind: UnreadableLaneKind;
       readonly ownerUserId?: string | null;
+      readonly reason?: UnreadableLaneReason;
+      readonly authorUserId?: string | null;
     }>,
   ) {
     super(
-      input.laneKind === "VARIABLE_DEFINITION"
-        ? `Variable ${input.variableId}: its definition cannot be decrypted with this Device's Project key grant`
-        : input.laneKind === "SHARED_VALUE"
-          ? `Variable ${input.variableId}: its Shared Value cannot be decrypted with this Device's Project key grant`
-          : `Variable ${input.variableId}: its User-defined Value cannot be decrypted with this Device's key grant`,
+      input.reason === "unconfirmed-legacy-author"
+        ? `Variable ${input.variableId}: its ${laneKindLabel(input.laneKind)} was written in the legacy lane format by a teammate this installation has not confirmed`
+        : input.laneKind === "VARIABLE_DEFINITION"
+          ? `Variable ${input.variableId}: its definition cannot be decrypted with this Device's Project key grant`
+          : input.laneKind === "SHARED_VALUE"
+            ? `Variable ${input.variableId}: its Shared Value cannot be decrypted with this Device's Project key grant`
+            : `Variable ${input.variableId}: its User-defined Value cannot be decrypted with this Device's key grant`,
     );
     this.name = "UnreadableLaneError";
     this.variableId = input.variableId;
     this.laneKind = input.laneKind;
     this.ownerUserId = input.ownerUserId ?? null;
+    this.reason = input.reason ?? "undecryptable";
+    this.authorUserId = input.authorUserId ?? null;
   }
 }
 
@@ -798,15 +859,42 @@ type DecodedVariableState = {
 
 // How the newest lane of one kind for a Variable decoded: READ means the
 // head state is verified, REQUIRED_UNREADABLE means this Device must be able
-// to read it and cannot, and OTHER_UNREADABLE means a User-defined Value
-// another User owns withheld it from this Device.
-type LaneReadState = "READ" | "REQUIRED_UNREADABLE" | "OTHER_UNREADABLE";
+// to read it and cannot, OTHER_UNREADABLE means a User-defined Value
+// another User owns withheld it from this Device, and UNCONFIRMED_LEGACY
+// means a legacy (format 1) lane by an author this Device has not
+// confirmed, which it never applies (ADR 0023).
+type LaneReadState =
+  "READ" | "REQUIRED_UNREADABLE" | "OTHER_UNREADABLE" | "UNCONFIRMED_LEGACY";
 
 type ValueLaneState = Readonly<{
   readonly state: LaneReadState;
   readonly scope: 3 | 4;
   readonly ownerUserId: string | null;
+  /** For UNCONFIRMED_LEGACY: the author of the legacy lane. */
+  readonly authorUserId?: string | null;
 }>;
+
+type DefinitionLaneState = Readonly<{
+  readonly state: LaneReadState;
+  readonly authorUserId?: string | null;
+}>;
+
+const isLegacyLane = (lane: ProtocolObject): boolean => {
+  const format = lane.get(50);
+  return format === LANE_FORMAT_LEGACY || format === BigInt(LANE_FORMAT_LEGACY);
+};
+
+// The author (field 22) of the Revision object a sync Revision carries.
+const revisionAuthorUserId = (revision: SyncRevisionWire): string | null => {
+  const revisionObject = revision.objects.find((object) =>
+    bytesEqual(object.digest, revision.digest),
+  );
+  if (!revisionObject) return null;
+  const author = parseProtocolObject(revisionObject.canonicalBytes).get(22);
+  return author instanceof Uint8Array && author.length === 16
+    ? bytesToUuid(author)
+    : null;
+};
 
 export type SyncManifestDecode = Readonly<{
   /** The Manifest at the page's final Revision. */
@@ -908,7 +996,13 @@ export const decodeSyncManifest = async (
   sharedValueSecrets?: SharedValueSecrets,
   actorUserId?: string,
   userDefinedValueSecret?: Uint8Array,
+  options: SyncDecodeOptions = {},
 ): Promise<SyncManifestDecode> => {
+  // Legacy lanes apply only from this User and the teammates it confirmed.
+  const legacyLaneAuthors = new Set<string>([
+    ...(options.legacyLaneAuthors ?? []),
+    ...(actorUserId === undefined ? [] : [actorUserId]),
+  ]);
   const variables = new Map<string, DecodedVariableState>();
   for (const variable of existingVariables)
     variables.set(variable.id, {
@@ -923,12 +1017,18 @@ export const decodeSyncManifest = async (
     });
   // Newest lane state per Variable, so a Revision that re-publishes a lane
   // readably clears an earlier Revision's unreadable one.
-  const definitionStates = new Map<string, LaneReadState>();
+  const definitionStates = new Map<string, DefinitionLaneState>();
   const valueStates = new Map<string, ValueLaneState>();
   const snapshots = new Map<string, readonly DecodedVariable[]>();
   for (const revision of page.revisions) {
     const sharedValueSecret = (lane: ProtocolObject): Uint8Array | undefined =>
       sharedSecretForLane(sharedValueSecrets, lane, revision.projectEpoch);
+    const authorUserId = revisionAuthorUserId(revision);
+    // A legacy lane binds neither its Environment nor its author, so only
+    // one this Device's own User or a confirmed teammate wrote is applied.
+    const unconfirmedLegacy = (lane: ProtocolObject): boolean =>
+      isLegacyLane(lane) &&
+      (authorUserId === null || !legacyLaneAuthors.has(authorUserId));
     const laneObjects = revision.objects.filter((object) => {
       const lane = parseProtocolObject(object.canonicalBytes);
       return lane.get(1) === 13;
@@ -952,6 +1052,15 @@ export const decodeSyncManifest = async (
         throw new ProtocolVerificationError("sync lane identity is malformed");
       const id = bytesToUuid(variableId);
       if (scope === 2) {
+        if (unconfirmedLegacy(lane)) {
+          // Not applied: the Variable keeps no definition from this lane,
+          // and fails the decode if no later Revision replaces it.
+          definitionStates.set(id, {
+            state: "UNCONFIRMED_LEGACY",
+            authorUserId,
+          });
+          continue;
+        }
         const plaintext = await openReadableLane(
           object.canonicalBytes,
           resolvePrivateKey("SHARED_VALUE"),
@@ -960,10 +1069,10 @@ export const decodeSyncManifest = async (
         if (!plaintext) {
           // The head definition of this Variable is unverified; whether that
           // fails the decode is decided once the whole page is folded.
-          definitionStates.set(id, "REQUIRED_UNREADABLE");
+          definitionStates.set(id, { state: "REQUIRED_UNREADABLE" });
           continue;
         }
-        definitionStates.set(id, "READ");
+        definitionStates.set(id, { state: "READ" });
         const definition = JSON.parse(new TextDecoder().decode(plaintext)) as {
           name: string;
           description: string;
@@ -993,6 +1102,9 @@ export const decodeSyncManifest = async (
             ? null
             : (existing?.ownerUserId ?? null),
         });
+        // A deleted Variable has no Value, so an earlier Value this Device
+        // could not read (or would not apply) no longer has to be read.
+        if (definition.tombstone) valueStates.delete(id);
       } else if (scope === 3 || scope === 4) {
         const existing = variables.get(id);
         if (!existing) {
@@ -1002,11 +1114,16 @@ export const decodeSyncManifest = async (
           // the unreadable definition fails the decode; otherwise the page
           // (or the caller's prior state) is incomplete, and skipping the
           // lane would silently drop the Variable.
-          if (definitionStates.get(id) === "REQUIRED_UNREADABLE") {
+          const definition = definitionStates.get(id);
+          if (
+            definition?.state === "REQUIRED_UNREADABLE" ||
+            definition?.state === "UNCONFIRMED_LEGACY"
+          ) {
             valueStates.set(id, {
-              state: "REQUIRED_UNREADABLE",
+              state: definition.state,
               scope,
               ownerUserId: scope === 4 ? laneUserId(lane, 26) : null,
+              authorUserId: definition.authorUserId ?? null,
             });
             continue;
           }
@@ -1045,6 +1162,18 @@ export const decodeSyncManifest = async (
             state: "OTHER_UNREADABLE",
             scope: 4,
             ownerUserId: existing.ownerUserId,
+          });
+          continue;
+        }
+        if (unconfirmedLegacy(lane)) {
+          // Never carry an earlier Value across a lane this Device does not
+          // apply: until a later Revision replaces it the Value is unknown.
+          existing.value = null;
+          valueStates.set(id, {
+            state: "UNCONFIRMED_LEGACY",
+            scope,
+            ownerUserId: scope === 4 ? existing.ownerUserId : null,
+            authorUserId,
           });
           continue;
         }
@@ -1168,17 +1297,35 @@ export const decodeSyncManifest = async (
     snapshots.set(revision.id, decodedVariables(variables));
   }
   for (const [id, state] of definitionStates)
-    if (state === "REQUIRED_UNREADABLE")
+    if (
+      state.state === "REQUIRED_UNREADABLE" ||
+      state.state === "UNCONFIRMED_LEGACY"
+    )
       throw new UnreadableLaneError({
         variableId: id,
         laneKind: "VARIABLE_DEFINITION",
+        ...(state.state === "UNCONFIRMED_LEGACY"
+          ? {
+              reason: "unconfirmed-legacy-author",
+              authorUserId: state.authorUserId ?? null,
+            }
+          : {}),
       });
   for (const [id, state] of valueStates)
-    if (state.state === "REQUIRED_UNREADABLE")
+    if (
+      state.state === "REQUIRED_UNREADABLE" ||
+      state.state === "UNCONFIRMED_LEGACY"
+    )
       throw new UnreadableLaneError({
         variableId: id,
         laneKind: state.scope === 3 ? "SHARED_VALUE" : "USER_DEFINED_VALUE",
         ownerUserId: state.ownerUserId,
+        ...(state.state === "UNCONFIRMED_LEGACY"
+          ? {
+              reason: "unconfirmed-legacy-author",
+              authorUserId: state.authorUserId ?? null,
+            }
+          : {}),
       });
   return Object.freeze({
     variables: decodedVariables(variables),
@@ -1201,6 +1348,7 @@ export const decodeSyncVariables = async (
   sharedValueSecret?: SharedValueSecrets,
   actorUserId?: string,
   userDefinedValueSecret?: Uint8Array,
+  options: SyncDecodeOptions = {},
 ): Promise<readonly DecodedVariable[]> =>
   (
     await decodeSyncManifest(
@@ -1210,6 +1358,7 @@ export const decodeSyncVariables = async (
       sharedValueSecret,
       actorUserId,
       userDefinedValueSecret,
+      options,
     )
   ).variables;
 
@@ -1411,15 +1560,26 @@ const entryAuthorizesRevision = (
   return true;
 };
 
+type RevisionAuthorization = Readonly<{
+  /** The keys whose entries authorized the Revision. */
+  readonly keys: readonly Uint8Array[];
+  /**
+   * Whether an authorizing entry names the Revision's author, so the author
+   * field is bound to the signing Device rather than claimed by the signer.
+   */
+  readonly authorBound: boolean;
+}>;
+
 const authorizeRevisionSignature = async (
   canonicalBytes: Uint8Array,
   entries: readonly SigningTrustEntry[],
   parsedRevision: ProtocolObject,
   authoredAtMs: bigint,
-): Promise<Uint8Array[]> => {
+): Promise<RevisionAuthorization> => {
   const signingDeviceId = parsedRevision.get(23);
   const authorUserId = parsedRevision.get(22);
   const authorizing: Uint8Array[] = [];
+  let authorBound = false;
   let lastError: unknown;
   for (const entry of entries) {
     if (
@@ -1434,15 +1594,49 @@ const authorizeRevisionSignature = async (
     try {
       await verifySignedProtocolObject(canonicalBytes, entry.publicKey);
       authorizing.push(entry.publicKey);
+      if (entry.userId !== undefined) authorBound = true;
     } catch (error) {
       lastError = error;
     }
   }
-  if (authorizing.length > 0) return authorizing;
+  if (authorizing.length > 0) return { keys: authorizing, authorBound };
   if (lastError instanceof ProtocolVerificationError) throw lastError;
   throw new ProtocolVerificationError(
     "sync revision signature is not authorized",
   );
+};
+
+// The fields that tie a lane or Manifest descriptor to the one Revision that
+// carries it (ADR 0023): Server Profile, Team, Project, Environment and
+// Revision id. Both lane formats bind field 16 into their associated data,
+// so a lane copied from another Revision either fails these checks or fails
+// to decrypt.
+const REVISION_BINDING_FIELDS = [8, 11, 13, 14, 16] as const;
+
+const boundToRevision = (
+  object: ProtocolObject,
+  revision: ProtocolObject,
+): boolean =>
+  REVISION_BINDING_FIELDS.every((field) => {
+    const value = object.get(field);
+    const expected = revision.get(field);
+    return (
+      value instanceof Uint8Array &&
+      expected instanceof Uint8Array &&
+      value.length === 16 &&
+      bytesEqual(value, expected)
+    );
+  });
+
+const laneFormatOf = (lane: ProtocolObject): number | null => {
+  const format = lane.get(50);
+  const value =
+    typeof format === "bigint"
+      ? Number(format)
+      : typeof format === "number"
+        ? format
+        : null;
+  return value !== null && LANE_FORMATS.includes(value) ? value : null;
 };
 
 export const verifySyncPage = async (
@@ -1478,6 +1672,30 @@ export const verifySyncPage = async (
   }
   if (page.trustedRevisionHash.length !== 48)
     throw new ProtocolVerificationError("trusted revision hash is malformed");
+  let expectedContext:
+    Readonly<{ 8: Uint8Array; 11: Uint8Array; 13: Uint8Array }> | undefined;
+  try {
+    expectedContext = options.expectedContext
+      ? {
+          8: uuidToBytes(options.expectedContext.serverProfileId),
+          11: uuidToBytes(options.expectedContext.teamId),
+          13: uuidToBytes(options.expectedContext.projectId),
+        }
+      : undefined;
+  } catch {
+    throw new ProtocolVerificationError("sync page context is malformed");
+  }
+  // Every Revision id the Environment's verified history already holds: the
+  // starting point, the Environment's own id (the genesis anchor), and what
+  // the caller verified before. A Revision may not reuse any of them, nor an
+  // id earlier in this page (ADR 0023).
+  const historyRevisionIds = new Set<string>(
+    [
+      page.environmentId,
+      page.trustedRevisionId,
+      ...(options.knownRevisionIds ?? []),
+    ].map((id) => id.toLowerCase()),
+  );
   let previousRevision: ProtocolObject | undefined;
   let previousRevisionDigest: Uint8Array | undefined;
   for (const [revisionIndex, revision] of page.revisions.entries()) {
@@ -1515,6 +1733,24 @@ export const verifySyncPage = async (
       BigInt(revisionAuthoredAt as number | bigint) !== revision.authoredAtMs
     )
       throw new ProtocolVerificationError("sync revision identity mismatch");
+    if (historyRevisionIds.has(revision.id.toLowerCase()))
+      throw new ProtocolVerificationError(
+        "sync page repeats a Revision id the Environment's history already holds",
+      );
+    historyRevisionIds.add(revision.id.toLowerCase());
+    if (
+      expectedContext &&
+      !([8, 11, 13] as const).every((field) => {
+        const value = parsedRevision.get(field);
+        return (
+          value instanceof Uint8Array &&
+          bytesEqual(value, expectedContext[field])
+        );
+      })
+    )
+      throw new ProtocolVerificationError(
+        "sync revision belongs to another Server Profile, Team or Project",
+      );
     const actualRevisionDigest = await sha384(revisionObject.canonicalBytes);
     if (!bytesEqual(actualRevisionDigest, revision.digest))
       throw new ProtocolVerificationError("revision digest mismatch");
@@ -1540,14 +1776,18 @@ export const verifySyncPage = async (
         "sync revision Project epoch is older than its parent's",
       );
     previousProjectEpoch = revision.projectEpoch;
-    let revisionTrustKeys = trustKeys;
+    let revisionTrustKeys: readonly Uint8Array[] = trustKeys;
+    // Plain keys verify a signature but say nothing about who authored it.
+    let authorBound = false;
     if (scopedTrust) {
-      revisionTrustKeys = await authorizeRevisionSignature(
+      const authorization = await authorizeRevisionSignature(
         revisionObject.canonicalBytes,
         trustEntries,
         parsedRevision,
         revision.authoredAtMs,
       );
+      revisionTrustKeys = authorization.keys;
+      authorBound = authorization.authorBound;
     } else {
       await verifySignedProtocolObjectWithKeys(
         revisionObject.canonicalBytes,
@@ -1694,11 +1934,38 @@ export const verifySyncPage = async (
         throw new ProtocolVerificationError(
           "sync object environment identity mismatch",
         );
+      // A lane or descriptor speaks only for the Revision that carries it:
+      // one copied from an earlier Revision, or from another Environment,
+      // Project, Team or Server Profile, is refused (ADR 0023).
+      if (
+        (objectKind === 13 || objectKind === 15) &&
+        !boundToRevision(parsed, parsedRevision)
+      )
+        throw new ProtocolVerificationError(
+          "sync object is not bound to the Revision that carries it",
+        );
       if (parsed.get(1) === 13) {
         laneProjectEpoch(parsed, revision.projectEpoch);
         const laneId = parsed.get(18);
         const laneScope = parsed.get(36);
         const laneCiphertextLength = parsed.get(72);
+        const laneFormat = laneFormatOf(parsed);
+        if (laneFormat === null)
+          throw new ProtocolVerificationError(
+            "sync lane names an unknown lane format",
+          );
+        // A legacy User-defined Value lane binds neither its context nor its
+        // owner into its ciphertext. Only a signer bound to the Revision's
+        // author (and so to the owner) may carry one; a plain key could claim
+        // any author and present another context's ciphertext as theirs.
+        if (
+          laneFormat === LANE_FORMAT_LEGACY &&
+          laneScope === 4 &&
+          !authorBound
+        )
+          throw new ProtocolVerificationError(
+            "a legacy User-defined Value lane needs a signer bound to its author",
+          );
         const commitment = commitments.find((candidate) => {
           const candidateLaneId = candidate.get(18);
           return (

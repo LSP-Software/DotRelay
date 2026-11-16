@@ -8,7 +8,11 @@ Technical facts for the privacy notice. The decisions are in
 
 Self-service, in the web app's Account view or with `dotrelay account delete`. It takes effect at
 once; there is no grace period and no undo. It is refused while the User is the last active owner
-of a Team that has other Members.
+of a Team that has other Members. While the User has an active Device, deletion must come from one
+of them: the request proves the Device and carries its signature over the deletion command. A User
+with no active Device deletes from a sign-in made in the last ten minutes
+([ADR 0024](../adr/0024-account-actions-need-a-device.md)). A User whose Devices are lost but still
+active first restores one with the Recovery Code.
 
 Deleted immediately:
 
@@ -46,7 +50,8 @@ Teammates keep whatever they already decrypted. Owners should rotate each affect
 ## Leaving a Team
 
 Ends the Membership as a removal does. The Membership row and its periods are kept, so the
-User's Revisions in that Team stay verifiable. The Team's Projects owe a key rotation.
+User's Revisions in that Team stay verifiable. The Team's Projects owe a key rotation. Like account
+deletion, it needs a proven Device while the User has an active one, or a recent sign-in.
 
 ## Deleting a Team
 
@@ -67,4 +72,5 @@ caused.
 
 It contains no Values, ciphertext, wrapped keys, public keys, or tokens. The service cannot
 decrypt Values; `dotrelay pull` or `dotrelay export` on one of the User's Devices exports them.
-Exports are limited to 10 per hour per User.
+Exports are limited to 10 per hour per User. Because the export lists every Device and session, it
+needs the same proven Device, or recent sign-in, as leaving a Team.

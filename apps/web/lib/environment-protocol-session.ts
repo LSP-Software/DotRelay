@@ -1,5 +1,6 @@
 import {
   createVerifiedEnvironmentSession,
+  ownSigningTrust,
   type ProtocolTransport,
   type PublicationContext,
   type RevisionSigningTrust,
@@ -88,13 +89,18 @@ export const createEnvironmentProtocolSession = (input: {
   // stays readable; publications always use sharedValueSecret.
   readonly sharedValueKeyRing?: SharedValueKeyRing;
   readonly userDefinedValueSecret?: Uint8Array;
+  /**
+   * The teammates whose identity this browser confirmed; with its own User,
+   * the only authors whose legacy (format 1) lanes it applies (ADR 0023).
+   */
+  readonly legacyLaneAuthors?: Iterable<string>;
 }): EnvironmentProtocolSession => {
-  const signingTrustKeys =
+  // Without roster-verified entries this browser trusts only its own key,
+  // bound to its own User and Device (ADR 0023).
+  const signingTrustKeys: RevisionSigningTrust =
     input.signingTrustKeys && input.signingTrustKeys.length > 0
       ? input.signingTrustKeys
-      : input.context.revisionSigningPublicKey
-        ? [input.context.revisionSigningPublicKey]
-        : [];
+      : ownSigningTrust(input.context);
   // Reading and publishing must use the same content keys. The workspace
   // resolves the Project epoch key after it builds the publication context
   // and passes that key beside the context; a publish that omits it seals

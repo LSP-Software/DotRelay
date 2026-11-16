@@ -808,6 +808,32 @@ export const locallyPublishedRevision = (input: {
     changedVariableIds: input.changedVariableIds ?? null,
   });
 
+/**
+ * What an incremental sync from `trustedRevisionId` must check against the
+ * history this browser already verified (ADR 0022, ADR 0023): every Revision
+ * id it holds, which no new Revision may reuse, and the starting Revision's
+ * authored-at instant and Project epoch, which no new Revision may predate.
+ */
+export const trustedHistoryVerification = (
+  history: readonly VerifiedRevision[],
+  trustedRevisionId: string,
+): Readonly<{
+  readonly knownRevisionIds: readonly string[];
+  readonly trustedRevisionAuthoredAtMs?: bigint;
+  readonly trustedRevisionProjectEpoch?: bigint;
+}> => {
+  const trusted = history.find((revision) => revision.id === trustedRevisionId);
+  return Object.freeze({
+    knownRevisionIds: Object.freeze(history.map((revision) => revision.id)),
+    ...(trusted?.authoredAtMs !== null && trusted?.authoredAtMs !== undefined
+      ? { trustedRevisionAuthoredAtMs: BigInt(trusted.authoredAtMs) }
+      : {}),
+    ...(trusted?.projectEpoch !== null && trusted?.projectEpoch !== undefined
+      ? { trustedRevisionProjectEpoch: BigInt(trusted.projectEpoch) }
+      : {}),
+  });
+};
+
 export const mergeVerifiedHistory = (
   current: readonly VerifiedRevision[],
   incoming: readonly VerifiedRevision[],

@@ -45,7 +45,7 @@ import {
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
 import type { CredentialStore } from "./credentials";
-import { CliError } from "./errors";
+import { CliError, EXIT_CODES } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
@@ -927,7 +927,7 @@ describe("protected CLI workflows", () => {
       );
   });
 
-  test("pulls Values signed by a peer Device using workspace signing trust keys", async () => {
+  test("refuses Values a peer Device signed when only plain signing trust keys name it", async () => {
     const bootstrap = await createDeviceBootstrap({
       pin: profile.pin,
       userId: ids.user,
@@ -1019,9 +1019,12 @@ describe("protected CLI workflows", () => {
       ],
       runtime,
     );
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("DATABASE_URL='postgres://example'");
-    expect(result.stderr).toBe("");
+    // A plain key binds no author to the Revision it signs, so the CLI
+    // trusts only its own key when the boundary names no signing Devices
+    // (ADR 0023). The peer's Revision does not verify.
+    expect(result.exitCode).toBe(EXIT_CODES.crypto);
+    expect(result.stderr).toContain("does not verify");
+    expect(result.stdout).not.toContain("postgres://example");
   });
 
   test("pulls Values signed by a peer Device through its trust entry windows", async () => {
@@ -1220,7 +1223,7 @@ describe("protected CLI workflows", () => {
       ],
       runtime,
     );
-    expect(result.exitCode).toBe(8);
+    expect(result.exitCode).toBe(EXIT_CODES.crypto);
     let written = "";
     try {
       written = await Bun.file(outputPath).text();
@@ -1229,8 +1232,8 @@ describe("protected CLI workflows", () => {
     }
     expect(written).not.toContain("postgres://example");
     expect(JSON.parse(result.stderr)).toMatchObject({
-      category: "local-io",
-      code: "unexpected_failure",
+      category: "crypto",
+      code: "history_unverifiable",
     });
   });
 
@@ -1371,7 +1374,7 @@ describe("protected CLI workflows", () => {
       revisions: [revision],
     });
     const refused = await pullStdout(currentOnly);
-    expect(refused.exitCode).toBe(8);
+    expect(refused.exitCode).toBe(EXIT_CODES.crypto);
     expect(refused.stdout).not.toContain("postgres://example");
   });
 
@@ -1408,7 +1411,7 @@ describe("protected CLI workflows", () => {
       ],
     });
     const refused = await pullStdout(runtime);
-    expect(refused.exitCode).toBe(8);
+    expect(refused.exitCode).toBe(EXIT_CODES.crypto);
     expect(refused.stdout).not.toContain("postgres://example");
   });
 
@@ -6881,22 +6884,46 @@ describe("pull after Project epoch rotations", () => {
       );
       expect(author?.status).toBe("identity-changed");
       expect(author?.fingerprint).toMatch(/^([0-9a-f]{8} ){4}[0-9a-f]{8}$/);
-      const trusted = await pullWith(project, {
+      const trustWith = (...flags: string[]) =>
+        pullWith(project, {
+          links: project.links,
+          listedEpochs: [],
+          runtime: first.runtime,
+          accountRosters: rosters,
+          args: [
+            "team",
+            "trust",
+            project.authorUserId,
+            "--profile",
+            "relay",
+            "--no-input",
+            "--json",
+            ...flags,
+          ],
+        });
+      // Without a terminal --force never confirms an identity: only a
+      // fingerprint the user compared does, and it must match.
+      const forced = await trustWith("--force");
+      expect(forced.result.exitCode).not.toBe(0);
+      expect(JSON.parse(forced.result.stderr)).toMatchObject({
+        code: "account_fingerprint_required",
+      });
+      const mismatched = await trustWith("--fingerprint", "0".repeat(40));
+      expect(mismatched.result.exitCode).not.toBe(0);
+      expect(JSON.parse(mismatched.result.stderr)).toMatchObject({
+        code: "account_fingerprint_mismatch",
+      });
+      const stillRefused = await pullWith(project, {
         links: project.links,
         listedEpochs: [],
         runtime: first.runtime,
         accountRosters: rosters,
-        args: [
-          "team",
-          "trust",
-          project.authorUserId,
-          "--profile",
-          "relay",
-          "--no-input",
-          "--force",
-          "--json",
-        ],
       });
+      expect(stillRefused.result.exitCode).not.toBe(0);
+      const trusted = await trustWith(
+        "--fingerprint",
+        author?.fingerprint ?? "",
+      );
       expect(trusted.result.exitCode).toBe(0);
       const accepted = await pullWith(project, {
         links: project.links,
@@ -6908,6 +6935,17 @@ describe("pull after Project epoch rotations", () => {
       expect(accepted.result.stdout).toContain(
         "DATABASE_URL='postgres://epoch-one'",
       );
+      // A confirmed identity still answers to a fingerprint passed again.
+      const again = await trustWith("--fingerprint", author?.fingerprint ?? "");
+      expect(again.result.exitCode).toBe(0);
+      expect(JSON.parse(again.result.stdout)).toMatchObject({
+        message: expect.stringContaining("already confirmed"),
+      });
+      const stale = await trustWith("--fingerprint", "0".repeat(40));
+      expect(stale.result.exitCode).not.toBe(0);
+      expect(JSON.parse(stale.result.stderr)).toMatchObject({
+        code: "account_fingerprint_mismatch",
+      });
     });
 
     test("a teammate's injected Device cannot sign Revisions the client accepts", async () => {

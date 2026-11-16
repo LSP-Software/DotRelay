@@ -19,6 +19,12 @@ import {
 } from "@dotrelay/contracts";
 import { projectGrantVerification } from "./account-keys";
 import { establishBrowserAccountTrust } from "./account-trust";
+import { sessionSigningTrust } from "./environment-editor-views";
+import { createEnvironmentProtocolSession } from "./environment-protocol-session";
+import {
+  trustedHistoryVerification,
+  type VerifiedRevision,
+} from "./environment-workflow";
 import { adoptProjectEpochKey } from "./project-key-adoption";
 import type { WorkspaceBoundary } from "./workspace-boundary";
 
@@ -321,5 +327,101 @@ describe("C-2 (browser): an omitted pinned teammate vouches for nothing", () => 
         pinStore: pins,
       }),
     ).rejects.toThrow("differs");
+  });
+});
+
+describe("ADR 0023 (browser): history trust never comes from plain keys", () => {
+  test("an invented first-sight User is recorded as unconfirmed", async () => {
+    const ownAmk = crypto.getRandomValues(new Uint8Array(32));
+    const inventedAmk = crypto.getRandomValues(new Uint8Array(32));
+    const own = await realDevice(ownDeviceId);
+    const invented = await realDevice(injectedDeviceId);
+    const trusted = await establishBrowserAccountTrust({
+      boundary: boundaryOf(own.entry, {
+        accountRosters: {
+          [ownUserId]: await roster(ownAmk, ownUserId, 1, [own.entry]),
+          [teammateId]: await roster(inventedAmk, teammateId, 1, [
+            { ...invented.entry, deviceId: injectedDeviceId },
+          ]),
+        },
+        signingTrustDevices: [],
+        signingTrustKeys: [
+          hex(own.entry.signingPublicKey),
+          hex(invented.entry.signingPublicKey),
+        ],
+      }),
+      accountMasterKey: ownAmk,
+      actor: { origin: "https://relay.example", deviceId: ownDeviceId },
+      encryptionPublicKey: own.entry.encryptionPublicKey,
+      signingPublicKey: own.entry.signingPublicKey,
+      pinStore: memoryPins(),
+      publish: async () => undefined,
+    });
+    expect(trusted.boundary.verifiedSigners?.history).toContain(
+      hex(invented.entry.signingPublicKey),
+    );
+    // Only this account is confirmed: the invented User's legacy lanes are
+    // never applied.
+    expect(trusted.boundary.verifiedSigners?.confirmedUserIds).toEqual([
+      ownUserId,
+    ]);
+  });
+
+  test("without roster-verified entries a session trusts only its own key, bound to its own User and Device", async () => {
+    const own = await realDevice(ownDeviceId);
+    const context = {
+      serverProfileId,
+      teamId,
+      projectId,
+      environmentId: "abababab-abab-4bab-8bab-abababababab",
+      actorUserId: ownUserId,
+      actorDeviceId: ownDeviceId,
+      projectEpoch: 1,
+      expectedHeadId: null,
+      expectedHeadHash: null,
+      valueRecipientPublicKey: own.encryption.publicKey,
+      signingPrivateKey: own.signing.privateKey,
+      revisionSigningPublicKey: own.entry.signingPublicKey,
+    };
+    const expected = [
+      {
+        publicKey: own.entry.signingPublicKey,
+        deviceId: ownDeviceId,
+        userId: ownUserId,
+      },
+    ];
+    expect(sessionSigningTrust({ context })).toEqual(expected);
+    const session = createEnvironmentProtocolSession({
+      context,
+      transport: {} as never,
+      sharedValuePrivateKey: own.encryption.privateKey,
+    });
+    expect(session.signingTrustKeys).toEqual(expected);
+  });
+
+  test("an incremental sync checks every Revision id this browser verified", () => {
+    const revision = (
+      id: string,
+      projectEpoch: number,
+      authoredAtMs: number,
+    ): VerifiedRevision => ({
+      id,
+      parentId: null,
+      mutation: 2,
+      projectEpoch,
+      authoredAtMs,
+      rollbackTargetId: null,
+      authorUserId: ownUserId,
+      changedVariableIds: null,
+    });
+    const history = [revision("r1", 1, 10), revision("r2", 2, 20)];
+    expect(trustedHistoryVerification(history, "r2")).toEqual({
+      knownRevisionIds: ["r1", "r2"],
+      trustedRevisionAuthoredAtMs: 20n,
+      trustedRevisionProjectEpoch: 2n,
+    });
+    expect(trustedHistoryVerification(history, "unknown")).toEqual({
+      knownRevisionIds: ["r1", "r2"],
+    });
   });
 });

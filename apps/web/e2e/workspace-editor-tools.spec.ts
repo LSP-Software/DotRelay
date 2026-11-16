@@ -357,8 +357,10 @@ test("downloading .env warns first and writes the readable published values", as
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("production.env");
   const path = await download.path();
+  // The same text `dotrelay pull` writes: `$n` is a reference, kept for an
+  // expander to resolve.
   expect(await readFile(path, "utf8")).toBe(
-    "API_URL='https://api.test'\nTOKEN=\"t0k\\$n\"\n",
+    "API_URL='https://api.test'\nTOKEN=\"t0k$n\"\n",
   );
 });
 

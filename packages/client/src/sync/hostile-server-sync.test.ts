@@ -2,15 +2,18 @@ import { describe, expect, test } from "bun:test";
 import {
   type CborValue,
   canonicalEncode,
+  decodeCiphertextEnvelope,
   encodeProtocolObject,
   exportSigningPublicKey,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   InvalidCiphertextError,
+  laneAssociatedData,
   parseProtocolObject,
   protocolObjectFromFields,
   type SyncPageWire,
   type SyncRevisionWire,
+  sealWithSharedSecret,
   sha384,
   signProtocolObject,
   uuidToBytes,
@@ -23,7 +26,9 @@ import {
   openLane,
   type PublicationContext,
   type PublicationVariable,
+  type RevisionSigningTrustEntry,
   type StagedPublicationObject,
+  UnreadableLaneError,
   verifySyncPage,
 } from "./publication";
 
@@ -597,3 +602,681 @@ describe("C-6: the decoder uses the descriptor the Revision commits to", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADR 0023: every lane is bound to the Revision that carries it, Revision ids
+// never repeat, and legacy lanes apply only from confirmed authors. The
+// signer in these tests is a teammate this client pinned on first sight.
+// ---------------------------------------------------------------------------
+
+type Actor = Awaited<ReturnType<typeof actor>>;
+
+const userU = "99999999-aaaa-4aaa-8aaa-999999999999";
+const deviceU = "99999999-bbbb-4bbb-8bbb-999999999999";
+
+// The constrained trust entry a client builds for a roster-verified Device.
+const entryFor = (who: Actor): RevisionSigningTrustEntry => ({
+  publicKey: who.signingPublicKey,
+  deviceId: who.deviceId,
+  userId: who.userId,
+  deviceActiveFromMs: 0,
+  deviceActiveUntilMs: null,
+  memberSinceMs: 0,
+  memberUntilMs: null,
+});
+
+// Seals a lane again under the legacy (format 1) associated data, the way a
+// client from before lane format 2 wrote it, and signs it with `signer`.
+const toLegacyLane = async (
+  laneBytes: Uint8Array,
+  opener: Actor,
+  secret: Uint8Array,
+  signer: CryptoKey,
+): Promise<Uint8Array> => {
+  const plaintext = await openLane(
+    laneBytes,
+    opener.encryption.privateKey,
+    secret,
+  );
+  const lane = new Map(parseProtocolObject(laneBytes));
+  lane.set(50, 1);
+  const envelope = decodeCiphertextEnvelope(
+    await sealWithSharedSecret(plaintext, secret, laneAssociatedData(lane)),
+  );
+  for (const field of [46, 47, 48, 72])
+    lane.set(field, envelope.get(field) as CborValue);
+  lane.set(
+    69,
+    new Map<number, CborValue>([
+      [44, envelope.get(44) as CborValue],
+      [45, envelope.get(45) as CborValue],
+    ]),
+  );
+  return signFields(13, lane, signer);
+};
+
+// Builds the descriptor and Revision objects for `lanes` (already signed),
+// signed by `signer` and authored by `author`, the way a hostile signer
+// assembles a Revision around lanes it did not seal.
+const assembleRevision = async (input: {
+  readonly signer: Actor;
+  readonly author: string;
+  readonly revisionId: string;
+  readonly parent: Readonly<{ id: string; digest: Uint8Array }>;
+  readonly authoredAtMs: number;
+  readonly lanes: readonly Uint8Array[];
+  readonly environmentId?: string;
+}): Promise<SyncRevisionWire> => {
+  const environmentId = input.environmentId ?? ids.environmentId;
+  const commitments: Map<number, CborValue>[] = [];
+  const staged: StagedPublicationObject[] = [];
+  const variableIds = new Set<string>();
+  for (const bytes of input.lanes) {
+    const lane = parseProtocolObject(bytes);
+    commitments.push(
+      new Map<number, CborValue>([
+        [18, lane.get(18) as CborValue],
+        [36, lane.get(36) as CborValue],
+        [48, await sha384(bytes)],
+        [72, lane.get(72) as CborValue],
+        ...([26, 27] as const).flatMap((field): Array<[number, CborValue]> =>
+          lane.has(field) ? [[field, lane.get(field) as CborValue]] : [],
+        ),
+      ]),
+    );
+    variableIds.add(Buffer.from(lane.get(15) as Uint8Array).toString("hex"));
+    staged.push({ objectId: crypto.randomUUID(), bytes });
+  }
+  const context = new Map<number, CborValue>([
+    [8, uuidToBytes(ids.serverProfileId)],
+    [11, uuidToBytes(ids.teamId)],
+    [13, uuidToBytes(ids.projectId)],
+    [14, uuidToBytes(environmentId)],
+    [16, uuidToBytes(input.revisionId)],
+    [30, 1],
+  ]);
+  const descriptorBytes = await signFields(
+    15,
+    new Map<number, CborValue>([...context, [50, 1], [53, commitments]]),
+    input.signer.signing.privateKey,
+  );
+  staged.push({ objectId: crypto.randomUUID(), bytes: descriptorBytes });
+  const revisionObjectId = crypto.randomUUID();
+  const first = input.parent.id === environmentId;
+  staged.push({
+    objectId: revisionObjectId,
+    bytes: await signFields(
+      16,
+      new Map<number, CborValue>([
+        ...context,
+        [17, uuidToBytes(crypto.randomUUID())],
+        [19, uuidToBytes(input.parent.id)],
+        [20, input.parent.digest],
+        [22, uuidToBytes(input.author)],
+        [23, uuidToBytes(input.signer.deviceId)],
+        [34, input.authoredAtMs],
+        [35, first ? 1 : 2],
+        [50, 1],
+        [51, descriptorBytes],
+        [52, await sha384(descriptorBytes)],
+        [53, commitments],
+        [
+          54,
+          [...variableIds].map(
+            (hex) => new Uint8Array(Buffer.from(hex, "hex")),
+          ),
+        ],
+      ]),
+      input.signer.signing.privateKey,
+    ),
+  });
+  return wireRevision(staged, revisionObjectId, input.revisionId, input.parent);
+};
+
+const valueLaneOf = (wire: SyncRevisionWire, scope: 3 | 4): Uint8Array => {
+  const lane = wire.objects.find((object) => {
+    const parsed = parseProtocolObject(object.canonicalBytes);
+    return parsed.get(1) === 13 && parsed.get(36) === scope;
+  });
+  if (!lane) throw new Error("Value lane is missing");
+  return lane.canonicalBytes;
+};
+
+describe("ADR 0023: a Revision cannot carry lanes sealed for another Revision", () => {
+  const passwordId = "99999999-9999-4999-8999-9999999999b1";
+  const password = (value: string) =>
+    variable({ id: passwordId, name: "DB_PASSWORD", value });
+
+  // The team rotates a leaked password: R1 sets "old-password", R2 sets
+  // "new-password". The provider wrote both, in the given lane format.
+  const rotation = async (format: 1 | 2) => {
+    const provider = await actor(userA, deviceA);
+    const invented = await actor(userU, deviceU);
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const legacy = async (published: Awaited<ReturnType<typeof publish>>) =>
+      format === 2 ? published.wire : resealRevision(published, provider, key);
+    const r1 = await legacy(
+      await publish(provider, [password("old-password")], {
+        parent: genesis,
+        sharedValueSecret: key,
+      }),
+    );
+    const r2 = await legacy(
+      await publish(provider, [password("new-password")], {
+        parent: r1,
+        sharedValueSecret: key,
+      }),
+    );
+    return { provider, invented, key, r1, r2 };
+  };
+
+  const decodePassword = async (
+    page: SyncPageWire,
+    viewer: Actor,
+    key: Uint8Array,
+  ) =>
+    (
+      await decodeSyncVariables(
+        page,
+        () => viewer.encryption.privateKey,
+        [],
+        key,
+        viewer.userId,
+        viewer.userValueKey,
+      )
+    ).find((entry) => entry.id === passwordId)?.value;
+
+  test("an honest rotation verifies and decodes to the new Value", async () => {
+    const { provider, key, r1, r2 } = await rotation(2);
+    const page = pageOf([r1, r2]);
+    await verifySyncPage(page, [entryFor(provider)], {
+      ...fromGenesis,
+      actorUserId: provider.userId,
+    });
+    expect(await decodePassword(page, provider, key)).toBe("new-password");
+  });
+
+  test("with plain keys, a Revision carrying an earlier Revision's format-2 lane is refused", async () => {
+    const { provider, invented, r1, r2 } = await rotation(2);
+    for (const revisionId of [crypto.randomUUID(), r1.id]) {
+      // The invented User's Device signs R3, claims the real provider as
+      // author, and carries R1's Value lane unchanged.
+      const r3 = await assembleRevision({
+        signer: invented,
+        author: provider.userId,
+        revisionId,
+        parent: r2,
+        authoredAtMs: Number(r2.authoredAtMs) + 1,
+        lanes: [valueLaneOf(r1, 3)],
+      });
+      await expect(
+        verifySyncPage(
+          pageOf([r1, r2, r3]),
+          [provider.signingPublicKey, invented.signingPublicKey],
+          { ...fromGenesis, actorUserId: provider.userId },
+        ),
+      ).rejects.toBeInstanceOf(ProtocolVerificationError);
+    }
+  });
+
+  test("with signing-trust entries, a re-signed legacy lane from an earlier Revision is refused", async () => {
+    const { provider, invented, key, r1, r2 } = await rotation(1);
+    // The provider field sits outside the format-1 associated data, so the
+    // invented User can name itself and sign the lane; the ciphertext still
+    // opens because field 16 keeps R1's id.
+    const lane = new Map(parseProtocolObject(valueLaneOf(r1, 3)));
+    lane.set(27, uuidToBytes(invented.userId));
+    const relabelled = await signFields(13, lane, invented.signing.privateKey);
+    expect(
+      new TextDecoder().decode(
+        await openLane(relabelled, provider.encryption.privateKey, key),
+      ),
+    ).toBe("old-password");
+    for (const revisionId of [crypto.randomUUID(), r1.id]) {
+      const r3 = await assembleRevision({
+        signer: invented,
+        author: invented.userId,
+        revisionId,
+        parent: r2,
+        authoredAtMs: Number(r2.authoredAtMs) + 1,
+        lanes: [relabelled],
+      });
+      await expect(
+        verifySyncPage(
+          pageOf([r1, r2, r3]),
+          [entryFor(provider), entryFor(invented)],
+          { ...fromGenesis, actorUserId: provider.userId },
+        ),
+      ).rejects.toBeInstanceOf(ProtocolVerificationError);
+    }
+  });
+
+  test("an incremental page may not reuse a Revision id the Device verified earlier", async () => {
+    const { provider, invented, key, r1, r2 } = await rotation(1);
+    const lane = new Map(parseProtocolObject(valueLaneOf(r1, 3)));
+    lane.set(27, uuidToBytes(invented.userId));
+    // R3 reuses R1's id, so the lane's field 16 names the Revision carrying
+    // it; only the history before the starting point shows the repeat.
+    const r3 = await assembleRevision({
+      signer: invented,
+      author: invented.userId,
+      revisionId: r1.id,
+      parent: r2,
+      authoredAtMs: Number(r2.authoredAtMs) + 1,
+      lanes: [await signFields(13, lane, invented.signing.privateKey)],
+    });
+    const fromHead: SyncPageWire = {
+      ...pageOf([r3]),
+      trustedRevisionId: r2.id,
+      trustedRevisionHash: r2.digest,
+    };
+    const fromR2 = {
+      expectedTrustedRevisionId: r2.id,
+      expectedTrustedRevisionHash: r2.digest,
+      actorUserId: provider.userId,
+      trustedRevisionAuthoredAtMs: r2.authoredAtMs,
+      trustedRevisionProjectEpoch: r2.projectEpoch,
+    } as const;
+    await expect(
+      verifySyncPage(fromHead, [entryFor(provider), entryFor(invented)], {
+        ...fromR2,
+        knownRevisionIds: [r1.id, r2.id],
+      }),
+    ).rejects.toThrow("repeats a Revision id");
+    // Without its history the Device cannot see the repeat, but it still
+    // never applies the invented User's legacy lane.
+    await verifySyncPage(
+      fromHead,
+      [entryFor(provider), entryFor(invented)],
+      fromR2,
+    );
+    const previous = await decodeSyncVariables(
+      pageOf([r1, r2]),
+      () => provider.encryption.privateKey,
+      [],
+      key,
+      provider.userId,
+    );
+    await expect(
+      decodeSyncVariables(
+        fromHead,
+        () => provider.encryption.privateKey,
+        previous,
+        key,
+        provider.userId,
+      ),
+    ).rejects.toBeInstanceOf(UnreadableLaneError);
+  });
+
+  test("a lane or descriptor naming another Team or Project is refused", async () => {
+    const { provider, key } = await rotation(2);
+    const published = await publish(provider, [password("value")], {
+      parent: genesis,
+      sharedValueSecret: key,
+    });
+    for (const field of [8, 11, 13] as const) {
+      const moved = await resignRevision(
+        published.artifacts.stagedObjects,
+        published.artifacts.request.revision.protocolObjectId,
+        published.artifacts.request.revision.id,
+        genesis,
+        provider.signing.privateKey,
+        (lane) => new Map([...lane, [field, uuidToBytes(crypto.randomUUID())]]),
+      );
+      await expect(
+        verifySyncPage(pageOf([moved]), [entryFor(provider)], fromGenesis),
+      ).rejects.toThrow("not bound to the Revision");
+    }
+  });
+
+  test("a Revision of another Team or Project is refused when the context is given", async () => {
+    const { provider, r1 } = await rotation(2);
+    const page = pageOf([r1]);
+    await verifySyncPage(page, [entryFor(provider)], {
+      ...fromGenesis,
+      expectedContext: ids,
+    });
+    for (const expectedContext of [
+      { ...ids, teamId: crypto.randomUUID() },
+      { ...ids, projectId: crypto.randomUUID() },
+      { ...ids, serverProfileId: crypto.randomUUID() },
+    ])
+      await expect(
+        verifySyncPage(page, [entryFor(provider)], {
+          ...fromGenesis,
+          expectedContext,
+        }),
+      ).rejects.toThrow("another Server Profile, Team or Project");
+  });
+});
+
+describe("ADR 0023: legacy lanes cannot cross Environment or Team boundaries", () => {
+  const flagId = "99999999-9999-4999-8999-9999999999c1";
+  const devEnvironmentId = "aeaeaeae-aeae-4eae-8eae-aeaeaeaeaeae";
+  const devGenesis = { id: devEnvironmentId, digest: new Uint8Array(48) };
+
+  // Development's legacy Revision sets AUTH_DISABLED=true; the invented User
+  // re-wraps those lanes into a Revision of production: same Project, same
+  // key, and the format-1 associated data binds no Environment.
+  const moved = async () => {
+    const owner = await actor(userA, deviceA);
+    const invented = await actor(userU, deviceU);
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const source = await resealRevision(
+      await publish(
+        owner,
+        [variable({ id: flagId, name: "AUTH_DISABLED", value: "true" })],
+        {
+          parent: devGenesis,
+          sharedValueSecret: key,
+          environmentId: devEnvironmentId,
+        },
+      ),
+      owner,
+      key,
+      devEnvironmentId,
+    );
+    const lanes = await Promise.all(
+      source.objects
+        .filter(
+          (object) => parseProtocolObject(object.canonicalBytes).get(1) === 13,
+        )
+        .map(async (object) => {
+          const lane = new Map(parseProtocolObject(object.canonicalBytes));
+          lane.set(14, uuidToBytes(ids.environmentId));
+          if (lane.get(36) === 3) lane.set(27, uuidToBytes(invented.userId));
+          return signFields(13, lane, invented.signing.privateKey);
+        }),
+    );
+    const injected = await assembleRevision({
+      signer: invented,
+      author: invented.userId,
+      // The format-1 ciphertext opens only under its original Revision id,
+      // which no Revision of the production history has used.
+      revisionId: source.id,
+      parent: genesis,
+      authoredAtMs: Number(source.authoredAtMs) + 1,
+      lanes,
+    });
+    return { owner, invented, key, page: pageOf([injected]) };
+  };
+
+  test("the moved legacy lanes verify, but a Device never applies them from an unconfirmed author", async () => {
+    const { owner, invented, key, page } = await moved();
+    await verifySyncPage(page, [entryFor(owner), entryFor(invented)], {
+      ...fromGenesis,
+      actorUserId: owner.userId,
+    });
+    const decode = (legacyLaneAuthors: readonly string[]) =>
+      decodeSyncManifest(
+        page,
+        () => owner.encryption.privateKey,
+        [],
+        key,
+        owner.userId,
+        owner.userValueKey,
+        { legacyLaneAuthors },
+      );
+    const refusal = await decode([]).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(UnreadableLaneError);
+    expect(refusal).toMatchObject({
+      reason: "unconfirmed-legacy-author",
+      authorUserId: invented.userId,
+    });
+    // A teammate the user confirmed is trusted with legacy lanes: they hold
+    // the Project key and could publish the same Value anyway.
+    const confirmed = await decode([invented.userId]);
+    expect(
+      confirmed.variables.find((entry) => entry.id === flagId)?.value,
+    ).toBe("true");
+  });
+
+  test("an own or confirmed legacy history still reads, and a later format-2 Revision replaces an unconfirmed one", async () => {
+    const owner = await actor(userA, deviceA);
+    const teammate = await actor(userC, deviceC);
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const r1 = await resealRevision(
+      await publish(
+        teammate,
+        [variable({ id: flagId, name: "AUTH_DISABLED", value: "false" })],
+        { parent: genesis, sharedValueSecret: key },
+      ),
+      teammate,
+      key,
+    );
+    const page = pageOf([r1]);
+    await verifySyncPage(page, [entryFor(owner), entryFor(teammate)], {
+      ...fromGenesis,
+      actorUserId: owner.userId,
+    });
+    const read = (
+      viewer: Actor,
+      target: SyncPageWire,
+      legacyLaneAuthors: readonly string[],
+    ) =>
+      decodeSyncManifest(
+        target,
+        () => viewer.encryption.privateKey,
+        [],
+        key,
+        viewer.userId,
+        viewer.userValueKey,
+        { legacyLaneAuthors },
+      );
+    // The author reads its own legacy lanes; a confirming viewer reads them.
+    expect((await read(teammate, page, [])).variables[0]?.value).toBe("false");
+    expect(
+      (await read(owner, page, [teammate.userId])).variables[0]?.value,
+    ).toBe("false");
+    await expect(read(owner, page, [])).rejects.toBeInstanceOf(
+      UnreadableLaneError,
+    );
+    // Once a key holder publishes the Variable again (format 2), the head no
+    // longer depends on the legacy lane.
+    const r2 = await publish(
+      owner,
+      [variable({ id: flagId, name: "AUTH_DISABLED", value: "false" })],
+      { parent: r1, sharedValueSecret: key },
+    );
+    const republished = pageOf([r1, r2.wire]);
+    await verifySyncPage(republished, [entryFor(owner), entryFor(teammate)], {
+      ...fromGenesis,
+      actorUserId: owner.userId,
+    });
+    expect((await read(owner, republished, [])).variables[0]?.value).toBe(
+      "false",
+    );
+  });
+
+  test("a readable tombstone retires a legacy Value this Device would not apply", async () => {
+    const owner = await actor(userA, deviceA);
+    const teammate = await actor(userC, deviceC);
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const r1 = await resealRevision(
+      await publish(
+        teammate,
+        [variable({ id: flagId, name: "AUTH_DISABLED", value: "false" })],
+        { parent: genesis, sharedValueSecret: key },
+      ),
+      teammate,
+      key,
+    );
+    // The owner deletes the Variable in format 2; nothing about it is left
+    // to read, so the unconfirmed legacy Value no longer blocks the page.
+    const r2 = await publish(
+      owner,
+      [
+        variable({
+          id: flagId,
+          name: "AUTH_DISABLED",
+          value: null,
+          required: false,
+          tombstone: true,
+        }),
+      ],
+      { parent: r1, sharedValueSecret: key },
+    );
+    const page = pageOf([r1, r2.wire]);
+    await verifySyncPage(page, [entryFor(owner), entryFor(teammate)], {
+      ...fromGenesis,
+      actorUserId: owner.userId,
+    });
+    const decoded = await decodeSyncManifest(
+      page,
+      () => owner.encryption.privateKey,
+      [],
+      key,
+      owner.userId,
+      owner.userValueKey,
+      { legacyLaneAuthors: [] },
+    );
+    expect(decoded.variables).toEqual([
+      expect.objectContaining({ id: flagId, tombstone: true, value: null }),
+    ]);
+  });
+
+  test("a legacy User-defined Value cannot be presented in another Team through a plain key", async () => {
+    // A Team A legacy ciphertext placed in a Team B Revision whose signer
+    // names another User as author: only an author-bound signer may carry a
+    // legacy User-defined Value lane.
+    const victim = await actor(userC, deviceC);
+    const member = await actor(userA, deviceA);
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const teamA = {
+      teamId: "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1",
+      projectId: "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2",
+      environmentId: "a3a3a3a3-a3a3-4a3a-8a3a-a3a3a3a3a3a3",
+    };
+    const source = await resealRevision(
+      await publish(
+        victim,
+        [
+          variable({
+            id: flagId,
+            name: "TOKEN",
+            ownership: "USER_DEFINED_VALUE",
+            value: "team-a-secret",
+          }),
+        ],
+        {
+          parent: { id: teamA.environmentId, digest: new Uint8Array(48) },
+          sharedValueSecret: key,
+          ...teamA,
+        },
+      ),
+      victim,
+      key,
+      teamA.environmentId,
+    );
+    const definition = source.objects.find(
+      (object) => parseProtocolObject(object.canonicalBytes).get(36) === 2,
+    );
+    if (!definition) throw new Error("definition lane is missing");
+    const sourceLanes = [definition.canonicalBytes, valueLaneOf(source, 4)];
+    for (const bytes of sourceLanes)
+      expect(parseProtocolObject(bytes).get(11)).toEqual(
+        uuidToBytes(teamA.teamId),
+      );
+    // The Member signs the lanes into a Team B Revision. They always take
+    // Team B's Environment; `relabel` decides whether they also claim Team
+    // B's Team and Project or still name Team A's.
+    const teamBRevision = async (relabel: boolean) =>
+      assembleRevision({
+        signer: member,
+        author: victim.userId,
+        revisionId: source.id,
+        parent: genesis,
+        authoredAtMs: Number(source.authoredAtMs) + 1,
+        lanes: await Promise.all(
+          sourceLanes.map((bytes) => {
+            const lane = new Map(parseProtocolObject(bytes));
+            lane.set(14, uuidToBytes(ids.environmentId));
+            if (relabel) {
+              lane.set(11, uuidToBytes(ids.teamId));
+              lane.set(13, uuidToBytes(ids.projectId));
+            }
+            return signFields(13, lane, member.signing.privateKey);
+          }),
+        ),
+      });
+    const toVictim = {
+      ...fromGenesis,
+      actorUserId: victim.userId,
+      expectedContext: ids,
+    } as const;
+    // Lanes that still name Team A's Team and Project fail the Revision
+    // binding.
+    await expect(
+      verifySyncPage(
+        pageOf([await teamBRevision(false)]),
+        [member.signingPublicKey],
+        toVictim,
+      ),
+    ).rejects.toThrow("not bound to the Revision");
+    // Relabelled to Team B, the legacy ciphertext would still open: its
+    // associated data binds no Team. The author binding refuses it.
+    const relabelled = await teamBRevision(true);
+    const valueLane = valueLaneOf(relabelled, 4);
+    expect(parseProtocolObject(valueLane).get(11)).toEqual(
+      uuidToBytes(ids.teamId),
+    );
+    expect(
+      new TextDecoder().decode(
+        await openLane(
+          valueLane,
+          victim.encryption.privateKey,
+          victim.userValueKey,
+        ),
+      ),
+    ).toBe("team-a-secret");
+    await expect(
+      verifySyncPage(pageOf([relabelled]), [member.signingPublicKey], toVictim),
+    ).rejects.toThrow("needs a signer bound to its author");
+    // Constrained trust binds the author to the Member's own User.
+    await expect(
+      verifySyncPage(pageOf([relabelled]), [entryFor(member)], toVictim),
+    ).rejects.toThrow("not authorized");
+  });
+});
+
+// Re-seals every lane of a published Revision in the legacy format (signed by
+// the author again) and rebuilds the commitments, descriptor and Revision.
+const resealRevision = async (
+  published: Readonly<{
+    readonly artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>;
+    readonly wire: SyncRevisionWire;
+  }>,
+  author: Actor,
+  key: Uint8Array,
+  environmentId: string = ids.environmentId,
+): Promise<SyncRevisionWire> => {
+  const resealed = new Map<string, Uint8Array>();
+  for (const object of published.artifacts.stagedObjects) {
+    const parsed = parseProtocolObject(object.bytes);
+    if (parsed.get(1) !== 13) continue;
+    resealed.set(
+      object.objectId,
+      await toLegacyLane(
+        object.bytes,
+        author,
+        parsed.get(36) === 4 ? author.userValueKey : key,
+        author.signing.privateKey,
+      ),
+    );
+  }
+  const lanes = published.artifacts.stagedObjects
+    .filter((object) => resealed.has(object.objectId))
+    .map((object) => resealed.get(object.objectId) as Uint8Array);
+  return assembleRevision({
+    signer: author,
+    author: author.userId,
+    revisionId: published.wire.id,
+    parent: {
+      id: published.wire.parentId ?? environmentId,
+      digest: published.wire.parentHash ?? new Uint8Array(48),
+    },
+    authoredAtMs: Number(published.wire.authoredAtMs),
+    lanes,
+    environmentId,
+  });
+};

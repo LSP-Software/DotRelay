@@ -58,14 +58,6 @@ export const disabledEmailNotifier: EmailNotifier = Object.freeze({
   drain: async () => undefined,
 });
 
-/** Best-effort Project display name; undefined falls back to the repo id. */
-export type ProjectNameResolver = (
-  input: Readonly<{
-    readonly githubRepositoryId: string;
-    readonly actorUserId: string;
-  }>,
-) => Promise<string | undefined>;
-
 type Recipient = Readonly<{ readonly userId: string; readonly email: string }>;
 
 type Delivery = Readonly<{
@@ -103,7 +95,6 @@ export const createEmailNotifier = ({
   config,
   transport,
   diagnostics,
-  resolveProjectName = async () => undefined,
   sleep = (ms: number) => Bun.sleep(ms),
 }: Readonly<{
   readonly database: DatabaseClient;
@@ -112,7 +103,6 @@ export const createEmailNotifier = ({
   /** Null disables sending (no RESEND_API_KEY). */
   readonly transport: EmailTransport | null;
   readonly diagnostics: ServerDiagnosticSink;
-  readonly resolveProjectName?: ProjectNameResolver;
   readonly sleep?: (ms: number) => Promise<void>;
 }>): EmailNotifier => {
   if (transport === null) return disabledEmailNotifier;
@@ -165,19 +155,6 @@ export const createEmailNotifier = ({
     );
   };
 
-  const displayNameFor = async (userId: string) => {
-    const user = await database.user.findUnique({
-      where: { id: userId },
-      select: { authSubject: true },
-    });
-    if (!user) return null;
-    const authUser = await database.authUser.findUnique({
-      where: { id: user.authSubject },
-      select: { name: true },
-    });
-    return authUser?.name?.trim() ? authUser.name : null;
-  };
-
   const planInvitation = async (
     event: Extract<EmailEvent, { kind: "invitation" }>,
   ): Promise<Plan> => {
@@ -186,7 +163,7 @@ export const createEmailNotifier = ({
       select: {
         providerSubject: true,
         expiresAt: true,
-        team: { select: { name: true, serverProfileId: true } },
+        team: { select: { serverProfileId: true } },
       },
     });
     if (!invitation) return { deliveries: [], skipped: ["no_recipient"] };
@@ -209,8 +186,6 @@ export const createEmailNotifier = ({
           recipient: { userId: invitee.id, email: email as string },
           idempotencyKey: `invitation/${event.invitationId}/${invitee.id}`,
           email: renderInvitationEmail({
-            teamName: invitation.team.name,
-            inviterName: await displayNameFor(event.inviterUserId),
             expiresAt: invitation.expiresAt,
             acceptUrl: webUrl("/workspace"),
             supportAddress: config.supportAddress,
@@ -227,7 +202,7 @@ export const createEmailNotifier = ({
     if (event.projectIds.length === 0) return { deliveries: [], skipped: [] };
     const membership = await database.membership.findUnique({
       where: { id: event.membershipId },
-      select: { userId: true, team: { select: { name: true } } },
+      select: { userId: true },
     });
     if (!membership) return { deliveries: [], skipped: ["no_recipient"] };
     const email = (await recipientsFor([membership.userId])).get(
@@ -235,29 +210,18 @@ export const createEmailNotifier = ({
     );
     if (!deliverableAddress(email))
       return { deliveries: [], skipped: ["no_address"] };
-    const projects = await database.project.findMany({
+    // Only a count: a repository's name is resolved with someone's GitHub
+    // access, and the sharer's may see repositories the recipient cannot.
+    const projectCount = await database.project.count({
       where: { id: { in: [...event.projectIds] } },
-      select: { githubRepositoryId: true },
-      orderBy: { createdAt: "asc" },
     });
-    const projectNames = await Promise.all(
-      projects.map(async (project) => {
-        const githubRepositoryId = project.githubRepositoryId.toString();
-        const name = await resolveProjectName({
-          githubRepositoryId,
-          actorUserId: event.actorUserId,
-        }).catch(() => undefined);
-        return name ?? `GitHub repository ${githubRepositoryId}`;
-      }),
-    );
     return {
       deliveries: [
         {
           recipient: { userId: membership.userId, email: email as string },
           idempotencyKey: `keys-shared/${event.operationId}/${membership.userId}`,
           email: renderKeysSharedEmail({
-            teamName: membership.team.name,
-            projectNames,
+            projectCount,
             workspaceUrl: webUrl("/workspace", { team: event.teamId }),
             supportAddress: config.supportAddress,
           }),
@@ -275,7 +239,6 @@ export const createEmailNotifier = ({
       select: {
         userId: true,
         teamId: true,
-        team: { select: { name: true } },
         user: { select: { githubSubject: true } },
       },
     });
@@ -303,8 +266,6 @@ export const createEmailNotifier = ({
       administrators.map((administrator) => administrator.userId),
     );
     const email = renderInvitationAcceptedEmail({
-      teamName: membership.team.name,
-      memberName: await displayNameFor(membership.userId),
       memberUserId: membership.userId,
       memberLogin,
       teamId: membership.teamId,

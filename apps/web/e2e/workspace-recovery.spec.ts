@@ -3,6 +3,7 @@ import {
   createAccountKeyTransfer,
   createAccountKeyWrapper,
   createPublicationArtifacts,
+  deviceKeyFingerprint,
   encodeRecoveryCode,
   generateAccountMasterKey,
   generateRecoveryCode,
@@ -1062,6 +1063,129 @@ test.describe("workspace recovery", () => {
     });
   });
 
+  test("a password set under the old rule still unlocks but is flagged for a change", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const accountMasterKey = await generateAccountMasterKey();
+    const recoveryCode = await generateRecoveryCode();
+    const weakPassword = "password1";
+    const signer = await importSigningKey();
+    const revoked: string[] = [];
+    const scenario = scenarioBase({
+      onWrapperPublish: (body) => {
+        if (
+          typeof body.wrapperId === "string" &&
+          typeof body.object === "string"
+        )
+          scenario.wrappers = [
+            ...scenario.wrappers,
+            {
+              wrapperId: body.wrapperId,
+              type: "password",
+              object: body.object,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+      },
+    });
+    await installRecoveryRoutes(page, scenario);
+    await page.route("**/api/v1/account-keys/wrappers/revoke", (route) => {
+      const body = route.request().postDataJSON() as { wrapperId?: string };
+      if (typeof body.wrapperId === "string") {
+        revoked.push(body.wrapperId);
+        // A revoked wrapper is no longer listed, so it unlocks nothing.
+        scenario.wrappers = scenario.wrappers.filter(
+          (wrapper) => wrapper.wrapperId !== body.wrapperId,
+        );
+      }
+      return route.fulfill({ status: 200, json: { revoked: true } });
+    });
+    await enrollDevice(page);
+    const deviceKeys = capturedDeviceKeys(scenario);
+    const weakWrapper = await createAccountKeyWrapper({
+      serverProfileId: fixtureIds.serverProfileId,
+      userId: hexToBytes(fixtureIds.actorUserId.replaceAll("-", "")),
+      deviceId: hexToBytes(deviceKeys.id.replaceAll("-", "")),
+      userIdentityGeneration: 1,
+      createdAtMs: Date.now(),
+      accountMasterKey,
+      signingPrivateKey: signer,
+      kind: {
+        type: "password",
+        password: new TextEncoder().encode(weakPassword),
+      },
+    });
+    const weakWrapperId = bytesToHex(weakWrapper.wrapperId);
+    scenario.wrappers = [
+      await buildRecoveryCodeWrapper({
+        accountMasterKey,
+        recoveryCode,
+        deviceId: deviceKeys.id,
+        signer,
+      }),
+      {
+        wrapperId: weakWrapperId,
+        type: "password",
+        object: bytesToBase64(canonicalEncode(weakWrapper.object)),
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    scenario.envelopeB64 = await buildEpochEnvelopeB64({
+      accountMasterKey,
+      deviceId: deviceKeys.id,
+      signer,
+    });
+    scenario.syncPage = await buildVerifiedFixturePage(
+      deviceKeys.encryptionPublicKey,
+    );
+    await page.reload();
+    await openRecoveryView(page);
+    await page
+      .getByTestId("recovery-unlock")
+      .getByTestId("recovery-method-password")
+      .click();
+    await unlockWith(page, "password", weakPassword);
+    const status = page.getByTestId("recovery-status");
+    await expect(status).toBeVisible({ timeout: 90_000 });
+    // The old password still unlocks, and the person is asked to change it.
+    await expect(page.getByTestId("weak-password-notice")).toBeVisible();
+    await page.getByTestId("change-weak-password").click();
+    const input = page.getByTestId("add-encryption-password-input");
+    const confirm = page.getByTestId("add-encryption-password-confirm");
+    const advice = page.getByTestId("add-encryption-password-advice");
+    // A password manager offers to generate and save a new password.
+    await expect(input).toHaveAttribute("autocomplete", "new-password");
+    await input.fill("hunter2");
+    await expect(confirm).toBeDisabled();
+    await expect(advice).toContainText("at least 12 characters");
+    await input.fill("Password2024!");
+    await expect(confirm).toBeDisabled();
+    await expect(advice).toContainText("common word");
+    await input.fill("correct-horse-battery-9");
+    await expect(confirm).toBeEnabled();
+    await expect(confirm).toHaveText("Change password");
+    await confirm.click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "was changed" }),
+    ).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByTestId("weak-password-notice")).toHaveCount(0);
+    // The new password was added first, then the old one retired.
+    expect(revoked).toEqual([weakWrapperId]);
+    // With the old wrapper gone, a fresh page unlocks with the new password.
+    await page.reload();
+    await openRecoveryView(page);
+    await page
+      .getByTestId("recovery-unlock")
+      .getByTestId("recovery-method-password")
+      .click();
+    await unlockWith(page, "password", "correct-horse-battery-9");
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 90_000,
+    });
+    await expect(page.getByTestId("weak-password-notice")).toHaveCount(0);
+  });
+
   test("an encryption password can be added, used after a reload, and removed", async ({
     page,
   }) => {
@@ -1268,11 +1392,15 @@ test.describe("workspace recovery", () => {
 
     // Stage the transfer toward one of the account's other devices. It is
     // not in the signed roster yet, so the sender is refused until the
-    // person confirms the key fingerprint, which adds it to the roster.
+    // person types the key fingerprint that device shows, which must match
+    // the keys the server reports; then it joins the roster. The sender
+    // never displays the server's fingerprint to copy from.
     await page.locator("#transfer-target").selectOption({ index: 1 });
-    await expect(page.getByTestId("transfer-target-fingerprint")).toContainText(
-      /([0-9a-f]{8} ){4}[0-9a-f]{8}/,
-    );
+    const fingerprintInput = page.getByTestId("transfer-fingerprint-input");
+    await expect(fingerprintInput).toBeVisible();
+    await expect(
+      page.getByTestId("transfer-target-fingerprint"),
+    ).not.toContainText(/([0-9a-f]{8} ){4}[0-9a-f]{8}/);
     await status.getByTestId("send-transfer-confirm").click();
     await expect(
       page
@@ -1280,7 +1408,22 @@ test.describe("workspace recovery", () => {
         .getByRole("alert")
         .filter({ hasText: "isn't in your signed device list yet" }),
     ).toBeVisible({ timeout: 30_000 });
-    await page.getByTestId("transfer-fingerprint-confirmed").check();
+    await fingerprintInput.fill("0".repeat(40));
+    await status.getByTestId("send-transfer-confirm").click();
+    await expect(
+      page
+        .getByTestId("recovery-area")
+        .getByRole("alert")
+        .filter({ hasText: "doesn't match the key the server reports" }),
+    ).toBeVisible({ timeout: 30_000 });
+    // What the receiving device shows: its own keys, as the fixture's first
+    // peer device reports them.
+    await fingerprintInput.fill(
+      await deviceKeyFingerprint({
+        encryptionPublicKey: hexToBytes("11".repeat(32)),
+        signingPublicKey: hexToBytes("22".repeat(32)),
+      }),
+    );
     await status.getByTestId("send-transfer-confirm").click();
     const transferNotice = page
       .getByRole("status")

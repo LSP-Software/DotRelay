@@ -90,6 +90,9 @@ const createFinalizeScenario = async (input: {
   readonly scope: 3 | 4; // 3 = SHARED_VALUE, 4 = USER_DEFINED_VALUE
   readonly owner: string | null;
   readonly provider: string | null;
+  /** Lane fields to replace, such as another Revision id or lane format. */
+  readonly laneOverrides?: ReadonlyArray<readonly [number, CborValue]>;
+  readonly descriptorOverrides?: ReadonlyArray<readonly [number, CborValue]>;
 }): Promise<FinalizeScenario> => {
   const signing = await generateSigningKeyPair();
   const laneFields = new Map<number, CborValue>([
@@ -106,7 +109,7 @@ const createFinalizeScenario = async (input: {
     [46, zeroBytes(12)],
     [47, zeroBytes(CIPHERTEXT_LENGTH)],
     [48, zeroBytes(48)],
-    [50, 1],
+    [50, 2],
     [
       69,
       new Map<number, CborValue>([
@@ -119,6 +122,8 @@ const createFinalizeScenario = async (input: {
   ]);
   if (input.owner) laneFields.set(26, uuidToBytes(input.owner));
   if (input.provider) laneFields.set(27, uuidToBytes(input.provider));
+  for (const [field, value] of input.laneOverrides ?? [])
+    laneFields.set(field, value);
   const lane = await signObject(13, laneFields, signing.privateKey);
 
   const commitment = new Map<number, CborValue>([
@@ -140,6 +145,8 @@ const createFinalizeScenario = async (input: {
     [50, 1],
     [53, [commitment]],
   ]);
+  for (const [field, value] of input.descriptorOverrides ?? [])
+    descriptorFields.set(field, value);
   const descriptor = await signObject(15, descriptorFields, signing.privateKey);
 
   const revisionFields = new Map<number, CborValue>([
@@ -338,5 +345,51 @@ describe("publication lane ownership validation", () => {
     const error = requireBuildError(runBuild(scenario.buildInput));
     expect(error).toBeInstanceOf(ContractError);
     expect((error as ContractError).code).toBe("invalid_crypto_object");
+  });
+});
+
+describe("publication lane binding (ADR 0023)", () => {
+  const refused = async (
+    overrides: Pick<
+      Parameters<typeof createFinalizeScenario>[0],
+      "laneOverrides" | "descriptorOverrides"
+    >,
+  ) => {
+    const scenario = await createFinalizeScenario({
+      scope: 3,
+      owner: null,
+      provider: ACTOR_USER_ID,
+      ...overrides,
+    });
+    const error = requireBuildError(runBuild(scenario.buildInput));
+    expect(error).toBeInstanceOf(ContractError);
+    expect((error as ContractError).code).toBe("invalid_crypto_object");
+  };
+
+  test("refuses a new lane in the legacy format", async () => {
+    await refused({ laneOverrides: [[50, 1]] });
+  });
+
+  test("refuses a lane sealed for another Revision", async () => {
+    await refused({
+      laneOverrides: [[16, uuidToBytes(crypto.randomUUID())]],
+    });
+  });
+
+  test("refuses a lane or descriptor naming another Team, Project or Server Profile", async () => {
+    for (const field of [8, 11, 13] as const) {
+      await refused({
+        laneOverrides: [[field, uuidToBytes(crypto.randomUUID())]],
+      });
+      await refused({
+        descriptorOverrides: [[field, uuidToBytes(crypto.randomUUID())]],
+      });
+    }
+  });
+
+  test("refuses a descriptor written for another Revision", async () => {
+    await refused({
+      descriptorOverrides: [[16, uuidToBytes(crypto.randomUUID())]],
+    });
   });
 });

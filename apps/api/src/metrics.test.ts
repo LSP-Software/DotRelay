@@ -8,8 +8,13 @@ import {
   createMetricsRegistry,
   METRICS_CONTENT_TYPE,
   statusClassFor,
+  startMetricsServer,
 } from "./metrics";
-import { DEFAULT_METRICS_PORT, loadMetricsConfig } from "./metrics-config";
+import {
+  DEFAULT_METRICS_HOSTNAME,
+  DEFAULT_METRICS_PORT,
+  loadMetricsConfig,
+} from "./metrics-config";
 import {
   createApiObservability,
   createInMemoryDiagnosticSink,
@@ -419,6 +424,7 @@ describe("private metrics endpoint", () => {
     expect(loadMetricsConfig({}, true)).toEqual({
       enabled: false,
       port: DEFAULT_METRICS_PORT,
+      hostname: DEFAULT_METRICS_HOSTNAME,
     });
     expect(
       loadMetricsConfig({ METRICS_ENABLED: "false", METRICS_TOKEN: "x" }, true)
@@ -427,13 +433,30 @@ describe("private metrics endpoint", () => {
     expect(loadMetricsConfig({ METRICS_ENABLED: "true" }, false)).toEqual({
       enabled: true,
       port: DEFAULT_METRICS_PORT,
+      hostname: "127.0.0.1",
     });
+    // The listener is private: loopback unless the operator names the
+    // interface their scraper reaches.
+    for (const hostname of ["0.0.0.0", "10.0.0.7", "::", "metrics.internal"])
+      expect(
+        loadMetricsConfig(
+          { METRICS_ENABLED: "true", METRICS_HOSTNAME: hostname },
+          false,
+        ).hostname,
+      ).toBe(hostname);
+    for (const hostname of ["http://x", "a b", "x/y"])
+      expect(() =>
+        loadMetricsConfig(
+          { METRICS_ENABLED: "true", METRICS_HOSTNAME: hostname },
+          false,
+        ),
+      ).toThrow("METRICS_HOSTNAME");
     expect(
       loadMetricsConfig(
         { METRICS_ENABLED: "true", METRICS_PORT: "9100", METRICS_TOKEN: token },
         true,
       ),
-    ).toEqual({ enabled: true, port: 9100, token });
+    ).toEqual({ enabled: true, port: 9100, hostname: "127.0.0.1", token });
     for (const environment of [
       { METRICS_ENABLED: "yes" },
       { METRICS_ENABLED: "true" },
@@ -460,5 +483,26 @@ describe("private metrics endpoint", () => {
     }
     expect(message).toContain("METRICS_TOKEN must be at least");
     expect(message).not.toContain("secret-but-short");
+  });
+});
+
+describe("metrics listener", () => {
+  test("binds loopback unless configured otherwise", async () => {
+    const config = loadMetricsConfig(
+      {
+        METRICS_ENABLED: "true",
+        METRICS_PORT: String(20_000 + Math.floor(Math.random() * 20_000)),
+      },
+      false,
+    );
+    const server = startMetricsServer(config, {
+      registry: createMetricsRegistry(),
+      ready: async () => true,
+    });
+    try {
+      expect(server?.hostname).toBe("127.0.0.1");
+    } finally {
+      server?.stop(true);
+    }
   });
 });

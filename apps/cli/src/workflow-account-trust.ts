@@ -111,8 +111,10 @@ const verifiedSignersFor = (
   const account: string[] = [];
   const grant: string[] = [];
   const history: string[] = [];
+  const confirmedUserIds: string[] = [];
   for (const user of resolution.users.values()) {
     if (user.status !== "verified" || !user.roster) continue;
+    if (user.confirmed) confirmedUserIds.push(user.userId);
     for (const device of user.roster.devices) {
       const key = bytesToHex(device.signingPublicKey);
       history.push(key);
@@ -125,6 +127,7 @@ const verifiedSignersFor = (
     reportedAccount: Object.freeze([...reportedAccountSigningKeys(boundary)]),
     grant: Object.freeze(grant),
     history: Object.freeze(history),
+    confirmedUserIds: Object.freeze(confirmedUserIds),
   });
 };
 

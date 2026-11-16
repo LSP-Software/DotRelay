@@ -1,29 +1,112 @@
 import { unlink } from "node:fs/promises";
 import { resolve } from "node:path";
-import { uuidToBytes } from "@dotrelay/contracts";
-import { listTeams } from "./admin";
+import { accountDeletionCommand, uuidToBytes } from "@dotrelay/contracts";
+import { listTeams, type StrictJsonClient } from "./admin";
 import type { ParsedArguments } from "./args";
 import { createSessionStore } from "./auth";
+import { cliDevice } from "./device-proof";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
 import { CliError, CliInvocationError, sanitizeCliLine } from "./errors";
 import { atomicWriteProtectedFile } from "./output";
 import {
   adminClient,
   ask,
+  base64,
   confirmSilent,
+  createDeviceAdmin,
   isRecord,
   resolveDeviceStorage,
   type WorkflowOptions,
 } from "./workflow-core";
 
 // Leaving a Team (ADR 0019) and exporting or deleting the account (ADR
-// 0018). All three need only a session, like the web app.
+// 0018). While the account has an active Device, the service accepts these
+// only from a proven Device, and deleting the account also needs that
+// Device's signature over the exact command (ADR 0024). An account with no
+// active Device acts from a recent sign-in instead.
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The phrase `dotrelay account delete` asks the User to type. */
 export const ACCOUNT_DELETION_PHRASE = "delete my account";
+
+// The session-only client for a machine whose Device was revoked. The
+// service still wants a Device proof while the account has another active
+// Device, so that refusal names the way out.
+const withoutRevokedDevice = (admin: StrictJsonClient): StrictJsonClient => {
+  const explain = (error: unknown): never => {
+    if (error instanceof CliError && error.code === "device_proof_required")
+      throw new CliError(
+        "authentication",
+        "this machine's Device is no longer active and your account still has an active Device; run the command on that Device, or run dotrelay device enroll to authorize this machine again",
+        {},
+        "device_not_active",
+      );
+    throw error;
+  };
+  return Object.freeze({
+    get: (path: string, fields: readonly string[]) =>
+      admin.get(path, fields).catch(explain),
+    post: (
+      path: string,
+      body: Record<string, unknown>,
+      fields: readonly string[],
+      postOptions?: Readonly<{ readonly idempotencyKey?: string }>,
+    ) => admin.post(path, body, fields, postOptions).catch(explain),
+  });
+};
+
+// This machine's Device for the profile, when it has one, and a client that
+// proves it on every request. A Device revoked since this machine stored it
+// cannot prove itself; the action then goes ahead on the session alone,
+// which the service accepts only while the account has no active Device and
+// the sign-in is recent (ADR 0024).
+const accountClient = async (
+  options: WorkflowOptions,
+): Promise<
+  Readonly<{
+    readonly deviceId: string | null;
+    readonly admin: StrictJsonClient;
+  }>
+> => {
+  const deviceId =
+    options.deviceId ??
+    (await readDeviceId(
+      deviceMetadataPath(options.stateDirectory, options.profile.pin),
+    ));
+  if (!deviceId) return { deviceId: null, admin: adminClient(options) };
+  const admin = createDeviceAdmin(options, deviceId);
+  try {
+    // The client keeps this proof for the action's own requests.
+    await admin.deviceProof?.headers();
+    return { deviceId, admin };
+  } catch (error) {
+    if (!(error instanceof CliError && error.code === "device_not_active"))
+      throw error;
+  }
+  return { deviceId: null, admin: withoutRevokedDevice(adminClient(options)) };
+};
+
+// The Device's Ed25519 signature over the account deletion command.
+const signAccountDeletion = async (
+  options: WorkflowOptions,
+  deviceId: string,
+  command: Uint8Array<ArrayBuffer>,
+): Promise<string> => {
+  const signer = await cliDevice({
+    pin: options.profile.pin,
+    credentials: options.credentials,
+    stateDirectory: options.stateDirectory,
+    deviceId,
+    ...(options.deviceStorage ? { deviceStorage: options.deviceStorage } : {}),
+  }).signer();
+  return base64(
+    new Uint8Array(
+      await crypto.subtle.sign("Ed25519", signer.signingKey, command),
+    ),
+  );
+};
 
 // `dotrelay team leave <team>`: end this User's own Membership.
 export const leaveTeam = async (
@@ -35,7 +118,7 @@ export const leaveTeam = async (
     throw new CliInvocationError(
       "team leave needs a Team id or name; usage: dotrelay team leave <team-id-or-name>",
     );
-  const admin = adminClient(options);
+  const { admin } = await accountClient(options);
   const wanted = reference.trim().toLowerCase();
   const matches = (await listTeams(admin)).filter(
     (team) =>
@@ -103,10 +186,8 @@ export const exportAccount = async (
   options: WorkflowOptions,
   parsed: ParsedArguments,
 ): Promise<Record<string, unknown>> => {
-  const exported = await adminClient(options).get(
-    "/api/v1/account/export",
-    EXPORT_FIELDS,
-  );
+  const { admin } = await accountClient(options);
+  const exported = await admin.get("/api/v1/account/export", EXPORT_FIELDS);
   if (!parsed.output) return exported;
   const path = resolve(parsed.output);
   await atomicWriteProtectedFile(
@@ -133,7 +214,7 @@ const teamNames = (value: unknown): string[] =>
 export const deleteAccount = async (
   options: WorkflowOptions,
 ): Promise<Record<string, unknown>> => {
-  const admin = adminClient(options);
+  const { admin, deviceId: provingDeviceId } = await accountClient(options);
   const plan = await admin.get("/api/v1/account/deletion", [
     "userId",
     "blockingTeams",
@@ -175,11 +256,19 @@ export const deleteAccount = async (
     if (answer.trim() !== ACCOUNT_DELETION_PHRASE)
       throw new CliInvocationError("deleting the account was cancelled");
   }
+  const operationId = crypto.randomUUID();
+  const signature = provingDeviceId
+    ? await signAccountDeletion(
+        options,
+        provingDeviceId,
+        accountDeletionCommand({ userId, operationId }),
+      )
+    : undefined;
   await admin.post(
     "/api/v1/account/delete",
-    { confirmUserId: userId },
+    { confirmUserId: userId, ...(signature ? { signature } : {}) },
     ["userId", "status", "deletedAt", "teamsDeleted", "teamsLeft"],
-    { idempotencyKey: crypto.randomUUID() },
+    { idempotencyKey: operationId },
   );
   // The server account is gone; what this machine still holds for the
   // Server Profile is now useless, so it is removed too.

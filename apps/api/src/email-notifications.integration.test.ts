@@ -274,8 +274,10 @@ integrationDescribe("transactional email after commit (PostgreSQL)", () => {
     const { invitationId } = (await invite.json()) as { invitationId: string };
     await notifier.drain();
     expect(sent.map((message) => message.to)).toEqual([inviteeEmail]);
-    expect(sent[0]?.text).toContain("Olive Owner invited you");
-    expect(sent[0]?.html).toContain("Ops &amp; &lt;Friends&gt;");
+    // The email names no Team and no inviter: Members chose those words.
+    expect(sent[0]?.subject).toBe("You're invited to a Team on DotRelay");
+    expect(sent[0]?.text).not.toContain("Olive Owner");
+    expect(sent[0]?.html).not.toContain("Friends");
 
     // An invitee who never signed in has no stored address: no email.
     const unknown = await post(
@@ -308,7 +310,10 @@ integrationDescribe("transactional email after commit (PostgreSQL)", () => {
       where: { id: membershipId },
       select: { userId: true },
     });
-    expect(sent[1]?.text).toContain("Ivy <Invitee> joined");
+    expect(sent[1]?.subject).toBe(
+      "A new Member is waiting for Project keys on DotRelay",
+    );
+    expect(sent[1]?.text).not.toContain("Ivy");
     expect(sent[1]?.text).toContain(
       `dotrelay team share-keys ${accepted?.userId} --team ${teamId}`,
     );

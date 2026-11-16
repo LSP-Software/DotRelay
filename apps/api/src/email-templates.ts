@@ -1,6 +1,11 @@
-// Plain transactional email bodies. Every user-controlled string (Team names,
-// display names, repository names) passes through `clean` for text and
-// `escapeHtml` for HTML. No images, tracking pixels or remote resources.
+// Plain transactional email bodies. Subjects and headings are fixed text:
+// Team names and display names are chosen by Members, and mail from
+// DotRelay's domain should not carry their words where a reader trusts it
+// most. Bodies say only what the recipient needs to act, and name no
+// repository: a repository's name is resolved with someone's GitHub access
+// and may be private to them. The few user-controlled strings left pass
+// through `clean` for text and `escapeHtml` for HTML. No images, tracking
+// pixels or remote resources.
 
 export type RenderedEmail = Readonly<{
   readonly subject: string;
@@ -42,11 +47,6 @@ const formatDate = (value: Date): string =>
     timeStyle: "short",
     timeZone: "UTC",
   }).format(value)} UTC`;
-
-const listNames = (names: readonly string[]): string => {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-};
 
 const render = (content: EmailContent): RenderedEmail => {
   const footer = [
@@ -91,63 +91,51 @@ const render = (content: EmailContent): RenderedEmail => {
   return Object.freeze({ subject: content.subject, text, html });
 };
 
+// The Team and the inviter are shown after the recipient signs in, where
+// the name is attributed to the Team instead of to DotRelay's mail.
 export const renderInvitationEmail = (
   input: Readonly<{
-    readonly teamName: string;
-    readonly inviterName: string | null;
     readonly expiresAt: Date;
     readonly acceptUrl: string;
     readonly supportAddress: string;
   }>,
-): RenderedEmail => {
-  const teamName = clean(input.teamName);
-  const inviter = input.inviterName ? clean(input.inviterName) : null;
-  return render({
-    subject: `You're invited to join ${teamName} on DotRelay`,
-    heading: `Join ${teamName} on DotRelay`,
+): RenderedEmail =>
+  render({
+    subject: "You're invited to a Team on DotRelay",
+    heading: "You're invited to a Team on DotRelay",
     paragraphs: [
-      `${inviter ?? "A Team owner or admin"} invited you to join the Team ${teamName} on DotRelay.`,
-      `Sign in with GitHub to accept or decline. The invitation expires on ${formatDate(input.expiresAt)}.`,
+      "A Team owner or admin invited your GitHub account to a Team on DotRelay.",
+      `Sign in with GitHub to see the Team and accept or decline. The invitation expires on ${formatDate(input.expiresAt)}.`,
     ],
     action: { label: "Review the invitation", url: input.acceptUrl },
-    reason: `someone invited your GitHub account to the DotRelay Team ${teamName}`,
+    reason: "someone invited your GitHub account to a DotRelay Team",
     supportAddress: input.supportAddress,
   });
-};
 
 export const renderKeysSharedEmail = (
   input: Readonly<{
-    readonly teamName: string;
-    readonly projectNames: readonly string[];
+    readonly projectCount: number;
     readonly workspaceUrl: string;
     readonly supportAddress: string;
   }>,
-): RenderedEmail => {
-  const teamName = clean(input.teamName);
-  const projects = input.projectNames.map((name) => clean(name));
-  const single = projects.length === 1;
-  return render({
-    subject: single
-      ? `You can now pull ${projects[0]} with DotRelay`
-      : `You can now pull ${teamName}'s Projects with DotRelay`,
+): RenderedEmail =>
+  render({
+    subject: "Your DotRelay Project keys are ready",
     heading: "You can now pull",
     paragraphs: [
-      `The Project keys for ${listNames(projects)} in the Team ${teamName} were shared with your Devices.`,
+      `The keys for ${input.projectCount === 1 ? "one Project" : `${input.projectCount} Projects`} in one of your DotRelay Teams were shared with your Devices.`,
       "In the repository, run:",
       { code: "dotrelay pull" },
     ],
     action: { label: "Open DotRelay", url: input.workspaceUrl },
-    reason: `you are a Member of the DotRelay Team ${teamName}`,
+    reason: "you are a Member of a DotRelay Team",
     supportAddress: input.supportAddress,
   });
-};
 
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 
 export const renderInvitationAcceptedEmail = (
   input: Readonly<{
-    readonly teamName: string;
-    readonly memberName: string | null;
     readonly memberUserId: string;
     // The cached GitHub login (github_logins), when one is recorded.
     readonly memberLogin?: string | null;
@@ -156,8 +144,6 @@ export const renderInvitationAcceptedEmail = (
     readonly supportAddress: string;
   }>,
 ): RenderedEmail => {
-  const teamName = clean(input.teamName);
-  const member = input.memberName ? clean(input.memberName) : "A new Member";
   // A login is friendlier than a User id, but only a well-formed one goes
   // into a command line.
   const shareKeysTarget =
@@ -165,17 +151,17 @@ export const renderInvitationAcceptedEmail = (
       ? input.memberLogin
       : input.memberUserId;
   return render({
-    subject: `${member} joined ${teamName} and is waiting for Project keys`,
-    heading: `${member} joined ${teamName}`,
+    subject: "A new Member is waiting for Project keys on DotRelay",
+    heading: "A new Member is waiting for Project keys",
     paragraphs: [
-      `${member} accepted the invitation to the Team ${teamName}. They can't pull until an owner or admin shares the Project keys with them.`,
+      "Someone accepted an invitation to a Team you own or administer on DotRelay. They can't pull until an owner or admin shares the Project keys with them, after comparing their account fingerprint.",
       "Use Share project keys in the Members view, or run:",
       {
         code: `dotrelay team share-keys ${shareKeysTarget} --team ${input.teamId}`,
       },
     ],
     action: { label: "Open the Members view", url: input.membersUrl },
-    reason: `you are an owner or admin of the DotRelay Team ${teamName}`,
+    reason: "you are an owner or admin of a DotRelay Team",
     supportAddress: input.supportAddress,
   });
 };

@@ -3,11 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  accountFingerprint,
   createAccountDeviceRoster,
   createCliDeviceStorage,
   createDeviceBootstrap,
   createMemoryDeviceRecordStore,
   deriveAccountSigningKey,
+  loadDeviceKeyMaterial,
 } from "@dotrelay/client";
 import {
   createProblem,
@@ -15,6 +17,8 @@ import {
   PROTOCOL_MEDIA_TYPE,
   type ProblemCode,
   type ServerProfilePin,
+  accountDeletionCommand,
+  uuidToBytes,
 } from "@dotrelay/contracts";
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
@@ -117,6 +121,10 @@ const boundaryFor = (environmentId: string | null) => ({
 // command needs.
 const startServer = (
   routes: readonly Route[],
+  options: Readonly<{
+    /** False when the Server Profile has revoked this machine's Device. */
+    readonly deviceActive?: boolean;
+  }> = {},
 ): Readonly<{
   origin: string;
   pin: ServerProfilePin;
@@ -128,7 +136,10 @@ const startServer = (
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
-      const proof = await answerDeviceProofRoute(request);
+      const proof = await answerDeviceProofRoute(
+        request,
+        options.deviceActive === false ? { isActive: () => false } : {},
+      );
       if (proof) return proof;
       const url = new URL(request.url);
       const body = request.method === "GET" ? "" : await request.clone().text();
@@ -661,6 +672,32 @@ describe("run, export, and list read the Environment without writing", () => {
     });
   });
 
+  test("refuses toolchain and launcher hooks a Member could set", () => {
+    // Each runs code, or loads configuration that does, in a teammate's
+    // build or tool: go -toolexec through GOFLAGS, a compiler wrapper, a
+    // browser opener, or a configuration directory.
+    const hooks = [
+      { name: "GOFLAGS", value: "-toolexec=/tmp/evil" },
+      { name: "CC", value: "/tmp/evil-cc" },
+      { name: "CXX", value: "/tmp/evil-cxx" },
+      { name: "CGO_LDFLAGS", value: "-Wl,--wrap=main" },
+      { name: "BROWSER", value: "/tmp/evil-open" },
+      { name: "RUSTC_WRAPPER", value: "/tmp/evil-rustc" },
+      { name: "XDG_CONFIG_HOME", value: "/tmp/evil-config" },
+    ];
+    for (const hook of hooks) {
+      expect(() =>
+        childEnvironment({}, [{ name: "API_URL", value: "x" }, hook], []),
+      ).toThrow(`--allow-env ${hook.name}`);
+      expect(childEnvironment({}, [hook], [hook.name.toLowerCase()])).toEqual({
+        [hook.name]: hook.value,
+      });
+    }
+    expect(
+      childEnvironment({}, [{ name: "NODE_ENV", value: "production" }], []),
+    ).toEqual({ NODE_ENV: "production" });
+  });
+
   test("formats dotenv, JSON, and shell exports", () => {
     const entries = [
       { name: "API_URL", value: "https://x.example" },
@@ -907,8 +944,8 @@ describe("team share-keys", () => {
         return { membershipId, lifecycle: "ACTIVE" };
       },
     };
-    try {
-      const result = await run(
+    const shareKeys = (...flags: string[]) =>
+      run(
         [
           "team",
           "share-keys",
@@ -918,9 +955,35 @@ describe("team share-keys", () => {
           "--no-input",
           "--force",
           "--json",
+          ...flags,
         ],
         { ...state.runtime, admin },
       );
+    const memberFingerprint = await accountFingerprint(
+      (
+        await deriveAccountSigningKey(memberAccountKey, {
+          serverProfileId,
+          userId: memberUserId,
+        })
+      ).identity,
+    );
+    try {
+      // Sharing confirms the Member's first-sight identity, so without a
+      // terminal it needs the fingerprint the user compared: --force alone
+      // is refused, and a different fingerprint is refused.
+      const unconfirmed = await shareKeys();
+      expect(unconfirmed.exitCode).not.toBe(0);
+      expect(JSON.parse(unconfirmed.stderr)).toMatchObject({
+        code: "account_fingerprint_required",
+      });
+      const mismatched = await shareKeys("--fingerprint", "f".repeat(40));
+      expect(JSON.parse(mismatched.stderr)).toMatchObject({
+        code: "account_fingerprint_mismatch",
+      });
+      expect(posts.some((post) => post.path.endsWith("/provision"))).toBe(
+        false,
+      );
+      const result = await shareKeys("--fingerprint", memberFingerprint);
       expect(result.stderr).toBe("");
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
@@ -937,19 +1000,7 @@ describe("team share-keys", () => {
       // Without a signed roster for the Member there is nothing to seal to.
       servedRoster = null;
       posts.length = 0;
-      const refused = await run(
-        [
-          "team",
-          "share-keys",
-          "octocat",
-          "--profile",
-          "relay",
-          "--no-input",
-          "--force",
-          "--json",
-        ],
-        { ...state.runtime, admin },
-      );
+      const refused = await shareKeys("--fingerprint", memberFingerprint);
       expect(refused.exitCode).not.toBe(0);
       expect(JSON.parse(refused.stderr)).toMatchObject({
         code: "trust_failed",
@@ -1297,6 +1348,8 @@ describe("team leave and account lifecycle", () => {
     options: Readonly<{
       leave?: () => Response;
       blockingTeams?: readonly Record<string, string>[];
+      /** Sees each leave, export and delete request. */
+      record?: (request: Request) => void;
     }> = {},
   ): Route[] => [
     (request, url) =>
@@ -1308,15 +1361,17 @@ describe("team leave and account lifecycle", () => {
     (request, url) =>
       request.method === "POST" &&
       url.pathname === `/api/v1/teams/${paymentsTeamId}/leave`
-        ? (options.leave?.() ??
-          jsonResponse(
-            { teamId: paymentsTeamId, membershipId, lifecycle: "REMOVED" },
-            201,
-          ))
+        ? (options.record?.(request),
+          options.leave?.() ??
+            jsonResponse(
+              { teamId: paymentsTeamId, membershipId, lifecycle: "REMOVED" },
+              201,
+            ))
         : undefined,
     (request, url) =>
       request.method === "GET" && url.pathname === "/api/v1/account/export"
-        ? jsonResponse({
+        ? (options.record?.(request),
+          jsonResponse({
             format: "dotrelay-account-export-v1",
             exportedAt: "2026-11-15T00:00:00.000Z",
             serverOrigin: url.origin,
@@ -1331,7 +1386,7 @@ describe("team leave and account lifecycle", () => {
             projectsCreated: [],
             revisionsAuthored: { count: 0 },
             auditFacts: [],
-          })
+          }))
         : undefined,
     (request, url) =>
       request.method === "GET" && url.pathname === "/api/v1/account/deletion"
@@ -1344,7 +1399,8 @@ describe("team leave and account lifecycle", () => {
         : undefined,
     (request, url) =>
       request.method === "POST" && url.pathname === "/api/v1/account/delete"
-        ? jsonResponse(
+        ? (options.record?.(request),
+          jsonResponse(
             {
               userId,
               status: "DELETED",
@@ -1353,14 +1409,20 @@ describe("team leave and account lifecycle", () => {
               teamsLeft: [{ teamId: paymentsTeamId, name: "Payments" }],
             },
             201,
-          )
+          ))
         : undefined,
   ];
+  const proven = (request: Request) =>
+    request.headers.get("X-DotRelay-Device-Id") === deviceId &&
+    request.headers.has("X-DotRelay-Device-Proof");
   const posts = (requests: readonly Recorded[]) =>
     requests.filter((request) => request.method === "POST");
 
   test("leaves a Team named by its name", async () => {
-    const server = startServer(lifecycleRoutes());
+    const seen: boolean[] = [];
+    const server = startServer(
+      lifecycleRoutes({ record: (request) => seen.push(proven(request)) }),
+    );
     const state = await seedState(server.pin);
     try {
       const result = await run(
@@ -1389,6 +1451,8 @@ describe("team leave and account lifecycle", () => {
           body: "{}",
         },
       ]);
+      // A session alone may not make the account leave a Team (ADR 0024).
+      expect(seen).toEqual([true]);
     } finally {
       server.stop();
       await state.cleanup();
@@ -1435,7 +1499,10 @@ describe("team leave and account lifecycle", () => {
   });
 
   test("exports the account to stdout or a protected file", async () => {
-    const server = startServer(lifecycleRoutes());
+    const seen: boolean[] = [];
+    const server = startServer(
+      lifecycleRoutes({ record: (request) => seen.push(proven(request)) }),
+    );
     const state = await seedState(server.pin);
     try {
       const printed = await run(["account", "export"], state.runtime);
@@ -1452,6 +1519,7 @@ describe("team leave and account lifecycle", () => {
       expect(await Bun.file(output).json()).toMatchObject({
         user: { id: userId },
       });
+      expect(seen).toEqual([true, true]);
     } finally {
       server.stop();
       await state.cleanup();
@@ -1491,8 +1559,35 @@ describe("team leave and account lifecycle", () => {
   });
 
   test("deletes the account after the typed phrase and clears local keys", async () => {
-    const server = startServer(lifecycleRoutes());
+    const seen: Array<
+      Readonly<{ proven: boolean; operationId: string | null }>
+    > = [];
+    const server = startServer(
+      lifecycleRoutes({
+        record: (request) =>
+          seen.push({
+            proven: proven(request),
+            operationId: request.headers.get("Idempotency-Key"),
+          }),
+      }),
+    );
     const state = await seedState(server.pin);
+    const storedKey = (
+      await loadDeviceKeyMaterial(
+        await state.runtime.deviceStorage!.load({
+          pin: server.pin,
+          deviceId: uuidToBytes(deviceId),
+        }),
+      )
+    ).signingPublicKey;
+    if (!storedKey) throw new Error("Device signing key is missing");
+    const signingPublicKey = await crypto.subtle.importKey(
+      "raw",
+      await crypto.subtle.exportKey("raw", storedKey),
+      "Ed25519",
+      false,
+      ["verify"],
+    );
     try {
       const wrong = await run(["account", "delete"], {
         ...state.runtime,
@@ -1516,13 +1611,26 @@ describe("team leave and account lifecycle", () => {
         status: "DELETED",
         localDataRemoved: ["session", "device keys"],
       });
-      expect(posts(server.requests)).toEqual([
-        {
-          method: "POST",
-          path: "/api/v1/account/delete",
-          body: JSON.stringify({ confirmUserId: userId }),
-        },
-      ]);
+      // The proven Device signs the exact deletion command (ADR 0024).
+      const [deletion] = posts(server.requests);
+      expect(deletion?.path).toBe("/api/v1/account/delete");
+      const body = JSON.parse(deletion?.body ?? "{}") as {
+        confirmUserId: string;
+        signature: string;
+      };
+      expect(body.confirmUserId).toBe(userId);
+      expect(seen).toEqual([{ proven: true, operationId: expect.any(String) }]);
+      expect(
+        await crypto.subtle.verify(
+          "Ed25519",
+          signingPublicKey,
+          Buffer.from(body.signature, "base64"),
+          accountDeletionCommand({
+            userId,
+            operationId: seen[0]?.operationId ?? "",
+          }),
+        ),
+      ).toBe(true);
       expect(
         await createSessionStore(state.credentials).get(server.pin),
       ).toBeNull();
@@ -1531,6 +1639,76 @@ describe("team leave and account lifecycle", () => {
           deviceMetadataPath(state.stateDirectory, server.pin),
         ).exists(),
       ).toBe(false);
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("acts on the session alone once this machine's Device is revoked", async () => {
+    const seen: boolean[] = [];
+    const server = startServer(
+      lifecycleRoutes({ record: (request) => seen.push(proven(request)) }),
+      { deviceActive: false },
+    );
+    const state = await seedState(server.pin);
+    try {
+      const flags = ["--profile", "relay", "--no-input", "--force", "--json"];
+      const left = await run(
+        ["team", "leave", "payments", ...flags],
+        state.runtime,
+      );
+      expect(left.exitCode).toBe(0);
+      const exported = await run(["account", "export"], state.runtime);
+      expect(exported.exitCode).toBe(0);
+      const deleted = await run(["account", "delete", ...flags], state.runtime);
+      expect(deleted.exitCode).toBe(0);
+      expect(JSON.parse(deleted.stdout)).toMatchObject({
+        status: "DELETED",
+        localDataRemoved: ["session", "device keys"],
+      });
+      // No proof and no signature from a revoked Device; the service
+      // decides from the session (ADR 0024).
+      expect(seen).toEqual([false, false, false]);
+      const deletion = posts(server.requests).find(
+        (request) => request.path === "/api/v1/account/delete",
+      );
+      expect(JSON.parse(deletion?.body ?? "{}")).toEqual({
+        confirmUserId: userId,
+      });
+    } finally {
+      server.stop();
+      await state.cleanup();
+    }
+  });
+
+  test("names the active Device when the session alone is not enough", async () => {
+    const server = startServer(
+      lifecycleRoutes({
+        leave: () => problemResponse("device_proof_required"),
+      }),
+      { deviceActive: false },
+    );
+    const state = await seedState(server.pin);
+    try {
+      const result = await run(
+        [
+          "team",
+          "leave",
+          "payments",
+          "--profile",
+          "relay",
+          "--no-input",
+          "--force",
+          "--json",
+        ],
+        state.runtime,
+      );
+      expect(result.exitCode).toBe(6);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        code: "device_not_active",
+        detail: expect.stringContaining("still has an active Device"),
+      });
     } finally {
       server.stop();
       await state.cleanup();

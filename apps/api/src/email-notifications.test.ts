@@ -163,7 +163,8 @@ const database = {
       ),
   },
   project: {
-    findMany: async () => [{ githubRepositoryId: 4242n }],
+    count: async ({ where }: { where: { id: { in: string[] } } }) =>
+      where.id.in.length,
   },
   gitHubLogin: {
     findUnique: async ({ where }: { where: { githubSubject: string } }) =>
@@ -197,7 +198,6 @@ const setup = (
     },
     transport: options.enabled === false ? null : transport,
     diagnostics,
-    resolveProjectName: async () => "octo/api",
     sleep: async (ms) => {
       sleeps.push(ms);
     },
@@ -213,7 +213,7 @@ const invitationEvent: EmailEvent = {
   inviterUserId: OWNER,
 };
 
-test("an invitation emails the invitee's stored address with the inviter and Team", async () => {
+test("an invitation emails the invitee's stored address without the inviter's or Team's words", async () => {
   const { notifier, sent, diagnostics } = setup();
   notifier.notify(invitationEvent);
   // Nothing is sent synchronously: the response is never held up.
@@ -222,9 +222,13 @@ test("an invitation emails the invitee's stored address with the inviter and Tea
   expect(sent).toHaveLength(1);
   expect(sent[0]?.to).toBe("invitee@example.com");
   expect(sent[0]?.idempotencyKey).toBe(`invitation/${INVITATION}/${INVITEE}`);
-  expect(sent[0]?.text).toContain("Olive Owner invited you");
-  expect(sent[0]?.text).toContain("Ops & <Friends>");
-  expect(sent[0]?.html).toContain("Ops &amp; &lt;Friends&gt;");
+  // Names a Member chose stay out of mail from DotRelay's domain; the
+  // invitee sees the Team after signing in.
+  expect(sent[0]?.subject).toBe("You're invited to a Team on DotRelay");
+  for (const part of [sent[0]?.subject, sent[0]?.text, sent[0]?.html]) {
+    expect(part).not.toContain("Olive Owner");
+    expect(part).not.toContain("Friends");
+  }
   expect(sent[0]?.text).toContain("https://dotrelay.dev/workspace");
   expect(diagnostics.records()).toEqual([
     expect.objectContaining({
@@ -260,9 +264,11 @@ test("an acceptance emails each active owner and admin, separately, but not the 
     "owner@example.com",
   ]);
   for (const message of sent) {
-    expect(message.text).toContain("<b>Ivy</b> joined");
-    expect(message.html).toContain("&lt;b&gt;Ivy&lt;/b&gt; joined");
-    expect(message.html).not.toContain("<b>Ivy</b>");
+    expect(message.subject).toBe(
+      "A new Member is waiting for Project keys on DotRelay",
+    );
+    for (const part of [message.subject, message.text, message.html])
+      expect(part).not.toContain("Ivy</b>");
     expect(message.text).toContain(
       `dotrelay team share-keys ivy-invitee --team ${TEAM}`,
     );
@@ -272,7 +278,7 @@ test("an acceptance emails each active owner and admin, separately, but not the 
   }
 });
 
-test("shared keys send one email per operation with the Project names", async () => {
+test("shared keys send one email per operation naming no repository", async () => {
   const { notifier, sent } = setup();
   const event: EmailEvent = {
     kind: "keys_shared",
@@ -286,7 +292,11 @@ test("shared keys send one email per operation with the Project names", async ()
   await notifier.drain();
   expect(sent).toHaveLength(1);
   expect(sent[0]?.to).toBe("member@example.com");
-  expect(sent[0]?.subject).toBe("You can now pull octo/api with DotRelay");
+  // A repository name resolved with the sharer's GitHub access could be
+  // private to them, so the email gives only a count.
+  expect(sent[0]?.subject).toBe("Your DotRelay Project keys are ready");
+  expect(sent[0]?.text).toContain("The keys for one Project");
+  expect(sent[0]?.text).not.toContain("4242");
   expect(sent[0]?.text).toContain("dotrelay pull");
   expect(sent[0]?.idempotencyKey).toBe(`keys-shared/${OPERATION}/${MEMBER}`);
   notifier.notify({ ...event, projectIds: [] });

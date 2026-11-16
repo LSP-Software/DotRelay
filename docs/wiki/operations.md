@@ -92,15 +92,21 @@ the image's probe uses the pinned Bun runtime and needs no apt-installed client.
 
 The API sends three emails through [Resend](https://resend.com):
 
-- **Invitation**, to the invitee: Team name, inviter, expiry and a link to `/workspace` on
-  `WEB_ORIGIN`, where the invitation is accepted or declined. Invitations address a GitHub id, so
-  only an invitee who has already signed in to DotRelay has a stored address. Anyone else gets no
-  email; the inviter still shares the invitation themselves.
+- **Invitation**, to the invitee: the expiry and a link to `/workspace` on `WEB_ORIGIN`, where the
+  invitation, its Team and its inviter are shown and it is accepted or declined. Invitations
+  address a GitHub id, so only an invitee who has already signed in to DotRelay has a stored
+  address. Anyone else gets no email; the inviter still shares the invitation themselves.
 - **Project keys shared**, to the Member, once per Share project keys operation (web Members view
-  or `dotrelay team share-keys`), listing the Projects and the `dotrelay pull` hint. Not one email
-  per Device grant.
-- **Invitation accepted**, to each active owner and admin of the Team except the new Member: who
-  joined, and that the Project keys must be shared before they can pull.
+  or `dotrelay team share-keys`), with the number of Projects and the `dotrelay pull` hint. Not
+  one email per Device grant.
+- **Invitation accepted**, to each active owner and admin of the Team except the new Member: that
+  someone joined, the `dotrelay team share-keys` command for them, and that the Project keys must
+  be shared before they can pull.
+
+Subjects and headings are fixed text. No email names a Team, a person's display name, or a
+repository: Members choose Team and display names, so mail from DotRelay's domain does not carry
+their words, and a repository name resolved with one Member's GitHub access may be private to
+them.
 
 Recipients' addresses come from the GitHub primary email Better Auth stored at sign-in (the
 GitHub App's **Email addresses: read** permission). GitHub `users.noreply.github.com` addresses
@@ -156,8 +162,11 @@ Set `METRICS_ENABLED=true` to start a second, private listener on `METRICS_PORT`
 It serves only `GET /metrics` in the Prometheus text format; it shares no routes, CORS, cookies or
 sessions with the API on `PORT`. Production requires `METRICS_TOKEN` (at least 32 characters),
 compared in constant time against `Authorization: Bearer <token>`; other requests get 401. Keep
-`/health` and `/ready` on the API port for probes. Do not publish the metrics port or route it
-through the TLS proxy; scrape it from the private network:
+`/health` and `/ready` on the API port for probes. The listener binds `METRICS_HOSTNAME`, which
+defaults to `127.0.0.1`, so only a scraper on the same host reaches it. To scrape from another
+container or host on a private network, set it to that interface (or `0.0.0.0` inside a container
+network). Do not publish the metrics port or route it through the TLS proxy; scrape it from the
+private network:
 
 ```yaml
 scrape_configs:
@@ -269,15 +278,20 @@ python3 ops/postgres.py verify /private-backups/unique-name.age
 
 Backups are age-encrypted PostgreSQL custom archives with a `.json` manifest
 sidecar. Both must be retained. Encryption to a public age recipient does not say who
-made an archive, so the manifest records the archive's SHA-256 and size under an
-HMAC-SHA256 keyed by `BACKUP_MAC_KEY_FILE`: a private (`0600`) file holding at least
-32 random bytes, for example `openssl rand -hex 32`. Keep that key with the age identity
-and never on backup storage; whoever can write backup storage can replace an archive and
-its checksum, but not forge the MAC. `verify` and `restore` refuse an archive whose
-manifest does not authenticate before anything is decrypted. Archives made before
-manifests were authenticated (manifest version 1) are refused unless the operator sets
-`DOTRELAY_ALLOW_UNAUTHENTICATED_BACKUP=true` for that run after confirming the storage
-was not writable by anyone else. The pipeline checks both `pg_dump` and encryption
+made an archive, so the manifest records the archive's SHA-256 and size, its file name, its
+creation time and the source database (host, port and name) under an HMAC-SHA256 keyed by
+`BACKUP_MAC_KEY_FILE`: a private (`0600`) file holding at least 32 random bytes, for example
+`openssl rand -hex 32`. Keep that key with the age identity and never on backup storage;
+whoever can write backup storage can replace an archive and its checksum, but not forge the
+MAC, and cannot rename an older authentic archive over a newer one, because the manifest names
+the file it was written for. `verify` and `restore` refuse an archive whose manifest does not
+authenticate before anything is decrypted, and print its authenticated creation time; check it
+is the backup you meant to restore. Archives made before manifests were authenticated (manifest
+version 1) are refused unless the operator sets `DOTRELAY_ALLOW_UNAUTHENTICATED_BACKUP=true`
+for that run after confirming the storage was not writable by anyone else. Archives authenticated
+before the name, time and source were bound (manifest version 2) need
+`DOTRELAY_ALLOW_UNBOUND_BACKUP=true` for that run, after confirming no older archive was renamed
+over them. The pipeline checks both `pg_dump` and encryption
 exit codes; any failed output is unusable. Names are exclusive: a backup never
 overwrites another backup. Store copies outside the database host, encrypt disks,
 restrict access, monitor failures and capacity, and set retention/RPO/RTO appropriate

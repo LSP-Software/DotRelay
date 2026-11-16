@@ -112,6 +112,19 @@ const protocolParameters = Object.freeze({
       pattern: "^[A-Za-z0-9_-]{98}$",
     }),
   }),
+  // Account actions (ADR 0024) need the proof only while the User has an
+  // active Device; a User without one relies on a recent sign-in instead.
+  AccountDeviceProofHeader: Object.freeze({
+    name: DEVICE_PROOF_HEADER,
+    in: "header",
+    required: false,
+    description:
+      "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020). Required while the signed-in User has an active Device (401 device_proof_required without it); a User without one sends none and needs a sign-in from the last ten minutes instead (ADR 0024).",
+    schema: Object.freeze({
+      type: "string",
+      pattern: "^[A-Za-z0-9_-]{98}$",
+    }),
+  }),
   OperationKindHeader: Object.freeze({
     name: "X-DotRelay-Operation-Kind",
     in: "header",
@@ -829,9 +842,11 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
       Object.freeze({
         operationId: "leaveTeam",
         description:
-          "The signed-in User ends their own Membership (ADR 0019). Needs a session, not a Device. An active Membership owes each Project a rotation. The Team's last active owner, or its only Member, answers 409 owner_transfer_required.",
+          "The signed-in User ends their own Membership (ADR 0019). A User with an active Device proves one (401 device_proof_required otherwise); a User without one needs a sign-in from the last ten minutes (403 recent_sign_in_required) (ADR 0024). An active Membership owes each Project a rotation. The Team's last active owner, or its only Member, answers 409 owner_transfer_required.",
         parameters: Object.freeze([
           invitationParameters.TeamId,
+          protocolParameters.DeviceIdHeader,
+          protocolParameters.AccountDeviceProofHeader,
           Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
         ]),
         requestBody: lifecycleJsonBody,
@@ -891,7 +906,11 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
       Object.freeze({
         operationId: "exportAccount",
         description:
-          "The account metadata the service holds about the signed-in User, as a JSON attachment. No ciphertext, wrapped keys, public keys, or tokens.",
+          "The account metadata the service holds about the signed-in User, as a JSON attachment. No ciphertext, wrapped keys, public keys, or tokens. Needs the same authority as leaving a Team: a proven Device while the User has an active one, otherwise a recent sign-in (ADR 0024).",
+        parameters: Object.freeze([
+          protocolParameters.DeviceIdHeader,
+          protocolParameters.AccountDeviceProofHeader,
+        ]),
         responses: noStoreJsonResponse,
       }),
     ),
@@ -911,8 +930,10 @@ export const PROTOCOL_OPENAPI_PATHS = Object.freeze({
       Object.freeze({
         operationId: "deleteAccount",
         description:
-          "Deletes the signed-in User's account (ADR 0018). Needs a session, not a Device; confirmUserId must equal the User id. Ends every session of the User.",
+          'Deletes the signed-in User\'s account (ADRs 0018, 0024); confirmUserId must equal the User id. While the User has an active Device, the request proves one and signature is that Device\'s base64 Ed25519 signature over the UTF-8 JSON command {"action":"account.delete","userId":<confirmUserId>,"operationId":<Idempotency-Key>} (400 invalid_crypto_object when it does not verify). A User without an active Device sends no signature and needs a sign-in from the last ten minutes (403 recent_sign_in_required). Ends every session of the User.',
         parameters: Object.freeze([
+          protocolParameters.DeviceIdHeader,
+          protocolParameters.AccountDeviceProofHeader,
           Object.freeze({ $ref: "#/components/parameters/IdempotencyHeader" }),
         ]),
         requestBody: lifecycleJsonBody,

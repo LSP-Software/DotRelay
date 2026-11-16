@@ -1,6 +1,8 @@
 # Account deletion keeps public verification material
 
-Status: accepted
+Status: accepted; amended by [ADR 0024](0024-account-actions-need-a-device.md), which requires a
+proven Device and its signature over the deletion command while the User has an active Device,
+and a recent sign-in otherwise.
 
 A User can delete their account. Every Revision is signed by its author's Device and verified by
 every teammate's client against the author's signed Account Device roster (ADR 0015) and Membership

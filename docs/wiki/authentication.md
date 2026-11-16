@@ -61,7 +61,11 @@ readiness. Clients show it as its own state, not a generic error; see
 
 Authentication establishes only the server-local DotRelay User. It does not grant Membership,
 Device authority, decryption ability, or mutation permission. Encrypted operations still require an
-active Device and the application-level signed protocol checks.
+active Device and the application-level signed protocol checks. Account-level actions (deleting the
+account, leaving a Team, exporting account data) need a proven Device while the User has an active
+one, and account deletion also needs that Device's signature over the deletion command; a User with
+no active Device needs a sign-in from the last ten minutes instead
+([ADR 0024](../adr/0024-account-actions-need-a-device.md)).
 
 ## Device proof of possession
 

@@ -33,11 +33,70 @@ class SafetyTests(unittest.TestCase):
         os.chmod(key, 0o600)
         return key
 
-    def write_manifest(self, archive, key, sha256=None, mac=None):
+    def write_manifest(self, archive, key, sha256=None, mac=None, version=3, name=None, created_at="2026-11-16T10:00:00Z"):
         sha256 = sha256 or backup.checksum(archive)
-        fields = {"version": 2, "sha256": sha256, "size": Path(archive).stat().st_size}
+        fields = {"version": version, "sha256": sha256, "size": Path(archive).stat().st_size}
+        if version == 3:
+            fields.update(archive=name or Path(archive).name, createdAt=created_at, source="db.internal:5432/dotrelay")
         manifest = dict(fields, mac=mac or backup.manifest_mac(backup.mac_key(key), fields))
         Path(str(archive) + ".json").write_text(json.dumps(manifest))
+
+    def make_identity(self, root):
+        identity = Path(root) / "identity"
+        identity.write_text("AGE-SECRET-KEY-placeholder")
+        os.chmod(identity, 0o600)
+        return identity
+
+    def test_an_older_archive_renamed_over_a_newer_one_is_refused(self):
+        # Someone who can write backup storage moves an authentic older
+        # archive and its manifest over a newer backup's name, to roll the
+        # database back on the next restore.
+        with tempfile.TemporaryDirectory() as root:
+            key = self.make_key(root)
+            older = Path(root) / "dotrelay-2026-11-01.age"
+            older.write_bytes(b"older but authentic")
+            self.write_manifest(older, key, created_at="2026-11-01T00:00:00Z")
+            newer = Path(root) / "dotrelay-2026-11-16.age"
+            older.rename(newer)
+            Path(str(older) + ".json").rename(Path(str(newer) + ".json"))
+            with patch.object(backup, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, "not authentic"):
+                    backup.verify(newer, self.make_identity(root), key)
+                run.assert_not_called()
+
+    def test_the_bound_fields_cannot_be_edited(self):
+        with tempfile.TemporaryDirectory() as root:
+            key = self.make_key(root)
+            archive = Path(root) / "backup.age"
+            archive.write_bytes(b"genuine")
+            self.write_manifest(archive, key)
+            manifest_path = Path(str(archive) + ".json")
+            for field, value in (("createdAt", "2099-01-01T00:00:00Z"), ("source", "other:5432/db")):
+                manifest = json.loads(manifest_path.read_text())
+                original = manifest[field]
+                manifest[field] = value
+                manifest_path.write_text(json.dumps(manifest))
+                with patch.object(backup, "run") as run:
+                    with self.assertRaisesRegex(RuntimeError, "not authentic"):
+                        backup.verify(archive, self.make_identity(root), key)
+                    run.assert_not_called()
+                manifest[field] = original
+                manifest_path.write_text(json.dumps(manifest))
+
+    def test_unbound_version_two_manifest_needs_an_explicit_opt_in(self):
+        with tempfile.TemporaryDirectory() as root:
+            key = self.make_key(root)
+            identity = self.make_identity(root)
+            archive = Path(root) / "backup.age"
+            archive.write_bytes(b"made before names were bound")
+            self.write_manifest(archive, key, version=2)
+            with patch.object(backup, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, "not authentic"):
+                    backup.verify(archive, identity, key)
+                run.assert_not_called()
+            with patch.object(backup, "run") as run:
+                backup.verify(archive, identity, key, allow_unbound=True).close()
+                self.assertEqual(run.call_args_list[0].args[0][0], "age")
 
     def test_checksum_failure_never_decrypts_or_contacts_database(self):
         with tempfile.TemporaryDirectory() as root:
@@ -74,18 +133,52 @@ class SafetyTests(unittest.TestCase):
                     backup.verify(archive, "identity", key)
                 run.assert_not_called()
 
-    def test_authentic_manifest_reaches_decryption(self):
+    def test_authentic_manifest_reaches_decryption_and_reports_its_time(self):
         with tempfile.TemporaryDirectory() as root:
             key = self.make_key(root)
-            identity = Path(root) / "identity"
-            identity.write_text("AGE-SECRET-KEY-placeholder")
-            os.chmod(identity, 0o600)
+            identity = self.make_identity(root)
             archive = Path(root) / "backup.age"
             archive.write_bytes(b"genuine")
             self.write_manifest(archive, key)
+            reported = []
             with patch.object(backup, "run") as run:
-                backup.verify(archive, identity, key).close()
+                backup.verify(archive, identity, key, report=reported.append).close()
                 self.assertEqual(run.call_args_list[0].args[0][0], "age")
+            self.assertEqual(reported, ["Backup created at 2026-11-16T10:00:00Z"])
+
+    def test_backup_binds_name_time_and_source(self):
+        with tempfile.TemporaryDirectory() as root:
+            key = self.make_key(root)
+            archive = Path(root) / "out" / "nightly.age"
+
+            class Stream:
+                def close(self):
+                    pass
+
+            class Dump:
+                stdout = Stream()
+
+                def wait(self):
+                    return 0
+
+                def poll(self):
+                    return 0
+
+            def encrypt(command, stdin=None, stdout=None, stderr=None):
+                stdout.write(b"ciphertext")
+                return type("Done", (), {"returncode": 0})()
+
+            env = {"PGHOST": "db.internal", "PGPORT": "5432", "PGDATABASE": "dotrelay"}
+            with patch.object(backup.subprocess, "Popen", return_value=Dump()), patch.object(backup.subprocess, "run", side_effect=encrypt), patch.object(backup, "verify") as verify:
+                backup.backup(archive, env, "recipient", "identity", key)
+                verify.assert_called_once()
+            manifest = json.loads(Path(str(archive) + ".json").read_text())
+            self.assertEqual(manifest["version"], 3)
+            self.assertEqual(manifest["archive"], "nightly.age")
+            self.assertEqual(manifest["source"], "db.internal:5432/dotrelay")
+            self.assertRegex(manifest["createdAt"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+            fields = {name: manifest[name] for name in ("version", "archive", "createdAt", "source", "sha256", "size")}
+            self.assertEqual(manifest["mac"], backup.manifest_mac(backup.mac_key(key), fields))
 
     def test_mac_key_must_be_private_and_long_enough(self):
         with tempfile.TemporaryDirectory() as root:

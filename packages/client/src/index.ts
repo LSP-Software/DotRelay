@@ -45,6 +45,13 @@ export {
   USER_VALUE_KEY_GENERATION,
 } from "./account/user-value-key";
 export {
+  ENCRYPTION_PASSWORD_MAX_LENGTH,
+  ENCRYPTION_PASSWORD_MIN_LENGTH,
+  type EncryptionPasswordProblem,
+  encryptionPasswordAdvice,
+  encryptionPasswordProblem,
+} from "./account/password-policy";
+export {
   type AccountKeyTrustedKeys,
   type AccountKeyVerificationContext,
   AccountKeyVerificationError,
@@ -288,16 +295,21 @@ export {
   type SharedValueKeyRing,
   type SharedValueSecrets,
   type StagedPublicationObject,
+  type SyncDecodeOptions,
   type SyncManifestDecode,
+  type SyncPageContext,
   type SyncPageVerificationOptions,
   UnreadableLaneError,
   type UnreadableLaneKind,
+  type UnreadableLaneReason,
   validatePublicationVariables,
   validateRollbackRevision,
   verifySyncPage,
 } from "./sync/publication";
 export {
   createVerifiedEnvironmentSession,
+  ownSigningTrust,
+  type TrustedHistory,
   type VerifiedEnvironmentSession,
 } from "./sync/session";
 export {

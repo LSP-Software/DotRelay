@@ -144,6 +144,7 @@ export {
 
 export { deviceRecoveryMessage } from "./account-key-ack";
 export {
+  accountDeletionCommand,
   DEVICE_PROOF_CHALLENGE_BYTES,
   DEVICE_PROOF_TOKEN_BYTES,
   type DeviceProof,

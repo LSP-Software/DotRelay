@@ -43,19 +43,109 @@ const PROCESS_CONTROL_NAMES: ReadonlySet<string> = new Set([
   "JDK_JAVA_OPTIONS",
   "CLASSPATH",
   "DOTNET_STARTUP_HOOKS",
+  // Build tools that launch a JVM, and the JDK they pick.
+  "JAVA_HOME",
+  "JAVA_OPTS",
+  "MAVEN_OPTS",
+  "MAVEN_ARGS",
+  "GRADLE_OPTS",
+  "GRADLE_USER_HOME",
+  "SBT_OPTS",
+  "ANT_OPTS",
+  "DOTNET_ROOT",
+  "DOTNET_ADDITIONAL_DEPS",
+  "DOTNET_SHARED_STORE",
+  // Go: flags such as -toolexec, the toolchain it downloads, and where it
+  // fetches and caches modules.
+  "GOFLAGS",
+  "GOTOOLCHAIN",
+  "GOENV",
+  "GOROOT",
+  "GOPATH",
+  "GOBIN",
+  "GOCACHE",
+  "GOMODCACHE",
+  "GOWORK",
+  "GOPROXY",
+  "GONOPROXY",
+  "GOSUMDB",
+  "GONOSUMDB",
+  "GONOSUMCHECK",
+  "GOINSECURE",
+  "GOPRIVATE",
+  "GOVCS",
+  "GOEXPERIMENT",
+  // C and C++ toolchains, and make.
+  "CC",
+  "CXX",
+  "CPP",
+  "LD",
+  "AR",
+  "AS",
+  "NM",
+  "RANLIB",
+  "STRIP",
+  "OBJCOPY",
+  "OBJDUMP",
+  "CFLAGS",
+  "CXXFLAGS",
+  "CPPFLAGS",
+  "LDFLAGS",
+  "LIBS",
+  "FC",
+  "FFLAGS",
+  "F77",
+  "MAKE",
+  "MAKEFLAGS",
+  "MFLAGS",
+  "GNUMAKEFLAGS",
+  "MAKEFILES",
+  // Rust.
+  "RUSTFLAGS",
+  // Python and Ruby package managers.
+  "UV_INDEX_URL",
+  "UV_EXTRA_INDEX_URL",
+  "UV_PYTHON",
+  "PERL_MB_OPT",
+  "PERL_MM_OPT",
+  // Which certificates TLS trusts, and OpenSSL's configuration, which can
+  // load engines and providers.
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "CURL_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+  "OPENSSL_CONF",
+  "OPENSSL_MODULES",
+  "OPENSSL_ENGINES",
+  // Container and cluster tools, whose configuration can name credential
+  // helpers that run commands.
+  "KUBECONFIG",
+  "DOCKER_CONFIG",
+  "DOCKER_HOST",
   // The C library and helpers that tools start on the user's behalf.
   "GCONV_PATH",
   "LOCPATH",
+  "NLSPATH",
   "HOSTALIASES",
   "EDITOR",
   "VISUAL",
   "PAGER",
+  "MANPAGER",
+  "SYSTEMD_PAGER",
   "LESSOPEN",
   "LESSCLOSE",
+  "BROWSER",
+  "TERMINAL",
   "SSH_ASKPASS",
+  "SSH_ASKPASS_REQUIRE",
+  "SSH_AUTH_SOCK",
   "SUDO_ASKPASS",
 ]);
 
+// Prefixes that belong to a runtime, a loader, a shell or a toolchain rather
+// than to applications. Every name under them is refused except the
+// application settings in APPLICATION_NAMES: an allow-list, so a hook the
+// list above does not know yet is refused too.
 const PROCESS_CONTROL_PREFIXES: readonly string[] = [
   "LD_",
   "DYLD_",
@@ -64,16 +154,36 @@ const PROCESS_CONTROL_PREFIXES: readonly string[] = [
   "PERL5",
   "GIT_",
   "NPM_CONFIG_",
+  "YARN_",
+  "COREPACK_",
+  "NODE_",
+  "BUN_",
+  "DENO_",
   "COR_",
   "CORECLR_",
+  "CGO_",
+  "CARGO_",
+  "RUSTC",
+  "RUSTDOC",
+  "RUSTUP_",
+  "CMAKE_",
+  "CCACHE_",
+  "DISTCC_",
+  "PKG_CONFIG",
+  "PIP_",
+  "GEM_",
+  "BUNDLE_",
+  "XDG_",
 ];
+
+// Names under those prefixes that only configure the application.
+const APPLICATION_NAMES: ReadonlySet<string> = new Set(["NODE_ENV"]);
 
 export const isProcessControlName = (name: string): boolean => {
   const upper = name.toUpperCase();
-  return (
-    PROCESS_CONTROL_NAMES.has(upper) ||
-    PROCESS_CONTROL_PREFIXES.some((prefix) => upper.startsWith(prefix))
-  );
+  if (PROCESS_CONTROL_NAMES.has(upper)) return true;
+  if (APPLICATION_NAMES.has(upper)) return false;
+  return PROCESS_CONTROL_PREFIXES.some((prefix) => upper.startsWith(prefix));
 };
 
 // The process-control names among `names` that the user did not allow.

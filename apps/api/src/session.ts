@@ -49,7 +49,9 @@ export const requestWasAuthenticated = async (
 const hasCredentials = (request: Request) =>
   request.headers.has("Cookie") || request.headers.has("Authorization");
 
-const sessionCreatedAt = (session: RequestSession | null): Date | null => {
+export const sessionCreatedAt = (
+  session: RequestSession | null,
+): Date | null => {
   const createdAt = (session as { session?: { createdAt?: unknown } } | null)
     ?.session?.createdAt;
   if (createdAt instanceof Date) return createdAt;

@@ -303,10 +303,13 @@ verified, not confirmed, unverified (no signed Device roster yet, so none of the
 trusted), or blocked because the account key changed or the roster rolled back. `--fingerprints`
 adds each Member's account fingerprint for comparison out of band. The first time this
 installation sees a Member, it pins their identity: their Revisions verify, but no Project key is
-taken from them until you confirm the fingerprint. `team trust <user-id>` confirms a Member seen
-for the first time, or re-trusts one whose identity changed, after you compare fingerprints;
-`--no-input` requires `--force`. Until a changed identity is re-trusted, the CLI does not accept
-that Member's Devices. Every protected command also verifies this account's own roster and
+taken from them, and none of their legacy-format Values is read, until you confirm the
+fingerprint. `team trust <user-id>` confirms a Member seen for the first time, or re-trusts one
+whose identity changed, after you compare fingerprints. `--fingerprint <fingerprint>` passes the
+fingerprint you compared; the command confirms only when it matches, and with `--no-input` it is
+required: `--force` alone never confirms an identity. For a Member already confirmed, a passed
+fingerprint is still compared, so a script that pins one fails when it no longer matches. Until a changed identity is re-trusted, the
+CLI does not accept that Member's Devices. Every protected command also verifies this account's own roster and
 publishes a new one when this Device holds the AMK and is not listed yet; a first roster lists only
 this Device. Each installation also pins the highest epoch and the key it accepted for each
 Project, and refuses an older epoch or a different key for the same epoch.
@@ -320,7 +323,10 @@ accepted later: an owner or admin has to invite you again. The CLI cannot send o
 invitations; owners and admins do that in the web app.
 
 `team leave <team-id-or-name>` ends your own Membership after a confirmation; `--no-input`
-requires `--force`. It needs only a session. Like a removal, every Project of the Team then owes a
+requires `--force`. It proves this machine's Device; an account with no active Device needs a
+sign-in from the last ten minutes instead (`recent_sign_in_required`). If this machine's Device
+was revoked, the command goes on with the session alone, which works only while the account has
+no other active Device. Like a removal, every Project of the Team then owes a
 key rotation. The Team's last active owner gets `owner_transfer_required` while other Members
 remain: promote another active Member to owner, or delete the Team, in the web app. Deleting a
 Team is web-only.
@@ -331,7 +337,10 @@ with mode 0600 instead. It holds no Values, ciphertext, or keys: `pull` or `expo
 is how to keep a copy of Values. `account delete` deletes the account
 ([what deletion keeps](account-deletion.md)). It first lists the Teams it would leave or delete
 and refuses while you are a Team's last active owner, then asks you to type `delete my account`;
-`--no-input` requires `--force`. Afterwards it removes this profile's session and this Device's
+`--no-input` requires `--force`. This machine's Device proves itself and signs the deletion
+command; `account export` also proves the Device
+([ADR 0024](../adr/0024-account-actions-need-a-device.md)). A machine whose Device was revoked
+acts on the session alone, without a signature, as an account with no active Device does. Afterwards it removes this profile's session and this Device's
 keys from the machine and lists what stays: the Server Profile entry, trusted-head and teammate
 pins, worktree contexts, and any `.env` files you pulled.
 
@@ -346,7 +355,9 @@ login to a GitHub user id instead. The match only picks the Member: keys go to t
 id and signed roster. The command reads the service's provisioning plan for that Membership, opens each
 Project's current key, seals it only to Devices in the Member's signed Device roster, and posts
 the signed activation; `--no-input` requires `--force`. The question names the Member's account
-fingerprint, and sharing confirms it. A Member without a signed Device roster cannot receive keys
+fingerprint, and sharing confirms it; with `--no-input`, a Member not confirmed yet also needs
+`--fingerprint <fingerprint>` with the value they read from their own `team members
+--fingerprints`, and a different value is refused. A Member without a signed Device roster cannot receive keys
 yet. The Member then runs `dotrelay pull`.
 While a Membership is waiting for keys, protected commands in that Repository say so and name
 this step, instead of reporting the Repository as unlinked or creating a second Team and Project
@@ -397,14 +408,17 @@ tracked file itself, and the review and the report name the file the link points
 
 Values are written so an expander sees the same text the source gave it. A `${HOME}` reference
 read from an unquoted or double-quoted line is written in double quotes with `$` unescaped, and
-a `\$` the source used for a literal dollar sign stays `\$`. Values with no quote, line break,
-`$`, or backtick are single-quoted. A Value is also single-quoted, so every reader takes it
+a `\$` the source used before a reference (`\$HOME`) stays `\$`. Values with no quote, line
+break, `$`, or backtick are single-quoted. A Value is also single-quoted, so every reader takes it
 literally, when the file being replaced single-quoted it, or when it holds a `$` that is not a
-variable reference (`$(command)`, `$2b$10$…`, a trailing `$`), unless it also holds a single
-quote. A pulled file is data for a dotenv loader: do not `source` it in a shell, which would
-expand references in double-quoted Values; use `dotrelay run` to start a command with the Values. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
-`` \` `` are decoded, and any other backslash sequence, such as `"C:\Users"`, is kept as
-written. Parse errors name the file.
+variable reference (`$(command)`, `$2b$10$…`, a trailing `$`). A Value that also holds a single
+quote cannot be single-quoted: it is double-quoted with every `$` that is not a reference written
+as `\$`, and every backtick and backslash escaped, so even a file sourced into a shell runs none
+of it. A pulled file is still data for a dotenv loader: do not `source` it in a shell, which would
+expand references in double-quoted Values; use `dotrelay run` to start a command with the Values.
+Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and `` \` `` are decoded, and so is `\$`
+before anything that is not a reference, since every reader takes it as a plain `$`. Any other
+backslash sequence, such as `"C:\Users"`, is kept as written. Parse errors name the file.
 
 `run [--environment <label>] -- <command> [<argument>…]` decrypts the Environment in memory and
 starts the command with the Values as environment variables. Nothing is written to disk. Values
@@ -418,8 +432,14 @@ Any active Member can publish a Variable, and some names control how a program, 
 interpreter, or a shell starts rather than configuring the application: `PATH`, `HOME`,
 `NODE_OPTIONS`, `NODE_PATH`, `BUN_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `ENV`,
 `PROMPT_COMMAND`, `PS1`, `PS4`, `IFS`, `PYTHON*`, `PERL5*`, `RUBYOPT`, `RUBYLIB`,
-`JAVA_TOOL_OPTIONS`, `GIT_*`, `npm_config_*`, `EDITOR`, `PAGER` and similar. A Member who sets
-one of these could run code as every teammate who starts a command through DotRelay. `run`
+`JAVA_TOOL_OPTIONS`, `GIT_*`, `npm_config_*`, `EDITOR`, `PAGER` and similar, and the hooks of
+build toolchains and launchers: `GOFLAGS`, `GOTOOLCHAIN`, `GOPROXY` and the other Go settings,
+`CC`, `CXX`, `CFLAGS`, `LDFLAGS`, `MAKEFLAGS`, `CGO_*`, `RUSTFLAGS`, `RUSTC*`, `CARGO_*`,
+`MAVEN_OPTS`, `GRADLE_OPTS`, `BROWSER`, `XDG_*`, TLS trust (`SSL_CERT_FILE`, `OPENSSL_CONF`,
+`NODE_EXTRA_CA_CERTS`) and `KUBECONFIG`. Prefixes that belong to a runtime or toolchain (`NODE_*`,
+`BUN_*`, `YARN_*`, `PIP_*`, `CMAKE_*` and others) are refused as a whole except the application
+settings DotRelay knows, such as `NODE_ENV`. A Member who sets one of these could run code as
+every teammate who starts a command through DotRelay. `run`
 therefore refuses such a Variable (`process_control_variable`, exit 2) and names it; check who
 set it with `history`, and pass it on deliberately with `--allow-env <name>`, once per name
 (`dotrelay run --allow-env NODE_OPTIONS -- node app.js`). Names are matched case-insensitively.

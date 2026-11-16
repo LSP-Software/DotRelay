@@ -445,7 +445,10 @@ describe("C-2: a teammate the service leaves out of the rosters is not trusted",
           revisions: [revision],
           nextCursor: null,
         },
-        collectSigningTrust(outcome.boundary, own.signingPublicKey),
+        collectSigningTrust(outcome.boundary, own.signingPublicKey, {
+          userId: ids.user,
+          deviceId: ids.device,
+        }),
         {
           actorUserId: ids.user,
           expectedTrustedRevisionId: ids.environment,
@@ -453,5 +456,163 @@ describe("C-2: a teammate the service leaves out of the rosters is not trusted",
         },
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("ADR 0023: no history trust from plain keys", () => {
+  // The service invents a User, signs a roster for it under an AMK it chose,
+  // and sends no constrained signing trust: only plain keys.
+  const scenario = async () => {
+    const own = await deviceKeys();
+    const invented = await deviceKeys();
+    const ownAmk = crypto.getRandomValues(new Uint8Array(32));
+    const inventedAmk = crypto.getRandomValues(new Uint8Array(32));
+    const postedRosters: Uint8Array[] = [];
+    const postedGrants: Uint8Array[] = [];
+    const options = await optionsWith({ postedRosters, postedGrants });
+    const boundary = boundaryWith({
+      accountRosters: {
+        [ids.user]: Buffer.from(
+          await signedRoster(ownAmk, ids.user, 1, [
+            rosterDevice(ids.device, own),
+          ]),
+        ).toString("base64"),
+        [ids.injected]: Buffer.from(
+          await signedRoster(inventedAmk, ids.injected, 1, [
+            rosterDevice(ids.injected, invented),
+          ]),
+        ).toString("base64"),
+      },
+      signingTrustDevices: [],
+      signingTrustKeys: [
+        bytesToHex(own.signingPublicKey),
+        bytesToHex(invented.signingPublicKey),
+      ],
+    });
+    const outcome = await establishAccountTrust({
+      options,
+      boundary,
+      userId: ids.user,
+      deviceId: ids.device,
+      accountMasterKey: ownAmk,
+      encryptionPublicKey: own.encryptionPublicKey,
+      signingPublicKey: own.signingPublicKey,
+    });
+    return { own, invented, outcome };
+  };
+
+  const wire = async (
+    artifacts: Awaited<ReturnType<typeof createPublicationArtifacts>>,
+    parent: Readonly<{ id: string; digest: Uint8Array }>,
+  ): Promise<SyncRevisionWire> => {
+    const revisionObject = artifacts.stagedObjects.find(
+      (object) =>
+        object.objectId === artifacts.request.revision.protocolObjectId,
+    );
+    if (!revisionObject) throw new Error("revision object is missing");
+    const parsed = parseProtocolObject(revisionObject.bytes);
+    return {
+      id: artifacts.request.revision.id,
+      digest: await sha384(revisionObject.bytes),
+      parentId: parent.id,
+      parentHash: parent.digest,
+      mutation: parsed.get(35) as number,
+      projectEpoch: 1n,
+      authoredAtMs: BigInt(parsed.get(34) as number),
+      rollbackTargetId: null,
+      objects: await Promise.all(
+        artifacts.stagedObjects.map(async (object) => ({
+          objectId: object.objectId,
+          canonicalBytes: object.bytes,
+          digest: await sha384(object.bytes),
+        })),
+      ),
+    };
+  };
+
+  test("the invented User is pinned on first sight but its plain key verifies nothing", async () => {
+    const { own, invented, outcome } = await scenario();
+    const injected = outcome.resolution.users.get(ids.injected);
+    expect(injected?.status).toBe("verified");
+    expect(injected?.confirmed).toBe(false);
+    // Only this installation's own key, bound to its own User and Device.
+    expect(
+      collectSigningTrust(outcome.boundary, own.signingPublicKey, {
+        userId: ids.user,
+        deviceId: ids.device,
+      }),
+    ).toEqual([
+      {
+        publicKey: own.signingPublicKey,
+        deviceId: ids.device,
+        userId: ids.user,
+      },
+    ]);
+    // A Revision the invented User's Device signed while claiming this
+    // User as its author does not verify.
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const environmentGenesis = {
+      id: ids.environment,
+      digest: new Uint8Array(48),
+    };
+    const forged = await createPublicationArtifacts(
+      [
+        {
+          id: "abababab-abab-4bab-8bab-abababababab",
+          name: "DB_PASSWORD",
+          description: "",
+          ownership: "SHARED_VALUE",
+          value: "chosen-by-the-service",
+          required: true,
+          hasDraftChange: true,
+        },
+      ],
+      {
+        serverProfileId,
+        teamId: ids.team,
+        projectId: ids.project,
+        environmentId: ids.environment,
+        actorUserId: ids.user,
+        actorDeviceId: ids.injected,
+        projectEpoch: 1,
+        expectedHeadId: null,
+        expectedHeadHash: null,
+        valueRecipientPublicKey: invented.keys.encryptionPublicKey!,
+        sharedValueSecret: key,
+        signingPrivateKey: invented.keys.signingPrivateKey,
+        mutation: "GENESIS",
+      },
+    );
+    const revision = await wire(forged, environmentGenesis);
+    await expect(
+      verifySyncPage(
+        {
+          environmentId: ids.environment,
+          trustedRevisionId: ids.environment,
+          trustedRevisionHash: new Uint8Array(48),
+          currentHeadId: revision.id,
+          currentHeadHash: revision.digest,
+          projectEpoch: 1n,
+          revisions: [revision],
+          nextCursor: null,
+        },
+        collectSigningTrust(outcome.boundary, own.signingPublicKey, {
+          userId: ids.user,
+          deviceId: ids.device,
+        }),
+        {
+          actorUserId: ids.user,
+          expectedTrustedRevisionId: ids.environment,
+          expectedTrustedRevisionHash: new Uint8Array(48),
+        },
+      ),
+    ).rejects.toThrow("not authorized");
+  });
+
+  test("records which Users this installation confirmed, for legacy lanes", async () => {
+    const { outcome } = await scenario();
+    expect(outcome.boundary.verifiedSigners?.confirmedUserIds).toEqual([
+      ids.user,
+    ]);
   });
 });

@@ -28,7 +28,10 @@ Team (11), Project (13), Environment (14), Variable, Revision, owner (26) or ori
 (27), Project epoch (30), scope and format (50) fields, so a ciphertext opens only in the lane
 context it was sealed for. Protocol validation accepts only these two formats, and a format-2 lane
 must name its Environment, Variable and Revision. The v3 corpus pins both layouts as known answers
-(`lane-format-1`, `lane-format-2`).
+(`lane-format-1`, `lane-format-2`). Because format 1 binds no Environment, owner or provider,
+clients apply a format-1 lane only from their own User or a teammate they confirmed, and the
+service accepts no new format-1 lanes
+([ADR 0023](../adr/0023-lanes-are-bound-to-their-revision.md)).
 
 Decryption returns only plaintext or one generic `InvalidCiphertextError`. Malformed envelopes,
 unsupported suites, wrong keys, wrong associated data, and authentication failures are

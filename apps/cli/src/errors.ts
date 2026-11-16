@@ -101,6 +101,7 @@ const safeDiagnosticCodes = new Set([
   "device_mismatch",
   "device_not_active",
   "device_proof_required",
+  "recent_sign_in_required",
   "enrollment_binding_mismatch",
   "enrollment_certificate_invalid",
   "environment_ambiguous",
@@ -113,6 +114,7 @@ const safeDiagnosticCodes = new Set([
   "github_rate_limited",
   "github_unavailable",
   "grant_bootstrap_failed",
+  "history_unverifiable",
   "grant_bootstrap_unavailable",
   "incomplete-export",
   "input_read_failed",
@@ -178,6 +180,7 @@ const safeDiagnosticCodes = new Set([
   "trusted_head_invalid",
   "trusted_head_read_failed",
   "trust_failed",
+  "unconfirmed_legacy_lane",
   "unreadable_manifest",
   "unsafe_stdout",
   "unsupported_api_version",
@@ -224,6 +227,7 @@ export const categoryForProblem = (
     code === "alpha_admission_required" ||
     code === "device_not_active" ||
     code === "device_proof_required" ||
+    code === "recent_sign_in_required" ||
     code === "forbidden" ||
     code === "repository_access_denied"
   )
@@ -328,6 +332,8 @@ export const detailForProblem = (
     return "this Device is not active; run dotrelay device enroll to re-authorize it";
   if (code === "device_proof_required")
     return "the Server Profile did not accept this Device's proof of its key; run the command again, and run dotrelay login if it keeps failing";
+  if (code === "recent_sign_in_required")
+    return "this account has no active Device, so this action needs a sign-in from the last ten minutes; run dotrelay login and try again";
   if (code === "membership_not_key_provisioned")
     return [
       "you joined this Team, but its Project keys have not been shared with you yet.",
@@ -395,6 +401,7 @@ const errorTitles: Record<string, string> = {
   alpha_admission_required: "Private alpha",
   device_not_active: "Device not active",
   device_proof_required: "Device not proven",
+  recent_sign_in_required: "Recent sign-in required",
   membership_not_active: "Membership not active",
   membership_not_key_provisioned: "Waiting for Project keys",
   device_bundle_missing: "No Device enrolled",
@@ -432,6 +439,8 @@ const errorTitles: Record<string, string> = {
   rollback_target_unavailable: "Rollback target unavailable",
   rollback_variable_absent: "Rollback target missing Variables",
   unreadable_manifest: "Unreadable manifest",
+  history_unverifiable: "Environment history does not verify",
+  unconfirmed_legacy_lane: "Legacy Value from an unconfirmed teammate",
   account_key_not_unlocked: "Device not unlocked",
   account_key_unlock_failed: "Could not unlock account",
   account_key_transfer_invalid: "Account key transfer invalid",
@@ -515,6 +524,14 @@ const cryptoRuntimeErrorNames = new Set([
   "DataError",
   "NotSupportedError",
 ]);
+
+// The sync verifier's refusal: the Server Profile served Revisions this
+// Device cannot verify. Its messages are fixed strings, never server text.
+const isHistoryVerificationError = (error: unknown): error is Error =>
+  error instanceof Error && error.name === "ProtocolVerificationError";
+
+const historyVerificationDetail = (error: Error): string =>
+  `the Server Profile returned Environment history that does not verify (${sanitizeCliLine(error.message).slice(0, 200)}). Nothing was written. Do not trust this Server Profile until you have checked it`;
 
 const isCryptoRuntimeError = (error: unknown): boolean => {
   if (typeof error !== "object" || error === null) return false;
@@ -651,6 +668,14 @@ export const diagnosticForError = (
       exitCode: categoryExitCode[category],
     };
   }
+  if (isHistoryVerificationError(error))
+    return {
+      ok: false,
+      category: "crypto",
+      code: "history_unverifiable",
+      detail: historyVerificationDetail(error),
+      exitCode: EXIT_CODES.crypto,
+    };
   if (isCryptoRuntimeError(error)) {
     return {
       ok: false,
@@ -676,6 +701,8 @@ export const humanDetailForError = (
   const problemCode = problemCodeFor(error);
   if (problemCode !== null)
     return detailForProblem(problemCode, retryContextFor(error));
+  if (isHistoryVerificationError(error))
+    return historyVerificationDetail(error);
   // A raw crypto runtime failure stays as opaque on human stderr as in the
   // JSON document, so both modes name the same severity and next action;
   // --debug opts both into the sanitized operational message.

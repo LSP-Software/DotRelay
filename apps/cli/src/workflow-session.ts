@@ -26,6 +26,7 @@ import {
   USER_VALUE_KEY_GENERATION,
 } from "@dotrelay/client";
 import {
+  bytesToUuid,
   encodeProtocolObject,
   sha384,
   sha384ToHex,
@@ -37,7 +38,7 @@ import { createSessionStore } from "./auth";
 import { note } from "./components";
 import { describeCliClient } from "./device-describe";
 import { deviceMetadataPath, readDeviceId } from "./device-storage";
-import { CliError, CliInvocationError } from "./errors";
+import { CliError, CliInvocationError, sanitizeCliLine } from "./errors";
 import { loadAccountMasterKey } from "./workflow-account-key";
 import {
   establishAccountTrust,
@@ -668,7 +669,11 @@ export const loadWorkflowSession = async (
     ...(options.fetch ? { fetch: options.fetch as never } : {}),
   });
   const signingPublicKey = await exportSigningPublicKey(deviceSigningPublicKey);
-  const signingTrustKeys = collectSigningTrust(boundary, signingPublicKey);
+  // This Device's own key speaks for the User its bundle belongs to.
+  const signingTrustKeys = collectSigningTrust(boundary, signingPublicKey, {
+    userId: bytesToUuid(bundle.userId),
+    deviceId,
+  });
   let userValueKey: Uint8Array | undefined;
   if (accountMasterKey !== null && boundary.session.userId) {
     const unlockedKey = accountMasterKey;
@@ -847,6 +852,8 @@ export const loadWorkflowSession = async (
     sharedValuePrivateKey: keys.encryptionPrivateKey,
     userDefinedValuePrivateKey: keys.encryptionPrivateKey,
     signingTrustKeys,
+    // Legacy lanes apply only from this account and confirmed teammates.
+    legacyLaneAuthors: boundary.verifiedSigners?.confirmedUserIds ?? [],
     ...(epochKey ? { sharedValueSecret: epochKey } : {}),
     ...(sharedValueKeyRing && sharedValueKeyRing.size > 0
       ? { sharedValueKeyRing }
@@ -1096,6 +1103,16 @@ export const syncWorkflow = async (
     });
   } catch (error) {
     if (!(error instanceof UnreadableLaneError)) throw error;
+    // A legacy (format 1) lane binds no Environment, so it is applied only
+    // from this account or a teammate whose identity was confirmed here
+    // (ADR 0023). Name the author so the user can compare their fingerprint.
+    if (error.reason === "unconfirmed-legacy-author")
+      throw new CliError(
+        "crypto",
+        `a Value in this Environment was last published in the legacy lane format by a teammate this installation has not confirmed${error.authorUserId ? ` (${sanitizeCliLine(error.authorUserId)})` : ""}. Compare their fingerprint with dotrelay team members --fingerprints and confirm it with dotrelay team trust <user-id>, or ask a teammate to publish the Value again`,
+        {},
+        "unconfirmed_legacy_lane",
+      );
     // The verified history says the Manifest changed but this Device cannot
     // read it: failing here keeps the local file and the trusted head
     // untouched and names the grant that must be repaired.

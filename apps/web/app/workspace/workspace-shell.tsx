@@ -86,7 +86,6 @@ import {
   type AccountKeyActor,
   type AccountKeyWrapperEntry,
   fetchAccountKeyWrappers,
-  hexToBytes,
 } from "@/lib/account-keys";
 import {
   addEncryptionPassword,
@@ -845,6 +844,9 @@ export const WorkspaceShell = ({
   const [password, setPassword] = useState("");
   const [addPassword, setAddPassword] = useState("");
   const [addPasswordOpen, setAddPasswordOpen] = useState(false);
+  // The encryption password this browser was unlocked with no longer meets
+  // the password policy (it was set under the older, weaker rule).
+  const [passwordNeedsChange, setPasswordNeedsChange] = useState(false);
   const [transferIdInput, setTransferIdInput] = useState("");
   const [removePasswordDialogOpen, setRemovePasswordDialogOpen] =
     useState(false);
@@ -858,14 +860,11 @@ export const WorkspaceShell = ({
     readonly expiresAt: string;
     readonly recipientDeviceId: string;
   }> | null>(null);
-  // ADR 0022: the receiving Device's key fingerprint as the server reports
-  // it, which the person compares with the one that Device shows, and
-  // whether they confirmed it matches.
-  const [transferTargetFingerprint, setTransferTargetFingerprint] = useState<
-    string | null
-  >(null);
-  const [transferFingerprintConfirmed, setTransferFingerprintConfirmed] =
-    useState(false);
+  // ADR 0022: the key fingerprint the person typed from the receiving
+  // Device's own screen. The send compares it with the keys the server
+  // reports for that Device, so the check never compares a value with
+  // itself.
+  const [transferFingerprintInput, setTransferFingerprintInput] = useState("");
   // This browser's own key fingerprint, from its local keys, for another
   // Device to compare before it sends the account key here.
   const [deviceFingerprint, setDeviceFingerprint] = useState<string | null>(
@@ -1323,6 +1322,7 @@ export const WorkspaceShell = ({
       setTransferIdInput("");
     },
     setAccountUnlocked,
+    setPasswordNeedsChange,
   };
   const onRecoveryMutated = () =>
     setRecoveryGeneration((generation) => generation + 1);
@@ -1863,33 +1863,13 @@ export const WorkspaceShell = ({
         setSentTransfer(staged);
         setTransferTarget(null);
       },
-      transferFingerprintConfirmed ? transferTargetFingerprint : null,
+      transferFingerprintInput.trim() === "" ? null : transferFingerprintInput,
     );
 
+  // A fingerprint typed for one Device never carries over to another.
   useEffect(() => {
-    setTransferFingerprintConfirmed(false);
-    const peer = boundary.peerDevices?.find(
-      (candidate) => candidate.id === transferTarget,
-    );
-    if (!peer) {
-      setTransferTargetFingerprint(null);
-      return;
-    }
-    let cancelled = false;
-    void deviceKeyFingerprint({
-      encryptionPublicKey: hexToBytes(peer.encryptionPublicKey),
-      signingPublicKey: hexToBytes(peer.signingPublicKey),
-    })
-      .then((fingerprint) => {
-        if (!cancelled) setTransferTargetFingerprint(fingerprint);
-      })
-      .catch(() => {
-        if (!cancelled) setTransferTargetFingerprint(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transferTarget, boundary.peerDevices]);
+    setTransferFingerprintInput("");
+  }, [transferTarget]);
 
   useEffect(() => {
     const serverProfileId = boundary.profile.serverProfileId;
@@ -2798,6 +2778,7 @@ export const WorkspaceShell = ({
       setupMode={accountSetupRequired}
       onAddPassword={setAddPassword}
       onAddPasswordOpen={setAddPasswordOpen}
+      passwordNeedsChange={passwordNeedsChange}
       onAddEncryptionPassword={addEncryptionPasswordHandler}
       onAddPasskey={addPasskeyHandler}
       onDeviceSetup={provisionBrowserDevice}
@@ -2827,9 +2808,8 @@ export const WorkspaceShell = ({
       sentTransfer={sentTransfer}
       deviceId={boundary.device.id}
       deviceFingerprint={deviceFingerprint}
-      transferTargetFingerprint={transferTargetFingerprint}
-      transferFingerprintConfirmed={transferFingerprintConfirmed}
-      onTransferFingerprintConfirmed={setTransferFingerprintConfirmed}
+      transferFingerprintInput={transferFingerprintInput}
+      onTransferFingerprintInput={setTransferFingerprintInput}
       sessionActive={sessionActive}
       transferIdInput={transferIdInput}
       transferTarget={transferTarget}
@@ -4441,6 +4421,15 @@ export const WorkspaceShell = ({
                   ) : apiOrigin && displayBoundary.session.userId ? (
                     <AccountSettingsSection
                       apiOrigin={apiOrigin}
+                      device={
+                        browserDeviceId
+                          ? {
+                              deviceId: browserDeviceId,
+                              signingKey: () =>
+                                loadDeviceSigningKey(displayBoundary),
+                            }
+                          : undefined
+                      }
                       onDeleted={() => {
                         // The deleted account's keys and Device are useless
                         // now; a later sign-in is a new account with a new
