@@ -1142,7 +1142,12 @@ describe("ADR 0023: legacy lanes cannot cross Environment or Team boundaries", (
     const victim = await actor(userC, deviceC);
     const member = await actor(userA, deviceA);
     const key = crypto.getRandomValues(new Uint8Array(32));
-    const teamA = await resealRevision(
+    const teamA = {
+      teamId: "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1",
+      projectId: "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2",
+      environmentId: "a3a3a3a3-a3a3-4a3a-8a3a-a3a3a3a3a3a3",
+    };
+    const source = await resealRevision(
       await publish(
         victim,
         [
@@ -1154,47 +1159,83 @@ describe("ADR 0023: legacy lanes cannot cross Environment or Team boundaries", (
           }),
         ],
         {
-          parent: devGenesis,
+          parent: { id: teamA.environmentId, digest: new Uint8Array(48) },
           sharedValueSecret: key,
-          environmentId: devEnvironmentId,
+          ...teamA,
         },
       ),
       victim,
       key,
-      devEnvironmentId,
+      teamA.environmentId,
     );
-    const definition = teamA.objects.find(
+    const definition = source.objects.find(
       (object) => parseProtocolObject(object.canonicalBytes).get(36) === 2,
     );
     if (!definition) throw new Error("definition lane is missing");
-    const lanes = await Promise.all(
-      [definition.canonicalBytes, valueLaneOf(teamA, 4)].map((bytes) => {
-        const lane = new Map(parseProtocolObject(bytes));
-        lane.set(14, uuidToBytes(ids.environmentId));
-        return signFields(13, lane, member.signing.privateKey);
-      }),
-    );
-    const teamB = await assembleRevision({
-      signer: member,
-      author: victim.userId,
-      revisionId: teamA.id,
-      parent: genesis,
-      authoredAtMs: Number(teamA.authoredAtMs) + 1,
-      lanes,
-    });
+    const sourceLanes = [definition.canonicalBytes, valueLaneOf(source, 4)];
+    for (const bytes of sourceLanes)
+      expect(parseProtocolObject(bytes).get(11)).toEqual(
+        uuidToBytes(teamA.teamId),
+      );
+    // The Member signs the lanes into a Team B Revision. They always take
+    // Team B's Environment; `relabel` decides whether they also claim Team
+    // B's Team and Project or still name Team A's.
+    const teamBRevision = async (relabel: boolean) =>
+      assembleRevision({
+        signer: member,
+        author: victim.userId,
+        revisionId: source.id,
+        parent: genesis,
+        authoredAtMs: Number(source.authoredAtMs) + 1,
+        lanes: await Promise.all(
+          sourceLanes.map((bytes) => {
+            const lane = new Map(parseProtocolObject(bytes));
+            lane.set(14, uuidToBytes(ids.environmentId));
+            if (relabel) {
+              lane.set(11, uuidToBytes(ids.teamId));
+              lane.set(13, uuidToBytes(ids.projectId));
+            }
+            return signFields(13, lane, member.signing.privateKey);
+          }),
+        ),
+      });
+    const toVictim = {
+      ...fromGenesis,
+      actorUserId: victim.userId,
+      expectedContext: ids,
+    } as const;
+    // Lanes that still name Team A's Team and Project fail the Revision
+    // binding.
     await expect(
-      verifySyncPage(pageOf([teamB]), [member.signingPublicKey], {
-        ...fromGenesis,
-        actorUserId: victim.userId,
-      }),
+      verifySyncPage(
+        pageOf([await teamBRevision(false)]),
+        [member.signingPublicKey],
+        toVictim,
+      ),
+    ).rejects.toThrow("not bound to the Revision");
+    // Relabelled to Team B, the legacy ciphertext would still open: its
+    // associated data binds no Team. The author binding refuses it.
+    const relabelled = await teamBRevision(true);
+    const valueLane = valueLaneOf(relabelled, 4);
+    expect(parseProtocolObject(valueLane).get(11)).toEqual(
+      uuidToBytes(ids.teamId),
+    );
+    expect(
+      new TextDecoder().decode(
+        await openLane(
+          valueLane,
+          victim.encryption.privateKey,
+          victim.userValueKey,
+        ),
+      ),
+    ).toBe("team-a-secret");
+    await expect(
+      verifySyncPage(pageOf([relabelled]), [member.signingPublicKey], toVictim),
     ).rejects.toThrow("needs a signer bound to its author");
     // Constrained trust binds the author to the Member's own User.
     await expect(
-      verifySyncPage(pageOf([teamB]), [entryFor(member)], {
-        ...fromGenesis,
-        actorUserId: victim.userId,
-      }),
-    ).rejects.toBeInstanceOf(ProtocolVerificationError);
+      verifySyncPage(pageOf([relabelled]), [entryFor(member)], toVictim),
+    ).rejects.toThrow("not authorized");
   });
 });
 
