@@ -76,9 +76,12 @@ Before trusting synchronized protocol bytes, clients should:
 5. Take the Project Epoch Key from the account's own envelope before any grant, accept a grant
    only from a verified, confirmed signer, and check the key against the per-Project pins
    (ADR 0022).
-6. Verify signed protocol objects, parent Revision links, the Project epoch never decreasing, the
-   one committed Manifest descriptor, lane attribution to the Revision author, grant recipient
-   bindings, and Manifest descriptor ceilings.
+6. Verify signed protocol objects through signing-trust entries that bind each Revision's author
+   to its signing Device, parent Revision links, the Project epoch never decreasing, the one
+   committed Manifest descriptor, every lane and descriptor naming the Revision that carries it,
+   Revision ids that never repeat, lane attribution to the Revision author, grant recipient
+   bindings, and Manifest descriptor ceilings. Apply a legacy (format 1) lane only from the own
+   User or a confirmed teammate (ADR 0023).
 7. Advance or reconcile the trusted head; refuse implicit continuity loss.
 
 Malformed objects, signature failures, and parent-link breaks fail closed with generic client errors

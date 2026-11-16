@@ -71,7 +71,19 @@ Revision object, the one Manifest descriptor its Manifest hash names, and the
 lanes that descriptor commits to, each once; the decoder reads that
 descriptor. Every Value lane names the Revision's author as its owner
 (User-defined Value) or provider (Shared Value), and a client never opens
-another User's User-defined Value lane with its own User Value Key. A missing link is backfilled through
+another User's User-defined Value lane with its own User Value Key.
+
+Every lane and the descriptor carry the Server Profile, Team, Project,
+Environment and Revision id of the Revision that carries them, and every
+Revision names the Server Profile, Team and Project the client synced it for.
+A Revision id appears once in an Environment's history: a page that repeats
+one, or reuses an id the client verified earlier, is refused. Revisions verify
+only through signing-trust entries that bind the signing Device to its author;
+without them a client trusts only its own Device's Revisions. A legacy
+(format 1) lane is applied only when the client's own User or a teammate it
+confirmed authored it
+([ADR 0023](../adr/0023-lanes-are-bound-to-their-revision.md)). The service
+checks the same binding at publication and refuses new format-1 lanes. A missing link is backfilled through
 `POST /api/v1/projects/:projectId/epoch-key-links` by a client that holds both
 keys.
 

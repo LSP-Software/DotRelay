@@ -11,7 +11,6 @@ import {
   loadDeviceKeyMaterial,
   type ProtocolTransport,
   type PublicationContext,
-  type RevisionSigningTrust,
   type RevisionSigningTrustEntry,
   revisionAuthoredAtNotBeforeMs,
 } from "@dotrelay/client";
@@ -139,6 +138,12 @@ export type VerifiedSigners = Readonly<{
   readonly grant: readonly string[];
   /** Every roster-verified Device: Revisions and key chain links. */
   readonly history: readonly string[];
+  /**
+   * This account and the teammates whose identity the user confirmed: the
+   * only authors whose legacy (format 1) lanes this Device applies
+   * (ADR 0023).
+   */
+  readonly confirmedUserIds: readonly string[];
 }>;
 
 export type RotationOwed = Readonly<{
@@ -445,73 +450,61 @@ export const hexToBytes = (value: string): Uint8Array => {
 };
 
 // The boundary names the Team's authorized signing Devices with their Device
-// and Membership windows; that scoped set replaces the flat key list so a
-// Device revoked after it signed a legitimate Revision stays verifiable,
-// while a write made after the revocation is not. A boundary without the set
-
+// and Membership windows, already narrowed to roster-verified Devices
+// (ADR 0015). Each entry binds a Revision's author and signing Device to one
+// key, so a Device revoked after it signed a legitimate Revision stays
+// verifiable while a write made after the revocation is not. A boundary
+// without that set trusts only this installation's own key, bound to its own
+// User and Device: a plain teammate key would let its holder claim any author
+// for a Revision (ADR 0023).
 export const collectSigningTrust = (
   boundary: Boundary,
   localSigningPublicKey: Uint8Array,
-): RevisionSigningTrust => {
-  if (boundary.signingTrustDevices.length > 0) {
-    const entries: RevisionSigningTrustEntry[] = [];
-    // Keys that already have an entry, so the local fallback is not added
-    // twice. Entries themselves are kept even when they share a key: each
-    // carries its own windows (ADR 0017), and the verifier admits a
-    // Revision through any entry whose windows hold.
-    const seen = new Set<string>();
-    const seenEntries = new Set<string>();
-    for (const device of boundary.signingTrustDevices) {
-      let publicKey: Uint8Array;
-      try {
-        publicKey = hexToBytes(device.signingPublicKey);
-      } catch {
-        continue;
-      }
-      const hex = bytesToHex(publicKey);
-      seen.add(hex);
-      const entry: RevisionSigningTrustEntry = {
-        publicKey,
-        deviceId: device.deviceId,
-        userId: device.userId,
-        deviceActiveFromMs: device.deviceActiveFromMs,
-        deviceActiveUntilMs: device.deviceActiveUntilMs,
-        memberSinceMs: device.memberSinceMs,
-        memberUntilMs: device.memberUntilMs,
-        ...(device.membershipPeriods
-          ? { membershipPeriods: device.membershipPeriods }
-          : {}),
-      };
-      const identity = JSON.stringify({ ...entry, publicKey: hex });
-      if (seenEntries.has(identity)) continue;
-      seenEntries.add(identity);
-      entries.push(entry);
-    }
-    // This installation's own key is the one fallback that needs no window:
-    // the service only ever accepted its writes while it was authorized.
-    const localHex = bytesToHex(localSigningPublicKey);
-    if (!seen.has(localHex)) entries.push({ publicKey: localSigningPublicKey });
-    return entries;
-  }
-  const keys = [localSigningPublicKey];
-  const seen = new Set([bytesToHex(localSigningPublicKey)]);
-  const addHex = (value: string): void => {
+  local: Readonly<{ readonly userId: string; readonly deviceId: string }>,
+): RevisionSigningTrustEntry[] => {
+  const entries: RevisionSigningTrustEntry[] = [];
+  // Keys that already have an entry, so the local fallback is not added
+  // twice. Entries themselves are kept even when they share a key: each
+  // carries its own windows (ADR 0017), and the verifier admits a Revision
+  // through any entry whose windows hold.
+  const seen = new Set<string>();
+  const seenEntries = new Set<string>();
+  for (const device of boundary.signingTrustDevices) {
+    let publicKey: Uint8Array;
     try {
-      const bytes = hexToBytes(value);
-      const hex = bytesToHex(bytes);
-      if (seen.has(hex)) return;
-      seen.add(hex);
-      keys.push(bytes);
+      publicKey = hexToBytes(device.signingPublicKey);
     } catch {
-      return;
+      continue;
     }
-  };
-  for (const key of boundary.signingTrustKeys) addHex(key);
-  if (boundary.device.signingPublicKey)
-    addHex(boundary.device.signingPublicKey);
-  for (const peer of boundary.peerDevices)
-    if (peer.signingPublicKey.length > 0) addHex(peer.signingPublicKey);
-  return keys;
+    const hex = bytesToHex(publicKey);
+    seen.add(hex);
+    const entry: RevisionSigningTrustEntry = {
+      publicKey,
+      deviceId: device.deviceId,
+      userId: device.userId,
+      deviceActiveFromMs: device.deviceActiveFromMs,
+      deviceActiveUntilMs: device.deviceActiveUntilMs,
+      memberSinceMs: device.memberSinceMs,
+      memberUntilMs: device.memberUntilMs,
+      ...(device.membershipPeriods
+        ? { membershipPeriods: device.membershipPeriods }
+        : {}),
+    };
+    const identity = JSON.stringify({ ...entry, publicKey: hex });
+    if (seenEntries.has(identity)) continue;
+    seenEntries.add(identity);
+    entries.push(entry);
+  }
+  // This installation's own key needs no window: the service only ever
+  // accepted its writes while it was authorized. It still speaks only for
+  // this User and Device.
+  if (!seen.has(bytesToHex(localSigningPublicKey)))
+    entries.push({
+      publicKey: localSigningPublicKey,
+      deviceId: local.deviceId,
+      userId: local.userId,
+    });
+  return entries;
 };
 
 // The earliest authored-at instant the service accepts for a Revision this

@@ -1,6 +1,8 @@
 # Clients take trust only from what the service cannot forge
 
-Status: accepted
+Status: accepted; amended by [ADR 0023](0023-lanes-are-bound-to-their-revision.md), which binds
+every lane to the Revision that carries it, refuses repeated Revision ids, drops plain-key history
+trust, and applies legacy (format 1) lanes only from the own account or confirmed teammates.
 
 ADR 0015 put each account's Device keys on a roster signed by the account key. This ADR decides
 where the clients anchor their other trust decisions: which Devices a client trusts for history

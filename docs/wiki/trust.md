@@ -183,7 +183,11 @@ keys from its JSON (ADR 0015).
   Their Devices count only when a roster signed by the pinned identity lists them. No grant from
   them is accepted until the user compares fingerprints and confirms the identity
   (`dotrelay team trust <user-id>`, **Confirm fingerprint** in Members, or the share-keys
-  question). A changed identity, a lower version, or a missing roster, whether the service sends
+  question). Without a terminal, `dotrelay team trust` and `dotrelay team share-keys` confirm
+  only with `--fingerprint <fingerprint>`, which must match the teammate's identity. A first-sight
+  author can change a Value only with a lane sealed for their own Revision, and their legacy
+  (format 1) lanes are not applied until the user confirms them
+  ([ADR 0023](../adr/0023-lanes-are-bound-to-their-revision.md)). A changed identity, a lower version, or a missing roster, whether the service sends
   null or leaves the User out, blocks that teammate: no grants or provisioning go to them and their
   Revisions do not verify, until the user compares fingerprints and re-trusts them
   (`dotrelay team trust <user-id>` or **Trust new key** in Members). A confirmed or re-trusted pin

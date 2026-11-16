@@ -135,6 +135,12 @@ export type WorkspaceBoundary = Readonly<{
     readonly grant: readonly string[];
     /** Every roster-verified Device: Revisions and key chain links. */
     readonly history: readonly string[];
+    /**
+     * This account and the teammates whose identity the user confirmed: the
+     * only authors whose legacy (format 1) lanes this browser applies
+     * (ADR 0023).
+     */
+    readonly confirmedUserIds: readonly string[];
   }>;
   readonly epochGrant?: string;
   readonly accountKeyEnvelope?: string;

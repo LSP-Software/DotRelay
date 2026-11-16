@@ -4,6 +4,7 @@ import {
   decodeSyncManifest,
   type PublicationContext,
   type RevisionSigningTrust,
+  type RevisionSigningTrustEntry,
   type SharedValueKeyRing,
   type SharedValueSecrets,
   verifySyncPage,
@@ -21,6 +22,11 @@ export type VerifiedEnvironmentSession = Readonly<{
     readonly environmentId: string;
     readonly deviceId: string;
     readonly request: SyncInput["request"];
+    /**
+     * For a sync that starts after genesis: what this Device already
+     * verified about the Environment's history before the starting point.
+     */
+    readonly trustedHistory?: TrustedHistory;
   }) => Promise<
     Readonly<{
       readonly page: SyncPageWire;
@@ -51,6 +57,39 @@ export type VerifiedEnvironmentSession = Readonly<{
     readonly DecodedVariable[]
   >;
 }>;
+
+/**
+ * What a Device verified before an incremental sync's starting point: every
+ * Revision id the Environment's history already holds, and the starting
+ * Revision's authored-at instant and Project epoch (ADR 0022, ADR 0023).
+ */
+export type TrustedHistory = Readonly<{
+  readonly revisionIds: Iterable<string>;
+  readonly authoredAtMs?: bigint;
+  readonly projectEpoch?: bigint;
+}>;
+
+/**
+ * The trust a Device places in its own key when the Server Profile names no
+ * signing Devices: Revisions this Device signed, naming its own User and
+ * Device, and nothing else. A teammate's plain key never verifies history,
+ * because nothing would bind a Revision's claimed author to it (ADR 0023).
+ */
+export const ownSigningTrust = (
+  context: Pick<
+    PublicationContext,
+    "actorUserId" | "actorDeviceId" | "revisionSigningPublicKey"
+  >,
+): RevisionSigningTrustEntry[] =>
+  context.revisionSigningPublicKey
+    ? [
+        {
+          publicKey: context.revisionSigningPublicKey,
+          deviceId: context.actorDeviceId,
+          userId: context.actorUserId,
+        },
+      ]
+    : [];
 
 const sharedValueSecretsFor = (input: {
   readonly context: PublicationContext;
@@ -87,13 +126,20 @@ export const createVerifiedEnvironmentSession = (input: {
    * legitimate Revision stay verifiable while later writes stay rejected.
    */
   readonly signingTrustKeys?: RevisionSigningTrust;
+  /**
+   * The teammates whose identity this Device confirmed; with its own User,
+   * the only authors whose legacy (format 1) lanes it applies (ADR 0023).
+   */
+  readonly legacyLaneAuthors?: Iterable<string>;
 }): VerifiedEnvironmentSession => {
-  const signingTrust =
+  const ownTrust = ownSigningTrust(input.context);
+  const signingTrust: RevisionSigningTrust =
     input.signingTrustKeys && input.signingTrustKeys.length > 0
       ? input.signingTrustKeys
-      : input.context.revisionSigningPublicKey;
-  if (!signingTrust)
+      : ownTrust;
+  if (signingTrust.length === 0)
     throw new Error("revision signing trust key is required for live sync");
+  const legacyLaneAuthors = Object.freeze([...(input.legacyLaneAuthors ?? [])]);
   const sharedValueSecrets = sharedValueSecretsFor(input);
   const snapshots = new Map<string, readonly DecodedVariable[]>();
   let cachedVariables: readonly DecodedVariable[] = [];
@@ -121,6 +167,7 @@ export const createVerifiedEnvironmentSession = (input: {
       sharedValueSecrets,
       input.context.actorUserId,
       input.userDefinedValueSecret,
+      { legacyLaneAuthors },
     );
     for (const [revisionId, snapshot] of decoded.snapshots)
       snapshots.set(revisionId, snapshot);
@@ -133,11 +180,28 @@ export const createVerifiedEnvironmentSession = (input: {
     transport: input.transport,
     decodeVariables,
     syncAndDecode: async (request) => {
-      const page = await input.transport.syncAll(request);
+      const { trustedHistory: history, ...syncInput } = request;
+      const page = await input.transport.syncAll(syncInput);
       await verifySyncPage(page, signingTrust, {
         actorUserId: input.context.actorUserId,
         expectedTrustedRevisionId: request.request.trustedRevisionId,
         expectedTrustedRevisionHash: request.request.trustedRevisionHash,
+        expectedContext: {
+          serverProfileId: input.context.serverProfileId,
+          teamId: input.context.teamId,
+          projectId: input.context.projectId,
+        },
+        ...(history
+          ? {
+              knownRevisionIds: history.revisionIds,
+              ...(history.authoredAtMs === undefined
+                ? {}
+                : { trustedRevisionAuthoredAtMs: history.authoredAtMs }),
+              ...(history.projectEpoch === undefined
+                ? {}
+                : { trustedRevisionProjectEpoch: history.projectEpoch }),
+            }
+          : {}),
       });
       const variables = await decodeVariables(page);
       return Object.freeze({ page, variables });

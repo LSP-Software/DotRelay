@@ -4,6 +4,7 @@ import {
   createProtocolTransport,
   loadDeviceKeyMaterial,
   openProjectEpochKeyChain,
+  ownSigningTrust,
   ProjectEpochTrustError,
   uuidToBytes,
 } from "@dotrelay/client";
@@ -705,15 +706,10 @@ export const loadWorkspaceSession = (
           },
         },
       });
-      const signingTrustKeys = (boundary.signingTrustKeys ?? [])
-        .map((key) => {
-          try {
-            return hexToBytes(key);
-          } catch {
-            return null;
-          }
-        })
-        .filter((key): key is Uint8Array => key !== null);
+      // Every history signer is a roster-verified Device entry that binds a
+      // Revision's author to its signing Device. Without one, this browser
+      // trusts only its own key for its own User and Device (ADR 0023): a
+      // plain teammate key could claim any author.
       const scopedSigningTrustDevices = revisionSigningTrustEntries(
         boundary.signingTrustDevices ?? [],
       );
@@ -886,9 +882,8 @@ export const loadWorkspaceSession = (
         signingTrustKeys:
           scopedSigningTrustDevices.length > 0
             ? scopedSigningTrustDevices
-            : signingTrustKeys.length > 0
-              ? signingTrustKeys
-              : [hexToBytes(device.signingPublicKey)],
+            : ownSigningTrust(context),
+        legacyLaneAuthors: boundary.verifiedSigners?.confirmedUserIds ?? [],
         ...(sharedValueSecret ? { sharedValueSecret } : {}),
         ...(sharedValueKeyRing && sharedValueKeyRing.size > 0
           ? { sharedValueKeyRing }

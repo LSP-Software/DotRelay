@@ -90,7 +90,8 @@ _Avoid_: Transfer ID (alone), handoff token
 **Confirmed Identity**:
 A teammate's Account Identity that the user compared out of band and accepted on one installation.
 An identity pinned on first sight verifies the teammate's history, but only a confirmed one lets
-their Devices hand this installation keys.
+their Devices hand this installation keys, and only a confirmed teammate's legacy-format Values
+are read.
 _Avoid_: Trusted user, verified member
 
 **Project Epoch Key Link**:

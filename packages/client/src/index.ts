@@ -288,16 +288,21 @@ export {
   type SharedValueKeyRing,
   type SharedValueSecrets,
   type StagedPublicationObject,
+  type SyncDecodeOptions,
   type SyncManifestDecode,
+  type SyncPageContext,
   type SyncPageVerificationOptions,
   UnreadableLaneError,
   type UnreadableLaneKind,
+  type UnreadableLaneReason,
   validatePublicationVariables,
   validateRollbackRevision,
   verifySyncPage,
 } from "./sync/publication";
 export {
   createVerifiedEnvironmentSession,
+  ownSigningTrust,
+  type TrustedHistory,
   type VerifiedEnvironmentSession,
 } from "./sync/session";
 export {

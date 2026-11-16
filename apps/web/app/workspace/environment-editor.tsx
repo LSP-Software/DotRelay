@@ -118,6 +118,7 @@ import {
   type SetupAction,
   settlePublishedDraft,
   summarizeConflict,
+  trustedHistoryVerification,
   updateVariableValue,
   type VerifiedRevision,
   validateVariableDraft,
@@ -325,6 +326,11 @@ export const EnvironmentEditor = ({
           actorUserId: context.actorUserId,
           expectedTrustedRevisionId: context.trustedRevisionId,
           expectedTrustedRevisionHash: context.trustedRevisionHash,
+          expectedContext: {
+            serverProfileId: context.serverProfileId,
+            teamId: context.teamId,
+            projectId: context.projectId,
+          },
         });
         if (cancelled) return;
         const epochState = verifiedPageEpochState(page, context.projectEpoch);
@@ -384,9 +390,11 @@ export const EnvironmentEditor = ({
         if (!cancelled) {
           setPublishMessage(
             error instanceof UnreadableLaneError
-              ? error.laneKind === "USER_DEFINED_VALUE"
-                ? "This browser can open the account, but not a user-defined value in this environment. Open DotRelay on the device that last published it and run `dotrelay pull`, then retry here. Your values have not been changed."
-                : "This browser can open the account, but not this project's values. On a device that can still read this project, run `dotrelay pull` to publish its key for recovery, then retry here. Your values have not been changed."
+              ? error.reason === "unconfirmed-legacy-author"
+                ? "A value in this environment was last published in an older format by a teammate this browser hasn't confirmed. Compare their fingerprint in Members and confirm it, or ask a teammate to publish the value again. Your values have not been changed."
+                : error.laneKind === "USER_DEFINED_VALUE"
+                  ? "This browser can open the account, but not a user-defined value in this environment. Open DotRelay on the device that last published it and run `dotrelay pull`, then retry here. Your values have not been changed."
+                  : "This browser can open the account, but not this project's values. On a device that can still read this project, run `dotrelay pull` to publish its key for recovery, then retry here. Your values have not been changed."
               : stage === "fetch"
                 ? "The server couldn't send this environment. Check your connection and retry; no values were changed."
                 : stage === "verify"
@@ -931,10 +939,18 @@ export const EnvironmentEditor = ({
               pagination: {},
             },
           });
+          // An incremental page: no Revision may reuse an id this browser
+          // already verified or predate the head it continues from.
           await verifySyncPage(page, sessionSigningTrust(publishSession), {
             actorUserId: context.actorUserId,
             expectedTrustedRevisionId: trustedRevisionId,
             expectedTrustedRevisionHash: trustedRevisionHash,
+            expectedContext: {
+              serverProfileId: context.serverProfileId,
+              teamId: context.teamId,
+              projectId: context.projectId,
+            },
+            ...trustedHistoryVerification(verifiedHistory, trustedRevisionId),
           });
           setVerifiedHistory((current) =>
             mergeVerifiedHistory(current, verifiedRevisionsFromPage(page)),

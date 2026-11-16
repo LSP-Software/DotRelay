@@ -54,10 +54,11 @@ describe("boundary Membership periods (ADR 0017)", () => {
       trustEntry({ membershipPeriods: periods }),
     ]);
     expect(boundary.signingTrustDevices[0]?.membershipPeriods).toEqual(periods);
-    const trust = collectSigningTrust(
+    const trust: readonly RevisionSigningTrustEntry[] = collectSigningTrust(
       boundary,
       new Uint8Array(32).fill(0x33),
-    ) as readonly RevisionSigningTrustEntry[];
+      { userId, deviceId },
+    );
     expect(trust[0]?.membershipPeriods).toEqual(periods);
     expect(trust[0]?.memberSinceMs).toBe(5_000);
   });
@@ -84,10 +85,11 @@ describe("boundary Membership periods (ADR 0017)", () => {
       trustEntry({ membershipPeriods: [{ sinceMs: 5_000, untilMs: null }] }),
     ]);
     const local = new Uint8Array(32).fill(0x11);
-    const trust = collectSigningTrust(
+    const trust: readonly RevisionSigningTrustEntry[] = collectSigningTrust(
       boundary,
       local,
-    ) as readonly RevisionSigningTrustEntry[];
+      { userId, deviceId },
+    );
     // Exact duplicates collapse; the local key already has an entry, so no
     // unconstrained fallback is added for it.
     expect(trust).toHaveLength(2);

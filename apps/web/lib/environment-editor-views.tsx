@@ -1,7 +1,8 @@
-import type {
-  PublicationContext,
-  RevisionSigningTrust,
-  SyncPageWire,
+import {
+  ownSigningTrust,
+  type PublicationContext,
+  type RevisionSigningTrust,
+  type SyncPageWire,
 } from "@dotrelay/client";
 import { Check, Copy, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
@@ -49,14 +50,18 @@ export const ownershipLabel = (
 ): string =>
   ownership === "SHARED_VALUE" ? "Shared value" : "User-defined value";
 
+// The history signers a session verifies Revisions against. Without
+// roster-verified entries only this browser's own key counts, bound to its
+// own User and Device (ADR 0023).
 export const sessionSigningTrust = (
   session: SessionSigningTrustSource,
 ): RevisionSigningTrust => {
   if (session.signingTrustKeys && session.signingTrustKeys.length > 0)
     return session.signingTrustKeys;
-  if (!session.context.revisionSigningPublicKey)
+  const own = ownSigningTrust(session.context);
+  if (own.length === 0)
     throw new Error("revision signing trust key is unavailable");
-  return session.context.revisionSigningPublicKey;
+  return own;
 };
 
 export const headFromContext = (

@@ -45,7 +45,7 @@ import {
 import type { StrictJsonClient } from "./admin";
 import { createSessionStore } from "./auth";
 import type { CredentialStore } from "./credentials";
-import { CliError } from "./errors";
+import { CliError, EXIT_CODES } from "./errors";
 import type { GitTrackingProbe } from "./git-tracking";
 import { run } from "./index";
 import type { FetchFunction } from "./profile";
@@ -927,7 +927,7 @@ describe("protected CLI workflows", () => {
       );
   });
 
-  test("pulls Values signed by a peer Device using workspace signing trust keys", async () => {
+  test("refuses Values a peer Device signed when only plain signing trust keys name it", async () => {
     const bootstrap = await createDeviceBootstrap({
       pin: profile.pin,
       userId: ids.user,
@@ -1019,9 +1019,12 @@ describe("protected CLI workflows", () => {
       ],
       runtime,
     );
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("DATABASE_URL='postgres://example'");
-    expect(result.stderr).toBe("");
+    // A plain key binds no author to the Revision it signs, so the CLI
+    // trusts only its own key when the boundary names no signing Devices
+    // (ADR 0023). The peer's Revision does not verify.
+    expect(result.exitCode).toBe(EXIT_CODES.crypto);
+    expect(result.stderr).toContain("does not verify");
+    expect(result.stdout).not.toContain("postgres://example");
   });
 
   test("pulls Values signed by a peer Device through its trust entry windows", async () => {
@@ -1220,7 +1223,7 @@ describe("protected CLI workflows", () => {
       ],
       runtime,
     );
-    expect(result.exitCode).toBe(8);
+    expect(result.exitCode).toBe(EXIT_CODES.crypto);
     let written = "";
     try {
       written = await Bun.file(outputPath).text();
@@ -1229,8 +1232,8 @@ describe("protected CLI workflows", () => {
     }
     expect(written).not.toContain("postgres://example");
     expect(JSON.parse(result.stderr)).toMatchObject({
-      category: "local-io",
-      code: "unexpected_failure",
+      category: "crypto",
+      code: "history_unverifiable",
     });
   });
 
@@ -1371,7 +1374,7 @@ describe("protected CLI workflows", () => {
       revisions: [revision],
     });
     const refused = await pullStdout(currentOnly);
-    expect(refused.exitCode).toBe(8);
+    expect(refused.exitCode).toBe(EXIT_CODES.crypto);
     expect(refused.stdout).not.toContain("postgres://example");
   });
 
@@ -1408,7 +1411,7 @@ describe("protected CLI workflows", () => {
       ],
     });
     const refused = await pullStdout(runtime);
-    expect(refused.exitCode).toBe(8);
+    expect(refused.exitCode).toBe(EXIT_CODES.crypto);
     expect(refused.stdout).not.toContain("postgres://example");
   });
 
