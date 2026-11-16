@@ -1092,7 +1092,13 @@ test.describe("workspace recovery", () => {
     await installRecoveryRoutes(page, scenario);
     await page.route("**/api/v1/account-keys/wrappers/revoke", (route) => {
       const body = route.request().postDataJSON() as { wrapperId?: string };
-      if (typeof body.wrapperId === "string") revoked.push(body.wrapperId);
+      if (typeof body.wrapperId === "string") {
+        revoked.push(body.wrapperId);
+        // A revoked wrapper is no longer listed, so it unlocks nothing.
+        scenario.wrappers = scenario.wrappers.filter(
+          (wrapper) => wrapper.wrapperId !== body.wrapperId,
+        );
+      }
       return route.fulfill({ status: 200, json: { revoked: true } });
     });
     await enrollDevice(page);
@@ -1148,6 +1154,8 @@ test.describe("workspace recovery", () => {
     const input = page.getByTestId("add-encryption-password-input");
     const confirm = page.getByTestId("add-encryption-password-confirm");
     const advice = page.getByTestId("add-encryption-password-advice");
+    // A password manager offers to generate and save a new password.
+    await expect(input).toHaveAttribute("autocomplete", "new-password");
     await input.fill("hunter2");
     await expect(confirm).toBeDisabled();
     await expect(advice).toContainText("at least 12 characters");
@@ -1164,6 +1172,18 @@ test.describe("workspace recovery", () => {
     await expect(page.getByTestId("weak-password-notice")).toHaveCount(0);
     // The new password was added first, then the old one retired.
     expect(revoked).toEqual([weakWrapperId]);
+    // With the old wrapper gone, a fresh page unlocks with the new password.
+    await page.reload();
+    await openRecoveryView(page);
+    await page
+      .getByTestId("recovery-unlock")
+      .getByTestId("recovery-method-password")
+      .click();
+    await unlockWith(page, "password", "correct-horse-battery-9");
+    await expect(page.getByTestId("recovery-status")).toBeVisible({
+      timeout: 90_000,
+    });
+    await expect(page.getByTestId("weak-password-notice")).toHaveCount(0);
   });
 
   test("an encryption password can be added, used after a reload, and removed", async ({

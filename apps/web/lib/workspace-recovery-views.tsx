@@ -749,6 +749,7 @@ export const RecoveryArea = ({
                 </Label>
                 <Input
                   aria-describedby="add-encryption-password-advice"
+                  autoComplete="new-password"
                   data-testid="add-encryption-password-input"
                   id="add-encryption-password"
                   onChange={(event) => onAddPassword(event.target.value)}
