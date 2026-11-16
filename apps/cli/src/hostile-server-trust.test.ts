@@ -459,7 +459,7 @@ describe("C-2: a teammate the service leaves out of the rosters is not trusted",
   });
 });
 
-describe("N-1: no history trust from plain keys", () => {
+describe("ADR 0023: no history trust from plain keys", () => {
   // The service invents a User, signs a roster for it under an AMK it chose,
   // and sends no constrained signing trust: only plain keys.
   const scenario = async () => {

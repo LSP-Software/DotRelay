@@ -604,9 +604,9 @@ describe("C-6: the decoder uses the descriptor the Revision commits to", () => {
 });
 
 // ---------------------------------------------------------------------------
-// N-1 and C-5 of the November 2026 re-review (ADR 0023): a malicious Server
-// Profile invents a teammate, signs a roster for it, and has its Device sign
-// Revisions that carry lanes sealed for other Revisions.
+// ADR 0023: every lane is bound to the Revision that carries it, Revision ids
+// never repeat, and legacy lanes apply only from confirmed authors. The
+// signer in these tests is a teammate this client pinned on first sight.
 // ---------------------------------------------------------------------------
 
 type Actor = Awaited<ReturnType<typeof actor>>;
@@ -742,7 +742,7 @@ const valueLaneOf = (wire: SyncRevisionWire, scope: 3 | 4): Uint8Array => {
   return lane.canonicalBytes;
 };
 
-describe("N-1: a Revision cannot carry lanes sealed for another Revision", () => {
+describe("ADR 0023: a Revision cannot carry lanes sealed for another Revision", () => {
   const passwordId = "99999999-9999-4999-8999-9999999999b1";
   const password = (value: string) =>
     variable({ id: passwordId, name: "DB_PASSWORD", value });
@@ -796,7 +796,7 @@ describe("N-1: a Revision cannot carry lanes sealed for another Revision", () =>
     expect(await decodePassword(page, provider, key)).toBe("new-password");
   });
 
-  test("replay A: plain keys, an author-spoofed Revision carrying R1's format-2 lane", async () => {
+  test("with plain keys, a Revision carrying an earlier Revision's format-2 lane is refused", async () => {
     const { provider, invented, r1, r2 } = await rotation(2);
     for (const revisionId of [crypto.randomUUID(), r1.id]) {
       // The invented User's Device signs R3, claims the real provider as
@@ -819,7 +819,7 @@ describe("N-1: a Revision cannot carry lanes sealed for another Revision", () =>
     }
   });
 
-  test("replay B: constrained trust, R1's legacy lane re-signed with the provider rewritten", async () => {
+  test("with signing-trust entries, a re-signed legacy lane from an earlier Revision is refused", async () => {
     const { provider, invented, key, r1, r2 } = await rotation(1);
     // The provider field sits outside the format-1 associated data, so the
     // invented User can name itself and sign the lane; the ciphertext still
@@ -950,7 +950,7 @@ describe("N-1: a Revision cannot carry lanes sealed for another Revision", () =>
   });
 });
 
-describe("C-5: legacy lanes cannot cross Environment or Team boundaries", () => {
+describe("ADR 0023: legacy lanes cannot cross Environment or Team boundaries", () => {
   const flagId = "99999999-9999-4999-8999-9999999999c1";
   const devEnvironmentId = "aeaeaeae-aeae-4eae-8eae-aeaeaeaeaeae";
   const devGenesis = { id: devEnvironmentId, digest: new Uint8Array(48) };
@@ -1089,9 +1089,9 @@ describe("C-5: legacy lanes cannot cross Environment or Team boundaries", () => 
   });
 
   test("a legacy User-defined Value cannot be presented in another Team through a plain key", async () => {
-    // PoC shape: the victim's format-1 Team A ciphertext in a Team B GENESIS
-    // that a cooperating Member signs, claiming the victim as author, with
-    // no constrained signing trust.
+    // A Team A legacy ciphertext placed in a Team B Revision whose signer
+    // names another User as author: only an author-bound signer may carry a
+    // legacy User-defined Value lane.
     const victim = await actor(userC, deviceC);
     const member = await actor(userA, deviceA);
     const key = crypto.getRandomValues(new Uint8Array(32));

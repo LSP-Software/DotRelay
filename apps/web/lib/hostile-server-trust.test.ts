@@ -330,7 +330,7 @@ describe("C-2 (browser): an omitted pinned teammate vouches for nothing", () => 
   });
 });
 
-describe("N-1 (browser): history trust never comes from plain keys", () => {
+describe("ADR 0023 (browser): history trust never comes from plain keys", () => {
   test("an invented first-sight User is recorded as unconfirmed", async () => {
     const ownAmk = crypto.getRandomValues(new Uint8Array(32));
     const inventedAmk = crypto.getRandomValues(new Uint8Array(32));
