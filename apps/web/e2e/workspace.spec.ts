@@ -572,7 +572,7 @@ test("protected Environment editor keeps Values masked and previews a local draf
   await expect(
     page.getByRole("menuitem", { name: "Load latest values" }),
   ).toHaveCount(0);
-  await page.keyboard.press("Escape");
+  await page.getByRole("menu").press("Escape");
   await expect(page.getByRole("menu")).toBeHidden();
   await page.getByRole("tab", { name: "History" }).click();
   await expect(page.getByText("rev_0184", { exact: true })).toBeVisible();
