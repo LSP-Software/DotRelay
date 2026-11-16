@@ -55,6 +55,12 @@ describe("browser dotenv parsing", () => {
     ]);
   });
 
+  test("keeps \\$ before a reference and decodes it before anything else", () => {
+    expect(parseDotenv('A="\\$HOME \\${PATH} \\$5 \\$(id) \\$"')).toEqual([
+      { name: "A", value: "\\$HOME \\${PATH} $5 $(id) $" },
+    ]);
+  });
+
   test("rejects malformed input with a line number", () => {
     expect(() => parseDotenv("  not an assignment")).toThrow(
       "line 1, column 3",
@@ -81,6 +87,12 @@ describe("browser dotenv writing", () => {
       { name: "EMPTY", value: "" },
     ];
     expect(parseDotenv(serializeDotenv(entries))).toEqual(entries);
+  });
+
+  test("writes references for expanders and escapes every other $", () => {
+    expect(
+      serializeDotenv([{ name: "A", value: "$HOME \\$PATH $5 $(id)" }]),
+    ).toBe('A="$HOME \\$PATH \\$5 \\$(id)"\n');
   });
 
   test("single-quotes plain values and writes nothing for no entries", () => {
