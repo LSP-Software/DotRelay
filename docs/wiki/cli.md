@@ -404,14 +404,17 @@ tracked file itself, and the review and the report name the file the link points
 
 Values are written so an expander sees the same text the source gave it. A `${HOME}` reference
 read from an unquoted or double-quoted line is written in double quotes with `$` unescaped, and
-a `\$` the source used for a literal dollar sign stays `\$`. Values with no quote, line break,
-`$`, or backtick are single-quoted. A Value is also single-quoted, so every reader takes it
+a `\$` the source used before a reference (`\$HOME`) stays `\$`. Values with no quote, line
+break, `$`, or backtick are single-quoted. A Value is also single-quoted, so every reader takes it
 literally, when the file being replaced single-quoted it, or when it holds a `$` that is not a
-variable reference (`$(command)`, `$2b$10$…`, a trailing `$`), unless it also holds a single
-quote. A pulled file is data for a dotenv loader: do not `source` it in a shell, which would
-expand references in double-quoted Values; use `dotrelay run` to start a command with the Values. Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and
-`` \` `` are decoded, and any other backslash sequence, such as `"C:\Users"`, is kept as
-written. Parse errors name the file.
+variable reference (`$(command)`, `$2b$10$…`, a trailing `$`). A Value that also holds a single
+quote cannot be single-quoted: it is double-quoted with every `$` that is not a reference written
+as `\$`, and every backtick and backslash escaped, so even a file sourced into a shell runs none
+of it. A pulled file is still data for a dotenv loader: do not `source` it in a shell, which would
+expand references in double-quoted Values; use `dotrelay run` to start a command with the Values.
+Inside double quotes `\n`, `\r`, `\t`, `\\`, `\"`, and `` \` `` are decoded, and so is `\$`
+before anything that is not a reference, since every reader takes it as a plain `$`. Any other
+backslash sequence, such as `"C:\Users"`, is kept as written. Parse errors name the file.
 
 `run [--environment <label>] -- <command> [<argument>…]` decrypts the Environment in memory and
 starts the command with the Values as environment variables. Nothing is written to disk. Values
@@ -425,8 +428,14 @@ Any active Member can publish a Variable, and some names control how a program, 
 interpreter, or a shell starts rather than configuring the application: `PATH`, `HOME`,
 `NODE_OPTIONS`, `NODE_PATH`, `BUN_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `ENV`,
 `PROMPT_COMMAND`, `PS1`, `PS4`, `IFS`, `PYTHON*`, `PERL5*`, `RUBYOPT`, `RUBYLIB`,
-`JAVA_TOOL_OPTIONS`, `GIT_*`, `npm_config_*`, `EDITOR`, `PAGER` and similar. A Member who sets
-one of these could run code as every teammate who starts a command through DotRelay. `run`
+`JAVA_TOOL_OPTIONS`, `GIT_*`, `npm_config_*`, `EDITOR`, `PAGER` and similar, and the hooks of
+build toolchains and launchers: `GOFLAGS`, `GOTOOLCHAIN`, `GOPROXY` and the other Go settings,
+`CC`, `CXX`, `CFLAGS`, `LDFLAGS`, `MAKEFLAGS`, `CGO_*`, `RUSTFLAGS`, `RUSTC*`, `CARGO_*`,
+`MAVEN_OPTS`, `GRADLE_OPTS`, `BROWSER`, `XDG_*`, TLS trust (`SSL_CERT_FILE`, `OPENSSL_CONF`,
+`NODE_EXTRA_CA_CERTS`) and `KUBECONFIG`. Prefixes that belong to a runtime or toolchain (`NODE_*`,
+`BUN_*`, `YARN_*`, `PIP_*`, `CMAKE_*` and others) are refused as a whole except the application
+settings DotRelay knows, such as `NODE_ENV`. A Member who sets one of these could run code as
+every teammate who starts a command through DotRelay. `run`
 therefore refuses such a Variable (`process_control_variable`, exit 2) and names it; check who
 set it with `history`, and pass it on deliberately with `--allow-env <name>`, once per name
 (`dotrelay run --allow-env NODE_OPTIONS -- node app.js`). Names are matched case-insensitively.

@@ -14,11 +14,22 @@ export type ClassifiedDotenvEntry = DotenvEntry &
 
 const variableName = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+// Whether the `$` at `index` starts a reference an expander resolves:
+// `$NAME`, `${NAME}`, or `${NAME:-default}` and its kin.
+const REFERENCE_AT =
+  /^\$(?:[A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?][^}]*)?\})/;
+const startsReference = (text: string, index: number): boolean =>
+  REFERENCE_AT.test(text.slice(index));
+
 // Escapes that only exist to survive the double quotes are decoded. `\$`
-// is expansion syntax rather than quoting, so it stays in the Value as
-// written: dotenv-expand, Next.js and Bun read it as a literal dollar sign,
-// and writing the Value back emits the same text. Any other backslash
-// sequence is kept literally, as the npm dotenv package does.
+// before a variable reference (`\$NAME`, `\${NAME}`) is expansion syntax
+// rather than quoting, so it stays in the Value as written: dotenv-expand,
+// Next.js and Bun read it as a literal dollar sign, and writing the Value
+// back emits the same text. `\$` before anything else (`\$(`, `\$5`, a
+// final `\$`) means a plain `$` to every reader, since no expander treats
+// those as references, so it is decoded; the serializer writes such a `$`
+// that way to keep a shell from running it. Any other backslash sequence is
+// kept literally, as the npm dotenv package does.
 const DECODED_ESCAPES: Readonly<Record<string, string>> = {
   n: "\n",
   r: "\r",
@@ -59,7 +70,9 @@ const readQuotedValue = (
         }
         const decoded = Object.hasOwn(DECODED_ESCAPES, next)
           ? DECODED_ESCAPES[next]
-          : undefined;
+          : next === "$" && !startsReference(text, col + 1)
+            ? "$"
+            : undefined;
         chunks.push(decoded ?? `\\${next}`);
         col += 2;
         continue;
@@ -294,30 +307,28 @@ export const diffDotenvEntries = (
   return Object.freeze(changes);
 };
 
-// Whether every `$` in the Value is a reference an expander resolves
-// (`$NAME`, `${NAME}`, `${NAME:-default}`) or one the source escaped as
-// `\$`. Anything else, such as `$(command)`, `$2b$` or a trailing `$`, is
-// not something an expander should see.
-const REFERENCE_AT =
-  /^\$(?:[A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?][^}]*)?\})/;
+// Whether every `$` in the Value starts a reference an expander resolves.
+// Anything else, such as `$(command)`, `$2b$` or a trailing `$`, is not
+// something an expander should see.
 const onlyReferences = (value: string): boolean => {
   for (let index = value.indexOf("$"); index >= 0;) {
-    if (value[index - 1] !== "\\" && !REFERENCE_AT.test(value.slice(index)))
-      return false;
+    if (!startsReference(value, index)) return false;
     index = value.indexOf("$", index + 1);
   }
   return true;
 };
 
-// A Value is written so the parser above reads it back unchanged. Values
-// with no quote, line break, `$` or backtick use single quotes, which every
-// reader takes literally. So does a Value read from a single-quoted line,
-// and one whose `$` is not a variable reference: double quotes would let
-// an expander rewrite it and a shell run `$(…)`. Otherwise the Value is
-// double-quoted so an expander (dotenv-expand, Next.js, Bun) sees the same
-// text it saw in an unquoted or double-quoted source: `$` is never
-// escaped, so a `${HOME}` reference stays expandable and a `\$` the source
-// used for a literal dollar stays `\$`.
+// A Value is written so the parser above reads it back unchanged, and so a
+// file sourced into a shell (`set -a; . ./.env`) never runs any of it.
+// Values with no quote, line break, `$` or backtick use single quotes,
+// which every reader takes literally. So does a single-quotable Value read
+// from a single-quoted line, and one whose `$` is not a variable
+// reference. Otherwise the Value is double-quoted: a `$` that starts a
+// reference stays as written so an expander (dotenv-expand, Next.js, Bun)
+// and a shell expand it, a `\$` the source used before a reference stays
+// `\$`, and every other `$`, every backtick and every backslash is escaped,
+// so `$(…)`, `$((…))` and `` `…` `` reach no shell. A Value that holds a
+// single quote cannot be single-quoted and relies on these escapes.
 const serializeValue = (value: string, literal: boolean): string => {
   if (!/['\n\r$`]/.test(value)) return `'${value}'`;
   const singleQuotable = !/['\r]/.test(value);
@@ -326,7 +337,12 @@ const serializeValue = (value: string, literal: boolean): string => {
   let escaped = "";
   for (let index = 0; index < value.length; index += 1) {
     const ch = value.charAt(index);
-    if (ch === "\\") escaped += value[index + 1] === "$" ? "\\" : "\\\\";
+    if (ch === "\\")
+      escaped +=
+        value[index + 1] === "$" && startsReference(value, index + 1)
+          ? "\\"
+          : "\\\\";
+    else if (ch === "$") escaped += startsReference(value, index) ? "$" : "\\$";
     else if (ch === "\n") escaped += "\\n";
     else if (ch === "\r") escaped += "\\r";
     else if (ch === "\t") escaped += "\\t";
