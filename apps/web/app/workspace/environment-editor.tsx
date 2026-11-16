@@ -952,9 +952,6 @@ export const EnvironmentEditor = ({
             },
             ...trustedHistoryVerification(verifiedHistory, trustedRevisionId),
           });
-          setVerifiedHistory((current) =>
-            mergeVerifiedHistory(current, verifiedRevisionsFromPage(page)),
-          );
           const remoteChangedVariableIds = changedVariableIdsFromSyncPage(page);
           const decodedVariables = publishSession.decodeVariables
             ? await publishSession.decodeVariables(page, remoteVariables)
@@ -979,6 +976,12 @@ export const EnvironmentEditor = ({
               decodedVariables,
               conflictingVariableIds,
             );
+          // The page's Revisions join the verified history only with the
+          // head they lead to: a page that fails to decode, or names no
+          // head, leaves both as they were, so a retry can fetch it again.
+          setVerifiedHistory((current) =>
+            mergeVerifiedHistory(current, verifiedRevisionsFromPage(page)),
+          );
           setProtocolHead({
             id: page.currentHeadId,
             hash: page.currentHeadHash,
