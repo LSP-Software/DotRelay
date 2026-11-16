@@ -1088,6 +1088,53 @@ describe("ADR 0023: legacy lanes cannot cross Environment or Team boundaries", (
     );
   });
 
+  test("a readable tombstone retires a legacy Value this Device would not apply", async () => {
+    const owner = await actor(userA, deviceA);
+    const teammate = await actor(userC, deviceC);
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const r1 = await resealRevision(
+      await publish(
+        teammate,
+        [variable({ id: flagId, name: "AUTH_DISABLED", value: "false" })],
+        { parent: genesis, sharedValueSecret: key },
+      ),
+      teammate,
+      key,
+    );
+    // The owner deletes the Variable in format 2; nothing about it is left
+    // to read, so the unconfirmed legacy Value no longer blocks the page.
+    const r2 = await publish(
+      owner,
+      [
+        variable({
+          id: flagId,
+          name: "AUTH_DISABLED",
+          value: null,
+          required: false,
+          tombstone: true,
+        }),
+      ],
+      { parent: r1, sharedValueSecret: key },
+    );
+    const page = pageOf([r1, r2.wire]);
+    await verifySyncPage(page, [entryFor(owner), entryFor(teammate)], {
+      ...fromGenesis,
+      actorUserId: owner.userId,
+    });
+    const decoded = await decodeSyncManifest(
+      page,
+      () => owner.encryption.privateKey,
+      [],
+      key,
+      owner.userId,
+      owner.userValueKey,
+      { legacyLaneAuthors: [] },
+    );
+    expect(decoded.variables).toEqual([
+      expect.objectContaining({ id: flagId, tombstone: true, value: null }),
+    ]);
+  });
+
   test("a legacy User-defined Value cannot be presented in another Team through a plain key", async () => {
     // A Team A legacy ciphertext placed in a Team B Revision whose signer
     // names another User as author: only an author-bound signer may carry a

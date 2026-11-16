@@ -1102,6 +1102,9 @@ export const decodeSyncManifest = async (
             ? null
             : (existing?.ownerUserId ?? null),
         });
+        // A deleted Variable has no Value, so an earlier Value this Device
+        // could not read (or would not apply) no longer has to be read.
+        if (definition.tombstone) valueStates.delete(id);
       } else if (scope === 3 || scope === 4) {
         const existing = variables.get(id);
         if (!existing) {
