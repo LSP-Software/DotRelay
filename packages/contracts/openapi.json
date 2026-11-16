@@ -2949,8 +2949,8 @@
           {
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
-            "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "required": false,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020). Required while the signed-in User has an active Device (401 device_proof_required without it); a User without one sends none and needs a sign-in from the last ten minutes instead (ADR 0024).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -3368,8 +3368,8 @@
           {
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
-            "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "required": false,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020). Required while the signed-in User has an active Device (401 device_proof_required without it); a User without one sends none and needs a sign-in from the last ten minutes instead (ADR 0024).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"
@@ -3632,8 +3632,8 @@
           {
             "name": "X-DotRelay-Device-Proof",
             "in": "header",
-            "required": true,
-            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020).",
+            "required": false,
+            "description": "A Device proof from POST /api/v1/devices/proofs, bound to this session and Device (ADR 0020). Required while the signed-in User has an active Device (401 device_proof_required without it); a User without one sends none and needs a sign-in from the last ten minutes instead (ADR 0024).",
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{98}$"

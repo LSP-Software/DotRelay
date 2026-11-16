@@ -7,6 +7,7 @@ import {
   canonicalEncode,
   createCapabilitiesDocument,
   createProblem,
+  DEVICE_PROOF_HEADER,
   encodeProtocolObject,
   FIELD_REGISTRY,
   OBJECT_REGISTRY,
@@ -211,5 +212,28 @@ describe("runtime-neutral API contracts", () => {
       true,
     );
     expect(validateIdempotencyKey("not-an-idempotency-key")).toBe(false);
+  });
+
+  test("marks the Device proof optional only where a recent sign-in can stand in", () => {
+    const paths = OPENAPI_DOCUMENT.paths as unknown as Record<
+      string,
+      Record<
+        string,
+        { parameters?: readonly { name?: string; required?: boolean }[] }
+      >
+    >;
+    const proof = (path: string, method: string) =>
+      paths[path]?.[method]?.parameters?.find(
+        (parameter) => parameter.name === DEVICE_PROOF_HEADER,
+      );
+    for (const [path, method] of [
+      ["/api/v1/teams/{teamId}/leave", "post"],
+      ["/api/v1/account/export", "get"],
+      ["/api/v1/account/delete", "post"],
+    ] as const)
+      expect(proof(path, method)).toMatchObject({ required: false });
+    expect(
+      proof("/api/v1/environments/{environmentId}/sync", "post"),
+    ).toMatchObject({ required: true });
   });
 });
