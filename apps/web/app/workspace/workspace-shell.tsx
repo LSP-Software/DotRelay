@@ -13,6 +13,7 @@ import {
   Braces,
   ChevronDown,
   ChevronRight,
+  Check,
   FolderGit2,
   KeyRound,
   LockKeyhole,
@@ -20,7 +21,6 @@ import {
   Menu,
   MonitorSmartphone,
   RotateCcw,
-  UserRound,
   Users,
   WifiOff,
 } from "lucide-react";
@@ -28,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCommand } from "@/components/copyable-command";
 import { GitHubAppAccessHint } from "@/components/github-app-access-hint";
 import { CommandText, InlineCommand } from "@/components/inline-command";
+import { BrandLink } from "@/components/site-shell";
 import {
   Alert,
   AlertAction,
@@ -267,11 +268,11 @@ const WORKSPACE_FIXTURE =
   process.env.NEXT_PUBLIC_DOTRELAY_WORKSPACE_FIXTURE === "1";
 
 const roleDisclosure: Readonly<Record<MembershipRole, string>> = {
-  OWNER: "Owners can manage team members, projects, and environments.",
+  OWNER:
+    "As an owner, you can invite and remove people, change roles, and manage projects and environments.",
   ADMIN:
-    "Admins can invite and remove members and manage projects and environments. They cannot change owners or other admins.",
-  MEMBER:
-    "Members can view this team's projects, read shared values, and manage their own values.",
+    "As an admin, you can invite and remove members and manage projects and environments. You can't change owners or other admins.",
+  MEMBER: "As a member, you can see team values and edit your own values.",
 };
 
 // A Member's account identity state (ADR 0015, ADR 0022) and fingerprint.
@@ -460,8 +461,14 @@ const LifecycleDialog = ({
       <DialogTrigger
         render={
           <Button
+            className={
+              isActive
+                ? "text-muted-foreground hover:text-destructive"
+                : undefined
+            }
             disabled={disabled}
-            variant={isActive ? "destructive" : "outline"}
+            size="sm"
+            variant={isActive ? "ghost" : "outline"}
           />
         }
       >
@@ -538,6 +545,14 @@ const installArgon2Worker = () => {
   })();
 };
 
+const navItemClass = (active: boolean) =>
+  cn(
+    "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring",
+    active
+      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+      : "text-muted-foreground",
+  );
+
 const NavLinks = ({
   onNavigate,
   onOpenProject,
@@ -553,13 +568,12 @@ const NavLinks = ({
   readonly teamProjects: readonly WorkspaceProject[];
   readonly view: WorkspaceView;
 }) => (
-  <nav aria-label="Workspace navigation" className="grid gap-1">
+  <nav aria-label="Workspace navigation" className="grid gap-0.5">
     <button
       className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring",
-        view === "projects" || view === "environment"
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-muted-foreground",
+        navItemClass(view === "projects"),
+        "mb-0.5 text-xs font-normal",
+        view !== "projects" && "text-muted-foreground/80",
       )}
       onClick={() => {
         onSetView("projects");
@@ -567,34 +581,39 @@ const NavLinks = ({
       }}
       type="button"
     >
-      <FolderGit2 aria-hidden="true" className="size-4" />
       Projects
     </button>
     {teamProjects.map((project) => (
       <button
-        className={cn(
-          "ml-4 truncate rounded-lg px-3 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        aria-current={
           selectedProjectId === project.id && view === "environment"
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "text-muted-foreground",
+            ? "page"
+            : undefined
+        }
+        className={navItemClass(
+          selectedProjectId === project.id && view === "environment",
         )}
         key={project.id}
         onClick={() => {
           onOpenProject(project);
           onNavigate?.();
         }}
+        title={projectDisplayName(project)}
         type="button"
       >
-        {projectDisplayName(project)}
+        <FolderGit2 aria-hidden="true" className="size-4 shrink-0" />
+        <span className="truncate">{projectDisplayName(project)}</span>
       </button>
     ))}
+    {teamProjects.length === 0 ? (
+      <p className="px-2.5 py-1.5 text-xs text-muted-foreground">
+        No projects yet
+      </p>
+    ) : null}
+    <div className="my-2 h-px bg-sidebar-border" />
     <button
-      className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-        view === "team"
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-muted-foreground",
-      )}
+      aria-current={view === "team" ? "page" : undefined}
+      className={navItemClass(view === "team")}
       onClick={() => {
         onSetView("team");
         onNavigate?.();
@@ -602,14 +621,16 @@ const NavLinks = ({
       type="button"
     >
       <Users aria-hidden="true" className="size-4" />
-      Team
+      Members
     </button>
     <button
-      className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-        view === "devices"
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-muted-foreground",
+      aria-current={
+        view === "devices" || view === "recovery" || view === "account"
+          ? "page"
+          : undefined
+      }
+      className={navItemClass(
+        view === "devices" || view === "recovery" || view === "account",
       )}
       onClick={() => {
         onSetView("devices");
@@ -618,39 +639,7 @@ const NavLinks = ({
       type="button"
     >
       <MonitorSmartphone aria-hidden="true" className="size-4" />
-      Devices
-    </button>
-    <button
-      className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-        view === "recovery"
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-muted-foreground",
-      )}
-      onClick={() => {
-        onSetView("recovery");
-        onNavigate?.();
-      }}
-      type="button"
-    >
-      <KeyRound aria-hidden="true" className="size-4" />
-      Recovery
-    </button>
-    <button
-      className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-        view === "account"
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-muted-foreground",
-      )}
-      onClick={() => {
-        onSetView("account");
-        onNavigate?.();
-      }}
-      type="button"
-    >
-      <UserRound aria-hidden="true" className="size-4" />
-      Account
+      Devices and recovery
     </button>
   </nav>
 );
@@ -3072,11 +3061,8 @@ export const WorkspaceShell = ({
           accountSetupRequired && "lg:hidden",
         )}
       >
-        <div className="flex h-16 items-center gap-3 border-b px-5">
-          <span className="grid size-8 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-primary">
-            <Braces aria-hidden="true" className="size-4" />
-          </span>
-          <span className="font-heading font-semibold">DotRelay</span>
+        <div className="flex h-14 items-center border-b px-4">
+          <BrandLink />
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
           {teams.length > 0 ? (
@@ -3191,8 +3177,18 @@ export const WorkspaceShell = ({
       </aside>
 
       <div className={accountSetupRequired ? undefined : "lg:pl-64"}>
-        <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur-xl">
-          <div className="flex min-h-16 items-center gap-3 px-4 sm:px-6">
+        <header
+          className={cn(
+            "sticky top-0 z-40 border-b bg-background/90 backdrop-blur-xl",
+            !WORKSPACE_FIXTURE && !accountSetupRequired && "lg:border-b-0",
+          )}
+        >
+          <div
+            className={cn(
+              "flex min-h-14 items-center gap-3 px-4 sm:px-6",
+              !WORKSPACE_FIXTURE && !accountSetupRequired && "lg:hidden",
+            )}
+          >
             <Sheet onOpenChange={setMobileOpen} open={mobileOpen}>
               <SheetTrigger
                 render={
@@ -3275,28 +3271,21 @@ export const WorkspaceShell = ({
             </Sheet>
 
             {selectedTeam && !accountSetupRequired ? (
-              <div className="hidden min-w-0 items-center gap-2 text-sm sm:flex">
-                <span className="truncate">{selectedTeam.name}</span>
-                {selectedProject ? (
-                  <>
-                    <ChevronRight
-                      aria-hidden="true"
-                      className="size-3 text-muted-foreground"
-                    />
-                    <span className="truncate">
-                      {projectDisplayName(selectedProject)}
-                    </span>
-                  </>
-                ) : null}
-                {selectedEnvironment && view === "environment" ? (
-                  <>
-                    <ChevronRight
-                      aria-hidden="true"
-                      className="size-3 text-muted-foreground"
-                    />
-                    <span>{selectedEnvironment.label}</span>
-                  </>
-                ) : null}
+              <div className="flex min-w-0 items-center gap-2 text-sm lg:hidden">
+                <span className="truncate font-medium">
+                  {view === "environment" && selectedProject
+                    ? projectDisplayName(selectedProject)
+                    : view === "team"
+                      ? "Members"
+                      : view === "devices" ||
+                          view === "recovery" ||
+                          view === "account"
+                        ? "Devices and recovery"
+                        : "Projects"}
+                </span>
+                <span className="truncate text-muted-foreground">
+                  {selectedTeam.name}
+                </span>
               </div>
             ) : null}
 
@@ -3304,6 +3293,7 @@ export const WorkspaceShell = ({
                 fixture, where it previews hosted and self-hosted deployments.
                 A live deployment is bound to the backend it is served from,
                 so the browser offers no choice of server. */}
+            {accountSetupRequired ? <BrandLink /> : null}
             {accountSetupRequired ? (
               <Button
                 className="ml-auto"
@@ -3342,7 +3332,7 @@ export const WorkspaceShell = ({
         </header>
 
         <main
-          className="mx-auto max-w-[1500px] p-4 sm:p-6"
+          className="mx-auto max-w-6xl px-4 pt-6 pb-32 sm:px-8 sm:pt-8"
           id="workspace-content"
           tabIndex={-1}
         >
@@ -3394,10 +3384,7 @@ export const WorkspaceShell = ({
               className="mx-auto max-w-2xl"
               data-testid="account-key-gate"
             >
-              <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground">
-                ACCOUNT SETUP
-              </p>
-              <h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight">
+              <h1 className="font-heading text-2xl font-semibold tracking-tight">
                 {recoveryLoaded && recoveryWrappers.length > 0
                   ? "Unlock your account"
                   : "Set up your account"}
@@ -3485,9 +3472,9 @@ export const WorkspaceShell = ({
                   <CardHeader>
                     <CardTitle>Invitations for you</CardTitle>
                     <CardDescription>
-                      Teams that invited you by your GitHub account. Accepting
-                      keeps you pending until you receive the encryption keys
-                      your device needs.
+                      After you accept, a team owner or admin shares the
+                      team&apos;s keys with you. You&apos;ll see its values once
+                      they have.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
@@ -3501,8 +3488,7 @@ export const WorkspaceShell = ({
                             {invitation.teamName}
                           </div>
                           <div className="text-sm text-muted-foreground">
-                            Invitation to join {invitation.teamName} · expires{" "}
-                            {formatDate(invitation.expiresAt)}
+                            Expires {formatDate(invitation.expiresAt)}
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -3548,11 +3534,11 @@ export const WorkspaceShell = ({
                         <div>
                           <div className="font-medium">{pending.teamName}</div>
                           <div className="text-sm text-muted-foreground">
-                            You accepted this team's invitation. An owner or
-                            admin of {pending.teamName || "the team"} now has to
-                            open Team and choose Share project keys for you.
-                            When they have, refresh this page, or run{" "}
-                            <InlineCommand value="dotrelay pull" /> in the CLI.
+                            You&apos;ve joined. An owner or admin of{" "}
+                            {pending.teamName || "the team"} now needs to open
+                            Members and share the project keys with you. Then
+                            refresh this page, or run{" "}
+                            <InlineCommand value="dotrelay pull" />.
                           </div>
                         </div>
                         <Badge
@@ -3597,14 +3583,15 @@ export const WorkspaceShell = ({
                       {gettingStarted.resumable ? (
                         <GettingStartedResume onShow={resumeGettingStarted} />
                       ) : null}
-                      <div className="mb-6">
-                        <p className="text-sm text-muted-foreground">Team</p>
-                        <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                          {selectedTeam?.name ?? "Choose a team"}
+                      <div className="mx-auto mb-6 max-w-3xl">
+                        <h1 className="font-heading text-2xl font-semibold tracking-tight">
+                          {selectedTeam
+                            ? `Projects in ${selectedTeam.name}`
+                            : "Choose a team"}
                         </h1>
-                        <p className="mt-2 max-w-2xl text-muted-foreground">
-                          Open a project to manage its environment variables and
-                          secrets. Switch teams using the team menu.
+                        <p className="mt-1 text-muted-foreground">
+                          Each project is one GitHub repository. Open one to see
+                          and edit its variables.
                         </p>
                       </div>
                       {!gettingStarted.visible &&
@@ -3626,38 +3613,48 @@ export const WorkspaceShell = ({
                         </div>
                       ) : null}
                       {teamProjects.length === 0 ? (
-                        <Card>
-                          <CardHeader>
-                            <CardTitle>No projects yet</CardTitle>
-                            <CardDescription>
-                              Run this in your GitHub repository to create a
-                              project: <InlineCommand value="dotrelay init" />.
-                            </CardDescription>
-                          </CardHeader>
-                        </Card>
-                      ) : (
-                        <div className="grid gap-4 md:grid-cols-2">
-                          {teamProjects.map((project) => (
-                            <button
-                              className="rounded-xl border bg-card p-5 text-left ring-1 ring-foreground/10 transition-colors hover:bg-muted/40"
-                              key={project.id}
-                              onClick={() => openProject(project)}
-                              type="button"
-                            >
-                              <p className="text-xs text-muted-foreground">
-                                Project
-                              </p>
-                              <h2 className="mt-1 font-heading text-xl font-medium">
-                                {projectDisplayName(project)}
-                              </h2>
-                              <p className="mt-2 text-sm text-muted-foreground">
-                                {project.environments
-                                  .map((environment) => environment.label)
-                                  .join(", ") || "No environments yet"}
-                              </p>
-                            </button>
-                          ))}
+                        <div className="mx-auto max-w-3xl rounded-xl border border-dashed px-6 py-10 text-center">
+                          <p className="font-medium">No projects yet</p>
+                          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+                            Run <InlineCommand value="dotrelay init" /> in a
+                            GitHub repository to add one. It shows up here once
+                            it&apos;s created.
+                          </p>
                         </div>
+                      ) : (
+                        <ul className="mx-auto max-w-3xl divide-y overflow-hidden rounded-xl border bg-card">
+                          {teamProjects.map((project) => (
+                            <li
+                              className="relative flex items-center gap-3 px-4 py-3.5 transition-colors focus-within:bg-muted/30 hover:bg-muted/30"
+                              key={project.id}
+                            >
+                              <FolderGit2
+                                aria-hidden="true"
+                                className="size-4 shrink-0 text-muted-foreground"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <h2 className="truncate font-medium">
+                                  <button
+                                    className="text-left after:absolute after:inset-0 focus-visible:outline-none"
+                                    onClick={() => openProject(project)}
+                                    type="button"
+                                  >
+                                    {projectDisplayName(project)}
+                                  </button>
+                                </h2>
+                                <p className="truncate text-sm text-muted-foreground">
+                                  {project.environments
+                                    .map((environment) => environment.label)
+                                    .join(", ") || "No environments yet"}
+                                </p>
+                              </div>
+                              <ChevronRight
+                                aria-hidden="true"
+                                className="size-4 shrink-0 text-muted-foreground"
+                              />
+                            </li>
+                          ))}
+                        </ul>
                       )}
                     </>
                   )}
@@ -3668,37 +3665,15 @@ export const WorkspaceShell = ({
               selectedProject &&
               selectedEnvironment ? (
                 <section>
-                  <div className="mb-5 flex flex-col items-start gap-4 lg:flex-row lg:items-end lg:justify-between">
-                    <div>
-                      <p className="text-sm text-muted-foreground">
-                        {selectedTeam?.name}
-                      </p>
-                      <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                        {projectDisplayName(selectedProject)}
-                      </h1>
-                    </div>
-                    <LifecycleDialog
-                      disabled={!canAdminister}
-                      lifecycle={environmentLifecycle}
-                      onConfirm={() =>
-                        void persistEnvironmentLifecycle(
-                          environmentLifecycle === "ACTIVE"
-                            ? "archive"
-                            : "restore",
-                        )
-                      }
-                      resource="Environment"
-                    />
-                    {lifecycleError?.resource === "environment" ? (
-                      <p
-                        role="alert"
-                        className="text-xs font-medium text-destructive"
-                      >
-                        {lifecycleError.message}
-                      </p>
-                    ) : null}
+                  <div className="mb-5">
+                    <h1 className="font-heading text-2xl font-semibold tracking-tight">
+                      {projectDisplayName(selectedProject)}
+                    </h1>
+                    <p className="mt-0.5 text-sm text-muted-foreground">
+                      {selectedTeam?.name}
+                    </p>
                   </div>
-                  <div className="mb-6 flex flex-wrap items-center gap-3">
+                  <div className="mb-5 flex flex-wrap items-end gap-x-3 gap-y-2 border-b">
                     <Tabs
                       onValueChange={(nextId) => {
                         if (typeof nextId !== "string") return;
@@ -3711,9 +3686,14 @@ export const WorkspaceShell = ({
                       }}
                       value={selectedEnvironment.id}
                     >
-                      <TabsList aria-label="Environments">
+                      <TabsList
+                        aria-label="Environments"
+                        className="-mb-px h-auto gap-0 p-0"
+                        variant="line"
+                      >
                         {selectedProject.environments.map((environment) => (
                           <TabsTrigger
+                            className="h-10 flex-none rounded-none px-3 after:bg-primary group-data-horizontal/tabs:after:bottom-0"
                             key={environment.id}
                             value={environment.id}
                           >
@@ -3722,7 +3702,31 @@ export const WorkspaceShell = ({
                         ))}
                       </TabsList>
                     </Tabs>
-                    {newEnvironmentControl(selectedProject)}
+                    <div className="mb-1.5 flex items-center gap-1">
+                      {newEnvironmentControl(selectedProject)}
+                    </div>
+                    <div className="mb-1.5 ml-auto flex items-center gap-2">
+                      {lifecycleError?.resource === "environment" ? (
+                        <p
+                          role="alert"
+                          className="text-xs font-medium text-destructive"
+                        >
+                          {lifecycleError.message}
+                        </p>
+                      ) : null}
+                      <LifecycleDialog
+                        disabled={!canAdminister}
+                        lifecycle={environmentLifecycle}
+                        onConfirm={() =>
+                          void persistEnvironmentLifecycle(
+                            environmentLifecycle === "ACTIVE"
+                              ? "archive"
+                              : "restore",
+                          )
+                        }
+                        resource="Environment"
+                      />
+                    </div>
                   </div>
                   {rotationOwed ? (
                     <Alert
@@ -3789,14 +3793,15 @@ export const WorkspaceShell = ({
                 ) : !selectedTeam ? (
                   noTeamsEmpty
                 ) : (
-                  <section id="administration">
-                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <section className="mx-auto max-w-4xl" id="administration">
+                    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                       <div>
-                        <h1 className="font-heading text-3xl font-semibold">
-                          {selectedTeam?.name ?? "Team"}
+                        <h1 className="font-heading text-2xl font-semibold tracking-tight">
+                          Members of {selectedTeam?.name ?? "this team"}
                         </h1>
-                        <p className="mt-2 text-muted-foreground">
-                          {roleDisclosure[effectiveRole]}
+                        <p className="mt-1 max-w-2xl text-muted-foreground">
+                          Everyone here can see the team values in all of the
+                          team&apos;s projects. {roleDisclosure[effectiveRole]}
                         </p>
                       </div>
                       {displayBoundary.source === "fixture" ||
@@ -3819,13 +3824,6 @@ export const WorkspaceShell = ({
                         </div>
                       ) : null}
                     </div>
-                    <Alert className="mb-4 bg-card/60">
-                      <Users aria-hidden="true" className="text-primary" />
-                      <AlertTitle>Your team permissions</AlertTitle>
-                      <AlertDescription>
-                        {roleDisclosure[effectiveRole]}
-                      </AlertDescription>
-                    </Alert>
                     {removedNotice &&
                     removedNotice.teamId === selectedTeam?.id ? (
                       <MemberRemovedNotice
@@ -3854,11 +3852,10 @@ export const WorkspaceShell = ({
                     />
                     <Card data-testid="members-card">
                       <CardHeader>
-                        <CardTitle>Members</CardTitle>
+                        <CardTitle>Members and invites</CardTitle>
                         <CardDescription>
-                          The team's members and pending invitations, straight
-                          from its record. Invitations go to a GitHub account
-                          and expire after seven days.
+                          Invite people by their GitHub username. Invites expire
+                          after seven days.
                         </CardDescription>
                         <CardAction>
                           <Button
@@ -4106,7 +4103,7 @@ export const WorkspaceShell = ({
                                       className="border-amber-300/25 text-amber-200"
                                       variant="outline"
                                     >
-                                      Invitation pending · expires{" "}
+                                      Invited, expires{" "}
                                       {formatDate(invitation.expiresAt)}
                                     </Badge>
                                   </TableCell>
@@ -4163,29 +4160,36 @@ export const WorkspaceShell = ({
                     </Card>
                     {selectedProject ? (
                       <>
-                        <Card className="mt-4">
-                          <CardHeader>
-                            <CardTitle>
-                              {projectDisplayName(selectedProject)}
-                            </CardTitle>
-                            <CardDescription>
-                              Archive this project to let another project use
-                              its GitHub repository.
-                            </CardDescription>
-                          </CardHeader>
+                        <h2 className="mt-10 font-heading text-lg font-semibold">
+                          Project
+                        </h2>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Archiving a project frees its GitHub repository for
+                          another project.
+                        </p>
+                        <Card className="mt-3" size="sm">
                           <CardContent className="flex items-center justify-between gap-4">
-                            <Badge
-                              data-testid="project-lifecycle"
-                              variant={
-                                projectLifecycle === "ACTIVE"
-                                  ? "default"
-                                  : "secondary"
-                              }
-                            >
-                              {projectLifecycle === "ACTIVE"
-                                ? "Active"
-                                : "Archived"}
-                            </Badge>
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <FolderGit2
+                                aria-hidden="true"
+                                className="size-4 shrink-0 text-muted-foreground"
+                              />
+                              <span className="truncate font-medium">
+                                {projectDisplayName(selectedProject)}
+                              </span>
+                              <Badge
+                                data-testid="project-lifecycle"
+                                variant={
+                                  projectLifecycle === "ACTIVE"
+                                    ? "default"
+                                    : "secondary"
+                                }
+                              >
+                                {projectLifecycle === "ACTIVE"
+                                  ? "Active"
+                                  : "Archived"}
+                              </Badge>
+                            </span>
                             <LifecycleDialog
                               disabled={!canAdminister}
                               lifecycle={projectLifecycle}
@@ -4227,264 +4231,229 @@ export const WorkspaceShell = ({
                 )
               ) : null}
 
-              {view === "devices" ? (
-                <section id="devices">
-                  <h1 className="font-heading text-3xl font-semibold">
-                    Devices
-                  </h1>
-                  <p className="mt-2 max-w-2xl text-muted-foreground">
-                    A device is this browser, or the CLI on one of your
-                    machines. Signing in alone doesn't let you read secrets.
-                  </p>
-                  {enrolledDevices.length > 0 ? (
-                    <Card className="mt-6">
-                      <CardHeader>
-                        <CardTitle>Your devices</CardTitle>
-                        <CardDescription>
-                          Devices set up on your account. A device also needs
-                          the project's keys to read its secrets.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <Table aria-label="Your devices">
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Device</TableHead>
-                              <TableHead>Project access</TableHead>
-                              <TableHead>Actions</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {enrolledDevices.map((device) => (
-                              <TableRow
-                                data-testid={`enrolled-device-${device.id}`}
-                                key={device.id}
-                              >
-                                <TableCell>
-                                  <div className="font-medium">
-                                    {device.name ??
-                                      (device.current
-                                        ? "This browser"
-                                        : "Device")}
-                                  </div>
-                                  <div className="font-mono text-[10px] text-muted-foreground">
-                                    {device.id}
-                                  </div>
-                                  {device.clientSummary ? (
-                                    // The client's own description already
-                                    // names the OS when it has one ("Chrome
-                                    // 126 on Windows 10/11"), so the row never
-                                    // appends it a second time.
-                                    <div className="text-xs text-muted-foreground">
-                                      {device.clientSummary}
-                                    </div>
-                                  ) : null}
-                                  {device.current ? (
-                                    deviceRenameOpen ? (
-                                      <div className="mt-2 flex max-w-xs items-center gap-2">
-                                        <Input
-                                          aria-label="Device name"
-                                          className="h-8"
-                                          data-testid="device-rename-input"
-                                          maxLength={64}
-                                          value={deviceRenameValue}
-                                          onChange={(event) =>
-                                            setDeviceRenameValue(
-                                              event.target.value,
-                                            )
-                                          }
-                                          onKeyDown={(event) => {
-                                            if (event.key === "Enter")
-                                              void renameCurrentDevice();
-                                            if (event.key === "Escape")
-                                              setDeviceRenameOpen(false);
-                                          }}
-                                        />
-                                        <Button
-                                          disabled={
-                                            deviceRenameBusy ||
-                                            deviceRenameValue.trim().length ===
-                                              0
-                                          }
-                                          size="sm"
-                                          type="button"
-                                          data-testid="device-rename-save"
-                                          onClick={() =>
-                                            void renameCurrentDevice()
-                                          }
-                                        >
-                                          Save
-                                        </Button>
-                                        <Button
-                                          disabled={deviceRenameBusy}
-                                          size="sm"
-                                          type="button"
-                                          variant="ghost"
-                                          onClick={() => {
-                                            setDeviceRenameOpen(false);
-                                            setDeviceRenameError(null);
-                                          }}
-                                        >
-                                          Cancel
-                                        </Button>
-                                        {deviceRenameError ? (
-                                          <p className="text-xs text-destructive">
-                                            {deviceRenameError}
-                                          </p>
-                                        ) : null}
-                                      </div>
-                                    ) : (
-                                      <Button
-                                        className="mt-2"
-                                        size="sm"
-                                        type="button"
-                                        variant="outline"
-                                        data-testid="device-rename-open"
-                                        onClick={() => {
-                                          setDeviceRenameValue(
-                                            device.name ?? "",
-                                          );
-                                          setDeviceRenameError(null);
-                                          setDeviceRenameOpen(true);
-                                        }}
-                                      >
-                                        Rename
-                                      </Button>
-                                    )
-                                  ) : null}
-                                </TableCell>
-                                <TableCell>
-                                  <Badge
-                                    className={
-                                      device.hasEpochGrant
-                                        ? undefined
-                                        : "border-amber-300/25 text-amber-200"
-                                    }
-                                    variant="outline"
-                                  >
-                                    {device.hasEpochGrant
-                                      ? "Has project access"
-                                      : "Waiting for project keys"}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell>
-                                  <Button
-                                    aria-label={`Revoke device ${
-                                      device.name ??
-                                      (device.current
-                                        ? "This browser"
-                                        : device.id)
-                                    }`}
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={
-                                      revokingDevice !== null ||
-                                      !browserDeviceId ||
-                                      protectedPreview
-                                    }
-                                    onClick={() =>
-                                      setRevokeTarget({
-                                        id: device.id,
-                                        label:
-                                          device.name ??
-                                          (device.current
-                                            ? "this browser"
-                                            : "this device"),
-                                      })
-                                    }
-                                  >
-                                    {revokingDevice === device.id
-                                      ? "Revoking…"
-                                      : "Revoke device"}
-                                  </Button>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                        {revokeDeviceError ? (
-                          <p
-                            className="mt-2 text-sm text-destructive"
-                            role="alert"
-                          >
-                            {revokeDeviceError}
-                          </p>
-                        ) : null}
-                        <RevokeDeviceDialog
-                          onCancel={() => setRevokeTarget(null)}
-                          onConfirm={(deviceId) => void revokeDevice(deviceId)}
-                          target={revokeTarget}
-                        />
-                        <DeviceRevokedDialog
-                          onContinue={() => window.location.assign("/sign-in")}
-                          open={deviceRevoked}
-                        />
-                      </CardContent>
-                    </Card>
-                  ) : null}
-                  <Card
-                    className={enrolledDevices.length > 0 ? "mt-4" : "mt-6"}
-                  >
-                    <CardHeader>
-                      <CardTitle>
-                        {thisBrowserEnrolled
-                          ? "This browser is set up"
-                          : "Set up this browser"}
-                      </CardTitle>
-                      <CardDescription>
-                        {thisBrowserEnrolled
-                          ? "This browser has saved its device keys. It also needs the project's keys to read its secrets."
-                          : "This creates a key pair in this browser. The CLI is a separate device."}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <p className="text-sm text-muted-foreground">
-                        Prefer the CLI? It sets up the CLI, not this browser.
+              {view === "devices" ||
+              view === "recovery" ||
+              view === "account" ? (
+                <div className="mx-auto max-w-4xl space-y-12">
+                  <section id="devices">
+                    <h1 className="font-heading text-2xl font-semibold tracking-tight">
+                      Devices and recovery
+                    </h1>
+                    <p className="mt-1 max-w-2xl text-muted-foreground">
+                      A device is a browser, or a computer with the CLI. Each
+                      one has its own keys and can decrypt your values.
+                    </p>
+                    {thisBrowserEnrolled ? (
+                      <p
+                        className="mt-4 flex items-center gap-2 text-sm text-primary"
+                        role="status"
+                      >
+                        <Check aria-hidden="true" className="size-4" />
+                        <span>This browser is set up</span>
                       </p>
-                      <CopyableCommand
+                    ) : null}
+                    <h2 className="mt-8 font-heading text-lg font-semibold">
+                      Your devices
+                    </h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      To add a computer, install the CLI and run{" "}
+                      <InlineCommand
                         data-testid="cli-setup-command"
                         value={cliCommand}
-                      />
-                      {deviceSetupMessage ? (
-                        <p className="mt-3 text-sm text-muted-foreground">
-                          <CommandText text={deviceSetupMessage} />
-                        </p>
-                      ) : null}
-                    </CardContent>
-                    {!thisBrowserEnrolled ? (
-                      <CardFooter>
-                        <Button
-                          disabled={deviceSetupInProgress}
-                          onClick={() => void provisionBrowserDevice()}
-                        >
-                          {deviceSetupInProgress
-                            ? "Setting up…"
-                            : "Set up browser"}
-                        </Button>
-                      </CardFooter>
+                      />{" "}
+                      on it.
+                    </p>
+                    {enrolledDevices.length > 0 ? (
+                      <ul
+                        aria-label="Your devices"
+                        className="mt-4 divide-y overflow-hidden rounded-xl border bg-card"
+                      >
+                        {enrolledDevices.map((device) => {
+                          const deviceLabel =
+                            device.name ??
+                            (device.current ? "This browser" : "Device");
+                          return (
+                            <li
+                              className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center"
+                              data-testid={`enrolled-device-${device.id}`}
+                              key={device.id}
+                            >
+                              <MonitorSmartphone
+                                aria-hidden="true"
+                                className="hidden size-4 shrink-0 text-muted-foreground sm:block"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-medium">
+                                    {deviceLabel}
+                                  </span>
+                                  {device.current ? (
+                                    <Badge
+                                      className="border-primary/30 bg-primary/10 text-primary"
+                                      variant="outline"
+                                    >
+                                      This browser
+                                    </Badge>
+                                  ) : null}
+                                  {device.hasEpochGrant ? null : (
+                                    <Badge
+                                      className="border-amber-300/25 text-amber-200"
+                                      variant="outline"
+                                    >
+                                      Waiting for project keys
+                                    </Badge>
+                                  )}
+                                </div>
+                                {device.clientSummary ? (
+                                  // The client's own description already
+                                  // names the OS when it has one ("Chrome
+                                  // 126 on Windows 10/11"), so the row never
+                                  // appends it a second time.
+                                  <div className="text-xs text-muted-foreground">
+                                    {device.clientSummary}
+                                  </div>
+                                ) : null}
+                                {device.current && deviceRenameOpen ? (
+                                  <div className="mt-2 flex max-w-sm flex-wrap items-center gap-2">
+                                    <Input
+                                      aria-label="Device name"
+                                      className="h-8 min-w-0 flex-1"
+                                      data-testid="device-rename-input"
+                                      maxLength={64}
+                                      value={deviceRenameValue}
+                                      onChange={(event) =>
+                                        setDeviceRenameValue(event.target.value)
+                                      }
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter")
+                                          void renameCurrentDevice();
+                                        if (event.key === "Escape")
+                                          setDeviceRenameOpen(false);
+                                      }}
+                                    />
+                                    <Button
+                                      disabled={
+                                        deviceRenameBusy ||
+                                        deviceRenameValue.trim().length === 0
+                                      }
+                                      size="sm"
+                                      type="button"
+                                      data-testid="device-rename-save"
+                                      onClick={() => void renameCurrentDevice()}
+                                    >
+                                      Save
+                                    </Button>
+                                    <Button
+                                      disabled={deviceRenameBusy}
+                                      size="sm"
+                                      type="button"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setDeviceRenameOpen(false);
+                                        setDeviceRenameError(null);
+                                      }}
+                                    >
+                                      Cancel
+                                    </Button>
+                                    {deviceRenameError ? (
+                                      <p className="w-full text-xs text-destructive">
+                                        {deviceRenameError}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
+                                {device.current && !deviceRenameOpen ? (
+                                  <Button
+                                    size="sm"
+                                    type="button"
+                                    variant="ghost"
+                                    data-testid="device-rename-open"
+                                    onClick={() => {
+                                      setDeviceRenameValue(device.name ?? "");
+                                      setDeviceRenameError(null);
+                                      setDeviceRenameOpen(true);
+                                    }}
+                                  >
+                                    Rename
+                                  </Button>
+                                ) : null}
+                                <Button
+                                  aria-label={`Revoke device ${
+                                    device.name ??
+                                    (device.current
+                                      ? "This browser"
+                                      : device.id)
+                                  }`}
+                                  className="text-destructive hover:text-destructive"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={
+                                    revokingDevice !== null ||
+                                    !browserDeviceId ||
+                                    protectedPreview
+                                  }
+                                  onClick={() =>
+                                    setRevokeTarget({
+                                      id: device.id,
+                                      label:
+                                        device.name ??
+                                        (device.current
+                                          ? "this browser"
+                                          : "this device"),
+                                    })
+                                  }
+                                >
+                                  {revokingDevice === device.id
+                                    ? "Revoking…"
+                                    : "Revoke"}
+                                </Button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
                     ) : null}
-                  </Card>
-                </section>
-              ) : null}
-              {view === "recovery" ? recoveryArea : null}
-              {view === "account" ? (
-                !sessionActive ? (
-                  signInRequired
-                ) : apiOrigin && displayBoundary.session.userId ? (
-                  <AccountSettingsSection
-                    apiOrigin={apiOrigin}
-                    onDeleted={() => {
-                      // The deleted account's keys and Device are useless
-                      // now; a later sign-in is a new account with a new
-                      // Device, so clear everything this browser kept.
-                      forgetDeviceProofs();
-                      void forgetThisBrowser().finally(() =>
-                        window.location.assign("/sign-in"),
-                      );
-                    }}
-                    userId={displayBoundary.session.userId}
-                  />
-                ) : null
+                    {revokeDeviceError ? (
+                      <p className="mt-2 text-sm text-destructive" role="alert">
+                        {revokeDeviceError}
+                      </p>
+                    ) : null}
+                    <RevokeDeviceDialog
+                      onCancel={() => setRevokeTarget(null)}
+                      onConfirm={(deviceId) => void revokeDevice(deviceId)}
+                      target={revokeTarget}
+                    />
+                    <DeviceRevokedDialog
+                      onContinue={() => window.location.assign("/sign-in")}
+                      open={deviceRevoked}
+                    />
+                    {deviceSetupMessage ? (
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        <CommandText text={deviceSetupMessage} />
+                      </p>
+                    ) : null}
+                  </section>
+                  {recoveryArea}
+                  {!sessionActive ? (
+                    signInRequired
+                  ) : apiOrigin && displayBoundary.session.userId ? (
+                    <AccountSettingsSection
+                      apiOrigin={apiOrigin}
+                      onDeleted={() => {
+                        // The deleted account's keys and Device are useless
+                        // now; a later sign-in is a new account with a new
+                        // Device, so clear everything this browser kept.
+                        forgetDeviceProofs();
+                        void forgetThisBrowser().finally(() =>
+                          window.location.assign("/sign-in"),
+                        );
+                      }}
+                      userId={displayBoundary.session.userId}
+                    />
+                  ) : null}
+                </div>
               ) : null}
 
               <section

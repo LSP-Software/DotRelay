@@ -95,7 +95,7 @@ test("a plain member sees no rotation call to action", async ({ page }) => {
   // The owed rotation is on the boundary: an owner sees it...
   await expect(page.getByTestId("rotation-owed")).toBeVisible();
   // ...and the same boundary shows a plain member nothing.
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByLabel("Preview role").selectOption("MEMBER");
   await page
     .locator("aside")

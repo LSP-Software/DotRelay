@@ -94,7 +94,7 @@ test("an owner creates a new environment and lands on it", async ({ page }) => {
 
 test("a plain member is not offered environment creation", async ({ page }) => {
   await page.goto("/workspace");
-  await page.locator("aside").getByRole("button", { name: "Team" }).click();
+  await page.locator("aside").getByRole("button", { name: "Members" }).click();
   await page.getByLabel("Preview role").selectOption("MEMBER");
   await page
     .locator("aside")

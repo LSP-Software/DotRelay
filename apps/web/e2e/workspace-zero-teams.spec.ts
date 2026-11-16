@@ -70,7 +70,7 @@ test("a signed-in user with zero Teams is pointed at the CLI, not an empty selec
   // never requested without a Team, so this must not sit on "Loading members…".
   await page
     .getByRole("navigation", { name: "Workspace navigation" })
-    .getByRole("button", { name: "Team" })
+    .getByRole("button", { name: "Members" })
     .click();
   await expect(page.getByText("Loading members…")).toHaveCount(0);
   await expect(page.getByTestId("members-card")).toHaveCount(0);

@@ -1,8 +1,7 @@
-import { Braces } from "lucide-react";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { SiteShell } from "@/components/site-shell";
 import { PrivateAlphaNotice } from "@/components/private-alpha-notice";
 import { readServerSession } from "@/lib/server-session";
 import {
@@ -32,35 +31,16 @@ const PrivateAlphaPage = async () => {
   }
 
   return (
-    <main className="landing-grid grid min-h-screen place-items-center px-5 py-12">
-      <div className="flex w-full max-w-sm flex-col items-center text-center">
-        <div className="relative">
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 scale-150 rounded-full bg-primary/15 blur-2xl"
-          />
-          <Link
-            aria-label="DotRelay home"
-            className="relative grid size-14 place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary shadow-[0_0_40px_-12px_var(--primary)]"
-            href="/"
-          >
-            <Braces aria-hidden="true" className="size-7" />
-          </Link>
-        </div>
-        <p className="mt-4 font-heading text-base font-semibold tracking-tight">
-          DotRelay
-        </p>
-
-        <h1 className="mt-14 font-heading text-3xl font-semibold tracking-[-0.02em]">
-          Private alpha
-        </h1>
-        <PrivateAlphaNotice
-          apiOrigin={liveApiOrigin ?? "http://localhost:3001"}
-          className="mt-3 w-full"
-          hosted={resolveWorkspaceProfileId() === "hosted"}
-        />
-      </div>
-    </main>
+    <SiteShell>
+      <h1 className="font-heading text-2xl font-semibold tracking-tight">
+        Private alpha
+      </h1>
+      <PrivateAlphaNotice
+        apiOrigin={liveApiOrigin ?? "http://localhost:3001"}
+        className="mt-2 w-full"
+        hosted={resolveWorkspaceProfileId() === "hosted"}
+      />
+    </SiteShell>
   );
 };
 

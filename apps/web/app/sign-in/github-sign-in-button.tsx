@@ -1,7 +1,8 @@
 "use client";
 
-import { GitBranch, LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import { useState } from "react";
+import { GitHubMark } from "@/components/site-shell";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -70,7 +71,7 @@ export const GitHubSignInButton = ({
             className="size-4 motion-safe:animate-spin"
           />
         ) : (
-          <GitBranch aria-hidden="true" />
+          <GitHubMark className="size-4" />
         )}
         Continue with GitHub
       </Button>

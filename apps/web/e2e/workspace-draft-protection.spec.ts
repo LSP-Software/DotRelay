@@ -11,7 +11,7 @@ const startDraft = async (page: Page) => {
   await editor.getByLabel("API_ORIGIN Value").fill("draft-value");
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 };
 
 const beforeUnloadPrevented = (page: Page) =>
@@ -44,10 +44,10 @@ test("navigating among workspace views and returning preserves the draft", async
   await openFirstProject(page);
   await startDraft(page);
 
-  for (const view of ["Projects", "Team", "Devices", "Recovery"]) {
+  for (const view of ["Projects", "Members", "Devices and recovery"]) {
     await page.locator("aside").getByRole("button", { name: view }).click();
     await expect(page.getByTestId("editor-context-active")).toContainText(
-      "Draft change",
+      "Not published",
     );
   }
 
@@ -58,7 +58,7 @@ test("navigating among workspace views and returning preserves the draft", async
   const editor = activeEditor(page);
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
   await editor.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(editor.getByLabel("API_ORIGIN Value")).toHaveValue(
     "draft-value",
@@ -83,7 +83,7 @@ test("reloading with an unpublished draft warns and keeps it when cancelled", as
   const editor = activeEditor(page);
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
   await editor.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(editor.getByLabel("API_ORIGIN Value")).toHaveValue(
     "draft-value",
@@ -105,7 +105,7 @@ test("a confirmed reload discards the warned-about draft", async ({ page }) => {
   await expect(page.getByTestId("editor-context-active")).toBeVisible();
   await expect(
     activeEditor(page).getByTestId("environment-variable-API_ORIGIN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
 });
 
 test("reloading without an unpublished draft proceeds without a warning", async ({
@@ -147,7 +147,7 @@ test("the discard prompt names the affected Environment and Variable changes", a
   const staging = activeEditor(page);
   await expect(
     staging.getByTestId("environment-variable-API_ORIGIN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
 });
 
 test("staying on the profile keeps an unpublished draft", async ({ page }) => {
@@ -166,7 +166,7 @@ test("staying on the profile keeps an unpublished draft", async ({ page }) => {
   const editor = activeEditor(page);
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
   expect(await beforeUnloadPrevented(page)).toBe(true);
 });
 
@@ -198,7 +198,7 @@ test("switching profiles with drafts names them and discards on explicit choice"
   const editor = activeEditor(page);
   await expect(
     editor.getByTestId("environment-variable-API_ORIGIN"),
-  ).not.toContainText("Draft change");
+  ).not.toContainText("Not published");
   await editor.getByRole("button", { name: "Reveal API_ORIGIN" }).click();
   await expect(editor.getByLabel("API_ORIGIN Value")).toHaveValue("");
   expect(await beforeUnloadPrevented(page)).toBe(false);
@@ -227,7 +227,7 @@ test("a profile switch warns even when only a retained draft is dirty", async ({
   const production = activeEditor(page);
   await expect(
     production.getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 });
 
 test("unpublished draft Values are not written to browser storage", async ({
@@ -239,7 +239,7 @@ test("unpublished draft Values are not written to browser storage", async ({
   await activeEditor(page).getByLabel("API_ORIGIN Value").fill(secret);
   await expect(
     activeEditor(page).getByTestId("environment-variable-API_ORIGIN"),
-  ).toContainText("Draft change");
+  ).toContainText("Not published");
 
   const stored = await readBrowserStorage(page);
   expect(stored).not.toContain(secret);

@@ -137,7 +137,7 @@ export const ImportDotenvDialog = ({
                     key={action.name}
                   >
                     <Badge
-                      className="h-4 text-[10px] uppercase tracking-wide"
+                      className="h-4 text-[10px]"
                       variant={
                         action.kind === "blocked" ? "outline" : "secondary"
                       }
@@ -164,12 +164,12 @@ export const ImportDotenvDialog = ({
                 [
                   [
                     "SHARED_VALUE",
-                    "Shared value",
+                    "Team",
                     "Everyone on the team reads the same value.",
                   ],
                   [
                     "USER_DEFINED_VALUE",
-                    "User-defined value",
+                    "Only me",
                     "Each person sets their own value; yours stays private.",
                   ],
                 ] as const

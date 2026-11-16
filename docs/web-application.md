@@ -28,8 +28,18 @@ The workspace presents information in this order:
 5. non-secret Membership and resource administration;
 6. Device authorization and in-browser recovery entry points.
 
-Desktop navigation is persistent. The same landmarks are available from a keyboard-operable sheet
-on narrow viewports, and a skip link moves focus directly to the workspace.
+Desktop navigation is persistent. The sidebar holds the Team switcher, the Team's Projects, and
+two pages: **Members** (the Team view) and **Devices and recovery**, which lists this User's
+Devices, the recovery methods, and the account settings on one page. The `recovery` and `account`
+URL views open that same page. A Project page shows its Environments as tabs and switches
+between **Variables** and **History** inside the Environment. Unpublished draft changes appear
+in a bar at the bottom of the page with a **Review and publish** action. The same landmarks are
+available from a keyboard-operable sheet on narrow viewports, and a skip link moves focus
+directly to the workspace.
+
+UI copy names a Shared Value "Team" and a User-defined Value "Only me", and calls the draft
+"unpublished changes". These are display labels only; the domain terms in `CONTEXT.md` are
+unchanged.
 
 ## Trust, session, Device, and cryptography
 
@@ -97,9 +107,9 @@ name filter narrows the list. "Import .env" parses pasted text with the same str
 CLI, previews which Variables it would add, update, leave unchanged, or skip (with the reason the
 actor's role or the draft gives), asks who can read any new Variables, and stages the result into
 the draft; nothing is published until the draft is saved, and the pasted text is dropped when the
-dialog closes. "Download .env" warns that the file holds the readable published Values in plain
+dialog closes. "Download as a .env file" (in the More actions menu, with Import) warns that the file holds the readable published Values in plain
 text, notes Variables without a Value and unpublished draft changes it leaves out, and writes the
-file from a client-side Blob whose URL is revoked immediately. A Refresh control re-reads the
+file from a client-side Blob whose URL is revoked immediately. "Load latest values" re-reads the
 verified head on demand and rebases the draft exactly as the background read does, so unpublished
 edits are kept and a teammate's change to a drafted Variable comes back as a conflict. A new Variable requires a valid name
 and explicit Shared Value or User-defined Value classification; its definition and initial Value
@@ -107,7 +117,7 @@ lane enter the local draft together. Empty Values and absent optional Values rem
 Live Variable names are unique within the Manifest. Deletion creates a tombstone in the draft so
 the definition is not silently reused or removed from immutable history.
 
-Save changes shows the draft Variable diffs and publishes a new Revision. A live protocol session
+Review and publish shows the draft Variable diffs and publishes a new Revision. A live protocol session
 then encrypts each changed definition and Value lane, signs the v3 mutation with the active Device
 key, begins an idempotent operation, stages immutable objects, and finalizes with compare-and-swap
 head checks. The client verifies sync object digests, manifest hashes, and revision links before
@@ -201,14 +211,14 @@ can do. Each row's controls carry the Member's name in their accessible names, a
 announced.
 
 An invitee whose Membership is in `PENDING_KEY_GRANT` is told that an Owner or Admin must open
-the Team view and share project keys with them, and to refresh or run `dotrelay pull` afterwards.
+the Members page and share project keys with them, and to refresh or run `dotrelay pull` afterwards.
 Owners and Admins see such a row as "Action needed: share project keys", with a note that their
 browser must be set up and unlocked to do it. Owners and Admins can also create an empty
 Environment in a Project from the web ("New environment"); the label follows the service's rule,
 an existing label is caught before submitting, and the new Environment opens once the refreshed
 catalog lists it.
 
-The Team view ends with **Leave team** for everyone and **Delete team** for owners. Leaving
+The Members page ends with **Leave team** for everyone and **Delete team** for owners. Leaving
 names the rotation the team's owners should run; the last active owner is told to promote
 another owner or delete the Team first. Deleting asks for the Team name to be typed and states
 that every Member loses access at once and the encrypted data is erased after 30 days.
@@ -292,7 +302,7 @@ instead of a blank page, and history navigation preserves dirty drafts or, for a
 rebind in the development fixture, prompts so dismissing it returns to the entry left behind. `apps/web/e2e/workspace-protocol-read.spec.ts` covers the Environment
 read states with a live protocol session: a slow initial read shows the loading state instead of
 the empty-claim, and a failed read discloses the failure with a retry action while Add Variable,
-Save changes, and per-Variable edits stay blocked; retry re-enters the loading state.
+publishing, and per-Variable edits stay blocked; retry re-enters the loading state.
 `apps/web/e2e/workspace-protocol-reread.spec.ts` extends this to a verified read that later
 fails: the Variables it loaded stay visible but locked, with each Variable's Value input,
 reveal, Set absent, delete, and Undo delete controls disabled until the read recovers.
@@ -320,7 +330,7 @@ its body scrolls, a focused field — including the last field — scrolls into 
 pinned footer, and its Cancel/Add actions stay visible, including while the visible
 viewport shrinks as an on-screen keyboard raises (Playwright cannot shrink only the visual
 viewport, so the keyboard is simulated by resizing the viewport), whether before or after
-the field is focused. Desktop and mobile navigation keep Devices and Recovery reachable
+the field is focused. Desktop and mobile navigation keep Devices and recovery reachable
 with a long Project list. `apps/web/e2e/workspace-invitations.spec.ts` covers the Team
 invitation lifecycle against the service's API: a failed GitHub login resolution keeps the
 form on the login field with an actionable explanation and never creates an invitation, a
