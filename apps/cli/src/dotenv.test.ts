@@ -369,9 +369,12 @@ describe("serializeDotenv safety", () => {
             { name: "D", value: `x'\${UNSET:-$(touch ${marker})}` },
           ]),
         );
-        Bun.spawnSync(["sh", "-c", 'set -a; . "$1"', "sh", file], {
-          env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
-        });
+        const sourced = Bun.spawnSync(
+          ["sh", "-c", 'set -a; . "$1"', "sh", file],
+          { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } },
+        );
+        // The file must source cleanly, or the marker check proves nothing.
+        expect(sourced.exitCode).toBe(0);
         expect(existsSync(marker)).toBe(false);
       } finally {
         rmSync(directory, { recursive: true, force: true });
