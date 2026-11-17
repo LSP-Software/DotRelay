@@ -680,9 +680,7 @@ integrationDescribe("trust workflow integration", () => {
         },
         certificateObject: await createProtocolObjectInput(2),
       }),
-    ).rejects.toThrow(
-      "a device has already been bootstrapped; use enrollment to add another device",
-    );
+    ).rejects.toThrow("state_conflict");
     expect(
       await database.device.count({
         where: { userId: user.id, lifecycle: "ACTIVE" },

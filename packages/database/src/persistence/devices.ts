@@ -1,4 +1,5 @@
 import {
+  ContractError,
   deviceRecoveryMessage,
   parseProtocolObject,
 } from "@dotrelay/contracts";
@@ -396,7 +397,7 @@ export class DeviceRepository {
             ).get(97)
           : undefined;
         if (!(publicKey instanceof Uint8Array) || publicKey.length !== 32)
-          throw new Error("recovery authorization is invalid");
+          throw new ContractError("invalid_crypto_object");
         const key = await crypto.subtle.importKey(
           "raw",
           new Uint8Array(publicKey),
@@ -418,17 +419,17 @@ export class DeviceRepository {
             message,
           ))
         )
-          throw new Error("recovery authorization is invalid");
+          throw new ContractError("invalid_crypto_object");
       } else if (activeDeviceCount > 0)
-        throw new Error(
-          "a device has already been bootstrapped; use enrollment to add another device",
-        );
+        // The one rejection clients read as "this account already has a
+        // Device": the browser then asks for the recovery code.
+        throw new ContractError("state_conflict");
       const user = await transaction.user.findUnique({
         where: { id: input.operation.actorUserId },
         select: { identityGeneration: true },
       });
       if (!user || user.identityGeneration !== input.device.identityGeneration)
-        throw new Error("device identity generation is stale");
+        throw new ContractError("stale_generation");
       validatePublicKeys(input.device);
       await validateSha384Digest(
         input.device.x25519PublicKey,

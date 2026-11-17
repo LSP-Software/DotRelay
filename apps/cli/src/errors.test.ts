@@ -75,8 +75,6 @@ describe("CLI diagnostics", () => {
     );
     expect(detail).not.toContain("Ask the server operator");
     expect(detail).not.toContain("OAuth");
-    // The headline already says DotRelay can't see the repository.
-    expect(detail).not.toContain("can't access this GitHub repository");
     const diagnostic = diagnosticForError(
       new CliError("authentication", detail, {}, "repository_access_denied"),
     );

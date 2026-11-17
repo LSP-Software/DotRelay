@@ -1127,7 +1127,11 @@ const createApi = ({
     } catch (error) {
       if (error instanceof ContractError)
         return jsonProblem(context, error.code);
-      return jsonProblem(context, "state_conflict");
+      // Only completeBootstrap's existing-Device rejection is a
+      // state_conflict (a ContractError above); anything unexpected is
+      // retryable, so a transient failure never reads as "this account
+      // already has a Device".
+      return jsonProblem(context, "service_unavailable");
     }
   });
 

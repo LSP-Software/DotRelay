@@ -89,6 +89,7 @@ import {
   diagnosticForError,
   EXIT_CODES,
   presentationForError,
+  REPOSITORY_ACCESS_LEAD,
   sanitizeCliLine,
   sanitizeCliText,
 } from "./errors";
@@ -3211,10 +3212,14 @@ export const run = async (
       ? /^(.+?[^.\s])\.(?:\s+(?=[A-Z<])|$)/su.exec(presentation.detail)
       : null;
     const headline = firstSentence?.[1] ?? null;
-    const body =
+    const fullBody =
       headline === null
         ? presentation.detail
         : presentation.detail.slice(firstSentence?.[0].length ?? 0).trim();
+    // The card's headline already says DotRelay can't see the repository.
+    const body = fullBody.startsWith(`${REPOSITORY_ACCESS_LEAD}\n`)
+      ? fullBody.slice(REPOSITORY_ACCESS_LEAD.length + 1)
+      : fullBody;
     // Someone at a terminal gets the plain explanation; scripts and
     // --no-input keep the precise detail with its flags and file names.
     const plain = guided && guidance?.explain !== undefined && !debug;
