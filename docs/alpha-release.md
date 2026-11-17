@@ -133,8 +133,12 @@ Better Auth, Next.js, Hono, the shadcn tooling chain, and the issue panel's HTML
 `fast-uri` override advances to the patched 3.1.9 release. `deepmerge`
 4.3.1 is affected by GHSA-gcqx-w48m-w2h4 (low) and has no patched 4.x successor; it reaches the
 tree only through the shadcn development CLI and never ships, so `security:audit` ignores that one
-advisory by id. Remove the ignore once a fixed release is available. Run the sanitizer/panel
-regressions and the dependency audit before changing it.
+advisory by id. `picomatch` (every release up to 4.0.7, the latest) is affected by
+GHSA-fc5q-39xc-vjpf (high, a ReDoS on crafted glob patterns) with no patched release; it too
+reaches the tree only through the shadcn development CLI (`@dotenvx/dotenvx` and `fast-glob`),
+which matches project-controlled globs and never ships, so it is ignored by id as well. Remove
+each ignore once a fixed release is available. Run the sanitizer/panel regressions and the
+dependency audit before changing them.
 
 ## Alpha release channels
 
