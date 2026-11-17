@@ -286,6 +286,9 @@ jobs:
     with:
       environment: dev
       commit: ${{ github.sha }}
+    # A called workflow only receives its environment's secrets when the
+    # caller passes them through; there are no repository-wide secrets left.
+    secrets: inherit
 
   # npm validates a new trusted publisher only after a publish from the
   # configured workflow file. This manual job publishes a placeholder
