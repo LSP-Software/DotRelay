@@ -111,7 +111,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Every release target, since --aot compiles native code per target.
+        os:
+          [
+            ubuntu-latest,
+            ubuntu-24.04-arm,
+            macos-latest,
+            macos-15-intel,
+            windows-latest,
+          ]
     runs-on: ${{ matrix.os }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -255,9 +263,10 @@ jobs:
       # that one advisory; it is only reached through shadcn's glob matcher.
       - run: bun run security:audit
       - run: bun run tracked-tree:clean
+  # Deploys each main commit that passed CI to dev. Settings and the scoped
+  # Coolify token live in the `dev` GitHub environment (main only).
   deploy-dev:
-    name: deploy dev (Coolify)
-    runs-on: ubuntu-latest
+    name: deploy dev
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       [
@@ -273,23 +282,13 @@ jobs:
         docs,
         security,
       ]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: { persist-credentials: false }
-      # Coolify builds the dev apps from Git with railpack (railpack.json),
-      # pinned to the commit that just passed CI. The API applies pending
-      # migrations at start (scripts/hosted-migrate.ts) before it serves.
-      - name: deploy dev apps via Coolify
-        env:
-          COOLIFY_ENDPOINT: ${{ secrets.COOLIFY_ENDPOINT }}
-          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
-        run: python3 scripts/coolify-deploy.py --environment dev --commit "$GITHUB_SHA"
-      - name: smoke deployment readiness and trust boundary
-        env:
-          SMOKE_API_ORIGIN: https://dev-api.dotrelay.dev
-          SMOKE_WEB_ORIGIN: https://dev.dotrelay.dev
-          SMOKE_SERVER_PROFILE_ID: ${{ vars.DEV_SERVER_PROFILE_ID }}
-        run: python3 scripts/smoke-deployment.py
+    uses: ./.github/workflows/deploy.yml
+    # A called workflow sees no secrets, not even its environment's, unless
+    # the caller passes them on.
+    secrets: inherit
+    with:
+      environment: dev
+      commit: ${{ github.sha }}
 
   # npm validates a new trusted publisher only after a publish from the
   # configured workflow file. This manual job publishes a placeholder
@@ -299,6 +298,9 @@ jobs:
     name: validate npm trusted publishing (manual)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # The ci.yml npm trusted publishers are bound to this environment, so a
+    # workflow edited on another branch cannot publish.
+    environment: dev
     permissions:
       contents: read
       id-token: write
@@ -395,6 +397,9 @@ jobs:
     # The dev CLI targets the dev API deployed by this same commit, so it is
     # published only after that deployment has cleared CI.
     needs: [build-cli-dev, deploy-dev]
+    # The ci.yml npm trusted publishers are bound to this environment, so a
+    # workflow edited on another branch cannot publish.
+    environment: dev
     # npm --provenance signs with the job's OIDC token; without id-token the
     # publish fails before upload.
     permissions:

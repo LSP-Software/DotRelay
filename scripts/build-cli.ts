@@ -69,6 +69,12 @@ const validateBuildOrigin = (value: string): string => {
 // Server Profile origin: the hosted service, unless DOTRELAY_CLI_ORIGIN names
 // another (the dev channel points its builds at the dev API). Self-hosters
 // still pass their own address to `dotrelay setup`.
+//
+// --trim drops the Bun and Node.js APIs the CLI never calls, and --aot
+// compiles the CLI to machine code, which lets the build drop more of the
+// runtime: together they cut the binary from about 141 MB to 50 MB on
+// linux-x64. --aot can't cross-compile, so every target builds on its own
+// native runner (see the build-cli matrices in ci.yml and release.yml).
 export const buildCli = async (
   version?: string,
   outfile = "dist/dotrelay",
@@ -82,6 +88,9 @@ export const buildCli = async (
       process.execPath,
       "build",
       "--compile",
+      "--minify",
+      "--trim",
+      "--aot",
       "src/index.ts",
       "--outfile",
       outfile,

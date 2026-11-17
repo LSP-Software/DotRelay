@@ -210,6 +210,15 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelpEntry>> = {
     },
     examples: ["dotrelay diff", "dotrelay diff --from .env.local"],
   },
+  update: {
+    about:
+      "Install the newest version of dotrelay. It stays on the track you installed: a stable release follows the npm latest tag, a dev build follows the dev tag, and a prerelease such as an alpha follows its own tag until its stable release is out. A copy installed with npm or bun is updated by that package manager. A standalone binary is replaced with the release from GitHub after its SHA-256 checksum is checked.",
+    notes: [
+      "Once a day, other commands check for a newer version in the background and say when one is out. The check is skipped with --json, --no-input, in CI, and when DOTRELAY_NO_UPDATE_CHECK=1 is set.",
+      "A copy installed inside a project is updated through that project's package manager instead.",
+    ],
+    examples: ["dotrelay update", "dotrelay update --json"],
+  },
   status: {
     about:
       "Show how this machine is connected: the server, your session, this device, and what to fix next. Lines that come from saved state say so. Only lines the server has confirmed call the session or device current.",
@@ -887,6 +896,7 @@ const POWER_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["env create", "Create an environment with a label"],
   ["history", "List verified revisions and what changed"],
   ["rollback", "Roll variables back to an earlier revision"],
+  ["update", "Install the newest version of dotrelay"],
 ];
 
 // Aligned flag rows for the directory views; the width follows the longest

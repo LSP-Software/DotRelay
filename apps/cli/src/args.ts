@@ -24,6 +24,7 @@ export const COMMANDS = [
   "export",
   "list",
   "account",
+  "update",
 ] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
@@ -319,6 +320,7 @@ export const USAGE: Record<string, string> = {
   "env use":
     "dotrelay env use <environment-id-or-label> | --environment <environment-id-or-label>",
   "env create": "dotrelay env create <label>",
+  update: "dotrelay update",
 };
 
 // The flags each command consumes; anything parsed but not listed here is
@@ -462,6 +464,7 @@ export const FLAG_PERMISSIONS: Record<string, readonly FlagKey[]> = {
   "env list": ["profile", "json"],
   "env use": ["profile", "environment", "json"],
   "env create": ["profile", "json"],
+  update: ["json"],
 };
 
 // Subcommands the parser accepts under each grouped command; the help
@@ -692,6 +695,7 @@ const validateCommand = (parsed: MutableArguments) => {
     rollback: parsed.noInput ? 1 : [0, 1],
     export: 0,
     list: 0,
+    update: 0,
   };
   const expected = positionalCounts[command];
   if (expected !== undefined) {
